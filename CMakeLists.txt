@@ -1391,6 +1391,7 @@ set(GUI_SOURCES
     src/gui/PanadapterMessageOverlay.cpp
     src/gui/PanadapterMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
+    src/gui/WindowRepaintScheduler.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumWidget_TimeMarkers.cpp
     src/gui/WaterfallHistoryBuffer.cpp

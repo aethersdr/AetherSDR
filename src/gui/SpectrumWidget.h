@@ -180,16 +180,11 @@ public:
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
     void setRenderScheduler(PanadapterRenderScheduler* scheduler);
-    // macOS: whether the pan gets its own native NSView (historical default —
-    // #714). AETHER_PAN_NO_NATIVE_WINDOW=1 opts out to validate the cheaper
-    // composited path (no per-present raster flushSubWindow blend). Keep the
-    // native path as the production default because current Qt/macOS versions
-    // can otherwise leave a QRhiWidget inside a raster top-level window with no
-    // Metal surface, producing a transparent panadapter.
+    // The required Qt 6.12 stack supports shared top-level Metal composition.
+    // Native child surfaces are an explicit diagnostic override (#714).
+    // Source references and live evidence: docs/performance/backing-store-redraws.md.
     static bool nativeWindowPreferred() {
-        static const bool noNative =
-            qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") == 1;
-        return !noNative;
+        return qEnvironmentVariableIntValue("AETHER_PAN_NATIVE_WINDOW") == 1;
     }
     // macOS: apply the native-window isolation policy as one unit — request the
     // native Metal leaf (WA_NativeWindow) *and* block ancestor promotion
@@ -2497,6 +2492,9 @@ private:
     // ── panstats: per-widget frame-cost counters (automation bridge) ─────────
     // Always-on: a handful of integer adds per frame plus one QElapsedTimer
     // read per instrumented section. Snapshot/reset via panstatsSnapshot().
+    QElapsedTimer m_submissionClock;
+    QVector<qint64> m_submissionIntervalsNs;
+    static constexpr qsizetype kMaxSubmissionIntervals = 65536; // ~18 min at 60 fps
     struct PanStats {
         QElapsedTimer clock;              // wall interval since last reset
         quint64 updateSpectrumCalls{0};   // FFT frames ingested
