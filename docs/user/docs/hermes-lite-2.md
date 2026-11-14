@@ -226,7 +226,7 @@ Not yet tested:
 - A change made from a CAT or TCI program reaching both the on-screen control and the radio.
 - Modes, filters and bands coming back after a restart are checked by automated tests without a radio; saved filter presets are not covered.
 - Two HL2s used from one computer.
-- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. aetherd does not transmit with an HL2.
+- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. Its AGC threshold, noise blanker, RIT and RF gain controls are checked by automated tests only. aetherd does not transmit with an HL2.
 
 ## Troubleshooting
 

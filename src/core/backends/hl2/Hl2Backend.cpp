@@ -2040,6 +2040,29 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
         {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    // The host DSP this backend runs and echoes in emitSliceState(): AGC, the
+    // impulse blankers and RIT (a DDC retune, clamped by clampRitXit()) in every
+    // mode setSliceMode() accepts, and the APF only where Hl2RxDsp puts it in
+    // circuit. No NR, ANF or manual notch runs here, so none is declared.
+    {
+        using Feature = ReceiveDspControl::Feature;
+        ReceiveDspControl dsp;
+        for (const QString& mode : hl2::knownModeStrings()) {
+            const QString canonical = canonicalOfferedMode(mode);
+            if (!dsp.modes.contains(canonical)) {
+                dsp.modes.append(canonical);
+            }
+        }
+        dsp.features = {Feature::Agc, Feature::Nb, Feature::Apf, Feature::Rit};
+        dsp.featureModes.insert(Feature::Apf, {QStringLiteral("CW"), QStringLiteral("CWL")});
+        dsp.authority = SliceFrequencyControl::Authority::Engine;
+        dsp.maximumRitOffsetHz = kRitXitMaxHz;
+        c.receiveDspControl = dsp;
+    }
+    // setPanRfGain() drives the AD9866 LNA, and panRfGainChanged reports the
+    // gain it applied (the operator's, less any automatic offset).
+    c.receivePanRfGainControl = ReceivePanRfGainControl{SliceFrequencyControl::Authority::Engine,
+                                                        kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb};
     // The BFO pitch is host DSP: setCwPitch adopts it and reports it back as
     // TransmitDelta::cwPitch. Same range and step as cwPitchMinHz..cwPitchMaxHz.
     c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
@@ -3435,6 +3458,8 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind k
     r->nbLevel = qBound(0, level, 100);
     r->nbFill = fill;
     pushNoiseBlanker(*r);
+    r->nbEchoPending = true;
+    emitSliceState(ddc);
     notifyOperatingStateChanged();
 }
 
@@ -9201,9 +9226,11 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.audioGain = qRound(r->audioGain * 100.0f);
     d.audioMute = r->audioMuted;
     d.audioPan = r->audioPanPercent;
-    // A restored blanker, once, so the NB control shows it. Not on every echo:
-    // SliceModel re-emits all three NB signals for each one it receives.
+    // The blanker when it changed, was restored or every slice was re-announced,
+    // not on every echo: SliceModel re-emits all three NB signals for each one it
+    // receives. d.nb is what the slice's receive observation reads.
     if (r->nbEchoPending) {
+        d.nb = r->nbKind != AetherSDR::NoiseBlankerKind::Off;
         d.nbKind = r->nbKind;
         d.nbLevel = r->nbLevel;
         d.nbFill = r->nbFill;
@@ -9266,6 +9293,9 @@ void Hl2Backend::emitPanState(int ddc)
 
 void Hl2Backend::emitAllSliceState()
 {
+    for (Receiver& r : m_rx) {
+        r.nbEchoPending = true;
+    }
     for (const auto& ids : m_ids.all())
         emitSliceState(ids.ddcIndex, true);
 }
