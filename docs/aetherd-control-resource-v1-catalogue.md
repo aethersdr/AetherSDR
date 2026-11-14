@@ -243,6 +243,18 @@ commands. Create a new instance to restart discovery.
     minimum/maximum low cut, high cut and width; audio carries gain bounds
     0–100; pan records carry inclusive `minimumHz`/`maximumHz`. See the
     receive-control contract for eligibility.
+  - Optional `receiveDspControl`: `authority`, `maximumRitOffsetHz` and
+    `features`, an object naming each steerable host DSP feature
+    (`agcThreshold`, `noiseBlanker`, `noiseReduction`, `rit`) with the modes
+    it applies in; a feature that applies in no mode is omitted.
+  - Optional `radioSpeakerControl`: `authority` only, for
+    `radioSession.setRadioSpeaker` (the radio's own speaker; ANAN declares it).
+  - Optional `receivePanRfGainControl`: `authority`, inclusive
+    `minimumDb`/`maximumDb`, and `stepDb`. A backend whose stage is an
+    attenuator declares it negated (ANAN: −31 to 0).
+- `receiveObservation.radioSpeaker`: `{known, enabled}`, whether the backend is
+  feeding the radio's own speaker, as it last reported in this session; unknown
+  while disconnected.
 - `receiveObservation.cwPitch`: `{known, hz}`, the pitch the backend last
   reported in this session, with `known:false` and `hz:null` while unknown or
   disconnected. It is session-wide, shared by every CW receiver, so it lives
@@ -279,6 +291,10 @@ control methods are specified in
   required for a known ordered passband. These are backend publications,
   separate from the legacy optimistic mode/filter/audio values above. A changed
   mode invalidates previous cuts; partial fields do not invent missing partners.
+- `receiveObservation.agcThreshold` (integer 0–100), `.noiseBlanker` and
+  `.noiseReduction` (booleans): `{known, value, authority}`, backend
+  publications. `receiveObservation.rit` carries `known`, nullable `enabled`
+  and `offsetHz`, and `authority`; known needs both halves.
 - `receive.antenna`, `receive.rfGain`.
 - `receive.agc.mode`, `receive.agc.threshold`, `receive.agc.offLevel`.
 - `receive.squelch.enabled`, `receive.squelch.level`.
@@ -297,6 +313,9 @@ for control admission, observation and concurrent-intent semantics.
   `bandwidthKnown`, `centerAuthority` / `bandwidthAuthority`. Only normalized
   backend geometry updates these fields. Reconnect or an ownership change
   invalidates them, including when legacy visible geometry is retained.
+- `rfGainObservation`: `{known, value, authority}`, the RF gain in dB the
+  backend last reported applying. The `receive.rfGain` value below can be the
+  desktop slider's own; this field is not. An ownership change invalidates it.
 - `centerHz`, `centerKnown`, `bandwidthHz`.
 - `dbmRange.minimum`, `dbmRange.maximum`.
 - `bandwidthLimitsHz.minimum`, `bandwidthLimitsHz.maximum`; zero means the

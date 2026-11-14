@@ -85,6 +85,10 @@ public:
     void recordGeometryObservation(double centerMhz, double bandwidthMhz);
     std::optional<qint64> reportedCenterHz() const { return m_reportedCenterHz; }
     std::optional<qint64> reportedBandwidthHz() const { return m_reportedBandwidthHz; }
+    // The RF gain the backend reports it applied (panRfGainChanged), never the
+    // UI slider's own value.
+    void recordRfGainObservation(int gainDb);
+    std::optional<int> reportedRfGain() const { return m_reportedRfGain; }
     // Force an infoChanged with the current values — for a backend re-asserting
     // a span it refused to change. See the definition.
     void republishCenterBandwidth();
@@ -252,6 +256,7 @@ public:
 
 signals:
     void geometryObservationChanged();
+    void rfGainObservationChanged();
     void infoChanged(double centerMhz, double bandwidthMhz);
     void levelChanged(float minDbm, float maxDbm);
     void bandwidthLimitsChanged(double minMhz, double maxMhz);
@@ -308,6 +313,7 @@ private:
     bool        m_centerKnown{false}; // true after a normalized center update
     std::optional<qint64> m_reportedCenterHz;
     std::optional<qint64> m_reportedBandwidthHz;
+    std::optional<int> m_reportedRfGain;
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};
