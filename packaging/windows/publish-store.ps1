@@ -58,7 +58,8 @@
 
 .PARAMETER CommitProduction
     Explicit second opt-in for -Commit without a flight. Cannot be used with a
-    flight or without -Commit; ordinary tag builds pass neither switch.
+    flight or without -Commit. The production workflow passes both switches
+    when AETHERSDR_STORE_AUTO_PUBLISH is true.
 #>
 
 [CmdletBinding()]
