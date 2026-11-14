@@ -434,8 +434,16 @@ jobs:
           # Official RTL builds ship the pinned libusb despite linuxdeploy's
           # excludelist. Stage its matching SONAME before the dependency walk.
           python3 tools/stage_rtl_appimage.py third_party/rtl-deps AppDir
+          # libsecret too. qtkeychain dlopen()s it at runtime, so no dependency
+          # walk finds it, and a host libsecret pulls the HOST libgobject against
+          # the image's older libglib: "undefined symbol: g_string_copy", and the
+          # keychain has no backend on any distro newer than this runner (seen on
+          # an Arch ARM host). Deployed by linuxdeploy so it gets an $ORIGIN
+          # RUNPATH and resolves the image's own GLib set.
+          LIBSECRET=$(ls /usr/lib/${{ matrix.arch }}-linux-gnu/libsecret-1.so.0)
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
+            --library "$LIBSECRET" \
             --plugin qt \
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
@@ -447,6 +455,15 @@ jobs:
       # without this a dropped engine_target would ship an image whose
       # `--aetherd` exits 127, from a green run. Running it through the app's own
       # hand-off also catches a library linuxdeploy did not bundle for it.
+      # The keychain's backend: qtkeychain dlopen()s libsecret, so nothing else
+      # notices it missing, and a host copy breaks against the bundled GLib.
+      - name: Assert libsecret was bundled with an $ORIGIN runpath
+        run: |
+          lib=AppDir/usr/lib/libsecret-1.so.0
+          test -e "$lib" || { echo "::error::libsecret-1.so.0 is not in AppDir/usr/lib"; exit 1; }
+          readelf -d "$lib" | grep -E 'R(UN)?PATH' | grep -q 'ORIGIN' \
+            || { echo "::error::bundled libsecret has no \$ORIGIN runpath"; readelf -d "$lib" | grep -E 'R(UN)?PATH'; exit 1; }
+
       - name: Assert the headless engine was bundled and runs
         if: matrix.engine_target != ''
         env:
