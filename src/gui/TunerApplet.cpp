@@ -1081,11 +1081,6 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // The direct info response identifies the 3-way antenna switch.
     auto updateAntVisible = [this]() {
         const bool visible = m_model->hasDirectConnection() && m_model->hasAntennaSwitch();
-        if (!visible && !m_antContainer->isHidden()) {
-            m_ant1Btn->setText(tr("ANT 1"));
-            m_ant2Btn->setText(tr("ANT 2"));
-            m_ant3Btn->setText(tr("ANT 3"));
-        }
         m_antContainer->setVisible(visible);
     };
     connect(m_model, &TunerModel::portsChanged, this, &TunerApplet::updatePortRows);

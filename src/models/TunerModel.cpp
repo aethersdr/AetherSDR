@@ -216,6 +216,7 @@ bool TunerModel::hasAntennaSwitch() const
     if (hasDirectConnection()) {
         return m_directConn->isThreeWay().value_or(false);
     }
+    // Relay-only identification is informational; antenna commands require a direct link.
     return m_oneByThree;
 }
 
@@ -426,6 +427,10 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
             }
             if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak);
         });
+    }
+    if (m_directConn && m_directConn->isConnected()) {
+        // An already-handshaken replacement sent its names before we subscribed.
+        m_directConn->sendCommand(QStringLiteral("antenna read"));
     }
     emit stateChanged();
 }

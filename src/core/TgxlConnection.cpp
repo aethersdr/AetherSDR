@@ -7,6 +7,19 @@
 
 namespace AetherSDR {
 
+namespace {
+QMap<QString, QString> parseKvs(const QString& body)
+{
+    QMap<QString, QString> kvs;
+    const auto parts = body.split(' ', Qt::SkipEmptyParts);
+    for (const auto& part : parts) {
+        const int eq = part.indexOf('=');
+        if (eq > 0) kvs.insert(part.left(eq), part.mid(eq + 1));
+    }
+    return kvs;
+}
+}
+
 TgxlConnection::TgxlConnection(QObject* parent)
     : QObject(parent)
 {
@@ -410,20 +423,16 @@ void TgxlConnection::processLine(const QString& line)
             QString body = line.mid(pipe2 + 1).trimmed();
             bool seqOk = false;
             const quint32 seq = line.mid(1, pipe1 - 1).toUInt(&seqOk);
-            if (m_infoSeq && seqOk && seq == *m_infoSeq) {
+            const bool infoBody = body.startsWith(QLatin1String("info "));
+            const bool infoBySeq = m_infoSeq && seqOk && seq == *m_infoSeq
+                && !body.startsWith(QLatin1String("antenna "));
+            if (infoBody || infoBySeq) {
                 m_infoSeq.reset();
                 if (line.mid(pipe1 + 1, pipe2 - pipe1 - 1) != QLatin1String("0")) {
                     qCWarning(lcTuner) << "TgxlConnection: info request failed" << line;
                     return;
                 }
-                QMap<QString, QString> kvs;
-                const auto parts = body.split(' ', Qt::SkipEmptyParts);
-                for (const auto& part : parts) {
-                    const int eq = part.indexOf('=');
-                    if (eq > 0) {
-                        kvs.insert(part.left(eq), part.mid(eq + 1));
-                    }
-                }
+                const auto kvs = parseKvs(body);
                 if (kvs.isEmpty()) {
                     qCWarning(lcTuner) << "TgxlConnection: empty or invalid info response";
                     return;
@@ -445,12 +454,7 @@ void TgxlConnection::processLine(const QString& line)
             if (!body.isEmpty()) {
                 // antenna name1=X name2=Y name3=Z  (3-way model, v1.2.41+)
                 if (body.startsWith(QStringLiteral("antenna "))) {
-                    QMap<QString, QString> kvs;
-                    const auto parts = body.mid(8).split(' ', Qt::SkipEmptyParts);
-                    for (const auto& part : parts) {
-                        int eq = part.indexOf('=');
-                        if (eq > 0) kvs.insert(part.left(eq), part.mid(eq + 1));
-                    }
+                    const auto kvs = parseKvs(body.mid(8));
                     auto decode = [](const QString& s) {
                         QString out = s;
                         out.replace(QLatin1Char('_'), QLatin1Char(' '));
@@ -466,13 +470,7 @@ void TgxlConnection::processLine(const QString& line)
                                              decode(kvs.value(QStringLiteral("name2"))),
                                              decode(kvs.value(QStringLiteral("name3"))));
                 } else {
-                    QMap<QString, QString> kvs;
-                    const auto parts = body.split(' ', Qt::SkipEmptyParts);
-                    for (const auto& part : parts) {
-                        int eq = part.indexOf('=');
-                        if (eq > 0)
-                            kvs.insert(part.left(eq), part.mid(eq + 1));
-                    }
+                    const auto kvs = parseKvs(body);
                     if (!kvs.isEmpty()) {
                         m_pollInFlight = false;   // reply landed
                         applyPollRateFor(kvs);
@@ -503,13 +501,7 @@ void TgxlConnection::processLine(const QString& line)
         QString kvString = rest.mid(lastSpaceBeforeEq + 1);
 
         // Parse key=value pairs
-        QMap<QString, QString> kvs;
-        const auto parts = kvString.split(' ', Qt::SkipEmptyParts);
-        for (const auto& part : parts) {
-            int eq = part.indexOf('=');
-            if (eq > 0)
-                kvs.insert(part.left(eq), part.mid(eq + 1));
-        }
+        const auto kvs = parseKvs(kvString);
 
         if (object == "state") {
             emit stateUpdated(kvs);

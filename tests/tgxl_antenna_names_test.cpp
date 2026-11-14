@@ -127,7 +127,7 @@ int main(int argc, char** argv)
     settle();
 
     CHECK(!b1->isVisible());
-    CHECK(inject(&direct, QStringLiteral("R99|0|info serial=TG123 3way=1")));
+    CHECK(inject(&direct, QStringLiteral("R99|0|serial=TG123 3way=1")));
     CHECK(!b1->isVisible());
     CHECK(inject(&direct, QStringLiteral("S1|status antA=1")));
     PeripheralConnectionTestAccess::setPollInFlight(direct, true);
@@ -229,7 +229,7 @@ int main(int argc, char** argv)
     // typical captures); fwd=50.0 dBm (100 W) is well above it.
     //
     // The RX status frame selects ANT 1; the later threshold crossing in
-    // updateMeters is what drives the colour change.
+    // updateMeters is what drives the color change.
 
     // RX: inject a low-power status frame to seat antA=0 and confirm green.
     CHECK(inject(&direct, QStringLiteral(
@@ -293,9 +293,13 @@ int main(int argc, char** argv)
         PeripheralConnectionTestAccess::captureCommands(replacement, commands);
         CHECK(inject(&replacement, QStringLiteral("V1.2.44")));
         CHECK(inject(&replacement, QStringLiteral("R1|0|info serial=NEW 3way=1")));
+        commands.clear();
         model.setDirectConnection(&replacement);
         CHECK(b1->text() == QStringLiteral("ANT 1"));
         CHECK(model.antennaA() == -1);
+        CHECK(commands.size() == 1 && commands.front().contains(QStringLiteral("|antenna read\n")));
+        CHECK(inject(&replacement, QStringLiteral("R2|0|antenna name1=New name2=Other name3=Third")));
+        CHECK(b1->text() == QStringLiteral("New"));
         model.setDirectConnection(&direct);
     }
 
@@ -309,6 +313,34 @@ int main(int argc, char** argv)
     CHECK(b3->text() == QStringLiteral("ANT 3"));
     CHECK(!b1->isVisible());
     CHECK(model.antennaA() == -1);
+
+    // Error replies cannot identify a variant, even with plausible KV data.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|1|info serial=TG123 3way=1")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(!b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
+    CHECK(direct.isThreeWay().value_or(false));
+    CHECK(b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("R1|0|antenna name1=Vertical name2=Other name3=Third")));
+    CHECK(direct.isThreeWay().value_or(false));
+    CHECK(b1->text() == QStringLiteral("Vertical"));
+    commands.clear();
+    b1->click();
+    CHECK(commands.size() == 1 && commands.front().contains(QStringLiteral("|activate ant=1\n")));
+    CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+
+    // A names reply matching the pending info sequence is not evidence of SO2R.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|0|antenna name1=Vertical name2=Other name3=Third")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(!b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
+    CHECK(direct.isThreeWay().value_or(false));
+    CHECK(b1->isVisible());
+    CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
 
     // An invalid variant must not expose antenna controls.
     CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
