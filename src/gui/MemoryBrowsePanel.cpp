@@ -6,6 +6,15 @@
 
 #include <QAbstractItemView>
 #include <QHeaderView>
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QLineEdit>
+#include <QPainter>
+#include <QPen>
+#include <QPixmap>
+#include <QPointF>
+#include <QRectF>
+#include <QToolButton>
 #include <QLabel>
 #include <QPushButton>
 #include <QTableWidgetItem>
@@ -86,7 +95,65 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
         "QPushButton:hover { background: rgba(0, 112, 192, 180); "
         "border: 1px solid {{color.accent.dim}}; }");
     m_addBtn->setToolTip("Save the current slice on this panadapter as a memory.");
-    root->insertWidget(0, m_addBtn, 0);
+    auto* actions = new QHBoxLayout;
+    actions->setSpacing(4);
+    actions->addWidget(m_addBtn, 1);
+    auto* searchButton = new QToolButton(this);
+    searchButton->setObjectName(QStringLiteral("memorySearchButton"));
+    searchButton->setAccessibleName(QStringLiteral("Search memories"));
+    searchButton->setAccessibleDescription(
+        QStringLiteral("Show or hide the memory name filter. Hiding it clears the filter."));
+    searchButton->setToolTip(QStringLiteral("Search memories"));
+    searchButton->setCheckable(true);
+    searchButton->setFixedSize(22, 22);
+    ThemeManager::instance().applyStyleSheet(searchButton,
+        "QToolButton { background: {{color.canon.control}}; border: 1px solid {{color.canon.lineHi}}; border-radius: 2px; }"
+        "QToolButton:hover { background: {{color.canon.nested}}; }"
+        "QToolButton:checked, QToolButton:focus { border-color: {{color.canon.cyan}}; }");
+    const auto updateSearchIcon = [searchButton] {
+        const qreal dpr = searchButton->devicePixelRatioF();
+        QPixmap icon(qRound(16 * dpr), qRound(16 * dpr));
+        icon.setDevicePixelRatio(dpr);
+        icon.fill(Qt::transparent);
+        QPainter painter(&icon);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(ThemeManager::instance().color(searchButton,
+                              QStringLiteral("color.canon.cyan")), 1.5));
+        painter.drawEllipse(QRectF(2, 2, 8, 8));
+        painter.drawLine(QPointF(9, 9), QPointF(14, 14));
+        painter.end();
+        searchButton->setIcon(QIcon(icon));
+    };
+    updateSearchIcon();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            searchButton, updateSearchIcon);
+    actions->addWidget(searchButton);
+    root->insertLayout(0, actions);
+
+    m_searchEdit = new QLineEdit(this);
+    m_searchEdit->setObjectName(QStringLiteral("memorySearchEdit"));
+    m_searchEdit->setAccessibleName(QStringLiteral("Memory name filter"));
+    m_searchEdit->setAccessibleDescription(
+        QStringLiteral("Filter memory names as you type. Typing does not recall a memory."));
+    m_searchEdit->setPlaceholderText(QStringLiteral("Search memory names"));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setFixedHeight(22);
+    ThemeManager::instance().applyStyleSheet(m_searchEdit,
+        "QLineEdit { background: {{color.canon.control}}; color: {{color.canon.ink}};"
+        " border: 1px solid {{color.canon.lineHi}}; border-radius: 2px; padding: 0 4px; }"
+        "QLineEdit:focus { border-color: {{color.canon.cyan}}; }");
+    root->insertWidget(1, m_searchEdit);
+    m_searchEdit->hide();
+    connect(m_searchEdit, &QLineEdit::textChanged, this, &MemoryBrowsePanel::populateTable);
+    connect(searchButton, &QToolButton::toggled, this, [this, searchButton](bool shown) {
+        m_searchEdit->setVisible(shown);
+        if (shown) {
+            m_searchEdit->setFocus(Qt::OtherFocusReason);
+        } else {
+            m_searchEdit->clear();
+            searchButton->setFocus(Qt::OtherFocusReason);
+        }
+    });
     connect(m_addBtn, &QPushButton::clicked, this,
             &MemoryBrowsePanel::quickAddRequested);
 
@@ -190,9 +257,11 @@ void MemoryBrowsePanel::populateTable()
         return lhs.index < rhs.index;
     });
 
+    const QString query = m_searchEdit->text().trimmed();
     for (const MemoryEntry& memory : sortedMemories) {
-        if (memory.freq <= 0.0)
+        if (!displayMemoryName(memory).contains(query, Qt::CaseInsensitive)) {
             continue;
+        }
 
         const int row = m_table->rowCount();
         m_table->insertRow(row);
@@ -217,6 +286,9 @@ void MemoryBrowsePanel::populateTable()
         m_table->setItem(row, 1, nameItem);
     }
 
+    m_emptyLabel->setText(sortedMemories.isEmpty()
+        ? QStringLiteral("No memories are available yet.")
+        : QStringLiteral("No matching memories."));
     const bool hasRows = m_table->rowCount() > 0;
     m_emptyLabel->setVisible(!hasRows);
     m_table->setVisible(hasRows);

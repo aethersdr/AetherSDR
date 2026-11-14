@@ -339,7 +339,7 @@ applets), `src/core/backends/` (one directory per radio family).
 - `IRadioBackend` — the radio seam; six implementors (flex, hl2, icom, sim,
   anan, rtl) ([`docs/agents/backends.md`](docs/agents/backends.md))
 
-**Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
+**Threading:** up to 14 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.

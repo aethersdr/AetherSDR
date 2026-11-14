@@ -39,6 +39,11 @@ public:
         std::optional<int> filterHighHz;
         std::optional<int> gain;
         std::optional<bool> muted;
+        std::optional<int> agcThreshold;
+        std::optional<bool> noiseBlanker;
+        std::optional<bool> noiseReduction;
+        std::optional<bool> ritEnabled;
+        std::optional<int> ritOffsetHz;
         bool operator==(const ReceiveObservation&) const = default;
     };
     const ReceiveObservation& receiveObservation() const { return m_receiveObservation; }
@@ -418,7 +423,7 @@ public:
 
     // Apply a normalized, typed slice delta from the backend
     // (IRadioBackend::sliceChanged). Vendor-neutral fields only — the Flex wire
-    // decode lives in FlexBackend::decodeSliceStatus. Applies only the fields the
+    // decode lives in FlexSliceStatus::decodeValues. Applies only the fields the
     // delta has engaged (present-only). (aetherd RFC 2.3.)
     void applyChanges(const SliceDelta& delta);
 

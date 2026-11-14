@@ -92,7 +92,20 @@ SRC_DIR="$(dirname "$OUT_DIR_ABS")/qtkeychain-src"
 # ── Fetch source ─────────────────────────────────────────────────────────
 rm -rf "$SRC_DIR" "$BUILD_DIR"
 echo "Cloning qtkeychain $QTKEYCHAIN_VERSION..."
-git clone --depth 1 --branch "$QTKEYCHAIN_VERSION" "$QTKEYCHAIN_REPO" "$SRC_DIR"
+for attempt in 1 2 3; do
+    # An interrupted clone may leave a nonempty destination behind.
+    rm -rf "$SRC_DIR"
+    if git clone --depth 1 --branch "$QTKEYCHAIN_VERSION" "$QTKEYCHAIN_REPO" "$SRC_DIR"; then
+        break
+    fi
+    rm -rf "$SRC_DIR"
+    if [ "$attempt" -eq 3 ]; then
+        echo "ERROR: qtkeychain source clone failed after 3 attempts." >&2
+        exit 1
+    fi
+    echo "WARNING: qtkeychain clone failed (attempt $attempt/3); retrying..." >&2
+    sleep $((5 * attempt))
+done
 
 # Verify the tag resolved to the pinned commit (supply-chain hardening #3665).
 ACTUAL_COMMIT="$(git -C "$SRC_DIR" rev-parse HEAD)"

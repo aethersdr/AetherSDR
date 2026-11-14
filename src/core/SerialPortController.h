@@ -98,10 +98,13 @@ signals:
 
 private:
     friend class TxOperationIntegrationTestAccess;
+    friend class SerialInputBaselineTestAccess;
     void publishPttInput(bool active, const TxCoordinator::Request& input = {});
     void publishKeyInput(bool down, const TxCoordinator::Request& input = {});
     void publishPaddleInput(bool dit, bool dah, const TxCoordinator::Request& input = {});
     void retireTxInputs();
+    // Discard queued input and publish the release of held PTT, key and paddle.
+    void releaseHeldTxInputs();
     TxCoordinator::Producer m_txProducer;
     TxCoordinator::Request m_pttInput;
     TxCoordinator::Request m_keyInput;
@@ -137,8 +140,40 @@ private:
     bool          m_lastKeyDown{false};
     bool          m_lastDitActive{false};
     bool          m_lastDahActive{false};
+    // The roles, polarities and paddle swap the current baseline was taken
+    // under. An in-place reload acts only on the pins whose settings differ.
+    InputFunction m_baseCtsFn{InputFunction::None};
+    InputFunction m_baseDsrFn{InputFunction::None};
+    InputFunction m_baseDcdFn{InputFunction::None};
+    bool          m_baseCtsActiveHigh{false};
+    bool          m_baseDsrActiveHigh{false};
+    bool          m_baseDcdActiveHigh{false};
+    bool          m_basePaddleSwap{false};
+    void          recordBaselineSettings();
+    // A paddle line active at open, ignored until it is released.
+    bool          m_ditHeldAtOpen{false};
+    bool          m_dahHeldAtOpen{false};
     QElapsedTimer m_debounceTimer;
     static constexpr int DEBOUNCE_MS = 20;
+
+    // What the CW key and paddle roles read from one sample of the input lines.
+    struct CwLines {
+        bool hasKey = false;
+        bool keyDown = false;
+        bool hasPaddle = false;
+        bool dit = false;
+        bool dah = false;
+    };
+    CwLines cwLines(bool ctsActive, bool dsrActive, bool dcdActive) const;
+    // The lines as they read at open are the baseline for every role, so a line
+    // already active keys nothing until it is released and pressed again.
+    void baselineInputs(bool ctsRaw, bool dsrRaw, bool dcdRaw);
+    // loadSettings() with the port already open: release held inputs, then
+    // baseline under the new polarity and roles.
+    void rebaselineInPlace(bool ctsRaw, bool dsrRaw, bool dcdRaw);
+    // One sample of the raw input lines, from the poll or the Win32 watcher.
+    void applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRaw,
+                          const TxCoordinator::Request& input);
 #endif
 
 // On Windows, HAVE_SERIALPORT is typically defined (Qt6::SerialPort ships for Windows),

@@ -17,6 +17,7 @@
 //
 // Run: ./build/cwx_drain_watch_test
 
+#include "core/backends/flex/FlexCwxStatus.h"
 #include "models/CwxModel.h"
 #include "CwxControlTestFixture.h"
 #include <QCoreApplication>
@@ -39,7 +40,7 @@ void report(const char* name, bool ok, const std::string& detail = {})
 // Deliver a `cwx sent=<idx>` status, the mechanism that drains the watch.
 void feedSent(CwxModel& m, int idx)
 {
-    m.applyStatus({{QStringLiteral("sent"), QString::number(idx)}});
+    m.applyStatusDelta(flexCwxStatus({{QStringLiteral("sent"), QString::number(idx)}}));
 }
 
 } // namespace
@@ -139,7 +140,7 @@ int main(int argc, char** argv)
         m.handleSendReply(FlexCwxControls::decodeReply(0, "10,1", 1), e, 1);      // arm at end 10
 
         // Interleaved unrelated status (as arrives during interlock flicker).
-        m.applyStatus({{QStringLiteral("wpm"), QStringLiteral("25")}});
+        m.applyStatusDelta(flexCwxStatus({{QStringLiteral("wpm"), QStringLiteral("25")}}));
         feedSent(m, 7);                          // partial — not yet drained
         report("item1: queueEmpty not fired before sent reaches end index",
                emptySpy.count() == 0,

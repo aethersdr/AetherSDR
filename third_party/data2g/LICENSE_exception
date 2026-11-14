@@ -1,0 +1,100 @@
+Data2G Interface Exception, version 1.0
+
+Copyright (c) 2026, Andrew Rodland
+
+This is an additional permission granted by the Copyright Holder of
+Data2G, in addition to the Artistic License 2.0 (the "License") in the
+file LICENSE. It is an arrangement made outside the License, as the
+License's preamble allows. It does not modify the License, and every
+term defined in the License has the same meaning here.
+
+1. Purpose
+
+Section 8 of the License lets You embed the Package in a larger work
+and Distribute the result without restriction, "provided the result
+does not expose a direct interface to the Package". Data2G is a modem.
+Programs commonly use it through its control and data ports (such as
+its TCP and KISS ports) or through its programming interfaces. The
+Copyright Holder does not intend Section 8 to stop a substantial
+application from embedding Data2G and offering those interfaces to
+other programs. The Copyright Holder does intend it to stop a product
+that is little more than a repackaging of Data2G. This exception says
+so explicitly.
+
+2. Definitions
+
+"Larger Work" means a work that embeds, links, or bundles a Standard
+or Modified Version of the Package, as described in Section 8 of the
+License.
+
+"Exposing an Interface" means making any interface of the Package
+available to users or to other programs, directly or through the
+Larger Work. This includes the Package's control and data ports, its
+network and serial interfaces, its command-line options, and its
+programming interfaces.
+
+3. Permission
+
+Notwithstanding the proviso in Section 8 of the License, You may
+Distribute a Larger Work that Exposes an Interface of the Package,
+under the same terms that Section 8 grants to a Larger Work that does
+not, provided the Larger Work is a significant work in its own right
+and not merely a facade over the Package.
+
+4. Significant work
+
+A Larger Work is a significant work in its own right if it provides
+substantial functionality, beyond the Package, that its users would
+value even if it did not Expose an Interface of the Package.
+
+A Larger Work is merely a facade over the Package if its primary
+purpose or effect is to make the Package's functionality available
+under another name, packaging, or user interface. Examples are a
+program that launches the Package and forwards its ports, or a
+program whose main added feature is a replacement user interface for
+the Package's own modem functions.
+
+For example, these are significant works in their own right:
+
+  - a messaging, email, or file-transfer client that uses the Package
+    as its modem and also accepts connections from other programs on
+    the Package's ports;
+  - a station-control, logging, or digital-modes suite that includes
+    the Package among its modes;
+  - a mobile application that runs the Package for its own features
+    and also lets other applications on the device use its ports.
+
+These are not:
+
+  - a rebranded or repackaged build of the Package whose ports are its
+    main reason to exist;
+  - a "Data2G server" or "Data2G app" that adds little beyond starting
+    the Package, configuring it, and relaying its interfaces.
+
+Distributing a Standard Version, or a Modified Version under Section 4
+of the License, is not affected by this exception. Those Versions
+expose their interfaces under those Sections already.
+
+5. Other terms
+
+Except for the proviso in Section 8, the License applies in full. In
+particular, this exception does not permit You to remove copyright
+notices, to misrepresent a Modified Version as the Standard Version,
+or to use the name "Data2G" for a Modified Version in a way that
+Section 4 of the License does not allow.
+
+If You Distribute a Modified Version, You may include this exception
+with it, or remove it.
+
+6. Scope
+
+This exception applies to material in the Package for which the
+Copyright Holder named above holds the copyright, and to contributions
+whose authors have agreed to license them under this exception. It
+does not apply to material under other licenses (for example, code
+under the Apache License 2.0 in LICENSE_ion), which remains under its
+own license.
+
+If You are unsure whether a Larger Work qualifies, You may ask the
+Copyright Holder. A written statement from the Copyright Holder that
+a Larger Work qualifies is conclusive for that Larger Work.

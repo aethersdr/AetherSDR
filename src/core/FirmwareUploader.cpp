@@ -147,10 +147,10 @@ bool FirmwareUploader::beginOperation(const QByteArray& fileData, const QString&
     const Generation generation = m_generation;
     const QPointer<FirmwareUploader> self(this);
     m_statusConnection = connect(
-        m_model, &RadioModel::statusReceived, this,
-        [self, generation](const QString& object, const QMap<QString, QString>& kvs) {
+        m_model, &RadioModel::firmwareUpdateReported, this,
+        [self, generation](const FirmwareUpdateStatus& status) {
             if (self) {
-                self->onRadioStatus(generation, object, kvs);
+                self->onUpdateStatus(generation, status);
             }
         });
     return true;
@@ -442,48 +442,39 @@ void FirmwareUploader::onError(Generation generation, QTcpSocket* socket)
     finishOperation(generation, Outcome::Failed, tr("Upload failed: %1").arg(socket->errorString()));
 }
 
-void FirmwareUploader::onRadioStatus(Generation generation,
-                                      const QString& object,
-                                      const QMap<QString, QString>& kvs)
+void FirmwareUploader::onUpdateStatus(Generation generation, const FirmwareUpdateStatus& status)
 {
     const QPointer<FirmwareUploader> alive(this);
-    if (!isCurrent(generation) || object != QStringLiteral("file update")) {
+    if (!isCurrent(generation)) {
         return;
     }
 
-    if (kvs.contains(QStringLiteral("failed"))) {
-        bool parsed = false;
-        const int failed = kvs.value(QStringLiteral("failed")).toInt(&parsed);
-        if (parsed && failed == 1) {
-            m_outcomeSettledByRadio = true;
-            const QString reason = kvs.value(QStringLiteral("reason")).trimmed();
+    if (status.failed) {
+        m_outcomeSettledByRadio = true;
+        if (*status.failed) {
+            const QString reason = status.reason;
             finishOperation(generation,
                             Outcome::Failed,
                             reason.isEmpty()
                                 ? tr("Radio reported that firmware installation failed")
                                 : tr("Radio reported that firmware installation failed: %1").arg(reason));
-            return;
-        }
-        if (parsed && failed == 0) {
+        } else {
             // The radio's own word that it accepted the image. FlexLib treats
             // any parseable `failed` as terminal and drops the command channel
             // on it ("close main command channel too since the radio will
             // reboot", Radio.cs:12626-12630), so this — not a drained socket,
             // not transfer=1.00 — is the one signal that confirms an install.
-            m_outcomeSettledByRadio = true;
             finishOperation(generation,
                             Outcome::Succeeded,
                             tr("Radio accepted the firmware image and is rebooting"));
-            return;
         }
-    }
-
-    bool parsed = false;
-    const double transfer = kvs.value(QStringLiteral("transfer")).toDouble(&parsed);
-    if (!parsed || !std::isfinite(transfer) || transfer < 0.0 || transfer > 1.0) {
         return;
     }
-    const int percent = static_cast<int>(transfer * 100.0);
+
+    if (!status.transfer) {
+        return;
+    }
+    const int percent = static_cast<int>(*status.transfer * 100.0);
     m_radioProgressSeen = true;
     m_radioProgressPercent = percent;
     m_radioProgressAge.restart();
