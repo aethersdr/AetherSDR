@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7840,
+          "line": 7826,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7761,
+          "line": 7747,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7812,
+          "line": 7798,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7668,
+          "line": 7654,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 9022,
+          "line": 9010,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8059,
+          "line": 8045,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,17 +227,17 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8037,
+          "line": 8023,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 239,
+          "line": 246,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8116,
+          "line": 8102,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -254,7 +254,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 177,
+          "line": 184,
           "text": "capped by net.core.rmem_max"
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1509,
+          "line": 1489,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1950,
+          "line": 2003,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12799,
+          "line": 12818,
           "text": "RadioModel: DAX TX create failed"
         }
       ]

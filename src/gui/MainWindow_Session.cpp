@@ -3289,16 +3289,21 @@ void MainWindow::wirePanStreamTxSink()
 void MainWindow::wirePanStreamTciSinks()
 {
 #ifdef HAVE_WEBSOCKETS
+    if (!tciServer())
+        return;
+    // Spectrum rows come from the neutral pan feed, so every family with a
+    // panadapter feeds TCI, Flex through its typed receive path. RadioModel
+    // outlives a backend swap, which reruns this.
+    connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
+            tciServer(), &TciServer::onWaterfallRowReady, Qt::UniqueConnection);
     auto* ps = m_radioModel.panStream();
-    if (!ps || !tciServer())
+    if (!ps)
         return;
     disconnect(m_tciPcmConnection);
     m_tciPcmConnection = connect(ps, &PanadapterStream::daxPcmReady,
             tciServer(), tciServer()->daxPcmSink(), Qt::DirectConnection);
     connect(ps, &PanadapterStream::iqDataReady,
             tciServer(), &TciServer::onIqDataReady);
-    connect(ps, &PanadapterStream::waterfallRowReady,
-            tciServer(), &TciServer::onWaterfallRowReady);
     // F6 (#4448): keeps TCI's channel→TRX routing cache truthful; previously
     // subscribed inside TciServer, which left it disconnected after a family swap.
     connect(ps, &PanadapterStream::daxStreamUnregistered,
