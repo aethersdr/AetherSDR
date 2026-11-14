@@ -2298,6 +2298,46 @@ static const char *band_for_cycle(const config_t *c, const char *grid, long long
     return BANDS[b].name;
 }
 
+/* Decode one 15 s WAV and print what it found, one message per line.
+ *
+ * This is the harness the #7114 OSD ruling needs: "measure the decode rate
+ * against the same reference corpus with and without it". It runs the SAME
+ * run_decode() the live agent runs, so a corpus score measures the decoder
+ * the radio ships, not a separate test path.
+ *
+ * Output is one line per spot: frequency, SNR, then the message text. A
+ * scoring harness compares the message text against ft8_lib's reference
+ * .txt files, which carry their metadata columns in a different format.
+ *
+ * The dial is fixed at the 20 m FT8 frequency because a WAV carries no dial:
+ * it only sets the absolute frequency printed, never what decodes. */
+static int decode_wav_file(const char *path)
+{
+    static float audio[15 * FT8_RATE];
+    int nsamples = (int)(sizeof audio / sizeof audio[0]);
+    int rate = 0;
+    if (load_wav(audio, &nsamples, &rate, path) < 0) {
+        fprintf(stderr, "decodewav: cannot read %s\n", path);
+        return 1;
+    }
+    if (rate != FT8_RATE) {
+        fprintf(stderr, "decodewav: %s is %d Hz, expected %d\n", path, rate, FT8_RATE);
+        return 1;
+    }
+    decode_t dc;
+    memset(&dc, 0, sizeof dc);
+    dc.cycle_t = 1700000000LL;
+    dc.dial_hz = 14074000LL;
+    snprintf(dc.band, sizeof dc.band, "20m");
+    double t0 = mono_s();
+    run_decode(&dc, audio, nsamples);
+    double took = mono_s() - t0;
+    for (int i = 0; i < dc.nspots; i++)
+        printf("%8lld %4d %s\n", dc.spots[i].hz, dc.spots[i].snr, dc.spots[i].msg);
+    fprintf(stderr, "decodewav: %s -> %d spot(s) in %.0f ms\n", path, dc.nspots, took * 1000);
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     signal(SIGPIPE, SIG_IGN);
@@ -2317,6 +2357,14 @@ int main(int argc, char *argv[])
     snprintf(g_work, sizeof g_work, "%s/aether-wspr", tmp);
     mkdir(g_work, 0700);
     if (argc >= 2 && !strcmp(argv[1], "selftest")) return selftest();
+    /* decodewav: one WAV in, its messages out, nothing else. Dispatched here
+     * beside selftest and BEFORE the status listener is bound, because it is
+     * a batch tool -- a scoring run invokes it once per file, and binding
+     * STATUS_PORT would make every invocation after the first fail with
+     * "Address in use" instead of decoding. It touches no socket and no
+     * radio. Exit status is 0 when the file decoded, 1 when it could not be
+     * read, so a harness can tell "no messages" from "no decode". */
+    if (argc >= 3 && !strcmp(argv[1], "decodewav")) return decode_wav_file(argv[2]);
     /* The radio tells a container its API address. */
     if (getenv("SSDR_RADIO_ADDRESS") && *getenv("SSDR_RADIO_ADDRESS")) g_radio_addr = getenv("SSDR_RADIO_ADDRESS");
     if (getenv("AETHER_WSPR_RADIO")) g_radio_addr = getenv("AETHER_WSPR_RADIO");

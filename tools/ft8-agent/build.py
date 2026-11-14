@@ -79,8 +79,8 @@ def zig_cc(args, out, cache):
 
 
 def check_version():
-    agent = re.search(r'#define AGENT_VERSION "([^"]+)"', (HERE / 'agent.c').read_text())
-    cfg = re.search(r'^Version: "([^"]+)"', (HERE / 'package' / f'{NAME}.cfg').read_text(), re.M)
+    agent = re.search(r'#define AGENT_VERSION "([^"]+)"', (HERE / 'agent.c').read_text(encoding='utf-8'))
+    cfg = re.search(r'^Version: "([^"]+)"', (HERE / 'package' / f'{NAME}.cfg').read_text(encoding='utf-8'), re.M)
     if not agent or not cfg or agent.group(1) != cfg.group(1):
         raise SystemExit(f'{NAME}.cfg Version and AGENT_VERSION in agent.c disagree')
 
@@ -94,8 +94,8 @@ def check_version_zig():
 def licenses():
     zig_lib = subprocess.run(['zig', 'env'], capture_output=True, text=True, check=True).stdout
     lib_dir = re.search(r'"?lib_dir"?\s*[:=]\s*"([^"]+)"', zig_lib).group(1)
-    musl = pathlib.Path(lib_dir, 'libc', 'musl', 'COPYRIGHT').read_text()
-    ft8 = (HERE / 'ft8_lib' / 'LICENSE').read_text()
+    musl = pathlib.Path(lib_dir, 'libc', 'musl', 'COPYRIGHT').read_text(encoding='utf-8')
+    ft8 = (HERE / 'ft8_lib' / 'LICENSE').read_text(encoding='utf-8')
     return ('AetherFT8 is part of AetherSDR, licensed under the GNU GPL v3\n'
             '(https://github.com/aethersdr/AetherSDR). It includes the ft8_lib\n'
             'decoder (Karlis Goba YL3JG, MIT; https://github.com/kgoba/ft8_lib),\n'
@@ -153,7 +153,7 @@ def main():
 
         if not a.armv7_only:
             zig_cc(ARM64, stage / 'aether-ft8', cache)
-            version = re.search(r'#define AGENT_VERSION "([^"]+)"', (HERE / 'agent.c').read_text()).group(1)
+            version = re.search(r'#define AGENT_VERSION "([^"]+)"', (HERE / 'agent.c').read_text(encoding='utf-8')).group(1)
             image = mkimage().build_image(NAME, [('aether-ft8', (stage / 'aether-ft8').read_bytes(), 0o755),
                                                  ('LICENSES', license_text, 0o644)], version, CONTAINER_ENV)
             if len(image) > MAX_BYTES:
