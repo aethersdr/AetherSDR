@@ -264,8 +264,9 @@ Initial non-TX methods are `capabilities.get`, `resource.get`,
 `panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Remote-client
 pairing adds `pairing.begin` (local socket, `control`) and `pairing.complete`
 (sent instead of `hello` on the TLS network listener, so like `hello` it
-carries no `sessionId`); see [`aetherd-remote-clients.md`](aetherd-remote-clients.md)
-§3.  Connect requests use
+carries no `sessionId`), and paired clients are listed and removed at run time
+with `remoteClients.list` and `remoteClients.revoke` (local socket, `control`);
+see [`aetherd-remote-clients.md`](aetherd-remote-clients.md) §3.  Connect requests use
 typed family-neutral fields; backend-specific connection data lives in a
 namespaced validated object and never includes a persistent plaintext credential.
 

@@ -73,6 +73,14 @@ public:
     // with it would be invalid.
     [[nodiscard]] bool add(const Record& record);
     [[nodiscard]] bool revoke(const QString& id);
+    // The live remote-scope records, for listing paired clients: identity,
+    // scope and the name given at pairing. Never a digest.
+    struct RemoteListing {
+        QString id;
+        Role role{Role::RemoteControl};
+        QString name;
+    };
+    [[nodiscard]] QList<RemoteListing> remoteRecords() const;
     void clear();
     [[nodiscard]] Principal verify(const QJsonValue& auth) const;
     [[nodiscard]] qsizetype size() const;

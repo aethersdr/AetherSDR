@@ -1401,6 +1401,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/gui/PanadapterMessageOverlay.h
+    src/gui/StatusBarMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
     src/gui/WindowRepaintScheduler.cpp
     src/gui/SpectrumWidget.cpp
