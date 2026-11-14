@@ -1,5 +1,9 @@
 #pragma once
 
+#include "RadioStatusObservation.h"
+#include "core/ReceiveData.h"
+#include "SetupStatusObservation.h"
+
 #include "IndependentTxControl.h"
 #include "CwControlRequest.h"
 
@@ -23,6 +27,7 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include "core/backends/DisplayObservation.h"
 #include "core/backends/AmpDelta.h"
 #include "core/backends/AudioControlRequest.h"
 #include "core/backends/DaxTxStream.h"
@@ -38,6 +43,7 @@
 #include "core/backends/ModelControlRequest.h"
 #include "core/backends/CwTextRequest.h"
 #include "core/backends/RadioSetupRequest.h"
+#include "core/backends/TransmitServiceRequest.h"
 #include "core/backends/SpotRequest.h"
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
@@ -49,6 +55,8 @@
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/SliceObservation.h"
+#include "core/backends/TransmitServiceStatus.h"
 #include "core/backends/SpectrumCoverage.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
@@ -71,6 +79,10 @@ struct RadioConnectRequest {
     RadioSerialIdentity serialIdentity;
     // Local IPv4 address that reached the radio; null lets the OS choose.
     QHostAddress localBindAddress;
+    // RadioModel's automatic retry after a lost link, not an operator's connect.
+    // A backend whose radio obeys any controller (ANAN Protocol 2) checks the
+    // radio is free first, so a retry never fights another client for it.
+    bool automaticReconnect = false;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
@@ -119,6 +131,8 @@ struct MemoryRecallDetails {
 //     equivalents, which RadioModel drives directly (including
 //     BlockingQueuedConnection) until #5262 M4 / #5554 §2.6. No new call site may
 //     join them, and every handler bound to them is generation-guarded per rule 5.
+//     Their statusIngress() is not a worker: it lives on this thread and is the
+//     one way their wire lines reach the model (docs/agents/backends.md).
 //  4. SEAM PAYLOADS ARE DECLARED AND REGISTERED IN ONE PLACE. Every type crossing
 //     the seam (*Delta structs, MeterDef, LinkStats) has Q_DECLARE_METATYPE in
 //     its header AND qRegisterMetaType in RadioModel's constructor. Qt 6 queued
@@ -214,7 +228,14 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
     { return ReceiveDispatch::Unsupported; }
-    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {})
+    virtual ReceiveDispatch requestDvk(const DvkRequest&, const TransmitServiceCompletion&,
+                                       const TxCoordinator::Command& = {}, const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestNavtex(const NavtexRequest&, const TransmitServiceCompletion&,
+                                          const TxCoordinator::Command&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {},
+                                          const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
         const PanDisplayRequest& request, const RadioControlCompletion& = {},
@@ -440,6 +461,10 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceLock(int, bool)
     { return ReceiveDispatch::LocalOnly; }
+    // Play the receiver's audio on the radio's own speaker (RadioSpeakerControl).
+    // A backend that does reports the state it adopted through radioSpeakerAudioReported().
+    virtual ReceiveDispatch requestRadioSpeakerAudio(bool)
+    { return ReceiveDispatch::Unsupported; }
 
     // Compatibility implementation hooks for backend-internal callers and
     // existing paired AGC users. New receive routing uses the adapters above.
@@ -1192,6 +1217,10 @@ public:
         QString localEndpoint;
     };
     virtual LinkStats linkStats() const { return {}; }
+    // Separate display/meter transport snapshots do not confirm a TCP ping.
+    virtual std::optional<ReceiveTelemetry> receiveTelemetry() const { return {}; }
+    // Revoke buffered and detached receive payloads before model/session teardown.
+    virtual void retireReceiveData() {}
 
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
@@ -1202,6 +1231,13 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    // A Flex-shaped panadapter/waterfall report: identity, ownership, pairing
+    // and present-only values. Delivered on the owner thread behind the
+    // backend's status fence (Flex: FlexStatusIngress).
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
+    // A typed transverter, USB cable, filter sharpness or license report,
+    // stamped with the status epoch it arrived in (Flex: FlexStatusIngress).
+    void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
     void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
@@ -1252,6 +1288,7 @@ signals:
     // the backend populates only the fields the wire reported, the model applies
     // exactly those. Replaces the prior stringly-keyed QVariantMap payload.
     void sliceChanged(int sliceId, const SliceDelta& delta);
+    void sliceObserved(const AetherSDR::SliceObservation& observation);
     // Where a slice IS a receiver, closing the receiver emits BOTH this and
     // panRemoved, or the stale SliceModel keeps counting against maxSlices().
     void sliceRemoved(int sliceId);
@@ -1313,6 +1350,15 @@ signals:
     // residual). Typed + compiler-checked; the backend populates only the fields
     // the wire reported and RadioModel applies them + its own orchestration.
     void radioChanged(const RadioDelta& delta);
+    // A Flex radio-global, client, oscillator or static-network report, stamped
+    // with the status epoch it arrived in (Flex: FlexStatusIngress). Flex
+    // radio-global status arrives here and never also on radioChanged, which
+    // carries native backends and Flex's nickname/info replies.
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
+    // The radio voice keyer's and NAVTEX's reports, stamped with the status
+    // epoch they arrived in (Flex: FlexStatusIngress).
+    void dvkStatusObserved(const AetherSDR::DvkStatusObservation& observation);
+    void navtexStatusObserved(const AetherSDR::NavtexStatusObservation& observation);
 
     // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
     // backend tokenizes the vendor GPS status line into a present-only GpsDelta;
@@ -1407,6 +1453,8 @@ signals:
     // range/step are family-specific and reported via RadioCapabilities). The
     // backend decodes it from vendor status; RadioModel drives the pan.
     void panRfGainChanged(const QString& panId, int gain);
+    // Whether the radio's own speaker is being fed (RadioSpeakerControl), as adopted.
+    void radioSpeakerAudioReported(bool on);
     // Operating state moved (frequency, mode, passband, rate, gain, drive) —
     // fetch it with currentOperatingState(). Emitted only by backends with a
     // non-empty clientSettingsDomains declaration; rate-limiting is the
@@ -1460,16 +1508,18 @@ signals:
                          const QVariantMap& fields);
 
     // ---- data plane UP (RFC §4.2) ----
-    // Normalized outlets for spectrum and audio; binary frame formats are step-4
-    // work, so a backend may relay the existing in-tree frame types. No separate
-    // waterfall outlet: RadioModel derives the row from spectrumFrameReady, paced by
-    // the pan's waterfall rate. A backend with a genuinely separate waterfall plane
-    // adds an outlet together with its consumer.
+    // Native backends publish spectrumFrameReady; RadioModel derives their
+    // paced waterfall from it. The receive* outlets carry independently decoded
+    // display planes, converted meter batches and transport snapshots. They are
+    // in-process owning payloads, not the remote binary streaming protocol.
     // A producer may attach wider, same-observation RF coverage. Existing
     // producers omit it; consumers interested only in the viewport keep their
     // two-argument connection. One emission owns spectrum + paced history.
     void spectrumFrameReady(int panId, const QByteArray& frame,
                             const AetherSDR::SpectrumCoverage& coverage = AetherSDR::SpectrumCoverage());
+    void receiveSpectrumReady(const AetherSDR::ReceiveSpectrumFrame& frame);
+    void receiveWaterfallReady(const AetherSDR::ReceiveWaterfallRow& row);
+    void receiveMetersReady(const AetherSDR::ReceiveMeterBatch& batch);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:

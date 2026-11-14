@@ -1,8 +1,10 @@
 // Production encoders and model admission, with unopened transports only.
+#include "core/backends/flex/FlexGraphicEqStatus.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "PanControlTestFixture.h"
 #include "core/backends/sim/SimBackend.h"
+#include "IqStatusFixture.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -12,6 +14,8 @@
 #include <cstdio>
 #include <thread>
 #include <vector>
+
+
 
 using namespace AetherSDR;
 
@@ -252,7 +256,7 @@ void iqAndBinding()
     check(!f.guards.front().permits(), "IQ Off revokes the unanswered create at the terminal writer");
     iq.createStream(1);
     f.answer(0, 0x100);
-    iq.applyStreamStatus(0x100, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}});
+    iq.applyStreamDelta(iqStatus(0x100, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}}));
     check(!iq.stream(1).exists, "canceled late stream cannot flash the applet back On");
     events();
     check(f.backend->commands().count(QStringLiteral("stream create type=dax_iq daxiq_channel=1")) == 2,
@@ -260,7 +264,7 @@ void iqAndBinding()
     const size_t create = f.backend->writes.size() - 1;
     f.answer(create, 0x101);
     f.stream(0x101);
-    iq.applyStreamStatus(0x101, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}});
+    iq.applyStreamDelta(iqStatus(0x101, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}}));
     check(iq.stream(1).exists && iq.stream(1).streamId == 0x101 && !iq.createPending(1), "only the current allocation becomes active");
     PanadapterModel* pan = f.publish(QStringLiteral("0x40000001"));
     check(f.radio.requestPanIqBinding(pan, 1) == ReceiveDispatch::Dispatched
@@ -460,7 +464,7 @@ void remoteRxAndNativeAudio()
     int requests = 0;
     QObject::connect(&native.equalizerModel(), &EqualizerModel::controlRequested, &native,
         [&requests](const GraphicEqRequest&) { ++requests; });
-    native.equalizerModel().applyRxEqStatus({{"63Hz", "3"}, {"mode", "1"}});
+    native.equalizerModel().applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Receive, {{"63Hz", "3"}, {"mode", "1"}}));
     check(requests == 0, "radio EQ observation never feeds back a control request");
     std::thread offThread([&native] {
         native.equalizerModel().setRxBand(EqualizerModel::B63, 5);
@@ -482,6 +486,10 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("audio-control-routing"));
     qputenv("XDG_RUNTIME_DIR", profile.path().toUtf8());
+    // Each IQ stream builds a pipe, which loads module-pipe-source through
+    // pactl on the model's worker thread; answer it here so the host's
+    // PipeWire is never touched (#6726).
+    DaxIqModel::setPactlRunnerForTest([](const QStringList&) { return quint32{0}; });
     QCoreApplication app(argc, argv);
     encoding();
     identityAndReplies();

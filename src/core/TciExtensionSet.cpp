@@ -97,6 +97,20 @@ const TciExtensionSet::Group* TciExtensionSet::offeredGroupFor(const QString& na
     return nullptr;
 }
 
+void TciExtensionSet::notifyResent() const
+{
+    // Copied first: a hook that registers a group reallocates m_groups.
+    QVector<std::function<void()>> hooks;
+    for (const Group& group : m_groups) {
+        if (group.resent) {
+            hooks.append(group.resent);
+        }
+    }
+    for (const auto& hook : std::as_const(hooks)) {
+        hook();
+    }
+}
+
 bool TciExtensionSet::isExtensionCommand(const QString& lowerName)
 {
     return lowerName.startsWith(kPrefix);

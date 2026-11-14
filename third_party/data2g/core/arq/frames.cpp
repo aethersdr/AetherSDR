@@ -303,8 +303,8 @@ Bytes Connect::pack() const {
 
 std::string ext_name(int t) {
     static const char* names[] = {"pad",  "new",   "abandon", "rv",    "bitmap", "resync", "report", "survey", "sound",
-                                  "buffer", "sess", "reply",  "chat",  "cq",     "dupctl", "comp",   "id",     "drained", "inline"};
-    static_assert(std::size(names) == T_INLINE + 1);
+                                  "buffer", "sess", "reply",  "chat",  "cq",     "dupctl", "comp",   "id",     "drained", "inline", "nods"};
+    static_assert(std::size(names) == T_NODS + 1);
     return t >= 0 && t < static_cast<int>(std::size(names)) ? names[t] : "ext " + std::to_string(t);
 }
 

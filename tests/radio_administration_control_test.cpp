@@ -73,6 +73,7 @@ public:
         });
         wan.processLine(QByteArrayLiteral("R10|0|"));
         wan.processLine(QByteArrayLiteral("R10|0|"));
+        QCoreApplication::sendPostedEvents(&wan);   // replies answer after queued status
         return erasedBeforeCallback && completions == 1 && wan.m_pendingCallbacks.contains(11);
     }
     static bool rebooting(const RadioModel& radio) { return radio.m_rebootInProgress; }

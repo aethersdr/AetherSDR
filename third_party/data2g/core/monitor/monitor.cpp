@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "arq/modes.hpp"
+#include "arq/nod.hpp"
 #include "kisslink/kisslink.hpp"
 #include "tables/zdict.hpp"
 
@@ -170,6 +171,12 @@ void Monitor::learn(int key, const std::string& caller, const std::string& calle
 }
 
 Dump Monitor::burst(const BurstHeard& b, const std::string& when) {
+    if (b.lost) return burst(b, nullptr, when);
+    ModemRx rx(b.heard, nullptr, DD_BUDGET_S, b.soft);
+    return burst(b, &rx, when);
+}
+
+Dump Monitor::burst(const BurstHeard& b, ModemRx* rx, const std::string& when) {
     Dump d;
     char line[200];
     std::snprintf(line, sizeof line, "%s  %s x%d", when.c_str(), b.submode.c_str(), b.n_cw);
@@ -179,19 +186,36 @@ Dump Monitor::burst(const BurstHeard& b, const std::string& when) {
         d.head += line;
     }
     d.head += "\n";
-    if (b.lost) {
+    if (b.lost || !rx) {
         d.head += "  header only: burst lost\n";
         return d;
     }
-    ModemRx rx(b.heard, nullptr, DD_BUDGET_S, b.soft);
-    read(rx, d);
+    read(*rx, d);
     return d;
 }
+
+namespace {
+std::string nod_note(const TxBurst& b) {
+    return b.nod ? " (nod " + std::to_string(b.nod->first) + ": " + arq::nod::describe(b.nod->first) + ")" : "";
+}
+}  // namespace
 
 Dump Monitor::sent(const TxBurst& b, const std::string& when) {
     Dump d;
     d.tx = true;
-    d.head = when + "  TX " + b.submode + " x" + std::to_string(b.slots.size()) + "\n";
+    d.head = when + "  TX " + b.submode + " x" + std::to_string(b.slots.size()) + nod_note(b) + "\n";
+    // our own session's key, from what we send: known even if its CONNECT
+    // was never read here (monitoring turned on mid-session, or a CONNECT
+    // only the session's primed or combined decode read)
+    if (!b.slots.empty() && b.slots[0].mask_id.key) learn(b.slots[0].mask_id.key);
+    SentRx rx(b);
+    read(rx, d);
+    return d;
+}
+
+Dump Monitor::nod_heard(const TxBurst& b, const std::string& when) {
+    Dump d;
+    d.head = when + "  RX " + b.submode + " x" + std::to_string(b.slots.size()) + nod_note(b) + "\n";
     SentRx rx(b);
     read(rx, d);
     return d;
@@ -307,7 +331,11 @@ void Monitor::session_frame(const Bytes& body, int key, int dir, Dump& d) {
         if (connects_.size() > MAX_KEYS) connects_.erase(connects_.begin());  // ponytail: by nonce, not age
         learn(k, caller, callee);
         for (int dir : {0, 1})  // a retry, or a late copy, leaves a stream under way alone
-            if (Side& x = sides_[{k, dir}]; !x.started) x.fresh = true;
+            if (Side& x = sides_[{k, dir}]; !x.started) {
+                x.fresh = true;
+                x.epoch = 0;  // a new session's slicing: no abandon yet, so resends are read (and combined) from the first
+                x.epoch_known = true;
+            }
         char t[96];
         std::snprintf(t, sizeof t, " v%d nonce %04x cap %d t_turn %.1f s -> key %04x", c.version, nonce, c.cap,
                       c.t_turn10 / 10.0, k);
@@ -353,8 +381,8 @@ void Monitor::arq_burst(PlainRx& rx, const Control& ctl, int key, int dir, int d
     flush(o, key, 1 - dir, d);
 
     if (const auto e = ext.find(T_ABANDON); e != ext.end() && e->second.size() >= 2) {
-        const int epoch = e->second[1] >> 1;
-        if (!s.epoch_known || epoch != s.epoch) {
+        const int epoch = e->second[1] >> 1;  // 7 bits; a scan (below) finds it mod EPOCH_MOD
+        if (!s.epoch_known || pmod(epoch, EPOCH_MOD) != pmod(s.epoch, EPOCH_MOD)) {
             s.epoch = epoch;
             s.epoch_known = true;
             if (s.started) {

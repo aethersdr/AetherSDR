@@ -72,7 +72,7 @@ bool isBeacon(const Data2gHeardBurst& burst)
 void identity()
 {
     check(Data2gReceiveModel::available(), "the model is available in this build");
-    check(Data2gReceiveModel::upstreamVersion() == QStringLiteral("0.4.3"),
+    check(Data2gReceiveModel::upstreamVersion() == QStringLiteral("0.5.0"),
           "the model reports the vendored release");
 }
 

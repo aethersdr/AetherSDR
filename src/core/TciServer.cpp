@@ -3752,11 +3752,23 @@ void TciServer::advertiseExtensions(ClientState& client, bool onlyIfChanged)
     }
 }
 
-void TciServer::announceExtensionSet()
+bool TciServer::announceExtensionSet()
 {
+    const QString line = m_extensions.advertisement();
+    bool anyEnabled = false;
+    bool allBehind = true;
     for (ClientState& client : m_clients) {
+        if (client.extensionsEnabled) {
+            anyEnabled = true;
+            allBehind = allBehind && client.extensionsAdvertised != line;
+        }
         advertiseExtensions(client, true);
     }
+    const bool resent = anyEnabled && allBehind;
+    if (resent) {
+        m_extensions.notifyResent();
+    }
+    return resent;
 }
 
 void TciServer::handleExtensionEnable(TciClient* ws, const QString& cmd)
@@ -3794,7 +3806,10 @@ void TciServer::handleExtensionCommand(TciClient* ws, const QString& cmd)
         }
     }
     const QPointer<TciClient> socket(ws);
-    const TciExtensionSet::Result result = group->handle(name, args);
+    // Copied first: a handler that registers a group reallocates the registry
+    // and would destroy itself mid-call. `group` is not used after this.
+    const auto handle = group->handle;
+    const TciExtensionSet::Result result = handle(name, args);
     if (ClientState* current = socket ? clientStateFor(socket) : nullptr) {
         sendExtensionText(*current, result.reply);
     }

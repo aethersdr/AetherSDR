@@ -10,6 +10,7 @@
 #include "core/TailnetShimDownloader.h"
 #include "core/RadioHealthClient.h"
 #include "core/RadioHealthPackage.h"
+#include "core/AetherGpsPackage.h"
 #include "core/WsprAgent.h"
 #include "TailnetShimDialog.h"
 #include "WsprConfigureWindow.h"
@@ -125,17 +126,6 @@ WfpSupportUiState wfpSupportUiState(const RadioModel* radioModel)
     };
 }
 
-QString wfpRuntimeStatusText(const FlexWaveformModel& wfModel)
-{
-    const QString powerText = wfModel.wfpPowered()
-        ? QObject::tr("WFP ON")
-        : QObject::tr("WFP OFF");
-    const QString readyText = wfModel.wfpReady()
-        ? QObject::tr("READY")
-        : QObject::tr("NOT READY");
-    return QObject::tr("%1, %2").arg(powerText, readyText);
-}
-
 TailnetShimPackage remoteAccessPackageFor(const RadioModel* radioModel)
 {
     return remoteAccessUsesNativePackage(radioModel->capabilities().platform)
@@ -155,26 +145,10 @@ QString dockerInstallBlockerText(const RadioModel* radioModel,
     const RadioPlatform platform = radioModel
         ? radioModel->capabilities().platform
         : RadioPlatform::Unknown;
-    switch (dockerWaveformInstallBlocker(connected, platform,
-                                         wfModel.wfpStatusSeen(),
-                                         wfModel.wfpPowered(),
-                                         wfModel.wfpReady())) {
-    case DockerWaveformInstallBlocker::None:
-        return {};
-    case DockerWaveformInstallBlocker::NotConnected:
-        return QObject::tr(
-            "Connect to a radio before installing Docker waveform images.");
-    case DockerWaveformInstallBlocker::UnsupportedPlatform:
-        return QObject::tr(
-            "This radio platform does not support on-radio Docker waveform "
-            "deployment.");
-    case DockerWaveformInstallBlocker::RuntimeStatusUnknown:
-        return QObject::tr(
-            "WFP runtime status has not been reported by this radio.");
-    case DockerWaveformInstallBlocker::WfpNotReady:
-        return wfpRuntimeStatusText(wfModel);
-    }
-    return {};
+    return dockerInstallBlockerMessage(
+        dockerWaveformInstallBlocker(connected, platform, wfModel.wfpStatusSeen(),
+                                     wfModel.wfpPowered(), wfModel.wfpReady()),
+        wfModel.wfpPowered(), wfModel.wfpReady());
 }
 
 QString existingParentDirectoryForPath(const QFileInfo& info)
@@ -1564,8 +1538,14 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     }
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &WaveformsDialog::updateInstallButtonState);
-    connect(m_radioModel, &RadioModel::connectionStateChanged,
-            this, &WaveformsDialog::updateHealthBar);
+    connect(m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        // An uninstall the radio never answered (the session ended) must not
+        // leave the health checkbox disabled.
+        if (!connected) {
+            m_healthBusy = false;
+        }
+        updateHealthBar();
+    });
     connect(m_radioModel, &RadioModel::infoChanged,
             this, &WaveformsDialog::refreshStatus);
     connect(m_radioModel, &RadioModel::infoChanged,
@@ -1586,7 +1566,7 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
 
 void WaveformsDialog::updateInstallButtonState()
 {
-    const bool busy  = m_installer && m_installer->isInstalling();
+    const bool busy  = WaveformInstaller::anyInstalling();
     const bool connected = m_radioModel && m_radioModel->isConnected();
     m_installBtn->setEnabled(!busy && connected);
 
@@ -1982,7 +1962,7 @@ void WaveformsDialog::updateHealthBar()
         m_radioModel->isConnected(), m_radioModel->backendCapabilities().hasWaveforms,
         m_radioModel->isWan(), radiohealth::isLanIpv4(address));
     const bool available = blocker == RadioHealthBlocker::None;
-    const bool busy = m_healthBusy || (m_installer && m_installer->isInstalling());
+    const bool busy = m_healthBusy || WaveformInstaller::anyInstalling();
     {
         const QSignalBlocker block(m_healthCheck);
         m_healthCheck->setChecked(installed);
@@ -2140,7 +2120,8 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
         }
     }
 
-    if (m_installer && m_installer->isInstalling()) {
+    // One upload at a time, including AetherGPS's own installer.
+    if (WaveformInstaller::anyInstalling()) {
         return;
     }
 
@@ -2543,10 +2524,11 @@ void WaveformsDialog::refreshWaveformList()
     }
 
     const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-    // The radio health agent is the health bar's, not a row of its own.
+    // The radio health agent is the health bar's, and AetherGPS is AetherGPS's
+    // checkbox: neither is a row of its own.
     QList<FlexWaveformEntry> waveforms;
     for (const FlexWaveformEntry& entry : wfModel.waveforms()) {
-        if (!isRadioHealthWaveform(entry.name, entry.isContainer)) {
+        if (!isRadioHealthWaveform(entry.name, entry.isContainer) && !isAetherGpsWaveform(entry.name)) {
             waveforms.append(entry);
         }
     }

@@ -18,7 +18,10 @@
 // [FROM call], BCAST CLOSE n, BCAST MODE n [AUTO] [DUP] mode, MODES. Replies OK /
 // WRONG (MYCALL's OK followed by REGISTERED call for each call). Notifications: CONNECTED src dst bw, DISCONNECTED, PTT ON|OFF, BUSY
 // ON|OFF, BUFFER n, IAMALIVE, MODE; broadcast statuses (BCAST ...) once the
-// client has sent a BCAST command.
+// client has sent a BCAST command. Hand bursts (docs/arq.md §9): HAND SEND ref
+// tag d channel hex16, HAND LISTEN d tag ack channel..., HAND CANCEL; REF / HAND
+// lines (REF, HAND SENT/DROPPED, HAND c hex16 snr dt, HAND SHORT ms, HAND END)
+// go to a client that has sent DATA2G ON or a HAND command.
 #pragma once
 
 #include <cstdint>
@@ -37,6 +40,7 @@ inline constexpr double ALIVE_S = 60.0;          // IAMALIVE on the command port
 inline constexpr double BUFFER_REPEAT_S = 30.0;  // a nonzero BUFFER is repeated this often
 inline constexpr double VOLUME_MIN_DB = -60.0, VOLUME_MAX_DB = 20.0;  // TXPOWER's range: the GUI's output volume
 inline constexpr double DIAL_TIMEOUT_S = 1.0;    // ACCEPT's connection must be up by then (the caller waits ~3.5 s)
+inline constexpr int MAX_RETRIES = 20;  // RETRIES' most (host.py)
 
 struct Addr {
     std::string host;
@@ -84,6 +88,7 @@ public:
     bool data2g = false;               // DATA2G ON
     double output_volume = 0.0;        // dB, TXPOWER: the owner applies it
     std::vector<std::string> out_cmd;  // lines for the command port, without CR
+    std::vector<std::string> out_kiss_refs;  // REF lines for the KISS port's REFS ON clients, ahead of the burst's frames
     arq::Bytes out_data;               // bytes for the data port
 
 protected:
@@ -106,6 +111,8 @@ private:
     void session_over();  // the session is ending: an unsettled limbo goes as SETTLED from split to UNKNOWN
 
     bool bcast_ = false;  // the client has sent BCAST: broadcast statuses go to it
+    bool hand_ = false;   // ... a HAND command: REF / HAND lines go to it
+    std::optional<int> retries_;  // RETRIES (nullopt: arq::CONNECT_TRIES - 1)
     bool up_ = false;     // CONNECTED sent, DISCONNECTED not yet (DATA2G ON: data before it is dropped)
     bool ptt_ = false, busy_ = false;
     std::optional<std::int64_t> buffer_ = 0;  // nullopt: answer the next step whatever it is
