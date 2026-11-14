@@ -240,7 +240,11 @@ void GpsdSkyClient::ingest(const QByteArray& chunk)
             m_overflow = false;   // the end of a line too long to keep
             continue;
         }
-        handleLine(m_buffer.mid(start, nl - start));
+        // A whole line can exceed the bound without the tail check below
+        // ever seeing it, when its newline arrives in the same read.
+        if (nl - start <= kMaxLine) {
+            handleLine(m_buffer.mid(start, nl - start));
+        }
     }
     m_buffer.remove(0, start);
     if (m_buffer.size() > kMaxLine) {

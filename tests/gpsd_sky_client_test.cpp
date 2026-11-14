@@ -26,6 +26,7 @@ namespace {
 class StreamProbe : public GpsdSkyClient {
 public:
     using GpsdSkyClient::ingest;
+    using GpsdSkyClient::pendingBytes;
 };
 
 int g_failed = 0;
@@ -124,6 +125,26 @@ int main(int argc, char** argv)
         client.ingest(QByteArray(70 * 1024, 'x'));
         client.ingest(QByteArray("tail of the overlong line\n") + kSky + "\n");
         check(views.size() == 2, "an overlong line is dropped and the next one parses");
+        check(client.pendingBytes() == 0, "nothing of the overlong line is kept");
+    }
+    {
+        // Valid JSON over the bound: only the length can refuse it.
+        QByteArray big = kSky;
+        big.insert(big.size() - 1, QByteArray(R"(,"pad":")") + QByteArray(70 * 1024, 'x') + "\"");
+        check(gpsdsky::parseSky(big).has_value(), "the oversized report is itself a valid SKY");
+        StreamProbe client;
+        int views = 0;
+        QObject::connect(&client, &GpsdSkyClient::skyUpdated, [&] { ++views; });
+        client.ingest(big + "\n");
+        check(views == 0, "a valid SKY over 64 KiB in one read is refused");
+        client.ingest(big.left(40000));
+        check(client.pendingBytes() == 40000, "a partial line under the bound waits");
+        client.ingest(big.mid(40000) + "\n");
+        check(views == 0, "the same report split into two reads under the bound is refused");
+        client.ingest(kSky + "\n");
+        check(views == 1, "the next report still parses");
+        client.ingest(QByteArray(70 * 1024, 'y'));
+        check(client.pendingBytes() == 0, "an unterminated tail over the bound is not kept");
     }
 
     check(gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("192.168.50.100")))

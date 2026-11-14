@@ -90,8 +90,11 @@ signals:
     void skyStale();
 
 protected:
-    // One chunk of the stream, as the socket delivered it.
+    // One chunk of the stream, as the socket delivered it. A line longer
+    // than 64 KiB is dropped whole, however the reads split it.
     void ingest(const QByteArray& chunk);
+    // Bytes held waiting for a newline; never more than the line bound.
+    qsizetype pendingBytes() const { return m_buffer.size(); }
 
 private:
     void openSession();

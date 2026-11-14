@@ -2,16 +2,51 @@
 
 #include "core/ThemeManager.h"
 
+#include <QAccessible>
+#include <QAccessibleWidget>
 #include <QPainter>
 #include <QPainterPath>
 
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR {
 
+namespace {
+
+// The plot is painted, so a screen reader gets its content as the Value:
+// the counts, then each satellite in the fix (docs/a11y.md, custom-painted
+// widgets). The table beside it carries every row.
+class GpsSkyPlotAccessible final : public QAccessibleWidget {
+public:
+    explicit GpsSkyPlotAccessible(GpsSkyPlot* plot) : QAccessibleWidget(plot, QAccessible::Graphic) {}
+    QString text(QAccessible::Text role) const override
+    {
+        if (role == QAccessible::Value) {
+            return widget()->accessibleDescription();
+        }
+        return QAccessibleWidget::text(role);
+    }
+};
+
+QAccessibleInterface* skyPlotAccessibility(const QString&, QObject* object)
+{
+    if (auto* plot = qobject_cast<GpsSkyPlot*>(object)) {
+        return new GpsSkyPlotAccessible(plot);
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 GpsSkyPlot::GpsSkyPlot(QWidget* parent)
     : QWidget(parent)
 {
+    static const bool installed = [] {
+        QAccessible::installFactory(skyPlotAccessibility);
+        return true;
+    }();
+    Q_UNUSED(installed);
     setObjectName(QStringLiteral("gpsSkyPlot"));
     setAccessibleName(tr("Satellite sky plot"));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -23,13 +58,25 @@ void GpsSkyPlot::setSatellites(const QList<GpsSatellite>& satellites)
 {
     m_satellites = satellites;
     int heard = 0, used = 0;
+    QStringList inFix;
     for (const GpsSatellite& s : satellites) {
         heard += s.heard();
         used += s.used;
+        if (s.used) {
+            inFix << tr("%1 %2").arg(gpsdsky::constellationName(gpsdsky::constellation(s))).arg(s.prn);
+        }
     }
-    setAccessibleDescription(tr("%n satellite(s) listed, %1 heard, %2 used in the fix.", "",
-                                int(satellites.size()))
-                                 .arg(heard).arg(used));
+    QString description = tr("%n satellite(s) listed, %1 heard, %2 used in the fix.", "",
+                             int(satellites.size()))
+                              .arg(heard).arg(used);
+    if (!inFix.isEmpty()) {
+        description += QLatin1Char(' ') + tr("In the fix: %1.").arg(inFix.join(QStringLiteral(", ")));
+    }
+    if (description != accessibleDescription()) {
+        setAccessibleDescription(description);
+        QAccessibleValueChangeEvent event(this, description);
+        QAccessible::updateAccessibility(&event);
+    }
     update();
 }
 

@@ -65,7 +65,7 @@ struct client {
 
 static struct client g_clients[MAX_CLIENTS];
 static int g_listen = -1, g_udp = -1, g_nmea = -1;
-static long long g_idle_ms = 30000;           // a client must send a command, and keep reading, within this (-i)
+static long long g_idle_ms = 30000;           // first-command and full-backlog limit (-i)
 static int g_shim = 1;                        // -s 0: no tailnet publishing (tests)
 static int g_listen_port = 2947, g_gpsd_port = 2947, g_udp_port = 10110;
 static struct in_addr g_addr, g_bcast;       // current LAN address and broadcast
@@ -528,8 +528,11 @@ int main(int argc, char **argv)
             open_nmea();
             last_retry = now;
         }
-        // Eight slots are all there is: a client that never sends a command,
-        // or stops reading, gives its slot back.
+        // Eight slots are all there is. A client that sends no allowed
+        // command within the limit gives its slot back; so does one whose
+        // backlog here stays full that long. A client that has stopped
+        // reading is seen only once its backlog fills, and a quiet client
+        // that once sent a command is kept.
         for (int i = 0; i < MAX_CLIENTS; ++i) {
             struct client *c = &g_clients[i];
             if (c->down < 0) {
