@@ -313,6 +313,50 @@ private slots:
         f.radio.disconnectFromRadio();
     }
 
+    // A report for the same slice nested inside the one creating it still
+    // leaves the slice announced exactly once.
+    void nestedUpdateDuringCreationStillAnnounces()
+    {
+        // Creation asks the backend for its control policy once before the new
+        // slice is listed and once after; the second call runs a nested report.
+        struct HookBackend final : FlexBackend {
+            mutable int calls = -1;
+            std::function<void()> nested;
+            ReceiveControlPolicy receiveControlPolicy() const override
+            {
+                if (calls >= 0 && ++calls == 2 && nested) { nested(); }
+                return FlexBackend::receiveControlPolicy();
+            }
+        };
+        RadioModel radio;
+        auto owned = std::make_unique<HookBackend>();
+        HookBackend* backend = owned.get();
+        radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
+        QSignalSpy added(&radio, &RadioModel::sliceAdded);
+        backend->nested = [&] { publishFlexSliceStatus(*backend, 0, {{"RF_frequency", "7.244"}}); };
+        QMap<QString, QString> ownerless = kPresent;
+        ownerless.remove(QStringLiteral("client_handle"));
+        backend->calls = 0;
+        publishFlexSliceStatus(*backend, 0, ownerless);
+        QCOMPARE(backend->calls >= 2, true);
+        QVERIFY(radio.slice(0));
+        QCOMPARE(added.size(), 1);
+        QCOMPARE(radio.slice(0)->frequency(), 7.244);
+    }
+
+    // A slot reserved for a program on the radio still has its raw mode list
+    // counted, and its owner's TX report kept.
+    void reservedSlotKeepsModeListAndClientTxReport()
+    {
+        Fixture f;
+        f.radio.reserveSlice(3, QStringLiteral("WSPR receiver"));
+        f.report(3, {{"in_use", "1"}, {"client_handle", "99"}, {"mode_list", "USB,DIGU"}, {"dax", "2"}});
+        QVERIFY(!f.radio.slice(3));
+        QCOMPARE(f.radio.rawSliceModeLists().value(3), QStringLiteral("USB,DIGU"));
+        f.report(3, {{"in_use", "0"}});
+        QVERIFY(!f.radio.rawSliceModeLists().contains(3));
+    }
+
     void removalDuringNotificationCannotPublishRetiredSlice()
     {
         Fixture f;

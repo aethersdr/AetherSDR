@@ -139,8 +139,8 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
     // The native producer has no setup inventory; replayed setup status is the Demo's.
     connect(&m_statusIngress, &FlexStatusIngress::setupStatusObserved, this, &IRadioBackend::setupStatusObserved);
-    // Slice identity and ownership only: Demo publishes its values through its
-    // native sliceChanged producer.
+    // Slice identity, ownership, presence and mode list: Demo publishes its
+    // values through its native sliceChanged producer.
     connect(&m_statusIngress, &FlexStatusIngress::sliceObserved, this,
             [this](const SliceObservation& observation) {
         SliceObservation lifecycle = observation;

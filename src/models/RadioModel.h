@@ -2310,6 +2310,8 @@ private:
     quint64 m_backendReceiverGeneration = 0;
     quint64 m_sliceObservationRevision = 0;
     QHash<int, quint64> m_activeSliceObservations;
+    // Created by a slice report that has not yet announced it (value: reclaimed).
+    QHash<int, std::pair<QPointer<SliceModel>, bool>> m_unpublishedSlices;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Remaining selection bindings and initial global lock observation.
     // Both helpers must be called at every SliceModel construction site.

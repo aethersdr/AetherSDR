@@ -21,6 +21,7 @@ void RadioModel::retireObservedSlice(int id, bool keepForeign)
     if (retired) { m_slices.removeAll(retired); }
     else { retired = m_staleSlices.take(id); }
     m_ownedSliceIds.remove(id);
+    m_unpublishedSlices.remove(id);
     const bool foreignRemoved = !keepForeign && m_foreignSliceOwners.remove(id);
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
@@ -58,6 +59,22 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
         return alive && session == controlSession() && sessionCurrent()
             && m_activeSliceObservations.value(id) == revision;
     };
+    // The raw mode list and another client's TX report are kept for every
+    // slot, a reserved one included.
+    if (!removed && observation.reportedModeList
+        && m_rawSliceModeLists.value(id) != *observation.reportedModeList) {
+        m_rawSliceModeLists.insert(id, *observation.reportedModeList);
+        emit rawSliceModeListsChanged();
+        if (!current()) { return; }
+    }
+    if (observation.ownerHandle && values.txSlice.value_or(false)) {
+        auto client = m_clientInfoMap.find(*observation.ownerHandle);
+        if (client != m_clientInfoMap.end()) {
+            if (values.txAntenna) { client->txAntenna = *values.txAntenna; }
+            if (values.frequency) { client->txFreqMhz = *values.frequency; }
+        }
+    }
+    const bool modesRemoved = removed && m_rawSliceModeLists.remove(id) > 0;
     // A slot reserved for a program on the radio is never ours, whatever
     // client_handle the radio reports for it (reserveSlice).
     if (m_reservedSlices.contains(id)) {
@@ -71,26 +88,13 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
             m_reservedDax.insert(id, *values.daxChannel);
             emit reservedDaxChanged();
         }
+        if (modesRemoved && current()) { emit rawSliceModeListsChanged(); }
         return;
     }
     if (removed) {
-        const bool modesChanged = m_rawSliceModeLists.remove(id) > 0;
         retireObservedSlice(id, false);
-        if (current() && modesChanged) { emit rawSliceModeListsChanged(); }
+        if (current() && modesRemoved) { emit rawSliceModeListsChanged(); }
         return;
-    }
-    if (observation.reportedModeList
-        && m_rawSliceModeLists.value(id) != *observation.reportedModeList) {
-        m_rawSliceModeLists.insert(id, *observation.reportedModeList);
-        emit rawSliceModeListsChanged();
-        if (!current()) { return; }
-    }
-    if (observation.ownerHandle && values.txSlice.value_or(false)) {
-        auto client = m_clientInfoMap.find(*observation.ownerHandle);
-        if (client != m_clientInfoMap.end()) {
-            if (values.txAntenna) { client->txAntenna = *values.txAntenna; }
-            if (values.frequency) { client->txFreqMhz = *values.frequency; }
-        }
     }
     bool ownershipChanged = false;
     if (observation.ownerHandle && *observation.ownerHandle != 0) {
@@ -114,7 +118,13 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
 
     QPointer<SliceModel> s = slice(id);
     bool reclaimed = false;
-    const bool creating = !s;
+    bool creating = !s;
+    // A report nested inside the one creating this slice finishes publishing it.
+    if (const auto pending = m_unpublishedSlices.constFind(id);
+        s && pending != m_unpublishedSlices.cend() && pending->first == s) {
+        creating = true;
+        reclaimed = pending->second;
+    }
     if (!s) {
         // A partial report cannot materialize a receiver. Frequency may follow
         // presence in a later report; only the radio's in-use observation gates it.
@@ -159,6 +169,7 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
 
         }
         m_slices.append(s);
+        m_unpublishedSlices.insert(id, {s, reclaimed});
         s->setNrsLevelMaximum(backendCapabilities().nrsLevelControl
             .value_or(RadioCapabilities::NrsLevelControl{}).levelMaximum);
         if (!current() || !s || slice(id) != s) { return; }
@@ -167,6 +178,7 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
     }
     const auto currentSlice = [&] { return current() && s && slice(id) == s; };
     s->setControlPolicy(m_backend ? m_backend->receiveControlPolicy() : ReceiveControlPolicy::Optimistic);
+    if (!currentSlice()) { return; }   // a newer report for this slice ran meanwhile
     s->applyChanges(values);
     if (!currentSlice()) { return; }
     selectSoleValidTxAntennaIfNeeded(s, values.txAntenna.has_value());
@@ -177,6 +189,7 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
     syncDigitalVoiceTxSelection();
     if (!currentSlice()) { return; }
     if (creating) {
+        m_unpublishedSlices.remove(id);
         if (!reclaimed) { emit sliceAdded(s); }
         else if (s->isTxSlice() && transmitInhibitMessageForSlice(s).isEmpty()
                  && QDateTime::currentMSecsSinceEpoch() >= m_profileLoadRadioStateWriteHoldUntilMs) {
