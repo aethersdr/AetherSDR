@@ -173,6 +173,8 @@ private:
     QHash<quint64, RxRoute> m_rxRoutes;
     PcmFrameGate m_rxGate;
     bool m_rxProcessing{false};
+    // Every text frame's last step; socket-free tests read the bytes here.
+    std::function<void(quint64, const QString&)> m_textSend;
     std::function<qint64(quint64, const QByteArray&)> m_rxSend;
     std::function<qint64(quint64)> m_rxBacklog;
     std::function<void(quint64, QWebSocketProtocol::CloseCode, const QString&)> m_rxClose;
