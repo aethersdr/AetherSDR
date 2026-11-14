@@ -44,6 +44,7 @@ class AprsStationList;
 class AudioEngine;
 class DStarModemPage;
 class Data2gMonitorPage;
+class HfGatewayPage;
 class Data2gReceiveModel;
 class HeardList;
 class KissTncServer;
@@ -324,6 +325,8 @@ private:
     std::unique_ptr<Data2gReceiveModel> m_data2g;
     Data2gMonitorPage* m_data2gPage{nullptr};
     QPushButton* m_data2gTab{nullptr};
+    HfGatewayPage* m_gatewayPage{nullptr};
+    QAbstractButton* m_gatewayTab{nullptr};
 #ifdef HAVE_MQTT
     QPointer<MqttClient> m_mqtt;
 #endif

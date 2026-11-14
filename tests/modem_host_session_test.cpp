@@ -33,6 +33,8 @@ int main()
         report("ABORT always allowed", s.request(Request::Abort) == "ABORT\r");
         report("MYCALL allowed", s.request(Request::MyCall, {"N0CALL"}) == "MYCALL N0CALL\r");
         report("VERSION allowed", s.request(Request::Version) == "VERSION\r");
+        report("MONITOR allowed without permission", s.request(Request::MonitorOn) == "MONITOR ON\r"
+                                                          && s.request(Request::MonitorOff) == "MONITOR OFF\r");
         s.setTransmitPermitted(true);
         report("LISTEN ON allowed with permission", s.request(Request::ListenOn) == "LISTEN ON\r");
         report("data allowed with permission", s.mayWriteData());

@@ -168,6 +168,21 @@ int main()
         const Notification q = parseNotification("CQFRAME N0CALL 500");
         report("CQFRAME", q.type == NotificationType::CqFrame && q.source == "N0CALL" && q.bandwidthHz == 500);
     }
+    {
+        const Notification m = parseNotification("MONITOR DATAC16 CALL FROM=K7EK BW=2300 SID=42 SNR=18.1");
+        report("MONITOR CALL", m.type == NotificationType::Monitor && m.monitorMode == "DATAC16"
+                                   && m.monitorKind == "CALL" && m.monitorFrom == "K7EK" && m.source == "K7EK"
+                                   && m.bandwidthHz == 2300 && m.monitorSnDb > 18.0);
+        const Notification a = parseNotification("MONITOR DATAC16 ACCEPT BW=2300 SID=42 START=3 SNR=17.9");
+        report("MONITOR ACCEPT has no FROM", a.type == NotificationType::Monitor && a.monitorKind == "ACCEPT"
+                                                 && a.monitorFrom.isEmpty());
+        const Notification bad = parseNotification("MONITOR DATAC16 CQ FROM=bad_call BW=999 SNR=900");
+        report("MONITOR invalid fields left empty", bad.type == NotificationType::Monitor && bad.monitorFrom.isEmpty()
+                                                        && bad.bandwidthHz == 0 && bad.monitorSnDb == 0.0);
+        report("MONITOR query reply is not a frame", nt("MONITOR ON") == NotificationType::Unknown);
+        report("MONITOR odd mode word rejected", nt("MONITOR data;16 CALL") == NotificationType::Unknown);
+        report("cmd MONITOR", cmdMonitor(true) == "MONITOR ON\r" && cmdMonitor(false) == "MONITOR OFF\r");
+    }
     report("unknown line surfaced as Unknown with raw", parseNotification("FOO BAR").raw == "FOO BAR"
                                                              && nt("FOO BAR") == NotificationType::Unknown);
     report("lower-case token not matched", nt("ok") == NotificationType::Unknown);

@@ -249,6 +249,39 @@ Notification parseNotification(const QString& raw)
         n.text = raw.mid(raw.indexOf(QLatin1String("VERSION")) + 7).trimmed();
         return n;
     }
+    if (head == QLatin1String("MONITOR") && t.size() >= 3) {
+        // "MONITOR <mode> <kind> <detail...> SNR=<snr>" (Mercury docs/TNC.md,
+        // MONITOR). Display-only telemetry: fields that fail validation are
+        // left empty rather than rejecting the line.
+        static const QRegularExpression word(QStringLiteral("^[A-Z0-9_]{1,16}$"));
+        if (!word.match(t.at(1)).hasMatch() || !word.match(t.at(2)).hasMatch()) {
+            return unknown(raw);
+        }
+        n.type = NotificationType::Monitor;
+        n.monitorMode = t.at(1);
+        n.monitorKind = t.at(2);
+        for (int i = 3; i < t.size(); ++i) {
+            const QString& kv = t.at(i);
+            if (kv.startsWith(QLatin1String("FROM="))) {
+                const QString call = kv.mid(5);
+                if (isValidCallsign(call)) {
+                    n.monitorFrom = call;
+                    n.source = call;
+                }
+            } else if (kv.startsWith(QLatin1String("BW="))) {
+                int bw = 0;
+                if (parseBandwidth(kv.mid(3), &bw)) {
+                    n.bandwidthHz = bw;
+                }
+            } else if (kv.startsWith(QLatin1String("SNR="))) {
+                double sn = 0.0;
+                if (parseDecimal(kv.mid(4), &sn) && sn >= kMinSnDb && sn <= kMaxSnDb) {
+                    n.monitorSnDb = sn;
+                }
+            }
+        }
+        return n;
+    }
     if (head == QLatin1String("CQFRAME") && t.size() == 3) {
         if (!isValidCallsign(t.at(1)) || !parseBandwidth(t.at(2), &n.bandwidthHz)) {
             return unknown(raw);
@@ -283,6 +316,7 @@ QByteArray cmdAbort() { return line(QStringLiteral("ABORT")); }
 QByteArray cmdVersion() { return line(QStringLiteral("VERSION")); }
 QByteArray cmdBuffer() { return line(QStringLiteral("BUFFER")); }
 QByteArray cmdSn() { return line(QStringLiteral("SN")); }
+QByteArray cmdMonitor(bool on) { return line(on ? QStringLiteral("MONITOR ON") : QStringLiteral("MONITOR OFF")); }
 
 // ── Host -> modem ───────────────────────────────────────────────────────────
 
@@ -452,6 +486,7 @@ QString toString(NotificationType type)
     case NotificationType::Registered: return QStringLiteral("Registered");
     case NotificationType::Version: return QStringLiteral("Version");
     case NotificationType::CqFrame: return QStringLiteral("CqFrame");
+    case NotificationType::Monitor: return QStringLiteral("Monitor");
     }
     return QStringLiteral("Unknown");
 }
