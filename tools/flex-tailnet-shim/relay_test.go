@@ -621,13 +621,13 @@ func infoRelay(t *testing.T, listen string) (dialled string, rd *bufio.Reader) {
 		for sc.Scan() {
 			switch sc.Text() {
 			case "C5|info":
-				fmt.Fprint(c, "R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06,"+
-					"ip=192.168.8.122,netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n")
-				fmt.Fprint(c, "S0|radio static_net_params ip=192.168.8.122 gateway=192.168.8.1 netmask=255.255.255.0\n")
+				fmt.Fprint(c, "R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:00:00:01,"+
+					"ip=192.168.0.20,netmask=255.255.255.0,gateway=192.168.0.1,region=\"USA\"\r\n")
+				fmt.Fprint(c, "S0|radio static_net_params ip=192.168.0.20 gateway=192.168.0.1 netmask=255.255.255.0\n")
 			case "C6|radio uptime":
-				fmt.Fprint(c, "R6|0|ip=192.168.8.122\n")
+				fmt.Fprint(c, "R6|0|ip=192.168.0.20\n")
 			case "C7|info":
-				fmt.Fprint(c, "R7|50000015|ip=192.168.8.122\n")
+				fmt.Fprint(c, "R7|50000015|ip=192.168.0.20\n")
 			}
 		}
 	}()
@@ -671,11 +671,11 @@ func expectLines(t *testing.T, rd *bufio.Reader, want ...string) {
 func TestInfoReplyNamesTheDialledAddress(t *testing.T) {
 	dialled, rd := infoRelay(t, "127.0.0.1:0")
 	expectLines(t, rd,
-		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06,"+
-			"ip="+dialled+",netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n",
-		"S0|radio static_net_params ip=192.168.8.122 gateway=192.168.8.1 netmask=255.255.255.0\n",
-		"R6|0|ip=192.168.8.122\n",
-		"R7|50000015|ip=192.168.8.122\n",
+		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:00:00:01,"+
+			"ip="+dialled+",netmask=255.255.255.0,gateway=192.168.0.1,region=\"USA\"\r\n",
+		"S0|radio static_net_params ip=192.168.0.20 gateway=192.168.0.1 netmask=255.255.255.0\n",
+		"R6|0|ip=192.168.0.20\n",
+		"R7|50000015|ip=192.168.0.20\n",
 	)
 }
 
@@ -684,11 +684,11 @@ func TestInfoReplyNamesTheDialledAddress(t *testing.T) {
 func TestInfoReplyUnchangedOverIPv6(t *testing.T) {
 	_, rd := infoRelay(t, "[::1]:0")
 	expectLines(t, rd,
-		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06,"+
-			"ip=192.168.8.122,netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n",
-		"S0|radio static_net_params ip=192.168.8.122 gateway=192.168.8.1 netmask=255.255.255.0\n",
-		"R6|0|ip=192.168.8.122\n",
-		"R7|50000015|ip=192.168.8.122\n",
+		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:00:00:01,"+
+			"ip=192.168.0.20,netmask=255.255.255.0,gateway=192.168.0.1,region=\"USA\"\r\n",
+		"S0|radio static_net_params ip=192.168.0.20 gateway=192.168.0.1 netmask=255.255.255.0\n",
+		"R6|0|ip=192.168.0.20\n",
+		"R7|50000015|ip=192.168.0.20\n",
 	)
 }
 
