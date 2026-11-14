@@ -652,16 +652,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_powerRateTimer->start();
     });
 
-    // Extension set, span: the same limiter for its notification, and a bound
-    // on how long a dispatched set waits for the radio's report.
-    m_spanRateTimer = new QTimer(this);
-    m_spanRateTimer->setSingleShot(true);
-    m_spanRateTimer->setInterval(kPowerRateLimitMs);
-    connect(m_spanRateTimer, &QTimer::timeout, this, [this]() {
-        if (m_spanPending && broadcastSpan()) {
-            m_spanRateTimer->start();
-        }
-    });
+    // Extension set, span: the same limiter as drive: for its notification,
+    // and a bound on how long a dispatched set waits for the radio's report.
+    m_spanNotice = std::make_unique<TciExtensionNotice>(
+        this, kPowerRateLimitMs, [this] { return broadcastSpan(); });
     m_spanAnswerTimer = new QTimer(this);
     m_spanAnswerTimer->setSingleShot(true);
     m_spanAnswerTimer->setInterval(kSpanAnswerTimeoutMs);
@@ -4057,20 +4051,9 @@ TciExtensionSet::Result TciServer::handleSpan(const QString& name, const QString
     return result;
 }
 
-// Posted, so a burst of pan reports goes out once, then rate-limited like drive:.
 void TciServer::queueSpanNotice()
 {
-    m_spanPending = true;
-    if (m_spanSendPosted || m_spanRateTimer->isActive()) {
-        return;
-    }
-    m_spanSendPosted = true;
-    QMetaObject::invokeMethod(this, [this]() {
-        m_spanSendPosted = false;
-        if (broadcastSpan()) {
-            m_spanRateTimer->start();
-        }
-    }, Qt::QueuedConnection);
+    m_spanNotice->queue();
 }
 
 // What moved since the last notice, and the answer to a dispatched set once
@@ -4079,7 +4062,6 @@ void TciServer::queueSpanNotice()
 // never measured against a value from before someone enabled.
 bool TciServer::broadcastSpan()
 {
-    m_spanPending = false;
     if (!spanOffered()) {
         m_spanAnnounced.clear();
         m_spanRatesAnnounced.clear();

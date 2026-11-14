@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "DaxTxAudioPermit.h"
+#include "TciExtensionNotice.h"
 #include "TciExtensionSet.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
@@ -539,13 +540,11 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
-    // Extension set, span notice: posted, then rate-limited. The last values
-    // sent to enabled clients, so a notice carries what moved; a dispatched set
-    // owes its trx a line even when the radio kept the span it had.
-    QTimer*           m_spanRateTimer{nullptr};
+    // Extension set, span notice. The last values sent to enabled clients, so
+    // a notice carries what moved; a dispatched set owes its trx a line even
+    // when the radio kept the span it had.
+    std::unique_ptr<TciExtensionNotice> m_spanNotice;
     QTimer*           m_spanAnswerTimer{nullptr};
-    bool              m_spanPending{false};
-    bool              m_spanSendPosted{false};
     QHash<int, qint64> m_spanAnnounced;
     QString           m_spanRatesAnnounced;
     // A dispatched set, per trx: the pan it waits on, the span and centre then.
