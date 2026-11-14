@@ -44,6 +44,7 @@ class Kpa500Connection;
 class Kat500Model;
 class Kxpa100Model;
 class LpMeterConnection;
+class MicrohamTrioModel;
 struct PeripheralDeviceUi;
 
 // Radio Setup: the searchable, category-based configuration window, a canon
@@ -66,7 +67,8 @@ public:
                               QWidget* parent = nullptr,
                               Kat500Model* kat500 = nullptr,
                               Kxpa100Model* kxpa100 = nullptr,
-                              RfkitConnection* rfkit = nullptr);
+                              RfkitConnection* rfkit = nullptr,
+                              MicrohamTrioModel* trio = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
@@ -223,6 +225,8 @@ private:
                             const std::function<void()>& refresh);
     void buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                           const std::function<void()>& refresh);
+    void buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                         const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
@@ -267,6 +271,7 @@ private:
     Kpa500Connection* m_kpa500{nullptr};
     Kat500Model* m_kat500{nullptr};
     Kxpa100Model* m_kxpa100{nullptr};
+    MicrohamTrioModel* m_trio{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

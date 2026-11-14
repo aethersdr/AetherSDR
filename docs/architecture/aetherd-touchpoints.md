@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 288 touchpoint headers (233 core, 55 models) — 288/288 tagged, 0/288 converted.
+**Totals:** 290 touchpoint headers (234 core, 56 models) — 290/290 tagged, 0/290 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -100,6 +100,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/MaidenheadLocator.h` | 4 | ui-support — Header-only Maidenhead grid/lat-lon/distance/bearing math; stateless shared utility, not a protocol surface | unconverted |
 | `core/MemoryCsvCompat.h` | 1 | vendor(flex) — SmartSDR memory-CSV import/export codec (exact 22-col format); Flex ecosystem interchange, not core protocol. | unconverted |
 | `core/MemoryFieldValues.h` | 2 | mixed(flex) — Canonical memory-channel value lists + sanitizers; concepts universal, wire forms mirror FlexLib protocol | unconverted |
+| `core/MicrohamTrioSettings.h` | 1 | peripheral(microhamtrio) — Where the microHAM TRIO antenna switch's connection is kept: its address and port under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect. Peripheral accessory configuration, not radio state. | unconverted |
 | `core/MidiControlManager.h` | 3 | ui-support — RtMidi input-device manager (ports, bindings, MIDI Learn) driving client setters; control-surface plumbing | unconverted |
 | `core/MidiSettings.h` | 3 | ui-support — MIDI controller binding/profile persistence (XML files) — client input-device config, not radio state. | unconverted |
 | `core/MiniPanSettings.h` | 1 | ui-support — Client-side persistence for the mini-pan applet span; UI configuration, not radio-owned state or a daemon protocol resource. | unconverted |
@@ -273,6 +274,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/Kxpa100Types.h` | 2 | peripheral(elecraft) — Typed KXPA100 accessory state, configuration, backup and fault records; no radio-family protocol. | unconverted |
 | `models/MemoryEntry.h` | 1 | universal — POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) — canonical memories surface | unconverted |
 | `models/MeterModel.h` | 7 | mixed(flex) — Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex | unconverted |
+| `models/MicrohamTrioModel.h` | 2 | peripheral(microhamtrio) — microHAM TRIO client that switches nothing: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels), the radio's port on it and the dummy-load mark (both stored locally). Read-only: changes nothing on the device. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam. | unconverted |
 | `models/ModeVocabulary.h` | 1 | universal — Canonical mode vocabulary: which slice modes count as voice (SSB, AM/SAM, the FM family) and which as CW (CW/CWU/CWL). Radio-family-neutral state and validation data - every backend reports these spellings - split out of gui/VoiceModeGate.h so the engine can answer the question without reaching into the UI. Same precedent as core/CtcssTones.h. The panel-policy half (shouldAutoHideCopyAssist) stayed in gui. | unconverted |
 | `models/ModelCapabilities.h` | 1 | mixed(flex) — Per-model capability table mirroring FlexLib ModelInfo.cs (RadioPlatform, has2Meters/has4Meters, loop A/B). This is the universal question 'what can this radio do', answered exclusively from a vendor table — and its band-availability half is precisely the band truth RFC §4.1 assigns to the capability descriptor. Consumed above the seam by SpectrumOverlayMenu, XvtrPolicy, WaveformInstallGate and MainWindow_Wiring. | unconverted |
 | `models/NetEntry.h` | 2 | ui-support — Net scheduler entry: RRULE/timezone/reminder metadata, operator-scoped local JSON; radio state only via embedded MemoryEntry | unconverted |

@@ -3651,7 +3651,8 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                                     &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                                     m_kiwiSdrManager, &m_acomConn, &m_speConn,
                                     &m_vkampConn, &m_lpMeterConn, &m_kpa1500Conn, &m_kpa500Conn,
-                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn);
+                                    this, &m_kat500Model, &m_kxpa100Model, &m_rfkitConn,
+                                    &m_trioModel);
     });
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
@@ -4274,6 +4275,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // any request still in flight while the event loop is live, rather than
     // leaving that to member destruction.
     m_rfkitConn.disconnect();
+    // The Trio serves one session; close it with a close frame while the
+    // event loop is live, so its own web page can take it at once.
+    m_trioModel.disconnect();
     // The LP-100A is likewise independent of the radio lifecycle and may be
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.

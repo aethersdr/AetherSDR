@@ -1052,6 +1052,10 @@ set(CORE_SOURCES
     src/core/MiniPanSettings.cpp
     src/core/Ctr2RelaySettings.cpp
     src/core/GreenHeronProtocol.cpp
+    src/core/MicrohamTrioProtocol.cpp
+    src/core/MicrohamTrioWebSocket.cpp
+    src/core/MicrohamTrioSession.cpp
+    src/core/MicrohamTrioTcpTransport.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
@@ -1335,6 +1339,7 @@ set(MODEL_SOURCES
     src/models/XvtrPolicy.cpp
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp
+    src/models/MicrohamTrioModel.cpp
     src/models/AetherClockModel.cpp
     src/models/Ctr2ProxyModel.cpp
     src/models/FirmwareInstallModel.cpp
