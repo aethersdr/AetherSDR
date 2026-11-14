@@ -4870,6 +4870,24 @@ float VfoWidget::signalDbmToMeterFraction(float dbm)
     return 1.0f;
 }
 
+void VfoWidget::updateMeterIfPixelsChanged()
+{
+    const QRect bar = meterBarRect();
+    const int fill = static_cast<int>(m_signalMeterFraction * bar.width());
+    const bool sameScale = bar == m_lastRequestedMeterBar
+        && m_relativeSignal == m_lastRequestedMeterRelative;
+    if (!m_collapsed && !m_smartMtr && sameScale && fill == m_lastRequestedMeterFill) {
+        // The smoother still advances at its normal cadence. An identical
+        // integer fill width has no new pixels to paint, on either backend.
+        // Numeric labels retain their own QWidget update notifications.
+        return;
+    }
+    m_lastRequestedMeterBar = bar;
+    m_lastRequestedMeterFill = fill;
+    m_lastRequestedMeterRelative = m_relativeSignal;
+    update();
+}
+
 void VfoWidget::updateSignalMeterTarget()
 {
     if (m_relativeSignal) {
@@ -4886,7 +4904,7 @@ void VfoWidget::updateSignalMeterTarget()
     if (m_smartMtr || (m_relativeSignal && !m_relativeSignalValid)) {
         m_signalMeterAnimation.stop();
         m_signalMeterFraction = m_targetSignalMeterFraction;
-        if (!m_smartMtr) { update(); }
+        if (!m_smartMtr) { updateMeterIfPixelsChanged(); }
         return;
     }
 
@@ -4895,7 +4913,7 @@ void VfoWidget::updateSignalMeterTarget()
         if (m_signalMeterAnimation.isActive()) {
             m_signalMeterAnimation.stop();
         }
-        update();
+        updateMeterIfPixelsChanged();
         return;
     }
 
@@ -4936,7 +4954,7 @@ void VfoWidget::animateSignalMeter()
         m_signalMeterFraction += delta * alpha;
     }
 
-    update();
+    updateMeterIfPixelsChanged();
 }
 
 // ── Slice connection ──────────────────────────────────────────────────────────

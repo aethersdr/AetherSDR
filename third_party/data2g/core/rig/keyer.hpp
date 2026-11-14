@@ -38,6 +38,7 @@ public:
     // must not wait for it (recordings/20261011-223759: acks lost to a mute held through it).
     void unkey(const std::function<void()>& drained = {});
     bool keyed() const { return keyed_.load(std::memory_order_acquire); }
+    void set_off_delay(double s) { off_delay_s_ = s; }  // any thread; from the next unkey
     // PTT calls that failed (logged and carried on from, as tnc.Rigctld does).
     std::uint64_t failures() const { return failures_; }
 
@@ -46,7 +47,7 @@ private:
 
     Ptt ptt_;
     audio::PlaybackFifo& out_;
-    double off_delay_s_;
+    std::atomic<double> off_delay_s_;
     Report report_;
     MustRelease must_release_;
     std::atomic<bool> keyed_{false};  // the transmit thread keys and unkeys

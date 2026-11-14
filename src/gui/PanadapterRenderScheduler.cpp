@@ -33,12 +33,37 @@ void PanadapterRenderScheduler::requestDataFrame(SpectrumWidget* widget, int slo
         return;
     }
 
+#ifdef AETHER_GPU_SPECTRUM
+    // Shared QRhi windows use display pacing on Windows, Linux and macOS,
+    // including software QRhi drivers. Only native child surfaces opt out.
+    const bool paceWindow = !widget->testAttribute(Qt::WA_NativeWindow);
+#else
+    // Raster pans need the existing timer to batch their expensive paints.
+    const bool paceWindow = false;
+#endif
+    QWidget* const window = widget->window();
+    WindowRepaintScheduler* windowScheduler = m_windowSchedulers.value(window);
+    if (!windowScheduler) {
+        m_windowSchedulers.removeIf([](const auto& entry) { return entry.value().isNull(); });
+        windowScheduler = WindowRepaintScheduler::ensureFor(window, paceWindow);
+        m_windowSchedulers.insert(window, windowScheduler);
+    }
     ++m_requests;
     slotMs = std::max(1, slotMs);
     m_lastSlotMs = slotMs;
 
     if (!markDirty(widget)) {
         ++m_coalescedRequests;
+    }
+
+    if (windowScheduler->isEnabled()) {
+        // Mark the pan dirty before an already queued window update arrives.
+        // Qt merges these dirty regions; the window owns the frame deadline.
+        // Another pan timer can miss that deadline and defer a fresh texture.
+        m_flushTimer.stop();
+        m_lastDelayMs = 0;
+        flushPending();
+        return;
     }
 
     int delayMs = 0;

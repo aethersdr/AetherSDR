@@ -859,18 +859,22 @@ sun.f90, grid2deg.f90). The GPL text is at tools/wspr-agent/wsprd/COPYING.
 
 37. Data2G — HF data modem core
 -------------------------------
-Bundled at third_party/data2g/ (upstream release v0.4.3, commit
-f5388f792425d80ac4d175ff1838260e790a3433): the data2g_core target's sources,
+Bundled at third_party/data2g/ (upstream release v0.5.0, commit
+7e1b98c5812839b6dee05d1a336d20793ed8bf92): the data2g_core target's sources,
 byte for byte, compiled as a separately-linked static library for
 AetherModem's receive-only HF data monitor (RFC #7159). The generated tables
 under core/generated/ include the rate shifter's trained model; upstream
 documents how each was produced (docs/outcome-training-data.md,
 data2g/codes_data/README.md). The license texts are at
-third_party/data2g/LICENSE and third_party/data2g/LICENSE_ion.
+third_party/data2g/LICENSE, third_party/data2g/LICENSE_exception and
+third_party/data2g/LICENSE_ion.
 
-  Copyright: the Data2G authors (upstream names no copyright holder in its
-             license file; see the repository history)
-  License:   Artistic License 2.0
+  Copyright: Copyright (c) 2026, Andrew Rodland (as named in
+             LICENSE_exception), and the Data2G authors (see the
+             repository history)
+  License:   Artistic License 2.0, with the Data2G Interface Exception 1.0
+             (an additional permission from the copyright holder covering
+             section 8's "direct interface" condition)
   Source:    https://github.com/arodland/Data2G
 
 Data2G incorporates features from Ion (CW identification, core/cwid/),

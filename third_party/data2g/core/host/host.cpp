@@ -13,6 +13,7 @@
 
 #include "arq/modes.hpp"
 #include "cwid/cwid.hpp"
+#include "hand/hand.hpp"
 #include "tables/cpm.hpp"
 
 namespace data2g::host {
@@ -200,7 +201,7 @@ void Host::command(std::string_view line, std::string_view peer) {
         try {
             const auto aliases = e.aliases();
             e.set_call(args[0], aliases);
-            e.connect(args[1], cap);
+            e.connect(args[1], cap, retries_ ? std::optional(*retries_ + 1) : std::nullopt);
         } catch (const std::runtime_error&) {
             ok = false;
         } catch (const std::invalid_argument&) {
@@ -222,6 +223,58 @@ void Host::command(std::string_view line, std::string_view peer) {
         } catch (const std::invalid_argument&) {  // a callsign that won't pack
             ok = false;
         }
+    } else if (cmd == "HAND" && !args.empty() && (upper(args[0]) == "SEND" ? args.size() == 6
+               : upper(args[0]) == "LISTEN" ? args.size() >= 5 : upper(args[0]) == "CANCEL" && args.size() == 1)) {
+        hand_ = true;
+        // HAND args are strict (engine.py's _hand_arg): ints [0-9]+, a delay [0-9.]+,
+        // a payload [0-9a-fA-F]{1,16}; anything else is WRONG without asking the Engine
+        auto digits = [](const std::string& s) {
+            return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; });
+        };
+        auto delay = [](const std::string& s) {
+            return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return c == '.' || (c >= '0' && c <= '9'); });
+        };
+        auto hex16 = [](const std::string& s) {
+            return !s.empty() && s.size() <= 16 && std::all_of(s.begin(), s.end(), [](char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); });
+        };
+        auto num = [&](const std::string& s) {  // digits(), no sign, nothing after (int())
+            if (!digits(s)) throw std::invalid_argument("not a number: " + s);
+            std::size_t used = 0;
+            const int n = std::stoi(s, &used);
+            if (used != s.size()) throw std::invalid_argument("not a number: " + s);
+            return n;
+        };
+        auto channel = [&](const std::string& s) {  // host.py's _hand_channel: within the BW command's
+            // width; --kiss-bw is for Port 0 clients and doesn't apply
+            const int c = num(s), w = arq::cap_hz(cap);
+            if (c >= hand::channels_within(w)) throw std::invalid_argument("channel outside the width: " + s);
+            return c;
+        };
+        auto ack = [&](const std::string& s) {  // the ACKMODE tag: exactly 4 hex digits
+            if (s.size() != 4 || !hex16(s)) throw std::invalid_argument("bad ack: " + s);
+            return static_cast<int>(std::stoul(s, nullptr, 16));
+        };
+        auto whole = [&](const std::string& s) {  // delay() characters, then float(): the whole
+            // string in the classic locale (1.2.3 is WRONG); a huge d is inf, which fails the Engine's bounds
+            const double v = delay(s) ? parse_double(s) : NAN;
+            if (std::isnan(v)) throw std::invalid_argument("not a number: " + s);
+            return v;
+        };
+        try {
+            if (upper(args[0]) == "SEND") {  // HAND SEND ref tag d channel hex16 (docs/arq.md §9)
+                if (!hex16(args[5])) throw std::invalid_argument("bad payload: " + args[5]);
+                e.hand_send(num(args[1]), num(args[2]), whole(args[3]), channel(args[4]), std::stoull(args[5], nullptr, 16));
+            } else if (upper(args[0]) == "LISTEN") {  // HAND LISTEN d tag ack channel [channel...]
+                std::vector<int> channels;
+                for (std::size_t i = 4; i < args.size(); ++i) channels.push_back(channel(args[i]));
+                e.hand_listen(whole(args[1]), num(args[2]), ack(args[3]), channels);
+            } else e.hand_cancel();  // HAND CANCEL: always OK (docs/arq.md §9)
+        } catch (const std::invalid_argument&) {
+            ok = false;
+        } catch (const std::out_of_range&) {
+            ok = false;
+        }
     } else if (auto c = bw_cap(cmd)) {
         cap = *c;
     } else if (cmd == "CHAT" && (a0 == "ON" || a0 == "OFF")) {
@@ -235,6 +288,16 @@ void Host::command(std::string_view line, std::string_view peer) {
         const double v = parse_double(args[0]);
         ok = v >= VOLUME_MIN_DB && v <= VOLUME_MAX_DB;
         if (ok) output_volume = v;
+    } else if (cmd == "RETRIES" && args.empty()) {
+        out_cmd.push_back("RETRIES " + std::to_string(retries_.value_or(arq::CONNECT_TRIES - 1)));
+        return;
+    } else if (cmd == "RETRIES" && args.size() == 1) {
+        const std::string& a = args[0];  // digits only (host.py)
+        const auto nz = a.find_first_not_of('0');
+        const std::string d = nz == std::string::npos ? "0" : a.substr(nz);  // no stoi overflow below
+        ok = !a.empty() && std::all_of(a.begin(), a.end(), [](unsigned char c) { return c >= '0' && c <= '9'; }) &&
+             d.size() <= 2 && std::stoi(d) <= MAX_RETRIES;
+        if (ok) retries_ = std::stoi(d);
     } else if (cmd == "TIMEOUT" && data2g && args.empty()) {
         out_cmd.push_back(arq::format("TIMEOUT %.1f", e.idle_close_s()));
         return;
@@ -304,7 +367,8 @@ void Host::client_gone() {
     const auto s = e.session().state;
     if (s == SessionState::CONNECTED || s == SessionState::DISCONNECTING) e.disconnect();
     else if (s == SessionState::CONNECTING) e.abort();
-    listening = data2g = false;
+    listening = data2g = hand_ = false;
+    retries_.reset();
     e.set_idle_close(std::nullopt);
     accept_addr.reset();
     const auto now = e.session().state;
@@ -313,6 +377,7 @@ void Host::client_gone() {
         link->reset();
         bcast_ = false;
     }
+    e.hand_cancel();  // its waiting Hand and window must not hold the radio (docs/arq.md §9)
 }
 
 bool Host::abort_session() {
@@ -370,6 +435,8 @@ void Host::after_step(bool ptt) {
             const bool master = e.session().master();
             out_cmd.push_back("CONNECTED " + (master ? me : peer) + " " + (master ? peer : me) + " " + bw_name(e.session().cap));
             up_ = true;
+        } else if (ev == "PENDING" || ev == "CANCELPENDING") {
+            out_cmd.push_back(ev);
         } else if (ev.starts_with("CQFRAME")) {
             out_cmd.push_back("CQFRAME " + w.at(1) + " " + bw_name(std::stoi(w.at(2))));
         } else if (ev.starts_with("DISCONNECTED")) {
@@ -385,6 +452,12 @@ void Host::after_step(bool ptt) {
     if (auto* link = e.kiss()) {
         auto events = link->take_events();
         if (bcast_) out_cmd.insert(out_cmd.end(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));
+    }
+    {
+        auto hand = e.take_hand_events();  // REF and HAND lines (docs/arq.md §9): Data2G-aware clients only
+        for (const auto& l : hand)  // ... and the REF lines again for the KISS port (Station::flush)
+            if (l.starts_with("REF ")) out_kiss_refs.push_back(l);
+        if (hand_ || data2g) out_cmd.insert(out_cmd.end(), std::make_move_iterator(hand.begin()), std::make_move_iterator(hand.end()));
     }
     if (ptt != ptt_) {
         ptt_ = ptt;
