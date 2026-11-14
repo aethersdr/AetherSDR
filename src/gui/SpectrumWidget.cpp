@@ -18310,9 +18310,12 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
 
     // Draw on both the panadapter (specRect) and the waterfall (wfRect) as
     // approved in RFC #5586: same per-pan toggle, same color tokens.
+    // Maintainer ruling (RFC #6999, 2026-11-14): omit markers on the 3D (DSS)
+    // panadapter entirely; the waterfall always keeps them.
+    const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
     auto drawFrequencyLine = [&](int x, const QColor& col) {
         p.setPen(QPen(col, 1));
-        if (!specRect.isEmpty())
+        if (!specRect.isEmpty() && !is3D)
             p.drawLine(x, specRect.top(), x, specRect.bottom());
         if (!wfRect.isEmpty())
             p.drawLine(x, wfRect.top(), x, wfRect.bottom());
@@ -18358,7 +18361,7 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
             if (!wfRect.isEmpty())
                 p.drawText(labelX, wfLabelY,
                            QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
-            if (!specRect.isEmpty())
+            if (!specRect.isEmpty() && !is3D)
                 p.drawText(labelX, specLabelY,
                            QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
         }
