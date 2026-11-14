@@ -37,11 +37,37 @@ int main()
     for (const QString& mode :
          {QStringLiteral("LSB"), QStringLiteral("USB"),
           QStringLiteral("AM"), QStringLiteral("SAM"),
-          QStringLiteral("FM"), QStringLiteral("NFM"),
+          QStringLiteral("FM"), QStringLiteral("NFM"), QStringLiteral("FMN"),
           QStringLiteral("DFM"), QStringLiteral("DSB"),
           QStringLiteral("WFM"), QStringLiteral("WBFM"), QString()}) {
         expect(qPrintable(mode + QStringLiteral(" allows AetherDSP")),
                !aetherDspModeRequiresDisable(mode));
+    }
+
+    for (const QString& method :
+         {QStringLiteral("NR2"), QStringLiteral("NR4"), QStringLiteral("MNR"),
+          QStringLiteral("DFNR"), QStringLiteral("RN2"), QStringLiteral("BNR"),
+          QStringLiteral("NNR")}) {
+        AetherDspModePolicy fmnPolicy;
+        const bool fmnRestricted = aetherDspMixRequiresDisable({
+            {QStringLiteral("FMN"), false, 50.0f},
+        });
+        expect(qPrintable(method + QStringLiteral(" remains enabled in audible FMN")),
+               fmnPolicy.update(fmnRestricted, method).kind
+                   == AetherDspModePolicy::ActionKind::None && !fmnRestricted);
+        fmnPolicy.update(true, method);
+        const AetherDspModePolicy::Action restored = fmnPolicy.update(fmnRestricted, {});
+        expect(qPrintable(method + QStringLiteral(" restores when returning to FMN")),
+               restored.kind == AetherDspModePolicy::ActionKind::Enable
+                   && restored.method == method);
+
+        fmnPolicy.noteUserOverride();
+        fmnPolicy.update(false, {});
+        expect(qPrintable(method + QStringLiteral(" manual off clears pending recall")),
+               fmnPolicy.methodForPersistence({}).isEmpty());
+        fmnPolicy.update(true, {});
+        expect(qPrintable(method + QStringLiteral(" manual off survives a mode round trip")),
+               fmnPolicy.update(false, {}).kind == AetherDspModePolicy::ActionKind::None);
     }
 
     expect("unpopulated audible slice does not interrupt voice NR",

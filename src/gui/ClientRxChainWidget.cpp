@@ -242,6 +242,7 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
     // click while everything is off re-enables the last-active module
     // saved by AetherDspWidget::onDspButtonClicked.
     if (box.kind == TileKind::StatusDsp) {
+        emit dspMethodUserToggled();
         const bool anyOn = m_audio->nr2Enabled()  || m_audio->nr4Enabled()
                         || m_audio->mnrEnabled()  || m_audio->dfnrEnabled()
                         || m_audio->rn2Enabled()  || m_audio->nvAfxEnabled()

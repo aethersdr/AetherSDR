@@ -454,6 +454,7 @@ void AetherRxDialog::setStageEnabled(Stage stage, bool on)
     if (!m_audio) return;
     switch (stage) {
         case Nr: {
+            emit dspMethodUserToggled();
             // The same gesture the chain strip's DSP tile makes: switching the
             // stage off turns off whichever method is running, and switching it
             // back on restores the last one AetherDspWidget saved.

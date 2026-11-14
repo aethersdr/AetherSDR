@@ -130,7 +130,7 @@ All client-side methods live in **AetherRX**, on its **AetherNR** tab. Open it w
 ### Rules that apply to all seven
 
 - **One at a time.** Selecting any client method turns off the one that was running. Any client method can be stacked with any radio-side filter.
-- **Voice modes only.** The client methods run automatically in USB, LSB, DSB, AM, SAM, FM, NFM, DFM, WFM and WBFM (where supported by your radio). An audible slice in any other mode switches the selected method off, including CW, RTTY, DIGU/DIGL, D-STAR, FreeDV and DRM. The selected method returns when every audible slice is compatible. The method button and status strip show whether it is running. Muted, zero-volume and parked slices do not trigger this rule. Explicitly selecting a method while restricted overrides the automatic rule until the mix becomes compatible again. For noise help in CW, use the radio's NR and ANF.
+- **Automatic mode protection.** The client methods run automatically in USB, LSB, DSB, AM, SAM, FM, NFM, FMN, DFM, WFM and WBFM (where supported by your radio). An audible slice in any other mode switches the selected method off, including CW, RTTY, DIGU/DIGL, Flex D-STAR (DSTR), FreeDV and DRM. DFM is also permitted; leave client NR off for DFM data decoding. The selected method returns when every audible slice is compatible. The method button and status strip show whether it is running. Muted, zero-volume and parked slices do not trigger this rule. Explicitly selecting a method while restricted overrides the automatic rule until the mix becomes compatible again. For noise help in CW, use the radio's NR and ANF.
 - **Stereo.** Each method runs one instance per audio channel, so a hard pan lands instantly and diversity keeps each antenna in its own ear.
 
 ### NR2 — Spectral Noise Reduction
@@ -267,7 +267,7 @@ On non-macOS builds MNR is disabled with an explanatory tooltip.
 
 ### Mode-dependent availability
 
-The seven client-side methods automatically switch off when an audible slice uses a mode outside the analog voice list above. This also protects new digital waveform modes. The radio-side filters shown in each mode are:
+The seven client-side methods automatically switch off when an audible slice uses a mode outside the compatible mode list above. This also protects new digital waveform modes. The radio-side filters shown in each mode are:
 
 | Mode | Radio-side filters shown | Hidden |
 |------|-----------|--------|
@@ -294,7 +294,7 @@ You are listening through the radio's own outputs (line out, headphone jack or f
 
 ### A client-side method turns itself off, or its button is unavailable
 
-The client-side methods automatically switch off for audible CW, digital and unrecognized modes. Muting that slice or returning it to an analog voice mode restores the selected method. A method can also be disabled because your computer or build doesn't support it; its tooltip says why.
+The client-side methods automatically switch off for audible CW, digital and unrecognized modes. Muting that slice or returning it to a compatible mode restores the selected method. A method can also be disabled because your computer or build doesn't support it; its tooltip says why.
 
 1. Switch back to a voice mode to make the methods available again.
 2. In CW, use the radio's NR and ANF instead.

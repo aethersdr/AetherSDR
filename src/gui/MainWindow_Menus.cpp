@@ -26,7 +26,6 @@
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
-#include "ClientChainApplet.h"
 #include "CwxPanel.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
@@ -1022,19 +1021,6 @@ void MainWindow::buildMenuBar()
         showOrRaiseCanon(m_settingsBrowserDialog,
                          [this] { return new SettingsBrowserDialog(this); });
     });
-    // RX chain DSP tile double-click also opens the full AetherDSP
-    // Settings dialog — same entry point as the Settings menu action.
-    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxDspEditRequested,
-                this, [dspAction]() { dspAction->trigger(); });
-        // Single-click re-enable of NR2 from LastClientNr also runs
-        // through enableNr2WithWisdom (#2275 — direct enable can crash).
-        connect(m_appletPanel->clientChainApplet(),
-                &ClientChainApplet::rxNr2EnableWithWisdomRequested,
-                this, &MainWindow::enableNr2WithWisdom);
-    }
-
     settingsMenu->addSeparator();
 
     // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)

@@ -10,12 +10,13 @@ bool aetherDspModeRequiresDisable(QStringView mode)
         return false;
     }
 
-    // Speech NR is safe automatically only for known analog voice modes;
+    // Automatic speech NR is limited to known compatible receive modes;
     // waveform authors can register arbitrary digital mode names. This RX
     // processing list is independent of voice-keyer/Copy Assist availability.
+    // DFM is an explicit FM-data compatibility exception.
     return !(mode == u"USB" || mode == u"LSB" || mode == u"DSB"
         || mode == u"AM" || mode == u"SAM"
-        || mode == u"FM" || mode == u"NFM" || mode == u"DFM"
+        || mode == u"FM" || mode == u"NFM" || mode == u"FMN" || mode == u"DFM"
         || mode == u"WFM" || mode == u"WBFM");
 }
 
