@@ -24,8 +24,12 @@ namespace AetherSDR {
 //     time keep the rhythm. Called on the worker: the receiver MUST be lock-free
 //     (e.g. CwSidetoneGenerator::setKeyDown).
 //   - onPaddleEvent(dit, dah): raw paddle transitions, diagnostics only.
-//   - onRoutedKeyDownChange(down, when, request): an element derived from the
-//     raw input for the engine queue; never supplies a new producer/session.
+//   - onRoutedKeyDownChange(down, when, releaseAt, request): an element derived
+//     from the raw input for the engine queue; never supplies a new
+//     producer/session. On a key-down, `releaseAt` is that element's own
+//     key-up instant (fixed when the element starts). On a key-up it is the
+//     stop instant when stop() cut the element short (`when` is then still
+//     the element's deadline), and epoch zero otherwise.
 class IambicKeyer {
 public:
     enum class Mode : int {
@@ -37,6 +41,7 @@ public:
                                    std::chrono::steady_clock::time_point when)>;
     using PaddleEventCallback = std::function<void(bool dit, bool dah)>;
     using RoutedKeyDownCallback = std::function<void(bool, std::chrono::steady_clock::time_point,
+                                                     std::chrono::steady_clock::time_point,
                                                      const TxCoordinator::Request&)>;
 
     IambicKeyer();
@@ -86,7 +91,8 @@ private:
     void setPaddleInput(bool dit, bool dah, const TxCoordinator::Request* input) noexcept;
     std::chrono::nanoseconds unitNs() const noexcept;  // 1.2e9 ns / WPM, clamped
     Element nextElementChoice(bool ditWanted, bool dahWanted, Element justSent) const noexcept;
-    void emitKeyDown(bool down, std::chrono::steady_clock::time_point when);
+    void emitKeyDown(bool down, std::chrono::steady_clock::time_point when,
+                     std::chrono::steady_clock::time_point releaseAt = {});
     void emitPaddleEvent(bool dit, bool dah);
 
     std::thread             m_thread;

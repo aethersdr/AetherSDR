@@ -1030,9 +1030,12 @@ public:
                            const QString& debugSource = {}, quint64 debugTraceId = 0,
                            quint64 debugSourceMs = 0);
     bool producerRequestHasWork(const TxCoordinator::Request& request) const;
+    // `releaseAt`: a key-down's own key-up instant, when the producer knows it;
+    // on a key-up, the earlier instant a keyer stop cut it to (CwControlRequest).
     void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                 const QString& source, quint64 traceId, quint64 sourceMs,
-                                std::chrono::steady_clock::time_point scheduledAt);
+                                std::chrono::steady_clock::time_point scheduledAt,
+                                std::chrono::steady_clock::time_point releaseAt = {});
     bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
     void abortTxProducerInputs(const TxCoordinator::Producer& producer,
                                TransmitModel::PttSource source);
@@ -1549,8 +1552,8 @@ signals:
     void operatorTransmitChanged(bool active);
     // Short operator-facing interlock warnings for the panadapter overlay.
     // `key` is the stable, translation-invariant dedup key (e.g. "radio:...",
-    // "pan-tx-inhibit:...") so the UI can classify the notice without sniffing
-    // the localized message text.
+    // "pan-tx-inhibit:...", "tx-failed:N") so the UI can classify the notice
+    // without sniffing the localized message text.
     void interlockNotificationRequested(const QString& message,
                                         const QString& key,
                                         const QString& panId);
@@ -2566,6 +2569,7 @@ private:
     bool        m_txFilterKillReported{false}; // latched, so we speak once per transmission
     QString     m_lastInterlockNotificationKey;
     qint64      m_lastInterlockNotificationMs{0};
+    quint64     m_txFailedNotices{0};   // makes each "tx-failed:" key distinct
     qint64      m_interlockNotificationArmedUntilMs{0};
     TransmitModel::PttSource m_interlockNotificationSource{TransmitModel::PttSource::Mox};
     int         m_digitalVoiceTxSliceId{-1};
@@ -2737,11 +2741,13 @@ private:
     bool sendCwInput(bool down, bool ptt, bool notifySidetone,
                      const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                      std::chrono::steady_clock::time_point scheduledAt,
-                     const TxCoordinator::Request* request = nullptr);
+                     const TxCoordinator::Request* request = nullptr,
+                     std::chrono::steady_clock::time_point releaseAt = {});
     bool dispatchCwInput(bool down, bool ptt, bool notifySidetone,
                          const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                          std::chrono::steady_clock::time_point scheduledAt,
-                         const TxCoordinator::Request* request);
+                         const TxCoordinator::Request* request,
+                         std::chrono::steady_clock::time_point releaseAt);
     bool m_cwPracticeKeyDown{false};
     quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;

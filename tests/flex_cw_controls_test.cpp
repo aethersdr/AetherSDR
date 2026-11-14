@@ -7,8 +7,10 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QtEndian>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 
@@ -53,6 +55,14 @@ public:
         return true;
     }
     static void index(FlexCwControls& cw, quint32 index) { cw.m_index = index; }
+    // The relative clock as if it started `agoMs` ago and nothing was sent since.
+    static void clockSince(FlexCwControls& cw, qint64 agoMs)
+    {
+        const qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        cw.m_clockStartMs = now - agoMs;
+        cw.m_lastSendMs = 0;
+    }
 };
 }
 namespace {
@@ -175,6 +185,39 @@ void streamRemovalForms()
     check(C::removedStreamId("stream 0x12345678", {{"type", "netcw"}}) == 0, "a live status is not a removal");
     check(C::removedStreamId("slice 0", {{"in_use", "0"}}) == 0, "only stream objects retire a stream");
 }
+// #5065: a keyer stopped mid-element sends its key-up with the element's
+// deadline as scheduledAt, as on main, and the stop instant in releaseAt,
+// which only the HL2 reads. The Flex command must be the one main sends: the
+// deadline is still ahead, so no backdate; a stop instant 100 ms back would
+// backdate `time=` by 100 ms if it reached the timestamp.
+void stopInstantDoesNotReachFlex()
+{
+    QStringList lines;
+    for (const bool withStop : {false, true}) {
+        Fixture f;
+        f.prepare();
+        f.edge(true);
+        const auto now = std::chrono::steady_clock::now();
+        CwControlRequest up{CwControlRequest::Kind::Carrier, false};
+        up.scheduledAt = now + std::chrono::milliseconds(300);
+        if (withStop) { up.releaseAt = now - std::chrono::milliseconds(100); }
+        FlexCwControlsTestAccess::clockSince(f.cw, 1000);
+        check(f.cw.request(up, {f.authority.operation, false, {}}) == ReceiveDispatch::Dispatched,
+              "stop key-up dispatched");
+        const QString line = f.tcp.last();
+        bool ok = false;
+        const int time = line.section(QStringLiteral("time=0x"), 1).left(4).toInt(&ok, 16);
+        check(ok && time >= 1000 && time < 1060,
+              withStop ? "stop key-up: time= not backdated by the stop instant"
+                       : "deadline key-up: time= not backdated (the deadline is ahead)");
+        QString rest = line;
+        rest.replace(QRegularExpression(QStringLiteral("time=0x[0-9A-F]{4}")), QStringLiteral("time="));
+        lines << rest;
+        check(waitFor([&] { return f.packets.size() == 8; }), "both edges drain");
+    }
+    check(lines.size() == 2 && lines[0] == lines[1] && lines[0].startsWith(QStringLiteral("cw key 0 time= index=2 ")),
+          "a key-up carrying a stop instant sends the same Flex command as one without");
+}
 void unwrittenFallbackIsRefused()
 {
     Fixture f;
@@ -260,7 +303,7 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("flex-cw-controls-test"));
     QCoreApplication app(argc, argv);
-    lifecycle(); transport(); unwrittenFallbackIsRefused(); streamRemovalForms(); localPtt(); retirementAndDispatch();
+    lifecycle(); transport(); stopInstantDoesNotReachFlex(); unwrittenFallbackIsRefused(); streamRemovalForms(); localPtt(); retirementAndDispatch();
     check(WanConnectionTestAccess::reentrantReply(), "WAN callback may retire its own request safely");
     check(FlexCwControlsTestAccess::timestampVectors(), "clock reset/clamp/order/wrap vectors");
     std::printf("flex_cw_controls_test: %d failures\n", failures);

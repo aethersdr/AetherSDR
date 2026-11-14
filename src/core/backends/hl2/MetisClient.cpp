@@ -15,6 +15,8 @@
 #include <QSet>
 
 #include <algorithm>
+#include <chrono>
+#include <limits>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -434,6 +436,10 @@ bool MetisClient::start(const Params& params)
                     / kEp2AudioRateHz;
     m_ep2Sent = 0;
     m_ep2Clock.restart();
+    flushCwSchedule();
+    resetCwShift();
+    m_cwAnchor = std::chrono::steady_clock::now();
+    m_cwFrameSample = 0;
     m_ep2Timer->start();
     m_sinceLastEp6.restart();
     m_watchdogTimer->start();
@@ -491,6 +497,7 @@ void MetisClient::onEp2PacerTick()
     const quint64 due = static_cast<quint64>(elapsedUs / m_ep2IntervalUs);
     int burst = 0;
     while (m_ep2Sent < due && burst < kEp2MaxBurstPerTick) {
+        m_cwFrameSample = static_cast<std::int64_t>(m_ep2Sent) * kTxSamplesPerPacket;
         sendControlPacket();
         ++m_ep2Sent;
         ++burst;
@@ -627,6 +634,8 @@ void MetisClient::stop()
     // The key ends with the session: the next start() streams unkeyed until a
     // fresh setMox(true).
     m_mox = false;
+    flushCwSchedule();
+    resetCwShift();
     // Any silence recovery in flight ends with the session. The COUNTERS do
     // not: they live on m_link, which start() replaces and stop() leaves
     // standing, because a stop is not a reason to forget that a recovery
@@ -814,6 +823,7 @@ void MetisClient::setReceiverCount(int count)
     // byte may reach the wire before the Start step: bit 0 would start the
     // radio unprimed. So the gate, the start retry and the watchdog hold here.
     cancelReceiverCountRestart();   // a newer restart supersedes an older one
+    flushCwSchedule();
     if (m_startRetryTimer)
         m_startRetryTimer->stop();
     resetBandscopeGate();
@@ -1428,7 +1438,9 @@ void MetisClient::setTxRoute(int route, int level)
     setTxDriveLevel(level);
 }
 
-void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation)
+void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
+                               std::chrono::steady_clock::time_point scheduledAt,
+                               std::chrono::steady_clock::time_point releaseAt)
 {
     if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
@@ -1439,13 +1451,139 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
     if (down && !m_txAllowed) {
         return;
     }
-    if (!down && !m_cwMode) {
+    const bool scheduled = scheduledAt != std::chrono::steady_clock::time_point{} && m_running;
+    if (!scheduled) {
+        flushCwSchedule();
+    }
+    if (!down && !m_cwMode && m_cwScheduleCount == 0) {
         return;
     }
-    if (down && !m_cwMode) {
-        // CW owns the IQ stream until PTT drops. Voice already queued behind a
-        // manual MOX must not leak into the spaces between elements. Abandoned,
-        // not dropped -- uncounted for the same reason as clearCwKeying().
+    if (down && scheduled && m_cwOverRefused) {
+        ++m_cwRefusedDowns;   // this over already went past the bound
+        return;
+    }
+    if (down) {
+        // CW owns the IQ stream until PTT drops, also before a scheduled
+        // element starts: queued voice must not fill the lead.
+        enterCwMode(operation);
+    }
+    if (!scheduled) {
+        m_cwKeyDown = down;
+        // The engine suppresses a global up while another CW contributor holds
+        // down. Retain that compatible set after checking this original command.
+        m_cwOperation = down ? operation.heldCwKeying() : operation;
+        return;
+    }
+    std::int64_t target = cwSampleAt(scheduledAt) + kCwEdgeLeadSamples + m_cwShiftSamples;
+    if (!down) {
+        if (m_cwReleaseOwed) {
+            m_cwReleaseOwed = false;
+            std::size_t at = m_cwScheduleCount;
+            while (at > 0 && !(m_cwSchedule[at - 1].release && !m_cwSchedule[at - 1].down)) {
+                --at;
+            }
+            if (at == 0 || target >= m_cwSchedule[at - 1].sample) {
+                return;   // the element's own release is placed, or already on the wire
+            }
+            // An earlier key-up (a keyer stopped mid-element) replaces it.
+            for (std::size_t i = at; i < m_cwScheduleCount; ++i) {
+                m_cwSchedule[i - 1] = std::move(m_cwSchedule[i]);
+            }
+            m_cwSchedule[--m_cwScheduleCount] = {};
+        }
+        scheduleCwKeyUp(target, operation, false);
+        return;
+    }
+    if (target < m_cwFrameSample) {
+        // Too late for its sample. Never truncated, never dropped: the element
+        // and every later edge of this over move by the lateness, so element
+        // and later space lengths stay exact. Bounded so a stalled keyer
+        // cannot key late forever.
+        const std::int64_t shift = m_cwShiftSamples + (m_cwFrameSample - target);
+        if (shift > kCwMaxEdgeShiftSamples) {
+            m_cwOverRefused = true;
+            ++m_cwRefusedDowns;
+            flushCwSchedule();
+            logCwFailSafe("scheduled key-down later than the shift bound refused; no carrier until the over ends");
+            emit cwOverRefused();
+            return;
+        }
+        m_cwShiftSamples = shift;
+        target = m_cwFrameSample;
+        ++m_cwShiftedElements;
+        logCwFailSafe("late scheduled key-down: the over shifted");
+    }
+    const bool withRelease = releaseAt > scheduledAt;
+    if (m_cwScheduleCount + (withRelease ? 2 : 1) > kCwScheduleCapacity) {
+        flushCwSchedule();
+        ++m_cwScheduleOverflows;
+        logCwFailSafe("scheduled CW edges overflowed; keyed up");
+        return;
+    }
+    (void)insertCwEdge(CwScheduledEdge{target, true, operation, false});
+    m_cwReleaseOwed = withRelease;
+    if (withRelease) {
+        scheduleCwKeyUp(cwSampleAt(releaseAt) + kCwEdgeLeadSamples + m_cwShiftSamples, operation, true);
+    }
+}
+
+void MetisClient::scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation,
+                                  bool release)
+{
+    if (target < m_cwFrameSample) {
+        // A late key-up is applied at once: the element runs long, never short.
+        ++m_cwLateKeyUps;
+        m_cwKeyDown = false;
+        m_cwForceUpSample = -1;
+        m_cwOperation = operation;
+        return;
+    }
+    if (!insertCwEdge(CwScheduledEdge{target, false, operation, release})) {
+        flushCwSchedule();
+        ++m_cwScheduleOverflows;
+        logCwFailSafe("scheduled CW edges overflowed; keyed up");
+        return;
+    }
+    // Split like cwSampleAt(), so a long session cannot overflow the product.
+    constexpr std::int64_t kNsPerSecond = 1'000'000'000;
+    const auto onAir = m_cwAnchor + std::chrono::nanoseconds(
+        (target / kEp2AudioRateHz) * kNsPerSecond + (target % kEp2AudioRateHz) * kNsPerSecond / kEp2AudioRateHz);
+    m_cwUpOnAirTicks.store(std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                               onAir.time_since_epoch()).count(),
+                           std::memory_order_release);
+}
+
+bool MetisClient::insertCwEdge(const CwScheduledEdge& edge)
+{
+    if (m_cwScheduleCount == kCwScheduleCapacity) {
+        return false;
+    }
+    std::size_t at = m_cwScheduleCount;
+    while (at > 0 && m_cwSchedule[at - 1].sample > edge.sample) {
+        m_cwSchedule[at] = std::move(m_cwSchedule[at - 1]);
+        --at;
+    }
+    m_cwSchedule[at] = edge;
+    ++m_cwScheduleCount;
+    return true;
+}
+
+std::int64_t MetisClient::cwSampleAt(std::chrono::steady_clock::time_point t) const noexcept
+{
+    constexpr std::int64_t kNsPerSecond = 1'000'000'000;
+    const std::int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t - m_cwAnchor).count();
+    if (ns < 0) {
+        return std::numeric_limits<std::int64_t>::min() / 2;   // before the session: late
+    }
+    return (ns / kNsPerSecond) * kEp2AudioRateHz + (ns % kNsPerSecond) * kEp2AudioRateHz / kNsPerSecond;
+}
+
+void MetisClient::enterCwMode(const TxCoordinator::Operation& operation)
+{
+    if (!m_cwMode) {
+        // Voice already queued behind a manual MOX must not leak into the
+        // spaces between elements. Abandoned, not dropped -- uncounted for the
+        // same reason as clearCwKeying().
         abandonTxIq();
         m_cwEnvelope = 0.0;
         // ...but a starvation in progress ended at this instant, not at the
@@ -1453,14 +1591,74 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
         reportTxUnderflowRun();
     }
     m_cwMode = true;
-    m_cwKeyDown = down;
-    // The engine suppresses a global up while another CW contributor holds
-    // down. Retain that compatible set after checking this original command.
-    m_cwOperation = down ? operation.heldCwKeying() : operation;
+    m_cwOperation = operation.heldCwKeying();
+}
+
+void MetisClient::applyDueCwEdges(std::int64_t sample, qint64 nowMs)
+{
+    while (m_cwScheduleCount > 0 && m_cwSchedule[0].sample <= sample) {
+        const CwScheduledEdge edge = std::move(m_cwSchedule[0]);
+        for (std::size_t i = 1; i < m_cwScheduleCount; ++i) {
+            m_cwSchedule[i - 1] = std::move(m_cwSchedule[i]);
+        }
+        m_cwSchedule[--m_cwScheduleCount] = {};
+        if (!edge.down) {
+            m_cwKeyDown = false;
+            m_cwForceUpSample = -1;
+            // A release keeps the held CW operation its key-down entered with;
+            // the element's own intent may end before the shifted up is due.
+            if (m_cwMode && !edge.release) {
+                m_cwOperation = edge.operation;
+            }
+        } else if (m_txAllowed && edge.operation.permitsDispatch(nowMs)) {
+            enterCwMode(edge.operation);
+            m_cwKeyDown = true;
+            m_cwForceUpSample = edge.sample + kCwMaxScheduledElementSamples;
+        }
+    }
+    if (m_cwKeyDown && m_cwForceUpSample >= 0 && sample >= m_cwForceUpSample) {
+        m_cwKeyDown = false;
+        m_cwForceUpSample = -1;
+        ++m_cwForcedKeyUps;
+        logCwFailSafe("scheduled key-down held past the element cap; forced up");
+    }
+}
+
+void MetisClient::flushCwSchedule() noexcept
+{
+    for (std::size_t i = 0; i < m_cwScheduleCount; ++i) {
+        m_cwSchedule[i] = {};
+    }
+    if (m_cwScheduleCount > 0 || m_cwForceUpSample >= 0) {
+        m_cwKeyDown = false;
+    }
+    m_cwScheduleCount = 0;
+    m_cwForceUpSample = -1;
+    m_cwReleaseOwed = false;
+    m_cwUpOnAirTicks.store(0, std::memory_order_release);
+}
+
+void MetisClient::resetCwShift() noexcept
+{
+    m_cwShiftSamples = 0;
+    m_cwOverRefused = false;
+}
+
+void MetisClient::logCwFailSafe(const char* what)
+{
+    if (m_cwFailSafeLogClock.isValid() && m_cwFailSafeLogClock.elapsed() < 1000) {
+        return;
+    }
+    m_cwFailSafeLogClock.restart();
+    qCWarning(lcHl2) << "HL2 CW:" << what << "(shift" << m_cwShiftSamples << "samples; totals: shifted"
+                     << m_cwShiftedElements << "refused downs" << m_cwRefusedDowns << "late ups" << m_cwLateKeyUps
+                     << "overflows" << m_cwScheduleOverflows << "forced ups" << m_cwForcedKeyUps << ")";
 }
 
 void MetisClient::clearCwKeying()
 {
+    flushCwSchedule();
+    resetCwShift();   // the over ends here
     m_cwMode = false;
     m_cwKeyDown = false;
     m_cwEnvelope = 0.0;
@@ -1642,6 +1840,15 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         m_cwMode = false;
         m_cwKeyDown = false;
         m_cwEnvelope = 0.0;
+        m_cwForceUpSample = -1;
+    }
+    // Pending scheduled edges keep their own operations, checked as each is due.
+    const std::int64_t cwFrameStart = m_cwFrameSample;
+    m_cwFrameSample += kTxSamplesPerPacket;
+    if (!m_cwMode && m_cwScheduleCount > 0 && m_cwSchedule[0].down
+        && m_cwSchedule[0].sample < m_cwFrameSample && m_txAllowed
+        && m_cwSchedule[0].operation.permitsDispatch(now)) {
+        enterCwMode(m_cwSchedule[0].operation);   // so this frame's CW arm places it
     }
     if (!m_toneOperation.permitsDispatch(now)) {
         m_toneAmp = 0.0;
@@ -1746,14 +1953,15 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         constexpr double kRampStep = 1.0 / static_cast<double>(kCwRampSamples);
         constexpr double kPi = 3.14159265358979323846;
         std::vector<std::complex<float>> block(kTxSamplesPerPacket);
-        for (std::complex<float>& sample : block) {
+        for (int n = 0; n < kTxSamplesPerPacket; ++n) {
+            applyDueCwEdges(cwFrameStart + n, now);
             if (m_cwKeyDown) {
                 m_cwEnvelope = std::min(1.0, m_cwEnvelope + kRampStep);
             } else {
                 m_cwEnvelope = std::max(0.0, m_cwEnvelope - kRampStep);
             }
             const double shaped = 0.5 - 0.5 * std::cos(kPi * m_cwEnvelope);
-            sample = {static_cast<float>(kHl2CarrierAmplitude * shaped), 0.0f};
+            block[static_cast<std::size_t>(n)] = {static_cast<float>(kHl2CarrierAmplitude * shaped), 0.0f};
         }
         ep2WriteTxIq(pkt, block);
     } else if (keyed && m_toneAmp > 0.0) {
@@ -1836,6 +2044,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         // clear m_txIq without going through flushTxIq().
         reportTxUnderflowRun();
     }
+    // Edges due in a frame no CW arm built still happen, at the frame's end.
+    applyDueCwEdges(m_cwFrameSample - 1, now);
 
     // Audio slot. Outside the IQ branches because speaker audio plays on receive.
     // Gated on a declared codec, never on queued audio: on a bare HL2 these four

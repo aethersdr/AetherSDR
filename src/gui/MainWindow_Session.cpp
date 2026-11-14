@@ -1689,10 +1689,11 @@ void MainWindow::wireRadioModel()
             }
         });
         m_iambicKeyer->setOnRoutedKeyDownChange([this](bool down,
-                std::chrono::steady_clock::time_point when, const TxCoordinator::Request& input) {
+                std::chrono::steady_clock::time_point when, std::chrono::steady_clock::time_point releaseAt,
+                const TxCoordinator::Request& input) {
             m_radioModel.queueProducerCwKeyEdge(input, down, QStringLiteral("cw:iambic-keyer"),
                 m_lastCwPaddleTraceId.load(std::memory_order_relaxed),
-                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when);
+                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when, releaseAt);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce

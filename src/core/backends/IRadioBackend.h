@@ -1234,6 +1234,10 @@ signals:
     // on it), so advice sent there becomes a reconnect loop. If it does not stop the
     // radio working, it belongs here.
     void configurationWarning(const QString& message);
+    // A transmission the operator keyed did not go out, for a reason the
+    // operator should see (`reason`, one short line). Once per transmission;
+    // RadioModel raises it as a "TX failed" notice. MOX is not changed by it.
+    void transmitFailed(const QString& reason);
 
     void capabilitiesChanged();
 

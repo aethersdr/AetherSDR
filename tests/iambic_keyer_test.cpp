@@ -544,7 +544,7 @@ void testCapturedInputSurvivesNormalTailButNotCancel()
     keyer.setWpm(kTestWpm);
     keyer.setMode(IambicKeyer::Mode::IambicB);
     keyer.setOnKeyDownChange([&](bool down, auto when) { rec.onKeyDownChange(down, when); });
-    keyer.setOnRoutedKeyDownChange([&](bool down, auto, const auto& request) {
+    keyer.setOnRoutedKeyDownChange([&](bool down, auto, auto, const auto& request) {
         std::lock_guard<std::mutex> lock(mutex);
         (down ? downs : ups).push_back(request);
     });
@@ -578,7 +578,7 @@ void testCapturedInputSurvivesNormalTailButNotCancel()
     const TxCoordinator::Request unrelated = producer.request();
     keyer.setMode(IambicKeyer::Mode::IambicA);
     keyer.setOnKeyDownChange([&](bool down, auto when) { held.onKeyDownChange(down, when); });
-    keyer.setOnRoutedKeyDownChange([&](bool down, auto, const auto&) {
+    keyer.setOnRoutedKeyDownChange([&](bool down, auto, auto, const auto&) {
         if (down) {
             keyer.setPaddleState(false, false, unrelated);
         }
@@ -589,6 +589,71 @@ void testCapturedInputSurvivesNormalTailButNotCancel()
     keyer.setPaddleState(false, false, current);
     keyer.stop();
     report("another input's release cannot stop the current paddle squeeze", retained);
+}
+
+// #5065: a stop mid-element. The key-up's instant stays the element's
+// deadline, as on main: that is what the sidetone and every backend but the
+// HL2 key up at (Flex stamps its `time=` from it). The stop instant rides
+// alongside in `releaseAt`, for the HL2, which places a key-up at its
+// instant and would otherwise keep the carrier for the rest of the element.
+// 5 WPM: a 720 ms dah.
+void testStopMidElementKeysUpBeforeRelease()
+{
+    Recorder rec;
+    IambicKeyer k;
+    std::mutex mutex;
+    std::chrono::steady_clock::time_point releaseAt{}, upAt{}, cutAt{};
+    int ups = 0;
+    k.setOnKeyDownChange([&](bool d, auto w) { rec.onKeyDownChange(d, w); });
+    k.setOnRoutedKeyDownChange([&](bool down, auto when, auto release, const auto&) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (down && releaseAt == std::chrono::steady_clock::time_point{}) releaseAt = release;
+        if (!down) { ++ups; upAt = when; cutAt = release; }
+    });
+    k.setWpm(5);
+    k.setMode(IambicKeyer::Mode::IambicB);
+    k.start();
+    k.setPaddleState(false, true);
+    const bool down = waitForNthDown(rec, 1);
+    const auto stoppedAt = std::chrono::steady_clock::now();
+    k.stop();
+    const auto stopReturned = std::chrono::steady_clock::now();
+    const auto evs = rec.events();
+    std::lock_guard<std::mutex> lock(mutex);
+    report("stop mid-dah: one key-up, its instant the element's deadline (other backends as on main)",
+           down && ups == 1 && releaseAt != std::chrono::steady_clock::time_point{} && upAt == releaseAt);
+    report("stop mid-dah: the sidetone's key-up instant is the element's deadline, as on main",
+           evs.size() >= 2 && !evs.back().down && evs.back().sched == releaseAt);
+    report("stop mid-dah: the key-up carries the stop instant, before the element's release",
+           cutAt >= stoppedAt && cutAt <= stopReturned && cutAt < releaseAt);
+}
+
+// A key-up that was not cut short carries no stop instant.
+void testUncutKeyUpCarriesNoStopInstant()
+{
+    Recorder rec;
+    IambicKeyer k;
+    std::mutex mutex;
+    int ups = 0;
+    bool anyCut = false;
+    k.setOnKeyDownChange([&](bool d, auto w) { rec.onKeyDownChange(d, w); });
+    k.setOnRoutedKeyDownChange([&](bool down, auto, auto release, const auto&) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!down) {
+            ++ups;
+            anyCut = anyCut || release != std::chrono::steady_clock::time_point{};
+        }
+    });
+    k.setWpm(kTestWpm);
+    k.setMode(IambicKeyer::Mode::IambicB);
+    k.start();
+    k.setPaddleState(true, false);
+    waitForNthDown(rec, 1);
+    k.setPaddleState(false, false);
+    waitForQuiescence(rec);
+    k.stop();
+    std::lock_guard<std::mutex> lock(mutex);
+    report("a released element's key-up carries no stop instant", ups >= 1 && !anyCut);
 }
 
 } // namespace
@@ -609,6 +674,8 @@ int main()
     testStartIsIdempotent();
     testCapturedInputSurvivesNormalTailButNotCancel();
     testScheduledStampsAreGridExact();
+    testStopMidElementKeysUpBeforeRelease();
+    testUncutKeyUpCarriesNoStopInstant();
     std::cout << "iambic_keyer_test: done, failures=" << g_failures << '\n';
     return g_failures == 0 ? 0 : 1;
 }
