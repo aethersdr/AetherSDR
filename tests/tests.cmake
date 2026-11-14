@@ -422,6 +422,26 @@ target_compile_definitions(control_authorization_test PRIVATE
 target_link_libraries(control_authorization_test PRIVATE Qt6::Core)
 add_test(NAME control_authorization_test COMMAND control_authorization_test)
 
+# Paired clients at run time through the real VaultPairingIssuer and vault
+# adapter, with in-memory QtKeychain jobs (no OS vault, sockets or radio):
+# vault-first revoke, local identities never removable, a refused write keeps
+# the client, a revoke queued behind a pairing write.
+add_executable(control_remote_clients_vault_test
+    tests/control_remote_clients_vault_test.cpp
+    tests/fakes/qt6keychain/keychain.h
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlCredentialProvisioner.cpp
+    src/core/control/VaultPairingIssuer.cpp
+)
+target_include_directories(control_remote_clients_vault_test BEFORE PRIVATE tests/fakes src)
+target_compile_definitions(control_remote_clients_vault_test PRIVATE HAVE_KEYCHAIN)
+target_link_libraries(control_remote_clients_vault_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(control_remote_clients_vault_test PRIVATE advapi32)
+endif()
+add_test(NAME control_remote_clients_vault_test COMMAND control_remote_clients_vault_test)
+
 # Production native-vault adapter with in-memory QtKeychain jobs: no OS vault,
 # sockets, settings or radio. Pins fallback prohibition and async lifetimes.
 # The fake models QtKeychain 0.17.0's job contract; its header documents the
@@ -4362,6 +4382,16 @@ target_include_directories(tx_audio_path_policy_test PRIVATE src)
 target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
 add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
 
+# #6331: socket-free status row sizing and notices; no radio peer.
+add_executable(status_bar_message_test
+    tests/status_bar_message_test.cpp
+    src/gui/StatusBarMessageOverlay.h
+)
+target_include_directories(status_bar_message_test PRIVATE src)
+target_link_libraries(status_bar_message_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME status_bar_message_test COMMAND status_bar_message_test)
+set_tests_properties(status_bar_message_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # #7078: socket-free voice-key notice and MIC readiness policy.
 add_executable(tx_voice_key_notice_test tests/tx_voice_key_notice_test.cpp)
 target_include_directories(tx_voice_key_notice_test PRIVATE src)
@@ -4433,6 +4463,8 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
 # Radio Setup pages must not show a parentless widget while building (macOS focus steal).
 add_executable(radio_setup_no_transient_window_test
     tests/radio_setup_no_transient_window_test.cpp
+    src/gui/ClientEqOutputFader.cpp
+    src/gui/ShackSwitchApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
@@ -12375,3 +12407,28 @@ add_executable(transfer_lifecycle_test tests/transfer_lifecycle_test.cpp)
 target_include_directories(transfer_lifecycle_test PRIVATE src)
 target_link_libraries(transfer_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME transfer_lifecycle_test COMMAND transfer_lifecycle_test)
+
+# The update and firmware HTTP transport retries a connection reset before
+# receiving bytes, but never repeats a partial, rejected or oversized transfer.
+# Binds an ephemeral 127.0.0.1 TCP listener to serve versioned HTTP/1.1 replies.
+add_executable(capped_download_test
+    tests/capped_download_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_test PRIVATE src)
+target_link_libraries(capped_download_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_test COMMAND capped_download_test)
+set_tests_properties(capped_download_test PROPERTIES TIMEOUT 30)
+
+# Which failures the update and firmware transport retries before a body
+# arrives, including the HTTP/2 refusals a loopback peer cannot produce.
+# Socket-free.
+add_executable(capped_download_retry_policy_test
+    tests/capped_download_retry_policy_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_retry_policy_test PRIVATE src)
+target_link_libraries(capped_download_retry_policy_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_retry_policy_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_retry_policy_test COMMAND capped_download_retry_policy_test)

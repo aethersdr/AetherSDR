@@ -292,6 +292,9 @@ A parametric EQ with ten bands by default (high-pass, low shelf, peaking
 bands, high shelf and low-pass), each with frequency, gain and Q. Drag band
 handles on the response curve, or select a band and type values.
 
+In AetherRX, the **OUT** strip below the EQ curve displays the post-EQ level,
+with its numeric readout at the end of the strip.
+
 Toolbar controls:
 
 <img src="/img/screens/aethertx-eq.png" width="720" alt="AetherTX window with EQ selected in the stage column. Ref:, Smoothing, Peak Hold and Reset controls run along the top, above a row of filter-shape buttons. The main area plots the live microphone spectrum with ten band handles on a flat line, over a frequency scale from 20 Hz to 20 kHz with the E-SSB, SSB and AM / FM ranges marked, and the band frequencies and gains listed beneath. An output level meter runs along the bottom." />
