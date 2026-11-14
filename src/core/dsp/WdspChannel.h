@@ -136,6 +136,10 @@ public:
         std::optional<AmReceive> amReceive;
         std::optional<AnalogReceiveDsp> analogReceiveDsp;
         std::optional<WbfmReceive> wbfmReceive;
+        // WDSP's FM detector limiter (fmd.c plim) without the FmReceive recipe's
+        // mode lock: it runs only inside the FM detector, so it bounds FM audio
+        // and leaves every other mode untouched across live mode changes (#7222).
+        bool fmLimiter = false;
         // RXA output panel gain, linear, applied after the AGC. Unset keeps
         // WDSP's create_rxa() default of 4.0 (+12.04 dB, #5942).
         std::optional<double> rxPanelGain;
