@@ -266,15 +266,12 @@ private:
     // hw.get, answered synchronously by the backend; nullopt if it did not.
     std::optional<QVariantMap> hl2Hardware();
     QString hl2FilterBoardLine();
-    // The health snapshot as the Radio Health dialog merges it.
-    QVariantMap hl2HealthValues();
     void bindHl2Backend();
     void onHl2ExtensionResult(quint64 requestId, const QVariant& result);
     void onHl2ExtensionError(quint64 requestId, const QString& reason);
     void onHl2ExtensionStatus(const QString& ns, const QString& kind, const QVariantMap& fields);
     void queueHl2FilterNotice();
     bool broadcastHl2FilterBoard();
-    void checkHl2Readings();
     QString hl2SetRefusal() const;
     void warnHl2SetRefused(const QString& refusal);
     void onHl2TransmitStateChanged();
@@ -508,9 +505,6 @@ private:
     std::optional<QVariantMap> m_hl2SetPending;
     QPointer<TciClient> m_hl2SetRequester;
     QSet<QString>     m_hl2RefusalWarned;
-    QTimer*           m_hl2ReadingTimer{nullptr};
-    QString           m_hl2LastTxTiming;
-    QString           m_hl2LastExtTr;
     std::function<void(int, bool)> m_centerLockSet;
     std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer

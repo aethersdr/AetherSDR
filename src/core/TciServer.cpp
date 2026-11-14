@@ -4,7 +4,6 @@
 #include "AppActivity.h"
 #include "TciProtocol.h"
 #include "TciHl2Extension.h"
-#include "core/backends/HealthSnapshotMerge.h"
 #include "core/backends/IRadioBackend.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
@@ -650,8 +649,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_powerRateTimer->start();
     });
 
-    // Extension set, HL2 group: the same limiter for the filter board notice,
-    // and a 1 s look at the transmit timing readings, which have no signal.
+    // Extension set, HL2 group: the same limiter for the filter board notice.
     m_hl2FilterRateTimer = new QTimer(this);
     m_hl2FilterRateTimer->setSingleShot(true);
     m_hl2FilterRateTimer->setInterval(kPowerRateLimitMs);
@@ -673,10 +671,6 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::radioTransmittingChanged, this,
                 &TciServer::onHl2TransmitStateChanged);
     }
-    m_hl2ReadingTimer = new QTimer(this);
-    m_hl2ReadingTimer->setInterval(1000);
-    connect(m_hl2ReadingTimer, &QTimer::timeout, this, &TciServer::checkHl2Readings);
-    m_hl2ReadingTimer->start();
     registerHl2Group();
 
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
@@ -3881,9 +3875,7 @@ void TciServer::registerHl2Group()
     TciExtensionSet::Group group;
     group.token = QString::fromLatin1(TciHl2Extension::kToken);
     group.commands = QStringList{QString::fromLatin1(TciHl2Extension::kFilterBoardCommand),
-                                 QString::fromLatin1(TciHl2Extension::kIoBoardCommand),
-                                 QString::fromLatin1(TciHl2Extension::kTxTimingCommand),
-                                 QString::fromLatin1(TciHl2Extension::kExtTrCommand)};
+                                 QString::fromLatin1(TciHl2Extension::kIoBoardCommand)};
     group.offered = [this] { return hl2Offered(); };
     group.stateLines = [this] { return hl2StateLines(); };
     group.handle = [this](const QString& name, const QStringList& args) {
@@ -3956,16 +3948,6 @@ QString TciServer::hl2FilterBoardLine()
     return hw ? TciHl2Extension::filterBoardLine(*hw) : QString();
 }
 
-QVariantMap TciServer::hl2HealthValues()
-{
-    // Same merge as the Radio Health dialog and the bridge: the stream-free
-    // rows are the base, the backend's win.
-    const IRadioBackend::HealthSnapshot snap = m_model->hasOfflineHealth()
-        ? mergeHealthSnapshots(m_model->offlineHealthRows(), m_model->backendHealthSnapshot())
-        : m_model->backendHealthSnapshot();
-    return snap.values;
-}
-
 QStringList TciServer::hl2StateLines()
 {
     QStringList lines;
@@ -3977,24 +3959,6 @@ QStringList TciServer::hl2StateLines()
             m_hl2LastFilter = hl2FilterOf(*hw);
         }
     }
-    const QVariantMap health = hl2HealthValues();
-    const QString timing = TciHl2Extension::txTimingLine(health);
-    const QString exttr = TciHl2Extension::extTrLine(health);
-    lines << timing << exttr;
-    // The readings' last broadcast is what every enabled client holds. A
-    // client enabling on a newer reading means the others are behind: the
-    // next look sends it to all of them.
-    const bool behind = (!m_hl2LastTxTiming.isEmpty() && timing != m_hl2LastTxTiming)
-        || (!m_hl2LastExtTr.isEmpty() && exttr != m_hl2LastExtTr);
-    if (m_hl2LastTxTiming.isEmpty()) {
-        m_hl2LastTxTiming = timing;
-    }
-    if (m_hl2LastExtTr.isEmpty()) {
-        m_hl2LastExtTr = exttr;
-    }
-    if (behind) {
-        QMetaObject::invokeMethod(this, &TciServer::checkHl2Readings, Qt::QueuedConnection);
-    }
     return lines;
 }
 
@@ -4005,16 +3969,6 @@ TciExtensionSet::Result TciServer::handleHl2(const QString& name, const QStringL
         return result;
     }
     const QString ns = QString::fromLatin1(TciHl2Extension::kToken);
-    if (name == QLatin1String(TciHl2Extension::kTxTimingCommand)
-        || name == QLatin1String(TciHl2Extension::kExtTrCommand)) {
-        if (args.isEmpty()) {
-            const QVariantMap health = hl2HealthValues();
-            result.reply = name == QLatin1String(TciHl2Extension::kTxTimingCommand)
-                ? TciHl2Extension::txTimingLine(health)
-                : TciHl2Extension::extTrLine(health);
-        }
-        return result;  // read only: no set exists
-    }
     if (name == QLatin1String(TciHl2Extension::kIoBoardCommand)) {
         if (!args.isEmpty() || !m_extensionRequester) {
             return result;
@@ -4243,32 +4197,6 @@ bool TciServer::broadcastHl2FilterBoard()
     }
     broadcastExtension(line);
     return true;
-}
-
-// The readings have no change signal: looked at once a second while a client
-// has the set enabled. A health read is the stream-free poller's demand
-// signal, but this runs only while connected, where the poller's cadence does
-// not depend on demand (Hl2TelemetryCadence.h).
-void TciServer::checkHl2Readings()
-{
-    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
-        [](const ClientState& client) { return client.extensionsEnabled; });
-    if (!anyEnabled || !hl2Offered()) {
-        m_hl2LastTxTiming.clear();
-        m_hl2LastExtTr.clear();
-        return;
-    }
-    const QVariantMap health = hl2HealthValues();
-    const QString timing = TciHl2Extension::txTimingLine(health);
-    const QString exttr = TciHl2Extension::extTrLine(health);
-    if (!m_hl2LastTxTiming.isEmpty() && timing != m_hl2LastTxTiming) {
-        broadcastExtension(timing);
-    }
-    if (!m_hl2LastExtTr.isEmpty() && exttr != m_hl2LastExtTr) {
-        broadcastExtension(exttr);
-    }
-    m_hl2LastTxTiming = timing;
-    m_hl2LastExtTr = exttr;
 }
 
 void TciServer::broadcastBinary(const QByteArray& data)

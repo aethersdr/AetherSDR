@@ -1,9 +1,9 @@
 // The HL2 hardware group of the opt-in TCI extension set (`aethersdr_hl2_*`,
 // RFC #7181): offered only where the backend declares the `hl2` extension
 // namespace, the filter board set through hw.set like the Radio Setup page and
-// refused while transmitting, the IO board read answered to the asker alone,
-// and the transmit timing readings taken from the health snapshot. Changes go
-// to enabled clients only. Socket-free; nothing keys.
+// refused while transmitting, and the IO board read answered to the asker
+// alone. The transmit timing and external T/R commands are not in the set.
+// Changes go to enabled clients only. Socket-free; nothing keys.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -51,7 +51,10 @@ public:
     {
         return server.m_extensions.offeredTokens();
     }
-    static void checkReadings(TciServer& server) { server.checkHl2Readings(); }
+    static bool commandOffered(TciServer& server, const char* name)
+    {
+        return server.m_extensions.offeredGroupFor(QString::fromLatin1(name)) != nullptr;
+    }
     // A TCI key held, as trx:...,true; leaves it, without a socket.
     static void holdTciPtt(TciServer& server, TciClient* client)
     {
@@ -293,27 +296,6 @@ void grammar()
     check(boardToken(1) == QStringLiteral("n2adr_rxtx") && boardToken(3).isEmpty()
               && boardToken(-1).isEmpty(),
           "board numbers map to their names, and nothing else does");
-
-    QVariantMap h;
-    check(txTimingLine(h) == QStringLiteral("aethersdr_hl2_tx_timing:-1,-1,-1;")
-              && extTrLine(h) == QStringLiteral("aethersdr_hl2_exttr:-1;"),
-          "readings not read yet are -1");
-    h.insert(QStringLiteral("pttHangTimeMs"), 31);
-    h.insert(QStringLiteral("txBufferLatencyMs"), 10);
-    check(txTimingLine(h) == QStringLiteral("aethersdr_hl2_tx_timing:31,false,10;"),
-          "a PTT hang of 31 reads auto_unkey false");
-    h.insert(QStringLiteral("pttHangTimeMs"), 4);
-    check(txTimingLine(h) == QStringLiteral("aethersdr_hl2_tx_timing:4,true,10;"),
-          "any other hang reads auto_unkey true");
-    h.insert(QStringLiteral("paExtTr"), true);
-    check(extTrLine(h) == QStringLiteral("aethersdr_hl2_exttr:-1;"),
-          "external T/R without a reading age is not reported");
-    h.insert(QStringLiteral("telemetryAgeMs"), qlonglong{800});
-    check(extTrLine(h) == QStringLiteral("aethersdr_hl2_exttr:true;"),
-          "a fresh external T/R reading is reported");
-    h.insert(QStringLiteral("telemetryAgeMs"), qlonglong{kExtTrFreshMs + 1});
-    check(extTrLine(h) == QStringLiteral("aethersdr_hl2_exttr:-1;"),
-          "a stale one is not: it is a transmit state");
 }
 
 void serverBehaviour()
@@ -341,7 +323,7 @@ void serverBehaviour()
     a.send("aethersdr_ext_enable:true;");
     check(a.take() == one("aethersdr_ext:1;"), "its enable reply lists no item");
     a.send("aethersdr_hl2_filter_board;aethersdr_hl2_filter_board:n2adr_rxtx,false;"
-           "aethersdr_hl2_ioboard_status;aethersdr_hl2_tx_timing;aethersdr_hl2_exttr;");
+           "aethersdr_hl2_ioboard_status;");
     settle();
     check(a.take().isEmpty() && backend->hwSets.isEmpty() && backend->ioRequests.isEmpty(),
           "a read or set for the group not offered gets no reply and writes nothing");
@@ -349,13 +331,18 @@ void serverBehaviour()
     backend->caps.extensionNamespaces << QStringLiteral("hl2");
     backend->health.insert(QStringLiteral("pttHangTimeMs"), 4);
     backend->health.insert(QStringLiteral("txBufferLatencyMs"), 10);
+    backend->health.insert(QStringLiteral("paExtTr"), true);
+    backend->health.insert(QStringLiteral("telemetryAgeMs"), qlonglong{500});
     emit model.capabilitiesChanged(true, backend->caps);
     const QStringList state{QStringLiteral("aethersdr_ext:1,hl2;"),
-                            QStringLiteral("aethersdr_hl2_filter_board:none,false;"),
-                            QStringLiteral("aethersdr_hl2_tx_timing:4,true,10;"),
-                            QStringLiteral("aethersdr_hl2_exttr:-1;")};
+                            QStringLiteral("aethersdr_hl2_filter_board:none,false;")};
     QStringList got = a.take();
-    check(got == state, "once declared, the list offers hl2 with its three state lines");
+    check(got == state, "once declared, the list offers hl2 with its one state line");
+    check(TciHl2ExtensionTest::commandOffered(server, "aethersdr_hl2_filter_board")
+              && TciHl2ExtensionTest::commandOffered(server, "aethersdr_hl2_ioboard_status")
+              && !TciHl2ExtensionTest::commandOffered(server, "aethersdr_hl2_tx_timing")
+              && !TciHl2ExtensionTest::commandOffered(server, "aethersdr_hl2_exttr"),
+          "the group offers the filter board and IO board commands, not tx_timing or exttr");
     if (got != state) {
         dump("a", got);
     }
@@ -364,18 +351,21 @@ void serverBehaviour()
     check(b.take().isEmpty(), "the plain client heard none of it");
 
     // Reads: to the requester only.
-    a.send("aethersdr_hl2_filter_board;aethersdr_hl2_tx_timing;aethersdr_hl2_exttr;");
-    check(a.take() == QStringList({QStringLiteral("aethersdr_hl2_filter_board:none,false;"),
-                                   QStringLiteral("aethersdr_hl2_tx_timing:4,true,10;"),
-                                   QStringLiteral("aethersdr_hl2_exttr:-1;")})
-              && c.take().isEmpty(),
+    a.send("aethersdr_hl2_filter_board;");
+    check(a.take() == one("aethersdr_hl2_filter_board:none,false;") && c.take().isEmpty(),
           "reads are answered to the requester only");
-    a.send("aethersdr_hl2_tx_timing:31,false,10;aethersdr_hl2_exttr:true;"
-           "aethersdr_hl2_filter_board:n2adr;aethersdr_hl2_filter_board:bogus,true;"
+    // The transmit timing and external T/R commands are not in the set, with
+    // their readings in the health snapshot: answered as an unknown command.
+    a.send("aethersdr_hl2_tx_timing;aethersdr_hl2_exttr;"
+           "aethersdr_hl2_tx_timing:31,false,10;aethersdr_hl2_exttr:true;");
+    settle();
+    check(a.take().isEmpty() && c.take().isEmpty() && backend->hwSets.isEmpty(),
+          "tx_timing and exttr, read or set, are ignored like an unknown command");
+    a.send("aethersdr_hl2_filter_board:n2adr;aethersdr_hl2_filter_board:bogus,true;"
            "aethersdr_hl2_filter_board:none,maybe;aethersdr_hl2_ioboard_status:1;");
     settle();
     check(a.take().isEmpty() && backend->hwSets.isEmpty() && backend->ioRequests.isEmpty(),
-          "sets of read-only items and malformed sets are ignored");
+          "malformed sets and a set of the IO board read are ignored");
 
     // No radio identity: refused, as the setup page dims the controls.
     a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;");
@@ -560,43 +550,10 @@ void serverBehaviour()
     check(a.take().isEmpty() && c.take().isEmpty() && b.take().isEmpty(),
           "an answer for a client that left goes to no one");
 
-    // Readings: a change is broadcast once to enabled clients.
-    TciHl2ExtensionTest::checkReadings(server);
-    a.take();
-    c.take();
-    backend->health.insert(QStringLiteral("pttHangTimeMs"), 31);
-    TciHl2ExtensionTest::checkReadings(server);
-    check(a.take() == one("aethersdr_hl2_tx_timing:31,false,10;")
-              && c.take() == one("aethersdr_hl2_tx_timing:31,false,10;") && b.take().isEmpty(),
-          "a PTT hang that moves to 31 is sent, auto_unkey false, to enabled clients");
-    backend->health.insert(QStringLiteral("paExtTr"), true);
-    backend->health.insert(QStringLiteral("telemetryAgeMs"), qlonglong{500});
-    TciHl2ExtensionTest::checkReadings(server);
-    check(a.take() == one("aethersdr_hl2_exttr:true;") && c.take() == one("aethersdr_hl2_exttr:true;"),
-          "an external T/R reading is sent when it appears");
-    TciHl2ExtensionTest::checkReadings(server);
-    check(a.take().isEmpty() && c.take().isEmpty(), "an unchanged reading is not repeated");
-    backend->health.insert(QStringLiteral("telemetryAgeMs"), qlonglong{60000});
-    TciHl2ExtensionTest::checkReadings(server);
-    check(a.take() == one("aethersdr_hl2_exttr:-1;") && c.take() == one("aethersdr_hl2_exttr:-1;"),
-          "and withdrawn as -1 when it goes stale");
-
-    // A client enabling on a newer reading brings the others up to date.
-    c.send("aethersdr_ext_enable:false;");
-    backend->health.insert(QStringLiteral("txBufferLatencyMs"), 20);
-    c.send("aethersdr_ext_enable:true;");
-    got = c.take();
-    check(got.contains(QStringLiteral("aethersdr_hl2_tx_timing:31,false,20;")),
-          "a client enabling gets the newest reading");
-    settle(20);
-    check(a.take() == one("aethersdr_hl2_tx_timing:31,false,20;"),
-          "and the client that held the older one is sent it");
-    c.take();
-
     // A plain or disabled client's command is dropped.
     c.send("aethersdr_ext_enable:false;");
-    c.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;aethersdr_hl2_tx_timing;");
-    b.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;aethersdr_hl2_tx_timing;");
+    c.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;aethersdr_hl2_filter_board;");
+    b.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;aethersdr_hl2_filter_board;");
     settle();
     check(backend->filterBoard == 0 && a.take().isEmpty() && b.take().isEmpty()
               && c.take().isEmpty(),
@@ -634,9 +591,7 @@ void noLineForAnUnmovedBoard()
     TciHl2ExtensionTest::attach(server, a.client, model);
     a.send("aethersdr_ext_enable:true;");
     const QStringList state{QStringLiteral("aethersdr_ext:1,hl2;"),
-                            QStringLiteral("aethersdr_hl2_filter_board:none,false;"),
-                            QStringLiteral("aethersdr_hl2_tx_timing:-1,-1,-1;"),
-                            QStringLiteral("aethersdr_hl2_exttr:-1;")};
+                            QStringLiteral("aethersdr_hl2_filter_board:none,false;")};
     QStringList got = a.take();
     check(got == state, "the enable sends the list and the state lines");
     if (got != state) {

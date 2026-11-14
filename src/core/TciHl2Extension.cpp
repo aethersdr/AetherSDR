@@ -91,28 +91,4 @@ QString ioBoardNoneLine()
     return QStringLiteral("%1:none;").arg(QLatin1String(kIoBoardCommand));
 }
 
-QString txTimingLine(const QVariantMap& health)
-{
-    const std::optional<int> hang = intField(health, "pttHangTimeMs");
-    const std::optional<int> latency = intField(health, "txBufferLatencyMs");
-    const QString autoUnkey = hang ? boolText(*hang != kPttHangAutoUnkeyOff)
-                                   : QStringLiteral("-1");
-    return QStringLiteral("%1:%2,%3,%4;")
-        .arg(QLatin1String(kTxTimingCommand))
-        .arg(hang.value_or(-1))
-        .arg(autoUnkey)
-        .arg(latency.value_or(-1));
-}
-
-QString extTrLine(const QVariantMap& health)
-{
-    const QVariant exttr = health.value(QStringLiteral("paExtTr"));
-    bool ageOk = false;
-    const qlonglong age = health.value(QStringLiteral("telemetryAgeMs")).toLongLong(&ageOk);
-    const bool fresh = exttr.isValid() && ageOk && age >= 0 && age <= kExtTrFreshMs;
-    return QStringLiteral("%1:%2;")
-        .arg(QLatin1String(kExtTrCommand),
-             fresh ? boolText(exttr.toBool()) : QStringLiteral("-1"));
-}
-
 } // namespace AetherSDR::TciHl2Extension
