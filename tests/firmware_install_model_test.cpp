@@ -88,7 +88,7 @@ bool waitFinished(FirmwareInstallModel& model, bool* ok, QString* message, int t
 
 void testWaitLifetime()
 {
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, Ctr2ProxyTestBackend::inertFirmwareSources());
     bool ok = false;
     QString message;
     QTimer::singleShot(0, &model, [&model] {
@@ -119,13 +119,13 @@ void testConfirmedDevice()
     auto log = std::make_shared<Log>();
     QTemporaryDir dir;
 
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, {[loaders] { return *loaders; },
+                                         [] { return QList<Ctr2HidPort::DeviceInfo>(); }});
     model.setJobTargetOpener([onPort, log](const QString&, QString*, bool*) {
         ++log->opens;
         return std::unique_ptr<EspFlashTarget>(new MemFlash(*onPort, log));
     });
-    model.setDeviceSources([loaders] { return *loaders; },
-                           [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    model.lookAgain();
     model.setReleaseForTesting(EspFirmwareManifest{}, {});
     check(model.device() == FirmwareInstallModel::Device::Bootloader && model.deviceMac() == a,
           "the device in download mode is found");
@@ -290,10 +290,10 @@ void testOtherControllerOnly()
 // could not tell it from another on the same port.
 void testUnknownMac()
 {
-    FirmwareInstallModel model(nullptr);
-    model.setDeviceSources([] {
+    FirmwareInstallModel model(nullptr, {[] {
         return QList<FirmwareInstallModel::Loader>{{QStringLiteral("ttyACM0"), QString()}};
-    }, [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    }, [] { return QList<Ctr2HidPort::DeviceInfo>(); }});
+    model.lookAgain();
     QTemporaryDir dir;
     QString problem;
     check(!model.backup(model.target(), dir.filePath(QStringLiteral("x.bin")), &problem)
@@ -311,15 +311,15 @@ void testAccessDenied()
     const QString a = QStringLiteral("AA:AA:AA:AA:AA:AA");
     auto denied = std::make_shared<bool>(true);
     QTemporaryDir dir;
-    FirmwareInstallModel model(nullptr);
+    FirmwareInstallModel model(nullptr, {[a] { return QList<Loader>{{QStringLiteral("ttyACM0"), a}}; },
+                                         [] { return QList<Ctr2HidPort::DeviceInfo>(); }});
     model.setJobTargetOpener([denied](const QString& port, QString* problem, bool* accessDenied) {
         // Same words either way: only the flag may tell them apart.
         *problem = QStringLiteral("Permission to open %1 was denied.").arg(port);
         *accessDenied = *denied;
         return std::unique_ptr<EspFlashTarget>();
     });
-    model.setDeviceSources([a] { return QList<Loader>{{QStringLiteral("ttyACM0"), a}}; },
-                           [] { return QList<Ctr2HidPort::DeviceInfo>(); });
+    model.lookAgain();
     QString problem;
     bool ok = true;
     QString message;
@@ -343,6 +343,9 @@ int main(int argc, char** argv)
     // A model built without an injected USB backend would reach hidapi and
     // could open a real CTR2; it gets this counting tripwire instead.
     Ctr2ProxyTestBackend::installUsbTripwire();
+    // Nor does a firmware model built without its own device lists enumerate
+    // the real serial ports or HID devices: it gets a counting tripwire too.
+    Ctr2ProxyTestBackend::installFirmwareSourceTripwire();
     testWaitLifetime();
     testConfirmedDevice();
     testAccessDenied();
@@ -352,6 +355,8 @@ int main(int argc, char** argv)
     testUnknownMac();
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every relay model was built with an injected USB backend, never the default (hidapi)");
+    check(Ctr2ProxyTestBackend::firmwareSourceTripwireCalls() == 0,
+          "every firmware model polled only injected device lists, never the system's");
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

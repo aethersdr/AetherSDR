@@ -1069,6 +1069,9 @@ int main(int argc, char** argv)
     // A model built without an injected USB backend would reach hidapi and
     // could open a real CTR2; it gets this counting tripwire instead.
     Ctr2ProxyTestBackend::installUsbTripwire();
+    // Nor does a firmware model built without its own device lists enumerate
+    // the real serial ports or HID devices: it gets a counting tripwire too.
+    Ctr2ProxyTestBackend::installFirmwareSourceTripwire();
     testReadImage();
     testSuccess();
     testDeviceComesBackLater();
@@ -1088,6 +1091,8 @@ int main(int argc, char** argv)
     testFirmwareReadDroppedOnUpdateAndRestart();
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every relay model was built with an injected USB backend, never the default (hidapi)");
+    check(Ctr2ProxyTestBackend::firmwareSourceTripwireCalls() == 0,
+          "every firmware model polled only injected device lists, never the system's");
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;
