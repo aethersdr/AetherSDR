@@ -669,9 +669,12 @@ void mixedResend()
     check(lastAdvertisement(gotA) == QStringLiteral("aethersdr_ext:1,rx_antenna;")
               && gotA.contains(QStringLiteral("aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;")),
           "mixed: the client behind gets the item list with the new list");
-    check(gotC == QStringList({QStringLiteral("aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;")}),
-          "mixed: the client already current gets the new list as a notice");
-    if (gotC != QStringList({QStringLiteral("aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;")})) {
+    // Its selection line may come along (the slice re-publishes it); the list
+    // line is the one a skipped notice would lose.
+    const bool currentNoticed = lastAdvertisement(gotC).isEmpty()
+        && gotC.count(QStringLiteral("aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;")) == 1;
+    check(currentNoticed, "mixed: the client already current gets the new list as a notice");
+    if (!currentNoticed) {
         dump("c", gotC);
     }
 }
