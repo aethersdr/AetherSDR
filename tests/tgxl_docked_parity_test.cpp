@@ -13,7 +13,6 @@
 
 #include "gui/AccessoryPanelWidgets.h"
 #include "gui/HGauge.h"
-#include "gui/SharedTxMeterSelection.h"
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
 #include "core/TgxlConnection.h"
@@ -95,23 +94,55 @@ int main(int argc, char** argv)
 
     CHECK(!applet.isFloating());
 
-    // A tuner sees its own RF path; selecting KXPA100 readings for the
-    // shared meters must not shrink a 500 W radio's tuner range.
-    QWidget* forwardGauge = nullptr;
-    for (QWidget* widget : applet.findChildren<QWidget*>()) {
-        if (widget->accessibleName() == QStringLiteral("Forward power")) {
-            forwardGauge = widget;
-            break;
+    // Both gauges range from telemetry, independent of the station's amplifier.
+    {
+        TunerApplet meters;
+        HGauge* power = nullptr;
+        HGauge* swr = nullptr;
+        for (auto* widget : meters.findChildren<QWidget*>()) {
+            auto* gauge = dynamic_cast<HGauge*>(widget);
+            if (!gauge) continue;
+            if (gauge->accessibleName() == QLatin1String("Forward power")) power = gauge;
+            if (gauge->accessibleName() == QLatin1String("SWR")) swr = gauge;
         }
-    }
-    CHECK(forwardGauge != nullptr);
-    if (forwardGauge) {
-        for (const int radioWatts : {100, 500, 100}) {
-            const SharedTxMeterSelection selected = selectSharedTxMeters(
-                radioWatts, false, false, false, true);
-            applet.setPowerScale(tunerMaxWatts(radioWatts, selected), selected.highPowerAmplifier);
-            CHECK(forwardGauge->property("gaugeMax").toInt() == (radioWatts == 500 ? 600 : 200));
-            CHECK(selected.maxWatts == 100);
+        CHECK(power && swr);
+        if (power && swr) {
+            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+            CHECK(swr->property("gaugeTicks").toString() == QLatin1String("1.0,1.5,2.0,2.5,3.0"));
+            meters.setDeviceMeters(200.0f, 3.0f, 3000.0f, 3000.0f);
+            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+            power->resize(200, 24);
+            const QImage withLimit = power->grab().toImage();
+            meters.setDeviceMeters(200.0f, 3.0f, 0.0f, 0.0f);
+            CHECK(!power->peakHeld());
+            const QImage withoutLimit = power->grab().toImage();
+            CHECK(withLimit.width() >= 40 && withLimit.height() >= 16);
+            const QPoint end(withLimit.width() - 2, withLimit.height() - 6);
+            CHECK(withLimit.pixelColor(end) != withoutLimit.pixelColor(end));
+            meters.setDeviceMeters(0.0f, 1.0f, 0.000000001f, 0.0f);
+            CHECK(!power->peakHeld());
+            meters.setDeviceMeters(0.0f, 1.0f, 0.5f, 0.0f);
+            CHECK(power->peakHeld());
+            meters.setDeviceMeters(0.0f, 1.0f, 0.49f, 0.0f);
+            CHECK(!power->peakHeld());
+            meters.setDeviceMeters(200.01f, 3.01f, 0.0f, 0.0f);
+            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+            CHECK(power->property("gaugeTicks").toString() == QLatin1String("0,500,1K,1K5,2K"));
+            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
+            CHECK(swr->property("gaugeTicks").toString() == QLatin1String("1.0,3.0,5.0,7.0,10.0"));
+            meters.setDeviceMeters(1.0f, 1.01f, 0.0f, 0.0f);
+            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
+            meters.setDeviceMeters(0.5f, 1.01f, 0.0f, 0.0f);
+            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+            meters.setDeviceMeters(0.49f, 1.0f, 0.0f, 0.0f);
+            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+            meters.setDeviceMeters(0.0f, 4.0f, 0.0f, 0.0f);
+            CHECK(swr->value() == 4.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
         }
     }
 

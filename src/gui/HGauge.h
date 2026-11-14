@@ -260,6 +260,23 @@ public:
         update();
     }
 
+    void setExtraZone(float start, const QColor& color) {
+        m_extraZoneStart = start;
+        m_extraZoneColor = color;
+        update();
+    }
+
+    void setLimitMarker(float value, const QColor& color) {
+        m_limitValue = value;
+        m_limitColor = color;
+        update();
+    }
+
+    void setPeakAtEdgesEnabled(bool enabled) {
+        m_peakAtEdges = enabled;
+        update();
+    }
+
     // Optional scale strokes: labeled ticks are major, empty labels are minor.
     // An invalid colour preserves the label-only scale used by other applets.
     void setTickMarkColor(const QColor& color) {
@@ -451,6 +468,13 @@ protected:
                         p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, m_cautionColor);
                 }
 
+                if (m_extraZoneColor.isValid()) {
+                    int extraX = static_cast<int>(((m_extraZoneStart - m_min) / (m_max - m_min)) * barW);
+                    int extraW = qMin(fillW, redX) - extraX;
+                    if (extraW > 0)
+                        p.fillRect(barX + extraX + 1, barY + 1, extraW, barH - 2, m_extraZoneColor);
+                }
+
                 // Red portion (above red zone)
                 if (fillW > redX) {
                     int rw = fillW - redX;
@@ -467,10 +491,19 @@ protected:
             // the bar's own gradient, especially while it is decaying.
             // Reversed mode reads the peak as the lowest value (most
             // compression) but draws the same marker.
+            if (m_peakAtEdges && m_peakValue > m_min)
+                peakX = qBound(barX + 1, peakX, barX + barW - 2);
             if (peakX > barX && peakX < barX + barW - 1) {
                 p.setPen(QPen(QColor(0xff, 0xff, 0xff), kPeakMarkerW));
                 p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
             }
+        }
+
+        if (m_limitValue > 0.0f && m_limitColor.isValid()) {
+            const float fraction = qBound(0.0f, (m_limitValue - m_min) / (m_max - m_min), 1.0f);
+            const int x = qBound(barX + 1, barX + static_cast<int>(fraction * barW), barX + barW - 2);
+            p.setPen(QPen(m_limitColor, kPeakMarkerW));
+            p.drawLine(x, barY + 1, x, barY + barH - 2);
         }
 
         // Tick labels along the top
@@ -729,6 +762,9 @@ private:
     qint64 m_nowMs{0};          // monotonic tick clock for the window
     float m_peakValue{0.0f};
     bool  m_peakEnabled{false};
+    bool  m_peakAtEdges{false};
+    float m_limitValue{0.0f};
+    QColor m_limitColor;
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
     qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
@@ -736,6 +772,8 @@ private:
     QVector<Tick> m_ticks;
     QColor m_tickMarkColor;
     QColor m_cautionColor{0x99, 0x88, 0x00};
+    float m_extraZoneStart{0.0f};
+    QColor m_extraZoneColor;
 
     // Hover value readout state (see setHoverValuePopupEnabled).
     //

@@ -13,6 +13,7 @@
 #include "HGauge.h"
 
 #include <QApplication>
+#include <QImage>
 #include <QtGlobal>
 
 #include <cmath>
@@ -46,6 +47,68 @@ int main(int argc, char** argv)
     qputenv("AETHER_AUTOMATION", "1");
 
     QApplication app(argc, argv);
+
+    // Four SWR zones stay at physical values when the range expands.
+    {
+        HGauge g(1.0f, 3.0f, 2.5f, "", "", noTicks(), nullptr, 1.5f);
+        g.resize(360, 24);
+        g.setCautionColor(QColor(Qt::yellow));
+        g.setExtraZone(2.0f, QColor(255, 165, 0));
+        g.setValueImmediate(3.0f);
+        QImage low = g.grab().toImage();
+        const int y = g.height() - 6;
+        auto pixel = [y](const QImage& image, int x) { return image.pixelColor(x, y); };
+        checkNear(pixel(low, 45).green(), 144, "low SWR green zone");
+        checkNear(pixel(low, 135).red(), 255, "low SWR yellow zone");
+        checkNear(pixel(low, 135).green(), 255, "low SWR yellow component");
+        checkNear(pixel(low, 225).green(), 165, "low SWR amber zone");
+        checkNear(pixel(low, 315).green(), 51, "low SWR red zone");
+        g.setRange(1.0f, 10.0f, 2.5f, noTicks(), 1.5f);
+        g.setValueImmediate(10.0f);
+        QImage high = g.grab().toImage();
+        checkNear(pixel(high, 10).green(), 144, "high SWR green before 1.5");
+        checkNear(pixel(high, 30).green(), 255, "high SWR yellow before 2.0");
+        checkNear(pixel(high, 50).green(), 165, "high SWR amber before 2.5");
+        checkNear(pixel(high, 70).green(), 51, "high SWR red above 2.5");
+        g.setRange(1.0f, 10.0f, 2.5f,
+                   {{1.0f, "1.0"}, {3.0f, "3.0"}, {5.0f, "5.0"},
+                    {7.0f, "7.0"}, {10.0f, "10.0"}}, 1.5f);
+        g.setTickMarkColor(QColor(Qt::white));
+        const QImage ticks = g.grab().toImage();
+        for (int x : {80, 160, 240, 358}) {
+            if (ticks.pixelColor(x, 14).green() <= high.pixelColor(x, 14).green() + 60) {
+                std::printf("[FAIL] high SWR tick at x=%d\n", x);
+                ++failures;
+            }
+        }
+    }
+
+    // Peak and limit markers remain visible at and beyond full scale.
+    {
+        HGauge g(0.0f, 200.0f, 150.0f, "", "", noTicks());
+        g.resize(200, 24);
+        g.setPeakAtEdgesEnabled(true);
+        g.setPeakValue(300.0f);
+        const int y = g.height() - 6;
+        QImage peak = g.grab().toImage();
+        checkNear(peak.pixelColor(198, y).red(), 255, "peak clamped at right edge");
+        checkNear(peak.pixelColor(198, y).green(), 255, "peak is white at right edge");
+        g.setPeakValue(0.1f);
+        peak = g.grab().toImage();
+        checkNear(peak.pixelColor(1, y).red(), 255, "positive peak visible at left edge");
+        checkNear(peak.pixelColor(1, y).green(), 255, "positive peak is white");
+        g.clearPeak();
+        g.setLimitMarker(300.0f, QColor(Qt::magenta));
+        QImage limit = g.grab().toImage();
+        checkNear(limit.pixelColor(198, y).red(), 255, "limit clamped at right edge");
+        checkNear(limit.pixelColor(198, y).blue(), 255, "limit is visible at right edge");
+        g.setLimitMarker(0.0f, QColor(Qt::magenta));
+        QImage hidden = g.grab().toImage();
+        if (hidden.pixelColor(198, y) == QColor(Qt::magenta)) ++failures;
+        g.setLimitMarker(-1.0f, QColor(Qt::magenta));
+        hidden = g.grab().toImage();
+        if (hidden.pixelColor(198, y) == QColor(Qt::magenta)) ++failures;
+    }
 
     // ── the reported case: steady carrier, axis grows ────────────────────
     // ACOM 600S -> 1200S reflected: 150 W axis becomes 257 W. 120 W of

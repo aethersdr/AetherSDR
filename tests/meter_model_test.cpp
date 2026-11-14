@@ -1846,6 +1846,16 @@ void testAmpAndTunerMetersSplitByHandleAfterALateHandle()
     report("amplifier and tuner forward power split by handle",
            nearlyEqual(ampFwd, 1000.0f) && nearlyEqual(tunerFwd, 794.33f));
 
+    model.updateValues({18}, {rawDb(60.0f)});
+    report("TGXL relayed return-loss floor maps to exactly 1:1",
+           model.tgxlSwr() == 1.0f);
+    model.updateValues({18}, {rawDb(61.0f)});
+    report("TGXL relayed return loss below the floor stays at 1:1",
+           model.tgxlSwr() == 1.0f);
+    model.updateValues({18}, {rawDb(59.0f)});
+    report("TGXL relayed return loss above the floor remains above 1:1",
+           model.tgxlSwr() > 1.0f);
+
     // The same rescan covers ID and TEMP: the tuner's readings (meters 19, 20)
     // must not displace the amplifier's.
     model.updateValues({15, 19, 20, 16},

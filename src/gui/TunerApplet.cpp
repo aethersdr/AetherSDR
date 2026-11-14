@@ -160,40 +160,6 @@ void TunerApplet::applyTuneButtonStyle(const char* styleTemplate)
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_panelTuneBtn, styleTemplate);
 }
 
-void TunerApplet::setAmplifierMode(bool hasAmp)
-{
-    setPowerScale(100, hasAmp);
-}
-
-void TunerApplet::setPowerScale(int maxWatts, bool hasAmplifier)
-{
-    if (m_havePowerScale && maxWatts == m_lastMaxWatts && hasAmplifier == m_lastHasAmplifier) {
-        return;
-    }
-    m_havePowerScale = true;
-    m_lastMaxWatts = maxWatts;
-    m_lastHasAmplifier = hasAmplifier;
-
-    auto* gauge = static_cast<HGauge*>(m_fwdGauge);
-    if (hasAmplifier) {
-        // PGXL: 0–2000 W, yellow > 1000 W, red > 1500 W
-        gauge->setRange(0.0f, 2000.0f, 1500.0f,
-            {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1.5K"}, {2000, "2K"}},
-            1000.0f);
-    } else if (maxWatts > 100) {
-        // Aurora (500 W): 0–600 W, yellow > 400 W, red > 500 W
-        gauge->setRange(0.0f, 600.0f, 500.0f,
-            {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
-             {400, "400"}, {500, "500"}, {600, "600"}},
-            400.0f);
-    } else {
-        // Barefoot radio: 0–200 W, yellow > 80 W, red > 125 W
-        gauge->setRange(0.0f, 200.0f, 125.0f,
-            {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
-            80.0f);
-    }
-}
-
 void TunerApplet::buildUI()
 {
     auto* outer = new QVBoxLayout(this);
@@ -222,8 +188,7 @@ void TunerApplet::buildUI()
     static const char* kRowLabelStyle =
         "QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }";
 
-    // Forward Power gauge — default barefoot (0–200 W); switches to
-    // 0–2000 W if a PGXL amplifier is detected via setAmplifierMode().
+    // Forward power begins on the low range and follows the measured power.
     // External row label carries the live value; internal gauge label is empty.
     m_pwrLabel = new QLabel("PWR", this);
     m_pwrLabel->setFixedWidth(72);
@@ -234,6 +199,7 @@ void TunerApplet::buildUI()
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
         this, 80.0f);
     static_cast<HGauge*>(m_fwdGauge)->setWindowPeakEnabled(true);
+    static_cast<HGauge*>(m_fwdGauge)->setPeakAtEdgesEnabled(true);
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
@@ -249,8 +215,19 @@ void TunerApplet::buildUI()
     m_swrLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     m_swrLabel->setStyleSheet(kRowLabelStyle);
     m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
-        {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
-        this, 2.0f);
+        {{1.0f, "1.0"}, {1.5f, "1.5"}, {2.0f, "2.0"}, {2.5f, "2.5"}, {3.0f, "3.0"}},
+        this, 1.5f);
+    auto applyMeterColors = [this]() {
+        auto& theme = ThemeManager::instance();
+        static_cast<HGauge*>(m_swrGauge)->setCautionColor(
+            theme.color(m_swrGauge, QStringLiteral("color.meter.swr.yellow")));
+        static_cast<HGauge*>(m_swrGauge)->setExtraZone(
+            2.0f, theme.color(m_swrGauge, QStringLiteral("color.accent.warning")));
+        static_cast<HGauge*>(m_fwdGauge)->setLimitMarker(
+            m_maxPower, theme.color(m_fwdGauge, QStringLiteral("color.accent.danger")));
+    };
+    applyMeterColors();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, applyMeterColors);
     m_swrGauge->setAccessibleName(tr("SWR"));
     auto* swrRow = new QHBoxLayout;
     swrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
@@ -1094,6 +1071,8 @@ void TunerApplet::setTunerModel(TunerModel* model)
                     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
                     gauge->setWindowPeakEnabled(true);
                     gauge->clearPeak();
+                    m_maxPower = 0.0f;
+                    gauge->setLimitMarker(0.0f, QColor());
                     // Reset antenna buttons to defaults on disconnect
                     if (m_ant1Btn) m_ant1Btn->setText(tr("ANT 1"));
                     if (m_ant2Btn) m_ant2Btn->setText(tr("ANT 2"));
@@ -1281,19 +1260,20 @@ void TunerApplet::setRadioMeters(float fwdPower, float swr)
     updateMeters(fwdPower, swr);
 }
 
-void TunerApplet::setDeviceMeters(float fwdPower, float swr, float fwdPeak)
+void TunerApplet::setDeviceMeters(float fwdPower, float swr, float fwdPeak, float maxPower)
 {
     // The authority whenever it is connected. The relay above takes over
     // within kRelayMeterFreshnessMs of this going quiet, so a station with no
     // direct connection, or one that drops, still gets a meter.
     m_deviceMeters.restart();
-    updateMeters(fwdPower, swr, fwdPeak);
+    updateMeters(fwdPower, swr, fwdPeak, maxPower);
 }
 
-void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
+void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float maxPower)
 {
     m_fwdPower = fwdPower;
     m_swr = swr;
+    m_maxPower = maxPower;
     // Active antenna button turns red while transmitting. Threshold matches
     // the meter label floor so both react to the same power level. Only
     // update the button on the edge — setStyleSheet at 60 Hz while keyed
@@ -1303,27 +1283,40 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
         if (m_ant1Btn) updateAntennaButtons(m_model ? m_model->antennaA() : -1);
     }
     auto* powerGauge = static_cast<HGauge*>(m_fwdGauge);
+    if (!m_powerHighRange && fwdPower > 200.0f) {
+        m_powerHighRange = true;
+        powerGauge->setRange(0.0f, 2000.0f, 1500.0f,
+            {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1K5"}, {2000, "2K"}}, 1000.0f);
+    } else if (m_powerHighRange && fwdPower < 0.5f) {
+        m_powerHighRange = false;
+        powerGauge->setRange(0.0f, 200.0f, 125.0f,
+            {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}}, 80.0f);
+    }
     if (fwdPeak < 0.0f) {
         powerGauge->setWindowPeakEnabled(true);
     }
     powerGauge->setValue(fwdPower);
-    // TGXL sends swr=0.0000 (return loss = 0 dB) at idle — no incident signal
-    // to measure against. The model converts that to rho=1.0 → ratio=99.9, which
-    // pegs the gauge. Snap to 1.0 (empty) whenever forward power is below the
-    // noise floor; m_swr retains the raw value for the numeric row label.
-    // Threshold matches the label threshold (5 W) — 1 W was too low and let
-    // idle noise readings light up the SWR bar.
-    if (fwdPower >= 5.0f) {
-        static_cast<HGauge*>(m_swrGauge)->setValue(swr);
-    } else {
-        static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
+    auto* swrGauge = static_cast<HGauge*>(m_swrGauge);
+    if (!m_swrHighRange && swr > 3.0f) {
+        m_swrHighRange = true;
+        swrGauge->setRange(1.0f, 10.0f, 2.5f,
+            {{1.0f, "1.0"}, {3.0f, "3.0"}, {5.0f, "5.0"}, {7.0f, "7.0"}, {10.0f, "10.0"}}, 1.5f);
+    } else if (m_swrHighRange && swr == 1.0f) {
+        m_swrHighRange = false;
+        swrGauge->setRange(1.0f, 3.0f, 2.5f,
+            {{1.0f, "1.0"}, {1.5f, "1.5"}, {2.0f, "2.0"}, {2.5f, "2.5"}, {3.0f, "3.0"}}, 1.5f);
     }
+    swrGauge->setValue(swr);
+    powerGauge->setLimitMarker(maxPower,
+        ThemeManager::instance().color(m_fwdGauge, QStringLiteral("color.accent.danger")));
     // Use the device's own peak when present: `fwd` is a sparse instant sample
     // (on voice it mostly reads near zero while `peak` reads the envelope). The
     // device peak owns the external-peak mode while direct telemetry is present;
     // the relay path has no peak and windows over fwdPower.
-    if (fwdPeak >= 0.0f) {
+    if (fwdPeak >= 0.5f) {
         powerGauge->setExternalPeak(fwdPeak);
+    } else if (fwdPeak >= 0.0f) {
+        powerGauge->clearPeak();
     }
     updateValueLabels();
 }
