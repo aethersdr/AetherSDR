@@ -274,6 +274,32 @@ QJsonObject RadioCertification::meterSnapshot() const
     return out;
 }
 
+bool RadioCertification::armCapture(int durationMs, const QStringList& points, QString* why)
+{
+    if (!m_audio) {
+        if (why)
+            *why = QStringLiteral("no audio engine");
+        return false;
+    }
+    const QJsonObject r = m_audio->startAutomationAudioCapture(durationMs, points);
+    if (r.value(QStringLiteral("ok")).toBool())
+        return true;
+    if (why) {
+        *why = r.value(QStringLiteral("error")).toString();
+        if (why->isEmpty())
+            *why = QStringLiteral("the audio engine refused the capture");
+    }
+    return false;
+}
+
+QString RadioCertification::captureUnavailableConcern(const QString& why)
+{
+    return QStringLiteral(
+        "INCONCLUSIVE — audio capture unavailable: %1. Nothing was recorded, so "
+        "this stage measured nothing; it says nothing about the antenna, the "
+        "signal or the receiver").arg(why);
+}
+
 QJsonObject RadioCertification::renderedSnapshot() const
 {
     QJsonObject out;
@@ -2081,6 +2107,8 @@ void RadioCertification::stageRxSidebands(const Options& o)
 
     QJsonObject perMode;
     QMap<QString, bool> recovered;
+    QString captureError;
+    QStringList silentModes;
     for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
                                 QStringLiteral("DIGU"), QStringLiteral("DIGL")}) {
         slice->setMode(mode);
@@ -2095,8 +2123,10 @@ void RadioCertification::stageRxSidebands(const Options& o)
             {QStringLiteral("threshold"), slice->agcThreshold()},
             {QStringLiteral("offLevel"), slice->agcOffLevel()},
         };
-        m_audio->startAutomationAudioCapture(1500,
-                                             QStringList{QStringLiteral("output")});
+        // The refusal is environmental (AETHER_AUTOMATION unset), so every
+        // later mode would be refused alike.
+        if (!armCapture(1500, QStringList{QStringLiteral("output")}, &captureError))
+            break;
         spin(1700);
         const QJsonObject snap = m_audio->automationAudioCaptureSnapshot(true);
 
@@ -2138,19 +2168,39 @@ void RadioCertification::stageRxSidebands(const Options& o)
         const double all = rms(mono);
         const bool heard = !mono.empty() && certmath::toneRecovered(tone, all);
         recovered[mode] = heard;
+        // An empty capture has no level: db() of nothing reads -240, which
+        // looks like a measurement of a deaf receiver.
+        const bool haveAudio = !mono.empty();
+        if (!haveAudio)
+            silentModes << mode;
         perMode[mode] = QJsonObject{
             {QStringLiteral("sampleRateHz"), fs},
             {QStringLiteral("toneSearchSpanHz"), kReferenceSearchSpanHz},
-            {QStringLiteral("toneAtOffsetDb"), db(tone)},
-            {QStringLiteral("overallRmsDb"), db(all)},
+            {QStringLiteral("toneAtOffsetDb"), haveAudio ? QJsonValue(db(tone)) : QJsonValue()},
+            {QStringLiteral("overallRmsDb"), haveAudio ? QJsonValue(db(all)) : QJsonValue()},
             {QStringLiteral("toneAboveBackgroundDb"),
-             certmath::toneAboveBackgroundDb(tone, all)},
+             haveAudio ? QJsonValue(certmath::toneAboveBackgroundDb(tone, all)) : QJsonValue()},
             {QStringLiteral("recovered"), heard},
             {QStringLiteral("agc"), agc},
             {QStringLiteral("frames"), static_cast<int>(mono.size())},
         };
     }
     slice->setMode(o.mode);
+
+    if (!captureError.isEmpty()) {
+        perMode[QStringLiteral("summary")] = QJsonObject{
+            {QStringLiteral("pattern"), QStringLiteral("capture-unavailable")},
+            {QStringLiteral("captureError"), captureError},
+        };
+        record(QStringLiteral("rx-sidebands"),
+               QStringLiteral("All four SSB-family modes against a known carrier"),
+               perMode,
+               QStringLiteral("The receive-audio capture this stage measures with "
+                              "could not be started."),
+               captureUnavailableConcern(captureError),
+               QStringLiteral("docs/HERMES.md 15.3, 15.4"));
+        return;
+    }
 
     const bool carrierAboveDial = o.referenceOffsetHz > 0.0;
     const certmath::RxSidebandPattern pattern = certmath::rxSidebandPattern(
@@ -2192,10 +2242,20 @@ void RadioCertification::stageRxSidebands(const Options& o)
                  carrierAboveDial ? QStringLiteral("above") : QStringLiteral("below"));
         break;
     }
+    // No audio at all is a missing audio path, not a quiet band: the
+    // carrier caveat above is only true of modes that captured something.
+    if (!silentModes.isEmpty()) {
+        concern = QStringLiteral(
+            "INCONCLUSIVE — the capture armed but returned no audio in %1. The "
+            "output tap delivered nothing, which is a missing receive-audio path, "
+            "not a quiet band, so no sideband pattern can be read")
+            .arg(silentModes.join(QStringLiteral(", ")));
+    }
     perMode[QStringLiteral("summary")] = QJsonObject{
         {QStringLiteral("pattern"), patternName},
         {QStringLiteral("carrierAboveDial"), carrierAboveDial},
         {QStringLiteral("recoveredThresholdDb"), certmath::kRecoveredToneAboveBackgroundDb},
+        {QStringLiteral("silentModes"), QJsonArray::fromStringList(silentModes)},
     };
 
     record(QStringLiteral("rx-sidebands"),
@@ -2511,12 +2571,19 @@ void RadioCertification::stageSideband(const Options& o)
     // Each capture reports the rate it ACTUALLY saw, in its own out-parameter.
     // See the block below the captures for why this is not a constant.
     double sameFs = 0.0, oppFs = 0.0;
+    // Armed BEFORE the key: with no capture there is nothing to measure, so
+    // the stage does not transmit at all.
+    QString captureError;
     auto capture = [&](const QString& mode, double& fsOut) -> std::vector<float> {
+        if (!captureError.isEmpty())
+            return {};
         if (auto* slice = m_radio->slice(0))
             slice->setMode(mode);
         spin(900);
-        m_audio->startAutomationAudioCapture(o.settleMs + 500,
-                                             QStringList{QStringLiteral("output")});
+        if (!armCapture(o.settleMs + 500, QStringList{QStringLiteral("output")},
+                        &captureError)) {
+            return {};
+        }
         keyViaOperatorPath(true);
         spin(o.settleMs);
         keyViaOperatorPath(false);
@@ -2555,6 +2622,18 @@ void RadioCertification::stageSideband(const Options& o)
     // Power, monitor, key and tone are all handled by the scope guard above.
     if (auto* slice = m_radio->slice(0))
         slice->setMode(o.mode);
+
+    if (!captureError.isEmpty()) {
+        record(QStringLiteral("sideband"),
+               QStringLiteral("Transmit/receive sideband AGREEMENT — not absolute correctness"),
+               QJsonObject{{QStringLiteral("transmitMode"), o.mode},
+                           {QStringLiteral("captureError"), captureError}},
+               QStringLiteral("The receive-audio capture this stage measures with "
+                              "could not be started, and no leg is keyed without one."),
+               captureUnavailableConcern(captureError),
+               QStringLiteral("docs/HERMES.md 14.6"));
+        return;
+    }
 
     // Take the rate from the capture (docs/HERMES.md 1.9): the "output" tap runs at
     // the audio device rate, not AudioEngine::DEFAULT_SAMPLE_RATE, and a wrong
@@ -2736,50 +2815,81 @@ void RadioCertification::stageLifecycle(const Options&)
     // Muting only the output is not enough: the demodulator keeps running on our
     // own signal, its filters fill, and the backlog drains on unkey — heard as
     // the tail of a transmission playing back after it ended.
-    m_audio->startAutomationAudioCapture(1200, QStringList{QStringLiteral("output")});
+    const QString title = QStringLiteral("Receive muting across the transmit cycle");
+    const QString observation = QStringLiteral(
+        "Zero bytes during transmit is what is wanted. A non-zero count "
+        "AFTER unkey that greatly exceeds the before-key rate would "
+        "indicate a drained backlog rather than a resumed stream.");
+    const QString reference = QStringLiteral("docs/HERMES.md 14.1; RX mute at the demodulator");
+    const QStringList output{QStringLiteral("output")};
+
+    // Zero bytes during transmit is the PASS condition, so every window must
+    // have been armed and the receiver keyed, or silence certifies muting.
+    QString captureError;
+    if (!armCapture(1200, output, &captureError)) {
+        record(QStringLiteral("lifecycle"), title,
+               QJsonObject{{QStringLiteral("captureError"), captureError}},
+               observation, captureUnavailableConcern(captureError), reference);
+        return;
+    }
     spin(1400);
     const QJsonObject before = m_audio->automationAudioCaptureSnapshot(false);
-
-    keyViaOperatorPath(true);
-    spin(600);
-    m_audio->startAutomationAudioCapture(1200, QStringList{QStringLiteral("output")});
-    spin(1400);
-    const QJsonObject during = m_audio->automationAudioCaptureSnapshot(false);
-    keyViaOperatorPath(false);
-
-    m_audio->startAutomationAudioCapture(1200, QStringList{QStringLiteral("output")});
-    spin(1400);
-    const QJsonObject afterUnkey = m_audio->automationAudioCaptureSnapshot(false);
-
     const auto bytes = [](const QJsonObject& o) {
         return o.value(QStringLiteral("capturedBytes")).toInt();
     };
+    // With no receive audio to begin with, zero bytes during transmit would
+    // prove nothing, so the stage does not key.
+    if (bytes(before) == 0) {
+        record(QStringLiteral("lifecycle"), title,
+               QJsonObject{{QStringLiteral("rxBytesBeforeKey"), 0}},
+               observation,
+               QStringLiteral(
+                   "INCONCLUSIVE — the capture armed but returned no audio before "
+                   "the key, which is a missing receive-audio path, not a muted "
+                   "one. The stage did not key"),
+               reference);
+        return;
+    }
+
+    const bool keyed = keyViaOperatorPath(true);
+    spin(600);
+    const bool duringArmed = armCapture(1200, output, &captureError);
+    spin(duringArmed ? 1400 : 0);
+    const QJsonObject during = m_audio->automationAudioCaptureSnapshot(false);
+    keyViaOperatorPath(false);
+
+    const bool afterArmed = duringArmed && armCapture(1200, output, &captureError);
+    spin(afterArmed ? 1400 : 0);
+    const QJsonObject afterUnkey = m_audio->automationAudioCaptureSnapshot(false);
+
     QJsonObject m{
         {QStringLiteral("rxBytesBeforeKey"), bytes(before)},
-        {QStringLiteral("rxBytesDuringTx"), bytes(during)},
-        {QStringLiteral("rxBytesAfterUnkey"), bytes(afterUnkey)},
+        {QStringLiteral("rxBytesDuringTx"), duringArmed ? QJsonValue(bytes(during)) : QJsonValue()},
+        {QStringLiteral("rxBytesAfterUnkey"),
+         afterArmed ? QJsonValue(bytes(afterUnkey)) : QJsonValue()},
+        {QStringLiteral("keyConfirmed"), keyed},
     };
 
     QString concern;
-    if (bytes(during) > 0)
+    if (!duringArmed || !afterArmed) {
+        m[QStringLiteral("captureError")] = captureError;
+        concern = captureUnavailableConcern(captureError);
+    } else if (!keyed) {
+        concern = QStringLiteral(
+            "INCONCLUSIVE — the key was refused, so the window labelled "
+            "\"during transmit\" was taken unkeyed and says nothing about muting");
+    } else if (bytes(during) > 0) {
         concern = QStringLiteral(
             "receive audio was still flowing during transmit. The operator will "
             "hear their own carrier as fuzz and their own voice as feedback, and "
             "with an open microphone that closes an acoustic loop that corrupts "
             "the transmitted audio");
-    else if (bytes(afterUnkey) == 0 && bytes(before) > 0)
+    } else if (bytes(afterUnkey) == 0) {
         concern = QStringLiteral(
             "receive audio did not resume after unkey");
+    }
 
-    record(QStringLiteral("lifecycle"),
-           QStringLiteral("Receive muting across the transmit cycle"),
-           m,
-           QStringLiteral(
-               "Zero bytes during transmit is what is wanted. A non-zero count "
-               "AFTER unkey that greatly exceeds the before-key rate would "
-               "indicate a drained backlog rather than a resumed stream."),
-           concern,
-           QStringLiteral("docs/HERMES.md 14.1; RX mute at the demodulator"));
+    record(QStringLiteral("lifecycle"), title, m, observation, concern, reference);
 }
 
 QJsonObject RadioCertification::run(const Options& o)

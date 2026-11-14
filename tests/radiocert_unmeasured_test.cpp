@@ -1,5 +1,9 @@
 // radiocert must not report a reading it never took.
 //
+// #7083: every audio stage discarded startAutomationAudioCapture()'s refusal,
+// so without AETHER_AUTOMATION=1 rx-sidebands read -240 dB and blamed the
+// antenna, and lifecycle certified receive muting on three empty windows.
+//
 // #7084: meter-scale judged SWR without its stale flag, so a 255.99 left over
 // from an earlier key raised a fixed-point saturation concern on a radio whose
 // SWR meter was not fed at all.
@@ -35,6 +39,19 @@ public:
     {
         return cert.meterSnapshot();
     }
+    static void rxSidebands(RadioCertification& cert, const RadioCertification::Options& o)
+    {
+        cert.stageRxSidebands(o);
+    }
+    static void sideband(RadioCertification& cert, const RadioCertification::Options& o)
+    {
+        cert.stageSideband(o);
+    }
+    static void lifecycle(RadioCertification& cert, const RadioCertification::Options& o)
+    {
+        cert.stageLifecycle(o);
+    }
+    static int keyRefusals(const RadioCertification& cert) { return cert.m_keyRefusals; }
     static void meterScale(RadioCertification& cert, const RadioCertification::Options& o)
     {
         cert.stageMeterScale(o);
@@ -61,9 +78,11 @@ void check(bool condition, const char* message)
     failures += !condition;
 }
 
+// The slice fixture installs only while disconnected, so the link is a flag.
 class IdleBackend final : public hl2::Hl2Backend {
 public:
-    bool isConnected() const override { return true; }
+    bool linked{true};
+    bool isConnected() const override { return linked; }
 };
 
 QJsonObject stageNamed(const RadioCertification& cert, const QString& id)
@@ -199,6 +218,107 @@ void testMeterScaleStage()
           "meter-scale stage: the report says the key was not confirmed");
 }
 
+// Runs the three audio stages and returns them by id. The engine is never
+// started, so an armed capture still receives no audio.
+struct AudioStages {
+    QJsonObject rxSidebands;
+    QJsonObject sideband;
+    QJsonObject lifecycle;
+    int keyRefusals = -1;
+};
+
+AudioStages runAudioStages()
+{
+    RadioModel radio;
+    auto* backend = new IdleBackend();
+    backend->linked = false;
+    std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(backend));
+    radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+    const bool fixture = radio.automationApplySliceFixture(0, QStringLiteral("A"));
+    backend->linked = true;
+    if (!fixture || !radio.slice(0)) {
+        std::fprintf(stderr, "FATAL: the slice fixture was not installed\n");
+        std::exit(2);
+    }
+    AudioEngine audio;
+    RadioCertification cert(&radio, &audio);
+    RadioCertification::Options o;
+    o.settleMs = 0;
+    RadioCertificationTestAccess::rxSidebands(cert, o);
+    RadioCertificationTestAccess::sideband(cert, o);
+    RadioCertificationTestAccess::lifecycle(cert, o);
+    AudioStages out;
+    out.rxSidebands = stageNamed(cert, QStringLiteral("rx-sidebands"));
+    out.sideband = stageNamed(cert, QStringLiteral("sideband"));
+    out.lifecycle = stageNamed(cert, QStringLiteral("lifecycle"));
+    out.keyRefusals = RadioCertificationTestAccess::keyRefusals(cert);
+    return out;
+}
+
+QString concernOf(const QJsonObject& stage)
+{
+    return stage.value(QStringLiteral("concern")).toString();
+}
+
+void testCaptureRefused()
+{
+    // THE REGRESSION: the bridge running without AETHER_AUTOMATION=1.
+    qunsetenv("AETHER_AUTOMATION");
+    const AudioStages s = runAudioStages();
+    const QString unavailable = QStringLiteral("audio capture unavailable");
+    const QString engineReason = QStringLiteral("requires AETHER_AUTOMATION=1");
+
+    check(!s.rxSidebands.isEmpty(), "refused: rx-sidebands was recorded");
+    check(concernOf(s.rxSidebands).contains(unavailable)
+              && concernOf(s.rxSidebands).contains(engineReason),
+          "refused: rx-sidebands says the capture was unavailable, and why");
+    check(!concernOf(s.rxSidebands).contains(QLatin1String("real carrier present")),
+          "refused: rx-sidebands does not blame the antenna or the signal");
+    const QJsonObject usb = s.rxSidebands.value(QStringLiteral("measured")).toObject()
+                                .value(QStringLiteral("USB")).toObject();
+    check(!usb.contains(QStringLiteral("toneAtOffsetDb")),
+          "refused: rx-sidebands publishes no tone figure it never measured");
+
+    check(concernOf(s.sideband).contains(unavailable),
+          "refused: sideband says the capture was unavailable");
+    check(!concernOf(s.sideband).contains(QLatin1String("TX audio monitor")),
+          "refused: sideband does not blame the TX audio monitor");
+
+    check(!s.lifecycle.isEmpty(), "refused: lifecycle was recorded");
+    check(concernOf(s.lifecycle).contains(unavailable),
+          "refused: lifecycle does not pass on a capture that never ran");
+
+    check(s.keyRefusals == 0,
+          "refused: no stage tried to key without a capture to measure it");
+}
+
+void testCaptureArmedButSilent()
+{
+    // The capture arms, the engine is not running, so nothing arrives: a
+    // missing audio path, which is not the same report as a quiet band.
+    qputenv("AETHER_AUTOMATION", "1");
+    const AudioStages s = runAudioStages();
+    qunsetenv("AETHER_AUTOMATION");
+
+    const QString rx = concernOf(s.rxSidebands);
+    check(rx.contains(QLatin1String("returned no audio"))
+              && rx.contains(QLatin1String("USB")) && rx.contains(QLatin1String("DIGL")),
+          "silent: rx-sidebands names the modes whose capture returned no audio");
+    check(!rx.contains(QLatin1String("real carrier present")),
+          "silent: rx-sidebands does not blame the antenna or the signal");
+    const QJsonObject usb = s.rxSidebands.value(QStringLiteral("measured")).toObject()
+                                .value(QStringLiteral("USB")).toObject();
+    check(usb.value(QStringLiteral("frames")).toInt(-1) == 0
+              && usb.value(QStringLiteral("toneAtOffsetDb")).isNull()
+              && usb.value(QStringLiteral("overallRmsDb")).isNull(),
+          "silent: an empty capture has frames 0 and no -240 dB levels");
+
+    const QString life = concernOf(s.lifecycle);
+    check(life.contains(QLatin1String("INCONCLUSIVE"))
+              && life.contains(QLatin1String("no audio before")),
+          "silent: lifecycle is INCONCLUSIVE when no audio flowed before the key");
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -207,6 +327,8 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     check(profile.isValid(), "settings are isolated");
 
+    testCaptureRefused();
+    testCaptureArmedButSilent();
     testMeterScaleJudgement();
     testMeterScaleStage();
 

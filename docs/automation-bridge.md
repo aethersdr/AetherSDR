@@ -1269,6 +1269,13 @@ The receive-only `rx-sidebands` stage judges each mode's reference tone relative
 to its own background. Silent captures and non-finite measurements do not count
 as recovered carriers, so muted audio cannot produce an `expected` pattern.
 
+The `rx-sidebands`, `sideband` and `lifecycle` stages measure through the
+automation audio capture, which needs `AETHER_AUTOMATION=1` at launch. Without
+it each of those stages reports `INCONCLUSIVE — audio capture unavailable` with
+the engine's reason, publishes no levels, and does not key. A capture that arms
+but returns no audio is reported as a missing receive-audio path, not as a
+quiet band.
+
 ### `radiocert meters`: control readback, interlock and the SQL line
 
 `radiocert meters [freqMhz] [sql=<MHz>]` runs three non-keying stages before its

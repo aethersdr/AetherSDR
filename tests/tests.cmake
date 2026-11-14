@@ -8701,13 +8701,15 @@ target_link_libraries(radiocert_gated_meter_test PRIVATE aethercore Qt6::Core Qt
 set_target_properties(radiocert_gated_meter_test PROPERTIES AUTOMOC ON)
 add_test(NAME radiocert_gated_meter_test COMMAND radiocert_gated_meter_test)
 
-# #7084 — radiocert does not report a reading it never took: a stale or
-# refused-key meter value is null, never judged. Socket-free, never keys.
+# #7083, #7084 — radiocert does not report a reading it never took: a refused or
+# silent audio capture is INCONCLUSIVE, and a stale or refused-key meter value
+# is null, never judged. Socket-free, never keys; the audio stages spin ~15 s.
 add_executable(radiocert_unmeasured_test tests/radiocert_unmeasured_test.cpp)
 target_include_directories(radiocert_unmeasured_test PRIVATE src tests)
 target_link_libraries(radiocert_unmeasured_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 set_target_properties(radiocert_unmeasured_test PROPERTIES AUTOMOC ON)
 add_test(NAME radiocert_unmeasured_test COMMAND radiocert_unmeasured_test)
+set_tests_properties(radiocert_unmeasured_test PROPERTIES TIMEOUT 90)
 
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
