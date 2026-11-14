@@ -1,6 +1,7 @@
 #include <QtGlobal>
 
 #include "UlanziDialMapperDialog.h"
+#include "ControlActionRegistry.h"
 #include "CanonIndicators.h"
 #include "ModemChrome.h"
 #include "core/AppSettings.h"
@@ -209,11 +210,13 @@ QLabel#UlanziStatus[ulanziState='off'] {
 UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
                                                ShortcutManager*     shortcuts,
                                                MidiControlManager*  midi,
-                                               QWidget*             parent)
+                                               QWidget*             parent,
+                                               const ControlActionRegistry* actions)
     : CanonWindow(tr("Ulanzi Dial — Control Mapping"), parent)
     , m_manager(manager)
     , m_shortcuts(shortcuts)
     , m_midi(midi)
+    , m_actions(actions)
 {
     setObjectName(QStringLiteral("UlanziDialMapperDialog"));
     theme::setContainer(this, QStringLiteral("canon/ulanziDial"));
@@ -429,11 +432,14 @@ void UlanziDialMapperDialog::buildPills()
                 if (mp.type != MidiParamType::Toggle &&
                     mp.type != MidiParamType::Trigger &&
                     mp.type != MidiParamType::Gate) continue;
-                // The CW keying actions are registered in BOTH registries under
-                // the same id.  Offering them twice would give the operator two
-                // dropdown entries that do the same thing by different code
-                // paths, so the shortcut entry (already listed) is the one.
+                // An action on both surfaces is listed once, as its shortcut
+                // entry: the CW keys share one id, and the registry pairs the
+                // rest (keyboard id ↔ MIDI id).
                 if (m_shortcuts && m_shortcuts->action(mp.id)) continue;
+                if (m_shortcuts && m_actions) {
+                    const QString twin = m_actions->shortcutIdForMidi(mp.id);
+                    if (!twin.isEmpty() && m_shortcuts->action(twin)) continue;
+                }
                 p.combo->addItem(QStringLiteral("[MIDI %1] %2").arg(mp.category, mp.displayName),
                                  QStringLiteral("midi:%1").arg(mp.id));
             }

@@ -6967,6 +6967,18 @@ target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
 add_test(NAME shortcut_manager_test COMMAND shortcut_manager_test)
 
+# One action declaration published to keyboard and MIDI (ControlActionRegistry).
+# Socket-free: no radio, no MIDI device, no settings file.
+add_executable(control_action_registry_test
+    tests/control_action_registry_test.cpp
+    src/gui/ControlActionRegistry.cpp
+    src/core/ShortcutManager.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(control_action_registry_test PRIVATE src)
+target_link_libraries(control_action_registry_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
+add_test(NAME control_action_registry_test COMMAND control_action_registry_test)
+
 # Actual Qt key delivery, socket-free; no radio or transmitter is constructed.
 add_executable(window_shortcut_test
     tests/window_shortcut_test.cpp
@@ -9662,6 +9674,7 @@ add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_tes
 add_executable(ulanzi_dial_mapper_dialog_test
     tests/ulanzi_dial_mapper_dialog_test.cpp
     src/gui/UlanziDialMapperDialog.cpp
+    src/gui/ControlActionRegistry.cpp
     src/gui/CanonWindow.cpp
     src/gui/CanonMessageBox.cpp
     src/gui/ModemChrome.cpp
@@ -11405,6 +11418,7 @@ set(AETHER_SETTINGS_CONSUMERS
     s_meter_geometry_test
     qrz_callsign_test
     shortcut_manager_test
+    control_action_registry_test
     window_shortcut_test
     antenna_alias_test
     mqtt_settings_test

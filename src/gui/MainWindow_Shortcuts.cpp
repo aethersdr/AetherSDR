@@ -1205,23 +1205,23 @@ void MainWindow::toggleCwKeyerPanel()
 }
 
 
+void MainWindow::cycleModeAction(int direction)
+{
+    auto* s = activeSlice();
+    const QString next = nextCycledMode(modeActionModes(), s ? s->mode() : QString(),
+                                        direction, s ? s->modeList() : QStringList());
+    if (next.isEmpty())
+        return;
+    if (auto* a = m_shortcutManager.action(QStringLiteral("mode_%1").arg(next.toLower())))
+        if (a->handler) a->handler();
+}
+
 void MainWindow::registerShortcutActions()
 {
     // Helper: nudge active slice frequency by N steps.
     // Share the incremental tune policy with wheel/knob/VFO tuning so pan
     // follow uses the same trigger + settle margins everywhere.
-    auto nudgeFreq = [this](int steps) {
-        if (!m_radioModel.isConnected()) return;
-        auto* s = activeSlice();
-        if (!s) return;
-        if (s->isLocked()) {
-            s->notifyTuneBlockedByLock();
-            return;
-        }
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + steps * stepHz / 1e6;
-        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "keyboard-step");
-    };
+    auto nudgeFreq = [this](int steps) { nudgeActiveSliceSteps(steps); };
 
     // Step cycle helper
     auto cycleStep = [this](int dir) {
@@ -1852,6 +1852,11 @@ void MainWindow::registerShortcutActions()
             auto* s = activeSlice();
             if (s) s->setXit(!s->xitOn(), s->xitFreq());
         });
+
+    // ── Registry-declared actions (keyboard side; MIDI side publishes in
+    // registerMidiParams). Before loadBindings so their saved keys load. ──
+    registerControlActions();
+    m_controlActions.publishShortcuts(m_shortcutManager);
 
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();

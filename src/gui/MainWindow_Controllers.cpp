@@ -2054,15 +2054,7 @@ void MainWindow::registerMidiParams()
     // The RADIO's own NR and ANF, refused where the radio has none (HL2,
     // ANAN, RTL: the VFO hides these buttons). The host modules (NR2, RN2,
     // NR4, DFNR) have their own parameters below.
-    reg("rx.nrEnable", "Noise Reduction", "RX", P::Toggle, 0, 1,
-        [this](float v) {
-            if (auto* s = activeSlice()) {
-                if (!m_radioModel.requestRadioNoiseReduction(s, v > 0.5f)) {
-                    showUnsupportedControlNotice();
-                }
-            }
-        },
-        [this]() -> float { auto* s = activeSlice(); return s && s->nrOn() ? 1 : 0; });
+    // rx.nrEnable is a registry action (MainWindow_ControlActions.cpp).
 
     reg("rx.anfEnable", "Auto Notch", "RX", P::Toggle, 0, 1,
         [this](float v) {
@@ -2161,9 +2153,7 @@ void MainWindow::registerMidiParams()
         });
 
     // ── TX ──────────────────────────────────────────────────────────────
-    reg("tx.rfPower", "RF Power", "TX", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setRfPower(static_cast<int>(v)); },
-        [this]() -> float { return m_radioModel.transmitModel().rfPower(); });
+    // tx.rfPower is a registry action (MainWindow_ControlActions.cpp).
 
     reg("tx.tunePower", "Tune Power", "TX", P::Slider, 0, 100,
         [this](float v) { m_radioModel.transmitModel().setTunePower(static_cast<int>(v)); },
@@ -2186,9 +2176,7 @@ void MainWindow::registerMidiParams()
         [this](float) { m_radioModel.transmitModel().atuStart(); });
 
     // ── Phone/CW ────────────────────────────────────────────────────────
-    reg("phone.micLevel", "Mic Level", "Phone/CW", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setMicLevel(static_cast<int>(v)); },
-        [this]() -> float { return m_radioModel.transmitModel().micLevel(); });
+    // phone.micLevel is a registry action (MainWindow_ControlActions.cpp).
 
     reg("phone.monGain", "Monitor Volume", "Phone/CW", P::Slider, 0, 100,
         [this](float v) {
@@ -2523,51 +2511,9 @@ void MainWindow::registerMidiParams()
             });
     }
 
-    // ── Band Up / Down (cycle through the band list above) ────────────
-    // Replaces the earlier placeholders that only logged a debug line.
-    static constexpr int kBandCount =
-        static_cast<int>(sizeof(kMidiBands) / sizeof(MidiBand));
-    auto cycleBand = [this, fireShortcut](int direction) {
-        // Find the current band by matching the active slice's frequency
-        // against canonical band centres.  If no slice or no match,
-        // start at index 0 / -1 so the first cycle still does something.
-        static const double freqs[kBandCount] = {
-            1.900, 3.800, 5.357, 7.200, 10.125, 14.225,
-            18.118, 21.300, 24.940, 28.400, 50.125, 146.000
-        };
-        int currentIdx = -1;
-        if (auto* s = activeSlice()) {
-            const double fMhz = s->frequency();
-            double bestDelta = 1e9;
-            for (int i = 0; i < kBandCount; ++i) {
-                const double d = std::abs(fMhz - freqs[i]);
-                if (d < bestDelta) { bestDelta = d; currentIdx = i; }
-            }
-        }
-        const int next = ((currentIdx < 0 ? 0 : currentIdx) + direction
-                          + kBandCount) % kBandCount;
-        fireShortcut(kMidiBands[next].idShort);
-    };
-    reg("global.bandUp", "Band Up", "Global", P::Trigger, 0, 1,
-        [cycleBand](float) { cycleBand(+1); });
-    reg("global.bandDown", "Band Down", "Global", P::Trigger, 0, 1,
-        [cycleBand](float) { cycleBand(-1); });
+    // Band Up/Down and Mode Up/Down are registry actions
+    // (MainWindow_ControlActions.cpp), published below.
 
-    // ── Mode Up / Down (cycle through the mode list above) ───────────
-    auto cycleMode = [this, fireShortcut, modes](int direction) {
-        auto* s = activeSlice();
-        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction,
-                                            s ? s->modeList() : QStringList());
-        if (next.isEmpty()) {
-            return;
-        }
-        const QString idShort = QString("mode_%1").arg(next.toLower());
-        fireShortcut(idShort.toUtf8().constData());
-    };
-    reg("global.modeUp", "Mode Up", "Global", P::Trigger, 0, 1,
-        [cycleMode](float) { cycleMode(+1); });
-    reg("global.modeDown", "Mode Down", "Global", P::Trigger, 0, 1,
-        [cycleMode](float) { cycleMode(-1); });
 
     // ── Slice / display / filter / DSP triggers (mirror keyboard) ──────
     reg("global.splitToggle", "Split Toggle", "Slice", P::Trigger, 0, 1,
@@ -2664,6 +2610,16 @@ void MainWindow::registerMidiParams()
             auto* s = activeSlice();
             return (s && s->playOn()) ? 1.0f : 0.0f;
         });
+
+    // ── Registry-declared actions (ControlActionRegistry) ───────────────
+    m_controlActions.publishMidi([&reg](const ControlActionMidiSpec& spec) {
+        const P type = spec.kind == ControlAction::Kind::Level  ? P::Slider
+                     : spec.kind == ControlAction::Kind::Toggle ? P::Toggle
+                                                                 : P::Trigger;
+        reg(spec.id.toUtf8().constData(), spec.name.toUtf8().constData(),
+            spec.category.toUtf8().constData(), type, spec.rangeMin, spec.rangeMax,
+            spec.set, spec.get);
+    });
 }
 #endif
 

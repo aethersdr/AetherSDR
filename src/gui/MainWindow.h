@@ -87,6 +87,7 @@
 #include "core/ShuttleRateIntegrator.h"
 #endif
 #include "core/ShortcutManager.h"
+#include "ControlActionRegistry.h"
 #include "core/SpectrogramBuffer.h"
 #include "core/SignalClassifier.h"
 #include "core/TgxlConnection.h"
@@ -970,6 +971,12 @@ private:
     void enableNr2WithWisdom();  // Wisdom-gated NR2 enable (shared by VFO + overlay)
     void updateNr2Availability(); // Disable NR2 when Opus is active (#1597)
     void registerShortcutActions();
+    // Actions declared once and published to keyboard + MIDI
+    // (ControlActionRegistry; MainWindow_ControlActions.cpp).
+    void registerControlActions();
+    void nudgeActiveSliceSteps(int steps);
+    void cycleBandAction(int direction);
+    void cycleModeAction(int direction);
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
@@ -2264,6 +2271,7 @@ private:
     bool m_waitingForFirstPanadapterFrame{false};
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
+    ControlActionRegistry m_controlActions;
     UpdateChecker* m_updateChecker{nullptr};
     // Install update in place (RFC #5304): outlives the Updates window, so
     // a staged release installs on quit (closeEvent).
