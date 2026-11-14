@@ -347,6 +347,45 @@ void serverBehaviour()
           "a disconnected radio is not offered it");
 }
 
+// The notice's limiter starts only after a line went out: a change nobody was
+// enabled to hear leaves the next one free to go at once, and a change right
+// after a send waits for the window. One processEvents() runs the posted send
+// and no timer, so the two cases do not depend on host speed.
+void noticeArmsOnlyAfterASend()
+{
+    RadioModel model;
+    auto owner = std::make_unique<FilterBackend>();
+    FilterBackend* backend = owner.get();
+    backend->caps.hasTxFilterControls = true;
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    TransmitModel& tx = model.transmitModel();
+    tx.setTxFilter(100, 2900);
+    TciServer server(&model);
+    Wire a;
+    TciTxPassbandExtensionTest::attach(server, a.client, model);
+    settle();
+
+    tx.setTxFilter(200, 2800);  // no client enabled: the send sends nothing
+    QCoreApplication::processEvents();
+    a.send("aethersdr_ext_enable:true;");
+    check(a.take() == QStringList({QStringLiteral("aethersdr_ext:1,tx_filter_band;"),
+                                   QStringLiteral("aethersdr_tx_filter_band:0,200,2800;")}),
+          "limiter: the enable reply carries the current passband");
+    tx.setTxFilter(300, 2400);
+    QCoreApplication::processEvents();
+    check(a.take() == one("aethersdr_tx_filter_band:0,300,2400;"),
+          "limiter: a send that reached nobody starts no window, so the next change goes at once");
+
+    tx.setTxFilter(400, 2500);
+    QCoreApplication::processEvents();
+    check(a.take().isEmpty(), "limiter: right after a send, a change waits for the window");
+    settle();
+    check(a.take() == one("aethersdr_tx_filter_band:0,400,2500;"),
+          "limiter: and goes out as one trailing send");
+    settle();
+    check(a.take().isEmpty(), "limiter: with nothing pending, the window sends nothing");
+}
+
 // Two receivers: moving TX re-sends the state line with the new trx, because a
 // set is only taken for the trx that transmits and the line is how a client
 // learns it.
@@ -493,6 +532,7 @@ int main(int argc, char** argv)
     offeredPerBackend();
     normalisation();
     serverBehaviour();
+    noticeArmsOnlyAfterASend();
     txMove();
     txMoveSplit(true);
     txMoveSplit(false);

@@ -648,15 +648,6 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_powerRateTimer->start();
     });
 
-    // Extension set, TX passband: the same limiter for its notification.
-    m_txPassbandRateTimer = new QTimer(this);
-    m_txPassbandRateTimer->setSingleShot(true);
-    m_txPassbandRateTimer->setInterval(kPowerRateLimitMs);
-    connect(m_txPassbandRateTimer, &QTimer::timeout, this, [this]() {
-        if (m_txPassbandPending && broadcastTxPassband()) {
-            m_txPassbandRateTimer->start();
-        }
-    });
     registerTxPassbandGroup();
 
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
@@ -3862,6 +3853,10 @@ void TciServer::registerTxPassbandGroup()
         return handleTxPassband(args);
     };
     registerExtensionGroup(std::move(group));
+    // Posted, so a ClientEq drag step (low, then high) goes out as one pair,
+    // then rate-limited like drive:.
+    m_txPassbandNotice = std::make_unique<TciExtensionNotice>(
+        this, kPowerRateLimitMs, [this] { return broadcastTxPassband(); });
     if (m_model) {
         connect(&m_model->transmitModel(), &TransmitModel::txFilterCutoffChanged,
                 this, [this](int, int) { queueTxPassbandNotice(); });
@@ -3896,26 +3891,13 @@ TciExtensionSet::Result TciServer::handleTxPassband(const QStringList& args)
     return result;
 }
 
-// Posted, so a ClientEq drag step (low, then high) goes out as one pair,
-// then rate-limited like drive:. Built on #7070's relay.
 void TciServer::queueTxPassbandNotice()
 {
-    m_txPassbandPending = true;
-    if (m_txPassbandSendPosted || m_txPassbandRateTimer->isActive()) {
-        return;
-    }
-    m_txPassbandSendPosted = true;
-    QMetaObject::invokeMethod(this, [this]() {
-        m_txPassbandSendPosted = false;
-        if (broadcastTxPassband()) {
-            m_txPassbandRateTimer->start();
-        }
-    }, Qt::QueuedConnection);
+    m_txPassbandNotice->queue();
 }
 
 bool TciServer::broadcastTxPassband()
 {
-    m_txPassbandPending = false;
     const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
         [](const ClientState& client) { return client.extensionsEnabled; });
     if (!anyEnabled || !txPassbandOffered()) {

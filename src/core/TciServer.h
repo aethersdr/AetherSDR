@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "DaxTxAudioPermit.h"
+#include "TciExtensionNotice.h"
 #include "TciExtensionSet.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
@@ -530,9 +531,7 @@ private:
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
     // Extension set, TX passband notice: posted, then rate-limited.
-    QTimer*           m_txPassbandRateTimer{nullptr};
-    bool              m_txPassbandPending{false};
-    bool              m_txPassbandSendPosted{false};
+    std::unique_ptr<TciExtensionNotice> m_txPassbandNotice;
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};
