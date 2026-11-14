@@ -9,7 +9,7 @@ QByteArray Session::request(Request request, const QStringList& callsigns)
         m_refusal = Refusal::NotPermitted;
         return {};
     }
-    if (outstanding() >= kMaxOutstanding) {
+    if (outstanding() >= (isStop(request) ? kHardMaxOutstanding : kMaxOutstanding)) {
         m_refusal = Refusal::QueueFull;
         return {};
     }
@@ -50,13 +50,18 @@ Session::Event Session::onLine(const QString& line)
         return ev;
     }
 
-    // A VERSION line answers the oldest outstanding command only when that
-    // command is VERSION; otherwise it is unsolicited.
-    if (n.type == NotificationType::Version && !m_awaiting.empty() && m_awaiting.front() == Request::Version) {
+    // The reply to VERSION is a free-text line whose shape differs by modem:
+    // Data2G sends "VERSION <text>", Mercury sends "VARA version 4.9.0
+    // registered" (docs/hf-gateway-host-interface.md). So while VERSION is
+    // the oldest outstanding command, a VERSION line or any line that isn't
+    // a known notification answers it. Otherwise a VERSION line is
+    // unsolicited.
+    if (!m_awaiting.empty() && m_awaiting.front() == Request::Version
+        && (n.type == NotificationType::Version || n.type == NotificationType::Unknown)) {
         ev.kind = Event::Kind::Reply;
         ev.request = Request::Version;
         ev.ok = true;
-        ev.version = n.text;
+        ev.version = n.type == NotificationType::Version ? n.text : n.raw.trimmed();
         m_awaiting.pop_front();
         return ev;
     }
@@ -64,6 +69,11 @@ Session::Event Session::onLine(const QString& line)
     ev.kind = Event::Kind::Notification;
     ev.notification = n;
     return ev;
+}
+
+bool Session::isStop(Request request)
+{
+    return request == Request::ListenOff || request == Request::Disconnect || request == Request::Abort;
 }
 
 void Session::reset()

@@ -57,6 +57,12 @@ bool Client::send(Request request, const QStringList& callsigns)
     }
     const QByteArray bytes = m_session.request(request, callsigns);
     if (bytes.isEmpty()) {
+        if (Session::isStop(request) && m_session.refusal() == Refusal::QueueFull) {
+            // The modem has left kHardMaxOutstanding commands unanswered and
+            // can't even be told to stop: fail closed.
+            emit problem(QStringLiteral("modem is not answering commands; disconnected"));
+            disconnectFromModem();
+        }
         return false;
     }
     m_cmd->write(bytes);

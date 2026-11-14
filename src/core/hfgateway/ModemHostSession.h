@@ -15,14 +15,15 @@
 //
 // Replies are positional (docs/hf-gateway-host-interface.md, Transport), but
 // not every command is answered with OK/WRONG: VERSION is answered with a
-// VERSION line or WRONG. The queue records what each outstanding command
+// free-text line (or WRONG) whose shape differs by modem. The queue records what each outstanding command
 // expects. BUFFER, SN and BITRATE are never sent as queries, because the same
 // lines also arrive unsolicited and Data2G answers some of them WRONG; the
 // gateway relies on the unsolicited reports instead.
 //
 // Transmit permission. LISTEN ON lets a modem answer a call, which keys the
 // radio, so it is refused unless the owner has granted permission. Ending
-// things (LISTEN OFF, DISCONNECT, ABORT) and setting MYCALL are always allowed.
+// things (LISTEN OFF, DISCONNECT, ABORT) and setting MYCALL never need
+// permission, and stop commands are also exempt from the soft reply cap.
 // The session never offers CONNECT, CQFRAME or TUNE at all. Permission starts
 // off and revoking it does not send anything by itself; the owner decides
 // what to send (LISTEN OFF).
@@ -41,13 +42,21 @@ enum class Request {
 enum class Refusal {
     None,
     NotPermitted,  // needs transmit permission
-    QueueFull,     // kMaxOutstanding replies already awaited
+    QueueFull,     // kMaxOutstanding (kHardMaxOutstanding for stops) replies already awaited
     Invalid,       // bad arguments (e.g. MYCALL callsigns)
 };
 
 class Session {
 public:
+    // Replies awaited before ordinary commands are refused.
     static constexpr int kMaxOutstanding = 16;
+    // Stop commands (LISTEN OFF, DISCONNECT, ABORT) are exempt from
+    // kMaxOutstanding: a modem that has stopped answering must still be told
+    // to stop. Past this hard limit the modem is not answering at all, and
+    // even a stop command is refused; the client drops the connection.
+    static constexpr int kHardMaxOutstanding = 64;
+
+    static bool isStop(Request request);
 
     struct Event {
         enum class Kind {
