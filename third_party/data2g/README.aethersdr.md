@@ -89,7 +89,9 @@ never put on the include path of the rest of the tree.
    per-file options or changes to the target's file list, and carry them
    over. Read what is new in `core/` for anything that can key the radio or
    open a socket: RFC #7159's transmit admission table has to list every
-   keying path.
+   keying path. A burst the engine keys without naming it to `on_send` (a
+   CW ID, a Hand) is dropped by `Data2gSession`, so turning `cw_id` on would
+   silently drop those identifications.
 5. Build and run `data2g_monitor_test`, `data2g_session_test` and `data2g_replay_test`. The last
    replays a session recorded from upstream 0.4.3: if it fails after a
    re-pin, read `tests/fixtures/data2g/README.md` before changing it.

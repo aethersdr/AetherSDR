@@ -67,6 +67,10 @@ struct Data2gSessionStep {
     std::vector<std::string> events;
     // Bytes the peer sent, in order.
     std::vector<std::uint8_t> received;
+    // During this step the engine heard its peer, or counted the session as
+    // carrying data. A watchdog outside the engine times these.
+    bool peerHeard{false};
+    bool dataActive{false};
 };
 
 class Data2gSession {
