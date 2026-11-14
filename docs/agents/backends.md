@@ -69,7 +69,10 @@ tool's `--check` on every PR and fails naming the signal you missed.
   catalogue, never in a transport or via QObject reflection.
 - No protocol TX method is advertised before the step-4 arbiter exists.
 - The desktop adapter has not landed; UI code still consumes models directly,
-  and that remains correct.
+  and that remains correct. The remote-engine backend
+  ([`docs/aetherd-remote-backend.md`](../aetherd-remote-backend.md), family
+  `aetherd`) is not that adapter: it is a radio family whose "radio" is a
+  remote aetherd, feeding the same models as every other family.
 - The Flex PTT hardware evidence covers FLEX-6700 firmware 4.2.18.41174; do
   not claim other models were tested
   ([`docs/aetherd-flex-ptt-stop-evidence.md`](../aetherd-flex-ptt-stop-evidence.md)).
