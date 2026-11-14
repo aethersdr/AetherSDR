@@ -80,19 +80,24 @@ The editor lists many more actions that ship **unbound**. They are grouped by ca
 
 | Category | Examples |
 |----------|----------|
-| Frequency | Tune up/down 1 MHz, Go to Frequency |
+| Frequency | Tune up/down 1, 10 or 100 steps, Tune up/down 1 MHz, Go to Frequency |
 | Tuning | Step size, Tune Lock, **Center Lock Active Slice** |
-| Slice | Next / Previous Slice, Cycle TX Slice, Split Toggle, Split Up 1 kHz / 5 kHz / 10 kHz |
-| Bands and modes | Band jumps (160 m to 2 m); USB, LSB, CW, CWL, AM, SAM, FM, NFM, DFM, DIGU, DIGL, RTTY |
-| Audio | Master Volume Up / Down (±5 from the level of the path you are hearing, auto-repeat), Master Mute, Mute All Slices, Squelch |
+| Slice | Next / Previous Slice, Select Slice A–H, Copy Slice A to B / B to A, Swap Slices A and B, New Slice, Close Active Slice, Make Active Slice TX, Cycle TX Slice, Split Toggle, Split Up 1 kHz / 5 kHz / 10 kHz, RX Antenna 1–4 and Next RX Antenna, Diversity RX |
+| Band | Band jumps (160 m to 2 m), Band Up / Down, Band Stack Up / Down |
+| Mode | USB, LSB, CW, CWL, AM, SAM, FM, NFM, DFM, DIGU, DIGL, RTTY; Mode Up / Down |
+| Audio | Master Volume Up / Down (±5 from the level of the path you are hearing, auto-repeat), Master Mute, Mute All Slices, Squelch, Binaural RX |
 | AGC | AGC mode cycle, AGC-T up/down, RF Gain up/down |
-| DSP | NB, ANF, NR2, NR4, RN2, DFNR, NR Cycle, TNF global toggle |
-| Filter | Filter Widen / Narrow (±100 Hz, in the right direction for the mode) |
-| RIT/XIT | RIT and XIT toggles |
-| CW | Speed ±5 WPM, iambic on/off and A/B, break-in, sidetone, swap paddles, CWL offset |
-| TX | TUNE, Two-Tone Tune, VOX, speech processor, TX monitor, DAX TX |
+| DSP | NB, NR, ANF, APF, WNB, NR2, NR4, RN2, DFNR, NR Cycle, TNF global toggle; NB / NR / ANF / APF / WNB Level Up / Down |
+| Filter | Filter Widen / Narrow (±100 Hz, in the right direction for the mode), Filter Width 100 Hz / 250 Hz / 400 Hz / 3 kHz |
+| RIT/XIT | RIT and XIT toggles, RIT / XIT Offset Up / Down (10 Hz) |
+| CW | Speed ±5 WPM, iambic on/off and A/B, CW Keyer: Iambic A / Iambic B / Straight Key, break-in, sidetone, swap paddles, CWL offset, CW Decoder, CWX Macro F1–F12, Stop CWX / Macros, Show/Hide CWX Panel |
+| TX | TUNE, Two-Tone Tune, ATU Start, ATU Bypass, ATU Memories, VOX, speech processor, TX monitor, DAX TX, RF Power and Mic Level Up / Down, TX Antenna 1–4 and Next TX Antenna, ACC TX / TX1 / TX2 / TX3 output |
 | EQ | RX EQ and TX EQ toggles |
-| Display | Minimal Mode, Panadapter Zoom In/Out, Band Zoom, Segment Zoom, Open Memories |
+| Display | Minimal Mode, Panadapter Zoom In/Out, Band Zoom, Segment Zoom, Select Panadapter 1–8, Add / Close Panadapter, Panadapter Span 5–200 kHz, Recall Memory 1–10, Next / Previous Memory, Open Memories, Load Global Profile 1–5, Open SpotHub, Open AetherModem, Band Plan Toggle |
+
+The full list, with each action's ID, is on [Default Keyboard Shortcuts](./generated/default-shortcuts.md).
+
+An action the connected radio cannot do shows "*name* is not available on this radio" in the status bar instead of doing nothing; for example, Make Active Slice TX on a receive-only radio, or Select Slice C with two slices open. Actions that key the transmitter (CWX macros, ATU Bypass, MOX, TUNE) go through the same transmit checks as the on-screen buttons.
 
 **Monitor TX (Hold)** listens on a split's transmit frequency while held. It is unbound by default; see [Split Operation](./split-operation.md).
 
