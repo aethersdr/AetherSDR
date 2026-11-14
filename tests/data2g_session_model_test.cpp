@@ -406,6 +406,39 @@ void watchdog()
         check(!bench.model.isArmed() && bench.sink.stops > 0, "disarmed and unkeyed");
     }
     {
+        // The same limit while disconnecting: the peer never hears the DISC.
+        Data2gSessionModel::Limits limits;
+        limits.linkLostMs = 20'000;
+        Bench bench(limits);
+        check(bench.connect(), "connected before a disconnect into a dead channel");
+        bench.model.disconnectSession();
+        const bool disconnecting = bench.runUntil(30.0, [&] {
+            return bench.model.state() == Data2gSessionModel::State::Disconnecting;
+        });
+        check(disconnecting, "the session is disconnecting");
+        bench.channelOpen = false;
+        const bool aborted = bench.runUntil(40.0, [&] { return !bench.aborts.isEmpty(); });
+        check(aborted, "the watchdog also covers a session that is disconnecting");
+        check(!bench.model.isArmed(), "and disarms it");
+    }
+    {
+        // The engine's clock is its audio. If the receive audio stops with
+        // nothing on the air, the engine's own limits can never fire.
+        Bench bench;
+        check(bench.connect(), "connected before the receive audio stops");
+        bench.runUntil(30.0, [&] { return !bench.sink.isActive(); });
+        bench.feedOurs = false;
+        const bool aborted = bench.runUntil(20.0, [&] { return !bench.aborts.isEmpty(); });
+        check(aborted, "a session whose receive audio stopped is aborted");
+        check(!bench.aborts.isEmpty() && bench.aborts.first().contains(QLatin1String("receive audio")),
+              "and says the audio stopped");
+        check(!bench.model.isArmed(), "disarmed, so audio coming back keys nothing");
+        const int starts = bench.sink.starts;
+        bench.feedOurs = true;
+        bench.run(30.0);
+        check(bench.sink.starts == starts, "and it does not");
+    }
+    {
         Data2gSessionModel::Limits limits;
         limits.idleMs = 20'000;
         Bench bench(limits);
@@ -446,6 +479,23 @@ void silentTap()
     check(bench.aborts.isEmpty(), "with no abort");
 }
 
+// A slot may delete the model from inside an abort.
+void deletedFromSlot()
+{
+    FakeSink sink;
+    qint64 nowMs = 0;
+    auto* model = new Data2gSessionModel(&sink, Data2gSessionModel::Limits{}, [&nowMs] { return nowMs; });
+    model->setMyCall(QStringLiteral("N0CALL"));
+    QString error;
+    check(model->connectTo(QStringLiteral("W1AW"), 2400, error), "connected before the model is deleted");
+    QObject::connect(model, &Data2gSessionModel::armedChanged, [model](bool armed) {
+        if (!armed)
+            delete model;
+    });
+    model->abortSession(QStringLiteral("operator"));
+    check(sink.onFinished == nullptr, "a model deleted from its own signal has let go of the sink");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -459,6 +509,7 @@ int main(int argc, char** argv)
     identificationOwed();
     watchdog();
     silentTap();
+    deletedFromSlot();
     if (g_failures) {
         std::fprintf(stderr, "data2g_session_model_test: %d failure(s)\n", g_failures);
         return 1;

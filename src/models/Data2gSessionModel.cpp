@@ -139,6 +139,7 @@ struct Data2gSessionModel::Impl {
     qint64 runStartMs = -1;      // clock time of the run's first audio
     qint64 fedSamples = 0;
     qint64 lastPeerMs = 0;
+    qint64 lastFeedMs = 0;       // clock time of the last receive audio
     qint64 lastDataMs = 0;
     qint64 connectStartMs = 0;
     qint64 closingAtMs = -1;     // when the closing-ID window ends
@@ -201,6 +202,7 @@ struct Data2gSessionModel::Impl {
         fedSamples = 0;
         closingAtMs = -1;
         closingIdDone = false;
+        lastFeedMs = now();
         transmissionsAtArm = stats.transmissions;
         tick.start();
     }
@@ -253,6 +255,7 @@ struct Data2gSessionModel::Impl {
             return;
         if (runStartMs < 0)
             runStartMs = now();
+        lastFeedMs = now();
         fedSamples += mono.size();
         bool overflow = false;
         {
@@ -301,6 +304,9 @@ struct Data2gSessionModel::Impl {
 
     void deliver(Step& step)
     {
+        // A slot on any signal below may abort the session or delete the
+        // model: check both before touching anything again.
+        const QPointer<Data2gSessionModel> guard(owner);
         const std::shared_ptr<Run> current = run;
         const qint64 t = now();
         if (step.peerHeard)
@@ -334,10 +340,13 @@ struct Data2gSessionModel::Impl {
 
         for (const std::string& event : step.events) {
             const QString text = QString::fromUtf8(event);
-            if (text.startsWith(QLatin1String("IDENTIFICATION not sent")))
+            if (text.startsWith(QLatin1String("IDENTIFICATION not sent"))) {
                 setIdOwed(true);
+                if (!guard || current != run)
+                    return;
+            }
             emit owner->sessionEvent(text);
-            if (current != run)
+            if (!guard || current != run)
                 return;
             if (text.startsWith(QLatin1String("REFUSED")) && state == State::Connecting) {
                 abort(text);
@@ -347,7 +356,7 @@ struct Data2gSessionModel::Impl {
         if (!step.received.empty()) {
             emit owner->dataReceived(QByteArray(reinterpret_cast<const char*>(step.received.data()),
                                                 static_cast<qsizetype>(step.received.size())));
-            if (current != run)
+            if (!guard || current != run)
                 return;
         }
 
@@ -356,6 +365,8 @@ struct Data2gSessionModel::Impl {
             closingAtMs = t + limits.closingMs;
         if (next == State::Connected && state != State::Connected)
             lastPeerMs = lastDataMs = t;
+        if (next == State::Disconnecting && state == State::Connecting)
+            lastPeerMs = t;
         setState(next);
     }
 
@@ -382,7 +393,10 @@ struct Data2gSessionModel::Impl {
 
         if (state == State::Connecting && t - connectStartMs > limits.connectingMs) {
             abort(QStringLiteral("The connect attempt ran past its limit."));
-        } else if (state == State::Connected && t - lastPeerMs > limits.linkLostMs) {
+        } else if (!sink->isActive() && t - lastFeedMs > limits.audioStallMs) {
+            abort(QStringLiteral("Watchdog: the receive audio stopped."));
+        } else if ((state == State::Connected || state == State::Disconnecting)
+                   && t - lastPeerMs > limits.linkLostMs) {
             abort(QStringLiteral("Watchdog: the other station has not been heard."));
         } else if (state == State::Connected && t - lastDataMs > limits.idleMs) {
             abort(QStringLiteral("Watchdog: the session has been idle."));
@@ -403,17 +417,32 @@ struct Data2gSessionModel::Impl {
 #ifdef HAVE_DATA2G
         if (!run || aborting)
             return;
+        // Everything is torn down before the first signal, so a slot sees a
+        // model that is already idle and disarmed, and may delete it.
         aborting = true;
-        setArmed(false);
+        const bool wasArmed = std::exchange(armed, false);
         // The station has been on the air in this session and now stops
         // without its closing ID.
-        if (stats.transmissions != transmissionsAtArm)
-            setIdOwed(true);
+        const bool owes = stats.transmissions != transmissionsAtArm;
         sink->stop();
         run->session->requestAbort();
         endRun(false);
-        setState(State::Idle);
         aborting = false;
+
+        const QPointer<Data2gSessionModel> guard(owner);
+        if (wasArmed) {
+            emit owner->armedChanged(false);
+            if (!guard)
+                return;
+        }
+        if (owes) {
+            setIdOwed(true);
+            if (!guard)
+                return;
+        }
+        setState(State::Idle);
+        if (!guard)
+            return;
         emit owner->sessionAborted(reason);
 #else
         Q_UNUSED(reason);

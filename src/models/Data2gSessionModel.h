@@ -30,7 +30,9 @@ public:
     virtual bool isActive() const = 0;
 
     // Set by the model. `ok` false: the transmission failed or was cut short
-    // by something other than the model's own stop().
+    // by something other than the model's own stop(). It must be called on
+    // the model's thread: a sink that finishes on an audio or network thread
+    // queues the call across.
     std::function<void(bool ok, const QString& why)> onFinished;
 };
 
@@ -48,12 +50,15 @@ public:
 //    restored without a new connectTo().
 //  - The watchdog enforces upstream's own two limits from outside the engine:
 //    the session is aborted when its peer has not been heard for the
-//    link-lost time, or it has carried no data for the idle time. There is no
-//    limit on total session length (maintainer ruling, 2026-11-14).
+//    link-lost time (connected or disconnecting), or it has carried no data
+//    for the idle time. It also aborts a session whose receive audio has
+//    stopped, since the engine's own clock stops with it. There is no limit
+//    on total session length (maintainer ruling, 2026-11-14).
 //  - AETHER_AUTOMATION_NO_TX refuses the arm outright.
 //
 // The model lives on its owner's thread; the engine runs on a worker thread
-// that exists only while a session does.
+// that exists only while a session does. A slot may abort, reconnect or
+// delete the model from any of its signals.
 //
 // In a build without the Data2G core (ENABLE_DATA2G=OFF) the model exists,
 // available() is false, and connectTo() always refuses.
@@ -78,6 +83,10 @@ public:
         // arm ends as soon as that ID has gone, or here at the latest.
         qint64 closingMs = 62'000;
         qint64 maxBacklogMs = 5'000;   // audio waiting for the engine, at most
+        // The engine keeps time by its audio, so with no audio its own limits
+        // never fire. A session whose receive audio has stopped this long,
+        // with nothing on the air, is aborted.
+        qint64 audioStallMs = 10'000;
     };
 
     struct Stats {
