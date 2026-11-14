@@ -28,6 +28,8 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <functional>
+#include <mutex>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -180,6 +182,11 @@ public:
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
                        const TxCoordinator::Context& context) override;
+    // Transmit audio straight from the AudioEngine thread, without the hop
+    // through the GUI thread: a GUI hitch of 100+ ms otherwise starves the
+    // transmit queue mid-over. The returned callable is safe from any thread
+    // and outlives the backend; once the backend is gone it returns false.
+    DirectTxSubmitter directTxSubmitter() override;
     void setTxPower(int percent) override;
     void setTunePower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
@@ -1101,6 +1108,14 @@ private:
     // Below this many observations a window has no rate, only a numerator.
     static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;
+    // m_keyed for the direct transmit-audio path, which runs on the
+    // AudioEngine thread. Written wherever m_keyed is.
+    std::atomic<bool> m_keyedAudio{false};
+    struct DirectTxGate {
+        std::mutex mutex;
+        Hl2Backend* backend = nullptr;   // nulled first thing in the destructor
+    };
+    std::shared_ptr<DirectTxGate> m_directTxGate = std::make_shared<DirectTxGate>();
     // The radio reports its own PTT/key (EP6 ptt_resp). Never an input to keying.
     bool m_radioPtt = false;
     // What transmitChanged last carried as mox: m_keyed || m_radioPtt.
@@ -1210,11 +1225,11 @@ private:
     // True once this transmission carried client-leveled (TCI/DAX) audio. Gates the
     // unkey mic-gain diagnostic off and is reported in healthSnapshot(). Set in
     // submitTxAudio(), cleared on each key edge in setKeying().
-    bool m_txAudioClientLeveled = false;
+    std::atomic<bool> m_txAudioClientLeveled{false};
     // True once this transmission carried EngineGenerated audio (the WSPR pump).
     // Gates the unkey mic-gain diagnostic off: no mic slider is in that path. The
     // AX.25 modem is tagged Microphone, since the slider is its only control.
-    bool m_txAudioEngineGenerated = false;
+    std::atomic<bool> m_txAudioEngineGenerated{false};
 
     // The passband to push at the modulator for `mode`: the operator's if they
     // have chosen one, otherwise that mode's default.

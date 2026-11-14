@@ -973,6 +973,7 @@ void RadioModel::setupBackend(const QString& family)
         // guarded by a dynamic_cast so the Flex path stays byte-identical and a
         // non-Flex backend simply skips it (it owns its own wire objects).
         m_backend = makeBackend(m_family);
+        installDirectTxSubmitter();
         if (!m_backend) {
             emit connectionError(
                 tr("This build has no RTL-SDR support — librtlsdr or fftw3f "
@@ -2074,6 +2075,10 @@ void RadioModel::resetFrontEndOverload()
 
 void RadioModel::teardownBackend()
 {
+    {
+        const std::lock_guard<std::mutex> lock(m_directTxMutex);
+        m_directTx = nullptr;
+    }
     resetRadioObservations();
     if (m_backend) { m_backend->retireReceiveData(); }
     retireObservationSession();
@@ -10077,6 +10082,29 @@ void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     }
 }
 
+bool RadioModel::submitTxAudioDirect(const QByteArray& int16Stereo, int sampleRateHz,
+                                     TxAudioSource source,
+                                     const TxCoordinator::Context& context)
+{
+    IRadioBackend::DirectTxSubmitter direct;
+    {
+        const std::lock_guard<std::mutex> lock(m_directTxMutex);
+        direct = m_directTx;
+    }
+    if (!direct)
+        return false;
+    const TxCoordinator::Dispatch dispatch = context.beginDispatch(txMonotonicMs());
+    if (!dispatch)
+        return true;   // refused, not undeliverable: do not resend it queued
+    return direct(int16Stereo, sampleRateHz, source, context);
+}
+
+void RadioModel::installDirectTxSubmitter()
+{
+    const std::lock_guard<std::mutex> lock(m_directTxMutex);
+    m_directTx = m_backend ? m_backend->directTxSubmitter() : nullptr;
+}
+
 void RadioModel::finishTxAudio(quint64 token, const TxCoordinator::Context& context)
 {
     const TxCoordinator::Dispatch dispatch = context.beginDispatch(txMonotonicMs());
@@ -11204,6 +11232,7 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     teardownBackend();
     resetGpsState();
     m_backend = std::move(backend);
+    installDirectTxSubmitter();
     m_panStream = panStream;
     m_family = family;
     wireBackendPcm();

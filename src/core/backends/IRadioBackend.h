@@ -118,6 +118,9 @@ struct MemoryRecallDetails {
 //  1. THE BACKEND OBJECT LIVES ON ITS OWNER'S THREAD — RadioModel's (GUI thread
 //     in the app, main thread in aetherd). It is never moved, every virtual is
 //     called there, and verbs need no locks against each other.
+//     Sole exception: the callable directTxSubmitter() returns may be invoked
+//     from the AudioEngine thread. A backend that returns one makes the
+//     submitTxAudio() path it calls safe there; the default returns none.
 //  2. EVERY SEAM SIGNAL IS EMITTED FROM THAT THREAD, data plane
 //     (audioFrameReady, sliceAudioFrameReady, spectrumFrameReady, meterUpdate)
 //     and linkStatsUpdated included. A worker hops back first (queued connection
@@ -1108,6 +1111,15 @@ public:
         Q_UNUSED(source);
         Q_UNUSED(context);
     }
+
+    // Transmit audio from the AudioEngine thread, without the hop through the
+    // owner's thread. Empty unless the backend's submit path is safe off that
+    // thread; see the exception under rule 1 of the contract above. The
+    // callable may outlive the backend and then returns false; true means the
+    // block was taken.
+    using DirectTxSubmitter = std::function<bool(const QByteArray&, int, TxAudioSource,
+                                                 const TxCoordinator::Context&)>;
+    virtual DirectTxSubmitter directTxSubmitter() { return {}; }
 
     // Finish a finite processed-audio stream before its caller starts the PTT
     // drain timer. Stateful converters may emit delayed tail samples here;

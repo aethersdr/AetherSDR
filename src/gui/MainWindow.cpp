@@ -1643,12 +1643,22 @@ MainWindow::MainWindow(QWidget* parent)
     // Transport rides txTransportPcmReady rather than the recorder tap: same
     // samples, but carrying immutable producer provenance across this queued
     // hop. Recorder/monitor consumers stay on the unguarded tap.
+    //
+    // Direct on the AudioEngine thread when the backend takes it (HL2): through
+    // the GUI thread, every GUI hitch was a gap in the transmitted audio.
+    // Other backends keep the queued hop.
     connect(m_audio, &AudioEngine::txTransportPcmReady,
             this, [this](const QByteArray& pcm, TxAudioSource source,
                          const TxCoordinator::Context& context) {
-        m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
-                                   source, context);
-    });
+        if (m_radioModel.submitTxAudioDirect(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
+                                             source, context)) {
+            return;
+        }
+        QMetaObject::invokeMethod(this, [this, pcm, source, context] {
+            m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
+                                       source, context);
+        }, Qt::QueuedConnection);
+    }, Qt::DirectConnection);
     wireModemAudioCompletion();
     wireTxAudioAuthority();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,

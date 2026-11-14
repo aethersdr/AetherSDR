@@ -1601,8 +1601,14 @@ bool MetisClient::txIqPrimeHolds()
     // queued-IQ arm counts.
     if (m_txIq.empty())
         return false;
+    // Read here, not at arming: the key edge arms the prime before the first
+    // block says whether this over's audio is client-leveled.
+    const bool client = m_txClientLeveledMargin.load(std::memory_order_relaxed);
+    if (client)
+        m_txIqPrimeTarget = std::max(m_txIqPrimeTarget, kTxPrimeClientTargetSamples);
     const bool reached = m_txIq.size() >= m_txIqPrimeTarget;
-    const bool expired = m_txIqPrimeHeldPackets >= kTxPrimeMaxHoldPackets;
+    const bool expired = m_txIqPrimeHeldPackets
+        >= (client ? kTxPrimeClientMaxHoldPackets : kTxPrimeMaxHoldPackets);
     if (!reached && !expired) {
         ++m_txIqPrimeHeldPackets;
         ++m_txPrimeHoldPackets;
@@ -1616,6 +1622,7 @@ bool MetisClient::txIqPrimeHolds()
                      << "with samples waiting"
                      << (reached ? "(target reached)."
                                  : "(DEADLINE: the producer stopped short of the target).");
+    m_txIqOverTarget = m_txIqPrimeTarget;
     m_txIqPrimeTarget = 0;
     m_txIqPrimeHeldPackets = 0;
     return false;
@@ -1623,15 +1630,15 @@ bool MetisClient::txIqPrimeHolds()
 
 void MetisClient::trimTxIqAfterUnderflow()
 {
-    if (!m_txIqTrimArmed || m_txIq.size() <= kTxPrimeTargetSamples + kTxTrimMarginSamples)
+    if (!m_txIqTrimArmed || m_txIq.size() <= m_txIqOverTarget + kTxTrimMarginSamples)
         return;
     // Oldest first, as overflow does: one skip, then the over runs at the primed depth.
-    const std::size_t drop = m_txIq.size() - kTxPrimeTargetSamples;
+    const std::size_t drop = m_txIq.size() - m_txIqOverTarget;
     m_txIq.erase(m_txIq.begin(), m_txIq.begin() + static_cast<std::ptrdiff_t>(drop));
     m_txTrimSamples += drop;
     ++m_txTrimEvents;
     qCDebug(lcHl2Tx) << "HL2 tx fifo: backlog after a mid-over starvation trimmed by" << drop
-                     << "sample(s) to the prime target" << kTxPrimeTargetSamples
+                     << "sample(s) to the prime target" << m_txIqOverTarget
                      << "(totals since process start:" << m_txTrimEvents << "trim(s) /"
                      << m_txTrimSamples << "samples).";
 }

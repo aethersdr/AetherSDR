@@ -32,6 +32,7 @@ struct MetisClientTestAccess {
     {
         return MetisClient::kTxPrimeTargetSamples - MetisClient::kTxPrimeBlockSamples;
     }
+    static constexpr std::size_t clientPrimeTarget() { return MetisClient::kTxPrimeClientTargetSamples; }
     static constexpr std::size_t trimMargin() { return MetisClient::kTxTrimMarginSamples; }
     static constexpr std::size_t queueMax() { return MetisClient::kTxQueueMax; }
     static constexpr std::uint64_t quietPackets() { return MetisClient::kUnderflowRunQuietPackets; }
@@ -135,7 +136,8 @@ long long dueOf(long long j, int block, int group)
     return (j / group + 1) * group * static_cast<long long>(block);
 }
 
-OverResult runOver(const std::vector<int>& lateness, int group = 1)
+// `clientLeveled`: TCI/DAX audio, primed to the client target.
+OverResult runOver(const std::vector<int>& lateness, int group = 1, bool clientLeveled = false)
 {
     const int block = blockSamples();
     const auto blocks = static_cast<long long>(lateness.size());
@@ -143,6 +145,7 @@ OverResult runOver(const std::vector<int>& lateness, int group = 1)
     TxTestAuthority tx;
     MetisClient client;
     MetisClientTestAccess::setStreaming(client);
+    client.setTxClientLeveledMargin(clientLeveled);
     client.enableTransmit(true);
     client.setMox(true, tx.operation);
 
@@ -486,11 +489,25 @@ int main(int argc, char** argv)
     const std::size_t ceiling =
         static_cast<std::size_t>(target) + MetisClientTestAccess::trimMargin();
     const auto quiet = static_cast<long long>(MetisClientTestAccess::quietPackets());
+    // A backlog 1.2x the cap, so it overflows whatever kTxQueueMax is (300 ms at 12000).
+    const double overflowPauseMs =
+        1.2 * samplesToMs(static_cast<long long>(MetisClientTestAccess::queueMax()));
+    // The blocks due from `stalled` until `pauseMs` later all arrive at its end.
+    const auto pausedLateness = [&](int stalled, double pauseMs, int group) {
+        const long long resume = dueOf(stalled, block, group) + msToSamples(pauseMs);
+        std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
+        for (std::size_t j = static_cast<std::size_t>(stalled); j < lateness.size(); ++j) {
+            const long long due = dueOf(static_cast<long long>(j), block, group);
+            if (due < resume)
+                lateness[j] = static_cast<int>(resume - due);
+        }
+        return lateness;
+    };
     // `group` 4 is a 2048-sample TCI delivery on the 512-sample block; 2 is the
     // same on the 1024-sample block it replaced. The trim lands wherever the delivery cycle is
     // when the quiet period ends, so the margin must hold a whole delivery.
     for (const int group : {1, 2, 4})
-    for (const double pauseMs : {190.0, 300.0}) {
+    for (const double pauseMs : {190.0, overflowPauseMs}) {
         if (group * block > kLargestDeliverySamples) {
             std::fprintf(stderr, "PROBE  %d block(s) per delivery: %d samples at once is beyond any"
                                  " producer (%d), not run\n",
@@ -498,14 +515,7 @@ int main(int argc, char** argv)
             continue;
         }
         const int stalled = 40;   // the first block held back (~0.43 s into the over); a group start
-        const long long resume = dueOf(stalled, block, group) + msToSamples(pauseMs);
-        std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
-        for (std::size_t j = stalled; j < lateness.size(); ++j) {
-            const long long due = dueOf(static_cast<long long>(j), block, group);
-            if (due < resume)
-                lateness[j] = static_cast<int>(resume - due);
-        }
-        const OverResult r = runOver(lateness, group);
+        const OverResult r = runOver(pausedLateness(stalled, pauseMs, group), group);
         const long long burstTick = r.arrivalTick[static_cast<std::size_t>(stalled)];
         const long long lastTick = r.arrivalTick.back();
         std::size_t peak = 0;
@@ -544,8 +554,57 @@ int main(int argc, char** argv)
                   "a 190 ms backlog stays under the cap: the trim is the only discontinuity");
         } else {
             check(peak + kPacket >= MetisClientTestAccess::queueMax() && r.overflowSamples > 0,
-                  "CONTROL: a 300 ms backlog reaches the overflow cap, which stays the bound");
+                  "CONTROL: a backlog of 1.2x the cap reaches the overflow cap, which stays the bound");
         }
+    }
+
+    // ---- THE SAME FOR TCI/DAX AUDIO: trimmed to the CLIENT target ----
+    //
+    // A client-leveled over primes to its own, deeper target; a trim to the
+    // microphone's would take that cushion away after the first starvation.
+    // 190 ms leaves less than the client target plus margin when the episode ends.
+    const std::size_t clientTarget = MetisClientTestAccess::clientPrimeTarget();
+    const std::size_t clientCeiling = clientTarget + MetisClientTestAccess::trimMargin();
+    for (const int group : {1, 4})
+    for (const double pauseMs : {190.0, 300.0, overflowPauseMs}) {
+        const int stalled = 40;
+        const OverResult r = runOver(pausedLateness(stalled, pauseMs, group), group, true);
+        const long long burstTick = r.arrivalTick[static_cast<std::size_t>(stalled)];
+        const long long lastTick = r.arrivalTick.back();
+        std::size_t peak = 0;
+        std::size_t lowAfter = MetisClientTestAccess::queueMax();
+        std::size_t highAfter = 0;
+        for (long long t = burstTick; t < lastTick; ++t) {
+            const std::size_t d = r.depth[static_cast<std::size_t>(t)];
+            peak = std::max(peak, d);
+            if (t > burstTick + quiet) {
+                lowAfter = std::min(lowAfter, d);
+                highAfter = std::max(highAfter, d);
+            }
+        }
+        std::fprintf(stderr,
+            "PROBE  client-leveled, %d block(s) per delivery, %.0f ms pause then a burst: peak depth"
+            " %zu, depth after %zu-%zu (client target %zu); trimmed %llu sample(s) in %llu trim(s),"
+            " overflow %llu\n",
+            group, pauseMs, peak, lowAfter, highAfter, clientTarget,
+            static_cast<unsigned long long>(r.trimSamples),
+            static_cast<unsigned long long>(r.trimEvents),
+            static_cast<unsigned long long>(r.overflowSamples));
+        check(r.gaps >= 1, "CONTROL: the pause outlasts the client cushion, a keyed gap on the wire");
+        check(lowAfter + static_cast<std::size_t>(group * block + kPacket) >= clientTarget,
+              "after a starvation a client-leveled over keeps its own cushion, not the microphone's");
+        if (pauseMs < 200.0) {
+            check(r.trimEvents == 0, "a 190 ms pause in a client-leveled over is not a backlog");
+        } else {
+            check(peak > clientCeiling && r.trimEvents == 1,
+                  "a client-leveled backlog above its own target plus margin is trimmed once");
+            check(highAfter <= clientCeiling,
+                  "and its depth returns to the client target plus margin and stays there");
+        }
+        check(static_cast<long long>(r.trimSamples + r.overflowSamples) == r.skipped,
+              "every sample missing from a client-leveled over is counted, as trim or overflow");
+        if (pauseMs > 1.0 + samplesToMs(static_cast<long long>(MetisClientTestAccess::queueMax())))
+            check(r.overflowSamples > 0, "CONTROL: a backlog of 1.2x the cap overflows a client over too");
     }
 
     // ---- A SHORT PAUSE IS NOT A BACKLOG ----
