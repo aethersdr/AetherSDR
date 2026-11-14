@@ -4,6 +4,9 @@
 #include <QMap>
 #include <QString>
 
+#include <functional>
+#include <utility>
+
 #include "core/backends/TunerDelta.h"
 
 namespace AetherSDR {
@@ -107,6 +110,11 @@ public:
     // verb, and nothing is sent.
     void setOperateAndBypass(bool operate, bool bypass, bool operateFirst);
     void autoTune();
+    // Asked before an autotune starts, on either route; a non-empty answer
+    // refuses it with autotuneRefused(). Never asked for an abort, which is
+    // the same verb while tuning.
+    using KeyOnAdmission = std::function<QString()>;
+    void setAutotuneAdmission(KeyOnAdmission admission) { m_autotuneAdmission = std::move(admission); }
     // Break a tune already in progress — the same `autotune` the start uses,
     // which the firmware treats as a toggle. No-op when not tuning.
     void abortTune();
@@ -144,6 +152,8 @@ signals:
     void operateRequested(bool on);
     void bypassRequested(bool on);
     void autotuneRequested();
+    // An autotune start the admission refused; nothing was sent.
+    void autotuneRefused(const QString& message);
     // Emitted when an autotune goes out over the direct port-9010 channel, which
     // bypasses autotuneRequested. The TGXL then keys the radio over its interlock
     // line, so RadioModel arms its tune-carrier window from this edge.
@@ -158,6 +168,7 @@ signals:
     void relayedCommandRefused(const QString& command);
 
 private:
+    KeyOnAdmission m_autotuneAdmission;
     QString m_handle;
     QString m_model;
     QString m_serialNum;

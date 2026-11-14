@@ -4,6 +4,7 @@
 
 #include <QPointer>
 #include <QScopeGuard>
+#include <QThread>
 #include <vector>
 
 namespace AetherSDR {
@@ -227,7 +228,8 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     }
 }
 
-bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request)
+bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request,
+                                 bool askKeyObjection)
 {
     if (m_txInputsStopping) {
         return false;
@@ -309,6 +311,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         : activity == TxActivity::VoiceKeyer ? QStringLiteral("dvk")
         : activity == TxActivity::Navtex ? QStringLiteral("navtex") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
+        return false;
+    }
+    // After the radio's own refusals, so a pan inhibit is reported ahead of it.
+    if (askKeyObjection && transmitStartBlockedByKeyObjection(gate)) {
         return false;
     }
     const bool independent = request && m_txCoordinator.isIndependentRequest(*request);
@@ -1124,6 +1130,56 @@ void RadioModel::emergencyTransmitStop()
     }
     m_txCoordinator.emergencyStop();
     cancelLocalTransmit();
+}
+
+void RadioModel::addKeyObjection(QObject* owner, KeyObjection objection)
+{
+    if (QThread::currentThread() != thread() || owner == nullptr || !objection) {
+        return;
+    }
+    m_keyObjections.push_back({QPointer<QObject>(owner), std::move(objection)});
+}
+
+QString RadioModel::keyObjectionMessage() const
+{
+    // A request while this client already transmits is not a key-on: refusing
+    // it would roll back the state of a transmission on the air.
+    if (activeTxActivities() != 0) {
+        return QString();
+    }
+    for (const KeyObjectionEntry& entry : m_keyObjections) {
+        if (entry.owner.isNull()) {
+            continue;
+        }
+        const QString message = entry.objection().trimmed();
+        if (!message.isEmpty()) {
+            return message;
+        }
+    }
+    return QString();
+}
+
+void RadioModel::emitKeyObjectionNotice(const QString& message, const QString& gate)
+{
+    // Keyed by gate, never by the sentence, so a changing sentence does not
+    // re-fire the notice inside its de-duplication window.
+    const QString panId = txSlice() ? txSlice()->panId() : QString();
+    emitInterlockNotification(message, QStringLiteral("key-objection:%1:%2").arg(panId, gate), panId);
+}
+
+bool RadioModel::transmitStartBlockedByKeyObjection(const QString& gate)
+{
+    const QString message = keyObjectionMessage();
+    if (message.isEmpty()) {
+        return false;
+    }
+    emitKeyObjectionNotice(message, gate);
+    m_transmitModel.setTransmitting(false);
+    if (m_txAudioGate) {
+        m_txAudioGate = false;
+        emit txAudioGateChanged(false);
+    }
+    return true;
 }
 
 void RadioModel::resetTxOperations()

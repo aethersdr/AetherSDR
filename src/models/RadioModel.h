@@ -72,6 +72,7 @@
 #include <QSet>
 #include <functional>
 #include <memory>
+#include <vector>
 #include "core/backends/SessionCommandGuard.h"
 
 #include <QTimer>
@@ -1000,6 +1001,13 @@ public:
     bool transmitRecovering() const { return m_txCoordinator.recovering(); }
     bool transmitOwnershipPending() const { return m_txCoordinator.hasOwnership(); }
     void emergencyTransmitStop();
+    // A station condition outside the radio that objects to a key-on from this
+    // application: empty is no objection, anything else is the sentence shown
+    // to the operator. Asked on the main thread at every key-on gate, never for
+    // an un-key, and not while this client already transmits; the first
+    // non-empty answer refuses. It goes when `owner` is destroyed (#6237).
+    using KeyObjection = std::function<QString()>;
+    void addKeyObjection(QObject* owner, KeyObjection objection);
     // Trusted composition only. A producer is a lifetime, not an actor grant.
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
@@ -2441,7 +2449,8 @@ private:
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
-    bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
+    bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request,
+                         bool askKeyObjection = true);
     TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
                                                   TxActivity activity, bool& dispatched);
     bool dispatchTuneIntent(bool on, const TxCoordinator::Request* request = nullptr);
@@ -2582,6 +2591,14 @@ private:
     bool        m_multiFlexEnabled{true};
     bool        m_txRequested{false}; // local MOX command intent (for edge sync)
     bool        m_cwKeyActive{false}; // true while CW key/paddle is held (#1379)
+    // One CW message, for the key objection: opened by a key-down admitted
+    // while none runs; ended by the radio reporting un-keyed after it reported
+    // keyed, or, with no keyed report, by the break-in delay after the last
+    // key-up. The objection is asked at its first element only.
+    bool        m_cwMessageOpen{false};
+    bool        m_cwMessageSawKeyed{false};
+    qint64      m_cwMessageLastUpMs{-1};
+    bool        cwMessageRunning();
     bool        m_cwxActive{false};   // true while CWX send is in flight (#2047, #2097)
     bool        m_cwPaddleHeld{false}; // true while a paddle is physically held (#5422)
     std::vector<TxCoordinator::Request> m_producerCwPaddleInputs;
@@ -2747,6 +2764,21 @@ private:
     void enforceTransmitInhibitForSlice(SliceModel* slice);
     void selectSoleValidTxAntennaIfNeeded(SliceModel* slice, bool txAntennaStatusReceived);
     bool transmitStartBlockedByInhibit(const QString& key);
+    struct KeyObjectionEntry {
+        QPointer<QObject> owner;
+        KeyObjection      objection;
+    };
+    std::vector<KeyObjectionEntry> m_keyObjections;
+    // The gate of an objection the PTT preflight just returned, so its
+    // pttBlocked notice is filed under key-objection:<pan>:<gate>.
+    QString m_keyObjectionPreflightGate;
+    // The first registered objection with something to say, trimmed; empty
+    // when none objects or while this client already transmits.
+    QString keyObjectionMessage() const;
+    // The refusal: the notice under key-objection:<pan>:<gate> and the pan
+    // inhibit's rollback.
+    bool transmitStartBlockedByKeyObjection(const QString& gate);
+    void emitKeyObjectionNotice(const QString& message, const QString& gate);
     void noteLocalTxSliceEnableIntent(int sliceId);
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
