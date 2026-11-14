@@ -20,9 +20,9 @@ import (
 
 // A radio's announcement payload: a real field set, with lookalike keys
 // (inuse_ip, gui_client_ips) that must keep the LAN addresses they name.
-const announcePayload = "discovery_protocol_version=3.0.0.2 model=FLEX-6500 serial=2213-3052-6500-9487 " +
-	"version=4.2.20.41343 nickname=K5PTB callsign=K5PTB ip=192.168.8.122 port=4992 status=Available " +
-	"inuse_ip=192.168.8.50 inuse_host=shack-pc max_licensed_version=v3 gui_client_ips=192.168.8.50 " +
+const announcePayload = "discovery_protocol_version=3.0.0.2 model=FLEX-6500 serial=1234-5678-6500-0001 " +
+	"version=4.2.20.41343 nickname=K5PTB callsign=K5PTB ip=192.168.0.20 port=4992 status=Available " +
+	"inuse_ip=192.168.0.50 inuse_host=shack-pc max_licensed_version=v3 gui_client_ips=192.168.0.50 " +
 	"gui_client_hosts=shack-pc gui_client_programs=SmartSDR-Win"
 
 // vitaAnnouncement wraps payload as FlexRadio sends it: extension data with
@@ -54,7 +54,7 @@ func vitaAnnouncement(payload string, trailer bool) []byte {
 }
 
 func TestRewriteAnnouncementVITA(t *testing.T) {
-	want := strings.Replace(announcePayload, " ip=192.168.8.122 ", " ip=100.64.0.1 ", 1)
+	want := strings.Replace(announcePayload, " ip=192.168.0.20 ", " ip=100.64.0.1 ", 1)
 	for _, trailer := range []bool{false, true} {
 		in := vitaAnnouncement(announcePayload, trailer)
 		orig := append([]byte(nil), in...)
@@ -65,7 +65,7 @@ func TestRewriteAnnouncementVITA(t *testing.T) {
 		if !bytes.Equal(in, orig) {
 			t.Fatalf("trailer=%v: the radio's packet was modified", trailer)
 		}
-		if named != netip.MustParseAddr("192.168.8.122") {
+		if named != netip.MustParseAddr("192.168.0.20") {
 			t.Errorf("trailer=%v: named %v", trailer, named)
 		}
 		if len(out)%4 != 0 || int(binary.BigEndian.Uint16(out[2:]))*4 != len(out) {
@@ -104,10 +104,10 @@ func TestRewriteAnnouncementText(t *testing.T) {
 func TestRewriteAnnouncementRefuses(t *testing.T) {
 	self := netip.MustParseAddr("100.64.0.1")
 	for _, in := range [][]byte{
-		[]byte("model=FLEX-6500 ip=192.168.8.122 port=4992"),          // no serial
+		[]byte("model=FLEX-6500 ip=192.168.0.20 port=4992"),          // no serial
 		[]byte("model=FLEX-6500 serial=1234 port=4992"),               // no ip
-		[]byte("serial= ip=192.168.8.122"),                            // empty serial
-		[]byte("model=X serial=1 inuse_ip=192.168.8.50"),              // only a lookalike key
+		[]byte("serial= ip=192.168.0.20"),                            // empty serial
+		[]byte("model=X serial=1 inuse_ip=192.168.0.50"),              // only a lookalike key
 		vitaAnnouncement("model=FLEX-6500 serial=1 port=4992", false), // VITA, no ip
 		{},
 	} {
@@ -118,13 +118,13 @@ func TestRewriteAnnouncementRefuses(t *testing.T) {
 }
 
 func TestSelectTargets(t *testing.T) {
-	station := []netip.Prefix{netip.MustParsePrefix("192.168.8.0/24")}
+	station := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}
 	peers := func() []tailPeer {
 		return []tailPeer{
 			{ID: "nRemote", Name: "laptop", Online: true, IP: netip.MustParseAddr("100.64.0.2"), Direct: netip.MustParseAddr("203.0.113.9")},
 			{ID: "nRelayed", Name: "desktop", Online: true, IP: netip.MustParseAddr("100.64.0.3")},
 			{ID: "nAway", Name: "tablet", Online: false, IP: netip.MustParseAddr("100.64.0.4")},
-			{ID: "nShack", Name: "shack-pc", Online: true, IP: netip.MustParseAddr("100.64.0.5"), Direct: netip.MustParseAddr("192.168.8.50")},
+			{ID: "nShack", Name: "shack-pc", Online: true, IP: netip.MustParseAddr("100.64.0.5"), Direct: netip.MustParseAddr("192.168.0.50")},
 			{ID: "nV6", Name: "v6only", Online: true},
 		}
 	}
@@ -219,14 +219,14 @@ func TestAnnouncerForwards(t *testing.T) {
 	a := &Announcer{
 		IsRadio:    func(netip.Addr) bool { return fromRadio.Load() },
 		Listen:     func() []net.PacketConn { return []net.PacketConn{pc} },
-		Interfaces: func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("192.168.8.0/24")} },
+		Interfaces: func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")} },
 	}
 	a.Start()
 
 	var mu sync.Mutex
 	var sent []sentAnnouncement
 	selected := make(chan struct{}, 8)
-	self := netip.MustParseAddr("100.112.196.2")
+	self := netip.MustParseAddr("100.70.0.2")
 	a.Attach(self, func(b []byte, to netip.AddrPort) error {
 		mu.Lock()
 		sent = append(sent, sentAnnouncement{append([]byte(nil), b...), to})
@@ -238,7 +238,7 @@ func TestAnnouncerForwards(t *testing.T) {
 			{ID: "nA", Name: "a", Online: true, IP: netip.MustParseAddr("100.64.0.2")},
 			{ID: "nB", Name: "b", Online: true, IP: netip.MustParseAddr("100.64.0.3")},
 			{ID: "nS", Name: "shack", Online: true, IP: netip.MustParseAddr("100.64.0.4"),
-				Direct: netip.MustParseAddr("192.168.8.50")},
+				Direct: netip.MustParseAddr("192.168.0.50")},
 		}, nil
 	}, func() (string, []string) { return announceAll, nil })
 	<-selected
@@ -286,7 +286,7 @@ func TestAnnouncerForwards(t *testing.T) {
 		if s.to != wantTo {
 			t.Errorf("sent to %v, want %v", s.to, wantTo)
 		}
-		if !bytes.Contains(s.b, []byte(" ip=100.112.196.2 ")) || bytes.Contains(s.b, []byte(" ip=192.168.8.122")) {
+		if !bytes.Contains(s.b, []byte(" ip=100.70.0.2 ")) || bytes.Contains(s.b, []byte(" ip=192.168.0.20")) {
 			t.Errorf("not rewritten: %q", s.b)
 		}
 	}
@@ -396,7 +396,7 @@ func TestAnnouncerHelperFeed(t *testing.T) {
 	var mu sync.Mutex
 	var sent []netip.AddrPort
 	mode := announceAll
-	a.Attach(netip.MustParseAddr("100.112.196.2"), func(b []byte, to netip.AddrPort) error {
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func(b []byte, to netip.AddrPort) error {
 		mu.Lock()
 		sent = append(sent, to)
 		mu.Unlock()
@@ -449,7 +449,7 @@ func TestAnnouncerHelperFeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("helper: %v", err)
 	}
-	if !bytes.Contains(b, []byte(" ip=100.112.196.2 ")) || binary.BigEndian.Uint32(b[8:])&0x00FFFFFF != flexOUI {
+	if !bytes.Contains(b, []byte(" ip=100.70.0.2 ")) || binary.BigEndian.Uint32(b[8:])&0x00FFFFFF != flexOUI {
 		t.Fatalf("helper got %q", b)
 	}
 	mu.Lock()
