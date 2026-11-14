@@ -11,6 +11,9 @@
 #include "SpectrumWidget.h"
 
 #include <QDebug>
+#include <QMenu>
+#include <QMenuBar>
+#include <QPointer>
 #include <QStatusBar>
 #include <array>
 #include <cmath>
@@ -54,6 +57,38 @@ void MainWindow::cycleBandAction(int direction)
     const int next = ((current < 0 ? 0 : current) + direction + count) % count;
     if (auto* a = m_shortcutManager.action(QLatin1String(kCycle[next].shortcutId)))
         if (a->handler) a->handler();
+}
+
+// The menu entry whose text, with the menus above it, ends with `path`
+// (untranslated literals from MainWindow_Menus.cpp): {"SpotHub..."} finds it
+// in whichever menu it lives; {"Band Plan", "Off"} disambiguates. The title
+// bar reparents the window's menu bar, after which menuBar() would hand back a
+// new empty one, so every menu bar under the window is searched.
+QAction* MainWindow::findMenuAction(const QStringList& path) const
+{
+    std::function<QAction*(const QList<QAction*>&, QStringList&)> walk =
+        [&](const QList<QAction*>& actions, QStringList& above) -> QAction* {
+            for (QAction* a : actions) {
+                above.append(a->text());
+                if (above.size() >= path.size() && above.mid(above.size() - path.size()) == path) {
+                    above.removeLast();
+                    return a;
+                }
+                if (a->menu()) {
+                    if (QAction* hit = walk(a->menu()->actions(), above)) {
+                        above.removeLast();
+                        return hit;
+                    }
+                }
+                above.removeLast();
+            }
+            return nullptr;
+        };
+    for (const QMenuBar* bar : findChildren<QMenuBar*>()) {
+        QStringList above;
+        if (QAction* hit = walk(bar->actions(), above)) return hit;
+    }
+    return nullptr;
 }
 
 void MainWindow::registerControlActions()
@@ -398,6 +433,137 @@ void MainWindow::registerControlActions()
     reg.add(A::trigger("memory_prev", "global.memoryPrev", "Previous Memory", "Display",
                        [memoryStep](float) { memoryStep(-1); })
         .inMidiCategory("Global").when(hasMemories));
+
+    // ── Antennas: pick by position in the radio's own list, or step ────
+    // Position N is the Nth choice the RX/TX antenna menu offers, so the
+    // binding means the same thing on any radio that lists antennas.
+    const auto rxApplet = [this]() -> RxApplet* {
+        return m_appletPanel ? m_appletPanel->rxApplet() : nullptr;
+    };
+    const auto antennaChoices = [rxApplet](bool tx) {
+        auto* rx = rxApplet();
+        return rx ? (tx ? rx->txAntennaChoices() : rx->rxAntennaChoices()) : QStringList{};
+    };
+    const auto pickAntenna = [rxApplet](bool tx, const QString& token) {
+        auto* rx = rxApplet();
+        return rx && (tx ? rx->selectTxAntenna(token) : rx->selectRxAntenna(token));
+    };
+    for (const bool tx : {false, true}) {
+        const QString side = tx ? QStringLiteral("TX") : QStringLiteral("RX");
+        const QString key = side.toLower();
+        const auto sideAvailable = [this, tx, canTransmit] {
+            return m_radioModel.isConnected() && activeSlice() && (!tx || canTransmit());
+        };
+        for (int n = 1; n <= 4; ++n) {
+            reg.add(A::trigger(QStringLiteral("%1_antenna_%2").arg(key).arg(n),
+                               QStringLiteral("%1.antenna%2").arg(key).arg(n),
+                               QStringLiteral("%1 Antenna %2").arg(side).arg(n), tx ? "TX" : "Slice",
+                               [antennaChoices, pickAntenna, tx, n](float) {
+                                   const QStringList choices = antennaChoices(tx);
+                                   if (n <= choices.size()) pickAntenna(tx, choices.at(n - 1));
+                               })
+                        .inMidiCategory(tx ? "TX" : "RX")
+                        .when([sideAvailable, antennaChoices, tx, n] {
+                            return sideAvailable() && antennaChoices(tx).size() >= n;
+                        }));
+        }
+        reg.add(A::trigger(QStringLiteral("%1_antenna_next").arg(key),
+                           QStringLiteral("%1.antennaNext").arg(key),
+                           QStringLiteral("Next %1 Antenna").arg(side), tx ? "TX" : "Slice",
+                           [this, antennaChoices, pickAntenna, tx](float) {
+                               const QStringList choices = antennaChoices(tx);
+                               auto* s = activeSlice();
+                               if (!s || choices.isEmpty()) return;
+                               const int at = choices.indexOf(tx ? s->txAntenna() : s->rxAntenna());
+                               pickAntenna(tx, choices.at((at + 1) % choices.size()));
+                           })
+                    .inMidiCategory(tx ? "TX" : "RX")
+                    .when([sideAvailable, antennaChoices, tx] {
+                        return sideAvailable() && antennaChoices(tx).size() > 1;
+                    }));
+    }
+
+    // ── Radio-side receive features ────────────────────────────────────
+    // WNB: the panadapter's wideband blanker, offered where the overlay menu
+    // offers it (radio-side DSP).
+    const auto wnbAvailable = [this] {
+        return m_radioModel.isConnected() && m_radioModel.activePanadapter()
+            && m_radioModel.hasRadioSideDsp();
+    };
+    reg.add(A::toggle("wnb_toggle", "rx.wnbEnable", "WNB", "DSP",
+        [this](float v) {
+            m_radioModel.requestPanDisplay(m_radioModel.activePanadapter(),
+                                           {PanDisplayField::Wnb, v > 0.5f});
+        },
+        [this]() -> float {
+            auto* pan = m_radioModel.activePanadapter();
+            return pan && pan->wnbActive() ? 1 : 0;
+        })
+        .inMidiCategory("RX").when(wnbAvailable));
+    reg.add(A::level("wnb_level", "rx.wnbLevel", "WNB Level", "DSP", 0, 100, 5,
+        [this](float v) {
+            m_radioModel.requestPanDisplay(m_radioModel.activePanadapter(),
+                                           {PanDisplayField::WnbLevel, static_cast<int>(v)});
+        },
+        [this]() -> float {
+            auto* pan = m_radioModel.activePanadapter();
+            return pan ? pan->wnbLevel() : 0;
+        })
+        .inMidiCategory("RX").when(wnbAvailable));
+    // Binaural: a radio setup field, offered where the radio declares it.
+    reg.add(A::toggle("binaural_toggle", "rx.binaural", "Binaural RX", "Audio",
+        [this](float v) {
+            m_radioModel.requestRadioSetup({RadioSetupField::BinauralReceive, v > 0.5f});
+        },
+        [this]() -> float { return m_radioModel.binauralRx() ? 1 : 0; })
+        .inMidiCategory("RX")
+        .when([this] {
+            const auto control = m_radioModel.backendCapabilities().radioSetupControl;
+            return m_radioModel.isConnected() && control
+                && control->supports(RadioSetupField::BinauralReceive);
+        }));
+    // Diversity: offered where the VFO's DIV button is (a diversity-capable radio).
+    reg.add(A::toggle("diversity_toggle", "rx.diversity", "Diversity RX", "Slice",
+        [this](float v) { if (auto* s = activeSlice()) s->setDiversity(v > 0.5f); },
+        [this]() -> float { auto* s = activeSlice(); return s && s->diversity() ? 1 : 0; })
+        .inMidiCategory("RX")
+        .when([this] {
+            return m_radioModel.isConnected() && activeSlice() && m_radioModel.isDiversityAllowed();
+        }));
+
+    // ── ATU memories (not keying; ATU tune and bypass stay on the TX path) ─
+    reg.add(A::toggle("atu_memories_toggle", "tx.atuMemories", "ATU Memories", "TX",
+        [this](float v) { m_radioModel.transmitModel().setAtuMemories(v > 0.5f); },
+        [this]() -> float { return m_radioModel.transmitModel().memoriesEnabled() ? 1 : 0; })
+        .when([this] {
+            const auto& tx = m_radioModel.transmitModel();
+            return m_radioModel.isConnected() && tx.hasTunerMemories() && tx.atuAvailable();
+        }));
+
+    // ── Band stack: step to the nearest bookmark above or below ────────
+    const auto hasBandStack = [this] {
+        return m_radioModel.isConnected() && activeSlice() && hasBandStackEntries();
+    };
+    const auto bandStackStep = [this](int direction) { stepBandStack(direction); };
+    reg.add(A::trigger("band_stack_up", "global.bandStackUp", "Band Stack Up", "Band",
+                       [bandStackStep](float) { bandStackStep(+1); })
+        .inMidiCategory("Global").when(hasBandStack));
+    reg.add(A::trigger("band_stack_down", "global.bandStackDown", "Band Stack Down", "Band",
+                       [bandStackStep](float) { bandStackStep(-1); })
+        .inMidiCategory("Global").when(hasBandStack));
+
+    // ── Windows: trigger the menu entry, so every path opens it alike ──
+    const auto menuEntry = [this](const QStringList& path) {
+        return [this, path](float) {
+            if (QAction* act = findMenuAction(path)) act->trigger();
+        };
+    };
+    reg.add(A::trigger("open_spothub", "global.openSpotHub", "Open SpotHub", "Display",
+                       menuEntry({"SpotHub..."})).inMidiCategory("Global"));
+    reg.add(A::trigger("open_aethermodem", "global.openAetherModem", "Open AetherModem", "Display",
+                       menuEntry({"AetherModem..."})).inMidiCategory("Global"));
+    reg.add(A::trigger("band_plan_toggle", "global.bandPlanToggle", "Band Plan Toggle", "Display",
+                       [this](float) { toggleBandPlanStrip(); }).inMidiCategory("Global"));
 
     // ── Pairs declared before the registry (keyboard id ↔ MIDI id) ─────
     static constexpr std::pair<const char*, const char*> kLegacyPairs[] = {

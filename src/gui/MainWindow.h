@@ -974,6 +974,11 @@ private:
     // Actions declared once and published to keyboard + MIDI
     // (ControlActionRegistry; MainWindow_ControlActions.cpp).
     void registerControlActions();
+    QAction* findMenuAction(const QStringList& path) const;
+    // Band stack stepping and the band-plan strip toggle (registry actions).
+    bool hasBandStackEntries() const;
+    void stepBandStack(int direction);
+    void toggleBandPlanStrip();
     void nudgeActiveSliceSteps(int steps);
     void cycleBandAction(int direction);
     void cycleModeAction(int direction);
@@ -2275,6 +2280,7 @@ private:
     ShortcutManager m_shortcutManager;
     ControlActionRegistry m_controlActions;
     int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
+    int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this
     UpdateChecker* m_updateChecker{nullptr};
     // Install update in place (RFC #5304): outlives the Updates window, so
     // a staged release installs on quit (closeEvent).

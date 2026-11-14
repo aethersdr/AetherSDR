@@ -3216,6 +3216,28 @@ void RxApplet::applyFilterPreset(int widthHz)
     }
 }
 
+bool RxApplet::selectRxAntenna(const QString& token)
+{
+    if (!m_slice || token.isEmpty() || !rxAntennaOptions().contains(token)) return false;
+    const QString profileId = m_kiwiSdrManager
+        ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
+        : QString();
+    if (!profileId.isEmpty()) {
+        emit kiwiRxAntennaSelected(m_slice->sliceId(), profileId);
+    } else {
+        emit flexRxAntennaSelected(m_slice->sliceId());
+        if (m_slice->rxAntenna() != token) { m_slice->setRxAntenna(token); }
+    }
+    return true;
+}
+
+bool RxApplet::selectTxAntenna(const QString& token)
+{
+    if (!m_slice || token.isEmpty() || !txAntennaOptions().contains(token)) return false;
+    if (m_slice->txAntenna() != token) { m_slice->setTxAntenna(token); }
+    return true;
+}
+
 bool RxApplet::applyNearestFilterWidth(int widthHz)
 {
     if (!m_slice || widthHz <= 0) return false;

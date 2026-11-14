@@ -11945,4 +11945,45 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
     }
 }
 
+bool MainWindow::hasBandStackEntries() const
+{
+    return !BandStackSettings::instance().entries(m_radioModel.settingsScope()).isEmpty();
+}
+
+// Recall the nearest band-stack bookmark strictly above (direction > 0) or
+// below the active slice's frequency, through the panel's own recall path.
+void MainWindow::stepBandStack(int direction)
+{
+    auto* s = activeSlice();
+    if (!s) return;
+    const auto entries = BandStackSettings::instance().entries(m_radioModel.settingsScope());
+    const double here = s->frequency();
+    const BandStackEntry* best = nullptr;
+    for (const BandStackEntry& e : entries) {
+        const double d = (e.frequencyMhz - here) * direction;
+        if (d <= 1e-6) continue;
+        if (!best || d < (best->frequencyMhz - here) * direction) best = &e;
+    }
+    if (!best) return;
+    const QPointer<MainWindow> owner(this);
+    m_radioModel.recallBandStack(s, *best, [owner](SliceModel* slice, double mhz) {
+        if (owner)
+            owner->applyTuneRequest(slice, mhz, TuneIntent::AbsoluteJump, "bandstack-recall");
+    });
+}
+
+// Band plan strip: Off, or back to the operator's last size (Small if none),
+// through the View ▸ Band Plan entries so the menu's check state follows.
+void MainWindow::toggleBandPlanStrip()
+{
+    const int size = AppSettings::instance().value("BandPlanFontSize", "6").toInt();
+    if (size > 0) m_lastBandPlanFontSize = size;
+    const QString target = size > 0 ? QStringLiteral("Off")
+        : m_lastBandPlanFontSize >= 16 ? QStringLiteral("Huge")
+        : m_lastBandPlanFontSize >= 12 ? QStringLiteral("Large")
+        : m_lastBandPlanFontSize >= 10 ? QStringLiteral("Medium")
+                                       : QStringLiteral("Small");
+    if (QAction* act = findMenuAction({"Band Plan", target})) act->trigger();
+}
+
 } // namespace AetherSDR
