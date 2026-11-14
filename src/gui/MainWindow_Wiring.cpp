@@ -4,6 +4,7 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
+#include "core/Kpa500IndicatorState.h"
 #include "core/ThemeManager.h"
 #include "ControlAvailabilityRegistry.h"
 #include "HGauge.h"
@@ -7877,40 +7878,17 @@ void MainWindow::wireMeters()
     });
 
     // KPA500 main-window indicator — RFC #7092.
-    // Six states in priority order: FAULT > TX > OPERATE > STANDBY > OFF > Unknown.
+    // Six states in priority order: FAULT > TX > OPERATE > STANDBY > OFF > "–".
+    // State mapping extracted to Kpa500IndicatorState.h for socket-free testing.
     // Passive widget; show/hide on detectedChanged only (not on radio-disconnect teardown).
     auto updateKpa500Style = [this, setIndicatorStyle]() {
-        const auto& s   = m_kpa500Conn.lastStatus();
         const bool live = m_kpa500Conn.isConnected() && m_kpa500Conn.isResponding();
-        if (!live) {
-            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "Unknown",
-                              QStringLiteral("color.text.secondary"));
-            return;
-        }
-        const bool fault = s.faultCode.value_or(0) > 0;
-        const bool txing = m_kpa500Conn.hasLiveTxMeters()
-                           && s.forwardPowerW.value_or(0.0f) >= 5.0f;
-        const bool oper  = s.powerOn == true && s.operate == true;
-        const bool stby  = s.powerOn == true && s.operate == false;
-        const bool off   = s.powerOn == false;
-        if (fault)
-            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "FAULT",
-                              QStringLiteral("color.accent.danger"));
-        else if (txing)
-            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "TX",
-                              QStringLiteral("color.accent.danger"));
-        else if (oper)
-            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "OPERATE",
-                              QStringLiteral("color.accent.success"));
-        else if (stby)
-            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "STANDBY",
-                              QStringLiteral("color.accessory.key.standby.foreground"));
-        else if (off)
-            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "OFF",
-                              QStringLiteral("color.text.secondary"));
-        else
-            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "Unknown",
-                              QStringLiteral("color.text.secondary"));
+        const auto [label, token] = kpa500IndicatorState(
+            m_kpa500Conn.lastStatus(), live, m_kpa500Conn.hasLiveTxMeters());
+        setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, label, token);
+        // Accessibility: state word in the name, not just color (docs/a11y.md).
+        m_kpa500Container->setAccessibleName(
+            QStringLiteral("KPA500: %1").arg(label));
     };
     connect(&m_kpa500Conn, &Kpa500Connection::detectedChanged, this, [this, updateKpa500Style](bool detected) {
         m_kpa500Container->setVisible(detected);
