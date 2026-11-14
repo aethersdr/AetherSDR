@@ -397,6 +397,22 @@ private:
                   rig.changes.size() == 1 && rig.changes[0].setting == Setting::Type);
         }
         {
+            // The operator's permission covers the cable as it was at Connect,
+            // not one unplugged and plugged back in before the walk finished.
+            RadioRig rig;
+            rig.cable = catCable();
+            rig.cable.type = QStringLiteral("bit");
+            LpMeterConnection connection;
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            const bool retyping = rig.changes.size() == 1 && rig.changes[0].setting == Setting::Type;
+            connection.onRadioCableStatus(sn, LpMeter::CableSnapshot{});
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a cable replugged during an operator retype is refused, not retyped again",
+                  retyping && rig.changes.size() == 1 && rig.failures.size() == 1
+                  && rig.failures[0].contains(QStringLiteral("press Connect")) && !connection.isConnected());
+        }
+        {
             RadioRig rig;
             rig.cable = catCable();
             rig.cable.type = QStringLiteral("passthrough");

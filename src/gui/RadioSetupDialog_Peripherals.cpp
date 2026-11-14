@@ -29,7 +29,6 @@
 #include "core/Kpa1500Connection.h"
 #include "core/Kpa500Connection.h"
 #include "core/LpMeterConnection.h"
-#include <QStandardItemModel>
 #include "core/PeripheralRemovalGuard.h"
 #include "core/PeripheralSettings.h"
 #include "core/PgxlConnection.h"
@@ -71,6 +70,7 @@
 #include <QTimer>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVector>
@@ -587,7 +587,8 @@ void finishDetailPage(DetailPage& detail, PeripheralDeviceUi& ui,
     // Remember the help text of the fields that are locked while connected.
     for (QWidget* field : {static_cast<QWidget*>(ui.addressEdit), static_cast<QWidget*>(ui.addressStack),
                            static_cast<QWidget*>(ui.portSpin), static_cast<QWidget*>(ui.portStack),
-                           static_cast<QWidget*>(ui.modeCombo), static_cast<QWidget*>(ui.baudCombo)}) {
+                           static_cast<QWidget*>(ui.modeCombo), static_cast<QWidget*>(ui.baudCombo),
+                           static_cast<QWidget*>(ui.radioCableCombo)}) {
         if (field) {
             ui.fieldHelp.insert(field, {field->accessibleDescription(), field->toolTip()});
         }
@@ -3039,9 +3040,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 }
                 const bool radioMode = ui.modeCombo->currentData().toString() == QLatin1String("Radio");
                 const bool blocked = radioMode && !why.isEmpty() && !connected && !connecting;
-                if (blocked) {
-                    updateFieldAvailability(ui, ui.radioCableCombo, true, why);
-                }
+                // Re-enabled once a cable is reported, and locked like the other
+                // connection fields while connected.
+                updateFieldAvailability(ui, ui.radioCableCombo, locked || blocked,
+                                        blocked ? why : reason);
                 ui.connectButton->setEnabled(!blocked);
                 ui.connectButton->setToolTip(blocked ? why : QString());
                 ui.connectButton->setAccessibleDescription(blocked ? why : QString());
