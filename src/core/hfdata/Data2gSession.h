@@ -25,7 +25,7 @@
 // And when an identification falls due in the same turn, the engine sends the
 // two as one transmission and counts itself as having identified: that
 // identification is dropped with the refusal, and the next comes a full
-// interval (600 s) later.
+// interval later. "Identification" below is what keeps that inside the rules.
 //
 // Qt-free, and the Data2G headers stay out of this header, for the reasons
 // given in Data2gMonitor.h.
@@ -71,6 +71,11 @@ struct Data2gSessionStep {
     // carrying data. A watchdog outside the engine times these.
     bool peerHeard{false};
     bool dataActive{false};
+    // The transmission handed back on this step carries an ID frame.
+    bool identified{false};
+    // A transmission dropped on this step carried an ID frame the engine now
+    // counts as sent (see "Identification" below).
+    bool identificationLost{false};
 };
 
 class Data2gSession {
@@ -79,6 +84,16 @@ public:
     // handed back. Past it, by the engine's clock, it is dropped (maintainer
     // ruling, 2026-11-14).
     static constexpr double kClosingIdSeconds = 6.0;
+    // Identification. A station must identify at least every 10 minutes
+    // during a communication and at its end (47 CFR 97.119(a), and its like
+    // elsewhere). The engine sends an ID frame every interval, ahead of one
+    // of its own turns. If that turn is a refusal the ID is dropped with it,
+    // and the engine waits a whole interval more. So the interval here is 4
+    // minutes, not upstream's 10: one lost ID leaves 8 minutes between IDs on
+    // the air. After kMaxLostIds in a row the session is closed, and the
+    // closing ID follows.
+    static constexpr double kIdIntervalSeconds = 240.0;
+    static constexpr int kMaxLostIds = 2;
     // Silence at the head of every transmission, for the transmitter to key.
     static constexpr double kDefaultKeyLeadSeconds = 0.1;
 
@@ -101,6 +116,11 @@ public:
     void send(std::vector<std::uint8_t> bytes);
     // From the next transmission keyed. Clamped to 0..1 s.
     void setKeyLeadSeconds(double seconds);
+    // Before the first step(). Clamped to 30..kIdIntervalSeconds: it can be
+    // shortened, never lengthened.
+    void setIdIntervalSeconds(double seconds);
+    // The interval the engine is running at; 0 for an invalid session.
+    double idIntervalSeconds() const;
 
     // The worker thread. Mono float32 at sampleRate(), in chunks of any size.
     // The engine keeps time by sample count, so it must be fed without gaps,

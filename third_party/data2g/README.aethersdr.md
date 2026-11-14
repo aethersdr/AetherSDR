@@ -74,6 +74,11 @@ never put on the include path of the rest of the tree.
   `POCKETFFT_NO_MULTITHREADING`. Measured on the monitor, decode time is the
   same with and without them. The adapter's own test pins the pool to 2 so
   the pooled path stays exercised.
+- AetherSDR runs the engine's ID interval at 4 minutes, not upstream's 10
+  (`Data2gSession::kIdIntervalSeconds`). The engine can send an ID in the same
+  transmission as a refusal, which AetherSDR never transmits; the shorter
+  interval keeps IDs on the air inside 10 minutes when that happens. If
+  upstream stops bundling the two, the interval can go back to 10.
 - Upstream calls the software beta and says the on-air protocol may still
   change. The protocol is versioned, so a mismatch is refused, not garbled.
 

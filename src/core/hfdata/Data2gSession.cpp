@@ -3,6 +3,7 @@
 #include "core/hfdata/Data2gMonitor.h"
 
 #include "arq/engine.hpp"
+#include "arq/frames.hpp"
 #include "arq/session.hpp"
 #include "audio/filters.hpp"
 #include "config/config.hpp"
@@ -42,6 +43,23 @@ int capOf(Data2gBandwidth bandwidth)
         return 2;
     }
     return 0;
+}
+
+// An ID frame: an open control burst (mask 0) carrying the T_ID extension.
+bool isIdFrame(const data2g::arq::TxBurst& burst)
+{
+    if (burst.slots.empty() || burst.slots.front().mask_id.key != 0)
+        return false;
+    try {
+        std::vector<data2g::arq::Bytes> payloads;
+        payloads.reserve(burst.slots.size());
+        for (const data2g::arq::Slot& slot : burst.slots)
+            payloads.push_back(slot.payload);
+        const data2g::arq::Control control = data2g::arq::Control::unpack(payloads);
+        return control.ext.find(data2g::arq::T_ID) != control.ext.end();
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 Data2gLinkState linkStateOf(data2g::arq::SessionState state)
@@ -86,6 +104,9 @@ struct Data2gSession::Impl {
     // What the engine keyed during the step in hand, from its on_send hook.
     int burstsSent{0};
     bool refusalSent{false};
+    bool idSent{false};
+    int lostIds{0};              // in a row
+    double idIntervalSeconds{kIdIntervalSeconds};
     // The engine is playing out a transmission that was dropped here.
     bool suppressing{false};
     std::uint64_t suppressed{0};
@@ -102,12 +123,16 @@ struct Data2gSession::Impl {
         appliedKeyLeadSeconds = config.ptt_delay_s;
         engine = std::make_unique<data2g::arq::Engine>(myCall, config);
         engine->set_call(myCall);   // throws for a call that will not pack
+        engine->id_interval_s = idIntervalSeconds;
+        lostIds = 0;
         // Runs inside step(), on its thread, as each burst is keyed. A
         // refusal is the one burst the session queues that is not its own.
         engine->set_on_send([this](const data2g::arq::TxBurstPtr& burst) {
             ++burstsSent;
             if (burst && burst == engine->session().nak)
                 refusalSent = true;
+            if (burst && isIdFrame(*burst))
+                idSent = true;
         });
         operatorSession = false;
         sessionEnded = false;
@@ -204,6 +229,18 @@ void Data2gSession::setKeyLeadSeconds(double seconds)
     m_impl->keyLeadSeconds.store(std::clamp(seconds, 0.0, 1.0));
 }
 
+void Data2gSession::setIdIntervalSeconds(double seconds)
+{
+    m_impl->idIntervalSeconds = std::clamp(seconds, 30.0, kIdIntervalSeconds);
+    if (m_impl->engine)
+        m_impl->engine->id_interval_s = m_impl->idIntervalSeconds;
+}
+
+double Data2gSession::idIntervalSeconds() const
+{
+    return m_impl->engine ? m_impl->engine->id_interval_s : 0.0;
+}
+
 std::uint64_t Data2gSession::suppressedTransmissions() const
 {
     return m_impl->suppressed;
@@ -267,6 +304,7 @@ Data2gSessionStep Data2gSession::step(std::span<const float> mono)
         const std::vector<double> atFs = (*impl.decimator)(impl.scratch);
         impl.burstsSent = 0;
         impl.refusalSent = false;
+        impl.idSent = false;
         const data2g::arq::Engine::Out engineOut = engine.step(atFs);
         out.abortTx = engineOut.tx_abort;
 
@@ -312,6 +350,18 @@ Data2gSessionStep Data2gSession::step(std::span<const float> mono)
             else
                 ++impl.suppressed;
             impl.suppressing = !ours;
+            if (impl.idSent && ours) {
+                out.identified = true;
+                impl.lostIds = 0;
+            } else if (impl.idSent && out.state != Data2gLinkState::Idle) {
+                // The engine believes it identified and will not try again
+                // for a whole interval.
+                out.identificationLost = true;
+                if (++impl.lostIds >= kMaxLostIds) {
+                    out.events.emplace_back("IDENTIFICATION overdue: closing the session");
+                    engine.disconnect();
+                }
+            }
         }
         // The engine plays a dropped transmission out on its own clock. It is
         // not reported as transmitting: nothing here is on the air.
