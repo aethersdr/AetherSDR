@@ -626,6 +626,10 @@ void MainWindow::registerControlActions()
     reg.add(A::trigger("cwx_cancel", "cwx.cancel", "Stop CWX / Macros", "CW",
                        [this](float) { m_radioModel.cwxModel().clearBuffer(); })
         .inMidiCategory("Phone/CW").when(cwxAvailable));
+    reg.add(A::toggle("cw_decode_toggle", "cw.decodeRx", "CW Decoder", "CW",
+                      [this](float v) { setCwDecodeRxEnabled(v > 0.5f); },
+                      [this]() -> float { return cwDecodeRxEnabled() ? 1 : 0; })
+        .inMidiCategory("Phone/CW"));
     reg.add(A::trigger("cwx_panel_toggle", "cwx.panelToggle", "Show/Hide CWX Panel", "CW",
                        [this](float) { toggleCwKeyerPanel(); })
         .inMidiCategory("Phone/CW"));

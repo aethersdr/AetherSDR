@@ -11986,4 +11986,15 @@ void MainWindow::toggleBandPlanStrip()
     if (QAction* act = findMenuAction({"Band Plan", target})) act->trigger();
 }
 
+bool MainWindow::cwDecodeRxEnabled() const
+{
+    return CwDecodeSettings::rxEnabled();
+}
+
+void MainWindow::setCwDecodeRxEnabled(bool on)
+{
+    CwDecodeSettings::setRxEnabled(on);
+    refreshCwDecodeState();
+}
+
 } // namespace AetherSDR

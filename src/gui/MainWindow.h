@@ -980,6 +980,9 @@ private:
     bool hasBandStackEntries() const;
     void stepBandStack(int direction);
     void toggleBandPlanStrip();
+    // CW decoder RX on/off, the Radio Setup "Decode: RX" switch.
+    bool cwDecodeRxEnabled() const;
+    void setCwDecodeRxEnabled(bool on);
     void nudgeActiveSliceSteps(int steps);
     void cycleBandAction(int direction);
     void cycleModeAction(int direction);

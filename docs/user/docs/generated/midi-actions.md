@@ -121,6 +121,7 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | CW Keyer: Iambic B | `cw.keyerIambicB` | Trigger |   |   |
 | CW Keyer: Straight Key | `cw.keyerStraight` | Trigger |   |   |
 | Stop CWX / Macros | `cwx.cancel` | Trigger |   |   |
+| CW Decoder | `cw.decodeRx` | Toggle |   |   |
 | Show/Hide CWX Panel | `cwx.panelToggle` | Trigger |   |   |
 | CWX Macro F1 | `cwx.macro1` | Trigger |   |   |
 | CWX Macro F2 | `cwx.macro2` | Trigger |   |   |

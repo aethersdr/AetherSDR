@@ -124,6 +124,7 @@ These are the actions you can bind in **Settings → Configure Shortcuts...**, w
 | CW Keyer: Iambic B | `cw_keyer_iambic_b` |   |   |
 | CW Keyer: Straight Key | `cw_keyer_straight` |   |   |
 | Stop CWX / Macros | `cwx_cancel` |   |   |
+| CW Decoder | `cw_decode_toggle` |   |   |
 | Show/Hide CWX Panel | `cwx_panel_toggle` |   |   |
 | CWX Macro F1 | `cwx_macro_1` |   | Keys the transmitter |
 | CWX Macro F2 | `cwx_macro_2` |   | Keys the transmitter |
