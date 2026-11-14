@@ -500,6 +500,19 @@ public:
     // MainWindow's gate and must ask here, returning an error when absent.
     // Says nothing about CW keying itself, which works without a text buffer.
     bool hasRadioSideCwKeyer() const;
+    // Whether THIS HOST can key CW text on the connected radio: no radio-side
+    // buffer, but a transmit-capable backend that keys host-timed elements
+    // (hostCwKeyingControl engaged). False when disconnected, unlike hasRadioSideCwKeyer().
+    bool hasHostCwTextKeyer() const;
+    // Send-time preflight for host-keyed text, as pure reads with no interlock
+    // notice. Each element still passes the per-edge gates of a paddle.
+    // BreakInOffUnkeyed: break-in is off and this host holds no MOX/PTT
+    // (TransmitModel::isTransmitting()), so the backend would not raise MOX
+    // and the text would play to an unkeyed radio. Tuning: TUNE is active, and a
+    // CW key-down is refused while tuning (TransmitModel::admitsCwxSend()).
+    enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited,
+                                   Tuning, BreakInOffUnkeyed };
+    HostCwTextRefusal hostCwTextRefusal() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
     int cwTextMinWpm() const;
@@ -1030,9 +1043,15 @@ public:
                            const QString& debugSource = {}, quint64 debugTraceId = 0,
                            quint64 debugSourceMs = 0);
     bool producerRequestHasWork(const TxCoordinator::Request& request) const;
+    // Host CW text: hostTextGates refuses a key-down unless the TX slice is in
+    // a CW mode and, with break-in off, this host holds MOX/PTT; onDownRefused
+    // runs on the model thread when a key-down is not forwarded, so the text
+    // keyer can end the message. Paddles pass neither.
     void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                 const QString& source, quint64 traceId, quint64 sourceMs,
-                                std::chrono::steady_clock::time_point scheduledAt);
+                                std::chrono::steady_clock::time_point scheduledAt,
+                                bool hostTextGates = false,
+                                std::function<void()> onDownRefused = {});
     bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
     void abortTxProducerInputs(const TxCoordinator::Producer& producer,
                                TransmitModel::PttSource source);

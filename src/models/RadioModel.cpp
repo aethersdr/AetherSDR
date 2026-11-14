@@ -48,6 +48,7 @@
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
 #include "TransmitInhibitPolicy.h"
+#include "ModeVocabulary.h"
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
@@ -4977,6 +4978,47 @@ bool RadioModel::hasRadioSideCwKeyer() const
         return true;   // nothing attached — assume present, see the header
     }
     return backendCapabilities().hasRadioSideCwKeyer;
+}
+
+bool RadioModel::hasHostCwTextKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    return !caps.hasRadioSideCwKeyer && caps.hostCwKeyingControl.has_value() && caps.canTransmit;
+}
+
+RadioModel::HostCwTextRefusal RadioModel::hostCwTextRefusal() const
+{
+    if (!hasHostCwTextKeyer()) {
+        return HostCwTextRefusal::Unsupported;
+    }
+    const SliceModel* tx = txSlice();
+    if (!tx) {
+        return HostCwTextRefusal::NoTxSlice;
+    }
+    // Text from a logger keys only a CW slice; a paddle's edge in SSB is the
+    // operator's own act and is not gated here.
+    if (!AetherSDR::isCwMode(tx->mode())) {
+        return HostCwTextRefusal::NotCwMode;
+    }
+    if (AetherSDR::modeIsReceiveOnly(backendCapabilities(), tx->mode())) {
+        return HostCwTextRefusal::ReceiveOnlyMode;
+    }
+    if (!transmitInhibitMessageForSlice(tx).isEmpty()) {
+        return HostCwTextRefusal::Inhibited;
+    }
+    // Every key-down would be refused while TUNE is active (admitsCwKeyEdge).
+    if (!m_transmitModel.admitsCwxSend()) {
+        return HostCwTextRefusal::Tuning;
+    }
+    // Break-in off: the backend keys CW only under an MOX/PTT already held
+    // (Hl2Backend::setCwKeying), so without one the text would not go out.
+    if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+        return HostCwTextRefusal::BreakInOffUnkeyed;
+    }
+    return HostCwTextRefusal::None;
 }
 
 bool RadioModel::hasCwTextProgress() const

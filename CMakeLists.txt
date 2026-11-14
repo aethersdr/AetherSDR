@@ -1291,6 +1291,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_AudioControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
+    src/models/HostCwTextKeyer.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
