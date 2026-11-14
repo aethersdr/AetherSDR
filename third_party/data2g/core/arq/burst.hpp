@@ -5,12 +5,14 @@
 // value (mask_value) and a TxBurst into audio.
 #pragma once
 
+#include <array>
 #include <compare>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "arq/frames.hpp"
@@ -52,6 +54,9 @@ struct TxBurst {
     // submode "cw": a CW ID (cwid::audio(cw_text, cw_wpm)), no slots (engine.py's cwid.CwBurst)
     std::string cw_text;
     double cw_wpm = 0.0;
+    // sent as a nod (docs/arq.md §3b): its meaning and family key (session key, direction, burst seq mod 8,
+    // acted-on); the slots hold the control it stands for
+    std::optional<std::pair<int, std::array<int, 4>>> nod;
 };
 using TxBurstPtr = std::shared_ptr<const TxBurst>;
 
@@ -108,6 +113,8 @@ public:
     }
     // CPM: slots its header says are control (2: duplicated); OFDM: 0.
     virtual int n_ctl_slots() const { return 0; }
+    // A nod (docs/arq.md §3b) standing for a control-only burst: checked as a primed control is.
+    virtual bool is_nod() const { return false; }
 };
 
 }  // namespace data2g::arq

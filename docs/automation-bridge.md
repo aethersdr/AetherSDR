@@ -1004,6 +1004,34 @@ causal comparisons while keeping the radio/display configuration fixed. As of
 v26.8.1, the total includes Client EQ paint time; captures from older builds do
 not include that component and are not directly comparable.
 
+### Window repaint scheduling
+
+`repaintScheduling on|off` enables or bypasses display-paced delivery of
+`QEvent::UpdateRequest` for existing windows containing a live pan. This is a
+transient profiling control, unavailable in Observe-only mode. It changes no
+radio state, meter ballistics, or stream rate. Newly participating windows start
+enabled on the shared-window QRhi path on Windows, Linux and macOS, including
+QRhi software drivers (WARP, llvmpipe, etc.). QPainter builds
+(`AETHER_GPU_SPECTRUM=OFF`) and legacy native-pan windows start disabled.
+After a `repaintScheduling` call, windows that join later (for example a pan
+floated afterwards) start in the requested state instead, for the rest of the
+process. Disabling delivers any pending final update immediately.
+
+`get repaintstats [reset]` reports one entry per participating window:
+`enabled`, `frameIntervalMs`, `requests`, `deferredRequests`,
+`updateDeliveries`, `updateDeliveriesPerSec`, `pending`, and `sinceSeconds`.
+These count QWidget update-request deliveries, not screen presentations,
+backing-store copy bytes, or hardware GPU work. Reset clears counters without
+discarding a pending repaint or restarting its deadline.
+
+The window scheduler works with both `AETHER_GPU_SPECTRUM=ON` and `OFF`.
+When enabled, the pan scheduler marks widgets dirty immediately and leaves
+frame pacing to the window. Qt merges the dirty regions, avoiding a second
+timer that could miss an already queued window update.
+After disabling, the pan scheduler resumes its original coalescing interval.
+Use identical screen geometry, FFT/waterfall rates and input trajectories when
+comparing; retain the delivered drag-event count as part of each sample.
+
 ### `get eqstats`
 
 Per-Client-EQ-canvas paint and cache counters. The bridge finds widgets by
@@ -1059,6 +1087,7 @@ cost a few integer adds per frame.
 | field | meaning |
 |---|---|
 | `gpuFrameMsPerSec` | **the headline number** — main-thread ms consumed per wall-second preparing + encoding this pan's GPU frames |
+| `submissionIntervalP50Ms`, `submissionIntervalP95Ms`, `submissionIntervalP99Ms`, `submissionIntervalMaxMs`, `submissionIntervalSamples`, `submissionIntervalSaturated` | first 65,536 intervals between `QRhiWidget::frameSubmitted` signals since reset (`submissionIntervalSaturated` turns true once the cap is reached and later intervals are no longer recorded); includes window compositions reusing the pan's texture, so it is distinct from fresh pan render FPS, display presentation latency, and GPU execution time |
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
@@ -1216,6 +1245,26 @@ accepting the verb there would certify two-tone RF that was never on the air.
 The refusal comes before the TX gate — it is about what the evidence would
 claim, so it applies even when `AETHER_AUTOMATION_ALLOW_TX=1`. Ordinary TUNE
 remains available in supported modes.
+
+### `radiocert tx`: the rf stimulus and the SWR gate
+
+The `rf` and `meter-scale` stages key with a 1 kHz test tone at −20 dBFS;
+`tone=<dBFS>` (−60 to −3) sets that level for both, and every other keyed stage
+keeps −20. The run never raises the level or the drive by itself, and the
+`AETHER_AUTOMATION_TX_MAX_POWER` ceiling still clamps drive; the report's
+`radio.txPowerCeilingPercent` is that ceiling, `rfPowerClampedFromPercent` the
+operator setting it lowered. Where a backend withholds SWR below its own forward
+gate (the health keys `forwardPowerSwrGateCounts` and `forwardPowerSwrGateClears`), `rf`
+reports `swrResult: gate-not-reached` with the gate, the key's forward peak, the
+tone and the drive, instead of "no SWR reading".
+Full drive does not establish adequate stimulus: a quiet tone can still leave
+the forward reading below the gate. Check the selected tone level and
+independently measured forward power before drawing conclusions about the
+detector or its scaling.
+
+The receive-only `rx-sidebands` stage judges each mode's reference tone relative
+to its own background. Silent captures and non-finite measurements do not count
+as recovered carriers, so muted audio cannot produce an `expected` pattern.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 
@@ -1554,9 +1603,9 @@ hierarchy from #4339 in the same snapshot.
 | `waterfallTextureW/H` / `waterfallImageW/H` | live GPU waterfall texture and retained CPU waterfall image extents |
 | `waterfallTextureMatchesImage` | the CPU waterfall image fits within its GPU texture (texture ≥ image in both dimensions), so the upload is safe; holds across pop-out initialization even when the texture is floored larger than a small retained image (#4319) |
 | `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 upload-safety invariant), independent of the auto-sized QRhi color buffer |
-| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
+| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` has a native child window. All supported builds default to shared composition (`false`); `AETHER_PAN_NATIVE_WINDOW=1` restores the legacy native path for diagnosis. Qt older than 6.12 is unsupported; `AETHER_PAN_NO_NATIVE_WINDOW` is obsolete because sharing is the default. |
 | `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
-| `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
+| `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; both shared composition and the isolated native path expect `0` |
 
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
 each entry reports `gpu:false` and omits the buffer fields. The three native
@@ -2628,6 +2677,11 @@ State changes are synchronous (no nested event loop), so the reply's
 `windowState` is authoritative. `resize` and `window` share window-target
 resolution (`topLevelWindowForTarget`): a child `target` resolves to its
 `window()`.
+
+Replies also include `screenName`, `screenDpr`, `screenRefreshRate`, and
+`screenAvailableGeometry` (logical coordinates). Use these to verify the
+intended monitor and scale before a render benchmark. Geometry can settle
+after the action; re-query once the window has settled before sampling.
 
 ### `shortcut`
 Fire a registered `ShortcutManager` action by id — the **exact** path a MIDI
@@ -5112,13 +5166,14 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 82 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 83 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
 | `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
+| `repaintScheduling` | — | repaintScheduling <on\|off> — compare display-paced window repaint delivery; does not change radio state |
 | `floors` | — | per-pan measured noise + display floor (dBm) |
 | `gauge` | `gauges` | gauge [<target>] — value, peak and painted fraction of one gauge, or every gauge when no target is given |
 | `text` | `getText` | text <target> — full plain text of a QTextEdit/QPlainTextEdit view |
@@ -5180,7 +5235,7 @@ audio devices require separate hardware validation.
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
-| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
+| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

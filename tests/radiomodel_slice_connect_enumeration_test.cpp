@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // Connect enumeration must never overwrite the radio's active slice selection.
 // Principle II: The Radio Is Authoritative On Live State.
 //
@@ -120,7 +121,7 @@ int main(int argc, char** argv)
         s0_kvs["in_use"] = "1";
         s0_kvs["RF_frequency"] = "14.074000";
         s0_kvs["active"] = "0";
-        model.handleSliceStatusForTest(0, s0_kvs, false);
+        applyFlexSliceStatus(model, 0, s0_kvs, false);
 
         check(harness.activeSliceId == 0,
               "Precondition: Slice 0 adopted locally as UI bootstrap target");
@@ -132,7 +133,7 @@ int main(int argc, char** argv)
         s1_kvs["in_use"] = "1";
         s1_kvs["RF_frequency"] = "7.074000";
         s1_kvs["active"] = "1";
-        model.handleSliceStatusForTest(1, s1_kvs, false);
+        applyFlexSliceStatus(model, 1, s1_kvs, false);
 
         check(harness.activeSliceId == 1,
               "Client converges on radio-active Slice 1 upon enumeration");
@@ -158,7 +159,7 @@ int main(int argc, char** argv)
         s0_kvs["in_use"] = "1";
         s0_kvs["RF_frequency"] = "14.074000";
         s0_kvs["active"] = "0";
-        model.handleSliceStatusForTest(0, s0_kvs, false);
+        applyFlexSliceStatus(model, 0, s0_kvs, false);
 
         check(harness.emittedCommands.contains("slice set 0 active=1"),
               "Regression guard: TopologyFallback when guard is inactive sends active=1");
@@ -179,11 +180,11 @@ int main(int argc, char** argv)
         s0_kvs["in_use"] = "1";
         s0_kvs["RF_frequency"] = "14.074000";
         s0_kvs["active"] = "1";
-        model.handleSliceStatusForTest(0, s0_kvs, false);
+        applyFlexSliceStatus(model, 0, s0_kvs, false);
         harness.emittedCommands.clear();
 
         // Operator closes Slice 0 mid-session
-        model.handleSliceStatusForTest(0, QMap<QString, QString>{}, true);
+        applyFlexSliceStatus(model, 0, QMap<QString, QString>{}, true);
         harness.onSliceRemoved(0);
         check(harness.activeSliceId == -1, "All slices removed: activeSliceId is -1");
 
@@ -196,7 +197,7 @@ int main(int argc, char** argv)
         s1_kvs["in_use"] = "1";
         s1_kvs["RF_frequency"] = "21.074000";
         s1_kvs["active"] = "0";
-        model.handleSliceStatusForTest(1, s1_kvs, false);
+        applyFlexSliceStatus(model, 1, s1_kvs, false);
 
         check(harness.emittedCommands.contains("slice set 1 active=1"),
               "Mid-session slice creation into empty list asserts active=1 via TopologyFallback");
@@ -217,7 +218,7 @@ int main(int argc, char** argv)
         s0_kvs["in_use"] = "1";
         s0_kvs["RF_frequency"] = "14.074000";
         s0_kvs["active"] = "1";
-        model.handleSliceStatusForTest(0, s0_kvs, false);
+        applyFlexSliceStatus(model, 0, s0_kvs, false);
         check(harness.emittedCommands.isEmpty(), "Session 1 connect emitted 0 commands");
 
         // Disconnect: cancelArm
@@ -248,7 +249,7 @@ int main(int argc, char** argv)
         s0_kvs["in_use"] = "1";
         s0_kvs["RF_frequency"] = "14.074000";
         s0_kvs["active"] = "0";
-        model.handleSliceStatusForTest(0, s0_kvs, false);
+        applyFlexSliceStatus(model, 0, s0_kvs, false);
 
         check(harness.emittedCommands.contains("slice set 0 active=1"),
               "Slow enumeration past guard window falls back to TopologyFallback");
@@ -275,7 +276,7 @@ int main(int argc, char** argv)
         s0_kvs["in_use"] = "1";
         s0_kvs["RF_frequency"] = "14.074000";
         s0_kvs["active"] = "0";
-        model.handleSliceStatusForTest(0, s0_kvs, false);
+        applyFlexSliceStatus(model, 0, s0_kvs, false);
 
         check(harness.emittedCommands.contains("slice set 0 active=1"),
               "Post-enumeration created slice on empty radio asserts active=1 via TopologyFallback");

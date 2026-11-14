@@ -2870,7 +2870,7 @@ const QStringList& getModelNames()
         QStringLiteral("slices"),     QStringLiteral("pan"),
         QStringLiteral("pans"),       QStringLiteral("panstats"),
         QStringLiteral("gps"),        QStringLiteral("clock"),
-        QStringLiteral("renderstats"),
+        QStringLiteral("renderstats"), QStringLiteral("repaintstats"),
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
@@ -3014,6 +3014,26 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("dumpTree", {}, "serialize the full widget tree as JSON",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doDumpTree(); });
+
+        add("repaintScheduling", {}, "repaintScheduling <on|off> — compare display-paced window repaint delivery; does not change radio state",
+            parseValueOnly,
+            [](AutomationServer&, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.value != QLatin1String("on") && a.value != QLatin1String("off")) {
+                    return err(QStringLiteral("expected on or off"));
+                }
+                int count = 0;
+                const bool enabled = a.value == QLatin1String("on");
+                for (QWidget* window : QApplication::topLevelWidgets()) {
+                    for (QObject* scheduler : window->findChildren<QObject*>(
+                             QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly)) {
+                        if (QMetaObject::invokeMethod(scheduler, "setEnabledForProcess", Qt::DirectConnection,
+                                                     Q_ARG(bool, enabled))) { ++count; }
+                    }
+                }
+                if (!count) { return err(QStringLiteral("no active window repaint schedulers")); }
+                return QJsonObject{{QStringLiteral("ok"), true},
+                    {QStringLiteral("enabled"), enabled}, {QStringLiteral("count"), count}};
+            });
 
         add("floors", {}, "per-pan measured noise + display floor (dBm)",
             parseTargetPath,
@@ -3738,7 +3758,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("radiocert", {},
-            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
+            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
             // Rest, not Value: Value keeps one token and drops the rest, which
             // lost `sql=` after a frequency in the line form.
             parseActionRest,
@@ -5705,6 +5725,22 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},
                            {QStringLiteral("waveforms"), data}};
+    }
+    if (model == QLatin1String("repaintstats")) {
+        const bool reset = selector == QLatin1String("reset") || property == QLatin1String("reset");
+        QJsonArray windows;
+        for (QWidget* window : QApplication::topLevelWidgets()) {
+            for (QObject* scheduler : window->findChildren<QObject*>(
+                     QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly)) {
+                QVariantMap snap;
+                if (QMetaObject::invokeMethod(scheduler, "statsSnapshot", Qt::DirectConnection,
+                        Q_RETURN_ARG(QVariantMap, snap), Q_ARG(bool, reset))) {
+                    snap[QStringLiteral("windowTitle")] = window->windowTitle();
+                    windows.append(QJsonObject::fromVariantMap(snap));
+                }
+            }
+        }
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("windows"), windows}};
     }
     if (model == QLatin1String("eqstats")) {
         // Per Client-EQ paint/cache counters. This keeps the bridge
@@ -9271,12 +9307,30 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             "blocked: this phase keys the transmitter — enable TX automation "
             "(or set AETHER_AUTOMATION_ALLOW_TX=1), or run 'radiocert tune' / 'radiocert rx'"));
 
-    // [freqMhz] [sql=<MHz>]: the keyed stages' dial, and the steady carrier
-    // stage-squelch-scale measures the radio's gate on. Both are dial targets,
-    // so both take tune's validation: QString::toDouble() accepts nan and inf.
+    // [freqMhz] [sql=<MHz>] [tone=<dBFS>]: the keyed stages' dial, the steady
+    // carrier stage-squelch-scale measures the radio's gate on, and the level
+    // of the tone the rf and meter-scale stages key with. The two dial targets
+    // take tune's validation: QString::toDouble() accepts nan and inf.
     static const QRegularExpression certArgSep(QStringLiteral("\\s+"));
     for (const QString& token : freqArg.trimmed().split(certArgSep, Qt::SkipEmptyParts)) {
         double mhz = 0.0;
+        if (token.startsWith(QLatin1String("tone="), Qt::CaseInsensitive)) {
+            // A level, not a power: the RF ceiling below still clamps drive, and
+            // the default stays -20 dBFS. Refused outside the range rather than
+            // clamped, so a typo cannot key a louder tone than was asked for.
+            bool ok = false;
+            const double dbfs = token.mid(5).toDouble(&ok);
+            if (!ok || !std::isfinite(dbfs)
+                || dbfs < RadioCertification::kMinRfStimulusDbfs
+                || dbfs > RadioCertification::kMaxRfStimulusDbfs)
+                return err(QStringLiteral(
+                    "radiocert tone=: '%1' is not a level in dBFS between %2 and %3")
+                    .arg(token.mid(5))
+                    .arg(RadioCertification::kMinRfStimulusDbfs)
+                    .arg(RadioCertification::kMaxRfStimulusDbfs));
+            opts.rfStimulusDbfs = dbfs;
+            continue;
+        }
         if (token.startsWith(QLatin1String("sql="), Qt::CaseInsensitive)) {
             if (auto refusal = refuseUntunableMhz(QStringLiteral("radiocert sql="),
                                                   token.mid(4), mhz))
@@ -9787,10 +9841,18 @@ QJsonObject AutomationServer::doWindow(const QString& action, const QString& tar
     else if (st & Qt::WindowFullScreen) ws = "fullscreen";
     else if (st & Qt::WindowMaximized)  ws = "maximized";
     qCInfo(lcAutomation).noquote() << "window" << a << "->" << ws;
+    const QScreen* screen = win->screen();
+    const QRect available = screen ? screen->availableGeometry() : QRect{};
     return QJsonObject{
         {QStringLiteral("ok"), true},
         {QStringLiteral("action"), a},
         {QStringLiteral("windowState"), QLatin1String(ws)},
+        {QStringLiteral("screenName"), screen ? screen->name() : QString{}},
+        {QStringLiteral("screenDpr"), screen ? screen->devicePixelRatio() : 1.0},
+        {QStringLiteral("screenRefreshRate"), screen ? screen->refreshRate() : 0.0},
+        {QStringLiteral("screenAvailableGeometry"), QJsonObject{
+            {QStringLiteral("x"), available.x()}, {QStringLiteral("y"), available.y()},
+            {QStringLiteral("w"), available.width()}, {QStringLiteral("h"), available.height()}}},
         {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("w"), win->width()},
                                                  {QStringLiteral("h"), win->height()}}},
     };

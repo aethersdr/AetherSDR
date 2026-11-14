@@ -222,6 +222,9 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/Ax25HfPacketDecodeDialog.cpp": ["DaxTxPolicy"],
     "src/gui/ConnectionPanel.cpp": ["AnanDiscovery", "Hl2Discovery", "IcomModels", "MetisProtocol", "P2Protocol", "SimBackend"],
     "src/gui/ConnectionPanel.h": ["SmartLinkClient"],
+    # The AetherGPS window's Flex-only install/remove/installed-state code,
+    # quarantined here so the shared window stays vendor-free (#7271, KK7GWY).
+    "src/gui/AetherGpsTools.cpp": ["FlexWaveformModel", "WaveformInstaller"],
     "src/gui/DaxIqApplet.cpp": ["DaxIqModel"],
     "src/gui/DemoApplet.cpp": ["NoiseMixer"],
     # Relocated from RadioSetupDialog.cpp with the firmware flow (#6718).

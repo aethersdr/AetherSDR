@@ -4083,7 +4083,20 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    restoreGeometry(m_startupGeometryForFirstShow);
+    const bool restored = restoreGeometry(m_startupGeometryForFirstShow);
+    if (!restored) {
+        // Qt rejects saved geometry after a large monitor-resolution/DPI
+        // change. Without a fallback the window can appear on whichever
+        // monitor a restored pop-out left active (and repeat every launch).
+        // Recover its normal size from the saved blob and put it on the
+        // primary display, rather than letting an obsolete native client rect
+        // move it back to a missing or unrelated screen (#7076).
+        if (QScreen* screen = QGuiApplication::primaryScreen()) {
+            placeWindowAfterRejectedRestore(this, m_startupGeometryForFirstShow,
+                                            screen->availableGeometry());
+        }
+        return;
+    }
 #ifdef Q_OS_WIN
     // Qt 6.12's frame margins under the expanded client area do not match the
     // window, so neither restoreGeometry() nor geometry() round-trips its size.
@@ -10700,10 +10713,10 @@ void MainWindow::updateKeyerAvailability()
 
     const bool txIsCw  = hasCwKeyer
                          && isCwMode(txMode);
-    // Voice-mode test through the shared predicate: the ASR block below asks
-    // the same question of a DIFFERENT slice, and one list keeps the two from
-    // drifting on which modes count (VoiceModeGate.h).
-    const bool txIsSsb = isVoiceMode(txMode);
+    // ASR accepts receive-only voice modes; keyer availability and the
+    // mode-change abort must also respect the backend's TX-mode exclusions.
+    const bool txIsSsb = isVoiceTransmitMode(
+        txMode, m_radioModel.backendCapabilities().receiveOnlyModes);
 
     // DVK carries a second, mode-independent gate: the radio's own DVK
     // entitlement. Unlike the mode gate it survives every mode change, so it is
