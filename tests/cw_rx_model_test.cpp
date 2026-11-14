@@ -184,8 +184,6 @@ bool savedRangesStayInsideTheSliders()
     return kept;
 }
 
-// Each neural decoder keeps its own Sens beside the other CW decoder settings,
-// and a missing, malformed or out-of-span value never reaches the slider.
 // What the pane shows of neural text at a Sens threshold: a hidden DeepCW
 // chunk that held a space leaves one, so the words either side stay apart
 // (maintainer ruling on #7210, 2026-11-14).
@@ -223,6 +221,8 @@ bool hiddenNeuralTextKeepsOneSpace()
                    "Shown text at or below the threshold changed");
 }
 
+// Each neural decoder keeps its own Sens beside the other CW decoder settings,
+// and a missing, malformed or out-of-span value never reaches the slider.
 bool neuralSensIsSavedPerDecoder()
 {
     auto& s = AppSettings::instance();
