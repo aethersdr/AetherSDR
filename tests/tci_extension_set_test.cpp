@@ -5,6 +5,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/TciClient.h"
+#include "core/TciExtensionNotice.h"
 #include "core/TciExtensionSet.h"
 #include "core/TciProtocol.h"
 #include "core/TciServer.h"
@@ -12,13 +13,16 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 #include <cstdio>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -51,6 +55,10 @@ public:
     static void broadcastExtension(TciServer& server, const QString& msg)
     {
         server.broadcastExtension(msg);
+    }
+    static bool announce(TciServer& server)
+    {
+        return server.announceExtensionSet();
     }
 };
 
@@ -264,6 +272,183 @@ void enableAndGate()
           "a new client starts with the set disabled");
 }
 
+// A handler that registers a group grows the registry under itself. The
+// handler that runs must be a copy, or the growth destroys it mid-call. Seen
+// with libc++, where a small std::function is copied, not moved, on growth;
+// libstdc++ keeps this callable on the heap and cannot show the fault. The
+// lambda captures one pointer, so libc++ keeps it in the std::function itself.
+struct Lifetime {
+    bool running{false};
+    QVector<const void*> destroyed;
+    bool executingDestroyed{true};
+    int registered{0};
+    TciServer* server{nullptr};
+};
+
+struct Sentinel {
+    Lifetime* life;
+    explicit Sentinel(Lifetime* l) noexcept : life(l) {}
+    Sentinel(const Sentinel& other) noexcept : life(other.life) {}
+    ~Sentinel()
+    {
+        if (life->running) {
+            life->destroyed.append(this);
+        }
+    }
+};
+
+void handlerThatRegisters()
+{
+    RadioModel model;
+    TciServer server(&model);
+    Lifetime life;
+    life.server = &server;
+    TciExtensionSet::Group grow;
+    grow.token = QStringLiteral("grow");
+    grow.commands = {QStringLiteral("aethersdr_grow")};
+    grow.offered = [] { return true; };
+    static_assert(sizeof(Sentinel) == sizeof(void*));
+    grow.handle = [sentinel = Sentinel{&life}](const QString&, const QStringList&) {
+        const void* self = &sentinel;
+        Lifetime* l = sentinel.life;
+        l->running = true;
+        for (int i = 0; i < 64; ++i) {
+            TciExtensionSet::Group g;
+            g.token = QStringLiteral("g%1").arg(i);
+            g.commands = {QStringLiteral("aethersdr_g%1").arg(i)};
+            g.offered = [] { return false; };
+            g.handle = [](const QString&, const QStringList&) { return TciExtensionSet::Result{}; };
+            l->registered += l->server->registerExtensionGroup(std::move(g)) ? 1 : 0;
+        }
+        l->running = false;
+        l->executingDestroyed = l->destroyed.contains(self);
+        TciExtensionSet::Result result;
+        result.reply = QStringLiteral("aethersdr_grow:1;");
+        return result;
+    };
+    server.registerExtensionGroup(std::move(grow));
+    Wire a;
+    TciExtensionSetTest::attach(server, a.client, model);
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    a.send("aethersdr_grow;");
+    check(life.registered == 64, "a handler can register groups");
+    check(!life.executingDestroyed, "the running handler survives the registry growing under it");
+    check(a.take() == QStringList{QStringLiteral("aethersdr_grow:1;")},
+          "and its reply still reaches the sender");
+}
+
+// What a group with a change notice of its own relies on: whether the
+// mechanism just sent every enabled client the list and every state line.
+// A group must not keep its own copy of the advertisement: one registering
+// later makes that copy stale, and the next notice is swallowed (#7199).
+void resentHookAndReannounce()
+{
+    RadioModel model;
+    TciServer server(&model);
+    Probe first;
+    int resent = 0;
+    TciExtensionSet::Group g = first.group();
+    g.resent = [&resent] { ++resent; };
+    server.registerExtensionGroup(std::move(g));
+    Probe later;
+    later.offered = false;
+    check(server.registerExtensionGroup(later.group(QStringLiteral("later"),
+                                                    QStringLiteral("aethersdr_later")))
+              && resent == 0,
+          "a group registering with no client enabled runs no resent hook");
+
+    Wire a;
+    Wire b;
+    TciExtensionSetTest::attach(server, a.client, model);
+    TciExtensionSetTest::attach(server, b.client, model);
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    check(resent == 0, "one client's enable runs no resent hook");
+
+    Probe third;
+    third.offered = false;
+    server.registerExtensionGroup(third.group(QStringLiteral("third"),
+                                              QStringLiteral("aethersdr_third")));
+    check(resent == 0 && a.take().isEmpty(),
+          "a group registering later, with the list unchanged, sends nothing and runs no hook");
+    emit model.capabilitiesChanged(true, model.backendCapabilities());
+    check(resent == 0 && a.take().isEmpty() && !TciExtensionSetTest::announce(server),
+          "an unchanged list is not resent, and the re-announce says so");
+
+    // A gate that moves without capabilitiesChanged: its group re-announces.
+    later.offered = true;
+    check(TciExtensionSetTest::announce(server) && resent == 1,
+          "a list changed for every enabled client is resent, the re-announce says so, the hook runs");
+    check(a.take() == QStringList({QStringLiteral("aethersdr_ext:1,probe,later;"),
+                                   QStringLiteral("aethersdr_probe:7;"),
+                                   QStringLiteral("aethersdr_probe:7;")})
+              && b.take().isEmpty(),
+          "the resend is the list and every state line, to enabled clients only");
+
+    // Mixed: b enables after a gate moved, so b holds the new list and a not.
+    third.offered = true;
+    b.send("aethersdr_ext_enable:true;");
+    b.take();
+    check(!TciExtensionSetTest::announce(server) && resent == 1,
+          "with one enabled client already current, the re-announce is not a full resend");
+    check(a.take().size() == 4 && b.take().isEmpty(),
+          "the client behind is sent the list and its state lines, the current one nothing");
+
+    a.send("aethersdr_ext_enable:false;");
+    b.send("aethersdr_ext_enable:false;");
+    first.offered = false;
+    check(!TciExtensionSetTest::announce(server) && resent == 1,
+          "with no client enabled, a changed list runs no hook");
+}
+
+// Spins the event loop for `ms`, so posted sends and the interval run.
+void spin(int ms)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (clock.elapsed() < ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    }
+}
+
+// The groups' change notice: one posted send per event-loop turn, then a rate
+// limit with one trailing send. Interval generous against a loaded host.
+void noticeCoalescesAndLimits()
+{
+    QObject context;
+    int calls = 0;
+    bool sends = true;
+    TciExtensionNotice notice(&context, 200, [&] {
+        ++calls;
+        return sends;
+    });
+
+    notice.queue();
+    notice.queue();
+    notice.queue();
+    check(calls == 0, "a queued notice is posted, not sent inline");
+    QCoreApplication::processEvents();
+    check(calls == 1, "three changes in one turn go out as one send");
+
+    notice.queue();
+    notice.queue();
+    QCoreApplication::processEvents();
+    check(calls == 1, "after a send, changes wait for the interval");
+    spin(400);
+    check(calls == 2, "and go out as one trailing send");
+    spin(400);
+    check(calls == 2, "with nothing queued, the interval sends nothing");
+
+    sends = false;
+    notice.queue();
+    QCoreApplication::processEvents();
+    check(calls == 3, "a queue after the interval is sent at once");
+    notice.queue();
+    QCoreApplication::processEvents();
+    check(calls == 4, "a send that sent nothing starts no interval");
+}
+
 // Deliberately unlike the *_sensors_enable precedent, which takes only `true`
 // (TCI 2.1 §4.7 note 3 allows 1); RFC #7181 review, item 2.
 void enableBooleans()
@@ -303,6 +488,9 @@ int main(int argc, char** argv)
     productionSetIsEmpty();
     enableAndGate();
     enableBooleans();
+    handlerThatRegisters();
+    resentHookAndReannounce();
+    noticeCoalescesAndLimits();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;

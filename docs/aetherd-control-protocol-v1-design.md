@@ -209,6 +209,8 @@ V1 begins with the smallest useful canonical set:
 - `meter` — definitions and bounded latest values;
 - `transmitState` — read-only interlock, PTT/VOX/MOX/tune state and inhibit
   reason.  No v1 method can mutate this resource during Stage 3.
+- `frontEndOverload` — the receive converter's overload level and the
+  automatic RF-gain loop's hold, only for a backend that declares it.
 
 Every field is documented in a method/resource catalogue and covered by a
 schema test before it is exported.  Credentials, backend pointers, raw vendor
@@ -258,10 +260,14 @@ The registry exposes metadata for each method:
 Initial non-TX methods are `capabilities.get`, `resource.get`,
 `resource.subscribe`, `resource.unsubscribe`, `radio.connect`,
 `radio.disconnect`, `slice.setFrequency`, `slice.setMode`, `slice.setFilter`,
-`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`, and
-`panadapter.setBandwidth`.  Connect requests use typed family-neutral fields;
-backend-specific connection data lives in a namespaced validated object and
-never includes a persistent plaintext credential.
+`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`,
+`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Remote-client
+pairing adds `pairing.begin` (local socket, `control`) and `pairing.complete`
+(sent instead of `hello` on the TLS network listener, so like `hello` it
+carries no `sessionId`); see [`aetherd-remote-clients.md`](aetherd-remote-clients.md)
+§3.  Connect requests use
+typed family-neutral fields; backend-specific connection data lives in a
+namespaced validated object and never includes a persistent plaintext credential.
 
 Advertised capabilities are the intersection of protocol support, build-time
 features, authenticated grants, active backend capabilities, and current
@@ -336,6 +342,14 @@ loopback, an explicitly selected WireGuard interface, or a TLS endpoint with
 certificate validation.  Wildcard/plain-LAN binding is rejected.  Origin
 headers are not authentication.  Bearer credentials are accepted only over a
 confidential transport or a current-user local endpoint.
+
+Remote clients, slice 1 ([`aetherd-remote-clients.md`](aetherd-remote-clients.md),
+ruled 2026-11-13) implements that listener receive-only: TLS with a pinned
+self-signed certificate, or a WireGuard address. Network sessions start
+unauthenticated and take their grants from the credential's scope
+(`remote-observe`, `remote-control`); they are never attached to the transmit
+service. Its pairing methods are the one wire path that provisions a
+credential, and only a code shown on the radio's own screen opens it.
 
 ## 7. Transmit actor and arbitration contract
 

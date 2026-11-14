@@ -1,5 +1,6 @@
 // Socket-free UI/bridge checks: production models and dispatcher, no radio,
 // listener, audio device or peer. Model ownership/ACK lifecycle tests are separate.
+#include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "TestEventLoop.h"
 #include "core/AudioEngine.h"
@@ -197,7 +198,7 @@ struct SelectionFixture {
             writes.push_back({command, std::move(reply)});
             return true;
         });
-        model.handleSliceStatusForTest(0, {{QStringLiteral("in_use"), QStringLiteral("1")},
+        applyFlexSliceStatus(model, 0, {{QStringLiteral("in_use"), QStringLiteral("1")},
             {QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
             {QStringLiteral("tx"), QStringLiteral("1")}, {QStringLiteral("mode"), QStringLiteral("DIGU")},
             {QStringLiteral("RF_frequency"), QStringLiteral("14.074000")}});
