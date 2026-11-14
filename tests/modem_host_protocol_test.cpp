@@ -21,6 +21,17 @@ void report(const char* name, bool ok)
 }
 
 NotificationType nt(const char* line) { return parseNotification(QString::fromLatin1(line)).type; }
+
+// The framed lines as text, with "<rejected>" standing in for a rejected one
+// so its position is checked too.
+QList<QString> texts(const QList<Line>& lines)
+{
+    QList<QString> out;
+    for (const Line& l : lines) {
+        out.append(l.rejected ? QStringLiteral("<rejected>") : l.text);
+    }
+    return out;
+}
 CommandType ct(const char* line) { return parseCommand(QString::fromLatin1(line)).type; }
 
 }  // namespace
@@ -30,24 +41,27 @@ int main()
     // ── Framing ─────────────────────────────────────────────────────────────
     {
         LineSplitter s;
-        const QList<QString> a = s.feed(QByteArray("OK\rPENDING\rCONN"));
-        const QList<QString> b = s.feed(QByteArray("ECTED N0CALL N1CALL 2300\r"));
+        const QList<QString> a = texts(s.feed(QByteArray("OK\rPENDING\rCONN")));
+        const QList<QString> b = texts(s.feed(QByteArray("ECTED N0CALL N1CALL 2300\r")));
         report("joined lines split in one read", a == QList<QString>{"OK", "PENDING"});
         report("a line split across reads is reassembled", b == QList<QString>{"CONNECTED N0CALL N1CALL 2300"});
     }
     {
         LineSplitter s;
-        report("CRLF framing tolerated", s.feed(QByteArray("OK\r\nWRONG\r\n")) == QList<QString>{"OK", "WRONG"});
-        report("empty lines dropped", s.feed(QByteArray("\r\r\rOK\r")) == QList<QString>{"OK"});
+        report("CRLF framing tolerated", texts(s.feed(QByteArray("OK\r\nWRONG\r\n"))) == QList<QString>{"OK", "WRONG"});
+        report("empty lines dropped", texts(s.feed(QByteArray("\r\r\rOK\r"))) == QList<QString>{"OK"});
     }
     {
         LineSplitter s;
         QByteArray huge(kMaxLineBytes + 10, 'A');
         huge.append('\r');
         huge.append("OK\r");
-        const QList<QString> out = s.feed(huge);
-        report("an oversized line is discarded", out == QList<QString>{"OK"});
+        const QList<QString> out = texts(s.feed(QByteArray("VERSION\r") + huge));
+        report("an oversized line is rejected in its place",
+               out == QList<QString>{"VERSION", "<rejected>", "OK"});
         report("the oversized line is counted", s.rejectedLines() == 1);
+        s.reset();
+        report("reset() zeroes the count", s.rejectedLines() == 0);
     }
     {
         LineSplitter s;
@@ -60,22 +74,27 @@ int main()
         QByteArray bad("PTT O");
         bad.append('\x01');
         bad.append("N\rOK\r");
-        const QList<QString> out = s.feed(bad);
-        report("a line with a control byte is discarded", out == QList<QString>{"OK"});
+        const QList<QString> out = texts(s.feed(bad));
+        report("a line with a control byte is rejected in its place", out == QList<QString>{"<rejected>", "OK"});
         report("the control-byte line is counted", s.rejectedLines() == 1);
         QByteArray high("BUSY ON");
         high.append('\xC3');
         high.append('\r');
-        report("a line with a non-ASCII byte is discarded", s.feed(high).isEmpty());
+        report("a line with a non-ASCII byte is rejected", texts(s.feed(high)) == QList<QString>{"<rejected>"});
     }
 
     // ── Validation helpers ──────────────────────────────────────────────────
     report("plain callsign valid", isValidCallsign("N0CALL"));
     report("callsign with SSID valid", isValidCallsign("AB1CD-7") && isValidCallsign("AB1CD-15"));
-    report("SSID 16 rejected", !isValidCallsign("AB1CD-16"));
-    report("lower case rejected", !isValidCallsign("n0call"));
-    report("no digit rejected", !isValidCallsign("NOCALL"));
-    report("too long rejected", !isValidCallsign("AB1CDEFG"));
+    report("portable suffix valid", isValidCallsign("N0CALL/P") && isValidCallsign("VE3/N0CALL"));
+    report("tactical name without a digit valid", isValidCallsign("NOCALL"));
+    report("15 characters valid (Mercury's limit)", isValidCallsign("ABCDEFGHIJKLMN1"));
+    report("16 characters rejected", !isValidCallsign("ABCDEFGHIJKLMNO1"));
+    report("lower case rejected (callers upper-case)", !isValidCallsign("n0call"));
+    report("leading or trailing separator rejected", !isValidCallsign("-N0CALL") && !isValidCallsign("N0CALL-")
+                                                         && !isValidCallsign("/N0CALL"));
+    report("other characters rejected", !isValidCallsign("N0 CALL") && !isValidCallsign("N0CALL.") 
+                                            && !isValidCallsign("N0CALL_1"));
     report("empty rejected", !isValidCallsign(""));
     report("known bandwidths", isKnownBandwidth(500) && isKnownBandwidth(1200) && isKnownBandwidth(2300)
                                    && isKnownBandwidth(2750));
@@ -170,7 +189,7 @@ int main()
         const Command m = parseCommand("MYCALL N0CALL N0CALL-1");
         report("MYCALL parsed", m.type == CommandType::MyCall && m.callsigns == QStringList{"N0CALL", "N0CALL-1"});
         report("MYCALL without calls invalid", ct("MYCALL") == CommandType::Invalid);
-        report("MYCALL bad call invalid", ct("MYCALL N0CALL x") == CommandType::Invalid);
+        report("MYCALL bad call invalid", ct("MYCALL N0CALL N0_CALL") == CommandType::Invalid);
         report("MYCALL too many invalid",
                ct("MYCALL N0CALL N0CALL-1 N0CALL-2 N0CALL-3 N0CALL-4 N0CALL-5") == CommandType::Invalid);
     }
@@ -182,7 +201,7 @@ int main()
         const Command c = parseCommand("CONNECT N0CALL N1CALL");
         report("CONNECT parsed", c.type == CommandType::Connect && c.source == "N0CALL" && c.destination == "N1CALL");
         report("CONNECT bad args invalid", ct("CONNECT N0CALL") == CommandType::Invalid
-                                               && ct("CONNECT N0CALL bad") == CommandType::Invalid);
+                                               && ct("CONNECT N0CALL N0_CALL") == CommandType::Invalid);
     }
     {
         const Command b = parseCommand("BW2300");
@@ -198,6 +217,12 @@ int main()
                                   && ct("SN") == CommandType::Sn && ct("COMPRESSION TEXT") == CommandType::Compression
                                   && ct("PUBLIC ON") == CommandType::Public && ct("CHAT OFF") == CommandType::Chat);
     report("unknown command", ct("FROB") == CommandType::Unknown && ct("") == CommandType::Unknown);
+    {
+        const Command m = parseCommand("mycall n0call");
+        report("commands are case-insensitive", m.type == CommandType::MyCall && m.callsigns == QStringList{"N0CALL"}
+                                                    && ct("listen on") == CommandType::ListenOn
+                                                    && ct("Bw2300") == CommandType::Bandwidth);
+    }
 
     // ── Notifications the gateway sends to its back end ─────────────────────
     report("fmt simple", fmtOk() == "OK\r" && fmtWrong() == "WRONG\r" && fmtIAmAlive() == "IAMALIVE\r"

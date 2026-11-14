@@ -12,24 +12,27 @@ If a token isn't listed here, the code doesn't use it.
 |---|---|---|
 | D2G | Data2G host layer, vendored: `third_party/data2g/core/host/host.hpp` (the header comment lists the command and notification vocabulary) and `host.cpp` | v0.5.0, as vendored (#7283) |
 | MER | Mercury `docs/TNC.md`, "Mercury TNC Command Reference", github.com/Rhizomatica/mercury | commit `762bb75bbc541ac55a0be98fcd6c66e72fef1773` |
-| EA5HVK | The VARA specification published by its author, §3.6 ("VARA uses a TCP link to connect with others applications") | public PDF |
 
-Both open-source sources describe an interface their modems implement so that
-existing host applications work unchanged. AetherSDR implements that published
-interface. No VARA binary, and no third-party VARA-compatible implementation's
-source, informed this code.
+Both are open-source modems that document the interface they implement so
+that existing host applications work unchanged. The checkable claim is this:
+every token, field and behaviour the code relies on traces to a line in one of
+these two sources, as cited below. No VARA binary was examined.
 
 ## Transport
 
 | Fact | Source |
 |---|---|
-| Two TCP ports: command on the base port, data on base + 1; default 8300/8301 | MER (table, "base_port"), D2G (header comment: command and data ports), EA5HVK §3.6 |
+| Two TCP ports: command on the base port, data on base + 1; default 8300/8301 | MER (table, "base_port"), D2G (header comment: command and data ports) |
 | Command lines are ASCII, each terminated by CR (`\r`) | MER ("All control commands and responses are CR-terminated ASCII") |
 | Data port is an unframed byte stream, payload only while connected | MER ("Data Port") |
 | One client per port at a time | MER ("One client at a time") |
 | Replies `OK` / `WRONG` are positional: they answer the oldest outstanding command | D2G (`Replies OK / WRONG`), MER (each command's **Response**) |
+| Not every command is answered with `OK`/`WRONG`: `VERSION` is answered with a `VERSION` line, and `SN` with an `SN` line (or `WRONG` from Data2G before any burst is decoded). A client's reply queue must be built per command | D2G (`host.cpp`, `Host::command`), MER (`VERSION`, `SN`, `BUFFER` **Response**) |
+| Command words are case-insensitive on the server side | D2G (`host.cpp`, `upper(words[0])`) |
 
 LF is not part of the framing in either source. `LineSplitter` ignores it so that a CRLF sender still frames cleanly. That's a robustness choice, not something either interface requires.
+
+A line the splitter rejects keeps its place in its output. A server can then answer it `WRONG` in order, which the positional replies require.
 
 ## Modem → host notifications parsed (`parseNotification`)
 
@@ -88,11 +91,11 @@ Every command in the table above, plus the following. They're recognised so they
 
 ## Validation applied (Principle VII)
 
-These limits are ours. They're set well above anything the sources produce.
+These limits are ours. Each one is at or above what the two sources accept.
 
 - **Lines:** at most 1024 bytes, printable ASCII only. A violating line is discarded and counted.
 - **Tokens:** matched exactly. `PTT ON` is two tokens, `PTT` then `ON`, and nothing else.
-- **Callsigns:** 1-7 upper-case letters and digits, with at least one of each, plus an optional `-SSID` of 0-15.
+- **Callsigns:** 1-15 characters of `A-Z 0-9 / -`, starting and ending with a letter or digit. This is the union of Mercury's length limit (15, MER `MYCALL`) and Data2G's alphabet (`A-Z 0-9 / -`, D2G `arq/frames.cpp` `CALL_ALPHABET`). A modem with a narrower rule (Data2G packs at most 10) answers `WRONG` itself.
 - **`BUFFER`:** 0 to 16 MiB.
 - **`SN`:** -50 to +60 dB, plain decimal only.
 - **Bandwidths:** only the four listed above.
