@@ -353,10 +353,40 @@ qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
     return it->socket->sendBinaryMessage(message);
 }
 
+// IQ is a picture, not a conversation: a frame the socket cannot take now is
+// dropped and the client stays. It may fill only a quarter of the backlog, so
+// text and RX audio, which still close on overrun, always find room behind it.
+// A stream the link cannot carry keeps the socket at its IQ share all the time,
+// and that share is what audio loses: at half, 48 kHz float32 stereo audio had
+// ~0.3 s of slack, and one Wi-Fi stall that long closed the client. A frame
+// larger than the share (384 kHz) still goes out when the socket is empty.
+qint64 TciIoWorker::sendStreamFrame(quint64 id, const QByteArray& message)
+{
+    const auto it = m_clients.find(id);
+    if (it == m_clients.end() || !it->socket || !it->lifetime->live.load()) { return -1; }
+    const qint64 pending = it->socket->bytesToWrite();
+    if (pending > 0 && pending + message.size() > kMaxStreamBacklogBytes) {
+        ++it->droppedStreamFrames;
+        // Logged by time, not by count: the frame cadence depends on the rate.
+        if (!it->streamDropLog.isValid() || it->streamDropLog.elapsed() >= kStreamDropLogMs) {
+            it->streamDropLog.start();
+            qCWarning(lcCat) << "TCI: IQ frame dropped, socket behind: client=" << id
+                             << "pending_bytes=" << pending << "dropped=" << it->droppedStreamFrames;
+        }
+        return 0;
+    }
+    return it->socket->sendBinaryMessage(message);
+}
+
 void TciIoWorker::closeClient(quint64 id, QWebSocketProtocol::CloseCode code, const QString& reason)
 {
     const auto it = m_clients.find(id);
     if (it == m_clients.end()) { return; }
+    // The server's disconnect line cannot tell this from a network drop.
+    if (code != QWebSocketProtocol::CloseCodeNormal) {
+        qCWarning(lcCat) << "TCI: closing client=" << id << "code=" << int(code) << "reason=" << reason
+                         << "pending_bytes=" << (it->socket ? it->socket->bytesToWrite() : -1);
+    }
     it->lifetime->live.store(false, std::memory_order_release);
     it->producer.invalidate();
     if (m_txClient == id) { stopChrono(); }

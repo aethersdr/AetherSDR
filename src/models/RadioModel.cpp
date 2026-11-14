@@ -3470,6 +3470,13 @@ void RadioModel::wireBackendPcm()
         }
         emit backendSliceAudioFrameReady(sliceId, frame);
     });
+    connect(m_backend.get(), &IRadioBackend::sliceIqFrameReady, this,
+            [this, generation](int sliceId, const QByteArray& iq, int sampleRate) {
+        if (generation != m_backendReceiverGeneration) {
+            return;
+        }
+        emit backendSliceIqFrameReady(sliceId, iq, sampleRate);
+    });
 }
 
 void RadioModel::wireRxDemodAudioBus()
@@ -4770,6 +4777,11 @@ void RadioModel::forceDisconnect()
 RadioCapabilities RadioModel::backendCapabilities() const
 {
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
+}
+
+bool RadioModel::setBackendSliceIqTap(int sliceId, bool on)
+{
+    return m_backend && m_backend->setSliceIqTap(sliceId, on);
 }
 
 // Client-owned receive state; radio-owned requests stay on the backend route.
