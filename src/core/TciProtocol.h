@@ -290,7 +290,8 @@ public:
 
     // §HW_SENSORS fields: supply V, current consumption A, temperature °C. A
     // field is engaged only when the backend declares that telemetry and a
-    // fresh sample exists. No backend reports device current consumption.
+    // fresh sample exists. No backend reports device current consumption, and
+    // Icom's rail meter is Vd, the PA drain voltage, so an Icom sends NaN in arg1.
     struct HwSensorReadings
     {
         std::optional<double> supplyVolts;
@@ -298,7 +299,8 @@ public:
         std::optional<double> temperatureC;
     };
     [[nodiscard]] static HwSensorReadings hwSensorReadings(const RadioCapabilities& caps,
-                                                           const MeterModel& meters);
+                                                           const MeterModel& meters,
+                                                           const QString& family);
     // The three fields are positional and the spec forbids empty arguments,
     // so a field the radio does not measure is sent as NaN, never as a number.
     // Empty when no field is measured: such a radio sends no hw_sensors.

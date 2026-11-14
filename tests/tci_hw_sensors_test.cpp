@@ -73,10 +73,25 @@ void feedSupply(MeterModel& meters, float volts)
     meters.updateValueByName(QStringLiteral("RAD"), QStringLiteral("+13.8A"), volts);
 }
 
-std::optional<QString> messageFor(const RadioCapabilities& caps, const MeterModel& meters)
+std::optional<QString> messageFor(const RadioCapabilities& caps, const MeterModel& meters,
+                                  const QString& family = QString())
 {
-    return TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(caps, meters));
+    return TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(caps, meters, family));
 }
+
+// Declares the rail meter the way IcomCivBackend does for an IC-705 (Vd on +13.8A).
+class LinkedRailBackend final : public hl2::Hl2Backend
+{
+public:
+    bool isConnected() const override { return true; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities c = hl2::Hl2Backend::capabilities();
+        c.hasSupplyVoltageTelemetry = true;
+        c.hasPaTemperatureTelemetry = false;
+        return c;
+    }
+};
 
 } // namespace
 
@@ -156,6 +171,55 @@ void testDeclaredSupplyAndTemperature()
     const auto msg = messageFor(caps, meters);
     check(msg && *msg == QStringLiteral("hw_sensors:13.8,NaN,45.0;"),
           "declared rail and temperature fill arg1 and arg3; PA drain current is not arg2");
+}
+
+void testIcomVdIsNotTheSupply()
+{
+    RadioCapabilities caps;
+    caps.hasSupplyVoltageTelemetry = true;
+    caps.hasPaTemperatureTelemetry = true;
+    MeterModel meters;
+    feedSupply(meters, 13.8f);
+    feedTemperature(meters, 45.0f);
+    const auto msg = messageFor(caps, meters, QStringLiteral("icom"));
+    check(msg && *msg == QStringLiteral("hw_sensors:NaN,NaN,45.0;"),
+          "Icom: the Vd meter is PA drain voltage, so arg1 is NaN");
+    const auto anan = messageFor(caps, meters, QStringLiteral("anan"));
+    check(anan && *anan == QStringLiteral("hw_sensors:13.8,NaN,45.0;"),
+          "control: another family's declared rail still fills arg1");
+}
+
+bool pumpUntil(const std::function<bool()>& done, int timeoutMs);
+
+// Through the server: the family comes from the RadioModel, as on a live Icom.
+std::optional<QString> serverMessageForRailFamily(const QString& family)
+{
+    RadioModel model;
+    model.setBackendForTest(std::make_unique<LinkedRailBackend>(), family);
+    feedSupply(model.meterModel(), 13.8f);
+    TciServer server(&model);
+    TciHwSensorsTestAccess::markRunning(server);
+    TciClient client;
+    QStringList got;
+    client.textSink = [&](const QString& m) { got << m; return qint64(m.size()); };
+    TciHwSensorsTestAccess::attach(server, &client, model);
+    emit client.textMessageReceived(QStringLiteral("hw_sensors_enable:true,30;"));
+    QElapsedTimer t;
+    t.start();
+    pumpUntil([&] { return t.elapsed() >= 200; }, 1000);
+    emit client.textMessageReceived(QStringLiteral("hw_sensors_enable:false;"));
+    pumpUntil([&] { return !TciHwSensorsTestAccess::timerActive(server); }, 1000);
+    const QStringList hw = got.filter(QStringLiteral("hw_sensors:"));
+    return hw.isEmpty() ? std::nullopt : std::optional<QString>(hw.first());
+}
+
+void testServerSendsNoIcomVd()
+{
+    const auto anan = serverMessageForRailFamily(QStringLiteral("anan"));
+    check(anan && *anan == QStringLiteral("hw_sensors:13.8,NaN,NaN;"),
+          "server control: a declared rail on a non-Icom family is sent in arg1");
+    check(!serverMessageForRailFamily(QStringLiteral("icom")),
+          "server: an Icom whose only reading is Vd sends no hw_sensors");
 }
 
 void testRadioWithoutSensorsSendsNothing()
@@ -343,9 +407,11 @@ int main(int argc, char** argv)
     testEnableArguments();
     testHl2SendsTemperatureOnly();
     testDeclaredSupplyAndTemperature();
+    testIcomVdIsNotTheSupply();
     testRadioWithoutSensorsSendsNothing();
     testNanFieldsStayPositional();
     testServerSendsOnlyAfterEnable();
+    testServerSendsNoIcomVd();
     testStaleReadingIsNotSent();
     testServerKeepsTheInterval();
     testTimerParksWhileDisconnected();

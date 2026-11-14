@@ -2225,10 +2225,12 @@ TciProtocol::parseHwSensorsEnable(const QString& argText)
 }
 
 TciProtocol::HwSensorReadings TciProtocol::hwSensorReadings(const RadioCapabilities& caps,
-                                                            const MeterModel& meters)
+                                                            const MeterModel& meters,
+                                                            const QString& family)
 {
     HwSensorReadings r;
-    if (caps.hasSupplyVoltageTelemetry
+    // Icom's +13.8A meter is Vd, the PA drain voltage, not the supply arg1 names.
+    if (caps.hasSupplyVoltageTelemetry && family != QLatin1String("icom")
         && MeterModel::vitalIsFresh(meters.hasSupplyVoltage(), meters.supplyVoltsAgeMs())) {
         r.supplyVolts = meters.supplyVolts();
     }

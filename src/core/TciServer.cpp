@@ -4248,7 +4248,7 @@ void TciServer::serviceHwSensors()
             if (!built) {
                 built = true;
                 message = TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(
-                    m_model->backendCapabilities(), m_model->meterModel()));
+                    m_model->backendCapabilities(), m_model->meterModel(), m_model->family()));
             }
             if (message) {
                 sendClientText(cs.socket, *message);
