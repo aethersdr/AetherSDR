@@ -357,7 +357,8 @@ void MicrohamTrioModel::startSession()
     const MicrohamTrioSettings& target = m_testing ? m_testTarget : m_settings;
     config.host = target.host;
     config.port = static_cast<quint16>(target.port);
-    qCInfo(lcDevices) << "MicrohamTrioModel: taking the session at" << description();
+    qCInfo(lcDevices) << "MicrohamTrioModel: taking the session at"
+                      << QStringLiteral("%1:%2").arg(config.host).arg(config.port);
     m_session->start(config);
 }
 

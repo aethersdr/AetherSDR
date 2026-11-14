@@ -543,6 +543,7 @@ void testControlCharactersAreNotLogged()
         rig.peer.handshake(TrioTestPeer::textFrame(
             stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "Dum\\rmy\\u001b[2J")));
         rig.peer.hold(rig.model, 1);
+        rig.model.testConnection(QStringLiteral("192.0.2.77"), 8080);
     }
     qInstallMessageHandler(previous);
     QLoggingCategory::setFilterRules(QString());
@@ -552,6 +553,13 @@ void testControlCharactersAreNotLogged()
             line = logged;
         }
     }
+    bool testTargetLogged = false;
+    for (const QString& logged : g_logged) {
+        testTargetLogged = testTargetLogged
+            || (logged.contains(QStringLiteral("taking the session at"))
+                && logged.contains(QStringLiteral("192.0.2.77:8080")));
+    }
+    report("a Test logs the address it takes the session at", testTargetLogged);
     report("a label with CR and ESC: the state-on-connect line carries neither",
            !line.isEmpty() && !line.contains(QLatin1Char('\r')) && !line.contains(QChar(0x1b))
                && line.contains(QStringLiteral("Dum\uFFFDmy\uFFFD[2J")),
