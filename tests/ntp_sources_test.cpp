@@ -924,6 +924,16 @@ void pageReviewRegressions()
                   && rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("The radio no longer lists b")),
               "removed-source edit drafts are discarded with a notice and cannot become an add");
     }
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.source(QStringLiteral("b"));
+        rig.select(1);
+        rig.removed(QStringLiteral("b"));
+        const QString text = rig.find<QLabel>("ntpSourcesMessage")->text();
+        check(text.contains(QLatin1String("The radio no longer lists b")) && !text.contains(QLatin1String("draft")),
+              "removing a selected but untouched source reports the removal without claiming a discarded draft");
+    }
     for (bool replyFirst : {false, true}) {
         PageRig rig;
         rig.add(QStringLiteral("mine"), 2);

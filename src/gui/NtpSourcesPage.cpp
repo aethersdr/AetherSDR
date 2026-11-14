@@ -496,7 +496,9 @@ void NtpSourcesPage::rebuild()
     for (QString& id : m_slots) {
         if (!id.isEmpty() && !source(id) && !pending(id) && !m_creates.contains(id)) {
             if (m_editorId == id && !m_adding) {
-                notices.append(tr("The radio no longer lists %1. Its edit draft was discarded.").arg(id));
+                notices.append(editorHasChanges()
+                    ? tr("The radio no longer lists %1. Its edit draft was discarded.").arg(id)
+                    : tr("The radio no longer lists %1.").arg(id));
             }
             id.clear();
         }
