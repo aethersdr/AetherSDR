@@ -132,6 +132,7 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_warnedForeignSender = false;
     m_linkUp = false;
     m_discoveryInfoSent = false;
+    m_lastRxClock.invalidate();
 
     m_socket = new QUdpSocket(this);
     if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
@@ -188,6 +189,21 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
 
 void P2Client::stop()
 {
+    teardown(true);
+}
+
+void P2Client::checkStreamSilence(qint64 silentMs)
+{
+    if (!m_running || !m_linkUp || silentMs < kStreamSilenceMs)
+        return;
+    qCWarning(lcAnanP2).nospace() << "ANAN: nothing from the radio for " << silentMs
+        << " ms; another client has it, or the link is gone. Ending this session"
+           " without a stop packet.";
+    teardown(false);
+}
+
+void P2Client::teardown(bool sendStopPacket)
+{
     m_keepaliveTimer->stop();
     m_linkCountersTimer->stop();
     m_connectTimeoutTimer->stop();
@@ -201,7 +217,7 @@ void P2Client::stop()
     m_speakerOverflowLogged = false;
     m_speakerUnderflowReports = 0;
     m_lastSpeakerFifoLevel = 0;
-    if (m_socket) {
+    if (m_socket && sendStopPacket) {
         // The clean-stop packet, mirroring metisStop(): run=0 reaches the
         // radio before the socket that would carry any further keepalive
         // goes away. Without highPriorityOptions(): p2app keeps the last
@@ -212,6 +228,8 @@ void P2Client::stop()
               buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters,
                                 m_adc0AttenuationDb, m_adc1AttenuationDb),
               m_host, kHighPriorityPort, m_txBytes);
+    }
+    if (m_socket) {
         m_socket->close();
         m_socket->deleteLater();
         m_socket = nullptr;
@@ -528,6 +546,8 @@ bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
 
 void P2Client::onKeepaliveTick()
 {
+    if (m_lastRxClock.isValid())
+        checkStreamSilence(m_lastRxClock.elapsed());
     if (!m_running || !m_socket)
         return;
     // This IS the "any C&C packet" the watchdog needs (p.8) -- no need to
@@ -579,6 +599,7 @@ void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 sende
     // either way, and LinkStats::alive reads bytes, so a session whose IQ has
     // stalled while Status packets still arrive does not read as a dead link.
     m_rxBytes += static_cast<quint64>(bytes.size());
+    m_lastRxClock.restart();
 
     const auto frame = parseDdcFrame(bytes);
     if (!frame) {

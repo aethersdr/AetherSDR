@@ -2,6 +2,7 @@
 
 #include "core/backends/AutoRfGainControl.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/ReconnectBusyProbe.h"
 #include "core/dsp/WdspChannel.h"
 #include "core/dsp/WdspSMeter.h"
 
@@ -78,6 +79,10 @@ public:
     bool ownsRxAudio() const override { return true; }
 
     void connectRadio(const RadioConnectRequest& request) override;
+    // Tests: arm the automatic-reconnect busy probe without a socket, then
+    // answer it through busyProbeForTest()->answerForTest().
+    void armBusyProbeForTest(const RadioConnectRequest& request);
+    ReconnectBusyProbe* busyProbeForTest() const { return m_busyProbe; }
     // RFC #4603: the client is this radio's memory. Restored state is validated and
     // stashed here pre-connect, applied during connect/pushInitialState; capture
     // reports through currentOperatingState() + operatingStateChanged().
@@ -131,6 +136,15 @@ public:
     void setAutoRfGain(bool on);
 
 private:
+    // The connect itself, after any busy probe (connectRadio()).
+    void startConnect(const RadioConnectRequest& request);
+    // An automatic reconnect asks the radio first (ReconnectBusyProbe.h): the
+    // gateware decodes commands from any host, so a retry must never fight
+    // another client for the radio.
+    void finishBusyProbe(std::optional<bool> streaming);
+    ReconnectBusyProbe* m_busyProbe = nullptr;
+    RadioConnectRequest m_busyProbeRequest;
+    bool m_busyWarned = false;   // one warning per busy spell, not one per 5 s retry
     // The span change after the throttle settles. The DDC rate is radio-wide
     // (0x00[25:24]), so every panadapter shares one span.
     void applyPanBandwidth(double hz);

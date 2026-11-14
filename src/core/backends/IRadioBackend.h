@@ -75,6 +75,10 @@ struct RadioConnectRequest {
     RadioSerialIdentity serialIdentity;
     // Local IPv4 address that reached the radio; null lets the OS choose.
     QHostAddress localBindAddress;
+    // RadioModel's automatic retry after a lost link, not an operator's connect.
+    // A backend whose radio obeys any controller (ANAN Protocol 2) checks the
+    // radio is free first, so a retry never fights another client for it.
+    bool automaticReconnect = false;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode

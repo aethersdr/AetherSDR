@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/ReconnectBusyProbe.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSliceAudio.h"
 #include "core/Resampler.h"
@@ -169,6 +170,7 @@ public:
     // 12 kHz cut, or CW's 6 kHz cut plus its 6 kHz BFO cap), so the shifted edge
     // stays inside the WDSP channel's +-24 kHz at its 48 kHz DSP rate.
     static constexpr int kMaxRitOffsetHz = 9'999;
+
     // WDSP ANR's level before the operator sets one, and when none is restored.
     static constexpr int kDefaultNrLevel = 50;
 
@@ -278,6 +280,7 @@ public:
     [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
 
 private:
+    friend class AnanBusyProbeTestAccess;
     friend class AnanNoiseBlankerTestAccess;
     friend class AnanLinkStatsTestAccess;
     friend class AnanSupplyRailTestAccess;
@@ -360,6 +363,14 @@ private:
     void connectReceiverOutputs(int index);
 
     void beginDspSetup();
+    // The connect itself, after any busy probe.
+    void startConnect(const RadioConnectRequest& request);
+    // An automatic reconnect asks the radio first (ReconnectBusyProbe.h): a retry
+    // must never take it from another client.
+    void finishBusyProbe(std::optional<bool> streaming);
+    ReconnectBusyProbe* m_busyProbe = nullptr;
+    RadioConnectRequest m_busyProbeRequest;
+    bool m_busyWarned = false;   // one warning per busy spell, not one per 5 s retry
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // beginDspSetup() builds one channel per receiver; finishDspSetup() starts
     // the session once the last of them is in. The first failure is kept.

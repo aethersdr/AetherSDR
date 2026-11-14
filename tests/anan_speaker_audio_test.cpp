@@ -34,6 +34,10 @@ namespace AetherSDR::anan {
 // side: reach the private drain and the private counters without widening
 // P2Client's own API for a test's benefit.
 struct P2ClientTestAccess {
+    static void setLinkUp(P2Client& c, bool up) { c.m_linkUp = up; }
+    static void silence(P2Client& c, qint64 ms) { c.checkStreamSilence(ms); }
+    static quint64 txBytes(const P2Client& c) { return c.m_txBytes; }
+    static constexpr int kSilenceMs = P2Client::kStreamSilenceMs;
     // Drain with the elapsed time UNDER TEST CONTROL, which is the only way any
     // assertion about burst size can be stable.
     //
@@ -406,6 +410,25 @@ int main(int argc, char** argv)
         check(P2ClientTestAccess::pendingSamples(client) == 0,
               "a live disable drops the queue");
         client.stop();
+    }
+
+    // ---- a silent session ends WITHOUT the clean-stop packet (#7270) ----
+    // On a real socket, where stop() would send run=0: the radio now serves
+    // another client, and that packet would stop it.
+    {
+        P2Client client;
+        client.start(loopbackParams(false));
+        P2ClientTestAccess::setLinkUp(client, true);
+        const quint64 before = P2ClientTestAccess::txBytes(client);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs);
+        check(!client.isRunning() && P2ClientTestAccess::txBytes(client) == before,
+              "3 s of silence ends a live session and sends the radio nothing");
+        P2Client stopped;
+        stopped.start(loopbackParams(false));
+        const quint64 beforeStop = P2ClientTestAccess::txBytes(stopped);
+        stopped.stop();
+        check(P2ClientTestAccess::txBytes(stopped) > beforeStop,
+              "while an ordinary stop() still sends its clean-stop packet");
     }
 
     if (g_failures == 0)
