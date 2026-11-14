@@ -19,6 +19,18 @@ namespace AetherSDR {
 class FlexReceiveDataTestAccess {
 public:
     static void begin(FlexBackend& backend) { backend.m_receiveData->begin(); }
+    // A disconnect that lands after a new connect has begun.
+    static void lateDisconnect(RadioModel& radio)
+    {
+        radio.m_connectedStatusEpoch = radio.beginStatusSession();
+        radio.beginStatusSession();
+        radio.onDisconnected();
+    }
+    static void endingDisconnect(RadioModel& radio)
+    {
+        radio.m_connectedStatusEpoch = radio.beginStatusSession();
+        radio.onDisconnected();
+    }
     static void fft(PanadapterStream& stream, quint32 id, quint32 sequence)
     {
         QByteArray packet(48, '\0');
@@ -266,7 +278,7 @@ int main(int argc, char** argv)
           && radio.localUdpEndpoint() == "Not bound", "retirement preserves lifetime totals, clears live endpoint");
     FlexReceiveDataTestAccess::begin(*backend);
     stream->registerPanStream(pan); stream->registerWfStream(wf);
-    QObject::connect(&radio, &RadioModel::panFeedSpectrumReady, &radio,
+    const auto retireOnDelivery = QObject::connect(&radio, &RadioModel::panFeedSpectrumReady, &radio,
         [&] { backend->retireReceiveData(); });
     produce(6);
     drain();
@@ -279,6 +291,23 @@ int main(int argc, char** argv)
           && affinity.count("receiveWaterfallReady") >= 1
           && affinity.count("receiveMetersReady") >= 1,
           "non-vacuous Flex owner-thread and disconnect contract");
+    // A late disconnect leaves the newer session's receive data flowing; the
+    // session that ends retires it.
+    // (A disconnect also clears the stream's registrations; one made afterwards
+    // only takes while the receive session is live.)
+    QObject::disconnect(retireOnDelivery);
+    FlexReceiveDataTestAccess::begin(*backend);
+    spectrum.clear();
+    FlexReceiveDataTestAccess::lateDisconnect(radio);
+    stream->registerPanStream(pan); stream->registerWfStream(wf);
+    produce(7);
+    drain();
+    check(spectrum.size() == 1, "a late disconnect does not retire the newer session's receive data");
+    FlexReceiveDataTestAccess::endingDisconnect(radio);
+    stream->registerPanStream(pan); stream->registerWfStream(wf);
+    produce(8);
+    drain();
+    check(spectrum.size() == 1, "the session that ends retires its receive data");
     std::cout << "flex_receive_path_test: " << failures << " failures\n";
     return failures ? 1 : 0;
 }

@@ -115,11 +115,10 @@ FlexBackend::FlexBackend(QObject* parent)
     // (auto) connections: the connection lives on its worker thread.
     connect(m_connection, &RadioConnection::connected,
             this, &IRadioBackend::connected);
+    // Receive data retires with the session that ends (RadioModel::onDisconnected),
+    // not with this transport: a late disconnect must not end a newer session's.
     connect(m_connection, &RadioConnection::disconnected,
-            this, [this] {
-        retireReceiveData();
-        emit disconnected();
-    });
+            this, &IRadioBackend::disconnected);
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
     connect(m_connection, &RadioConnection::independentPttStopped,
@@ -1435,7 +1434,6 @@ void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
 
 void FlexBackend::clearExtensionHandles()
 {
-    retireReceiveData();
     ++m_daxTxSession;
     m_statusIngress.clearDaxTxStreams();
     // Identity replies belong to the same session as the cached encode handles.

@@ -1799,6 +1799,7 @@ private:
     void applyGpsChanges(const GpsDelta& delta);
     friend class FlexSetupStatusTestPeer;
     friend class FlexSliceStatusTestPeer;
+    friend class FlexReceiveDataTestAccess;
     void applySetupObservation(const SetupStatusObservation& observation);
     void retireSetupObservations();
     void resetSetupObservations();

@@ -961,10 +961,8 @@ void RadioModel::setupBackend(const QString& family)
     // IRadioBackend contract rule 5: teardownBackend() bumps this before the old
     // backend dies, and every handler below that interprets a backend-owned delivery
     // captures it and returns early on mismatch, because Qt still delivers queued
-    // calls posted before the sender died (backend_family_switch_test). The panFeed*
-    // signal-to-signal forwards are exempt to keep the thread hop and batching: the
-    // renderer drops frames for pan ids it does not hold. If that stops being true,
-    // they need the guard.
+    // calls posted before the sender died (backend_family_switch_test). The typed
+    // receive relays (RadioModel_ReceiveData.cpp) take the same guard.
     const quint64 generation = m_backendReceiverGeneration;
 
     {
@@ -8519,11 +8517,12 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
-    if (m_backend) { m_backend->retireReceiveData(); }
     // The session that ended is the one that connected, unless a new connect
-    // has already begun (a late disconnect): that newer epoch stays open.
+    // has already begun (a late disconnect): that newer epoch, and its
+    // receive data, stay open.
     const bool endingStatusSession = m_connectedStatusEpoch == m_statusEpoch;
     if (endingStatusSession) {
+        if (m_backend) { m_backend->retireReceiveData(); }
         if (m_statusIngress) { m_statusIngress->retire(m_statusEpoch); }
         retireObservationSession();
     }
