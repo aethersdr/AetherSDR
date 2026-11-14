@@ -45,6 +45,11 @@ void Client::connectToModem(const QString& host, quint16 commandPort, quint16 da
 
 void Client::disconnectFromModem()
 {
+    // Hand anything already queued (a last LISTEN OFF or MONITOR OFF) to the
+    // OS before the sockets are torn down; abort() would drop it.
+    if (m_cmd && m_cmd->state() == QAbstractSocket::ConnectedState) {
+        m_cmd->flush();
+    }
     closeSockets();
     m_session.reset();
     setState(State::Disconnected);

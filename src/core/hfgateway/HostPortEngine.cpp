@@ -37,6 +37,11 @@ void HostPortEngine::connectToModem()
 
 void HostPortEngine::disconnectFromModem()
 {
+    // Don't leave Mercury monitoring after we go: it costs several times its
+    // usual CPU and nobody would be reading the lines.
+    if (m_monitor && monitorSupported() && m_client.state() == Client::State::Connected) {
+        m_client.send(Request::MonitorOff);
+    }
     m_client.disconnectFromModem();
 }
 
