@@ -10,6 +10,7 @@
 #include "core/TailnetShimDownloader.h"
 #include "core/RadioHealthClient.h"
 #include "core/RadioHealthPackage.h"
+#include "core/AetherGpsPackage.h"
 #include "core/WsprAgent.h"
 #include "TailnetShimDialog.h"
 #include "WsprConfigureWindow.h"
@@ -1413,6 +1414,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // The WSPR receiver ships inside AetherSDR, pinned like the health tools.
     m_installWsprAction = installMenu->addAction(
         tr("WSPR Receiver"), this, &WaveformsDialog::onInstallWsprClicked);
+    // So is AetherGPS; once installed it is an ordinary row in the list.
+    m_installAetherGpsAction = installMenu->addAction(
+        tr("AetherGPS (radio GPS on the network)"), this, &WaveformsDialog::onInstallAetherGpsClicked);
     installMenu->addSeparator();
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
@@ -1644,6 +1648,24 @@ void WaveformsDialog::updateInstallButtonState()
         m_installWsprAction->setToolTip(wsprTip);
         m_installWsprAction->setStatusTip(wsprTip);
     }
+    if (m_installAetherGpsAction) {
+        // The same package choice as the WSPR receiver: a container under
+        // the Docker gate on a radio with a Waveform Processor, else legacy.
+        const bool hasWaveforms = m_radioModel->backendCapabilities().hasWaveforms;
+        const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
+        const bool runtimeReady = native || dockerReady;
+        m_installAetherGpsAction->setEnabled(!busy && connected && hasWaveforms && runtimeReady);
+        const QString gpsTip = busy ? tr("A waveform install is already in progress.")
+            : !connected            ? tr("Connect to a radio before installing AetherGPS.")
+            : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
+            : !runtimeReady         ? dockerBlocker
+                                    : tr("Install AetherGPS (version %1). It shows each satellite in "
+                                         "AetherGPS and shares the radio's GPS, including its position, "
+                                         "with gpsd and NMEA programs on your network.")
+                                          .arg(QString::fromLatin1(AetherGpsPackage::kVersion));
+        m_installAetherGpsAction->setToolTip(gpsTip);
+        m_installAetherGpsAction->setStatusTip(gpsTip);
+    }
     if (busy) {
         m_installDockerAction->setToolTip(tr("A waveform install is already in progress."));
     } else if (dockerReady) {
@@ -1694,6 +1716,35 @@ void WaveformsDialog::onInstallWsprClicked()
         return;
     }
     installWspr(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::onInstallAetherGpsClicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    const bool docker = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container;
+    if (docker) {
+        const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+        if (!blocker.isEmpty()) {
+            showDockerWfpNotReadyDialog(this, blocker);
+            return;
+        }
+    }
+    // The package ships inside AetherSDR; the installer wants a file.
+    QString error;
+    const QString path = aethergps::writeBundledPackage(
+        docker ? AetherGpsPackage::kContainer : AetherGpsPackage::kLegacy,
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-gps-%1").arg(QString::fromLatin1(AetherGpsPackage::kVersion)),
+        &error);
+    if (path.isEmpty()) {
+        ScopedChildWidget<CanonMessageBox> box(tr("AetherGPS Not Installed"), error, this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
+        box.get()->exec();
+        return;
+    }
+    installWaveformPath(docker, path, m_radioModel, m_radioModel->controlSession());
 }
 
 bool WaveformsDialog::installWspr(bool docker)

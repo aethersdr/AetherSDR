@@ -2,6 +2,8 @@
 
 #include "CanonIndicators.h"
 #include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
+#include "GpsSkyPlot.h"
 #include "FramelessResizer.h"
 
 #include "core/LocationAddressResolver.h"
@@ -18,6 +20,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -28,7 +31,9 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSizePolicy>
+#include <QShowEvent>
 #include <QSignalBlocker>
+#include <QTableWidget>
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -319,7 +324,8 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     FramelessResizer::install(this);
 
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kAetherGpsStyle) + canonScrollBarRules() + canonIndicatorRules();
+        return QString::fromLatin1(kAetherGpsStyle) + canonScrollBarRules() + canonIndicatorRules()
+             + canonTableRules();
     });
 
     auto* outer = new QVBoxLayout(bodyWidget());
@@ -524,17 +530,59 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     configureReadout(m_lockDurationLabel, QStringLiteral("gpsLockDuration"),
                      tr("Duration of the current GPS lock while this window is open"));
     addReadoutRow(satelliteLayout, 9, tr("GPS lock duration"), m_lockDurationLabel);
-    auto* apiNote = new QLabel(
-        tr("AetherSDR reports aggregate tracked/visible counts, but not individual "
+    m_satelliteApiNote = new QLabel(
+        tr("The radio reports aggregate tracked/visible counts, but not individual "
            "satellite IDs, azimuth, elevation, or signal strength. Orbital positions "
            "are therefore intentionally not estimated."), m_satelliteGroup);
-    apiNote->setObjectName(QStringLiteral("gpsSatelliteApiNote"));
-    apiNote->setProperty("gpsRole", QStringLiteral("muted"));
-    apiNote->setWordWrap(true);
-    apiNote->setAccessibleName(tr("Satellite API limitation"));
-    satelliteLayout->addWidget(apiNote, 10, 0, 1, 2);
+    m_satelliteApiNote->setObjectName(QStringLiteral("gpsSatelliteApiNote"));
+    m_satelliteApiNote->setProperty("gpsRole", QStringLiteral("muted"));
+    m_satelliteApiNote->setWordWrap(true);
+    m_satelliteApiNote->setAccessibleName(tr("Satellite API limitation"));
+    satelliteLayout->addWidget(m_satelliteApiNote, 10, 0, 1, 2);
     satelliteLayout->setRowStretch(11, 1);
     root->addWidget(m_satelliteGroup, 2, 0);
+
+    // ── Sky view: each satellite, from the radio's gpsd via AetherGPS ──
+    m_skyGroup = new QGroupBox(content);
+    m_skyGroup->setAccessibleName(tr("Sky View"));
+    auto* skyLayout = new QGridLayout(m_skyGroup);
+    skyLayout->setContentsMargins(14, 12, 14, 12);
+    skyLayout->setHorizontalSpacing(18);
+    skyLayout->setVerticalSpacing(7);
+    skyLayout->addWidget(makeSectionTitle(tr("Sky View"), m_skyGroup), 0, 0, 1, 2);
+    m_skyStatusLabel = new QLabel(m_skyGroup);
+    m_skyStatusLabel->setObjectName(QStringLiteral("gpsSkyStatus"));
+    m_skyStatusLabel->setProperty("gpsRole", QStringLiteral("muted"));
+    m_skyStatusLabel->setWordWrap(true);
+    m_skyStatusLabel->setTextFormat(Qt::PlainText);
+    m_skyStatusLabel->setAccessibleName(tr("Sky view status"));
+    skyLayout->addWidget(m_skyStatusLabel, 1, 0, 1, 2);
+    m_skyPlot = new GpsSkyPlot(m_skyGroup);
+    m_skyPlot->setMinimumSize(260, 260);
+    skyLayout->addWidget(m_skyPlot, 2, 0);
+    m_skyTable = new QTableWidget(0, 6, m_skyGroup);
+    m_skyTable->setObjectName(QStringLiteral("gpsSkyTable"));
+    m_skyTable->setAccessibleName(tr("Satellites"));
+    m_skyTable->setHorizontalHeaderLabels({tr("System"), tr("PRN"), tr("Elevation"),
+                                           tr("Azimuth"), tr("Signal"), tr("In fix")});
+    m_skyTable->verticalHeader()->hide();
+    m_skyTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_skyTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_skyTable->setAlternatingRowColors(true);
+    m_skyTable->setSortingEnabled(true);
+    m_skyTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_skyTable->setMinimumHeight(260);
+    skyLayout->addWidget(m_skyTable, 2, 1);
+    skyLayout->setColumnStretch(0, 5);
+    skyLayout->setColumnStretch(1, 6);
+    root->addWidget(m_skyGroup, 3, 0, 1, 2);
+
+    m_skyClient = new GpsdSkyClient(this);
+    connect(m_skyClient, &GpsdSkyClient::skyUpdated, this, &GpsLocationDialog::showSky);
+    connect(m_skyClient, &GpsdSkyClient::stateChanged, this, &GpsLocationDialog::showSkyState);
+    connect(m_skyClient, &GpsdSkyClient::skyStale, this, [this] {
+        clearSky(tr("The radio's GPS hasn't reported satellites for 30 seconds."));
+    });
 
     auto* timeGroup = new QGroupBox(content);
     timeGroup->setAccessibleName(tr("Satellite Time"));
@@ -677,7 +725,9 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
         connect(m_radioModel, &RadioModel::gpsTimeSettingsChanged,
                 this, &GpsLocationDialog::updateGpsTimeControls);
         connect(m_radioModel, &RadioModel::capabilitiesChanged,
-                this, [this] { refreshGps(false); });
+                this, [this] { refreshGps(false); updateSkySource(); });
+        connect(m_radioModel, &RadioModel::connectionStateChanged,
+                this, &GpsLocationDialog::updateSkySource);
         connect(m_ntpEnabledCheck, &QCheckBox::clicked,
                 m_radioModel, &RadioModel::setGpsNtpEnabled);
         connect(m_gpsTimeCorrectionCheck, &QCheckBox::clicked,
@@ -706,6 +756,124 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     updateClockAndAges();
     updateNtpServerTip();
     updateGpsTimeControls();
+}
+
+void GpsLocationDialog::showEvent(QShowEvent* event)
+{
+    CanonWindow::showEvent(event);
+    updateSkySource();
+}
+
+void GpsLocationDialog::hideEvent(QHideEvent* event)
+{
+    CanonWindow::hideEvent(event);
+    updateSkySource();
+}
+
+void GpsLocationDialog::updateSkySource()
+{
+    const bool takesWaveforms = m_radioModel && m_radioModel->isConnected()
+        && m_radioModel->backendCapabilities().hasWaveforms;
+    m_skyGroup->setVisible(takesWaveforms);
+    const bool reachable = takesWaveforms
+        && gpsdsky::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
+    if (!isVisible() || !reachable) {
+        m_skyClient->stop();
+        clearSky(tr("Each satellite is shown when the radio is on this computer's local network "
+                    "or reached through Remote Access."));
+        return;
+    }
+    m_skyClient->start(m_radioModel->radioAddress());
+}
+
+void GpsLocationDialog::showSkyState(GpsdSkyClient::State state, const QString& detail)
+{
+    switch (state) {
+    case GpsdSkyClient::State::Connecting:
+        if (!m_skyHasData) {
+            m_skyStatusLabel->setText(tr("Connecting to the radio's GPS…"));
+        }
+        break;
+    case GpsdSkyClient::State::Streaming:
+        if (!m_skyHasData) {
+            m_skyStatusLabel->setText(tr("Waiting for the radio's GPS to report satellites…"));
+        }
+        break;
+    case GpsdSkyClient::State::Unavailable: {
+        // The detail may be the relay's own words, which end without a stop.
+        QString text = detail.trimmed();
+        if (!text.isEmpty() && !text.endsWith(QLatin1Char('.'))) {
+            text += QLatin1Char('.');
+        }
+        // Only when nothing answered is the waveform likely missing.
+        if (!m_skyClient->relayReached()) {
+            text += tr(" To see each satellite, install the AetherGPS waveform on the radio "
+                       "(Waveforms → Install).");
+        }
+        clearSky(text.trimmed());
+        break;
+    }
+    case GpsdSkyClient::State::Stopped:
+        break;
+    }
+}
+
+void GpsLocationDialog::clearSky(const QString& status)
+{
+    showSky({});
+    m_skyStatusLabel->setText(status);
+}
+
+void GpsLocationDialog::showSky(const QList<GpsSatellite>& satellites)
+{
+    m_skyHasData = !satellites.isEmpty();
+    m_skyPlot->setSatellites(satellites);
+    // The limitation note describes the radio's own status; the sky view
+    // fills the gap while it reports.
+    m_satelliteApiNote->setVisible(!m_skyHasData);
+
+    const QLocale locale;
+    auto& tm = ThemeManager::instance();
+    m_skyTable->setSortingEnabled(false);
+    m_skyTable->setRowCount(int(satellites.size()));
+    int heard = 0, used = 0;
+    for (int row = 0; row < satellites.size(); ++row) {
+        const GpsSatellite& s = satellites.at(row);
+        heard += s.heard();
+        used += s.used;
+        const gpsdsky::Constellation c = gpsdsky::constellation(s);
+        auto number = [](double v) {
+            auto* item = new QTableWidgetItem;
+            if (std::isfinite(v)) {
+                item->setData(Qt::DisplayRole, qRound(v));
+            } else {
+                item->setText(QStringLiteral("—"));
+            }
+            item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            return item;
+        };
+        auto* system = new QTableWidgetItem(gpsdsky::constellationName(c));
+        system->setForeground(tm.color(m_skyTable, GpsSkyPlot::colorToken(c)));
+        m_skyTable->setItem(row, 0, system);
+        auto* prn = new QTableWidgetItem;
+        prn->setData(Qt::DisplayRole, s.prn);
+        prn->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_skyTable->setItem(row, 1, prn);
+        m_skyTable->setItem(row, 2, number(s.elevationDeg));
+        m_skyTable->setItem(row, 3, number(s.azimuthDeg));
+        m_skyTable->setItem(row, 4, number(s.heard() ? s.snrDbHz : NAN));
+        m_skyTable->setItem(row, 5, new QTableWidgetItem(s.used ? tr("Yes") : QString()));
+    }
+    m_skyTable->setSortingEnabled(true);
+    // Every report sets the line, so an empty one doesn't leave old counts.
+    QString text = m_skyHasData
+        ? tr("%1 listed · %2 heard · %3 used in the fix").arg(satellites.size()).arg(heard).arg(used)
+        : tr("The radio's GPS lists no satellites.");
+    const QString release = m_skyClient->gpsdRelease();
+    if (!release.isEmpty()) {
+        text += tr(" · gpsd %1").arg(release);
+    }
+    m_skyStatusLabel->setText(text);
 }
 
 bool GpsLocationDialog::currentPosition(double& latitude, double& longitude) const

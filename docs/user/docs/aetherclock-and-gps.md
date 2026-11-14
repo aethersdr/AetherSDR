@@ -72,6 +72,27 @@ A map of the radio's position. Use the arrow keys to pan, plus and minus to zoom
 
 Satellites **Tracked** and **Visible**, the tracking ratio, the GPS **Frequency error**, the reference **setting**, **actual** source and **lock**, and how long GPS has been locked.
 
+### Sky View
+
+On a FlexRadio with the **AetherGPS** waveform installed, this section shows every satellite the radio's GPS receiver lists:
+
+- **The sky plot** looks straight up: the center is overhead, the rim is the horizon, north is at the top and east on the right, with rings at 30° and 60° elevation. Each dot's color shows its system (GPS, GLONASS, Galileo, BeiDou, QZSS or SBAS). A filled dot is used in the position fix, a ring is heard but not used, and a faint ring is listed but not heard.
+- **The table** gives each satellite's system, PRN, elevation, azimuth, signal strength in dB-Hz and whether it is in the fix. Click a column heading to sort.
+- **The line above them** counts satellites listed, heard and used in the fix.
+
+The radio's own **Visible** count includes satellites it lists but can't hear, so it is usually well above the number heard here.
+
+The sky view reads the radio only while AetherGPS is open, on the radio's local network or through [Remote Access](./tailscale-remote-access.md). AetherSDR carries the waveform: install it from **Waveforms → Install → AetherGPS (radio GPS on the network)**. A FLEX-8000 or Aurora gets a container, and a FLEX-6000 a legacy waveform. It then appears in the installed list as **AetherGPS**, and you remove it there like any other waveform.
+
+#### The radio's GPS for other programs
+
+The AetherGPS waveform also makes the radio's GPS available to other programs on your network, in two standard forms:
+
+- **gpsd on TCP port 2947** at the radio's address. Any gpsd client works, for example `cgps 192.168.1.50`, OpenCPN, or chrony's gpsd support. Only reading commands are passed on: a client can't change the GPS receiver's settings.
+- **NMEA 0183 sentences broadcast on UDP port 10110** on the radio's local network, for programs that listen for NMEA from the network. Remote Access carries TCP only, so the NMEA broadcast stays on the local network.
+
+Both include your station's position, as the radio's GPS reports it, to anything on your network that asks or listens. Remove the waveform if you don't want that.
+
 ### Satellite Time
 
 UTC, local time and time zone, the radio's GPS UTC, and **Clock agreement** between the radio's GPS time and your computer. The radio's GPS supplies the time of day but not the date, so dates come from your computer. Use Clock agreement as a rough guide when looking at FT8 DT, and keep the computer synchronized with NTP for precise work.
@@ -109,6 +130,14 @@ The decoder is searching for the frame marker, which can take up to about two mi
 ### There is no GPS window or indicator
 
 The connected radio does not report GPS hardware. The GPS window only appears for a radio that has GPS, such as a FlexRadio with the GPSDO option or an IC-705.
+
+### The Sky View says nothing answered on the radio's GPS port
+
+AetherGPS can't reach the AetherGPS waveform.
+
+1. Check that **AetherGPS** is in the radio's installed waveforms list, and install it from **Waveforms → Install** if it isn't.
+2. Make sure you're on the radio's local network or connected through Remote Access. SmartLink doesn't carry it.
+3. If it says gpsd is not running on the radio, the radio's firmware doesn't run gpsd. Please report your radio model and firmware version.
 
 ## See also
 

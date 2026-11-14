@@ -1,0 +1,174 @@
+// The AetherGPS sky view's gpsd client (tools/aether-gps): a SKY report's
+// satellites parse and are bounded, a DOP-only SKY and other classes are not
+// a sky view, constellations come from gnssid or gpsd's PRN numbering, the
+// stream reassembles lines split across reads and survives an overlong one,
+// and only LAN or tailnet addresses are tried. The bundled AetherGPS
+// packages match their pins and the legacy one is a valid waveform.
+// Socket-free; files only in a temporary dir.
+
+#include "core/AetherGpsPackage.h"
+#include "core/GpsdSkyClient.h"
+#include "core/LegacyWaveformPackage.h"
+
+#include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QHostAddress>
+#include <QTemporaryDir>
+
+#include <cstdio>
+
+using namespace AetherSDR;
+
+namespace {
+
+class StreamProbe : public GpsdSkyClient {
+public:
+    using GpsdSkyClient::ingest;
+};
+
+int g_failed = 0;
+
+void check(bool ok, const char* label)
+{
+    std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", label);
+    if (!ok) {
+        ++g_failed;
+    }
+}
+
+// The shape a FLEX-8600's gpsd 3.22 sends (2026-11-13), trimmed to three.
+const QByteArray kSky =
+    R"({"class":"SKY","device":"/dev/ttyGPS","xdop":0.9,"nSat":3,"uSat":1,"satellites":[)"
+    R"({"PRN":5,"gnssid":0,"svid":5,"el":41.0,"az":120.0,"ss":38.0,"used":true},)"
+    R"({"PRN":70,"gnssid":6,"svid":6,"el":12.0,"az":300.0,"ss":0.0,"used":false},)"
+    R"({"PRN":301,"gnssid":2,"svid":1,"ss":21.0,"used":false}]})";
+
+}  // namespace
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+
+    {
+        const auto sky = gpsdsky::parseSky(kSky);
+        check(sky && sky->size() == 3, "a SKY report's satellites parse");
+        const GpsSatellite& gps = sky->at(0);
+        check(gps.prn == 5 && gps.gnssId == 0 && gps.elevationDeg == 41.0
+                  && gps.azimuthDeg == 120.0 && gps.snrDbHz == 38.0 && gps.used && gps.heard()
+                  && gps.hasSkyPosition(),
+              "every field of a used satellite");
+        check(!sky->at(1).heard() && !sky->at(1).used, "ss 0 is listed but not heard");
+        check(!sky->at(2).hasSkyPosition() && sky->at(2).heard(),
+              "no el/az: in the list, off the plot");
+    }
+
+    check(!gpsdsky::parseSky(R"({"class":"SKY","device":"/dev/ttyGPS","hdop":1.1})"),
+          "a DOP-only SKY is not a sky view (it would blank the plot)");
+    check(!gpsdsky::parseSky(R"({"class":"TPV","mode":3})") && !gpsdsky::parseSky("garbage")
+              && !gpsdsky::parseSky(""),
+          "other classes and non-JSON are refused");
+
+    {
+        const auto sky = gpsdsky::parseSky(
+            R"({"class":"SKY","satellites":[{"PRN":0},{"PRN":7,"el":-5,"az":10,"ss":250},)"
+            R"({"PRN":8,"el":45,"az":400,"ss":-3,"gnssid":42},{"PRN":9,"el":45,"az":360}]})");
+        check(sky && sky->size() == 3, "a PRN of 0 is dropped");
+        check(!sky->at(0).hasSkyPosition() && !sky->at(0).heard(),
+              "below the horizon, and an impossible signal, are dropped");
+        check(!sky->at(1).hasSkyPosition() && !sky->at(1).heard() && sky->at(1).gnssId == -1,
+              "azimuth over 360, a negative signal and an unknown gnssid are dropped");
+        check(sky->at(2).hasSkyPosition() && sky->at(2).azimuthDeg == 0.0, "azimuth 360 is north");
+        const auto unknown = gpsdsky::parseSky(
+            R"({"class":"SKY","satellites":[{"PRN":1,"el":0.0,"az":0.0,"ss":0.0},)"
+            R"({"PRN":2,"el":0.0,"az":12.0}]})");
+        check(unknown && !unknown->at(0).hasSkyPosition(),
+              "el 0 az 0 is gpsd's unknown position, not the north rim");
+        check(unknown->at(1).hasSkyPosition(), "on the horizon at another azimuth is a position");
+    }
+    {
+        QByteArray many = R"({"class":"SKY","satellites":[)";
+        for (int i = 1; i <= 300; ++i) {
+            many += QByteArray(i > 1 ? "," : "") + R"({"PRN":)" + QByteArray::number(i) + "}";
+        }
+        many += "]}";
+        const auto sky = gpsdsky::parseSky(many);
+        check(sky && sky->size() == 128, "at most 128 satellites are kept");
+    }
+
+    auto system = [](int prn, int gnss = -1) {
+        GpsSatellite s;
+        s.prn = prn;
+        s.gnssId = gnss;
+        return gpsdsky::constellation(s);
+    };
+    using C = gpsdsky::Constellation;
+    check(system(5, 6) == C::Glonass && system(5, 2) == C::Galileo && system(5, 3) == C::BeiDou,
+          "gnssid decides the constellation when sent");
+    check(system(12) == C::Gps && system(70) == C::Glonass && system(133) == C::Sbas
+              && system(195) == C::Qzss && system(210) == C::BeiDou && system(305) == C::Galileo
+              && system(999) == C::Unknown,
+          "without gnssid, gpsd's PRN ranges decide");
+
+    {
+        StreamProbe client;
+        QList<QList<GpsSatellite>> views;
+        QObject::connect(&client, &GpsdSkyClient::skyUpdated,
+                         [&](const QList<GpsSatellite>& s) { views.append(s); });
+        client.ingest(R"({"class":"VERSION","release":"3.22"})" "\r\n" + kSky.left(40));
+        check(views.isEmpty() && client.gpsdRelease() == QLatin1String("3.22"),
+              "VERSION is noted; half a SKY waits");
+        client.ingest(kSky.mid(40) + "\r\n" + R"({"class":"TPV","mode":3})" "\n");
+        check(views.size() == 1 && views.first().size() == 3, "the rest of the line completes it");
+        client.ingest(QByteArray(70 * 1024, 'x'));
+        client.ingest(QByteArray("tail of the overlong line\n") + kSky + "\n");
+        check(views.size() == 2, "an overlong line is dropped and the next one parses");
+    }
+
+    check(gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("192.168.50.100")))
+              && gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("100.83.76.76")))
+              && gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("169.254.1.2"))),
+          "a LAN, tailnet or link-local radio is tried");
+    check(gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("fd7a:115c:a1e0::1")))
+              && !gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("fd00::1"))),
+          "the shim's IPv6 tailnet address is tried; other IPv6 is not");
+    check(!gpsdsky::reachableRadio(true, QHostAddress(QStringLiteral("192.168.50.100")))
+              && !gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("8.8.8.8")))
+              && !gpsdsky::reachableRadio(false, QHostAddress()),
+          "SmartLink, public and empty addresses are not");
+
+    // ── the bundled packages ──────────────────────────────────────────────
+    for (const AetherGpsPackage::Pin& pin : {AetherGpsPackage::kLegacy, AetherGpsPackage::kContainer}) {
+        QTemporaryDir dir;
+        QString error;
+        const QString path = aethergps::writeBundledPackage(pin, dir.path(), &error);
+        QFile f(path);
+        const QByteArray bytes = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+        check(!path.isEmpty() && bytes.size() == pin.size
+                  && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
+                         == QByteArray(pin.sha256),
+              "a bundled package is written and matches its pin");
+    }
+    {
+        QTemporaryDir dir;
+        QString error;
+        const LegacyWaveformPackageInfo info = inspectLegacyWaveformPackageFile(
+            aethergps::writeBundledPackage(AetherGpsPackage::kLegacy, dir.path(), &error));
+        check(info.valid && info.waveformName == QLatin1String(kAetherGpsWaveformName)
+                  && info.version == QLatin1String(AetherGpsPackage::kVersion),
+              "the legacy one is a valid waveform named AetherGPS, at the pinned version");
+        QTemporaryDir other;
+        QString why;
+        AetherGpsPackage::Pin wrong = AetherGpsPackage::kLegacy;
+        wrong.resource = ":/cty.dat";
+        const QString none = aethergps::writeBundledPackage(wrong, other.path(), &why);
+        check(none.isEmpty() && !why.isEmpty()
+                  && !QFile::exists(QDir(other.path()).filePath(QString::fromLatin1(wrong.fileName))),
+              "a resource that doesn't match the pin is refused and nothing is written");
+    }
+
+    std::printf(g_failed ? "\n%d gpsd sky tests failed.\n" : "\nAll gpsd sky tests passed.\n",
+                g_failed);
+    return g_failed ? 1 : 0;
+}

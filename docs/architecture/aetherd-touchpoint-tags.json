@@ -71,6 +71,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/AetherGpsPackage.h": {
+  "tag": "peripheral(aether-gps)",
+  "note": "Pinned version, Qt resource paths, sizes and SHA-256s of the AetherGPS relay packages (tools/aether-gps: a FLEX-6000 legacy waveform and a FLEX-8000/Aurora container) that ship in AetherSDR, and the writer that hands one to the installer. Not SmartSDR wire: AetherSDR's own radio-side app, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthPackage.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/GpsdSkyClient.h": {
+  "tag": "peripheral(aether-gps)",
+  "note": "A gpsd client for the AetherGPS relay on the radio (tools/aether-gps): watches SKY on TCP 2947 at the radio's LAN or tailnet-shim address and parses each satellite for AetherGPS's Sky View. Not SmartSDR wire: gpsd's public JSON protocol, served by AetherSDR's own relay that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/RadioHealthClient.h": {
   "tag": "peripheral(radio-health)",
   "note": "Reads one JSON line from the radio health agent on the radio's LAN address (TCP 48994) and summarizes free storage, memory and CPU for the Waveforms window's health bar. Not SmartSDR wire: AetherSDR's own TCP service (the radio health agent, tools/radio-health) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/TailnetShimClient.h).",

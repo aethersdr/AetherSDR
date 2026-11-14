@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 285 touchpoint headers (230 core, 55 models) — 285/285 tagged, 0/285 converted.
+**Totals:** 287 touchpoint headers (232 core, 55 models) — 287/287 tagged, 0/287 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -14,6 +14,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherClockEngine.h` | 2 | universal — WWV/WWVB time-signal decode engine bound to an operator-chosen RX slice. The wiring layer injects DAX holds and typed producer PCM; a private adapter preserves the decoder's fixed24 domain and source timing. The engine never touches a vendor stream class. Canonical engine state. | unconverted |
 | `core/AetherClockSettings.h` | 1 | ui-support — AetherClock persistence — one nested JSON blob under a single AppSettings key (Principle V). Client-side config plumbing; radio-authoritative state (slice frequency, mode, AGC) is deliberately never persisted here. | unconverted |
 | `core/AetherDspModePolicy.h` | 2 | universal — Pure policy deciding when AetherDSP must disable for a given mode or slice audio mix. Operates on canonical mode/mute/gain state only; no vendor ties. | unconverted |
+| `core/AetherGpsPackage.h` | 1 | peripheral(aether-gps) — Pinned version, Qt resource paths, sizes and SHA-256s of the AetherGPS relay packages (tools/aether-gps: a FLEX-6000 legacy waveform and a FLEX-8000/Aurora container) that ship in AetherSDR, and the writer that hands one to the installer. Not SmartSDR wire: AetherSDR's own radio-side app, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthPackage.h). | unconverted |
 | `core/AetherRxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares. | unconverted |
 | `core/AetherTxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply. | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
@@ -71,6 +72,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/FlexControlManager.h` | 2 | ui-support — FlexControl USB knob serial driver (VID 0x2192) — a desktop input-surface driver, the same class as HidEncoderManager (RC-28/TMate)/UlanziDialBackend/SerialPortController, all ui-support. Flex-branded hardware but client-side input, not radio-family wire; NOT behind the radio seam (reclassified from vendor(flex), #4089). | unconverted |
 | `core/FreeDvClient.h` | 4 | universal — FreeDV Reporter spot client (qso.freedv.org); radio-agnostic spotting fed by canonical freq/TX + RADE SNR | unconverted |
 | `core/GoClusterSettings.h` | 1 | ui-support — AppSettings-backed per-feed GoCluster Hide-Unverified policy (nested `GoCluster` object); no radio state. | unconverted |
+| `core/GpsdSkyClient.h` | 2 | peripheral(aether-gps) — A gpsd client for the AetherGPS relay on the radio (tools/aether-gps): watches SKY on TCP 2947 at the radio's LAN or tailnet-shim address and parses each satellite for AetherGPS's Sky View. Not SmartSDR wire: gpsd's public JSON protocol, served by AetherSDR's own relay that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h). | unconverted |
 | `core/GpuSelector.h` | 2 | ui-support — GPU enumeration + persisted QRhi render-adapter choice applied at app startup; pure client rendering plumbing | unconverted |
 | `core/GreenHeronProtocol.h` | 1 | peripheral(greenheron) — Pure framing/parsing/encoding for the Green Heron Everyware wire protocol — the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md. | unconverted |
 | `core/HidEncoderManager.h` | 3 | ui-support — USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state | unconverted |
@@ -172,7 +174,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 2 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 191 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 192 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |

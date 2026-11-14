@@ -4857,6 +4857,30 @@ else()
 endif()
 add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
 
+# The AetherGPS sky view's gpsd client (tools/aether-gps): SKY satellites
+# parse and are bounded, DOP-only SKY and other classes are refused,
+# constellations follow gnssid or gpsd's PRN ranges, the stream reassembles
+# split lines and survives an overlong one, and only LAN or tailnet addresses
+# are tried. The bundled packages match their pins and the legacy one is a
+# valid waveform. Socket-free; writes only to a QTemporaryDir.
+qt_add_resources(GPSD_SKY_TEST_RESOURCES resources/resources.qrc)
+add_executable(gpsd_sky_client_test
+    tests/gpsd_sky_client_test.cpp
+    src/core/GpsdSkyClient.cpp
+    src/core/AetherGpsPackage.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+    ${GPSD_SKY_TEST_RESOURCES}
+)
+target_include_directories(gpsd_sky_client_test PRIVATE src)
+target_link_libraries(gpsd_sky_client_test PRIVATE Qt6::Core Qt6::Network)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(gpsd_sky_client_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(gpsd_sky_client_test PRIVATE zlibstatic)
+endif()
+add_test(NAME gpsd_sky_client_test COMMAND gpsd_sky_client_test)
+
 # The WSPR receiver on the radio (tools/wspr-agent): status and settings
 # JSON parse and are bounded, the settings body round-trips, a spot becomes
 # a SpotHub DxSpot, only LAN or tailnet addresses are tried, and the bundled
