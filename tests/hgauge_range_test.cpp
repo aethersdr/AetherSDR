@@ -102,6 +102,11 @@ int main(int argc, char** argv)
         QImage limit = g.grab().toImage();
         checkNear(limit.pixelColor(198, y).red(), 255, "limit clamped at right edge");
         checkNear(limit.pixelColor(198, y).blue(), 255, "limit is visible at right edge");
+        g.setPeakValue(300.0f);
+        const QImage both = g.grab().toImage();
+        checkNear(both.pixelColor(198, 14).green(), 255, "overlapping peak remains white above");
+        checkNear(both.pixelColor(198, 20).green(), 0, "overlapping limit remains magenta below");
+        g.clearPeak();
         g.setLimitMarker(0.0f, QColor(Qt::magenta));
         QImage hidden = g.grab().toImage();
         if (hidden.pixelColor(198, y) == QColor(Qt::magenta)) ++failures;

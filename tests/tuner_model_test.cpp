@@ -51,6 +51,13 @@ int main(int argc, char** argv)
         CHECK(sample.at(3).toFloat() == 0.0f);
         emit direct.stateUpdated({{"swr", "-61"}});
         CHECK(meters.takeFirst().at(1).toFloat() == 1.0f);
+        for (const auto& invalid : {"", "invalid", "nan", "inf"}) {
+            emit direct.stateUpdated({{"swr", invalid}});
+            CHECK(meters.isEmpty());
+        }
+        emit direct.stateUpdated({{"swr", "-20"}});
+        sample = meters.takeFirst();
+        CHECK(sample.at(1).toFloat() > 1.2f && sample.at(1).toFloat() < 1.3f);
     }
 
     // ---- full apply + change-gated stateChanged ----

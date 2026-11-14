@@ -249,11 +249,16 @@ void TunerModel::applyDirectMeters(const QMap<QString, QString>& kvs)
         }
     }
     if (kvs.contains("swr")) {
-        const float rl = kvs.value("swr").toFloat();
-        const float rho = std::pow(10.0f, rl / 20.0f);
-        m_swr = rl <= -60.0f ? 1.0f
-            : (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
-        meters = true;
+        bool ok = false;
+        const float rl = kvs.value("swr").toFloat(&ok);
+        if (!ok || !std::isfinite(rl)) {
+            qCWarning(lcTuner) << "TunerModel: invalid direct TGXL swr field" << kvs.value("swr");
+        } else {
+            const float rho = std::pow(10.0f, rl / 20.0f);
+            m_swr = rl <= -60.0f ? 1.0f
+                : (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+            meters = true;
+        }
     }
     if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak, m_maxPower);
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QColor>
 #include <QHash>
 #include <QString>
 #include <QWidget>
@@ -94,6 +95,9 @@ private:
     // tracks fwdPower as it always did.
     void updateMeters(float fwdPower, float swr, float fwdPeak = -1.0f,
                       float maxPower = 0.0f);
+    void setPowerHighRange(bool high);
+    void setSwrHighRange(bool high);
+    void updateMeterAccessibility(bool force = false);
 
     void buildUI();
     void buildExpandedUI(QVBoxLayout* vbox);
@@ -254,6 +258,9 @@ private:
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
     float m_maxPower{0.0f};
+    QColor m_limitColor;
+    QTimer* m_powerRangeTimer{nullptr};
+    QElapsedTimer m_accessibleReadoutClock;
     // Latched by the first forward-power sample at or above 5 W; released by
     // m_labelClearTimer (800 ms after power drops below the threshold).
     // The active antenna button turns red while set, mirroring the hardware

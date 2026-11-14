@@ -119,7 +119,7 @@ signals:
     void stateChanged();               // any property changed
     void tuningChanged(bool tuning);   // tuning started/stopped
     void antennaAChanged(int antA);    // antenna port changed (0-indexed)
-    // fwd power / SWR / peak power / tuning-solution power limit.
+    // Forward power / SWR / peak power / reported MAX (watts).
     //
     // fwdPeak is the device's own peak, not ours. The TGXL is poll-response
     // only and `fwd` is an instantaneous sample, so on SSB most polls land
@@ -127,7 +127,9 @@ signals:
     // transmission, roughly three samples in four read 0.14 W while the
     // envelope was hitting 82 W. A peak taken from those samples is a peak of
     // the silences. `peak` is computed on the device's own timebase, where
-    // the envelope is actually visible.
+    // the envelope is actually visible. The observed peak holds for about a
+    // second after the last peak, then re-arms. MAX's display interpretation
+    // as a tuning-solution limit still needs physical hardware verification.
     void metersChanged(float fwdPower, float swr, float fwdPeak, float maxPower);
     // Alert text from the tuner; empty means cleared. See TgxlConnection.
     void alertChanged(const QString& text);

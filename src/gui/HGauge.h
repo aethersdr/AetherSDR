@@ -267,6 +267,7 @@ public:
     }
 
     void setLimitMarker(float value, const QColor& color) {
+        if (m_limitValue == value && m_limitColor == color) return;
         m_limitValue = value;
         m_limitColor = color;
         update();
@@ -483,6 +484,10 @@ protected:
             }
         }
 
+        const bool limitVisible = m_limitValue > 0.0f && m_limitColor.isValid();
+        const float limitFraction = qBound(0.0f, (m_limitValue - m_min) / (m_max - m_min), 1.0f);
+        const int limitX = qBound(barX + 1, barX + static_cast<int>(limitFraction * barW), barX + barW - 2);
+        bool markersOverlap = false;
         // Peak-hold marker (thin white vertical line)
         if (m_peakEnabled) {
             float peakFrac = qBound(0.0f, (m_peakValue - m_min) / (m_max - m_min), 1.0f);
@@ -494,16 +499,18 @@ protected:
             if (m_peakAtEdges && m_peakValue > m_min)
                 peakX = qBound(barX + 1, peakX, barX + barW - 2);
             if (peakX > barX && peakX < barX + barW - 1) {
+                markersOverlap = limitVisible && peakX == limitX;
                 p.setPen(QPen(QColor(0xff, 0xff, 0xff), kPeakMarkerW));
-                p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
+                p.drawLine(peakX, barY + 1, peakX,
+                           markersOverlap ? barY + barH / 2 - 1 : barY + barH - 2);
             }
         }
 
-        if (m_limitValue > 0.0f && m_limitColor.isValid()) {
-            const float fraction = qBound(0.0f, (m_limitValue - m_min) / (m_max - m_min), 1.0f);
-            const int x = qBound(barX + 1, barX + static_cast<int>(fraction * barW), barX + barW - 2);
+        if (limitVisible) {
+            // Shared positions retain both colors without moving either value off scale.
             p.setPen(QPen(m_limitColor, kPeakMarkerW));
-            p.drawLine(x, barY + 1, x, barY + barH - 2);
+            p.drawLine(limitX, markersOverlap ? barY + barH / 2 : barY + 1,
+                       limitX, barY + barH - 2);
         }
 
         // Tick labels along the top

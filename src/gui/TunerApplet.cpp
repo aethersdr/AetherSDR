@@ -103,6 +103,16 @@ TunerApplet::TunerApplet(QWidget* parent)
     hide();   // hidden by default until toggled on
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
+    // Silence between syllables or CW elements is not the end of a transmission.
+    m_powerRangeTimer = new QTimer(this);
+    m_powerRangeTimer->setSingleShot(true);
+    m_powerRangeTimer->setTimerType(Qt::PreciseTimer);
+    m_powerRangeTimer->setInterval(800);
+    connect(m_powerRangeTimer, &QTimer::timeout, this, [this]() {
+        setPowerHighRange(false);
+        updateMeterAccessibility(true);
+    });
+
     // Label clear timer: once power drops below threshold, wait 800 ms before
     // blanking the PWR/SWR text so inter-packet noise doesn't cause blinking.
     m_labelClearTimer = new QTimer(this);
@@ -223,12 +233,13 @@ void TunerApplet::buildUI()
             theme.color(m_swrGauge, QStringLiteral("color.meter.swr.yellow")));
         static_cast<HGauge*>(m_swrGauge)->setExtraZone(
             2.0f, theme.color(m_swrGauge, QStringLiteral("color.accent.warning")));
-        static_cast<HGauge*>(m_fwdGauge)->setLimitMarker(
-            m_maxPower, theme.color(m_fwdGauge, QStringLiteral("color.accent.danger")));
+        m_limitColor = theme.color(m_fwdGauge, QStringLiteral("color.accent.danger"));
+        static_cast<HGauge*>(m_fwdGauge)->setLimitMarker(m_maxPower, m_limitColor);
     };
     applyMeterColors();
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, applyMeterColors);
     m_swrGauge->setAccessibleName(tr("SWR"));
+    updateMeterAccessibility(true);
     auto* swrRow = new QHBoxLayout;
     swrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
     swrRow->setSpacing(4);
@@ -1072,7 +1083,12 @@ void TunerApplet::setTunerModel(TunerModel* model)
                     gauge->setWindowPeakEnabled(true);
                     gauge->clearPeak();
                     m_maxPower = 0.0f;
-                    gauge->setLimitMarker(0.0f, QColor());
+                    gauge->setLimitMarker(0.0f, m_limitColor);
+                    m_powerRangeTimer->stop();
+                    setPowerHighRange(false);
+                    setSwrHighRange(false);
+                    m_deviceMeters.invalidate();
+                    updateMeterAccessibility(true);
                     // Reset antenna buttons to defaults on disconnect
                     if (m_ant1Btn) m_ant1Btn->setText(tr("ANT 1"));
                     if (m_ant2Btn) m_ant2Btn->setText(tr("ANT 2"));
@@ -1283,32 +1299,28 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float m
         if (m_ant1Btn) updateAntennaButtons(m_model ? m_model->antennaA() : -1);
     }
     auto* powerGauge = static_cast<HGauge*>(m_fwdGauge);
-    if (!m_powerHighRange && fwdPower > 200.0f) {
-        m_powerHighRange = true;
-        powerGauge->setRange(0.0f, 2000.0f, 1500.0f,
-            {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1K5"}, {2000, "2K"}}, 1000.0f);
-    } else if (m_powerHighRange && fwdPower < 0.5f) {
-        m_powerHighRange = false;
-        powerGauge->setRange(0.0f, 200.0f, 125.0f,
-            {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}}, 80.0f);
+    if (fwdPower >= 0.5f) {
+        m_powerRangeTimer->stop();
+        if (!m_powerHighRange && fwdPower > 200.0f) {
+            setPowerHighRange(true);
+        }
+    } else if (m_powerHighRange && !m_powerRangeTimer->isActive()) {
+        m_powerRangeTimer->start();
     }
     if (fwdPeak < 0.0f) {
         powerGauge->setWindowPeakEnabled(true);
     }
     powerGauge->setValue(fwdPower);
     auto* swrGauge = static_cast<HGauge*>(m_swrGauge);
-    if (!m_swrHighRange && swr > 3.0f) {
-        m_swrHighRange = true;
-        swrGauge->setRange(1.0f, 10.0f, 2.5f,
-            {{1.0f, "1.0"}, {3.0f, "3.0"}, {5.0f, "5.0"}, {7.0f, "7.0"}, {10.0f, "10.0"}}, 1.5f);
-    } else if (m_swrHighRange && swr == 1.0f) {
-        m_swrHighRange = false;
-        swrGauge->setRange(1.0f, 3.0f, 2.5f,
-            {{1.0f, "1.0"}, {1.5f, "1.5"}, {2.0f, "2.0"}, {2.5f, "2.5"}, {3.0f, "3.0"}}, 1.5f);
+    if (swr == 1.0f) {
+        if (m_swrHighRange) setSwrHighRange(false);
+    } else if (fwdPower >= 5.0f && !m_swrHighRange && swr > 3.0f) {
+        setSwrHighRange(true);
     }
-    swrGauge->setValue(swr);
-    powerGauge->setLimitMarker(maxPower,
-        ThemeManager::instance().color(m_fwdGauge, QStringLiteral("color.accent.danger")));
+    // At idle, 0 dB return loss means no usable SWR measurement, not a full red bar.
+    if (fwdPower >= 5.0f) swrGauge->setValue(swr);
+    else swrGauge->setValueImmediate(1.0f);
+    powerGauge->setLimitMarker(maxPower, m_limitColor);
     // Use the device's own peak when present: `fwd` is a sparse instant sample
     // (on voice it mostly reads near zero while `peak` reads the envelope). The
     // device peak owns the external-peak mode while direct telemetry is present;
@@ -1319,6 +1331,52 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float m
         powerGauge->clearPeak();
     }
     updateValueLabels();
+    updateMeterAccessibility();
+}
+
+void TunerApplet::setPowerHighRange(bool high)
+{
+    m_powerHighRange = high;
+    auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+    if (high) {
+        gauge->setRange(0.0f, 2000.0f, 1500.0f,
+            {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1K5"}, {2000, "2K"}}, 1000.0f);
+    } else {
+        gauge->setRange(0.0f, 200.0f, 125.0f,
+            {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}}, 80.0f);
+    }
+}
+
+void TunerApplet::setSwrHighRange(bool high)
+{
+    m_swrHighRange = high;
+    auto* gauge = static_cast<HGauge*>(m_swrGauge);
+    if (high) {
+        gauge->setRange(1.0f, 10.0f, 2.5f,
+            {{1.0f, "1.0"}, {3.0f, "3.0"}, {5.0f, "5.0"}, {7.0f, "7.0"}, {10.0f, "10.0"}}, 1.5f);
+    } else {
+        gauge->setRange(1.0f, 3.0f, 2.5f,
+            {{1.0f, "1.0"}, {1.5f, "1.5"}, {2.0f, "2.0"}, {2.5f, "2.5"}, {3.0f, "3.0"}}, 1.5f);
+    }
+}
+
+void TunerApplet::updateMeterAccessibility(bool force)
+{
+    if (!force && m_accessibleReadoutClock.isValid()
+            && m_accessibleReadoutClock.elapsed() < kMeterReadoutUpdateMs) return;
+    m_accessibleReadoutClock.restart();
+    QString power = tr("Forward power %1 W; full scale %2 W.")
+        .arg(m_fwdPower, 0, 'f', 0).arg(m_powerHighRange ? 2000 : 200);
+    power += m_maxPower > 0.0f
+        ? tr(" Reported MAX %1 W.").arg(m_maxPower, 0, 'f', 0)
+        : tr(" No MAX indicator.");
+    const QString swr = m_fwdPower >= 5.0f
+        ? tr("SWR %1:1; full scale %2:1.").arg(m_swr, 0, 'f', 2).arg(m_swrHighRange ? 10 : 3)
+        : tr("SWR unavailable below 5 W; full scale %1:1.").arg(m_swrHighRange ? 10 : 3);
+    m_fwdGauge->setAccessibleDescription(power);
+    m_pwrLabel->setAccessibleDescription(power);
+    m_swrGauge->setAccessibleDescription(swr);
+    m_swrLabel->setAccessibleDescription(swr);
 }
 
 void TunerApplet::updateValueLabels()

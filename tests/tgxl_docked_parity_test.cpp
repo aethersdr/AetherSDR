@@ -138,11 +138,57 @@ int main(int argc, char** argv)
             meters.setDeviceMeters(0.5f, 1.01f, 0.0f, 0.0f);
             CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
             meters.setDeviceMeters(0.49f, 1.0f, 0.0f, 0.0f);
-            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
+            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
             CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+            settle(400);
+            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+            CHECK(spin([&] { return power->property("gaugeMax").toFloat() == 200.0f; }, 1000));
             meters.setDeviceMeters(0.0f, 4.0f, 0.0f, 0.0f);
+            CHECK(swr->value() == 1.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+            for (float fwd : {800.0f, 0.14f, 0.14f, 0.14f, 950.0f, 0.14f, 0.14f, 600.0f}) {
+                meters.setDeviceMeters(fwd, 1.3f, 1000.0f, 1750.0f);
+                CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+                settle(20);
+            }
+            settle(800); // The last positive sample cancelled the idle return.
+            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+            meters.setDeviceMeters(0.14f, 99.9f, 1000.0f, 1750.0f);
+            CHECK(spin([&] { return power->property("gaugeMax").toFloat() == 200.0f; }, 1500));
+            CHECK(power->accessibleDescription().contains(QStringLiteral("1750")));
+            CHECK(power->accessibleDescription().contains(QStringLiteral("200 W")));
+            CHECK(swr->value() == 1.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+
+            // The relay idle reading cannot latch high, but valid high SWR can.
+            settle(1100);
+            meters.setRadioMeters(0.0f, 99.9f);
+            meters.setRadioMeters(100.0f, 1.002f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+            meters.setRadioMeters(100.0f, 4.0f);
             CHECK(swr->value() == 4.0f);
             CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
+            meters.setRadioMeters(0.0f, 99.9f);
+            CHECK(swr->value() == 1.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
+            meters.setRadioMeters(0.0f, 1.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+
+            TunerModel meterModel;
+            TgxlConnection direct;
+            meterModel.setDirectConnection(&direct);
+            meters.setTunerModel(&meterModel);
+            CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                                            Q_ARG(QString, QStringLiteral("V1.2.17"))));
+            meters.setDeviceMeters(800.0f, 4.0f, 1000.0f, 1750.0f);
+            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
+            CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
+            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
+            CHECK(power->accessibleDescription().contains(QStringLiteral("No MAX")));
+            meters.setRadioMeters(100.0f, 1.3f);
+            CHECK(power->value() == 100.0f); // Disconnect also releases the direct freshness gate.
         }
     }
 
