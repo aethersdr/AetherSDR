@@ -1,20 +1,6 @@
-// #5204 — the TX waterfall mask must follow the TX slice's filter even when the
-// radio's filterChanged echo lands while the operator is dragging a filter edge.
-//
-// MainWindow_Wiring.cpp's filterChanged handler returns early while
-// SpectrumWidget::isDraggingFilter() is true. That guard exists for #764: the
-// radio's status echo would otherwise fight the mouse and snap the dragged edge
-// back. It was written for the OVERLAY. The TX-mask sync
-// (syncTxWaterfallSliceToSpectrums) was added later inside the same lambda,
-// BELOW the early return, so it inherited a guard that was never reasoning
-// about it.
-//
-// Consequence: for a slice with tx=1, a filter change that arrives mid-drag
-// never reaches SpectrumWidget::m_txWaterfallFilterLow/HighHz. The model holds
-// the new width, the widget keeps the old one, and txWaterfallMaskRange() paints
-// the TX block at a stale width. Same settings, different painted width —
-// which is what "Inconsistant CW signal on waterfall" describes.
-//
+// #5204: the TX waterfall mask follows the TX slice's filter even when the
+// radio's echo lands mid-drag. The #764 drag guard holds back only the dragged
+// overlay edge; the mask is separate state and must stay current.
 // Socket-free: the real MainWindow on a backend with no transport, driven by
 // SliceDelta injection. Nothing keys; this is a rendering-state test.
 
@@ -59,6 +45,13 @@ struct TxMaskTestAccess {
     }
     static int maskLowHz(const SpectrumWidget& w) { return w.m_txWaterfallFilterLowHz; }
     static int maskHighHz(const SpectrumWidget& w) { return w.m_txWaterfallFilterHighHz; }
+    static int overlayHighHz(const SpectrumWidget& w, int sliceId)
+    {
+        for (const auto& o : w.m_sliceOverlays) {
+            if (o.sliceId == sliceId) { return o.filterHighHz; }
+        }
+        return -1;
+    }
     // Puts the widget in the state a held mouse button on a filter edge creates,
     // without synthesising the whole gesture: the guard reads exactly this.
     static void beginFilterDrag(SpectrumWidget& w)
@@ -160,8 +153,7 @@ int main(int argc, char** argv)
     check(slice->filterHigh() == 2050,
           "the model took the widened filter while the drag was in progress");
 
-    // THE BUG: the sync below the #764 early return never ran, so the widget
-    // still masks at the pre-drag width while the model says 2 kHz.
+    // The mask must take the echo that landed mid-drag.
     check(TxMaskTestAccess::maskHighHz(*spectrum) == 2050,
           "#5204: the TX mask follows the filter even when the echo lands mid-drag");
 
@@ -171,12 +163,50 @@ int main(int argc, char** argv)
     check(dragWidthHz > 1990.0 && dragWidthHz < 2010.0,
           "#5204: the painted TX mask is ~2 kHz, not the stale ~400 Hz");
 
-    // Releasing must not leave the stale width behind either: nothing re-syncs
-    // on drag end today, so a later unrelated echo is what eventually fixes it.
+    // Release does not re-sync, so the mask must already be right when it ends.
     TxMaskTestAccess::endFilterDrag(*spectrum);
     QCoreApplication::processEvents();
     check(TxMaskTestAccess::maskHighHz(*spectrum) == 2050,
           "#5204: the mask is correct once the drag ends");
+
+    // A second slice on the same pan. A drag on the TX slice's edge must hold
+    // back only that slice's overlay; the other slice's echo still lands.
+    SliceDelta second;
+    second.panId = QStringLiteral("0x40000000");
+    second.letter = QStringLiteral("B");
+    second.frequency = 14.060;
+    second.mode = QStringLiteral("USB");
+    second.modeList = QStringList{"USB", "LSB", "CW", "CWU", "CWL"};
+    second.filterLow = 100;
+    second.filterHigh = 2800;
+    second.active = false;
+    second.txSlice = false;
+    emit radio->sliceChanged(1, second);
+    QCoreApplication::processEvents();
+    SliceModel* other = nullptr;
+    for (auto* s : window.radioModel().slices()) {
+        if (s && s->sliceId() == 1) { other = s; break; }
+    }
+    check(other != nullptr && !other->isTxSlice(), "a second, non-TX slice reached the model");
+    if (!other) { return 1; }
+    // The test's drag never moves the edge itself, so A's overlay holds
+    // whatever it held at grab time; the guard must leave that alone.
+    const int draggedOverlayHz = TxMaskTestAccess::overlayHighHz(*spectrum, 0);
+    check(draggedOverlayHz > 0 && TxMaskTestAccess::overlayHighHz(*spectrum, 1) == 2800,
+          "baseline: both slices have overlays on the pan");
+
+    TxMaskTestAccess::beginFilterDrag(*spectrum);   // the active slice A's edge
+    slice->setFilterWidth(50, 1050);
+    other->setFilterWidth(100, 2400);
+    QCoreApplication::processEvents();
+    check(TxMaskTestAccess::overlayHighHz(*spectrum, 0) == draggedOverlayHz,
+          "#764: the dragged slice's overlay is not overwritten by its echo");
+    check(TxMaskTestAccess::maskHighHz(*spectrum) == 1050,
+          "#5204: the TX mask still follows the dragged slice's echo");
+    check(TxMaskTestAccess::overlayHighHz(*spectrum, 1) == 2400,
+          "the other slice's overlay takes its echo during the drag");
+    TxMaskTestAccess::endFilterDrag(*spectrum);
+    QCoreApplication::processEvents();
 
     std::printf(failures == 0 ? "PASSED\n" : "FAILED (%d failures)\n", failures);
 
