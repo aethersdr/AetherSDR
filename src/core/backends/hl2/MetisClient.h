@@ -568,6 +568,9 @@ private:
     void onRadioPttEdge(bool keyed);
     // No stream, no observation: drop a PTT the radio last reported, with its edge.
     void clearRadioPtt();
+    // Whether this EP6 packet's ptt_resp may move the PTT: true only for a packet
+    // ahead of every one already believed (modulo 2^32). Advances the fence.
+    bool acceptPttSequence(std::uint32_t seq);
     void bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                            std::span<const std::uint8_t> bytes);
     // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm
@@ -1047,6 +1050,16 @@ private:
     // silence. Cleared in clearRadioPtt(), set only by a real frame: a synthetic
     // release at link loss must not arm the next press (see radioPttChanged).
     bool m_radioPttArmed = false;
+    // The newest EP6 sequence number whose ptt_resp was believed. A rewound or
+    // duplicate packet behind it keeps its IQ and telemetry but not its PTT level.
+    // Reset with the stream (clearRadioPtt(), a receiver-count restart).
+    std::uint32_t m_pttFenceSeq = 0;
+    bool m_havePttFence = false;
+    // Consecutive packets behind the fence. Reordering on a LAN is a few packets;
+    // this many in a row is a stream that restarted without a reset, ~0.17 s at
+    // the slowest EP6 rate (381 packets/s at 48 kHz, one receiver).
+    int m_pttStaleRun = 0;
+    static constexpr int kPttStaleRunRestart = 64;
     // Telemetry rides the C&C bytes of every EP6 frame, so it parses ~3000x/s at
     // 384 kHz. The meters only need ~10 Hz; rate-limit the cross-thread emit so
     // publishTelemetry() does not flood the GUI thread. (#4449 review)

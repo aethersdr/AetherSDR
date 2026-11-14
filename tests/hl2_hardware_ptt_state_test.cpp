@@ -4,6 +4,8 @@
 // producer path, so the front-panel PTT modulates like MOX, and releases only that.
 // A PTT already held when the stream starts or resumes is shown and keys nothing:
 // only a press after a release seen on the wire is a key request (#7067 review).
+// So is only a level carried by a packet newer than every one already believed: a
+// rewound or duplicate EP6 packet neither presses, releases nor arms (#7067 review).
 // Socket-free: EP6 status frames go into the backend's own MetisClient on its I/O
 // thread. The silence legs wait out MetisClient's real silence timeout, twice.
 
@@ -94,17 +96,23 @@ struct Hl2HardwarePttTestAccess {
         onIo(backend, [](MetisClient&) {});
         drain(backend);
     }
-    // One EP6 datagram whose two status frames carry ptt_resp in C0 bit 0.
-    static void radioPtt(Hl2Backend& backend, bool ptt)
+    // The sequence number the next radioPtt() frame carries.
+    static std::uint32_t& nextSeq()
     {
         static std::uint32_t seq = 0;
+        return seq;
+    }
+    // One EP6 datagram whose two status frames carry ptt_resp in C0 bit 0.
+    static void radioPtt(Hl2Backend& backend, bool ptt) { radioPttAt(backend, ptt, nextSeq()++); }
+    // The same with an explicit sequence number: a replay, a rewind or a wrap.
+    static void radioPttAt(Hl2Backend& backend, bool ptt, std::uint32_t seq)
+    {
         std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
         pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
         pkt[4] = static_cast<std::uint8_t>((seq >> 24) & 0xFF);
         pkt[5] = static_cast<std::uint8_t>((seq >> 16) & 0xFF);
         pkt[6] = static_cast<std::uint8_t>((seq >> 8) & 0xFF);
         pkt[7] = static_cast<std::uint8_t>(seq & 0xFF);
-        ++seq;
         const std::size_t frames[2] = {8, 8 + kFrameSize};
         for (const std::size_t fs : frames) {
             pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;
@@ -583,6 +591,122 @@ void testModelKeysForRadioPtt()
     Access::tearDown(*backend);
 }
 
+// A delayed or duplicated EP6 packet is not a press. The loss accounting lets
+// rewinds and duplicates through for their IQ; their ptt_resp must not move the
+// PTT (#7067 review).
+void testStalePacketsAreNoKeyIntent()
+{
+    std::printf("\n  rewound and duplicate EP6 packets\n");
+    {
+        // The review's replay, through the real model: release N, press N+1,
+        // release N+2, then the same press N+1 again.
+        RadioModel model;
+        if (!model.rebuildBackendForTest(QStringLiteral("hl2"))) {
+            qFatal("No HL2 backend in this build");
+        }
+        installTxSlice(model);
+        auto* backend = qobject_cast<Hl2Backend*>(model.backend());
+        if (!backend) {
+            qFatal("The HL2 family did not build an Hl2Backend");
+        }
+        Access::prepare(*backend);
+        Access::setHoldMs(*backend, 0);
+        model.transmitModel().setMox(true);
+        model.transmitModel().setMox(false);
+
+        const std::uint32_t n = Access::nextSeq();
+        Access::nextSeq() += 3;
+        Access::radioPttAt(*backend, false, n);
+        Access::radioPttAt(*backend, true, n + 1);
+        check(Access::hostMoxOnWire(*backend) && model.transmitModel().isTransmitting(),
+              "control: a fresh press keys the host");
+        Access::radioPttAt(*backend, false, n + 2);
+        check(!Access::hostMoxOnWire(*backend), "control: its release unkeys");
+        Access::radioPttAt(*backend, true, n + 1);
+        check(!Access::hostMoxOnWire(*backend), "a replayed press keys no host");
+        check(!model.transmitModel().isTransmitting(), "nor the model's intent");
+        check(!model.isRadioTransmitting() && !Access::clientRadioPtt(*backend),
+              "nor shows transmit");
+        Access::radioPttAt(*backend, true, n + 2);
+        check(!Access::hostMoxOnWire(*backend), "a press on a duplicate number keys nothing");
+        Access::radioPttAt(*backend, true, n + 3);
+        check(Access::hostMoxOnWire(*backend), "the next fresh press keys again");
+        Access::radioPttAt(*backend, false, n + 1);
+        check(Access::hostMoxOnWire(*backend), "a stale release does not unkey it");
+        Access::radioPttAt(*backend, false, n + 4);
+        check(!Access::hostMoxOnWire(*backend), "a fresh release does");
+        Access::nextSeq() = n + 5;
+        Access::tearDown(*backend);
+    }
+    {
+        // A PTT held from the stream's start, then a stale release from before it.
+        // Believed, that release would arm the held input, and the next held
+        // frame would become a key request with no release from the operator.
+        Hl2Backend backend;
+        Access::prepare(backend);
+        Access::setHoldMs(backend, 0);
+        KeyRequests requests(backend);
+        const std::uint32_t m = 1000;
+        Access::radioPttAt(backend, true, m);
+        Access::radioPttAt(backend, false, m - 1);
+        check(Access::clientRadioPtt(backend), "a stale release leaves the held PTT shown");
+        check(requests.seen.isEmpty(), "and offers nothing");
+        Access::radioPttAt(backend, true, m + 1);
+        check(requests.seen.isEmpty(), "the held PTT is still no key request");
+        Access::radioPttAt(backend, false, m + 2);
+        Access::radioPttAt(backend, true, m + 3);
+        check(requests.seen == (QList<bool>{false, true}),
+              "control: a fresh release then press is a key request");
+        Access::tearDown(backend);
+    }
+    {
+        // The counter's wrap is a step forward; a replay across it is not.
+        Hl2Backend backend;
+        Access::prepare(backend);
+        Access::setHoldMs(backend, 0);
+        KeyRequests requests(backend);
+        Access::radioPttAt(backend, false, 0xFFFFFFFEu);
+        Access::radioPttAt(backend, true, 0xFFFFFFFFu);
+        Access::radioPttAt(backend, false, 0u);
+        Access::radioPttAt(backend, true, 1u);
+        check(requests.seen == (QList<bool>{true, false, true}),
+              "across the wrap: press, release, press");
+        Access::radioPttAt(backend, false, 2u);
+        Access::radioPttAt(backend, true, 0xFFFFFFFFu);
+        check(requests.seen == (QList<bool>{true, false, true, false}),
+              "across the wrap: a replayed press is nothing");
+        Access::tearDown(backend);
+    }
+    {
+        // A stream that rewinds and stays behind restarted without a reset: after
+        // a long run of such packets the PTT is dropped and must be re-armed.
+        Hl2Backend backend;
+        Access::prepare(backend);
+        Access::setHoldMs(backend, 0);
+        KeyRequests requests(backend);
+        Access::radioPttAt(backend, false, 50000);
+        Access::radioPttAt(backend, true, 50001);
+        check(requests.seen == QList<bool>{true}, "control: a fresh press");
+        std::uint32_t seq = 0;
+        for (int i = 0; i < 63; ++i) {
+            Access::radioPttAt(backend, false, seq++);
+        }
+        check(requests.seen == QList<bool>{true} && Access::clientRadioPtt(backend),
+              "a short rewound run is ignored");
+        Access::radioPttAt(backend, true, seq++);
+        check(requests.seen == (QList<bool>{true, false}),
+              "a long one is a new stream: the PTT is released");
+        Access::radioPttAt(backend, true, seq++);
+        check(requests.seen == (QList<bool>{true, false}),
+              "and a PTT held across it is no key request");
+        Access::radioPttAt(backend, false, seq++);
+        Access::radioPttAt(backend, true, seq++);
+        check(requests.seen == (QList<bool>{true, false, false, true}),
+              "release then press on the new stream keys");
+        Access::tearDown(backend);
+    }
+}
+
 // A backend that publishes mox and does not declare radioPttObservation.
 class PlainBackend final : public IRadioBackend {
 public:
@@ -656,6 +780,7 @@ int main(int argc, char** argv)
     testLinkLossFailsToReceive();
     testHeldPttIsNotAKeyRequest();
     testModelKeysForRadioPtt();
+    testStalePacketsAreNoKeyIntent();
     testUndeclaredBackendIsUnchanged();
 
     std::printf("\n%s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,

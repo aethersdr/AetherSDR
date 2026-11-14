@@ -5302,14 +5302,10 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     }
 }
 
-// A host-modulated radio's own PTT input (the HL2 front-panel jack) puts the
-// radio in transmit but modulates nothing: the samples come from the host, which
-// was never keyed, so it transmits silence (#5998). Follow the radio's edge with
-// a host key through the same gated producer path a serial footswitch takes, so
-// every transmit preflight (capability, receive-only, inhibit, admission) still
-// applies. Release only what this path keyed: a key the host already held (MOX,
-// TCI, TUNE) owns its own release. CW is left alone, because the radio's own
-// keyer raises the same PTT and the CW path keys for itself.
+// A host-modulated radio's own PTT press is a host key through the gated
+// producer path a footswitch takes, so every transmit preflight applies. Only
+// what this path keyed is released here; a key the host already held owns its
+// own release. CW keys itself.
 void RadioModel::followRadioPtt(bool down)
 {
     if (!down) {
