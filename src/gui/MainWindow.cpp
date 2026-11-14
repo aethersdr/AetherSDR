@@ -10696,10 +10696,10 @@ void MainWindow::updateKeyerAvailability()
 
     const bool txIsCw  = hasCwKeyer
                          && isCwMode(txMode);
-    // Voice-mode test through the shared predicate: the ASR block below asks
-    // the same question of a DIFFERENT slice, and one list keeps the two from
-    // drifting on which modes count (VoiceModeGate.h).
-    const bool txIsSsb = isVoiceMode(txMode);
+    // ASR accepts receive-only voice modes; keyer availability and the
+    // mode-change abort must also respect the backend's TX-mode exclusions.
+    const bool txIsSsb = isVoiceTransmitMode(
+        txMode, m_radioModel.backendCapabilities().receiveOnlyModes);
 
     // DVK carries a second, mode-independent gate: the radio's own DVK
     // entitlement. Unlike the mode gate it survives every mode change, so it is

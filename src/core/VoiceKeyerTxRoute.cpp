@@ -22,9 +22,10 @@ QString VoiceKeyerTxRoute::startRefusal() const
     SliceModel* s = m_radio.txSlice();
     if (!s)
         return QStringLiteral("No transmit slice is assigned.");
-    if (!isVoiceMode(s->mode()))
+    if (!isVoiceTransmitMode(s->mode(), m_radio.backendCapabilities().receiveOnlyModes)) {
         return QStringLiteral("The transmit slice is in %1 — voice keyer playback needs a "
-                              "voice mode.").arg(s->mode());
+                              "transmit-capable voice mode.").arg(s->mode());
+    }
     if (m_radio.transmitModel().isTransmitting())
         return QStringLiteral("The radio is already transmitting.");
     // In a voice mode DAX TX mode is only on while another generated source
