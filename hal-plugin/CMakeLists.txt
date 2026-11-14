@@ -46,6 +46,9 @@ set_target_properties(AetherSDRDAX PROPERTIES
 )
 
 # Install to the HAL plug-in directory (requires sudo)
+# Install only the runtime driver in the DAX package. FetchContent also
+# defines libASPL's developer-file install rules; those must stay out.
 install(TARGETS AetherSDRDAX
     DESTINATION "/Library/Audio/Plug-Ins/HAL"
+    COMPONENT dax_driver
 )
