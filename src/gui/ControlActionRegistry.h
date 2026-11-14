@@ -8,8 +8,6 @@
 
 namespace AetherSDR {
 
-class ShortcutManager;
-
 // One declaration per operator action, published to every input surface.
 //
 // Keyboard shortcuts (ShortcutManager) and MIDI (MidiControlManager) keep
@@ -99,6 +97,17 @@ struct ControlActionMidiSpec {
     std::function<float()> get;
 };
 
+// What publishShortcuts() hands the keyboard side: one ShortcutManager
+// registration (Level actions arrive as their Up and Down pair).
+struct ControlActionShortcutSpec {
+    QString id;
+    QString name;
+    QString category;
+    QKeySequence defaultKey;
+    std::function<void()> handler;
+    bool autoRepeat;
+};
+
 class ControlActionRegistry {
 public:
     // Called with the action name when an unavailable action is invoked.
@@ -116,7 +125,7 @@ public:
     // own TX input before any setter runs.
     void addKeyingMidi(const QString& midiId, const QString& name, const QString& category);
 
-    void publishShortcuts(ShortcutManager& shortcuts) const;
+    void publishShortcuts(const std::function<void(const ControlActionShortcutSpec&)>& reg) const;
     void publishMidi(const std::function<void(const ControlActionMidiSpec&)>& reg) const;
 
     // Shortcut ids a Level action publishes as its keyboard pair.

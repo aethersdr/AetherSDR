@@ -1856,7 +1856,10 @@ void MainWindow::registerShortcutActions()
     // ── Registry-declared actions (keyboard side; MIDI side publishes in
     // registerMidiParams). Before loadBindings so their saved keys load. ──
     registerControlActions();
-    m_controlActions.publishShortcuts(m_shortcutManager);
+    m_controlActions.publishShortcuts([this](const ControlActionShortcutSpec& spec) {
+        m_shortcutManager.registerAction(spec.id, spec.name, spec.category, spec.defaultKey,
+                                         spec.handler, spec.autoRepeat);
+    });
 
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();

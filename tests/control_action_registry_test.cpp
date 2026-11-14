@@ -10,6 +10,14 @@ using namespace AetherSDR;
 
 namespace {
 
+void publish(const ControlActionRegistry& reg, ShortcutManager& sm)
+{
+    reg.publishShortcuts([&](const ControlActionShortcutSpec& spec) {
+        sm.registerAction(spec.id, spec.name, spec.category, spec.defaultKey, spec.handler,
+                          spec.autoRepeat);
+    });
+}
+
 const ShortcutManager::Action* find(const ShortcutManager& m, const QString& id)
 {
     for (const auto& a : m.actions())
@@ -31,7 +39,7 @@ private slots:
                                                [&](float) { ++fired; })
                             .inMidiCategory("Global")));
         ShortcutManager sm;
-        reg.publishShortcuts(sm);
+        publish(reg, sm);
         const auto* a = find(sm, "band_up");
         QVERIFY(a);
         QCOMPARE(a->displayName, QStringLiteral("Band Up"));
@@ -58,7 +66,7 @@ private slots:
                                               [&](float v) { state = v; },
                                               [&] { return state; })));
         ShortcutManager sm;
-        reg.publishShortcuts(sm);
+        publish(reg, sm);
         const auto* a = find(sm, "nr_toggle");
         QVERIFY(a);
         a->handler();
@@ -76,7 +84,7 @@ private slots:
                                              [&](float v) { level = v; },
                                              [&] { return level; })));
         ShortcutManager sm;
-        reg.publishShortcuts(sm);
+        publish(reg, sm);
         QVERIFY(!find(sm, "rf_power"));
         const auto* up = find(sm, "rf_power_up");
         const auto* down = find(sm, "rf_power_down");
@@ -113,7 +121,7 @@ private slots:
                                                [&](float) { ++fired; })
                             .when([&] { return available; })));
         ShortcutManager sm;
-        reg.publishShortcuts(sm);
+        publish(reg, sm);
         QVector<ControlActionMidiSpec> specs;
         reg.publishMidi([&](const ControlActionMidiSpec& s) { specs << s; });
 
@@ -208,7 +216,7 @@ private slots:
                                              noop, [] { return 0.0f; })));
         QVERIFY(reg.add(ControlAction::trigger("cw_keyer_iambic_a", "cw.keyerIambicA", "A", "CW", noop)));
         ShortcutManager sm;
-        reg.publishShortcuts(sm);
+        publish(reg, sm);
         for (const auto& a : sm.actions())
             QVERIFY2(ControlActionRegistry::isValidShortcutId(a.id), qPrintable(a.id));
     }

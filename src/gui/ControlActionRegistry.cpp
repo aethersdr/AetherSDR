@@ -1,7 +1,5 @@
 #include "ControlActionRegistry.h"
 
-#include "core/ShortcutManager.h"
-
 #include <QRegularExpression>
 #include <algorithm>
 
@@ -102,7 +100,8 @@ bool ControlActionRegistry::guard(const ControlAction& a) const
     return false;
 }
 
-void ControlActionRegistry::publishShortcuts(ShortcutManager& shortcuts) const
+void ControlActionRegistry::publishShortcuts(
+    const std::function<void(const ControlActionShortcutSpec&)>& reg) const
 {
     for (const ControlAction& a : m_actions) {
         if (a.shortcutId.isEmpty())
@@ -113,19 +112,19 @@ void ControlActionRegistry::publishShortcuts(ShortcutManager& shortcuts) const
         const auto self = this;
         switch (a.kind) {
         case ControlAction::Kind::Trigger:
-            shortcuts.registerAction(a.shortcutId, a.name, a.category, a.defaultKey,
-                [self, act] { if (self->guard(act)) act.set(act.rangeMax); },
-                a.autoRepeat);
+            reg({a.shortcutId, a.name, a.category, a.defaultKey,
+                 [self, act] { if (self->guard(act)) act.set(act.rangeMax); },
+                 a.autoRepeat});
             break;
         case ControlAction::Kind::Toggle:
-            shortcuts.registerAction(a.shortcutId, a.name, a.category, a.defaultKey,
-                [self, act] {
-                    if (!self->guard(act))
-                        return;
-                    const float mid = (act.rangeMin + act.rangeMax) / 2.0f;
-                    act.set(act.get() > mid ? act.rangeMin : act.rangeMax);
-                },
-                a.autoRepeat);
+            reg({a.shortcutId, a.name, a.category, a.defaultKey,
+                 [self, act] {
+                     if (!self->guard(act))
+                         return;
+                     const float mid = (act.rangeMin + act.rangeMax) / 2.0f;
+                     act.set(act.get() > mid ? act.rangeMin : act.rangeMax);
+                 },
+                 a.autoRepeat});
             break;
         case ControlAction::Kind::Level: {
             const auto step = [self, act](float sign) {
@@ -134,12 +133,10 @@ void ControlActionRegistry::publishShortcuts(ShortcutManager& shortcuts) const
                 const float next = act.get() + sign * act.keyStep;
                 act.set(std::clamp(next, act.rangeMin, act.rangeMax));
             };
-            shortcuts.registerAction(upId(a.shortcutId),
-                QStringLiteral("%1 Up").arg(a.name), a.category, QKeySequence(),
-                [step] { step(1.0f); }, /*autoRepeat=*/true);
-            shortcuts.registerAction(downId(a.shortcutId),
-                QStringLiteral("%1 Down").arg(a.name), a.category, QKeySequence(),
-                [step] { step(-1.0f); }, /*autoRepeat=*/true);
+            reg({upId(a.shortcutId), QStringLiteral("%1 Up").arg(a.name), a.category,
+                 QKeySequence(), [step] { step(1.0f); }, /*autoRepeat=*/true});
+            reg({downId(a.shortcutId), QStringLiteral("%1 Down").arg(a.name), a.category,
+                 QKeySequence(), [step] { step(-1.0f); }, /*autoRepeat=*/true});
             break;
         }
         }
