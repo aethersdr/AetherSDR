@@ -9,8 +9,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <optional>
 
 namespace AetherSDR {
+
+namespace {
+std::optional<bool> s_processOverride;
+}
 
 WindowRepaintScheduler* WindowRepaintScheduler::ensureFor(QWidget* window, bool initiallyEnabled)
 {
@@ -18,7 +23,8 @@ WindowRepaintScheduler* WindowRepaintScheduler::ensureFor(QWidget* window, bool 
     window = window->window();
     auto* existing = window->findChild<WindowRepaintScheduler*>(
         QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly);
-    return existing ? existing : new WindowRepaintScheduler(window, initiallyEnabled);
+    return existing ? existing
+                    : new WindowRepaintScheduler(window, s_processOverride.value_or(initiallyEnabled));
 }
 
 WindowRepaintScheduler::WindowRepaintScheduler(QWidget* window, bool initiallyEnabled)
@@ -90,6 +96,17 @@ void WindowRepaintScheduler::setEnabled(bool enabled)
     // Preserve the trailing dirty update when disabling the comparison mode.
     // Delivery can destroy the window and this scheduler; touch no state after it.
     if (!enabled) { deliverPending(); }
+}
+
+void WindowRepaintScheduler::setEnabledForProcess(bool enabled)
+{
+    s_processOverride = enabled;
+    setEnabled(enabled);
+}
+
+void WindowRepaintScheduler::clearProcessOverride()
+{
+    s_processOverride.reset();
 }
 
 QVariantMap WindowRepaintScheduler::statsSnapshot(bool reset)

@@ -1,7 +1,6 @@
 #include "PanadapterRenderScheduler.h"
 
 #include "SpectrumWidget.h"
-#include "WindowRepaintScheduler.h"
 
 #include <QMetaObject>
 #include <QThread>
@@ -42,7 +41,13 @@ void PanadapterRenderScheduler::requestDataFrame(SpectrumWidget* widget, int slo
     // Raster pans need the existing timer to batch their expensive paints.
     const bool paceWindow = false;
 #endif
-    const auto* windowScheduler = WindowRepaintScheduler::ensureFor(widget->window(), paceWindow);
+    QWidget* const window = widget->window();
+    WindowRepaintScheduler* windowScheduler = m_windowSchedulers.value(window);
+    if (!windowScheduler) {
+        m_windowSchedulers.removeIf([](const auto& entry) { return entry.value().isNull(); });
+        windowScheduler = WindowRepaintScheduler::ensureFor(window, paceWindow);
+        m_windowSchedulers.insert(window, windowScheduler);
+    }
     ++m_requests;
     slotMs = std::max(1, slotMs);
     m_lastSlotMs = slotMs;

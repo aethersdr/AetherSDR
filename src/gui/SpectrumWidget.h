@@ -2494,6 +2494,7 @@ private:
     // read per instrumented section. Snapshot/reset via panstatsSnapshot().
     QElapsedTimer m_submissionClock;
     QVector<qint64> m_submissionIntervalsNs;
+    static constexpr qsizetype kMaxSubmissionIntervals = 65536; // ~18 min at 60 fps
     struct PanStats {
         QElapsedTimer clock;              // wall interval since last reset
         quint64 updateSpectrumCalls{0};   // FFT frames ingested

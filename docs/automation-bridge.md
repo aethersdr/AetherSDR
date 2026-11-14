@@ -1013,7 +1013,9 @@ radio state, meter ballistics, or stream rate. Newly participating windows start
 enabled on the shared-window QRhi path on Windows, Linux and macOS, including
 QRhi software drivers (WARP, llvmpipe, etc.). QPainter builds
 (`AETHER_GPU_SPECTRUM=OFF`) and legacy native-pan windows start disabled.
-Disabling delivers any pending final update immediately.
+After a `repaintScheduling` call, windows that join later (for example a pan
+floated afterwards) start in the requested state instead, for the rest of the
+process. Disabling delivers any pending final update immediately.
 
 `get repaintstats [reset]` reports one entry per participating window:
 `enabled`, `frameIntervalMs`, `requests`, `deferredRequests`,
@@ -1085,7 +1087,7 @@ cost a few integer adds per frame.
 | field | meaning |
 |---|---|
 | `gpuFrameMsPerSec` | **the headline number** — main-thread ms consumed per wall-second preparing + encoding this pan's GPU frames |
-| `submissionIntervalP50Ms`, `submissionIntervalP95Ms`, `submissionIntervalP99Ms`, `submissionIntervalMaxMs`, `submissionIntervalSamples` | first 65,536 intervals between `QRhiWidget::frameSubmitted` signals since reset; includes window compositions reusing the pan's texture, so it is distinct from fresh pan render FPS, display presentation latency, and GPU execution time |
+| `submissionIntervalP50Ms`, `submissionIntervalP95Ms`, `submissionIntervalP99Ms`, `submissionIntervalMaxMs`, `submissionIntervalSamples`, `submissionIntervalSaturated` | first 65,536 intervals between `QRhiWidget::frameSubmitted` signals since reset (`submissionIntervalSaturated` turns true once the cap is reached and later intervals are no longer recorded); includes window compositions reusing the pan's texture, so it is distinct from fresh pan render FPS, display presentation latency, and GPU execution time |
 | `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |

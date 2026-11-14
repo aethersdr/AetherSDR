@@ -4870,7 +4870,7 @@ float VfoWidget::signalDbmToMeterFraction(float dbm)
     return 1.0f;
 }
 
-void VfoWidget::updateMeterRegion()
+void VfoWidget::updateMeterIfPixelsChanged()
 {
     const QRect bar = meterBarRect();
     const int fill = static_cast<int>(m_signalMeterFraction * bar.width());
@@ -4904,7 +4904,7 @@ void VfoWidget::updateSignalMeterTarget()
     if (m_smartMtr || (m_relativeSignal && !m_relativeSignalValid)) {
         m_signalMeterAnimation.stop();
         m_signalMeterFraction = m_targetSignalMeterFraction;
-        if (!m_smartMtr) { updateMeterRegion(); }
+        if (!m_smartMtr) { updateMeterIfPixelsChanged(); }
         return;
     }
 
@@ -4913,7 +4913,7 @@ void VfoWidget::updateSignalMeterTarget()
         if (m_signalMeterAnimation.isActive()) {
             m_signalMeterAnimation.stop();
         }
-        updateMeterRegion();
+        updateMeterIfPixelsChanged();
         return;
     }
 
@@ -4954,7 +4954,7 @@ void VfoWidget::animateSignalMeter()
         m_signalMeterFraction += delta * alpha;
     }
 
-    updateMeterRegion();
+    updateMeterIfPixelsChanged();
 }
 
 // ── Slice connection ──────────────────────────────────────────────────────────

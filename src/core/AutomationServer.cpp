@@ -3026,7 +3026,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 for (QWidget* window : QApplication::topLevelWidgets()) {
                     for (QObject* scheduler : window->findChildren<QObject*>(
                              QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly)) {
-                        if (QMetaObject::invokeMethod(scheduler, "setEnabled", Qt::DirectConnection,
+                        if (QMetaObject::invokeMethod(scheduler, "setEnabledForProcess", Qt::DirectConnection,
                                                      Q_ARG(bool, enabled))) { ++count; }
                     }
                 }

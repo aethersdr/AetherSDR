@@ -1179,6 +1179,8 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
         m[QStringLiteral("submissionIntervalP99Ms")] = percentileMs(0.99);
         m[QStringLiteral("submissionIntervalMaxMs")] = sorted.last() / 1.0e6;
         m[QStringLiteral("submissionIntervalSamples")] = sorted.size();
+        m[QStringLiteral("submissionIntervalSaturated")] =
+            sorted.size() >= kMaxSubmissionIntervals;
     }
     if (reset) {
         m_panStats.reset();
@@ -2042,7 +2044,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
 #ifdef AETHER_GPU_SPECTRUM
     connect(this, &QRhiWidget::frameSubmitted, this, [this] {
-        if (m_submissionClock.isValid() && m_submissionIntervalsNs.size() < 65536) {
+        if (m_submissionClock.isValid() && m_submissionIntervalsNs.size() < kMaxSubmissionIntervals) {
             m_submissionIntervalsNs.append(m_submissionClock.nsecsElapsed());
         }
         m_submissionClock.restart();

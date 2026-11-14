@@ -378,7 +378,7 @@ protected:
 
 private:
     void syncShadowGeometry();
-    void updateMeterRegion();
+    void updateMeterIfPixelsChanged();
     void updateSignalMeterTarget();
     void animateSignalMeter();
     // Build and push the current MeterInput (RX signal vs the selected TX meter)

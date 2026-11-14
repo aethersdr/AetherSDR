@@ -19,6 +19,10 @@ public:
     static WindowRepaintScheduler* ensureFor(QWidget* window, bool initiallyEnabled = true);
     bool isEnabled() const { return m_enabled; }
     Q_INVOKABLE void setEnabled(bool enabled);
+    // Bridge A/B control: sets this window and the state every scheduler
+    // created later starts in (e.g. a pan floated after the toggle).
+    Q_INVOKABLE void setEnabledForProcess(bool enabled);
+    static void clearProcessOverride();
     Q_INVOKABLE QVariantMap statsSnapshot(bool reset = false);
 
 protected:

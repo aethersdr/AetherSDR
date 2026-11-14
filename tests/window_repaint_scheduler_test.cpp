@@ -28,6 +28,8 @@ public:
 class WindowRepaintSchedulerTest : public QObject {
     Q_OBJECT
 private slots:
+    void cleanup() { WindowRepaintScheduler::clearProcessOverride(); }
+
     void burstKeepsFinalStateAndStopsWhenIdle()
     {
         UpdateWindow window;
@@ -94,6 +96,22 @@ private slots:
         window.update();
         window.show();
         QTRY_COMPARE_WITH_TIMEOUT(window.renderedValue, 17, 500);
+    }
+
+    void processToggleAppliesToWindowsCreatedLater()
+    {
+        UpdateWindow first;
+        auto* scheduler = WindowRepaintScheduler::ensureFor(&first);
+        scheduler->setEnabledForProcess(false);
+        QVERIFY(!scheduler->isEnabled());
+        UpdateWindow floated; // e.g. a pan floated after the bridge toggle
+        QVERIFY(!WindowRepaintScheduler::ensureFor(&floated, true)->isEnabled());
+        scheduler->setEnabledForProcess(true);
+        UpdateWindow nativeLeaf;
+        QVERIFY(WindowRepaintScheduler::ensureFor(&nativeLeaf, false)->isEnabled());
+        WindowRepaintScheduler::clearProcessOverride();
+        UpdateWindow fresh;
+        QVERIFY(!WindowRepaintScheduler::ensureFor(&fresh, false)->isEnabled());
     }
 };
 
