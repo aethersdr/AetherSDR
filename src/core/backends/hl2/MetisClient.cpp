@@ -519,6 +519,15 @@ void MetisClient::onWatchdogTick()
         // the burst msleeps on the EP2 thread. m_linkUp stays true so a recovery does not
         // republish state; m_params.bandscope and a pending frame request survive.
         if (!m_silenceRecoveryArmed && m_socket && m_startRetryTimer) {
+            // Ask the radio before re-sending run: if another host is running it
+            // now, a run command from us would take it back.
+            if (m_silenceProbeAsking)
+                return;
+            if (!m_silenceProbeCleared) {
+                beginSilenceProbe();
+                return;
+            }
+            m_silenceProbeCleared = false;
             m_silenceRecoveryArmed = true;
             ++m_link.silenceRecoveryAttempts;
             // Publish in this turn. linkCountersUpdated otherwise leaves only
@@ -605,6 +614,46 @@ void MetisClient::dropControlRequest()
 
 void MetisClient::stop()
 {
+    stopSession(true);
+}
+
+void MetisClient::abandon()
+{
+    stopSession(false);
+}
+
+void MetisClient::beginSilenceProbe()
+{
+    m_silenceProbeAsking = true;
+    if (!m_silenceProbe)
+        m_silenceProbe = new AetherSDR::ReconnectBusyProbe(this);
+    const auto request = discoveryRequest();
+    m_silenceProbe->start(m_host, kMetisPort,
+        QByteArray(reinterpret_cast<const char*>(request.data()),
+                   static_cast<qsizetype>(request.size())),
+        [](std::span<const std::uint8_t> datagram) -> std::optional<bool> {
+            const auto reply = parseDiscoveryReply(datagram);
+            return reply ? std::optional<bool>(reply->streaming) : std::nullopt;
+        },
+        [this](std::optional<bool> streaming) { onSilenceProbeAnswer(streaming); });
+}
+
+void MetisClient::onSilenceProbeAnswer(std::optional<bool> streaming)
+{
+    m_silenceProbeAsking = false;
+    if (!m_running)
+        return;   // the session ended while asking
+    if (!AetherSDR::ReconnectBusyProbe::mayProceed(streaming)) {
+        qInfo() << "MetisClient: the radio reports it is still sending, to another host"
+                   " or to a link we lost; ending this session without a stop";
+        abandon();
+        return;
+    }
+    m_silenceProbeCleared = true;   // the next watchdog tick re-sends the run command
+}
+
+void MetisClient::stopSession(bool sendStopPacket)
+{
     // A receiver-count restart in flight ends here: its remaining steps would
     // put a metis-start on the wire after the stop below.
     cancelReceiverCountRestart();
@@ -612,8 +661,12 @@ void MetisClient::stop()
     if (m_ep2Timer)        m_ep2Timer->stop();
     if (m_watchdogTimer)   m_watchdogTimer->stop();
     if (m_connectWatchdog) m_connectWatchdog->stop();
+    if (m_silenceProbe)    m_silenceProbe->cancel();
+    m_silenceProbeAsking = false;
+    m_silenceProbeCleared = false;
     if (m_socket) {
-        countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
+        if (sendStopPacket)
+            countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
         // Disarm only AFTER the normal stop has gone out, and before the
         // descriptor is closed. Disarming earlier would leave a window where a
         // signal arriving mid-teardown released nothing; later would leave a
@@ -2035,6 +2088,14 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     // recently the stream produced anything, which both the silence watchdog
     // and the start-retry read.
     m_sinceLastEp6.restart();
+    // A stream that came back needs no answer about who has the radio: the
+    // probe in flight (if any) is dropped, and the next silence asks afresh.
+    if (m_silenceProbeAsking || m_silenceProbeCleared) {
+        if (m_silenceProbe)
+            m_silenceProbe->cancel();
+        m_silenceProbeAsking = false;
+        m_silenceProbeCleared = false;
+    }
     if (m_silenceRecoveryArmed) {
         // The stream is back and m_linkUp never dropped, so nothing downstream
         // saw this happen. The counters are the only record that it did, which

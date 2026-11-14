@@ -88,6 +88,10 @@ public:
     // the stop (AnanBackend::kRateChangeConnectTimeoutMs).
     Q_INVOKABLE bool start(const Params& params, int connectTimeoutMs = kConnectTimeoutMs);
     Q_INVOKABLE void stop();
+    // As stop(), but sends the radio nothing (no run=0): another client may have
+    // it now, and p2app would obey our stop. If the session was ours, p2app's
+    // own watchdog idles the radio about a second after our keepalives cease.
+    Q_INVOKABLE void abandon() { teardown(false); }
 
     // Retune one DDC. No frequency is set by start() itself (see the class
     // comment on connectRadio()/setSliceFrequency() being separate seam

@@ -803,8 +803,10 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         // The previous session first, as start() would have stopped it: a client
         // left running after a connect timeout keeps sending this radio its
         // high-priority settings, and a busy answer below starts nothing new.
+        // Abandoned, not stopped: whether another client has the radio is what
+        // the probe is about to find out, and a run=0 from us would stop it.
         if (m_client)
-            QMetaObject::invokeMethod(m_client, "stop", Qt::BlockingQueuedConnection);
+            QMetaObject::invokeMethod(m_client, "abandon", Qt::BlockingQueuedConnection);
         m_busyProbeRequest = request;
         const auto discovery = buildDiscovery();
         m_busyProbe->start(host, kRadioPort,

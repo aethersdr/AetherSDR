@@ -2308,6 +2308,12 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     m_busyProbe->cancel();
     const QHostAddress probeHost(request.host);
     if (request.automaticReconnect && !probeHost.isNull()) {
+        // A session still running (its silence recovery declared link loss but
+        // keeps sending EP2) is abandoned first, without a metis-stop: another
+        // host may be running the radio, and the gateware obeys RUNSTOP from any
+        // host. The probe below finds out which; a busy answer starts nothing.
+        if (m_metis && m_metis->isRunning())
+            QMetaObject::invokeMethod(m_metis, "abandon", Qt::BlockingQueuedConnection);
         m_busyProbeRequest = request;
         const auto discovery = discoveryRequest();
         m_busyProbe->start(probeHost, kMetisPort,

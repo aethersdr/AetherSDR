@@ -102,6 +102,7 @@ struct MetisClientTestAccess {
     {
         return MetisClient::kMaxConsecutiveBandscopeTimeouts;
     }
+    static bool silenceProbeCleared(const MetisClient& client) { return client.m_silenceProbeCleared; }
 };
 }  // namespace AetherSDR::hl2
 
@@ -1044,5 +1045,34 @@ int main(int argc, char** argv)
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_ep4_gate_test: all checks passed\n");
+    // ---- silence recovery asks before re-sending run (#7270) ----
+    // The gateware decodes RUNSTOP from any host: a run command to an HL2 that
+    // another host is running now would take it back.
+    {
+        MetisClient c;
+        QSignalSpy down(&c, &MetisClient::linkDown);
+        MetisClientTestAccess::setStreaming(c);
+        MetisClientTestAccess::setLinkUp(c);
+        c.answerSilenceProbeForTest(false);
+        check(c.isRunning() && MetisClientTestAccess::silenceProbeCleared(c) && down.isEmpty(),
+              "a free radio: the next watchdog tick re-sends run, as before");
+        MetisClient d;
+        QSignalSpy downD(&d, &MetisClient::linkDown);
+        MetisClientTestAccess::setStreaming(d);
+        MetisClientTestAccess::setLinkUp(d);
+        d.answerSilenceProbeForTest(std::nullopt);
+        check(d.isRunning() && MetisClientTestAccess::silenceProbeCleared(d),
+              "no reply: the run re-send goes ahead (fail open)");
+        MetisClient e;
+        QSignalSpy downE(&e, &MetisClient::linkDown);
+        MetisClientTestAccess::setStreaming(e);
+        MetisClientTestAccess::setLinkUp(e);
+        e.answerSilenceProbeForTest(true);
+        check(!e.isRunning() && downE.count() == 1 && !MetisClientTestAccess::silenceProbeCleared(e),
+              "the radio still sending: the session is abandoned (no run, no metis-stop) and the link reported down");
+        e.answerSilenceProbeForTest(false);
+        check(!e.isRunning() && downE.count() == 1, "a late answer after the session ended does nothing");
+    }
+
     return g_failures == 0 ? 0 : 1;
 }

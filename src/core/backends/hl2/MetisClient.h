@@ -1,5 +1,6 @@
 #pragma once
 #include "core/TxCoordinator.h"
+#include "core/backends/ReconnectBusyProbe.h"
 
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -9,6 +10,7 @@
 
 #include <atomic>
 #include <complex>
+#include <optional>
 #include <span>
 #include <cstdint>
 #include <deque>
@@ -190,6 +192,14 @@ public:
     // and marshals these across; they are Q_INVOKABLE so it can.
     Q_INVOKABLE bool start(const Params& params);   // bind, send start + priming C&C, begin ingest
     Q_INVOKABLE void stop();                        // send stop, close socket
+    // As stop(), but sends the radio nothing: another host has it, and a
+    // metis-stop from us would halt that host's stream (the gateware decodes
+    // RUNSTOP from any host). If the stream was ours after all, the gateware's
+    // own watchdog halts it once our EP2 stops.
+    Q_INVOKABLE void abandon();
+    // Tests: the silence-recovery busy probe's answer, without a socket.
+    void answerSilenceProbeForTest(std::optional<bool> streaming) { onSilenceProbeAnswer(streaming); }
+    [[nodiscard]] bool silenceProbeAskingForTest() const noexcept { return m_silenceProbeAsking; }
     // Safe from any thread: Hl2Backend reads it to refuse a key while stopped.
     [[nodiscard]] bool isRunning() const noexcept { return m_running.load(); }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
@@ -745,6 +755,14 @@ private:
     // and by setReceiverCount(), which restarts the stream by its own route and
     // must not have its EP6 credited to this one.
     bool m_silenceRecoveryArmed = false;
+    // Silence recovery asks the radio first (ReconnectBusyProbe.h): a re-sent run
+    // command to an HL2 another host is now running would take it back.
+    void stopSession(bool sendStopPacket);
+    void beginSilenceProbe();
+    void onSilenceProbeAnswer(std::optional<bool> streaming);
+    AetherSDR::ReconnectBusyProbe* m_silenceProbe = nullptr;
+    bool m_silenceProbeAsking = false;
+    bool m_silenceProbeCleared = false;   // the radio answered free (or not at all)
     // Stage 1's only observable is a datagram on m_socket; with no injectable sink
     // beside feedDatagram(), its test uses a fake Metis radio (socket exception, #5254).
     // Free-running and never restarted: the RQST/ACK floor differences it, so it must
