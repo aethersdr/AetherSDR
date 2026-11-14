@@ -178,6 +178,7 @@ private:
     bool m_resumeAfterTest{false};
     MicrohamTrioSettings m_testTarget;
     void finishTest(bool reachable, const QString& report);
+    void abandonTest();
     QString m_failure;
 
     MicrohamTrioSession* m_session{nullptr};

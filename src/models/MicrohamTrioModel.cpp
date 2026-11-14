@@ -32,6 +32,7 @@ MicrohamTrioModel::~MicrohamTrioModel()
 
 void MicrohamTrioModel::loadSettings(bool connect)
 {
+    abandonTest();
     dropSession();
     m_settings = MicrohamTrioSettings::load();
     m_released = false;
@@ -47,6 +48,7 @@ void MicrohamTrioModel::loadSettings(bool connect)
 
 void MicrohamTrioModel::connectNetwork(const QString& host, quint16 port)
 {
+    abandonTest();
     const QString trimmed = host.trimmed();
     if (trimmed.isEmpty()) {
         removeTrio();
@@ -74,6 +76,7 @@ void MicrohamTrioModel::connectNetwork(const QString& host, quint16 port)
 
 void MicrohamTrioModel::disconnect()
 {
+    abandonTest();
     const bool wasConnected = isConnected();
     dropSession();
     m_released = false;
@@ -88,6 +91,7 @@ void MicrohamTrioModel::disconnect()
 
 void MicrohamTrioModel::removeTrio()
 {
+    abandonTest();
     const bool wasConnected = isConnected();
     dropSession();
     MicrohamTrioSettings::remove();
@@ -105,6 +109,7 @@ void MicrohamTrioModel::removeTrio()
 
 void MicrohamTrioModel::releaseForBrowser()
 {
+    abandonTest();
     if (!m_session) {
         return;
     }
@@ -165,6 +170,17 @@ void MicrohamTrioModel::finishTest(bool reachable, const QString& report)
     setWord(view().session);
     emit testFinished(reachable, report);
     emit changed();
+}
+
+// Anything that replaces the session ends a test in flight, answered.
+void MicrohamTrioModel::abandonTest()
+{
+    if (!m_testing) {
+        return;
+    }
+    m_testing = false;
+    m_resumeAfterTest = false;
+    emit testFinished(false, tr("Test cancelled."));
 }
 
 void MicrohamTrioModel::setRadio(const RadioSettingsScope& scope)

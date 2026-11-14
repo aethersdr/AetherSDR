@@ -376,6 +376,57 @@ void testTestConnection()
                reports.size() == 1 && rig.peer.transport.opens == opens
                    && rig.word() == SessionWord::Direct);
     }
+    {
+        // A Test cancelled from the row (its Connect button reads Cancel while
+        // the test runs): answered, and the next Connect is a Connect again.
+        Rig rig;
+        QStringList reports;
+        bool reachable = true;
+        QObject::connect(&rig.model, &MicrohamTrioModel::testFinished,
+                         [&](bool ok, const QString& report) { reachable = ok; reports << report; });
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        rig.peer.connectHeld(rig.model);
+        rig.model.testConnection(QStringLiteral("192.168.8.99"), 80);
+        const bool connectingDuringTest = rig.model.isConnecting() && rig.model.isTesting();
+        rig.model.disconnect();
+        report("cancel during a Test: testing cleared and answered",
+               connectingDuringTest && !rig.model.isTesting() && reports.size() == 1 && !reachable,
+               "connectingDuringTest=" + std::to_string(connectingDuringTest)
+                   + " answers=" + std::to_string(reports.size()));
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        const bool held = rig.peer.connectHeld(rig.model);
+        report("then Connect holds the saved Trio's session, not a test",
+               held && rig.model.hasSession() && reports.size() == 1
+                   && rig.word() == SessionWord::Direct
+                   && rig.peer.transport.lastHost == QLatin1String(kHost),
+               "held=" + std::to_string(held) + " answers=" + std::to_string(reports.size())
+                   + " host=" + rig.peer.transport.lastHost.toStdString());
+    }
+    {
+        // Every other way the session is replaced ends the test the same way.
+        Rig rig;
+        int answers = 0;
+        QObject::connect(&rig.model, &MicrohamTrioModel::testFinished,
+                         [&](bool, const QString&) { ++answers; });
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        rig.peer.connectHeld(rig.model);
+        rig.model.testConnection(QStringLiteral("192.168.8.99"), 80);
+        rig.model.releaseForBrowser();
+        const bool release = !rig.model.isTesting() && answers == 1;
+        rig.model.testConnection(QStringLiteral("192.168.8.99"), 80);
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        const bool connect = !rig.model.isTesting() && answers == 2;
+        rig.model.testConnection(QStringLiteral("192.168.8.99"), 80);
+        rig.model.loadSettings(false);
+        const bool load = !rig.model.isTesting() && answers == 3;
+        rig.model.testConnection(QStringLiteral("192.168.8.99"), 80);
+        rig.model.removeTrio();
+        const bool remove = !rig.model.isTesting() && answers == 4;
+        report("Web UI, Connect, a reload and Remove each end a Test, answered",
+               release && connect && load && remove,
+               "release=" + std::to_string(release) + " connect=" + std::to_string(connect)
+                   + " load=" + std::to_string(load) + " remove=" + std::to_string(remove));
+    }
 }
 
 // The dummy-load mark follows the label the Trio reports; a port renamed on
