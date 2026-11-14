@@ -620,6 +620,61 @@ void serverBehaviour()
           "a disconnected radio is not offered it");
 }
 
+// The state lines are what an enabled client holds, across a reconnect to a
+// new backend too: an option change that leaves the board alone sends no
+// filter board line, and one that moves it still does.
+void noLineForAnUnmovedBoard()
+{
+    RadioModel model;
+    auto owner = std::make_unique<Hl2FakeBackend>();
+    Hl2FakeBackend* first = owner.get();
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    TciServer server(&model);
+    Wire a;
+    TciHl2ExtensionTest::attach(server, a.client, model);
+    a.send("aethersdr_ext_enable:true;");
+    const QStringList state{QStringLiteral("aethersdr_ext:1,hl2;"),
+                            QStringLiteral("aethersdr_hl2_filter_board:none,false;"),
+                            QStringLiteral("aethersdr_hl2_tx_timing:-1,-1,-1;"),
+                            QStringLiteral("aethersdr_hl2_exttr:-1;")};
+    QStringList got = a.take();
+    check(got == state, "the enable sends the list and the state lines");
+    if (got != state) {
+        dump("a", got);
+    }
+    model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                 QVariantMap{{QStringLiteral("codec"), 1}});
+    settle();
+    got = a.take();
+    check(got.isEmpty(), "the first change after the enable, board unmoved, sends nothing");
+    dump("a", got);
+
+    // Reconnect: the radio goes, a new backend comes with the same board.
+    first->connected = false;
+    emit model.capabilitiesChanged(true, first->caps);
+    check(a.take() == one("aethersdr_ext:1;"), "a disconnect withdraws the group");
+    owner = std::make_unique<Hl2FakeBackend>();
+    Hl2FakeBackend* second = owner.get();
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    emit model.capabilitiesChanged(true, second->caps);
+    got = a.take();
+    check(got == state, "the reconnect sends the list and the state lines again");
+    if (got != state) {
+        dump("a", got);
+    }
+    model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                 QVariantMap{{QStringLiteral("codec"), 1}});
+    settle();
+    got = a.take();
+    check(got.isEmpty(), "after the rebind a change that leaves the board alone sends nothing");
+    dump("a", got);
+    model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                 QVariantMap{{QStringLiteral("filterBoard"), 1}});
+    settle();
+    check(a.take() == one("aethersdr_hl2_filter_board:n2adr_rxtx,false;"),
+          "CONTROL: a board that moves is still sent");
+}
+
 // The real HL2 backend tells every listener when a hw.set moves an option, and
 // says nothing when it does not.
 void realBackendNotifies()
@@ -785,6 +840,7 @@ int main(int argc, char** argv)
     offeredPerBackend();
     grammar();
     serverBehaviour();
+    noLineForAnUnmovedBoard();
     realBackendNotifies();
     realBackendRefusesInTheTail();
 

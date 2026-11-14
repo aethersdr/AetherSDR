@@ -499,8 +499,8 @@ private:
     QTimer*           m_hl2FilterRateTimer{nullptr};
     bool              m_hl2FilterPending{false};
     bool              m_hl2FilterSendPosted{false};
-    // Filter board and HPF from the last hw status seen; a notice is queued
-    // when a status moves them.
+    // Filter board and HPF the enabled clients were last sent (state lines or
+    // a hw status); a notice is queued when a status moves them.
     std::optional<QPair<int, bool>> m_hl2LastFilter;
     // A filter board set waiting for the rate window, newest wins, and who
     // asked; refusal warnings already shown in this transmit state.

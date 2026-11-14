@@ -3855,6 +3855,16 @@ bool TciServer::extensionKeyed() const
         || tx.isTransmitting() || tx.isMox() || tx.isTuning() || m_tciPttClient;
 }
 
+namespace {
+
+QPair<int, bool> hl2FilterOf(const QVariantMap& hw)
+{
+    return {hw.value(QStringLiteral("filterBoard")).toInt(),
+            hw.value(QStringLiteral("n2adrHpf")).toBool()};
+}
+
+} // namespace
+
 // The setup page's check: the backend declares the `hl2` namespace. No family
 // name is compared.
 bool TciServer::hl2Offered() const
@@ -3899,7 +3909,6 @@ void TciServer::bindHl2Backend()
         disconnect(c);
     }
     m_hl2Connections.clear();
-    m_hl2LastFilter.reset();
     // A read the old backend never answered is answered here, as unanswerable.
     const auto pending = std::exchange(m_hl2IoBoardPending, {});
     for (const QPointer<TciClient>& socket : pending) {
@@ -3960,9 +3969,13 @@ QVariantMap TciServer::hl2HealthValues()
 QStringList TciServer::hl2StateLines()
 {
     QStringList lines;
-    const QString filter = hl2FilterBoardLine();
-    if (!filter.isEmpty()) {
-        lines << filter;
+    // What an enabled client was sent is the baseline a later hw status is
+    // compared against, so a change that leaves the board alone sends nothing.
+    if (const std::optional<QVariantMap> hw = hl2Hardware()) {
+        if (const QString filter = TciHl2Extension::filterBoardLine(*hw); !filter.isEmpty()) {
+            lines << filter;
+            m_hl2LastFilter = hl2FilterOf(*hw);
+        }
     }
     const QVariantMap health = hl2HealthValues();
     const QString timing = TciHl2Extension::txTimingLine(health);
@@ -4193,8 +4206,7 @@ void TciServer::onHl2ExtensionStatus(const QString& ns, const QString& kind,
     if (ns != QLatin1String(TciHl2Extension::kToken) || kind != QLatin1String("hw")) {
         return;
     }
-    const QPair<int, bool> filter{fields.value(QStringLiteral("filterBoard")).toInt(),
-                                  fields.value(QStringLiteral("n2adrHpf")).toBool()};
+    const QPair<int, bool> filter = hl2FilterOf(fields);
     const bool moved = !m_hl2LastFilter || *m_hl2LastFilter != filter;
     m_hl2LastFilter = filter;
     if (moved) {
