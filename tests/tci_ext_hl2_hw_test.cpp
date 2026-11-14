@@ -495,6 +495,28 @@ void serverBehaviour()
           "and while a TCI client holds PTT");
     TciHl2ExtensionTest::holdTciPtt(server, nullptr);
 
+    // A set refused on arrival replaces one still held in the window: once
+    // the radio unkeys, the window applies nothing the client has replaced.
+    settle(250);
+    a.take();
+    c.take();
+    const qsizetype setsBeforeHeld = backend->hwSets.size();
+    a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;"
+           "aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    check(backend->hwSets.size() == setsBeforeHeld + 1 && backend->filterBoard == 1,
+          "the first set is applied and the second is held in the window");
+    model.transmitModel().setTransmitting(true);
+    a.send("aethersdr_hl2_filter_board:none,false;");
+    model.transmitModel().setTransmitting(false);
+    settle(250);
+    check(backend->hwSets.size() == setsBeforeHeld + 1 && backend->filterBoard == 1,
+          "a set refused while keyed drops the held one, which is not applied after");
+    a.send("aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    settle(250);
+    check(backend->filterBoard == 2 && backend->n2adrHpf, "the board is back as it was");
+    a.take();
+    c.take();
+
     // A change from elsewhere (the setup page writes with no reply expected).
     model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
                                  QVariantMap{{QStringLiteral("filterBoard"), 0}});

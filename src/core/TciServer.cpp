@@ -4045,6 +4045,7 @@ TciExtensionSet::Result TciServer::handleHl2(const QString& name, const QStringL
         return result;
     }
     if (const QString refusal = hl2SetRefusal(); !refusal.isEmpty()) {
+        m_hl2SetPending.reset();  // the newest request is refused, so none applies
         warnHl2SetRefused(refusal);
         result.reply = current;
         return result;
