@@ -227,6 +227,20 @@ if(ENABLE_DATA2G)
     # About 11 s plain and 2 min under ASan + UBSan on a fast desktop.
     set_tests_properties(data2g_session_test PROPERTIES TIMEOUT 900)
 
+    # The admission gate: the real worker thread, a fake transmitter, a second
+    # station, and a clock the test owns. No radio fixture.
+    add_executable(data2g_session_model_test
+        tests/data2g_session_model_test.cpp
+        src/models/Data2gSessionModel.cpp
+    )
+    target_include_directories(data2g_session_model_test PRIVATE src)
+    target_compile_definitions(data2g_session_model_test PRIVATE HAVE_DATA2G)
+    target_link_libraries(data2g_session_model_test PRIVATE
+        aether_hfdata aether_data2g_core Qt6::Core)
+    add_test(NAME data2g_session_model_test COMMAND data2g_session_model_test)
+    # About 20 s plain and 3 min under ASan + UBSan on a fast desktop.
+    set_tests_properties(data2g_session_model_test PROPERTIES TIMEOUT 1800)
+
     # A recording the adapter did not make: two upstream data2g-host 0.4.3
     # processes working each other, held to upstream data2g-monitor's reading.
     add_executable(data2g_replay_test tests/data2g_replay_test.cpp)

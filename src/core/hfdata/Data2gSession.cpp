@@ -90,6 +90,8 @@ struct Data2gSession::Impl {
     bool suppressing{false};
     std::uint64_t suppressed{0};
     std::uint64_t faults{0};
+    double lastHeard{0.0};
+    double lastData{0.0};
 
     void restart()
     {
@@ -273,6 +275,13 @@ Data2gSessionStep Data2gSession::step(std::span<const float> mono)
                           std::make_move_iterator(events.end()));
         out.received = engine.session().read();
         out.state = linkStateOf(engine.session().state);
+        if (out.state != Data2gLinkState::Idle) {
+            const data2g::arq::Session& session = engine.session();
+            out.peerHeard = session.last_heard != impl.lastHeard;
+            out.dataActive = session.last_data != impl.lastData || !out.received.empty();
+            impl.lastHeard = session.last_heard;
+            impl.lastData = session.last_data;
+        }
 
         // The window in which this station may transmit: from an accepted
         // requestConnect() until kClosingIdSeconds of audio after that
