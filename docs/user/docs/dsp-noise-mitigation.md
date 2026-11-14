@@ -130,7 +130,7 @@ All client-side methods live in **AetherRX**, on its **AetherNR** tab. Open it w
 ### Rules that apply to all seven
 
 - **One at a time.** Selecting any client method turns off the one that was running. Any client method can be stacked with any radio-side filter.
-- **Voice modes only.** The client methods switch themselves off in CW, CWL, RTTY and DIGU/DIGL, where they would suppress CW tones or corrupt data. Switch back to a voice mode and they become available again. For noise help in CW, use the radio's NR and ANF.
+- **Voice modes only.** The client methods run automatically in USB, LSB, DSB, AM, SAM, FM, NFM, DFM, WFM and WBFM (where supported by your radio). An audible slice in any other mode switches the selected method off, including CW, RTTY, DIGU/DIGL, D-STAR, FreeDV and DRM. The selected method returns when every audible slice is compatible. The method button and status strip show whether it is running. Muted, zero-volume and parked slices do not trigger this rule. Explicitly selecting a method while restricted overrides the automatic rule until the mix becomes compatible again. For noise help in CW, use the radio's NR and ANF.
 - **Stereo.** Each method runs one instance per audio channel, so a hard pan lands instantly and diversity keeps each antenna in its own ear.
 
 ### NR2 — Spectral Noise Reduction
@@ -267,7 +267,7 @@ On non-macOS builds MNR is disabled with an explanatory tooltip.
 
 ### Mode-dependent availability
 
-The seven client-side methods are voice-only: they switch themselves off in CW, CWL, RTTY and DIGU/DIGL. The radio-side filters shown in each mode are:
+The seven client-side methods automatically switch off when an audible slice uses a mode outside the analog voice list above. This also protects new digital waveform modes. The radio-side filters shown in each mode are:
 
 | Mode | Radio-side filters shown | Hidden |
 |------|-----------|--------|
@@ -282,7 +282,6 @@ The seven client-side methods are voice-only: they switch themselves off in CW, 
 - NR2 can sound scratchy or produce clicks and artifacts on voice ([#632](https://github.com/aethersdr/AetherSDR/issues/632)).
 - NNR's **Premium** model makes receive audio choppy and broken up; the **Standard** model does not ([#5989](https://github.com/aethersdr/AetherSDR/issues/5989)).
 - DFNR can switch itself back on in every profile after you turn it off and save the profile ([#4018](https://github.com/aethersdr/AetherSDR/issues/4018)).
-- The client-side methods stay on in the digital-voice and data modes DSTR, FDV, FDVU and DRM, where they can corrupt the decoder's input ([#5701](https://github.com/aethersdr/AetherSDR/issues/5701)).
 
 ## Troubleshooting
 
@@ -295,7 +294,7 @@ You are listening through the radio's own outputs (line out, headphone jack or f
 
 ### A client-side method turns itself off, or its button is unavailable
 
-The client-side methods are voice-only and switch off in CW, CWL, RTTY and DIGU/DIGL. A method can also be disabled because your computer or build doesn't support it; its tooltip says why.
+The client-side methods automatically switch off for audible CW, digital and unrecognized modes. Muting that slice or returning it to an analog voice mode restores the selected method. A method can also be disabled because your computer or build doesn't support it; its tooltip says why.
 
 1. Switch back to a voice mode to make the methods available again.
 2. In CW, use the radio's NR and ANF instead.
