@@ -103,6 +103,30 @@ facts. The consulted facts are:
   License:   GPL-3.0-or-later (consulted as a behavioral reference only)
   Source:    https://github.com/dl1ycf/pihpsdr  (src/old_protocol.c)
 
+The Hermes-Lite 2 PureSignal support (src/core/backends/hl2/Hl2PureSignal.{h,cpp}
+and the PureSignal parts of MetisProtocol / MetisClient) is original AetherSDR
+code. The calibration and the correction are WDSP's calcc stage (entry 1); the
+controller around it is designed from calcc's own interface (SetPSControl,
+GetPSInfo, pscc, PSRestoreCorr) and its state machine in calcc.c. MI0BOT's
+Thetis fork, which runs PureSignal on the HL2, was consulted as a reference
+for HL2 hardware facts only. No Thetis code is incorporated, vendored,
+translated, or linked into AetherSDR. The consulted facts are:
+  - 0x0a C2 bit 6 as the PureSignal enable, and DDC2 / DDC3 as the coupler
+    feedback and TX DAC reference pair, which needs at least four DDCs;
+  - the keyed feedback gain 19 - att with att -28..31, written in 0x0a C4;
+  - the HL2 values calcc is configured with: hardware peak 0.233, TX delay
+    150 ns, MOX delay 0.2 s; and
+  - the feedback window 128 < fb <= 181 on calcc's 0..256 level scale.
+
+  Thetis (MI0BOT's HL2 fork):
+             Copyright (C) 2000-2025 the original Thetis authors,
+             Richard Samphire (MW0LGE), and MI0BOT
+  License:   GPL-2.0-or-later (consulted as a hardware reference only)
+  Source:    https://github.com/mi0bot/OpenHPSDR-Thetis
+             (Project Files/Source/ChannelMaster/networkproto1.c for the
+             wire facts; Project Files/Source/Console/PSForm.cs and
+             clsHardwareSpecific.cs for the numeric values)
+
 The ACOM S-series amplifier peripheral (shipped; see
 docs/architecture/acom-600s-amplifier-design.md) implements ACOM's RS-232
 serial protocol — the binary frame layout (start byte, address, length,
