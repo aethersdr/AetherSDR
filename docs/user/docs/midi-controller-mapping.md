@@ -65,7 +65,7 @@ Endless encoders send small "turned up / turned down" deltas instead of an absol
 
 The **VFO Tune Knob** parameter is meant for an endless encoder bound as **Relative**; as an absolute control it treats 64 as center.
 
-These sliders also step with a **Relative** encoder, by their keyboard step per detent: Filter Width, RIT Offset and XIT Offset (10 Hz), NB / NR / ANF / APF / WNB Level, RF Power and Mic Level.
+These sliders also step with a **Relative** encoder, by their keyboard step per detent and faster when you turn quickly: Filter Width, RIT Offset and XIT Offset (10 Hz), NB / NR / ANF / APF / WNB Level, RF Power and Mic Level. Bind **RIT Offset** and **XIT Offset** as **Relative**: their range is ±99,999 Hz, so an absolute knob moves them in coarse jumps.
 
 ## Using profiles
 

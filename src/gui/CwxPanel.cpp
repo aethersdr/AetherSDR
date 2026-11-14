@@ -711,6 +711,15 @@ void CwxPanel::sendBuffer(const TxController::Input* input, const QString& captu
     m_model->send(text);
 }
 
+bool CwxPanel::fireMacro(int index, const TxController::Input& input)
+{
+    if (!m_model || index < 0 || index >= 12) return false;
+    if (m_txModeProvider && !isCwMode(m_txModeProvider())) return false;
+    if (!m_model->canSend()) return false;
+    sendMacro(index, &input);
+    return true;
+}
+
 void CwxPanel::sendMacro(int index, const TxController::Input* input)
 {
     if (!input && m_txControllerProvider) {

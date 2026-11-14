@@ -108,9 +108,10 @@ public:
     CwxBubble* pendingBubble() const { return m_pendingBubble; }
     int        historyBubbleCount() const;
 
-    // Fire macro F1..F12 (index 0..11) on the given TX input, exactly as the
-    // panel's own F-key does, history bubble included.
-    void fireMacro(int index, const TxController::Input& input) { sendMacro(index, &input); }
+    // Fire macro F1..F12 (index 0..11) on the given TX input under the
+    // panel's own F-key rules: only while the TX slice is in a CW mode and the
+    // keyer can send. History bubble included. False when refused.
+    bool fireMacro(int index, const TxController::Input& input);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;

@@ -59,7 +59,7 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | NR Level | `rx.nrLevel` | Slider | 0 to 100 |   |
 | ANF Level | `rx.anfLevel` | Slider | 0 to 100 |   |
 | APF Level | `rx.apfLevel` | Slider | 0 to 100 |   |
-| RIT Offset | `rx.ritOffset` | Slider | -5000 to 5000 |   |
+| RIT Offset | `rx.ritOffset` | Slider | -99999 to 99999 |   |
 | RX Antenna 1 | `rx.antenna1` | Trigger |   |   |
 | RX Antenna 2 | `rx.antenna2` | Trigger |   |   |
 | RX Antenna 3 | `rx.antenna3` | Trigger |   |   |
@@ -80,7 +80,7 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | ATU Start | `tx.atuStart` | Trigger |   |   |
 | Two-Tone Tune | `global.twoToneTune` | Trigger |   |   |
 | RF Power | `tx.rfPower` | Slider | 0 to 100 |   |
-| XIT Offset | `tx.xitOffset` | Slider | -5000 to 5000 |   |
+| XIT Offset | `tx.xitOffset` | Slider | -99999 to 99999 |   |
 | TX Antenna 1 | `tx.antenna1` | Trigger |   |   |
 | TX Antenna 2 | `tx.antenna2` | Trigger |   |   |
 | TX Antenna 3 | `tx.antenna3` | Trigger |   |   |

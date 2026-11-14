@@ -392,6 +392,29 @@ int main(int argc, char** argv)
             else
                 allResolved = false;
         }
+        // Keying actions declared beside the ControlActionRegistry: txShortcut()
+        // with a literal id, or a row of the kCwxMacros table it loops over;
+        // their MIDI entries are the addKeyingMidi() ids.
+        const QString registry = readSource(QStringLiteral("src/gui/MainWindow_ControlActions.cpp"));
+        ok &= expect(!registry.isEmpty(), "TX-default check found MainWindow_ControlActions.cpp");
+        QStringList txMidiIds;
+        const QRegularExpression regTx(QStringLiteral(R"re(txShortcut\(\s*"([^"]+)")re"));
+        for (auto it = regTx.globalMatch(registry); it.hasNext();)
+            txIds << it.next().captured(1);
+        const QRegularExpression macroRow(QStringLiteral(R"re(\{"(cwx_macro_\d+)",\s*"(cwx\.macro\d+)")re"));
+        for (auto it = macroRow.globalMatch(registry); it.hasNext();) {
+            const auto m = it.next();
+            txIds << m.captured(1);
+            txMidiIds << m.captured(2);
+        }
+        const QRegularExpression keyingMidi(QStringLiteral(R"re(addKeyingMidi\(\s*"([^"]+)")re"));
+        for (auto it = keyingMidi.globalMatch(registry); it.hasNext();)
+            txMidiIds << it.next().captured(1);
+        ok &= expect(txIds.contains(QStringLiteral("atu_bypass"))
+                         && txIds.contains(QStringLiteral("cwx_macro_12"))
+                         && txMidiIds.contains(QStringLiteral("cwx.macro1"))
+                         && txMidiIds.contains(QStringLiteral("tx.atuBypass")),
+                     "the registry's keying actions were found (ATU Bypass, CWX macros)");
         ok &= expect(allResolved, "every keysTx action id resolves to a string");
         ok &= expect(txIds.contains(QStringLiteral("mox_toggle"))
                          && txIds.contains(QStringLiteral("tune_toggle"))
@@ -409,8 +432,10 @@ int main(int argc, char** argv)
             const auto m = it.next();
             ++rows;
             const QString action = m.captured(2);
-            if (action.startsWith(QStringLiteral("shortcut:"))
-                && txIds.contains(action.mid(QStringLiteral("shortcut:").size())))
+            if ((action.startsWith(QStringLiteral("shortcut:"))
+                 && txIds.contains(action.mid(QStringLiteral("shortcut:").size())))
+                || (action.startsWith(QStringLiteral("midi:"))
+                    && txMidiIds.contains(action.mid(QStringLiteral("midi:").size()))))
                 txDefaults << m.captured(1) + QStringLiteral("=") + action;
         }
         ok &= expect(rows == 8,

@@ -62,15 +62,11 @@ void MainWindow::cycleBandAction(int direction)
 
 void MainWindow::fireCwxMacro(int index, const TxController::Input& input)
 {
-    if (m_cwxPanel) {
-        m_cwxPanel->fireMacro(index, input);
-        return;
+    // The CWX panel's F-key rules apply: a CW TX slice and a keyer that can send.
+    if (!m_cwxPanel || !m_cwxPanel->fireMacro(index, input)) {
+        showShortcutNotice(
+            tr("CWX Macro F%1 needs a CW transmit slice and a ready CW keyer").arg(index + 1), 5000);
     }
-    auto& cwx = m_radioModel.cwxModel();
-    if (index < 0 || index >= 12 || !cwx.canSend() || !input.belongsTo(&cwx)) return;
-    const QString text = cwx.macro(index);
-    if (!text.isEmpty()) (void)input.send(text);
-    else (void)input.sendMacro(index + 1);
 }
 
 // The menu entry whose text, with the menus above it, ends with `path`
@@ -108,9 +104,9 @@ QAction* MainWindow::findMenuAction(const QStringList& path) const
 void MainWindow::registerControlActions()
 {
     auto& reg = m_controlActions;
-    reg.setRefusalHandler([this](const QString& name) {
-        statusBar()->showMessage(tr("%1 is not available on this radio").arg(name), 4000);
-    });
+    // The radio lacks it, or the state does not allow it yet (no slice C,
+    // an empty band stack, not connected): say so, audibly too.
+    reg.setRefusalHandler([this](const QString& name) { refuseControlAction(name); });
 
     // Runs an existing keyboard action's handler — for MIDI twins of actions
     // whose keyboard side predates the registry.
@@ -277,12 +273,14 @@ void MainWindow::registerControlActions()
     }
 
     // ── RIT / XIT offsets ──────────────────────────────────────────────
-    // 10 Hz per key press, as the RX applet's RIT/XIT arrows step.
-    reg.add(A::level("rit_offset", "rx.ritOffset", "RIT Offset", "RIT/XIT", -5000, 5000, 10,
+    // 10 Hz per key press, as the RX applet's RIT/XIT arrows step. The range
+    // is the model's own limit (kIncrementalTuningMaxHz), so a step never
+    // pulls a larger offset back; bind these to a relative encoder on MIDI.
+    reg.add(A::level("rit_offset", "rx.ritOffset", "RIT Offset", "RIT/XIT", -99999, 99999, 10,
         [this](float v) { if (auto* s = activeSlice()) s->setRit(s->ritOn(), static_cast<int>(v)); },
         [this]() -> float { auto* s = activeSlice(); return s ? s->ritFreq() : 0; })
         .inMidiCategory("RX").when(dsp(Feature::Rit)));
-    reg.add(A::level("xit_offset", "tx.xitOffset", "XIT Offset", "RIT/XIT", -5000, 5000, 10,
+    reg.add(A::level("xit_offset", "tx.xitOffset", "XIT Offset", "RIT/XIT", -99999, 99999, 10,
         [this](float v) { if (auto* s = activeSlice()) s->setXit(s->xitOn(), static_cast<int>(v)); },
         [this]() -> float { auto* s = activeSlice(); return s ? s->xitFreq() : 0; })
         .inMidiCategory("TX").when([this, canTransmit] { return canTransmit() && activeSlice(); }));

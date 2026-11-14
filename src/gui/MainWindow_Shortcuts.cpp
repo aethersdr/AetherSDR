@@ -381,6 +381,19 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
     qCInfo(lcGui).noquote() << "Keyboard shortcuts are off:" << refused->displayName
                             << "(" + refused->currentKey.toString() + ") not run;"
                             << "Settings > Keyboard Shortcuts turns them on";
+    showShortcutNotice(tr("Keyboard shortcuts are off"), 10000);
+}
+
+void MainWindow::refuseControlAction(const QString& name)
+{
+    qCInfo(lcGui).noquote() << "Control action not available:" << name;
+    showShortcutNotice(tr("%1 is not available right now").arg(name), 5000);
+}
+
+// A short notice in the status bar that a screen reader also announces
+// (StatusBarNoticeLabel), for shortcut and controller refusals.
+void MainWindow::showShortcutNotice(const QString& text, int durationMs)
+{
     if (!m_shortcutNoticeLabel) {
         m_shortcutNoticeLabel = new StatusBarNoticeLabel(statusBar());
         // The right margin clears the resize grip that overlays the bar.
@@ -390,9 +403,7 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
             QStringLiteral("QLabel#statusBarNoticeLabel { color: {{color.text.primary}};"
                            " font-size: 14px; background: transparent; }"));
     }
-    m_shortcutNoticeLabel->showNotice(
-        tr("Keyboard shortcuts are off"),
-        10000);
+    m_shortcutNoticeLabel->showNotice(text, durationMs);
 }
 
 

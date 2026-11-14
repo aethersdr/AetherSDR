@@ -974,6 +974,8 @@ private:
     // Actions declared once and published to keyboard + MIDI
     // (ControlActionRegistry; MainWindow_ControlActions.cpp).
     void registerControlActions();
+    void showShortcutNotice(const QString& text, int durationMs);
+    void refuseControlAction(const QString& name);  // logged + announced
     QAction* findMenuAction(const QStringList& path) const;
     void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
     // Band stack stepping and the band-plan strip toggle (registry actions).

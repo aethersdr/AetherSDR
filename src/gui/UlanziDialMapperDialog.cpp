@@ -645,7 +645,18 @@ void UlanziDialMapperDialog::loadActions()
     for (int i = 0; i < m_pills.size(); ++i) {
         if (!m_pills[i].combo) continue;
         const QString actionId = actionForPill(m_pills[i].id);
-        const int idx = m_pills[i].combo->findData(actionId);
+        int idx = m_pills[i].combo->findData(actionId);
+#ifdef HAVE_MIDI
+        // A MIDI entry the list folds into its keyboard twin still shows when
+        // a pill was saved with it, instead of reading "(unassigned)".
+        if (idx < 0 && m_midi && actionId.startsWith(QLatin1String("midi:"))) {
+            if (const MidiParam* mp = m_midi->findParam(actionId.mid(5))) {
+                m_pills[i].combo->addItem(
+                    QStringLiteral("[MIDI %1] %2").arg(mp->category, mp->displayName), actionId);
+                idx = m_pills[i].combo->count() - 1;
+            }
+        }
+#endif
         if (idx >= 0) m_pills[i].combo->setCurrentIndex(idx);
     }
     if (m_rotaryCombo) {

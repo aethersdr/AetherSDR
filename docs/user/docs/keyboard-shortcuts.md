@@ -97,7 +97,7 @@ The editor lists many more actions that ship **unbound**. They are grouped by ca
 
 The full list, with each action's ID, is on [Default Keyboard Shortcuts](./generated/default-shortcuts.md).
 
-An action the connected radio cannot do shows "*name* is not available on this radio" in the status bar instead of doing nothing; for example, Make Active Slice TX on a receive-only radio, or Select Slice C with two slices open. Actions that key the transmitter (CWX macros, ATU Bypass, MOX, TUNE) go through the same transmit checks as the on-screen buttons.
+An action that can't run shows "*name* is not available right now" in the status bar, and a screen reader announces it, instead of doing nothing: for example, Make Active Slice TX on a receive-only radio, Select Slice C with two slices open, or Band Stack Up with no bookmarks saved. Actions that key the transmitter (CWX macros, ATU Bypass, MOX, TUNE) go through the same transmit checks as the on-screen buttons.
 
 **Monitor TX (Hold)** listens on a split's transmit frequency while held. It is unbound by default; see [Split Operation](./split-operation.md).
 

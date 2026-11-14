@@ -1973,28 +1973,12 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
 bool MainWindow::dispatchScopedMidiTx(const QString& id, float value,
                                      const std::shared_ptr<TxController>& controller)
 {
-    // Registry keying actions: consumed here with the device's own input,
-    // never falling through to a setter (see MidiTxDispatch.h).
-    if (id == QLatin1String("tx.atuBypass") || id.startsWith(QLatin1String("cwx.macro"))) {
-        if (value <= 0.5f || !controller || !controller->valid()
-            || !controller->belongsTo(&m_radioModel)) {
-            return true;
-        }
-        if (id == QLatin1String("tx.atuBypass")) {
-            (void)controller->capture(TxController::Activity::Atu).bypassAtu();
-        } else {
-            bool ok = false;
-            const int n = id.mid(QStringLiteral("cwx.macro").size()).toInt(&ok);
-            if (ok && n >= 1 && n <= 12)
-                fireCwxMacro(n - 1, controller->capture(TxController::Activity::Cwx));
-        }
-        return true;
-    }
     return dispatchMidiTxInput(id, value, m_radioModel, controller,
         [this](const QString& action, bool press, const std::shared_ptr<TxController>& source) {
             (void)handleScopedCwMomentaryShortcut(action, press, source, false);
         },
-        [this](const QString& why) { statusBar()->showMessage(why, 6000); });
+        [this](const QString& why) { statusBar()->showMessage(why, 6000); },
+        [this](int index, const TxController::Input& input) { fireCwxMacro(index, input); });
 }
 
 void MainWindow::registerMidiParams()
