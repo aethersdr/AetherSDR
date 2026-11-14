@@ -32,10 +32,11 @@ def relay(src, dst, rec):
 for a in (("a_out", "b_in", "a_tx.f32"), ("b_out", "a_in", "b_tx.f32")):
     threading.Thread(target=relay, args=a, daemon=True).start()
 def start(tag, call, cmd, kiss):
-    log = open(os.path.join(out, f"{tag}.log"), "w")
-    return subprocess.Popen([host, "--mycall", call, "--command-port", str(cmd), "--kiss-port", str(kiss),
-        "--audio-io", f"pipe:{fifos[tag+'_in']},{fifos[tag+'_out']}", "--no-realtime", "--log-level", "INFO"],
-        stdout=log, stderr=subprocess.STDOUT)
+    # The child keeps its own copy of the log descriptor; ours closes here.
+    with open(os.path.join(out, f"{tag}.log"), "w") as log:
+        return subprocess.Popen([host, "--mycall", call, "--command-port", str(cmd), "--kiss-port", str(kiss),
+            "--audio-io", f"pipe:{fifos[tag+'_in']},{fifos[tag+'_out']}", "--no-realtime", "--log-level", "INFO"],
+            stdout=log, stderr=subprocess.STDOUT)
 A = start("a", "N0CALL", 18300, 18100); B = start("b", "W1AW", 18310, 18110)
 t0 = time.time()
 def conn(port):
@@ -84,12 +85,12 @@ if ok:
     got = b""; bd.settimeout(40)
     try:
         while b"fixture" not in got: got += bd.recv(4096)
-    except OSError: pass
+    except OSError: pass  # timed out: print whatever arrived
     print(f"{time.time()-t0:6.1f} b data: {got!r}", flush=True)
     got = b""; ad.settimeout(40)
     try:
         while b"copied" not in got: got += ad.recv(4096)
-    except OSError: pass
+    except OSError: pass  # timed out: print whatever arrived
     print(f"{time.time()-t0:6.1f} a data: {got!r}", flush=True)
     seen["a"].clear()
     cmd(ac, "DISCONNECT"); wait("a", "DISCONNECTED", 60)
