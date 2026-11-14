@@ -16,6 +16,11 @@ osd_depth_t aether_osd_depth(void);
 // failed on; rescued counts the ones OSD actually recovered.
 extern long long aether_osd_attempted;
 extern long long aether_osd_rescued;
+extern long long aether_osd_skipped;
+// Temporary instrumentation for choosing the OSD gate: records the
+// candidate score and the post-BP unsatisfied-check count for every OSD
+// call, and whether it rescued anything.
+void aether_osd_probe(int score, int ldpc_errors, int rescued);
 #endif
 
 // #define LOG_LEVEL LOG_DEBUG
@@ -380,7 +385,30 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
         // how often it RESCUES anything. On a live band most candidates are
         // noise that never decodes, so OSD pays its full cost on each one
         // and returns nothing -- which is the cost without the benefit.
+        // Gate: do not run OSD on a codeword belief propagation left far
+        // from valid. Measured over the 22-WAV reference corpus, 1706 OSD
+        // calls and 120 rescues, bucketed by the unsatisfied-check count
+        // BP finished with:
+        //
+        //   threshold   work skipped   rescues lost
+        //      >= 24        4.4%         0  (0.0%)
+        //      >= 18       15.0%         5  (4.2%)
+        //      >= 13       38.0%        22 (18.3%)
+        //
+        // 24 is where the saving is free. It is deliberately conservative:
+        // the honest reading of that table is that the unsatisfied-check
+        // count does NOT separate rescuable candidates from hopeless ones
+        // sharply enough to buy the large saving -- rescues occur right
+        // across the range. A bigger cut has to come from somewhere else
+        // (fewer candidates, or an earlier SNR test), not from moving this
+        // number down, which trades decodes for time at a poor rate.
+        if (status->ldpc_errors >= 24)
+        {
+            aether_osd_skipped++;
+            return false;
+        }
         aether_osd_attempted++;
+        aether_osd_probe(cand->score, status->ldpc_errors, 0);
         uint8_t osd_msg91[FTX_LDPC_K];
         int osd_nhard = 0;
         if (!osd174_91_decode(log174, FTX_LDPC_K, depth, osd_msg91, &osd_nhard))
@@ -388,6 +416,7 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
             return false;
         }
         aether_osd_rescued++;
+        aether_osd_probe(cand->score, status->ldpc_errors, 1);
         for (int i = 0; i < FTX_LDPC_N; i++)
             plain174[i] = (i < FTX_LDPC_K) ? osd_msg91[i] : 0;
         status->ldpc_errors = 0;

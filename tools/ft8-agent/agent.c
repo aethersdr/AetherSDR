@@ -830,6 +830,7 @@ static int g_status_fd = -1;
  * status_json() above reports them. */
 extern long long aether_osd_attempted;
 extern long long aether_osd_rescued;
+extern long long aether_osd_skipped;
 #endif
 static char g_work[300];
 
@@ -1101,8 +1102,8 @@ static void status_json(buf_t *b, long long since)
      * what decides whether it earns its cost: belief propagation also
      * fails on every noise candidate, and OSD pays in full for each of
      * those before returning nothing. */
-    bprintf(b, ",\"osd_asked\":%lld,\"osd_rescued\":%lld",
-            aether_osd_attempted, aether_osd_rescued);
+    bprintf(b, ",\"osd_asked\":%lld,\"osd_rescued\":%lld,\"osd_gated\":%lld",
+            aether_osd_attempted, aether_osd_rescued, aether_osd_skipped);
 #endif
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
@@ -2498,6 +2499,44 @@ static int g_osd_env_set = 0;
  * pays its full cost on each of those before returning nothing. */
 long long aether_osd_attempted = 0;
 long long aether_osd_rescued = 0;
+/* Candidates the gate kept OSD away from. */
+long long aether_osd_skipped = 0;
+
+/* Temporary instrumentation for choosing the gate threshold. Histograms
+ * the candidate score and the post-BP unsatisfied-check count, split by
+ * whether OSD rescued anything, so the threshold comes from the data
+ * rather than from a guess. Printed by decodewav. */
+#define PROBE_SC 12
+#define PROBE_LE 50
+static long long g_probe_score[2][PROBE_SC];
+static long long g_probe_lerr[2][PROBE_LE];
+
+void aether_osd_probe(int score, int ldpc_errors, int rescued)
+{
+    int r = rescued ? 1 : 0;
+    int s = score / 10;          /* 0-9, 10-19, ... */
+    if (s < 0) s = 0;
+    if (s >= PROBE_SC) s = PROBE_SC - 1;
+    g_probe_score[r][s]++;
+    int e = ldpc_errors;
+    if (e < 0) e = 0;
+    if (e >= PROBE_LE) e = PROBE_LE - 1;
+    g_probe_lerr[r][e]++;
+}
+
+static void probe_dump(void)
+{
+    fprintf(stderr, "  score  wasted rescued\n");
+    for (int i = 0; i < PROBE_SC; i++)
+        if (g_probe_score[0][i] || g_probe_score[1][i])
+            fprintf(stderr, "   %3d+  %6lld %7lld\n", i * 10,
+                    g_probe_score[0][i], g_probe_score[1][i]);
+    fprintf(stderr, "  lderr  wasted rescued\n");
+    for (int i = 0; i < PROBE_LE; i++)
+        if (g_probe_lerr[0][i] || g_probe_lerr[1][i])
+            fprintf(stderr, "   %3d   %6lld %7lld\n", i,
+                    g_probe_lerr[0][i], g_probe_lerr[1][i]);
+}
 
 osd_depth_t aether_osd_depth(void)
 {
@@ -2552,9 +2591,12 @@ static int decode_wav_file(const char *path)
         printf("%8lld %4d %s\n", dc.spots[i].hz, dc.spots[i].snr, dc.spots[i].msg);
     fprintf(stderr, "decodewav: %s -> %d spot(s) in %.0f ms", path, dc.nspots, took * 1000);
 #ifdef AETHER_WITH_OSD
-    fprintf(stderr, " [osd %lld asked, %lld rescued]", aether_osd_attempted, aether_osd_rescued);
+    fprintf(stderr, " [osd %lld asked, %lld rescued, %lld gated]", aether_osd_attempted, aether_osd_rescued, aether_osd_skipped);
 #endif
     fputc('\n', stderr);
+#ifdef AETHER_WITH_OSD
+    if (getenv("AETHER_FT8_PROBE")) probe_dump();
+#endif
     return 0;
 }
 
