@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QPointer>
 #include <QWidget>
 
@@ -8,6 +9,8 @@
 class QCheckBox;
 class QLabel;
 class QLineEdit;
+class QListWidget;
+class QListWidgetItem;
 class QPushButton;
 class GuardedComboBox;
 
@@ -18,7 +21,9 @@ class Ctr2ProxyModel;
 // The CTR2 relay's controls, at the top of the CTR2 window
 // (FirmwareInstallDialog): Wi-Fi or USB mode, explicit endpoints,
 // Start/Stop, and the relay's state, endpoints, byte counters and last local
-// error. Styled by its host's canon sheet: row labels are SectionLabel, and
+// error. In USB mode every controller found is a row with its own state and
+// Start/Stop, so several relay at once; the selected row is the model's focus,
+// whose state, traffic and error show below. Styled by its host's canon sheet: row labels are SectionLabel, and
 // values carry a "tone" property (secondary, warning, danger). All behavior
 // lives in Ctr2ProxyModel; closing the window does not stop the proxy.
 class Ctr2ProxyPanel : public QWidget {
@@ -44,13 +49,21 @@ public:
     bool offerAccessRule(RuleUse use, std::function<void()> afterInstalled);
 #endif
 
+protected:
+    void changeEvent(QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+
 private:
     void buildUi();
+    void fitUsbList();
     void syncAddresses();
     void syncConfiguration();
     void syncStatus();
     void syncStats();
     void onStartClicked();
+    void syncUsbRows();
+    // A USB row's Start/Stop.
+    void onUsbRowClicked(const QString& path);
 #ifdef Q_OS_LINUX
     // True when the install started.
     bool offerUsbAccessRule(RuleUse use = RuleUse::Relay);
@@ -62,7 +75,16 @@ private:
     QPointer<Ctr2ProxyModel> m_model;
     GuardedComboBox* m_modeCombo{nullptr};
     GuardedComboBox* m_listenCombo{nullptr};
-    GuardedComboBox* m_usbCombo{nullptr};
+    // USB mode: one row per controller, keyed by HID path.
+    QListWidget* m_usbList{nullptr};
+    struct UsbRow {
+        QListWidgetItem* item{nullptr};
+        QLabel* name{nullptr};
+        QLabel* version{nullptr};
+        QLabel* state{nullptr};
+        QPushButton* button{nullptr};
+    };
+    QHash<QString, UsbRow> m_usbRows;
     QLabel* m_listenRowLabel{nullptr};
     QLabel* m_usbRowLabel{nullptr};
     QPushButton* m_refreshBtn{nullptr};

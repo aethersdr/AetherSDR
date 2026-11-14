@@ -133,14 +133,19 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     applyCanonSheet(bodyWidget(), [] {
         return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
                + QStringLiteral(
-                   "QListWidget#firmwareInstallProduct, QListWidget#firmwareInstallFileList { background: {{color.canon.nested}};"
+                   "QListWidget#firmwareInstallProduct, QListWidget#firmwareInstallFileList,"
+                   " QListWidget#ctr2ProxyUsbDevices { background: {{color.canon.nested}};"
                    " color: {{color.canon.ink}}; border: 1px solid {{color.canon.line}};"
                    " border-radius: 6px; padding: 4px; outline: 0; }"
                    "QListWidget#firmwareInstallProduct::item, QListWidget#firmwareInstallFileList::item { padding: 5px 8px; border-radius: 4px; }"
+                   // The relay's controller rows hold their own widgets.
+                   "QListWidget#ctr2ProxyUsbDevices::item { border-radius: 4px; }"
                    "QListWidget#firmwareInstallProduct::item:hover,"
-                   " QListWidget#firmwareInstallFileList::item:hover { background: {{color.canon.raised}}; }"
+                   " QListWidget#firmwareInstallFileList::item:hover,"
+                   " QListWidget#ctr2ProxyUsbDevices::item:hover { background: {{color.canon.raised}}; }"
                    "QListWidget#firmwareInstallProduct::item:selected,"
-                   " QListWidget#firmwareInstallFileList::item:selected {"
+                   " QListWidget#firmwareInstallFileList::item:selected,"
+                   " QListWidget#ctr2ProxyUsbDevices::item:selected {"
                    " background: {{color.canon.control}}; color: {{color.canon.cyan}}; }"
                    // Rows that are not a choice: a placeholder, a section's title.
                    "QListWidget#firmwareInstallProduct::item:disabled,"
