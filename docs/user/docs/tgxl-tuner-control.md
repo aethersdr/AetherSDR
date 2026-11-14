@@ -70,8 +70,9 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
   While transmitting (forward power at or above 5 W, or the TGXL interlock
   cable is active), the selected antenna's button turns red.
   Identification accepts the documented `info` reply prefix even if its
-  sequence number differs from the request. An unknown direct variant keeps
-  the row hidden; radio-relayed identification does not override it.
+  sequence number differs from the request. While the direct variant is unknown,
+  radio-relayed 3-way identification enables the row. A confirmed direct SO2R
+  answer overrides that fallback and hides it.
 
 Messages from the tuner appear across the applet for as long as the tuner
 shows them: after a successful tune it shows the SWR it settled on

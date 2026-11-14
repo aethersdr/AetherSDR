@@ -82,7 +82,7 @@ int main(int argc, char** argv)
 
     // ── Fixture: model + applet + 3-way direct connection ────────────────
     //
-    // The relay's model indication must not override direct identification.
+    // Relayed identification is the fallback until direct info identifies the variant.
 
     TunerModel model;
     model.setHandle(QStringLiteral("0x2000"));
@@ -126,9 +126,26 @@ int main(int argc, char** argv)
     CHECK(inject(&direct, QStringLiteral("V1.2.44")));
     settle();
 
-    CHECK(!b1->isVisible());
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(b1->isVisible() && b2->isVisible() && b3->isVisible());
+    commands.clear();
+    b2->click();
+    CHECK(commands.size() == 1 && commands.front().contains(QStringLiteral("|activate ant=2\n")));
+    {
+        TunerDelta d;
+        d.oneByThree = false;
+        model.applyChanges(d);
+        CHECK(!b1->isVisible());
+        commands.clear();
+        model.setAntennaA(1);
+        CHECK(commands.isEmpty());
+        d.oneByThree = true;
+        model.applyChanges(d);
+        CHECK(b1->isVisible());
+    }
     CHECK(inject(&direct, QStringLiteral("R99|0|serial=TG123 3way=1")));
-    CHECK(!b1->isVisible());
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(b1->isVisible());
     CHECK(inject(&direct, QStringLiteral("S1|status antA=1")));
     PeripheralConnectionTestAccess::setPollInFlight(direct, true);
     CHECK(inject(&direct, QStringLiteral("R1|0|serial=TG123 3way=1")));
@@ -319,7 +336,7 @@ int main(int argc, char** argv)
     CHECK(inject(&direct, QStringLiteral("V1.2.44")));
     CHECK(inject(&direct, QStringLiteral("R1|1|info serial=TG123 3way=1")));
     CHECK(!direct.isThreeWay().has_value());
-    CHECK(!b1->isVisible());
+    CHECK(b1->isVisible());
     CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
     CHECK(direct.isThreeWay().value_or(false));
     CHECK(b1->isVisible());
@@ -336,18 +353,28 @@ int main(int argc, char** argv)
     CHECK(inject(&direct, QStringLiteral("V1.2.44")));
     CHECK(inject(&direct, QStringLiteral("R1|0|antenna name1=Vertical name2=Other name3=Third")));
     CHECK(!direct.isThreeWay().has_value());
-    CHECK(!b1->isVisible());
+    CHECK(b1->isVisible());
     CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
     CHECK(direct.isThreeWay().value_or(false));
     CHECK(b1->isVisible());
     CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
 
-    // An invalid variant must not expose antenna controls.
+    // Invalid info leaves the variant unknown and retains the relay fallback.
     CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
     CHECK(inject(&direct, QStringLiteral("V1.2.44")));
     CHECK(inject(&direct, QStringLiteral("R1|0|info serial=TG123 3way=invalid")));
     CHECK(!direct.isThreeWay().has_value());
-    CHECK(!b1->isVisible());
+    CHECK(b1->isVisible());
+    {
+        TunerDelta d;
+        d.oneByThree = false;
+        model.applyChanges(d);
+        CHECK(!b1->isVisible());
+        CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
+        CHECK(b1->isVisible()); // Confirmed direct 3-way overrides relayed SO2R.
+        d.oneByThree = true;
+        model.applyChanges(d);
+    }
     CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
 
     // A subsequent SO2R reports no 3way field, despite stale radio data.
@@ -359,6 +386,15 @@ int main(int argc, char** argv)
     commands.clear();
     model.setAntennaA(1);
     CHECK(commands.isEmpty());
+    {
+        TunerDelta d;
+        d.oneByThree = false;
+        model.applyChanges(d);
+        d.oneByThree = true;
+        model.applyChanges(d);
+        CHECK(!b1->isVisible()); // Relay updates cannot override confirmed direct SO2R.
+        CHECK(direct.isThreeWay().has_value() && !*direct.isThreeWay());
+    }
 
     if (g_failures == 0) {
         std::printf("tgxl_antenna_names_test: all checks passed\n");

@@ -214,7 +214,7 @@ void TunerModel::abortTune()
 bool TunerModel::hasAntennaSwitch() const
 {
     if (hasDirectConnection()) {
-        return m_directConn->isThreeWay().value_or(false);
+        return m_directConn->isThreeWay().value_or(m_oneByThree);
     }
     // Relay-only identification is informational; antenna commands require a direct link.
     return m_oneByThree;
