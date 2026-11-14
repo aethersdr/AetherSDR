@@ -4039,6 +4039,9 @@ TciExtensionSet::Result TciServer::handleSpan(const QString& name, const QString
         result.reply = currentLine;
         return result;
     }
+    // Known limit: the desktop leaves the radio's pan alone while its pane
+    // shows a KiwiSDR (MainWindow::applyPanRangeRequest); TciServer cannot
+    // see that, so a set here still re-spans the radio's pan.
     const QString panId = sliceForTrxStrict(request->trx)->panId();
     m_spanAnswerOwed.insert(request->trx,
         SpanAnswer{panId, *current, m_model->panadapter(panId)->centerMhz(), false,

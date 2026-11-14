@@ -257,8 +257,9 @@ private:
     bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
-    // Keyed, for the extension set's refusals: the radio transmitting,
-    // TransmitModel transmitting, tuning or in MOX, or a TCI key held.
+    // Keyed, for the extension set's refusals: transmit ownership held, the
+    // radio transmitting, TransmitModel transmitting, tuning or in MOX, or a
+    // TCI key held.
     bool extensionKeyed() const;
     // Extension group `rx_span` (TciSpanExtension.h).
     void registerSpanGroup();

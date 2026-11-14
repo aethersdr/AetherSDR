@@ -376,11 +376,14 @@ aethersdr_rx_span:1,192000;       # set it
 - A set goes where the desktop's span buttons send it. Where the span is the
   sample rate, it is moved to the nearest listed rate; otherwise it is kept
   inside the panadapter's limits, when the radio reports them.
+- One exception: while a panadapter shows a KiwiSDR, the desktop's span
+  buttons leave the radio's panadapter alone, but a set still changes the span
+  of the radio's panadapter behind it.
 - The answer is `aethersdr_rx_span:<trx>,<hz>;` with the span the radio
   reports, sent to every client that enabled the set, for every receiver whose
   span moved. A radio that keeps its span (a Hermes-Lite 2 refuses a span the
   network link cannot carry) is answered with the span it kept; with no report
-  after two seconds, the span in force is sent. A set that the rounding left at
+  two seconds after the set, the span in force is sent. A set that the rounding left at
   the current span is answered to the sender only; a set of exactly the current
   span gets no answer.
 - Every change from any source (the desktop, a band change, another client) is

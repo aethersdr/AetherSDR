@@ -31,9 +31,10 @@ struct Model {
 Model model(const RadioCapabilities& caps);
 
 // The gate: a connected radio whose pan display control declares the span
-// (PanDisplayControl::declaresSpan(), the predicate that keeps the desktop's
-// -/+ span pair live), and, when the span follows the sample rate, at least
-// one rate to snap to.
+// (PanDisplayControl::declaresSpan()), and, when the span follows the sample
+// rate, at least one rate to snap to. Narrower than PanSpanControlGate, which
+// keeps the desktop's -/+ span pair live when nothing is declared: here an
+// absent declaration offers nothing.
 bool offered(bool connected, const RadioCapabilities& caps);
 
 struct Request {
@@ -45,10 +46,9 @@ struct Request {
 std::optional<Request> parseSpan(const QStringList& args);
 
 // The span a set asks the radio for. With followsRate, the listed rate nearest
-// by ratio (log distance, as Hl2Backend and AnanBackend snap; the lower one on
-// a tie), among the rates inside [minHz, maxHz] when those limits are known
-// (> 0). Otherwise the request clamped to the known limits. `rates` must be
-// ascending.
+// by ratio (log distance, as Hl2Backend and AnanBackend snap), among the rates
+// inside [minHz, maxHz] when those limits are known (> 0). Otherwise the
+// request clamped to the known limits. `rates` must be ascending.
 qint64 snap(qint64 hz, const Model& model, qint64 minHz, qint64 maxHz);
 
 // The rates a set can reach now: `rates` inside [minHz, maxHz] when known.
