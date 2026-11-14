@@ -36,7 +36,7 @@ The rest of this documentation describes FlexRadio operation unless a page says 
 | KiwiSDR and Web-888 | Public receivers used as receive-only antennas for a slice | Radio Setup → Antennas | [KiwiSDR and Web-888](./kiwisdr-and-web-888.md) |
 | Demo | Built-in simulator, cannot transmit | The Connect to Radio list | [Demo Mode](./demo-mode.md) |
 
-The Hermes-Lite 2 is supported in the desktop application: board id 6 over Ethernet / openHPSDR Protocol 1, with gateware 74. Windows is not yet certified until a Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental. The IC-7300MK2 over its built-in Ethernet (RS-BA1) is the one Icom model supported on its own; every other Icom model keeps the early, experimental treatment.
+The Hermes-Lite 2 is supported in the desktop application: board id 6 over Ethernet / openHPSDR Protocol 1, with gateware 74. Windows is not certified until a Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental. The IC-7300MK2 over its built-in Ethernet (RS-BA1) is the one Icom model supported on its own; every other Icom model keeps the early, experimental treatment.
 
 While an ANAN-G2, an Icom other than the IC-7300MK2, or a Hermes-Lite 2 on gateware other than 74 or on a board that names itself in its gateware version is connected, an **EXPERIMENTAL** badge shows in the title bar, and an "Experimental radio support" notice appears when you connect. Tick "Don't show again" in the notice to stop it for that family.
 

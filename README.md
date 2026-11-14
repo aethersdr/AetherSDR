@@ -97,7 +97,7 @@ supported on its own (both below); FlexRadio remains the primary target:
 
 - **Hermes-Lite 2** — **supported** in the desktop application: board id 6 over
   Ethernet / openHPSDR Protocol 1, gateware 74 ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257)).
-  Windows is not yet certified until a Windows `radiocert` run is posted on
+  Windows is not certified until a Windows `radiocert` run is posted on
   [#5678](https://github.com/aethersdr/AetherSDR/issues/5678); aetherd, other
   gateware, other boards and the wider Hermes-Lite family remain experimental.
   Four independent receivers, SSB, AM, DSB and simplex FM/NFM voice

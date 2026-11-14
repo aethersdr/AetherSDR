@@ -209,7 +209,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   **The Hermes-Lite 2 is now Supported** ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257), approved):
   board id 6 over Ethernet / openHPSDR Protocol 1, gateware 74, in the desktop
   application. aetherd, other gateware, other boards and the wider Hermes-Lite
-  family keep their current status. Windows is not yet certified until a
+  family keep their current status. Windows is not certified until a
   Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Field time follows the
   label: at least 20 h on the air on a released build, from at least two
   stations (one not ON8ST's), over at least two weeks, with no open
