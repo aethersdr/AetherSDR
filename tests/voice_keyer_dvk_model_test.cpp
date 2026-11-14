@@ -1,6 +1,7 @@
 // DvkModel as a VoiceKeyer — the radio DVK behind the keyer interface.
 // Run: ./build/voice_keyer_dvk_model_test
 
+#include "FlexTransmitServiceStatusTestSupport.h"
 #include "models/DvkModel.h"
 
 #include <QCoreApplication>
@@ -39,12 +40,12 @@ int main(int argc, char** argv)
                          [&](const DvkRequest& request, quint64) { sent << request; });
         keyer->recStart(3);
         keyer->recStop(3);
-        model.applyStatus("dvk", {{"status", "recording"}, {"id", "3"}});
-        model.applyStatus("dvk", {{"status", "idle"}});
+        applyDvkStatus(model, "dvk", {{"status", "recording"}, {"id", "3"}});
+        applyDvkStatus(model, "dvk", {{"status", "idle"}});
         keyer->previewStart(4);
         keyer->previewStop(4);
-        model.applyStatus("dvk", {{"status", "preview"}, {"id", "4"}});
-        model.applyStatus("dvk", {{"status", "idle"}});
+        applyDvkStatus(model, "dvk", {{"status", "preview"}, {"id", "4"}});
+        applyDvkStatus(model, "dvk", {{"status", "idle"}});
         keyer->playbackStart(5);
         keyer->playbackStop(5);
         keyer->clear(6);
@@ -72,9 +73,9 @@ int main(int argc, char** argv)
                          [&](VoiceKeyer::Status s, int id) { seen = s; seenId = id; });
         QObject::connect(keyer, &VoiceKeyer::recordingChanged,
                          [&](int id) { changed << id; });
-        model.applyStatus(QStringLiteral("dvk"),
+        applyDvkStatus(model, QStringLiteral("dvk"),
                           {{"id", "2"}, {"name", "\"CQ\""}, {"duration", "4200"}});
-        model.applyStatus(QStringLiteral("dvk"),
+        applyDvkStatus(model, QStringLiteral("dvk"),
                           {{"status", "playback"}, {"id", "2"}, {"enabled", "1"}});
         const auto& recs = keyer->recordings();
         const bool recordingOk = recs.size() == 1 && recs[0].id == 2

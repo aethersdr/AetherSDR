@@ -99,6 +99,17 @@ Use a WSJT-X build with TCI support (WSJT-X Improved, or WSJT-X 3.x).
 
 WSJT-X takes CAT, PTT **and audio** over TCI, so there are no sound-card devices to set up. WSJT-X's **Pwr** slider attenuates the transmitted audio. See [WSJT-X Integration](./wsjt-x-integration.md).
 
+On FlexRadio, the first TCI audio transmission can create AetherSDR's DAX TX
+stream when none exists. AetherSDR waits for both the creation reply and radio
+status confirming that its stream is selected before continuing the original
+request. A refused, cancelled or timed-out request cannot resume later. If the
+stream already exists but is not selected, select it with **TX stream** in
+**DAX Audio** while the radio is idle, then initiate a new transmission.
+
+On a slow link, such as SmartLink, that first transmission can time out in
+WSJT-X or JTDX, which wait one second for the `trx` reply. Key again; the
+stream now exists.
+
 ### MSHV
 
 **Settings → Interface**, select **TCI**, enter `localhost` and port `50001`, and enable audio streaming if wanted.
@@ -138,6 +149,7 @@ Several TCI programs can be connected at once, and each keys the slice it asked 
 - An externally selected TX slice only wins when split was requested, or when VFO B set up a route for that exact receiver, so satellite and cross-band split still work.
 - A receiver that cannot be resolved is **declined**, never keyed on slice A instead.
 - **Every refused PTT is answered with `trx:<n>,false;`**, including a second client trying to key while another holds TCI PTT. WSJT-X shows this as "TCI failed to set ptt".
+- After a refusal, a new request uses its own microphone or transmit-audio source. On FlexRadio, a TCI transmit-audio request also requires AetherSDR’s **TX stream** to be **Selected** in **DAX Audio** (see [DAX Virtual Audio](./dax-virtual-audio.md#the-dax-audio-applet)).
 - **Receiver numbers are stable.** If a slice closes mid-session, the other slices keep their receiver numbers, and the freed number goes to the next new slice.
 - A VFO B request from one client does not retune another client's slice.
 
@@ -292,6 +304,13 @@ rx_channel_sensors:0,0,-97.3;
 ```
 
 TX sensors broadcast during transmit, including ALC.
+
+The SWR field is the same trusted SWR the S-meter shows. A reading taken
+without measurable forward power, for example in a speech pause, does not
+replace it: the last reading taken under carrier is held. A worse SWR under
+carrier is reported at once. When the radio unkeys, the held value is cleared,
+so the next transmission starts again from 1.0. A persistent below-unity
+reading from the radio, which means it cannot measure SWR, is reported as 10.0.
 
 ### CW keying
 

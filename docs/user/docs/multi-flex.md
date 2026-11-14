@@ -38,6 +38,7 @@ AetherSDR handles this automatically:
 
 - **On connect:** AetherSDR checks whether existing slices belong to another client. If so, it creates its own slice and panadapter.
 - **Ownership:** panadapter and slice ownership is taken from the radio's status, not from the order packets arrive in, so joining a radio that already has clients attaches you to the right objects.
+- **Released slices:** a slot becomes available when the radio reports its removal or its owning client disconnects. A reassigned slice uses its new owner's state; queued updates from a disconnected session do not restore the old slice.
 - **Joining:** the connection watchdog allows a grace period while a second client joins, so the join does not trigger a false disconnect.
 - **Status filtering:** only slice, pan and waterfall updates that match your `client_handle` are processed. Spectrum and waterfall packets from other clients' panadapters are dropped.
 - **Shared radios** show "Shared radio on your network via multiFLEX" in the Connect to Radio list.
@@ -58,7 +59,7 @@ AetherSDR handles this automatically:
 | **TX FREQ (MHz)** | Transmit frequency |
 | *(button)* | **Disconnect** removes that client from the radio |
 
-The **Enabled / Disabled** button above the table turns multiFLEX on or off on the radio. Below the table, **Enable** (Local PTT) requests PTT for your station when another client holds it.
+The **Enabled / Disabled** button above the table turns multiFLEX on or off on the radio. Below the table, **Enable** (Local PTT) requests PTT for your station when another client holds it. The request does not key the transmitter. With multiple clients connected, the Local PTT check follows the radio’s reported ownership; an accepted request alone does not change it.
 
 A green **multiFLEX** button appears in the title bar while other clients are connected. Hover it for the list of stations; click it to open the dashboard.
 
@@ -74,6 +75,10 @@ When multiFLEX is **disabled** on the radio and another client is already connec
 
 - **Global slot index (A=0, B=1, …)**, the default.
 - **Radio-assigned letter with global subscript (A₂)**, which matches SmartSDR's letters in multi-client sessions and still shows which physical slot you are on.
+
+Client names and local PTT status follow the radio's live reports. A disconnected
+client is removed from the client list; its delayed connection notification cannot
+be reused for a later connection with the same radio-assigned handle.
 
 ## Troubleshooting
 

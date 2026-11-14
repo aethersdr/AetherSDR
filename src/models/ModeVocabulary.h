@@ -2,6 +2,7 @@
 
 #include <QLatin1String>
 #include <QString>
+#include <QStringList>
 
 namespace AetherSDR {
 
@@ -9,16 +10,25 @@ namespace AetherSDR {
 // CW. Radio-family-neutral — every backend reports these spellings — so the
 // engine can answer the question without reaching into the UI.
 //
-// Voice modes are SSB, AM/SAM and the FM family (not CW, RTTY, DIGx,
-// FreeDV/RADE). The DVK indicator asks about the TX slice (#4173); Copy Assist
-// asks about the active slice. One list so the two can't drift. An empty mode
-// (no slice) is not voice.
+// Voice modes carry intelligible speech, including wide FM's WFM/WBFM aliases.
+// Copy Assist follows the active slice; the voice keyer follows the TX slice
+// and additionally excludes the backend's receive-only modes below. CW, data
+// modes and an empty mode (no slice) are not voice.
 inline bool isVoiceMode(const QString& mode)
 {
     return mode == QLatin1String("USB") || mode == QLatin1String("LSB")
         || mode == QLatin1String("AM")  || mode == QLatin1String("SAM")
         || mode == QLatin1String("FM")  || mode == QLatin1String("NFM")
-        || mode == QLatin1String("DFM");
+        || mode == QLatin1String("DFM") || mode == QLatin1String("WFM")
+        || mode == QLatin1String("WBFM");
+}
+
+// The DVK indicator, mode-change abort and playback refusal share this gate.
+// A receive-only voice mode remains valid for Copy Assist, but cannot play a
+// voice-keyer message. Radio-wide TX/keyer capabilities are checked separately.
+inline bool isVoiceTransmitMode(const QString& mode, const QStringList& receiveOnlyModes)
+{
+    return isVoiceMode(mode) && !receiveOnlyModes.contains(mode, Qt::CaseInsensitive);
 }
 
 // CW/CWU use the upper sideband; CWL/CWR explicitly use the reverse sideband.

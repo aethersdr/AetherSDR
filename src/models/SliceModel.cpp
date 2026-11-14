@@ -12,7 +12,7 @@
 
 namespace AetherSDR {
 
-// Note: antenna-list splitting now lives in FlexBackend::decodeSliceStatus
+// Note: antenna-list splitting now lives in FlexSliceStatus::decodeValues
 // (aetherd RFC 2.3); SliceModel receives the already-split QStringList.
 
 SliceModel::SliceModel(int id, QObject* parent)
@@ -1872,8 +1872,24 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.audioMute) {
         m_receiveObservation.muted = d.audioMute;
     }
+    if (d.agcThreshold) {
+        m_receiveObservation.agcThreshold = *d.agcThreshold >= 0 && *d.agcThreshold <= 100
+            ? d.agcThreshold : std::nullopt;
+    }
+    if (d.nb) {
+        m_receiveObservation.noiseBlanker = d.nb;
+    }
+    if (d.nr) {
+        m_receiveObservation.noiseReduction = d.nr;
+    }
+    if (d.ritOn) {
+        m_receiveObservation.ritEnabled = d.ritOn;
+    }
+    if (d.ritFreq) {
+        m_receiveObservation.ritOffsetHz = d.ritFreq;
+    }
     // aetherd RFC 2.3: the Flex slice-status wire decode moved to
-    // FlexBackend::decodeSliceStatus, which emits sliceChanged(sliceId, changes)
+    // FlexSliceStatus::decodeValues, carried in the typed slice observation
     // with normalized, canonically-named typed values. This applies those
     // canonical keys — no SmartSDR key names or "1"/string parsing remain here;
     // only the model's business logic (filter-polarity normalization, the

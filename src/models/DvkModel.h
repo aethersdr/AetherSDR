@@ -2,6 +2,7 @@
 
 #include "VoiceKeyer.h"
 #include "core/backends/TransmitServiceRequest.h"
+#include "core/backends/TransmitServiceStatus.h"
 
 #include <QLatin1String>
 #include <QMap>
@@ -83,14 +84,15 @@ public:
     // import/export is unavailable.
     void importWav(int id, const QString& path) override;
     void exportWav(int id, const QString& path) override;
+    quint64 transferRevision() const override { return m_transferRevision; }
     bool canTransferWav() const override { return static_cast<bool>(m_transferBusyProbe); }
     bool isTransferring() const override { return m_transferBusyProbe && m_transferBusyProbe(); }
     void setWavTransferBusyProbe(std::function<bool()> probe) { m_transferBusyProbe = std::move(probe); }
 
     QString sourceLabel() const override { return QStringLiteral("Radio"); }
 
-    // Status parsing (called from RadioModel)
-    void applyStatus(const QString& object, const QMap<QString, QString>& kvs);
+    // One decoded voice keyer report (the backend's status ingress).
+    void applyObservation(const DvkStatusObservation& observation);
 
     // Connection-scoped state goes with the connection.
     void reset();
@@ -127,8 +129,13 @@ private:
     quint64 m_nextRequest{0};
     quint64 m_startRequest{0};
     bool m_startObserved{false};
+    // The radio accepted an operator stop for the pending start: an idle
+    // report then settles it even if the start itself was never observed.
+    bool m_stopAccepted{false};
+    void settleStart();
     QMap<quint64, DvkRequest> m_requests;
     void request(const DvkRequest& request);
+    quint64 m_transferRevision{0};
 
     void setPending(Status pending);
     QVector<VoiceKeyerRecording> m_recordings;

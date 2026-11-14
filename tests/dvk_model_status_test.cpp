@@ -1,3 +1,5 @@
+#include "FlexTransmitServiceStatusTestSupport.h"
+#include "FlexSetupStatusTestSupport.h"
 // #6244 — DvkModel against the SmartSDR API wiki (TCPIP-dvk) and lines
 // captured from a FLEX-8600 on fw 4.2.20. Status lines go through the real
 // CommandParser, so quoted names with spaces are covered end to end.
@@ -31,7 +33,7 @@ void report(const char* label, bool ok)
 void feed(DvkModel& model, const QString& line)
 {
     const ParsedMessage msg = CommandParser::parseLine(line);
-    model.applyStatus(msg.object, msg.kvs);
+    applyDvkStatus(model, msg.object, msg.kvs);
 }
 
 QString nameOf(const DvkModel& model, int id)
@@ -256,7 +258,7 @@ int main(int argc, char* argv[])
         model.recStart(2);
         model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Rejected, 0x50004001u, {}});
         report("a refused start retires pending intent but keeps the license refusal",
-               model.pendingOperation() == DvkModel::Unknown && !model.canStartOperation());
+               model.pendingOperation() == DvkModel::Unknown && model.licenseRefused());
         model.clearRefusal();
 
         model.setTransferActive(true);
@@ -295,16 +297,14 @@ int main(int argc, char* argv[])
         using Kvs = QMap<QString, QString>;  // Q_ARG cannot take the comma
         const auto status = [&radio](const QString& name, const QString& enabled) {
             const Kvs kvs{{QStringLiteral("name"), name}, {QStringLiteral("enabled"), enabled}};
-            QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                                      Q_ARG(QString, QStringLiteral("license feature")),
-                                      Q_ARG(Kvs, kvs));
+            FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), kvs);
         };
         radio.dvkModel().noteRefusal(0x50004001u);
         report("a refusal reaches RadioModel's entitlement input", radio.dvkLicenseRefused());
         status(QStringLiteral("digital_voice_keyer"), QStringLiteral("0"));
         report("a not-licensed status keeps the refusal", radio.dvkLicenseRefused());
         status(QStringLiteral("some_other_feature"), QStringLiteral("1"));
-        report("another feature's licence does not clear it", radio.dvkLicenseRefused());
+        report("another feature's license does not clear it", radio.dvkLicenseRefused());
         status(QStringLiteral("digital_voice_keyer"), QStringLiteral("1"));
         report("the radio reporting DVK licensed clears the refusal", !radio.dvkLicenseRefused());
     }

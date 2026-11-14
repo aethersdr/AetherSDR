@@ -50,6 +50,11 @@ void updateNativeTitleVisibility(QWidget* window)
         native.toolbar = nil;
         native.toolbarStyle = previousStyle;
     }
+    if ([native.toolbar isKindOfClass:[AetherSDRTitleToolbar class]]) {
+        // AppKit balances fullscreen transition suppression on this object;
+        // keep it installed, but hide its empty fullscreen strip.
+        native.toolbar.visible = !window->isFullScreen();
+    }
 }
 
 QRectF nativeCaptionBounds(const QWidget* window)

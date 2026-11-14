@@ -9,6 +9,9 @@
 // Kept honest by `python tools/gen_seam_probe_table.py --check` in
 // .github/workflows/static-checks.yml, on every pull request, without a build.
 
+AETHER_SEAM_PROBE(displayObserved);
+AETHER_SEAM_PROBE(setupStatusObserved);
+AETHER_SEAM_PROBE(audioStreamChanged);
 AETHER_SEAM_PROBE(independentTxStopped);
 AETHER_SEAM_PROBE(transmitControlAnswered);
 AETHER_SEAM_PROBE(connected);
@@ -24,16 +27,21 @@ AETHER_SEAM_PROBE(linkStatsUpdated);
 AETHER_SEAM_PROBE(extensionResult);
 AETHER_SEAM_PROBE(extensionError);
 AETHER_SEAM_PROBE(sliceChanged);
+AETHER_SEAM_PROBE(sliceObserved);
 AETHER_SEAM_PROBE(sliceRemoved);
 AETHER_SEAM_PROBE(sliceLifecycleFailed);
 AETHER_SEAM_PROBE(meterUpdate);
 AETHER_SEAM_PROBE(frontEndOverloadChanged);
 AETHER_SEAM_PROBE(autoRfGainArmSettled);
 AETHER_SEAM_PROBE(transmitChanged);
+AETHER_SEAM_PROBE(daxTxStreamChanged);
 AETHER_SEAM_PROBE(keyingStateConfirmed);
 AETHER_SEAM_PROBE(amplifierChanged);
 AETHER_SEAM_PROBE(tunerChanged);
 AETHER_SEAM_PROBE(radioChanged);
+AETHER_SEAM_PROBE(radioStatusObserved);
+AETHER_SEAM_PROBE(dvkStatusObserved);
+AETHER_SEAM_PROBE(navtexStatusObserved);
 AETHER_SEAM_PROBE(gpsChanged);
 AETHER_SEAM_PROBE(memoryChanged);
 AETHER_SEAM_PROBE(memoryRefreshStarted);
@@ -52,6 +60,7 @@ AETHER_SEAM_PROBE(panWideChanged);
 AETHER_SEAM_PROBE(panRangeChanged);
 AETHER_SEAM_PROBE(panBandwidthLimitsChanged);
 AETHER_SEAM_PROBE(panRfGainChanged);
+AETHER_SEAM_PROBE(radioSpeakerAudioReported);
 AETHER_SEAM_PROBE(operatingStateChanged);
 AETHER_SEAM_PROBE(panRfGainInfoChanged);
 AETHER_SEAM_PROBE(panPreampInfoChanged);
@@ -60,6 +69,7 @@ AETHER_SEAM_PROBE(panAttenuatorInfoChanged);
 AETHER_SEAM_PROBE(panAttenuatorChanged);
 AETHER_SEAM_PROBE(panScopeModesChanged);
 AETHER_SEAM_PROBE(panScopeModeChanged);
+AETHER_SEAM_PROBE(panZoomPlacementChanged);
 AETHER_SEAM_PROBE(panRxAntennaChanged);
 AETHER_SEAM_PROBE(panAntennaListChanged);
 AETHER_SEAM_PROBE(panWaterfallLineDurationChanged);

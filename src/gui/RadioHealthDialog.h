@@ -1,8 +1,14 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
+#include <QString>
+#include <QStringList>
+#include <QVariant>
+
+class QHideEvent;
 class QLabel;
+class QShowEvent;
 class QTableWidget;
 class QTimer;
 
@@ -14,11 +20,18 @@ class RadioModel;
 // IRadioBackend::healthSnapshot(); the backend decides which registers exist
 // and how they group. A family reporting none gets an explanatory message, not
 // an empty table. Read-only; an unreported register shows a dash, never a value.
-class RadioHealthDialog : public PersistentDialog {
+// A canon workspace (RFC #6226) that polls only while it is shown.
+class RadioHealthDialog : public CanonWindow {
     Q_OBJECT
 
 public:
     explicit RadioHealthDialog(RadioModel* model, QWidget* parent = nullptr);
+
+    bool isRefreshing() const;
+
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     void refresh();

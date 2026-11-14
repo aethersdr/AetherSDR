@@ -2,7 +2,9 @@
 
 #include <QObject>
 #include <QMap>
-#include <QVariantMap>
+#include <QPointer>
+#include <functional>
+#include "core/backends/DisplayObservation.h"
 #include <QString>
 #include <QStringList>
 #include <optional>
@@ -19,6 +21,14 @@ class PanadapterModel : public QObject {
 
 public:
     explicit PanadapterModel(const QString& panId, QObject* parent = nullptr);
+    ~PanadapterModel() override { cancelIqBinding(); }
+    AudioControlGuard beginIqBinding()
+    {
+        cancelIqBinding();
+        m_iqBindingGuard = AudioControlGuard::create(30000);
+        return m_iqBindingGuard;
+    }
+    void cancelIqBinding() { m_iqBindingGuard.revoke(); }
 
     // Identity
     QString panId() const { return m_panId; }
@@ -37,8 +47,8 @@ public:
     // #3977: true when this pan belongs to the given connection handle. The
     // radio reassigns client_handle when another session reclaims the pan;
     // callers gate outbound pan-set commands on this so a superseded session
-    // stops adjusting the new owner's display. Fails OPEN on unknown owner —
-    // safe only for gating our own commands.
+    // stops adjusting the new owner's display. Explicit zero fails closed;
+    // native models without reported ownership retain their local behavior.
     bool ownedByClient(quint32 handle) const;
     // Parsed owner (0 = radio never told us). Fail-CLOSED source for
     // eviction evidence: only pans whose confirmed owner is us may count
@@ -75,6 +85,10 @@ public:
     void recordGeometryObservation(double centerMhz, double bandwidthMhz);
     std::optional<qint64> reportedCenterHz() const { return m_reportedCenterHz; }
     std::optional<qint64> reportedBandwidthHz() const { return m_reportedBandwidthHz; }
+    // The RF gain the backend reports it applied (panRfGainChanged), never the
+    // UI slider's own value.
+    void recordRfGainObservation(int gainDb);
+    std::optional<int> reportedRfGain() const { return m_reportedRfGain; }
     // Force an infoChanged with the current values — for a backend re-asserting
     // a span it refused to change. See the definition.
     void republishCenterBandwidth();
@@ -119,11 +133,10 @@ public:
     // true. Emits Reported as well as Changed so the widget's existing Flex
     // wiring picks it up unchanged.
     void setLocalWeightedAverage(bool weighted);
-    // Flex-specific WNB extension applied from the backend's namespaced
-    // extensionStatus("flex","panWnb",…). Applies only the keys present;
-    // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3
-    // extension template — the decode lives in FlexBackend, not here.)
-    void applyWnbExtension(const QVariantMap& fields);
+    bool applyDisplayValues(const DisplayValues& values, const std::function<bool()>& current);
+    void setOwnerHandle(quint32 handle);
+    bool lifecyclePublished() const { return m_lifecyclePublished; }
+    void setLifecyclePublished(bool published) { m_lifecyclePublished = published; }
     float minDbm() const { return m_minDbm; }
     float maxDbm() const { return m_maxDbm; }
     QString rxAntenna() const { return m_rxAntenna; }
@@ -159,6 +172,9 @@ public:
     int scopeModeIndex() const { return m_scopeModeIndex; }
     void setScopeModeLabels(const QStringList& labels);
     void setScopeModeIndex(int index);
+    // IRadioBackend::panZoomPlacementChanged; Unknown until the backend reports.
+    PanZoomPlacement zoomPlacement() const { return m_zoomPlacement; }
+    void setZoomPlacement(PanZoomPlacement placement);
     // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +
     // antenna promoted to universal typed signals). Each emits its existing
     // change-signal only on an actual change; the wire decode lives in
@@ -238,16 +254,9 @@ public:
     bool isWaterfallConfigured() const { return m_wfConfigured; }
     void setWaterfallConfigured(bool c) { m_wfConfigured = c; }
 
-    // Flex-specific display-pan state applied from the backend's namespaced
-    // extensionStatus("flex","panState",…): wide, loop A/B, fps, preamp, DAX-IQ
-    // channel, MultiFlex client_handle ownership, waterfall stream-id. Applies
-    // only the keys present. (aetherd RFC 2.3 — the decode lives in FlexBackend;
-    // this is the last of PanadapterModel's Flex status decode to move, so the
-    // old applyPanStatus/applyWaterfallStatus wire-decoders are now gone.)
-    void applyStateExtension(const QVariantMap& fields);
-
 signals:
     void geometryObservationChanged();
+    void rfGainObservationChanged();
     void infoChanged(double centerMhz, double bandwidthMhz);
     void levelChanged(float minDbm, float maxDbm);
     void bandwidthLimitsChanged(double minMhz, double maxMhz);
@@ -262,6 +271,7 @@ signals:
     void attenuatorStepChanged(int step);
     void scopeModeLabelsChanged(const QStringList& labels);
     void scopeModeIndexChanged(int index);
+    void zoomPlacementChanged(AetherSDR::PanZoomPlacement placement);
     void wnbChanged(bool active, int level);
     void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
@@ -287,6 +297,9 @@ signals:
     void noiseFloorRangeChanged(double db);
 
 private:
+    bool m_ownerObserved{false};
+    bool m_lifecyclePublished{false};
+    AudioControlGuard m_iqBindingGuard;
     quint64 m_controlRevision{0};
     quint64 m_ownershipRevision{0};
     quint64 m_fftObservationRevision{0};
@@ -300,6 +313,7 @@ private:
     bool        m_centerKnown{false}; // true after a normalized center update
     std::optional<qint64> m_reportedCenterHz;
     std::optional<qint64> m_reportedBandwidthHz;
+    std::optional<int> m_reportedRfGain;
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};
@@ -321,6 +335,7 @@ private:
     int         m_attenuatorStep{0};
     QStringList m_scopeModeLabels;
     int         m_scopeModeIndex{-1};
+    PanZoomPlacement m_zoomPlacement{PanZoomPlacement::Unknown};
     bool        m_wnbActive{false};
     bool        m_wnbUpdating{false};
     bool        m_wideActive{false};

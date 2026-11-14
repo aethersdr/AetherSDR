@@ -1,4 +1,5 @@
 // Production encoding and model-to-terminal dispatch, with no socket peer or RF.
+#include "FlexTransmitServiceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/TciProtocol.h"
@@ -20,12 +21,28 @@ public:
         radio.m_connection = &connection;
         radio.wireFlexTransmitServices(&backend);
     }
+    // A connected session: service writes take its command guard.
+    static void openSession(RadioModel& radio, RadioConnection& connection)
+    {
+        connection.m_state.store(ConnectionState::Connected);
+        radio.m_sessionCommands = SessionCommandGuard::create();
+        radio.m_sessionWire = &connection;
+        radio.m_sessionWireGeneration = connection.commandSessionGeneration();
+    }
     static void retire(RadioModel& radio) { radio.resetTxOperations(); }
     static void reply(RadioModel& radio, int code, const QString& body = {})
     {
         const auto pending = std::exchange(radio.m_pendingCallbacks, {});
         for (const auto& callback : pending) { callback(code, body); }
     }
+    static bool beginMox(RadioModel& radio)
+    {
+        const bool admitted = radio.beginLocalTxActivity(TxCoordinator::Activity::Mox);
+        if (admitted) { radio.endLocalTxActivity(radio.m_localTxIntents.value(TxCoordinator::Activity::Mox)); }
+        return admitted;
+    }
+    static void stop(RadioModel& radio) { radio.cancelLocalTransmit(); }
+    static void closeObservations(RadioModel& radio) { radio.retireObservationSession(); }
     static bool serviceHeld(RadioModel& radio)
     {
         return radio.m_dvkTxIntent.pending() || radio.m_navtexTxIntent.pending();
@@ -75,7 +92,8 @@ struct Fixture {
         delta.mode = QStringLiteral("USB");
         radio.slice(0)->applyChanges(delta);
         pointer->connected = true;
-        radio.dvkModel().applyStatus("dvk", {{"status", "idle"}, {"enabled", "1"}});
+        TxOperationIntegrationTestAccess::openSession(radio, inert);
+        applyDvkStatus(radio.dvkModel(), "dvk", {{"status", "idle"}, {"enabled", "1"}});
         flush();
         wire.clear();
     }
@@ -136,8 +154,8 @@ void lifecycle()
     model.handleControlReply(latest, {TransmitServiceReply::Outcome::Unknown, 0, {}});
     model.previewStart(3);
     check(requests == 2 && !model.canStartOperation(), "unknown completion cannot admit an automatic retry");
-    model.applyStatus("dvk", {{"status", "preview"}, {"id", "2"}});
-    model.applyStatus("dvk", {{"status", "idle"}});
+    applyDvkStatus(model, "dvk", {{"status", "preview"}, {"id", "2"}});
+    applyDvkStatus(model, "dvk", {{"status", "idle"}});
     check(model.canStartOperation(), "observed operation and idle settle an unknown reply");
 
     DvkModel saturated;
@@ -160,9 +178,9 @@ void lifecycle()
     QObject::connect(&advancing, &DvkModel::controlRequested, &advancing,
         [&](const DvkRequest& request, quint64) { stops += request.stops(); });
     advancing.playbackStart(1);
-    advancing.applyStatus("dvk", {{"status", "playback"}, {"id", "1"}});
+    applyDvkStatus(advancing, "dvk", {{"status", "playback"}, {"id", "1"}});
     advancing.playbackStop(1);
-    advancing.applyStatus("dvk", {{"status", "idle"}});
+    applyDvkStatus(advancing, "dvk", {{"status", "idle"}});
     advancing.playbackStart(2);
     advancing.playbackStop(2);
     check(stops == 2, "unanswered old STOP cannot suppress STOP for a newer playback");
@@ -209,8 +227,8 @@ void terminalFence()
               "admitted voice playback reaches the injected terminal writer");
         TxOperationIntegrationTestAccess::reply(f.radio, 0);
         check(TxOperationIntegrationTestAccess::serviceHeld(f.radio), "acceptance retains playback intent");
-        f.radio.dvkModel().applyStatus("dvk", {{"status", "playback"}, {"id", "1"}});
-        f.radio.dvkModel().applyStatus("dvk", {{"status", "idle"}});
+        applyDvkStatus(f.radio.dvkModel(), "dvk", {{"status", "playback"}, {"id", "1"}});
+        applyDvkStatus(f.radio.dvkModel(), "dvk", {{"status", "idle"}});
         check(!TxOperationIntegrationTestAccess::serviceHeld(f.radio), "observed playback completion retires its intent");
     }
     {
@@ -222,19 +240,19 @@ void terminalFence()
     }
     {
         Fixture f;
-        f.radio.navtexModel().parseStatus("navtex", {{"status", "active"}});
+        applyNavtexStatus(f.radio.navtexModel(), "navtex", {{"status", "active"}});
         f.radio.navtexModel().sendMessage('A', 'B', "test");
         flush();
         check(f.wire == QStringList{"navtex send tx_ident=A subject_indicator=B msg_text=\"test\""},
               "admitted NAVTEX reaches the final injected writer");
         TxOperationIntegrationTestAccess::reply(f.radio, 0, "7");
         check(TxOperationIntegrationTestAccess::serviceHeld(f.radio), "queued NAVTEX retains TX intent");
-        f.radio.navtexModel().parseStatus("navtex sent", {{"idx", "7"}, {"serial_num", "1"}});
+        applyNavtexStatus(f.radio.navtexModel(), "navtex sent", {{"idx", "7"}, {"serial_num", "1"}});
         check(!TxOperationIntegrationTestAccess::serviceHeld(f.radio), "sent confirmation retires matching NAVTEX intent");
     }
     {
         Fixture f;
-        f.radio.navtexModel().parseStatus("navtex", {{"status", "active"}});
+        applyNavtexStatus(f.radio.navtexModel(), "navtex", {{"status", "active"}});
         f.radio.navtexModel().sendMessage('A', 'B', "test");
         TxOperationIntegrationTestAccess::retire(f.radio);
         flush();
@@ -256,6 +274,76 @@ void terminalFence()
         check(f.wire.isEmpty(), "non-keying DVK requests also respect session retirement at the writer");
     }
 }
+// An unanswered playback start, or a NAVTEX submission, must not lock the
+// operator out: the refusal says why, and an accepted Stop is the way out.
+void lockoutRecovery()
+{
+    {
+        Fixture f;
+        f.radio.dvkModel().playbackStart(1);
+        flush();
+        TxOperationIntegrationTestAccess::reply(f.radio, 0);
+        check(!TxOperationIntegrationTestAccess::beginMox(f.radio), "MOX cannot overlap an accepted voice playback");
+    }
+    {
+        Fixture f;
+        int notices = 0;
+        QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested, &f.radio, [&notices] { ++notices; });
+        f.radio.dvkModel().playbackStart(1);
+        flush();
+        TxOperationIntegrationTestAccess::reply(f.radio, -1);   // no answer: execution unknown
+        check(TxOperationIntegrationTestAccess::serviceHeld(f.radio)
+                  && !TxOperationIntegrationTestAccess::beginMox(f.radio) && notices == 1,
+              "an unanswered playback start holds TX, and the refusal is announced");
+        f.wire.clear();
+        TxOperationIntegrationTestAccess::stop(f.radio);
+        flush();
+        check(f.wire.contains(QStringLiteral("dvk playback_stop")) && !TxOperationIntegrationTestAccess::serviceHeld(f.radio)
+                  && TxOperationIntegrationTestAccess::beginMox(f.radio),
+              "Stop sends playback_stop and releases the transmitter");
+        TxOperationIntegrationTestAccess::reply(f.radio, 0);   // the radio accepts the stop
+        applyDvkStatus(f.radio.dvkModel(), "dvk", {{"status", "idle"}, {"enabled", "1"}});
+        check(f.radio.dvkModel().canStartOperation(), "accepted Stop plus idle settles the unseen start");
+    }
+    {
+        Fixture f;
+        applyNavtexStatus(f.radio.navtexModel(), "navtex", {{"status", "active"}});
+        f.radio.navtexModel().sendMessage('A', 'B', "first");
+        flush();
+        TxOperationIntegrationTestAccess::reply(f.radio, -1);
+        TxOperationIntegrationTestAccess::stop(f.radio);
+        flush();
+        f.wire.clear();
+        f.radio.navtexModel().sendMessage('A', 'B', "second");
+        flush();
+        check(!f.wire.isEmpty() && f.wire.last().startsWith(QStringLiteral("navtex send")),
+              "a NAVTEX submission after Stop reaches the writer");
+    }
+}
+
+// "dvk …" and "navtex …" lines reach their models through the status
+// ingress, and only while the observation session is open.
+void statusIngress()
+{
+    Fixture f;
+    f.radio.handleStatusForTest("dvk", {{"status", "playback"}, {"id", "2"}, {"enabled", "1"}});
+    f.radio.handleStatusForTest("dvk added", {{"id", "3"}, {"name", "\"CQ test\""}, {"duration", "1500"}});
+    f.radio.handleStatusForTest("navtex", {{"status", "Active"}});
+    check(f.radio.dvkModel().status() == VoiceKeyer::Playback && f.radio.dvkModel().activeId() == 2
+              && f.radio.navtexModel().status() == NavtexStatus::Active,
+          "DVK and NAVTEX status reach their models through the ingress");
+    bool named = false;
+    for (const auto& recording : f.radio.dvkModel().recordings()) {
+        named = named || (recording.id == 3 && recording.name == QStringLiteral("CQ test") && recording.durationMs == 1500);
+    }
+    check(named, "a DVK recording report keeps its quoted name and duration");
+    TxOperationIntegrationTestAccess::closeObservations(f.radio);
+    f.radio.handleStatusForTest("dvk", {{"status", "idle"}, {"enabled", "1"}});
+    f.radio.handleStatusForTest("navtex", {{"status", "Inactive"}});
+    check(f.radio.dvkModel().status() == VoiceKeyer::Playback && f.radio.navtexModel().status() == NavtexStatus::Active,
+          "a session that has begun to end applies no DVK or NAVTEX status");
+}
+
 void tciUnsupported()
 {
 #ifdef HAVE_WEBSOCKETS
@@ -279,6 +367,8 @@ int main(int argc, char** argv)
     encoding();
     lifecycle();
     terminalFence();
+    lockoutRecovery();
+    statusIngress();
     tciUnsupported();
     return failures ? 1 : 0;
 }

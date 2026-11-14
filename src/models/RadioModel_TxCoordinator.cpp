@@ -239,6 +239,15 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         | static_cast<unsigned>(TxActivity::Navtex);
     if (m_txCoordinator.hasOtherIntents(m_txOperation, {},
             (static_cast<unsigned>(activity) & services) ? 0 : services)) {
+        // A voice keyer playback or a NAVTEX message holds the transmitter.
+        emitInterlockNotification(tr("Transmit is held by the voice keyer or a NAVTEX message."),
+                                  QStringLiteral("tx-service"));
+        return false;
+    }
+    if (m_daxTxOwnershipIntent) {
+        qCWarning(lcProtocol) << "RadioModel: TX refused — a DAX TX stream selection was pending;"
+                              << "the selection is interrupted, key again to transmit";
+        interruptDaxTxOwnership(tr("Transmit preparation interrupted DAX TX ownership. Waiting for fresh radio status."));
         return false;
     }
     // TUNE/ATU use the backend's shared carrier/PTT latch, unlike compatible
@@ -286,7 +295,9 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const QString gate = activity == TxActivity::Tune || activity == TxActivity::Atu
         ? QStringLiteral("tune-start")
-        : activity == TxActivity::Mox ? QStringLiteral("xmit") : QStringLiteral("cw-key");
+        : activity == TxActivity::Mox ? QStringLiteral("xmit")
+        : activity == TxActivity::VoiceKeyer ? QStringLiteral("dvk")
+        : activity == TxActivity::Navtex ? QStringLiteral("navtex") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
         return false;
     }
@@ -379,6 +390,7 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         m_cwxCommandOperation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
     }
     m_txOperationActivities |= static_cast<unsigned>(activity);
+    m_daxTxSelectionRxObserved = false;
     // Independent backend-generated media belongs to this captured grant's
     // input. The shared desktop producer cannot carry another actor's audio.
     // Keep desktop's compatible multi-contributor context unchanged.
@@ -395,7 +407,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
             return false;
         }
     }
-    return true;
+    const QPointer<RadioModel> self(this);
+    emit daxTxOwnershipChanged();
+    return self && !m_txSessionClosing && m_backend
+        && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
 }
 
 TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
@@ -464,7 +479,8 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
     m_transmitModel.requestAtu(start, route);
-    const bool accepted = dispatched;
+    // A start withdrawn during admission dispatches its cleanup, not a cycle.
+    const bool accepted = dispatched && (!start || m_transmitModel.atuAvailable());
     if (start && !accepted) {
         m_transmitModel.requestAtu(false, route);
     }
@@ -605,6 +621,7 @@ void RadioModel::endLocalTxActivity(const TxCoordinator::Intent& intent)
 {
     if (m_txCoordinator.endIntent(intent)) {
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     }
 }
 
@@ -713,6 +730,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
 {
     const bool tracked = operation.sameOperation(m_txOperation) && operation.permitsCleanup();
     if (tracked) {
+        m_daxTxSelectionRxObserved = false;
         ++m_pendingTxDeliveries;
     }
     return [this, operation, tracked] {
@@ -722,6 +740,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
         }
         --m_pendingTxDeliveries;
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     };
 }
 
@@ -749,15 +768,16 @@ TxCoordinator::Completion RadioModel::trackTxQueue(const TxCoordinator::Operatio
     });
 }
 
-void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
+bool RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
 {
     const TxCoordinator::Operation operation = fence.operation;
     const auto completed = [completion = fence.completion] { completion.finish(); };
     if (fence.keying) {
         if (!sendTxTcpCommand(command, operation, true, completed)) {
             completed();
+            return false;
         }
-        return;
+        return true;
     }
     // Retain a short, normally released operation until its queued key-up is
     // consumed, just as NetCW does. Otherwise completion cancels an earlier
@@ -765,7 +785,9 @@ void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator
     // This is local queue completion, not qualified radio-idle evidence.
     if (!sendTxTcpCommand(command, operation, false, completed)) {
         completed();
+        return false;
     }
+    return true;
 }
 
 bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const QString& text,
@@ -1042,6 +1064,18 @@ void RadioModel::cancelLocalTransmit()
     if (m_dvkModel.status() == VoiceKeyer::Playback
         || m_dvkModel.pendingOperation() == VoiceKeyer::Playback) {
         m_dvkModel.playbackStop(m_dvkModel.activeId());
+    }
+    if (!alive) { return; }
+    // Stop also ends the services' hold on the transmitter, so a NAVTEX
+    // submission or voice playback whose answer never came cannot lock out
+    // MOX, TUNE or the next submission until reconnect.
+    if (m_dvkTxRequest) {
+        m_dvkTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_dvkTxIntent, {}));
+    }
+    if (m_navtexTxRequest) {
+        m_navtexTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_navtexTxIntent, {}));
     }
     if (!alive) { return; }
     m_txCoordinator.discardCapturedRequests();

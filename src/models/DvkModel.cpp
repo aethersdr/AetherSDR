@@ -53,6 +53,7 @@ void DvkModel::request(const DvkRequest& command)
     if (command.starts()) {
         m_startRequest = requestId;
         m_startObserved = false;
+        m_stopAccepted = false;
         m_pendingId = command.slot;
         const Status pending = command.operation == DvkRequest::Operation::RecordStart ? Recording
             : command.operation == DvkRequest::Operation::PreviewStart ? Preview : Playback;
@@ -128,7 +129,15 @@ void DvkModel::handleControlReply(quint64 requestId, const TransmitServiceReply&
     const DvkRequest command = *found;
     m_requests.erase(found);
     using Outcome = TransmitServiceReply::Outcome;
-    if (reply.outcome == Outcome::Accepted) { return; }
+    if (reply.outcome == Outcome::Accepted) {
+        // An accepted operator stop is the way out of a start the radio never
+        // reported (a lost reply, or a status shape this model did not match).
+        if (command.stops() && m_startRequest) {
+            m_stopAccepted = true;
+            if (m_status == Idle || m_status == Disabled) { settleStart(); }
+        }
+        return;
+    }
     const QPointer<DvkModel> alive(this);
     if (requestId == m_startRequest && !m_startObserved
         && (reply.outcome == Outcome::NotDispatched || reply.outcome == Outcome::Rejected)) {
@@ -146,9 +155,26 @@ void DvkModel::handleControlReply(quint64 requestId, const TransmitServiceReply&
     }
 }
 
+void DvkModel::settleStart()
+{
+    const quint64 originalStart = std::exchange(m_startRequest, 0);
+    if (!originalStart) { return; }
+    m_requests.remove(originalStart);
+    m_startObserved = false;
+    m_stopAccepted = false;
+    m_pending = Unknown;
+    m_pendingId = -1;
+    const QPointer<DvkModel> alive(this);
+    emit operationSettled(originalStart);
+    if (alive) { emit admissionChanged(); }
+}
+
 bool DvkModel::canStartOperation() const
 {
-    return (m_status == Idle || m_status == Unknown) && m_pending == Unknown && !m_transferActive && !m_licenseRefused;
+    // "No operation in flight", not "licensed": VoiceKeyerController reads this
+    // as busy, so a license refusal must not block Auto moving off this keyer
+    // (the panel gates the refusal through DvkAvailabilityGate).
+    return (m_status == Idle || m_status == Unknown) && m_pending == Unknown && !m_transferActive;
 }
 
 void DvkModel::setPending(Status pending)
@@ -209,41 +235,28 @@ DvkRecording* DvkModel::findRecording(int id)
     return nullptr;
 }
 
-void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& kvs)
+void DvkModel::applyObservation(const DvkStatusObservation& observation)
 {
-    // Global status: status=idle enabled=1
-    if (kvs.contains("status")) {
-        Status newStatus = Unknown;
-        int id = -1;
-
-        const QString& s = kvs["status"];
-        if (s == "idle")           newStatus = Idle;
-        else if (s == "recording") newStatus = Recording;
-        else if (s == "preview")   newStatus = Preview;
-        else if (s == "playback")  newStatus = Playback;
-        else if (s == "disabled")  newStatus = Disabled;
-
-        if (kvs.contains("id"))
-            id = kvs["id"].toInt();
-
-        if (kvs.contains("enabled"))
-            m_enabled = kvs["enabled"] == "1";
-        // FlexLib DVKStatus: enabled=0 means disabled, and the id is void.
-        if (kvs.value("enabled") == "0") {
-            newStatus = Disabled;
-            id = -1;
-        }
-
+    using Kind = DvkStatusObservation::Kind;
+    if (observation.kind == Kind::Status) {
+        using State = DvkStatusObservation::State;
+        const State state = observation.state;
+        const Status newStatus = state == State::Idle ? Idle : state == State::Recording ? Recording
+            : state == State::Preview ? Preview : state == State::Playback ? Playback
+            : state == State::Disabled ? Disabled : Unknown;
+        const int id = observation.id;
+        if (observation.enabled) { m_enabled = *observation.enabled; }
         const quint64 originalStart = m_startRequest;
         if (originalStart && newStatus == m_pending && id == m_pendingId) {
             m_startObserved = true;
         }
-        const bool settled = originalStart && m_startObserved
+        const bool settled = originalStart && (m_startObserved || m_stopAccepted)
             && (newStatus == Idle || newStatus == Disabled);
         if (settled) {
             m_requests.remove(originalStart);
             m_startRequest = 0;
             m_startObserved = false;
+            m_stopAccepted = false;
             m_pending = Unknown;
             m_pendingId = -1;
         }
@@ -266,36 +279,20 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
         return;
     }
 
-    // Deleted: object contains "deleted" (e.g. "dvk deleted id=1" or "dvk id=1 deleted")
-    if (object.contains("deleted")) {
-        if (kvs.contains("id")) {
-            int id = kvs["id"].toInt();
-            if (id > 0) {
-                for (int i = 0; i < m_recordings.size(); ++i) {
-                    if (m_recordings[i].id == id) {
-                        m_recordings.removeAt(i);
-                        emit recordingChanged(id);
-                        break;
-                    }
-                }
+    if (observation.kind == Kind::Deleted) {
+        for (int i = 0; i < m_recordings.size(); ++i) {
+            if (m_recordings[i].id == observation.id) {
+                m_recordings.removeAt(i);
+                emit recordingChanged(observation.id);
+                break;
             }
         }
         return;
     }
 
-    // Added or updated: id=N name="..." duration=NNNN
-    if (!kvs.contains("id")) return;
-    int id = kvs["id"].toInt();
-    if (id <= 0) return;
-
-    // The name is always quoted and may contain spaces; parseKVs keeps a
-    // quoted value whole, quotes included.
-    QString name = kvs.value("name", "");
-    name.remove('"');
-    if (name.isEmpty())
-        name = defaultName(id);
-
-    int duration = kvs.value("duration", "0").toInt();
+    const int id = observation.id;
+    const QString name = observation.name.isEmpty() ? defaultName(id) : observation.name;
+    const int duration = observation.durationMs;
 
     // Find or create recording
     auto* rec = findRecording(id);
@@ -318,10 +315,12 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
 
 void DvkModel::reset()
 {
+    ++m_transferRevision;
     const bool wasRefused = m_licenseRefused;
     m_requests.clear();
     m_startRequest = 0;
     m_startObserved = false;
+    m_stopAccepted = false;
     m_status = Unknown;
     m_activeId = -1;
     m_enabled = false;

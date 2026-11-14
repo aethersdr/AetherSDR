@@ -6,18 +6,12 @@
 #include <QMap>
 #include <optional>
 #include "core/backends/TransmitServiceRequest.h"
+#include "core/backends/TransmitServiceStatus.h"
 
 namespace AetherSDR {
 
-// NAVTEX waveform status (per FlexLib v4.2.18)
-enum class NavtexStatus {
-    Inactive,
-    Active,
-    Transmitting,
-    QueueFull,
-    Unlicensed,
-    Error
-};
+// NAVTEX waveform status (per FlexLib v4.2.18).
+using NavtexStatus = NavtexState;
 
 // Per-message status tracking
 enum class NavtexMsgStatus {
@@ -56,8 +50,8 @@ public:
     void sendMessage(QChar txIdent, QChar subjectIndicator,
                      const QString& msgText, std::optional<uint> serialNum = std::nullopt);
 
-    // Status parsing (from radio status dispatch)
-    void parseStatus(const QString& object, const QMap<QString, QString>& kvs);
+    // One decoded NAVTEX report (the backend's status ingress).
+    void applyObservation(const NavtexStatusObservation& observation);
 
     // Called by RadioModel when a reply to "navtex send" arrives
     void handleSendResponse(quint64 requestId, const TransmitServiceReply& reply);
@@ -71,8 +65,7 @@ signals:
     void messagesChanged();
 
 private:
-    void parseSentStatus(const QMap<QString, QString>& kvs);
-    static NavtexStatus parseStatusString(const QString& str);
+    void markSent(uint idx, uint serial);
     void appendMessage(const NavtexMsg& message);
 
     NavtexStatus m_status{NavtexStatus::Inactive};

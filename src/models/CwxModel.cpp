@@ -572,98 +572,68 @@ void CwxModel::setLive(bool on)
     }
 }
 
-void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
+void CwxModel::applyStatusDelta(const CwxStatusDelta& d)
 {
+    // Applied in the order the radio's keys sort, as the key/value loop did.
     const QPointer<CwxModel> self(this);
-    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
-        const QString& key = it.key();
-        const QString& val = it.value();
-
-        if (key == "sent") {
-            bool ok;
-            int idx = val.toInt(&ok);
-            if (ok) {
-                m_sentIndex = idx;
-                emit charSent(idx);
-                if (!self) { return; }
-                // Queue drain detection: radio_index captured from cwx send
-                // reply tells us the last char position of the queued batch.
-                // Fire queueEmpty() so RadioModel can release MOX. (#3949)
-                if (m_cwxEndIndex >= 0 && idx >= m_cwxEndIndex) {
-                    m_cwxEndIndex = -1;
-                    emit queueEmpty();
-                    if (!self) { return; }
-                }
-            }
-        } else if (key == "wpm") {
-            bool ok;
-            int v = val.toInt(&ok);
-            const auto echo = std::find_if(m_pendingWpmEchoes.cbegin(), m_pendingWpmEchoes.cend(),
-                [v](const std::shared_ptr<const int>& pending) { return *pending == v; });
-            if (ok && echo != m_pendingWpmEchoes.cend()) {
-                // A newer echo may skip superseded writes that never reached
-                // the terminal. Retain later tickets so an older operator or
-                // transient echo cannot retire the newest queued speed edit.
-                m_pendingWpmEchoes.erase(m_pendingWpmEchoes.cbegin(), std::next(echo));
-            } else if (ok && v != m_speed) {
-                retireSpeedIntent();
-                m_speed = v;
-                emit speedChanged(m_speed);
-                if (!self) { return; }
-            }
-        } else if (key == "break_in_delay") {
-            bool ok;
-            int v = val.toInt(&ok);
-            if (ok && v != m_delay) {
-                m_delay = v;
-                emit delayChanged(m_delay);
-                if (!self) { return; }
-            }
-        } else if (key == "qsk_enabled") {
-            bool on = (val == "1");
-            if (on != m_qsk) {
-                m_qsk = on;
-                emit qskChanged(m_qsk);
-                if (!self) { return; }
-            }
-        } else if (key == "erase") {
-            QStringList parts = val.split(',');
-            if (parts.size() == 2) {
-                bool ok1, ok2;
-                int start = parts[0].toInt(&ok1);
-                int stop  = parts[1].toInt(&ok2);
-                if (ok1 && ok2) {
-                    emit erased(start, stop);
-                    if (!self) { return; }
-                }
-            }
-        } else if (key == "queue") {
-            // Legacy path: an empty queue= would mean the radio's CWX buffer has
-            // drained. Firmware doesn't actually emit this (confirmed on FLEX-6500
-            // fw 4.2.20.41343 — the reply-radio_index watch exists precisely
-            // because queue= never arrives), so this is a belt-and-suspenders
-            // fallback should a future firmware start sending it. If it does, the
-            // reply-radio_index machinery can be retired in favour of this path —
-            // tracked in #4028 (protocol/upstream). (#3949)
-            if (val.isEmpty() || val == "0") {
-                emit queueEmpty();
-                if (!self) { return; }
-            }
-        } else if (key.startsWith("macro") && key.length() > 5) {
-            bool ok;
-            int idx = key.mid(5).toInt(&ok);
-            if (ok && idx >= 1 && idx <= 12) {
-                // Decode the quoted macro field using FlexLib CWX.cs substitutions.
-                QString decoded = val;
-                if (decoded.startsWith('"') && decoded.endsWith('"'))
-                    decoded = decoded.mid(1, decoded.length() - 2);
-                decoded.replace(QChar(0x7f), ' ');
-                decoded.replace(QChar(0x1e), '"');
-                decoded.replace('*', '=');
-                m_macros[idx - 1] = decoded;
-                emit macroChanged(idx - 1, decoded);
-                if (!self) { return; }
-            }
+    if (d.breakInDelay && *d.breakInDelay != m_delay) {
+        m_delay = *d.breakInDelay;
+        emit delayChanged(m_delay);
+        if (!self) { return; }
+    }
+    if (d.erase) {
+        emit erased(d.erase->first, d.erase->second);
+        if (!self) { return; }
+    }
+    for (const auto& [index, text] : d.macros) {
+        m_macros[index] = text;
+        emit macroChanged(index, text);
+        if (!self) { return; }
+    }
+    if (d.qsk && *d.qsk != m_qsk) {
+        m_qsk = *d.qsk;
+        emit qskChanged(m_qsk);
+        if (!self) { return; }
+    }
+    if (d.queueDrained) {
+        // Legacy path: an empty queue= would mean the radio's CWX buffer has
+        // drained. Firmware doesn't actually emit this (confirmed on FLEX-6500
+        // fw 4.2.20.41343 — the reply-radio_index watch exists precisely
+        // because queue= never arrives), so this is a belt-and-suspenders
+        // fallback should a future firmware start sending it. If it does, the
+        // reply-radio_index machinery can be retired in favour of this path —
+        // tracked in #4028 (protocol/upstream). (#3949)
+        emit queueEmpty();
+        if (!self) { return; }
+    }
+    if (d.sent) {
+        const int idx = *d.sent;
+        m_sentIndex = idx;
+        emit charSent(idx);
+        if (!self) { return; }
+        // Queue drain detection: radio_index captured from cwx send
+        // reply tells us the last char position of the queued batch.
+        // Fire queueEmpty() so RadioModel can release MOX. (#3949)
+        if (m_cwxEndIndex >= 0 && idx >= m_cwxEndIndex) {
+            m_cwxEndIndex = -1;
+            emit queueEmpty();
+            if (!self) { return; }
+        }
+    }
+    if (d.wpm) {
+        const int v = *d.wpm;
+        const auto echo = std::find_if(m_pendingWpmEchoes.cbegin(), m_pendingWpmEchoes.cend(),
+            [v](const std::shared_ptr<const int>& pending) { return *pending == v; });
+        if (echo != m_pendingWpmEchoes.cend()) {
+            // A newer echo may skip superseded writes that never reached
+            // the terminal. Retain later tickets so an older operator or
+            // transient echo cannot retire the newest queued speed edit.
+            m_pendingWpmEchoes.erase(m_pendingWpmEchoes.cbegin(), std::next(echo));
+        } else if (v != m_speed) {
+            retireSpeedIntent();
+            m_speed = v;
+            emit speedChanged(m_speed);
+            if (!self) { return; }
         }
     }
 }

@@ -100,47 +100,20 @@ void NavtexModel::reset()
     if (alive) { emit messagesChanged(); }
 }
 
-void NavtexModel::parseStatus(const QString& object, const QMap<QString, QString>& kvs)
+void NavtexModel::applyObservation(const NavtexStatusObservation& observation)
 {
-    // Two forms per FlexLib:
-    // 1. "navtex sent" — per-message TX confirmation with idx= and serial_num=
-    // 2. "navtex" with status=<value> — global NAVTEX state
-    if (object == "navtex sent") {
-        parseSentStatus(kvs);
+    if (observation.kind == NavtexStatusObservation::Kind::Sent) {
+        markSent(observation.idx, observation.serial);
         return;
     }
-
-    // Global status update
-    if (kvs.contains("status")) {
-        NavtexStatus newStatus = parseStatusString(kvs["status"]);
-        if (newStatus != m_status) {
-            m_status = newStatus;
-            emit statusChanged(m_status);
-        }
+    if (observation.state != m_status) {
+        m_status = observation.state;
+        emit statusChanged(m_status);
     }
 }
 
-void NavtexModel::parseSentStatus(const QMap<QString, QString>& kvs)
+void NavtexModel::markSent(uint idx, uint serial)
 {
-    // Parse idx and serial_num from the sent confirmation
-    if (!kvs.contains("idx")) {
-        qWarning() << "NavtexModel: sent status missing idx";
-        return;
-    }
-
-    bool ok = false;
-    uint idx = kvs["idx"].toUInt(&ok);
-    if (!ok) {
-        qWarning() << "NavtexModel: failed to parse idx from" << kvs["idx"];
-        return;
-    }
-
-    uint serial = 0;
-    if (kvs.contains("serial_num")) {
-        serial = kvs["serial_num"].toUInt(&ok);
-        if (!ok) { return; }
-    }
-
     // Check for redundant status
     for (const auto& msg : m_msgs) {
         if (msg.session == m_session && msg.idx == idx && msg.status == NavtexMsgStatus::Sent) {
@@ -177,18 +150,6 @@ void NavtexModel::parseSentStatus(const QMap<QString, QString>& kvs)
     const QPointer<NavtexModel> alive(this);
     if (settled) { emit operationSettled(settled); }
     if (alive) { emit messagesChanged(); }
-}
-
-NavtexStatus NavtexModel::parseStatusString(const QString& str)
-{
-    // Case-insensitive match per FlexLib's Enum.TryParse behavior
-    const QString lower = str.toLower();
-    if (lower == "inactive")     return NavtexStatus::Inactive;
-    if (lower == "active")       return NavtexStatus::Active;
-    if (lower == "transmitting") return NavtexStatus::Transmitting;
-    if (lower == "queuefull")    return NavtexStatus::QueueFull;
-    if (lower == "unlicensed")   return NavtexStatus::Unlicensed;
-    return NavtexStatus::Error;
 }
 
 } // namespace AetherSDR

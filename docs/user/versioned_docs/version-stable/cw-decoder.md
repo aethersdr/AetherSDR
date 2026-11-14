@@ -69,6 +69,16 @@ With a neural decoder selected:
 - Callsign contact cards and the MQTT text stream come from ggmorse only.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
 
+The slice's **Once** and **Loop** auto-tune controls adjust receive tuning;
+they do not transmit. Starting requires an unlocked CW slice owned by this
+client and a CW auto-tune license. **Loop** shows this client's requested loop state,
+not a radio-reported indication that a signal has been found. Rebuilding the
+slice controls preserves that request. Locking the slice or leaving CW mode
+requests Stop; an existing loop can also be stopped if its license becomes
+unavailable. Disconnecting or losing ownership clears the local request, and
+reconnecting does not restart it. Without a CW auto-tune license, the local **Zero Beat**
+control remains available where its decoder requirements are met.
+
 DeepCW discards its provisional text (about 5–7 seconds) when the source changes, audio is interrupted, or decoding stops. Its worker finishes the current inference or model load before stopping, so switching decoders can pause the interface until that work finishes.
 
 The neural decoders are not available on Intel Macs; there the selector does not appear and ggmorse decodes as before.
@@ -81,7 +91,7 @@ The decoder processes the received audio on a separate worker thread. It detects
 - **Auto speed detection** within the speed search range
 - **Cost function**: measures how well the detected on/off timing matches ideal Morse ratios; this drives the confidence colors
 
-Retuning resets the decoder state; pitch and speed locks survive a retune.
+Retuning resets the decoder state; pitch and speed locks survive a retune. Selecting a slice on another panadapter releases both locks.
 
 ### Which audio is decoded
 

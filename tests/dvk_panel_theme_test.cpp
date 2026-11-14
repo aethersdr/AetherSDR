@@ -1,6 +1,7 @@
 // #6249 — the DVK panel on the AetherSDR style guide (RFC #6226), in the title
 // bar's vocabulary (#6198). A real DvkPanel is driven by fw 4.2.20 status
 // lines, so every state is checked without a radio and without transmitting.
+#include "FlexTransmitServiceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/ThemeManager.h"
 #include "core/backends/flex/CommandParser.h"
@@ -43,7 +44,7 @@ void report(const QString& label, bool ok)
 void feed(DvkModel& model, const QString& line)
 {
     const ParsedMessage msg = CommandParser::parseLine(line);
-    model.applyStatus(msg.object, msg.kvs);
+    applyDvkStatus(model, msg.object, msg.kvs);
 }
 
 template <typename T>

@@ -1,4 +1,5 @@
 // Model lifecycle only: no sockets, peer process or RF.
+#include "FlexTransmitServiceStatusTestSupport.h"
 #include "models/NavtexModel.h"
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -31,11 +32,11 @@ int main(int argc, char** argv)
         model.handleSendResponse(token, {TransmitServiceReply::Outcome::Accepted, 0, "42"});
         check(model.messages().size() == 1 && model.messages().first().status == NavtexMsgStatus::Queued
             && settled.isEmpty(), "acceptance queues without claiming completed transmission");
-        model.parseStatus("navtex sent", {{"idx", "42"}, {"serial_num", "124"}});
+        applyNavtexStatus(model, "navtex sent", {{"idx", "42"}, {"serial_num", "124"}});
         check(model.messages().first().status == NavtexMsgStatus::Sent && settled.size() == 1
             && model.messages().first().serialNum == 124
             && !model.messages().first().dateTime.isEmpty(), "sent status completes the matching operation");
-        model.parseStatus("navtex sent", {{"idx", "42"}});
+        applyNavtexStatus(model, "navtex sent", {{"idx", "42"}});
         model.handleSendResponse(token, {TransmitServiceReply::Outcome::Rejected, 7, {}});
         check(settled.size() == 1 && model.messages().size() == 1
             && model.messages().first().status == NavtexMsgStatus::Sent, "duplicates cannot regress sent");
@@ -45,7 +46,7 @@ int main(int argc, char** argv)
         QSignalSpy requests(&model, &NavtexModel::controlRequested);
         QSignalSpy settled(&model, &NavtexModel::operationSettled);
         model.sendMessage('A', 'B', "early status");
-        model.parseStatus("navtex sent", {{"idx", "7"}, {"serial_num", "5"}});
+        applyNavtexStatus(model, "navtex sent", {{"idx", "7"}, {"serial_num", "5"}});
         model.handleSendResponse(latest(requests), {TransmitServiceReply::Outcome::Accepted, 0, "7"});
         check(model.messages().size() == 1 && model.messages().first().msgText == "early status"
             && model.messages().first().status == NavtexMsgStatus::Sent && settled.size() == 1,
@@ -96,19 +97,19 @@ int main(int argc, char** argv)
         check(requests.size() == 16, "pending submissions are bounded");
         model.reset();
         for (int i = 0; i < 400; ++i) {
-            model.parseStatus("navtex sent", {{"idx", QString::number(i)}});
+            applyNavtexStatus(model, "navtex sent", {{"idx", QString::number(i)}});
         }
         check(model.messages().size() == 256, "history is bounded separately from pending intent");
     }
     {
         NavtexModel model;
-        model.parseStatus("navtex", {{"status", "Active"}});
+        applyNavtexStatus(model, "navtex", {{"status", "Active"}});
         check(model.status() == NavtexStatus::Active, "status case accepted");
-        model.parseStatus("navtex", {{"status", "TRANSMITTING"}});
+        applyNavtexStatus(model, "navtex", {{"status", "TRANSMITTING"}});
         check(model.status() == NavtexStatus::Transmitting, "transmitting status observed");
-        model.parseStatus("navtex", {{"status", "queuefull"}});
+        applyNavtexStatus(model, "navtex", {{"status", "queuefull"}});
         check(model.status() == NavtexStatus::QueueFull, "queue full preserved");
-        model.parseStatus("navtex", {{"status", "garbage"}});
+        applyNavtexStatus(model, "navtex", {{"status", "garbage"}});
         check(model.status() == NavtexStatus::Error, "unknown status is an error");
     }
     {
@@ -118,11 +119,11 @@ int main(int argc, char** argv)
         model.sendMessage('A', 'B', "retain ownership independently of history");
         model.handleSendResponse(latest(requests), {TransmitServiceReply::Outcome::Accepted, 0, "500"});
         for (int i = 0; i < 300; ++i) {
-            model.parseStatus("navtex sent", {{"idx", QString::number(i)}});
+            applyNavtexStatus(model, "navtex sent", {{"idx", QString::number(i)}});
         }
-        model.parseStatus("navtex sent", {{"idx", "500"}, {"serial_num", "invalid"}});
+        applyNavtexStatus(model, "navtex sent", {{"idx", "500"}, {"serial_num", "invalid"}});
         check(settled.isEmpty(), "malformed status cannot retire queue ownership");
-        model.parseStatus("navtex sent", {{"idx", "500"}, {"serial_num", "1"}});
+        applyNavtexStatus(model, "navtex sent", {{"idx", "500"}, {"serial_num", "1"}});
         check(settled.size() == 1, "history eviction cannot lose active queue ownership");
     }
     return failures ? 1 : 0;

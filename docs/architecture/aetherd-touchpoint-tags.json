@@ -83,6 +83,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/WsprAgent.h": {
+  "tag": "peripheral(wspr-agent)",
+  "note": "The WSPR receiver's status, spots and settings (types, bounded JSON parsing, the settings body, the SpotHub DxSpot) and its pinned package. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WsprAgentClient.h": {
+  "tag": "peripheral(wspr-agent)",
+  "note": "Polls the WSPR receiver's /v1/status and reads and saves its /v1/config at the radio's LAN or tailnet-shim address. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TailnetShimTokenStore.h": {
   "tag": "peripheral(tailnet-shim)",
   "note": "OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",
@@ -337,7 +349,7 @@
  },
  "core/DvkWavTransfer.h": {
   "tag": "vendor(flex)",
-  "note": "DVK WAV upload/download via SmartSDR 'dvk' verbs + ad-hoc TCP port streaming; FlexLib 5MB limit baked in",
+  "note": "DVK WAV conversion and bounded byte transport; typed file-transfer requests delegate slot selection and Flex wire negotiation to the backend.",
   "split": "",
   "confidence": "high"
  },
@@ -373,7 +385,7 @@
  },
  "core/FirmwareUploader.h": {
   "tag": "vendor(flex)",
-  "note": "SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 \u2014 pure Flex protocol",
+  "note": "Firmware bytes and radio-confirmed outcome handling; typed negotiation delegates Flex commands and port parsing to the backend.",
   "split": "",
   "confidence": "high"
  },
@@ -643,7 +655,7 @@
  },
  "core/ProfileTransfer.h": {
   "tag": "vendor(flex)",
-  "note": "SmartSDR .ssdr_cfg database import/export over Flex TCP transfer protocol (meta_subset, ports 4995/42607)",
+  "note": "SmartSDR profile package preparation and staged ZIP validation; typed file-transfer requests delegate Flex wire negotiation to the backend.",
   "split": "",
   "confidence": "high"
  },
@@ -883,14 +895,14 @@
  },
  "core/WaveformInstaller.h": {
   "tag": "vendor(flex)",
-  "note": "Uploads Docker waveform images via SmartSDR fw 4.2.18 'file upload' TCP protocol \u2014 Flex-only ecosystem.",
+  "note": "Waveform package preparation and byte transport; typed file-transfer requests delegate Flex wire negotiation to the backend.",
   "split": "",
   "confidence": "high"
  },
  "core/WfmDemodulator.h": {
   "tag": "mixed(flex)",
-  "note": "WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source is DAX IQ + SmartSDR cmds (flex)",
-  "split": "WFM demod capability + freq-offset/volume intent = core-profile; DAX IQ capture device/channel, DaxIqModel wiring, SmartSDR commandReady = flex",
+  "note": "WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source remains Flex DAX IQ, with typed pan binding",
+  "split": "WFM demod capability + freq-offset/volume intent = core-profile; DAX IQ capture device/channel and DaxIqModel wiring = flex. Command encoding is behind IRadioBackend.",
   "confidence": "high"
  },
  "core/WfmSettings.h": {
@@ -1021,7 +1033,7 @@
  },
  "models/DaxIqModel.h": {
   "tag": "vendor(flex)",
-  "note": "Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps \u2014 DAX is Flex-only",
+  "note": "Flex DAX IQ streams: typed create/remove/rate requests, four-channel model and pipes to SDR apps; Flex status parsing remains in the model",
   "split": "",
   "confidence": "high"
  },
@@ -1033,13 +1045,13 @@
  },
  "models/EqualizerModel.h": {
   "tag": "universal",
-  "note": "8-band TX/RX audio EQ state (enable + band gains) \u2014 core capability; SmartSDR wire parsing/cmds move to flex adapter",
+  "note": "8-band TX/RX audio EQ state and typed enable/band-gain intent are universal; Flex encoding is backend-owned, legacy status parsing remains",
   "split": "",
   "confidence": "high"
  },
  "models/FlexWaveformModel.h": {
   "tag": "vendor(flex)",
-  "note": "FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands",
+  "note": "Flex waveform/WFP status mirror with typed management intents; the backend encodes commands.",
   "split": "",
   "confidence": "high"
  },
@@ -1077,6 +1089,12 @@
   "tag": "mixed(flex)",
   "note": "Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex",
   "split": "Core: meter defs/values, S-meter, TX pwr/SWR, mic/ALC, telemetry. Flex: VITA-49 scaling, TGXL/PGXL handles, COMPPEAK slice quirks",
+  "confidence": "high"
+ },
+ "models/RadioSwrValidityFilter.h": {
+  "tag": "universal",
+  "note": "Trust gate for a radio's SWR stream against instantaneous forward power (attack-immediately/timed-release envelope, low-SWR and below-unity confirmation). Pure value logic, no vendor ties; consumed by the S-meter and by TCI tx_sensors.",
+  "split": "",
   "confidence": "high"
  },
  "models/NetEntry.h": {
@@ -1784,6 +1802,18 @@
  "core/backends/flex/FlexCwxControls.h": {
   "tag": "vendor(flex)",
   "note": "FlexLib-authoritative CWX command encoding and bounded queue-reply decoding. Only backend implementations and socket-free wire fixtures consume it.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/ConnectionWorkspace.h": {
+  "tag": "ui-support",
+  "note": "Local connection memberships, credential references and operator audio/layout preferences; no radio operating state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/Data2gReceiveModel.h": {
+  "tag": "universal",
+  "note": "Receive-only Data2G monitor fed mono 24 kHz audio from the AX.25 receive model's existing tap; decode runs on its own worker with a bounded queue and generation retirement. No radio protocol, no audio source of its own and no transmit authority.",
   "split": "",
   "confidence": "high"
  }

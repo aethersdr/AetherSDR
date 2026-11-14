@@ -170,6 +170,12 @@ The container can run alongside other waveform containers, such as FreeDV.
 AetherSDR has its own RADE digital voice, so it doesn't need the FreeDV
 container (see [RADE Digital Voice](./rade-digital-voice.md)).
 
+Waveform installation stays with the radio connection that started it. If the
+radio reconnects while you choose or prepare the package, start the install
+again. Another firmware, profile or Radio DVK transfer must finish first.
+Upload completion means the bytes were sent; the radio's installed-waveform
+list confirms when the waveform becomes available.
+
 ## Part 4 — Sign the radio in to your tailnet
 
 ### Scan the code
@@ -343,8 +349,18 @@ radio side's view of the link, reported by the container:
 The container answers these requests only on the tailnet, and only with the
 asking computer's own session.
 
-## Part 7 — Disconnect, reset or remove
+## Part 7 — Update, disconnect, reset or remove
 
+:::warning
+
+**Don't do any of these while you're away from the radio.** Each one takes the radio off your tailnet, and signing it in again takes the radio's local network. Until then you can't reach it remotely.
+
+:::
+
+- **Update** (shown when a newer version is available): removes the container (on a FLEX-6000, uninstalls the
+  waveform) and installs the new one, after asking. Open **Remote Access** again and scan the new code.
+- **Waveforms → Environment… → Apply & Recreate** on the remote-access container: rebuilds it from its
+  image, which may sign the radio out. AetherSDR asks first.
 - **Disconnect** (shown once the radio is on the tailnet): ends remote
   sessions, signs the radio out and deletes its tailnet state and token. The
   next time you open **Remote Access**, a new code appears to sign it in

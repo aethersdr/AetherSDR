@@ -26,6 +26,8 @@ class PropForecastClient;
 class PskReporterClient;
 class RadioModel;
 class TransmitModel;
+class WsprSpotFeed;
+struct PskReporterSpot;
 
 // AetherMap, the PSK Reporter reception map (Tools menu): a CanonWindow
 // workspace (style guide, RFC #6226). Shows who is hearing our
@@ -39,9 +41,11 @@ class PskReporterMapDialog : public CanonWindow {
 public:
     // propForecast may be null; the band-conditions row is simply hidden
     // when no propagation client is available.
+    // wsprFeed may be null: the WSPR receiver's decodes are then not shown.
     explicit PskReporterMapDialog(AudioEngine* audioEngine,
                                   RadioModel* radioModel,
                                   PropForecastClient* propForecast = nullptr,
+                                  WsprSpotFeed* wsprFeed = nullptr,
                                   QWidget* parent = nullptr);
     ~PskReporterMapDialog() override;
 
@@ -104,6 +108,10 @@ private:
     uint64_t m_beaconGeneration{0};
     PskReporterClient*  m_client{nullptr};
     PskReporterClient*  m_globalClient{nullptr};
+    // The WSPR receiver on the radio: stations this station heard, as
+    // reports, shown alongside PSK Reporter's.
+    QPointer<WsprSpotFeed> m_wsprFeed;
+    QVector<PskReporterSpot> m_wsprReports;
     PropForecastClient* m_propForecast{nullptr};
     MapDisplayWidget*   m_mapView{nullptr};
     QComboBox*          m_bandCombo{nullptr};
