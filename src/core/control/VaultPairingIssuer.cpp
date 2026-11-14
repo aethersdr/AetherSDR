@@ -59,7 +59,7 @@ void VaultPairingIssuer::issue(const QString& clientName, Done done)
                 // Stored but not live: it works after a restart, but this client
                 // never gets its token, so the record is an orphan to remove.
                 qCWarning(lcPairing) << "pairing: credential" << record.id
-                                     << "was stored but could not be enabled; remove it from the radio's paired clients";
+                                     << "was stored but could not be enabled; it appears in the radio's paired clients after aetherd restarts, remove it there";
                 done(std::nullopt);
             } else {
                 qCInfo(lcPairing) << "pairing: paired" << record.name << "as credential" << record.id;

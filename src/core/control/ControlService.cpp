@@ -363,7 +363,7 @@ ServiceReply ControlService::handleRemoteClients(const ProtocolRequest& request,
                 return;
             case RemoteClientAdmin::RevokeResult::Failed:
                 answer(ControlProtocolCodec::errorResponse(requestId, {QStringLiteral("engine.failed"),
-                    QStringLiteral("the credential store refused the removal; the client is unchanged"), {}, false}));
+                    QStringLiteral("the credential store did not confirm the removal; the client stays paired until it does"), {}, false}));
                 return;
             }
         });
