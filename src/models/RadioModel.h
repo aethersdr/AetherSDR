@@ -6,6 +6,7 @@
 #include "core/SpotRequestQueue.h"
 #include "core/SpectrumDecodeScale.h"
 #include "core/backends/IndependentTxControl.h"
+#include "core/backends/AudioControlRequest.h"
 
 #include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
@@ -18,6 +19,7 @@
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
+#include "core/backends/SessionCommandGuard.h"
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
 
 #include <QHostAddress>
@@ -26,6 +28,8 @@
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/DaxTxAudioPermit.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/NetworkMtuPolicy.h"  // networkMtuParam(); Radio Setup's MTU range
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
@@ -74,6 +78,10 @@
 namespace AetherSDR {
 class TxController;
 class WanConnection;
+class FlexStatusIngress;
+struct TxBandDelta;
+struct StreamStatusDelta;
+struct InterlockStatusDelta;
 class IAutoRfGainControl;
 
 
@@ -166,6 +174,9 @@ public:
     NavtexModel&      navtexModel()      { return m_navtexModel; }
     UsbCableModel&    usbCableModel()    { return m_usbCableModel; }
     DaxIqModel&       daxIqModel()       { return m_daxIqModel; }
+    // Route our DAX IQ streams to DaxIqModel and the stream router (the
+    // desktop's DAX IQ applet turns this on; each stream makes a PipeWire pipe).
+    void enableDaxIqRegistry() { m_daxIqRegistry = true; }
     FlexWaveformModel& flexWaveformModel() { return m_flexWaveformModel; }
     DStarModel&        dstarModel()        { return m_dstarModel; }
     const DigitalVoiceWaveformMetrics& digitalVoiceWaveformMetrics() const;
@@ -204,11 +215,11 @@ public:
     // and hand the operator exactly the ambiguous retry it exists to forbid.
     // It lives here because the connection is what it is really keyed to: only
     // a genuine disconnect→reconnect clears it (see setConnected()).
-    bool firmwareRetryBlocked() const { return m_firmwareRetryBlocked; }
+    bool firmwareRetryBlocked() const;
     void blockFirmwareRetryUntilReconnect() { m_firmwareRetryBlocked = true; }
     // Only for an outcome the radio itself settled (`file update failed=`),
     // which leaves nothing pending to misattribute to the next attempt.
-    void clearFirmwareRetryBlock() { m_firmwareRetryBlocked = false; }
+    void clearFirmwareRetryBlock();
     // "idle" / "connecting" / "connected" — the bridge's third value, so a
     // caller can tell a connect that is working from one that is not happening
     // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
@@ -248,6 +259,9 @@ public:
     void setAntennaAlias(const QString& token, const QString& alias);
     void clearAntennaAlias(const QString& token);
     QStringList knownAntennaTokens() const;
+    // knownAntennaTokens() for an RX antenna menu. With IndependentTxAntenna
+    // declared (#4954) a token only the TX side publishes is not a receive input.
+    QStringList rxAntennaMenuTokens() const;
     QString serial()       const;
     QString chassisSerial() const { return m_chassisSerial; }
     // The operator's callsign, from the radio when it has one and from the
@@ -670,10 +684,10 @@ public:
     bool requestRadioAutoNotch(SliceModel* slice, bool on);
     bool requestAmCarrierLevel(int level);
 
-    // A band-stack bookmark's AGC, NB and NR through the SliceModel setters,
-    // so they reach every backend. NR only where radio-side NR exists; AGC not
-    // while KiwiSDR external receive replaces the slice (the caller sends it).
-    void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
+    // The caller supplies its tuning policy; the engine owns the remaining
+    // recall sequence and fences it to the original slice, pan and session.
+    void recallBandStack(SliceModel* slice, BandStackEntry entry,
+                         const std::function<void(SliceModel*, double)>& tune);
 
     // Radio-side recording is `slice set <n> record=/play=` on the slice's
     // command plane. Without one there is no radio-side recorder to reach, so
@@ -714,6 +728,15 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    // Await only allocation and radio selection of this input's absent stream.
+    // Existing deselected streams require an explicit stream-selection action.
+    bool prepareTciDaxTxStream(const TxCoordinator::Request& input,
+                               const DaxTxAudioPermit& captured,
+                               std::function<void(const DaxTxAudioPermit&)> completion);
+    QJsonObject daxTxOwnershipSnapshot() const;
+    QString daxTxOwnershipUnavailableReason(bool take) const;
+    bool requestDaxTxOwnership(bool take);
+    bool daxTxStreamReady() const;
     // The radio's `transmit dax` flag is ONE bit for the whole radio, shared
     // with every client: it picks DAX TX or the microphone as the source of
     // the next transmission. Every in-process producer that needs it on holds
@@ -761,7 +784,7 @@ public:
         if (wsprSeamAudioRouteReady(m_wsprTxSeamAudioArmed,
                                     backendCapabilities()))
             return true;
-        return m_daxTxStreamId != 0 && m_daxTxActive;
+        return (!m_wsprTxOwnershipRequested || m_wsprTxInput.valid()) && daxTxStreamReady();
     }
     QJsonObject troubleshootingSnapshot() const;
 
@@ -890,6 +913,27 @@ public:
     // Station name of the client occupying a foreign slot, or empty string
     // if not foreign / not known yet.
     QString foreignSliceOwnerStation(int sliceId) const;
+    // A slot held by a program running on the radio itself, such as the WSPR
+    // receiver. The radio reports such a slice as the connected GUI client's
+    // own, so only the program can say which one it is. A reserved slot is
+    // foreign under `label`: no SliceModel is made for it (one already made
+    // is dropped), and the reservation ends when the radio removes the
+    // slice. Session resets clear it.
+    void reserveSlice(int sliceId, const QString& label);
+    void releaseReservedSlice(int sliceId);
+    bool isSliceReserved(int sliceId) const { return m_reservedSlices.contains(sliceId); }
+    // Whether a reserved slot's slice is on DAX channel `channel`. A DAX
+    // channel feeds one slice, so putting it on ours would take it from them.
+    bool daxChannelReserved(int channel) const { return !daxChannelReservedBy(channel).isEmpty(); }
+    // The label of the reserved slot on DAX channel `channel`, or empty.
+    QString daxChannelReservedBy(int channel) const;
+    // Runs on a LAN connect just before `client gui`, whose reply carries
+    // the radio's slice statuses, so a reservation made here applies from
+    // the first one. The gate must call `proceed`; registration also goes
+    // ahead after kRegistrationGateCapMs if it doesn't.
+    using RegistrationGate = std::function<void(const QHostAddress& radio, std::function<void()> proceed)>;
+    void setRegistrationGate(RegistrationGate gate) { m_registrationGate = std::move(gate); }
+    static constexpr int kRegistrationGateCapMs = 2000;
     bool automationApplySliceFixture(int sliceId,
                                      const QString& radioLetter,
                                      QString* error = nullptr);
@@ -963,6 +1007,10 @@ public:
                                         std::function<void()> observer);
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Request& request) const;
+    TxCoordinator::Context captureDaxTxMedia(const TxCoordinator::Producer& producer) const;
+    TxCoordinator::Context captureDaxTxMedia(const TxCoordinator::Request& request) const;
+    void noteDaxTxInput(const TxCoordinator::Request& request);
+    DaxTxAudioPermit daxTxAudioPermit() const { return m_daxTxAudioPermit; }
     bool setProducerTransmit(const TxCoordinator::Request& request, bool tx,
                              TransmitModel::PttSource source = TransmitModel::PttSource::Dax);
     bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
@@ -1103,6 +1151,14 @@ public:
                                       QObject* replyContext = nullptr,
                                       const RadioSetupCompletion& completion = {},
                                       std::optional<RadioControlSession> expectedSession = {});
+    FileTransferHandle beginFileTransfer(FileTransferPurpose purpose, QObject* owner,
+        const RadioControlSession& expectedSession, int timeoutMs);
+    bool fileTransferCurrent(const FileTransferHandle& operation) const;
+    void finishFileTransfer(const FileTransferHandle& operation, int settleMs = 0);
+    ReceiveDispatch requestFileTransfer(const FileTransferHandle& operation,
+        const FileTransferRequest& request, const FileTransferCompletion& completion);
+    ReceiveDispatch requestWaveform(const WaveformRequest& request, QObject* owner,
+        const RadioControlCompletion& completion);
     RadioControlSession controlSession() const;
     bool controlSessionCurrent(const RadioControlSession& session) const;
     ReceiveDispatch requestSpot(const SpotRequest& request, PanadapterModel* pan = nullptr,
@@ -1113,7 +1169,8 @@ public:
     void flushQueuedSpots(int limit);
     void clearQueuedSpots();
     ReceiveDispatch requestPanControl(PanadapterModel* pan, const PanControlRequest& request);
-    ReceiveDispatch requestSlicePreset(SliceModel* slice, const SlicePresetRequest& request);
+    ReceiveDispatch requestSlicePreset(SliceModel* slice, const SlicePresetRequest& request,
+                                      std::optional<RadioControlSession> expectedSession = {});
     std::optional<RadioStationOverride> requestTemporaryStation(const QString& name);
     bool restoreTemporaryStation(const RadioStationOverride& owner);
     quint64 stationIdentityRevision() const { return m_stationIntentRevision; }
@@ -1307,10 +1364,6 @@ signals:
     // generator. Not emitted for the iambic keyer's sendCwKeyEdge (#4976) or
     // for CWX, which drive the sidetone gate themselves.
     void cwKeyDownChanged(bool down);
-    // Non-Flex diagnostic edge emitted only after transmit preflight, directly
-    // before IRadioBackend::setCwKeying(). Lets tests and diagnostics prove a
-    // refused key-down did not cross the radio seam.
-    void backendCwKeyingForwarded(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
     // Emitted immediately before "sub slice all" is dispatched during connect
@@ -1436,6 +1489,8 @@ signals:
     // empty states.  UI listens to this to re-style slice-tab buttons
     // (e.g. RxApplet dims foreign slots).
     void slotOccupancyChanged(int sliceId);
+    // A reserved slot gained, changed or lost its DAX channel (daxChannelReservedBy).
+    void reservedDaxChanged();
     // Emitted when the set of other connected clients changes.
     void otherClientsChanged(int count, const QStringList& names);
     // Emitted when another GUI client logs in after our known client list.
@@ -1464,6 +1519,8 @@ signals:
     void networkQualityChanged(const QString& quality, int pingMs);
     // Emitted when the radio assigns a TX audio stream ID (DAX TX).
     void txAudioStreamReady(quint32 streamId);
+    void daxTxOwnershipChanged();
+    void daxTxAudioRouteChanged(quint32 streamId, const AetherSDR::DaxTxAudioPermit& permit);
     // Emitted only after the active backend has drained finite TX-audio state.
     // drainMs is how much already-submitted audio (host queue plus radio
     // buffer) is still to be played — hold PTT for that long, then the tail.
@@ -1536,8 +1593,13 @@ signals:
     void digitalVoiceWaveformMetricsChanged();
     void digitalVoiceWaveformHealthChanged();
     void digitalVoiceWaveformDegradationStarted(const QString& message);
-    // Generic status relay — for dialogs that need to listen for specific objects.
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    // The radio's frequency calibration: running (done=false) or finished,
+    // with the error that status line reported (empty when it carried none).
+    void frequencyCalibrationReported(bool done, const QString& freqErrorPpb);
+    // The radio's report on a firmware image it received (FirmwareUploader).
+    void firmwareUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
+    // txBandSettings() changed (a "transmit band" or "interlock band" status).
+    void txBandSettingsChanged();
     // Emitted when the radio sends an M-prefix informational, warning, error,
     // or fatal message.  Severity comes from the high bits of the message
     // number per FlexLib Radio.cs:4498-4516.  MainWindow uses it to decide
@@ -1637,6 +1699,10 @@ public:
     // Speaker mix shared by PC playback and independent Line Out demand.
     void createRxAudioStream();
     void removeRxAudioStream();
+    ReceiveDispatch requestAudioStream(AudioStreamRequest request, const AudioStreamCompletion& completion = {});
+    ReceiveDispatch requestGraphicEq(GraphicEqRequest request);
+    ReceiveDispatch requestPanIqBinding(PanadapterModel* pan, int channel);
+    void reassertSliceAudio(SliceModel* slice);
     void setLineOutAudioRequested(bool requested);
     bool lineOutAudioRequested() const { return m_lineOutAudioRequested; }
     bool lineOutAudioStreamDemanded() const;
@@ -1644,10 +1710,6 @@ public:
 
     // True only when dispatched; the callback reports the later radio reply.
     bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
-    void requestFileUploadPort(qint64 size, const QString& uploadKind,
-                               std::function<void(int code, const QString& body)> cb);
-    void requestFileDownloadPort(const QString& downloadKind,
-                                 std::function<void(int code, const QString& body)> cb);
     void refreshProfiles();
     bool isProfileTransferBlocked() const;
     bool profileDatabaseImporting() const { return m_profileDatabaseImporting; }
@@ -1677,6 +1739,42 @@ private slots:
                                 const SpectrumCoverage& coverage);
 
 private:
+    void resetAudioControls();
+    void applyAudioStreamDelta(const AudioStreamDelta& delta);
+    // The DAX IQ registry: our IQ streams reach DaxIqModel and the VITA-49
+    // stream router; a removed or foreign one leaves both. Off until the
+    // desktop's DAX IQ applet enables it (enableDaxIqRegistry()), since an IQ
+    // stream there creates a PipeWire pipe.
+    void applyIqStreamDelta(const AudioStreamDelta& delta);
+    bool m_daxIqRegistry{false};
+    struct AudioStreamIdentity {
+        AudioStreamKind kind;
+        int channel{0};
+        quint32 owner{0};
+        quint64 incarnation{0};
+    };
+    struct PendingAudioControl {
+        AudioStreamRequest request;
+        RadioControlSession session;
+        quint64 retirementSerial{0};
+        quint64 retirementEpoch{0};
+        quint64 incarnation{0};
+        AudioStreamCompletion completion;
+        bool completed{false};
+        bool answered{false};
+        QPointer<QTimer> deadline{};
+    };
+    QHash<quint32, AudioStreamIdentity> m_audioStreams;
+    QHash<quint32, quint64> m_audioRetirements;
+    QHash<quint64, std::shared_ptr<PendingAudioControl>> m_audioPending;
+    QHash<int, AudioControlGuard> m_graphicEqGuards;
+    quint64 m_audioTicket{0};
+    quint64 m_audioRetirementSerial{0};
+    quint64 m_audioRetirementEpoch{0};
+    AudioControlGuard m_remoteRxCreateGuard;
+    bool m_remoteRxAllocationPending{false};
+    quint64 m_remoteRxRequestRevision{0};
+    bool m_remoteRxRestartAfterCancel{false};
     struct PendingPanCreation;
     QMap<quint64, std::shared_ptr<PendingPanCreation>> m_pendingPanCreations;
     quint64 m_nextPanCreation{0};
@@ -1695,19 +1793,36 @@ private:
     // (IRadioBackend::gpsChanged / memoryChanged / profileChanged). aetherd RFC
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
-    void resetGpsState(bool receiveMessages = true);
     friend class FlexSetupStatusTestPeer;
     void applySetupObservation(const SetupStatusObservation& observation);
     void retireSetupObservations();
     void resetSetupObservations();
-    std::shared_ptr<SetupStatusLifetime> m_setupObservationLifetime;
     bool refreshLicenseSubscription(const QDateTime& now);
     quint64 m_setupObservationGeneration{0};
     std::array<quint64, 6> m_filterSharpnessRevisions{};
     QString m_licenseSubscriptionLabel;
     QTimer m_licenseExpiryTimer;
-    void wireGpsSessionReceivers(bool receiveMessages = true);
-    void handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration);
+    void resetGpsState();
+    void wireGpsSessionReceivers();
+    // A fresh status epoch for the connect about to be issued: every wire line
+    // queued so far is refused (one strict fence for status and message lines).
+    quint64 beginStatusSession();
+    // Return the status ingress from a SmartLink session to the LAN connection.
+    void releaseWanStatus();
+    void wireStatusIngress(quint64 generation);
+    void applyTxBandChanges(const TxBandDelta& delta);
+    QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
+    quint64 m_statusEpoch{0};            // the epoch of the session being run
+    // Display and setup reports apply only from the session being run, and not
+    // after it has begun to end (RadioModel_DisplayObservations.cpp,
+    // RadioModel_SetupObservations.cpp).
+    // How long a deferred display report stays applicable.
+    static constexpr qint64 kDeferredDisplayAgeMs = 30'000;
+    quint64 m_observationEpoch{0};
+    bool m_observationSessionOpen{true};
+    quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for
+    quint64 m_wanRoute{0};               // fences queued SmartLink lifecycle per bind
+    void handleMessageReceived(const ParsedMessage& msg);
     // Asks for the CW profile list once per session, whenever the backend's CW
     // capability is (or later becomes) engaged.
     void refreshCwProfilesIfSupported();
@@ -1719,14 +1834,41 @@ private:
     void scheduleDStarRuntimeConfiguration();
     void applyPendingDStarRuntimeConfiguration();
     void syncDigitalVoiceTxSelection(bool force = false);
-    void handleMeterStatus(const QString& rawBody);
-    void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
-    void handleProfileStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void handleProfileStatusRaw(const QString& profileType, const QString& rawBody);
-    void traceDaxStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void handleDaxRxStreamRegistry(const QString& object, const QMap<QString, QString>& kvs);
-    bool handleRemoteAudioRxStreamStatus(const QString& object,
-                                         const QMap<QString, QString>& kvs);
+    void onDisplayObservation(const DisplayObservation& observation);
+    void openObservationSession(quint64 epoch);
+    void retireObservationSession();
+    bool observationSessionCurrent(quint64 statusEpoch) const;
+    bool displayObservationCurrent(const DisplayObservation& observation) const;
+    void applyDisplayObservation(const DisplayObservation& observation);
+    bool applyDisplayValues(PanadapterModel* pan, const DisplayObservation& observation);
+    void deferDisplayObservation(const DisplayObservation& observation);
+    DisplayObservation takeDeferredDisplayObservation(const DisplayObservation& observation);
+    void retireDisplayPan(const QString& id);
+    void replaceDisplayWaterfall(PanadapterModel* pan, const QString& id);
+    void syncDisplayStream(PanadapterModel* pan, bool rangeChanged = false, bool scaleReported = false);
+    bool displayWaterfallOwned(const QString& id, const QString& parent) const;
+    friend class DaxTxOwnershipTestAccess;
+    void resetDaxTxOwnership();
+    void retireDaxTxInputs();
+    void observeDaxTxStream(const DaxTxStreamDelta& delta);
+    void publishDaxTxOwnership();
+    void refreshDaxTxOwnershipGuards();
+    bool daxTxOwnershipWritten() const;
+    void interruptDaxTxOwnership(const QString& reason);
+    bool beginDaxTxOwnership(bool take, bool wspr);
+    void continueDaxTxOwnership();
+    void completeDaxTxOwnership();
+    void expireDaxTxOwnership(quint64 ticket);
+    void finishDaxTxOwnership(bool success, const QString& reason);
+    void releaseWsprDaxTxOwnership();
+    void finishWsprDaxTxRelease();
+    bool acceptDaxTxCreate(quint32 id, quint64 startRevision);
+    // A stream status's model rules: remote audio ownership, then (unless that
+    // replaced the backend) the DAX stream trace and the DAX RX registry.
+    void applyStreamStatus(const StreamStatusDelta& stream);
+    void traceDaxStreamStatus(const StreamStatusDelta& stream);
+    void handleDaxRxStreamRegistry(const StreamStatusDelta& stream);
+    bool handleRemoteAudioRxStreamStatus(const StreamStatusDelta& stream);
     void scheduleRxAudioStreamEnsure(const QString& reason);
     void logRemoteAudioRxSummary(const QString& reason) const;
 
@@ -1772,6 +1914,13 @@ private:
     // the radio status burst, then check for a multiFLEX conflict before
     // sending client gui. Calls continuation() if no conflict is found.
     void peekForMultiFlexConflictThen(std::function<void()> continuation);
+    void runRegistrationGateThen(std::function<void()> continuation);
+    // `current` is the session the gate was asked for: a proceed that comes
+    // after a reconnect must not register into the new session.
+    void runRegistrationGateThen(std::function<void()> continuation, RadioControlFence current);
+    // Drops the SliceModel (live or stale) for a slot another owner holds.
+    // Returns whether there was one.
+    bool dropSliceModelForForeignSlot(int sliceId);
     void handleForcedClientDisconnect();
     void handleDuplicateClientIdDisconnect();
     // Shared transport teardown for a terminal session failure (forced,
@@ -1799,11 +1948,29 @@ private:
     // Route command to active connection (LAN or WAN)
     using ResponseCallback = RadioConnection::ResponseCallback;
     void requestRadioInfo();
-    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr);
+    quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
+                    std::optional<SessionCommandGuard> guard = {},
+                    std::function<bool()> dispatchAllowed = {},
+                    bool expireReply = false);
+    ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
+                                         const SessionControlCompletion& completion = {});
+    void requestStartupSetup(const RadioSetupRequest& request);
+    void resetSessionControls();
+    bool sessionTransportCurrent() const;
+    RadioControlFence sessionControlFence() const;
+    RadioControlFence registrationRejectionFence() const;
+    std::function<void()> sessionContinuation(std::function<void()> action) const;
+    SessionCommandGuard m_sessionCommands;
+    std::optional<SessionControl> m_sessionControl;
+    quint64 m_sessionControlGeneration{~quint64{0}};
+    QPointer<QObject> m_sessionWire;
+    quint64 m_sessionWireGeneration{0};
+    quint64 m_sessionRequestId{0};
+    QMap<quint64, std::function<void()>> m_sessionCancellations;
     quint32 clientHandle() const;
-    PanadapterModel* ensureOwnedPanadapter(const QString& panId);
+    PanadapterModel* ensureOwnedPanadapter(const QString& panId,
+                                          const DisplayObservation* initial = nullptr);
     void updateStreamFilters();
-    void handleGpsStatus(const QString& rawBody);
     void emitOtherClientsChanged();
     QString antennaAliasRadioKey() const;
     bool reloadAntennaAliases() const;
@@ -1863,6 +2030,9 @@ private:
     void restoreClientOwnedCwState(const RestoredRadioState& state);
     // The step rides the Tuning domain only where no command plane carries it.
     bool clientOwnsSliceStep() const;
+    // A declared receive CW pitch whose adoption the backend confirms: only then
+    // does pitch intent bypass the optimistic model value.
+    bool confirmsReceiveCwPitch() const;
     void restoreClientOwnedStep(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
@@ -1870,6 +2040,8 @@ private:
     // run again on a family change — not just at construction.
     void setupBackend(const QString& family);
     void teardownBackend();
+    // Front-end overload back to Unobserved, emitting only on a change.
+    void resetFrontEndOverload();
     // The family switch itself: drop session models, tear down, build, announce.
     // One body, called by connectToRadio() and rebuildBackendForTest().
     void rebuildBackendForFamily(const QString& family);
@@ -1878,6 +2050,7 @@ private:
     // whenever the backend revises its own capabilities.
     void publishCapabilities(bool connected);
     void updateTuneAvailability();
+    void updateAtuAvailability();
     // Apply a backend's band-dependent PA ceiling to TransmitModel. Backends
     // without per-band data leave the existing radio-reported limit alone.
     void refreshTxPowerLimit();
@@ -1981,10 +2154,14 @@ public:
     // Feed a decoded status line straight into the router. Used to pin the TNF
     // removal-status handling — the wire says the notch is gone, and the router
     // must not upsert it back into TnfModel.
-    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs)
-    {
-        onStatusReceived(object, kvs);
-    }
+    // One wire line as the status ingress delivers it (decoders, then the
+    // model's own handling), without the session fence. handleStatusForTest()
+    // rebuilds the line from its object and key/value pairs, in key order, so
+    // raw-line objects (typed profile, gps, meter, ntp_sources) need
+    // handleLineForTest().
+    void handleLineForTest(const QString& line);
+    void deliverLineForTest(const ParsedMessage& message);
+    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs);
     // Fire the LAN auto-reconnect timer's handler now instead of waiting for it.
     // Drives the REAL handler, not a copy of its body, so a test can pin what the
     // reconnect restores — see the licensed-capacity case in
@@ -2026,6 +2203,7 @@ public:
     // when the family has no backend in this build (RTL without librtlsdr).
     bool rebuildBackendForTest(const QString& family);
 private:
+    friend class FlexDisplayStatusTestAccess;
     friend class RadioModelSliceLifecycleTestAccess;
     friend class RadioNicknameTestAccess;
     friend class TuneOutputControlTestAccess;
@@ -2034,6 +2212,7 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
     struct PendingAdministrationWrite {
         RadioControlSession session{};
@@ -2089,6 +2268,7 @@ private:
     quint64 m_spotRequestEpoch{0};
     SpotRequestQueue m_spotRequests;
     bool m_flushingSpotRequests{false};
+    quint64 m_bandStackRecallRevision{0};
     quint64 m_stationIntentRevision{0};
     quint64 m_stationOverrideOwner{0};
     std::array<quint64, 5> m_outputIntentRevisions{};
@@ -2144,7 +2324,18 @@ private:
                                                bool requiresLiveSession = true);
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
-    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    // dispatchAllowed, when given, is checked again at the final write.
+    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {},
+                                      std::function<bool()> dispatchAllowed = {});
+    using TransferCommandWriter = std::function<bool(const QString&, const FileTransferGuard&, ResponseCallback)>;
+    using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&, const RadioControlCompletion&)>;
+    TransferCommandSink transferCommandSink(const TransferCommandWriter& writer = {});
+    bool fileTransferEligible(FileTransferPurpose purpose, bool holdingReservation) const;
+    FileTransferHandle m_fileTransferOperation;
+    using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
+    AudioCommandSink audioCommandSink();
+    // A transverter or USB cable write, refused at the final write once the
+    // entity it was aimed at has been removed or replaced.
     bool sendSetupEntityCommand(const QString& command, const RadioSetupCompletion& completion,
                                 const std::shared_ptr<SetupStatusLifetime>& identity);
     // Translate a MODEL pan id to the backend's own id for a command going down
@@ -2221,7 +2412,7 @@ private:
     void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
-    void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
+    bool sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
     ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
@@ -2272,17 +2463,6 @@ private:
     void syncNtpSources(bool connected, const RadioCapabilities& caps);
     DStarModel          m_dstarModel{nullptr, true};
 
-    // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
-    quint32  m_netCwStreamId{0};
-    int      m_netCwIndex{1};           // sequential dedup index
-    QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
-    qint64   m_netCwLastSendMs{-1};
-    bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
-                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
-                          std::chrono::steady_clock::time_point scheduledAt = {},
-                          std::function<void()> delivered = {},
-                          const TxCoordinator::Operation* captured = nullptr);
-    QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
     QString     m_model;
@@ -2361,6 +2541,7 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    bool        m_daxTxSelectionRxObserved{false};
     // Last interlock state= the radio reported, any owner; empty until one
     // arrives and on backends that report none. m_radioTransmitting is only
     // `state == TRANSMITTING`, so it is already false in PTT_REQUESTED and
@@ -2402,9 +2583,7 @@ private:
     QSet<quint32> m_evictedPredecessorHandles;
     QSet<quint32> m_evictionsInFlight;
     QMap<quint32, ForeignPanWrite> m_foreignPanWrites;
-    void noteForeignPanWriteIfAny(const QString& object,
-                                  const QMap<QString, QString>& kvs,
-                                  quint32 sourceHandle);
+    void noteForeignPanWriteIfAny(const QString& panId, quint32 sourceHandle);
     void evictStaleSession(quint32 handle, const QString& reason);
     QString m_activePanId;       // currently active panadapter
 
@@ -2414,17 +2593,17 @@ private:
     // holds objects WE own. A leaked waterfall (panafall closed without
     // "display panafall remove") therefore lingers here after its pan is pruned,
     // making it detectable even when the radio has stopped streaming it.
-    // Main-thread only (written in onStatusReceived, read in the bridge).
-    struct RadioDisplayPan { quint32 clientHandle{0}; QString waterfallId; };
-    struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; };
+    // Main-thread only (written by display observations, read in the bridge).
+    struct RadioDisplayPan { quint32 clientHandle{0}; QString waterfallId; bool ownerKnown{false}; };
+    struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; bool ownerKnown{false}; };
     QMap<QString, RadioDisplayPan> m_radioDisplayPans;        // panId → entry
     QMap<QString, RadioDisplayWf>  m_radioDisplayWaterfalls;  // wfId  → entry
-    // Deferred "display pan" status pending ownership confirmation. Paired
-    // with QDateTime::currentSecsSinceEpoch() at insert so a sweep on insert
-    // can drop entries that the radio never resolved with a client_handle
-    // frame (#2228 — would otherwise leak for non-owned pans that also never
-    // emit "removed").
-    QMap<QString, QPair<qint64, QMap<QString, QString>>> m_pendingPanStatuses;
+    struct PendingDisplayObservation { qint64 insertedMs{0}; DisplayObservation observation; };
+    QMap<QString, PendingDisplayObservation> m_pendingDisplayObservations;
+    QElapsedTimer m_displayObservationClock;
+    QList<DisplayObservation> m_displayObservationQueue;
+    bool m_applyingDisplayObservation{false};
+    bool m_displayInventoryUncertain{false};
 
     AmpModel m_amplifier;            // power amp (PGXL) state + relay (#4094)
 
@@ -2434,8 +2613,6 @@ private:
     GpsFixState m_gpsFixState{GpsFixState::Unknown};
     quint64 m_gpsSessionGeneration{0};
     QMetaObject::Connection m_gpsBackendConnection;
-    QMetaObject::Connection m_gpsLanMessageConnection;
-    QMetaObject::Connection m_gpsWanMessageConnection;
     QString m_gpsSource;
     int     m_gpsTracked{0};
     int     m_gpsVisible{0};
@@ -2523,7 +2700,8 @@ private:
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
-    QString radioInterlockNotificationMessage(const QMap<QString, QString>& kvs) const;
+    QString radioInterlockNotificationMessage(const QString& reason, const QString& state) const;
+    void applyInterlockStatus(const InterlockStatusDelta& delta);
     void evaluateTxFilterAudioLoss(float scFilt1, float scFilt2);
     void armInterlockNotification(TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
     // Recompute the operator-transmit predicate and emit operatorTransmitChanged
@@ -2549,15 +2727,15 @@ private:
     // The refusal both of the above perform: raise the interlock notification
     // and roll back TransmitModel's optimistic transmit state. Always false.
     bool refuseKeyWithInterlock(const QString& message, const QString& key);
-    // Apply the same capability + receive-only-pan preflight to a non-Flex CW
-    // carrier edge before it crosses the backend seam. Key-up always passes so
-    // an inhibit arriving mid-element can never strand RF on.
-    bool forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
-                                const TxCoordinator::Completion& completion);
     bool sendCwInput(bool down, bool ptt, bool notifySidetone,
                      const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                      std::chrono::steady_clock::time_point scheduledAt,
                      const TxCoordinator::Request* request = nullptr);
+    bool dispatchCwInput(bool down, bool ptt, bool notifySidetone,
+                         const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                         std::chrono::steady_clock::time_point scheduledAt,
+                         const TxCoordinator::Request* request);
+    bool m_cwPracticeKeyDown{false};
     quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
@@ -2674,6 +2852,32 @@ private:
     QMap<quint32, DaxStreamDebugState> m_daxStreamDebug;
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
+    bool        m_daxTxKnown{false};
+    quint64     m_daxTxSession{1};
+    quint64     m_daxTxIncarnation{1};
+    quint64     m_daxTxObservationRevision{0};
+    quint64     m_daxTxTicket{0};
+    quint64     m_daxTxCreateTicket{0};
+    QMap<quint32, quint64> m_daxTxRetiredAt;
+    struct DaxTxOwnershipIntent {
+        quint64 ticket{0};
+        quint64 session{0};
+        quint64 incarnation{0};
+        quint64 startRevision{0};
+        quint32 streamId{0};
+        bool take{false};
+        bool dispatched{false};
+        bool accepted{false};
+        DaxTxRequestGuard guard;
+    };
+    DaxTxRequestGuard m_daxTxCreateGuard;
+    std::optional<DaxTxOwnershipIntent> m_daxTxOwnershipIntent;
+    std::vector<TxCoordinator::Request::Weak> m_daxTxInputs;
+    QTimer m_daxTxGuardTimer;
+    DaxTxAudioPermit m_daxTxAudioPermit{DaxTxAudioPermit::blocked()};
+    bool m_daxTxUncertain{false};
+    QString m_daxTxOutcome;
+    QString m_daxTxError;
     bool        m_wsprTxOwnershipRequested{false};
     TxCoordinator::Request m_wsprTxInput;
     bool        m_wsprTxTransition{false};
@@ -2683,7 +2887,7 @@ private:
     // stream and no `transmit dax`. Latched by prepareWsprTransmit() and the
     // only thing releaseWsprTransmit() has to undo on that path.
     bool        m_wsprTxSeamAudioArmed{false};
-    quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
+    quint32     m_daxTxClientHandle{0};
     bool        m_daxTxCreatePending{false};
     // acquireTransmitDax() table: a bit per DaxTxFlagHolder, the flag the
     // first hold found, and a restore owed once the radio reaches RX.
@@ -2707,6 +2911,9 @@ private:
     quint16  m_wanUdpPort{4991};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
     QHash<int, quint32> m_foreignSliceOwners;  // slot id → owning client handle
+    QHash<int, QString> m_reservedSlices;      // slot id → on-radio program (reserveSlice)
+    QHash<int, int>    m_reservedDax;         // reserved slot id → its DAX channel, as the radio reports
+    RegistrationGate   m_registrationGate;
     QSet<int>          m_automationSliceFixtures; // disconnected bridge fixtures
     bool               m_automationSliceFixtureBaselineActive{false};
     QString            m_automationSliceFixtureBaselineModel;

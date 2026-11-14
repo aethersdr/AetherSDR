@@ -49,6 +49,12 @@ XVTR bands use the **XVTA** or **XVTB** antenna ports. The radio routes
 through the transverter when these ports are selected. You can give the ports
 friendly names in **Radio Setup → Antennas**; the radio still uses XVTA/XVTB.
 
+The internal antenna tuner is outside the transverter TX path. Selecting
+**XVTA**, **XVTB** or **XVTR** as the TX antenna dims **ATU**, **MEM** and their
+status indicators in [TX Controls](./tx-controls.md). **TUNE** remains available
+to check transverter drive with a carrier; set the transverter's **Max Power
+(dBm)** for its rated input.
+
 ## Using transverter bands
 
 ### Selecting a band

@@ -949,6 +949,7 @@
     },
     {
       "id": "dax-applet",
+      "device_pixel_ratio": 1.0,
       "page": "dax-virtual-audio",
       "anchor_heading": "The DAX Audio applet",
       "settle": 1.5,
@@ -988,8 +989,8 @@
           "optional": true
         }
       ],
-      "caption": "The DAX Audio applet on Linux: one level bar per DAX channel and the button that starts DAX.",
-      "alt": "DAX Audio applet. Level bars for DAX 1, assigned to Slice A, DAX 2 to DAX 4, unassigned, and TX, assigned to Slice A, above a DAX row with a Disabled button."
+      "caption": "The DAX Audio applet with the local audio bridge enabled and AetherSDR’s TX stream selected.",
+      "alt": "DAX Audio applet. Receive level and gain bars for DAX 1, assigned to Slice A, and DAX 2 through DAX 8, unassigned. The TX row is assigned to Slice A. DAX is Enabled and the single TX stream toggle is Selected."
     },
     {
       "id": "dax-iq-applet",
@@ -1935,7 +1936,7 @@
         "target": "MemoryDialog"
       },
       "caption": "The Memory Channels window, listing the memories stored in the radio.",
-      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
+      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
     },
     {
       "id": "keyboard-shortcuts",
@@ -1977,7 +1978,7 @@
         "target": "ThemeEditorDialog"
       },
       "caption": "The Theme Editor, editing the built-in Default Dark theme.",
-      "alt": "Theme Editor window for Profile: Default Dark. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions, Save As… and Close buttons run along the bottom."
+      "alt": "Theme Editor window for Profile: Default Dark, with a round close button in its top-right corner. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions and Save As… buttons run along the bottom."
     },
     {
       "id": "support-diagnostics-dialog",
@@ -2033,7 +2034,7 @@
         "target": "SettingsBrowserDialog"
       },
       "caption": "The Settings Browser, filtered to keys that contain Spot.",
-      "alt": "Settings Browser window. An amber warning reads Advanced, edits apply immediately and bypass each feature's own validation. The left list holds App Settings (selected) and Station: AetherSDR. The right side has a filter box containing Spot and a Key and Value table with IsSpotsEnabled True, PassiveSpotsMode False, SpotFontSize 16 and SpotsMaxLevel 3. Add Key…, Delete, Refresh, Export Sanitized… and Close buttons run along the bottom."
+      "alt": "Settings Browser window, with a round close button in its top-right corner. An amber warning reads Advanced, edits apply immediately and bypass each feature's own validation. The left list holds App Settings (selected) and Station: AetherSDR. The right side has a filter box containing Spot and a Key and Value table with IsSpotsEnabled True, PassiveSpotsMode False, SpotFontSize 16 and SpotsMaxLevel 3. Add Key…, Delete, Refresh and Export Sanitized… buttons run along the bottom."
     },
     {
       "id": "aethercontrol-window",
@@ -2096,7 +2097,7 @@
         "target": "MidiMappingDialog"
       },
       "caption": "The MIDI Controller Mapping window, before any control is bound.",
-      "alt": "MIDI Controller Mapping window. The MIDI Device group has a Port selector, Refresh and Connect buttons, a Disconnected status and Auto-connect on startup ticked. The Parameter Bindings table, with columns Parameter, MIDI Source, Channel, Invert and Relative, is empty. Below are a category filter, a parameter selector set to [RX] AF Gain with Learn and Manual… buttons, and Clear All, Profile, Save, Load, Import… and Export… controls, with Close at the bottom."
+      "alt": "MIDI Controller Mapping window, with a round close button in its top-right corner. The MIDI Device group has a Port selector, Refresh and Connect buttons, a Disconnected status and Auto-connect on startup ticked. The Parameter Bindings table, with columns Parameter, MIDI Source, Channel, Invert and Relative, is empty. Below are a category filter, a parameter selector set to [RX] AF Gain with Learn and Manual… buttons, and Clear All, Profile, Save, Load, Import… and Export… controls."
     },
     {
       "id": "mqtt-settings-dialog",
@@ -2176,7 +2177,7 @@
         "target": "Ax25HfPacketDecodeDialog"
       },
       "caption": "AetherModem on the APRS tab. The station's GPS position is blacked out.",
-      "alt": "AetherModem window with tabs APRS (selected), Digipeater, KISS TNC, Terminal, Mailbox and D-STAR. Rows of settings cover the baud rate (300 or 1200), Enable Modem and Autostart at launch, then My Callsign (placeholder N0CALL-9), Symbol Home, Path WIDE1-1,WIDE2-1 and a Beacon every 30 min, the Position line (blacked out) with manual grid, latitude and longitude fields, a message composer with Send APRS Msg, and an empty table of heard stations with columns Time, Station, Symbol, Age, Pkts, Grid, Dist, CRS/SPD and Status / Comment. The status bar reads Modem Standby and No audio yet."
+      "alt": "AetherModem window with tabs APRS (selected), Digipeater, KISS TNC, Terminal, Mailbox, D-STAR and HF Data. Rows of settings cover the baud rate (300 or 1200), Enable Modem and Autostart at launch, then My Callsign (placeholder N0CALL-9), Symbol Home, Path WIDE1-1,WIDE2-1 and a Beacon every 30 min, the Position line (blacked out) with manual grid, latitude and longitude fields, a message composer with Send APRS Msg, and an empty table of heard stations with columns Time, Station, Symbol, Age, Pkts, Grid, Dist, CRS/SPD and Status / Comment. The status bar reads Modem Standby and No audio yet."
     },
     {
       "id": "rx-agc-calibration",
@@ -2260,7 +2261,7 @@
         "target": "ProfileManagerDialog"
       },
       "caption": "The Profile Manager, listing the global profiles stored in the radio.",
-      "alt": "Profile Manager window with tabs Global, Transmit, Microphone and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF. A Close button sits at the bottom."
+      "alt": "Profile Manager window with a round close button in its top-right corner and tabs Global, Transmit, Microphone, CW and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF."
     },
     {
       "id": "profile-import-export",
@@ -2281,7 +2282,7 @@
         "target": "ProfileImportExportDialog"
       },
       "caption": "The Import/Export Profiles window, on the Export tab. The destination path is blacked out.",
-      "alt": "Import/Export Profiles window on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and Cancel and Close buttons."
+      "alt": "Import/Export Profiles window, with a round close button in its top-right corner, on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and a Cancel button."
     },
     {
       "id": "runtime-monitor-overview",
@@ -2503,6 +2504,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2515,9 +2522,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2539,16 +2547,9 @@
           "_allow_fail": true
         }
       ],
-      "caption": "The Connect to Radio window, On This Network: every radio discovery found on the LAN. The addresses are blacked out.",
-      "alt": "Connect to Radio window. Three cards across the top read On This Network (selected), Remote with SmartLink and Connect by IP. The Available radios list holds three entries: Hermes-Lite 2, ready on your local network, highlighted, with its address blacked out; FLEX-8600 FLX8600 KK7GWY, shared radio on your network via multiFLEX at AetherSDR, USA; and AetherSDR Demo, Simulator (not on the air), DEMO, ready on your local network at 127.0.0.1. A Connect Selected Radio button and checkboxes for the adaptive frame-rate throttle, connecting to the last radio on start-up, waking an Icom on connect and showing the demo simulator follow, with Connected and a Disconnect button at the bottom.",
-      "redact": [
-        [
-          212,
-          318,
-          130,
-          22
-        ]
-      ]
+      "caption": "Choose a location, select a radio and use Connect to connect to that radio.",
+      "alt": "Connect to a radio window with Locations, the Radios at Home list, selected radio details, operator selection and SmartLink accounts.",
+      "radio": "demo"
     },
     {
       "id": "connect-by-ip-card",
@@ -2564,6 +2565,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2571,7 +2578,7 @@
         },
         {
           "cmd": "invoke",
-          "target": "connectionManualModeButton",
+          "target": "connectionAddRadio",
           "action": "click",
           "_sleep": 1.0
         },
@@ -2595,9 +2602,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2619,8 +2627,9 @@
           "_allow_fail": true
         }
       ],
-      "caption": "The Connect by IP card, with a documentation address typed in.",
-      "alt": "Connect to Radio window with the Connect by IP card selected. The Radio IP address group has Radio type: FlexRadio, Radio IP: 192.0.2.25, Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander. Below are Connection options for slower links with a Use low bandwidth mode checkbox, and the shared checkboxes for the adaptive frame-rate throttle, connecting to the last radio, waking an Icom and showing the demo simulator."
+      "caption": "The saved manual connection form, with a documentation address typed in.",
+      "alt": "Connect to a radio manual form with Connection name above the radio family, host and source path, and Save connection beside Connect by IP.",
+      "radio": "demo"
     },
     {
       "id": "connect-smartlink-card",
@@ -2636,6 +2645,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2643,7 +2658,7 @@
         },
         {
           "cmd": "invoke",
-          "target": "connectionSmartLinkModeButton",
+          "target": "connectionManageAccounts",
           "action": "click",
           "_sleep": 1.0
         }
@@ -2654,9 +2669,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2678,8 +2694,9 @@
           "_allow_fail": true
         }
       ],
-      "caption": "The Remote with SmartLink card, before signing in.",
-      "alt": "Connect to Radio window with the Remote with SmartLink card selected. The SmartLink account group has empty Email and Password fields and a Sign In button, with the note Sign in to see radios at remote stations. The Remote radios group reads Remote radios appear here after SmartLink sign-in. Connection options for slower links with Use low bandwidth mode sits below."
+      "caption": "Saved SmartLink accounts and sign-in, before authentication.",
+      "alt": "Connect to a radio SmartLink page with saved account selection, Add, Rename and Remove actions, sign-in fields and a remote radio list.",
+      "radio": "demo"
     },
     {
       "id": "connect-icom-rows",
@@ -2695,6 +2712,12 @@
           "wait_visible": "connectionPanel"
         },
         {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
           "cmd": "resize",
           "target": "connectionPanel",
           "value": "760 800",
@@ -2702,7 +2725,7 @@
         },
         {
           "cmd": "invoke",
-          "target": "connectionManualModeButton",
+          "target": "connectionAddRadio",
           "action": "click",
           "_sleep": 1.0
         },
@@ -2732,9 +2755,10 @@
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "connectionLocalModeButton",
+          "target": "connectionBackToStation",
           "action": "click",
-          "_sleep": 0.5
+          "_sleep": 0.5,
+          "_allow_fail": true
         },
         {
           "cmd": "invoke",
@@ -2757,7 +2781,8 @@
         }
       ],
       "caption": "Connect by IP with Radio type set to Icom (network): the Icom user, password, ports and CI-V rows appear.",
-      "alt": "Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander."
+      "alt": "Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander.",
+      "radio": "demo"
     },
     {
       "id": "runtime-monitor-threads",
@@ -4649,6 +4674,213 @@
       },
       "caption": "After Save, the status bar confirms the memory.",
       "alt": "The left end of the status bar reading Saved \"My first memory\" to memories."
+    },
+    {
+      "id": "station-home",
+      "page": "station-profiles",
+      "anchor_heading": "Setup",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0",
+          "_allow_fail": true
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Home keeps a single-location setup compact. Add another location to reveal the Locations column.",
+      "alt": "Connect to a radio with a compact Home header and saved radio list."
+    },
+    {
+      "id": "location-suggestions",
+      "page": "station-profiles",
+      "anchor_heading": "Setup",
+      "radio": "demo",
+      "alt": "Add Location dialog offering POTA, Club, Cabin and RV name suggestions.",
+      "caption": "Choose a suggested location name or type your own, including emoji.",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddStation",
+          "action": "click"
+        }
+      ],
+      "grab": {
+        "target": "connectionProfileEditor"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "connectionProfileEditor",
+          "_allow_fail": true
+        }
+      ]
+    },
+    {
+      "id": "station-pota",
+      "page": "station-profiles",
+      "anchor_heading": "Using saved connections",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "1"
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Choose POTA or another location to see its saved connection paths. Browsing locations does not connect or disconnect a radio.",
+      "alt": "POTA selected in the Locations list with its radios and connection summary."
+    },
+    {
+      "id": "operator-profile-selection",
+      "page": "station-profiles",
+      "anchor_heading": "Using operator profiles",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManageProfiles",
+          "action": "click"
+        }
+      ],
+      "grab": {
+        "target": "connectionOperatorProfiles"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "connectionOperatorProfiles"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Operator profiles keep personal audio and layout preferences separate from locations and account credentials.",
+      "alt": "Operators library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions."
+    },
+    {
+      "id": "operator-profile-creation",
+      "page": "station-profiles",
+      "anchor_heading": "Using operator profiles",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "wait_visible": "connectionPanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManageProfiles",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionOperatorCreate",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionProfileName",
+          "action": "setText",
+          "value": "Portable operator"
+        }
+      ],
+      "grab": {
+        "target": "connectionProfileEditor"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "connectionProfileEditor"
+        },
+        {
+          "cmd": "close",
+          "target": "connectionOperatorProfiles"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Start from defaults or another profile, then choose microphone, output and pan arrangement. Enter saves the profile.",
+      "alt": "Create Operator profile dialog with a name, source profile, microphone, audio output, pan arrangement and Create and use profile action."
     }
   ]
 }

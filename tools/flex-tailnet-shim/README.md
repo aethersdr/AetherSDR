@@ -45,9 +45,10 @@ AetherSDR (tailnet peer)                       radio container (host network nam
   limits access to listed logins or tags, on the radio, station devices and
   side channels alike. Each announced side channel admits one connection,
   from the computer whose transfer opened it. Saving a narrower list ends the
-  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports, so the
-  radio's other services, such as its SSH, are not exposed, and a shared
-  route never splices into the radio's own addresses.
+  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports and on
+  ports an app on the radio published (see Published ports), so the radio's
+  other services, such as its SSH, are not exposed, and a shared route never
+  splices into the radio's own addresses.
 - **Teardown (Principle VI):** when either side ends, the shim closes the radio
   connection at once. The radio drops the GUI client and unkeys anything that
   client owned. The shim never keeps a radio session alive for a client it
@@ -122,6 +123,45 @@ are refused.
 | GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
 | PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
 | POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
+
+### Published ports
+
+An app running on the radio itself, such as another container or a legacy
+waveform, can make one of its TCP ports reachable on the tailnet:
+`POST /v1/local/expose {"port": 48995, "name": "AetherWSPR"}` on TCP 48992.
+This is the one path open to callers the table above refuses, and only to
+them: loopback and the radio's own addresses. An 8000-series container
+shares the radio's network, so it calls from these too. Anyone else,
+including other 172.30.x hosts, gets 403.
+
+- Only a port bound where the LAN could reach it can be published (400
+  otherwise), read from `/proc/net/tcp`: the wildcard, or a LAN address. On
+  an 8000-series radio that excludes 172.30.0.0/16, its internal container
+  network; on a FLEX-6000 that range is plain LAN and any address but
+  loopback qualifies. The shim reads binds, not firewall rules, so a wildcard
+  listener a firewall keeps from the LAN qualifies too.
+- This is checked again for each connection, against the socket the app
+  registered. If the service goes away, or anything else takes the port, new
+  callers are refused until the app that owns the name renews, and a renewal
+  that finds nothing listening withdraws the publication.
+- The shim listens on that port on its own tailnet addresses, IPv4 and IPv6,
+  and splices each caller the tailnet admits (the same `WhoIs` check as the
+  radio) to the app's listener, at most 32 at a time per port. A wildcard
+  listener is dialed at the radio's LAN address, so callers reach the app as
+  a LAN caller does, never as loopback. The reply's `listening` is false while the tailnet
+  node is down; the port opens when it comes up. If the shim can't listen
+  (for example, a radio file transfer holds the port), the reply is 503.
+  Each port has one owner: a transfer the radio announces on a published
+  port fails the same way, until the publication ends.
+- The registration is a 10-minute lease (`expires_in_s`), renewed by posting
+  again. The app's `name` owns the port: the same name renews it, another
+  gets 409. When the lease lapses, the port and its open connections close.
+- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992 or 48993, and at
+  most 8. `/v1/status` lists them as `exposed_ports`. They survive the
+  tailnet node restarting, but not the shim.
+- Anything running on the radio is trusted to publish: names are
+  self-asserted, and any wildcard listener can be published. That matches a
+  radio that lets any LAN host install containers.
 
 **Trust model:** the first provisioning is open to the LAN. That matches the
 radio itself: its API on 4992 and its image upload on 42607 are

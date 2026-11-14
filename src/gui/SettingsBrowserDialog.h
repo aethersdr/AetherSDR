@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QString>
 
@@ -21,7 +21,11 @@ namespace AetherSDR {
 // coherent and credential / newer-schema refusals apply. Credential rows are
 // redacted read-only; raw JSON edits must parse as an object; a newer-schema
 // store disables all edits; meta is not shown; Export is diagnostic, not a backup.
-class SettingsBrowserDialog : public PersistentDialog {
+// Settings → Settings Browser: every row in the settings store, by scope, in
+// a canon workspace (RFC #6226, #7055). Its sub-dialogs and questions are
+// canon too; the store logic (redaction, corrupt-document refusal, on-disk
+// verification) is unchanged.
+class SettingsBrowserDialog : public CanonWindow {
     Q_OBJECT
 
 public:

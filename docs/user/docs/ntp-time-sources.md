@@ -1,7 +1,7 @@
 ---
 title: "NTP Time Sources"
 slug: "/ntp-time-sources"
-description: "See which NTP server a FlexRadio sets its clock from, and add, edit, enable, disable or remove the radio's NTP time sources (SmartSDR v4.3.16 or later, FLEX-8000 series, Aurora, ML-9600 and CL-9300)."
+description: "See which NTP server a FlexRadio sets its clock from, and add, edit, enable, disable or remove the radio's NTP time sources (SmartSDR v4.3.16 or later)."
 status: "Experimental"
 applies_to: ["FlexRadio"]
 ---
@@ -12,13 +12,15 @@ applies_to: ["FlexRadio"]
 
 :::
 
-A FLEX-8000-series, Aurora, ML-9600 or CL-9300 radio running SmartSDR v4.3.16 or later sets its own clock from a list of NTP servers that it keeps itself. **Radio Setup → Time** shows that list and lets you change it. The radio owns the list: AetherSDR sends each change to the radio, and the table shows what the radio then reports.
+A radio running SmartSDR v4.3.16 or later sets its own clock from a list of NTP servers that it keeps itself. **Radio Setup → Time** shows that list and lets you change it. The radio owns the list: AetherSDR sends each change to the radio, and the table shows what the radio then reports.
 
 ## Requirements
 
-- A FLEX-8000-series, Aurora, ML-9600 (or MLS-9601) or CL-9300 (or CLS-9301) radio running SmartSDR v4.3.16 or later.
+- A FlexRadio running SmartSDR v4.3.16 or later. That includes the FLEX-6000 series as well as the FLEX-8000 series, Aurora, ML-9600 (or MLS-9601) and CL-9300 (or CLS-9301).
 
-On older firmware, on a 6000-series radio, or with no radio connected, the **Time** page is still there but dimmed, and it says why.
+On older firmware, on a radio model AetherSDR doesn't know, or with no radio connected, the **Time** page is still there but dimmed, and it says why.
+
+On a FLEX-6300 running SmartSDR 4.3.16, the radio reports its sources and accepts enabling one, but it refuses adding a source and removing a missing one ([#7154](https://github.com/aethersdr/AetherSDR/issues/7154)). Disabling or removing a real source there has not been tested. When the radio refuses a change, the page shows the radio's error, and the list stays as the radio reports it.
 
 ## The table
 

@@ -363,15 +363,6 @@ void MainWindow::buildMenuBar()
         openRadioSetupPage();
     });
 
-    // The keyer-source chooser is otherwise only on the DVK indicator's
-    // right-click, which no keyboard or screen-reader operator can reach
-    // (docs/a11y.md: every interactive widget needs a non-mouse activation
-    // path). Same menu, same handler.
-    auto* voiceKeyerSourceAct = settingsMenu->addAction("Voice Keyer Source...");
-    connect(voiceKeyerSourceAct, &QAction::triggered, this, [this] {
-        showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
-    });
-
     // Every controller's settings in one submenu, so the Settings menu does
     // not grow by one entry per supported device.
     auto* controllersMenu = settingsMenu->addMenu("Controllers");
@@ -587,7 +578,8 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_MIDI
     auto* midiAction = controllersMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_midiDialog, m_midiControl);
+        showOrRaiseCanon(m_midiDialog,
+                         [this] { return new MidiMappingDialog(m_midiControl, this); });
     });
 #endif
 #ifdef HAVE_HIDAPI
@@ -673,7 +665,7 @@ void MainWindow::buildMenuBar()
         const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
             return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
                                        m_potaClient, m_eibiClient,
-                                       m_n1mmSpotClient,
+                                       m_n1mmSpotClient, m_wsprFeed,
 #ifdef HAVE_WEBSOCKETS
                                        m_freedvClient,
 #endif
@@ -1027,7 +1019,8 @@ void MainWindow::buildMenuBar()
     settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
                                                           // title — macOS #883
     connect(settingsBrowserAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_settingsBrowserDialog);
+        showOrRaiseCanon(m_settingsBrowserDialog,
+                         [this] { return new SettingsBrowserDialog(this); });
     });
     // RX chain DSP tile double-click also opens the full AetherDSP
     // Settings dialog — same entry point as the Settings menu action.
@@ -1129,11 +1122,13 @@ void MainWindow::buildMenuBar()
     m_profilesMenu = menuBar()->addMenu("&Profiles");
     auto* profileMgrAct = m_profilesMenu->addAction("Profile Manager...");
     connect(profileMgrAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileManagerDialog,
+                         [this] { return new ProfileManagerDialog(&m_radioModel, this); });
     });
     auto* profileImportExportAct = m_profilesMenu->addAction("Import/Export Profiles...");
     connect(profileImportExportAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileImportExportDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileImportExportDialog,
+                         [this] { return new ProfileImportExportDialog(&m_radioModel, this); });
     });
     m_profilesMenu->addSeparator();
 
@@ -1320,7 +1315,8 @@ void MainWindow::buildMenuBar()
     // one instance at a time, cleaned up via WA_DeleteOnClose.
     auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
     connect(themeEditorAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_themeEditorDialog);
+        showOrRaiseCanon(m_themeEditorDialog,
+                         [this] { return new ThemeEditorDialog(this); });
     });
 
     // Global defaults for new slices. Existing VFO flag controls remain
@@ -1620,6 +1616,16 @@ void MainWindow::buildMenuBar()
     });
 #endif
 
+    // Outside the ASR guard: without Copy Assist it follows CW Keyer.
+    auto* voiceKeyerAction = toolsMenu->addAction("Digital Voice Keyer");
+    m_voiceKeyerAction = voiceKeyerAction;
+    voiceKeyerAction->setCheckable(true);
+    voiceKeyerAction->setEnabled(false);
+    connect(voiceKeyerAction, &QAction::triggered, this, [this] {
+        toggleVoiceKeyerPanel();
+        updateToolsMenuState();
+    });
+
     viewMenu->removeAction(packetDecoderAction);
     toolsMenu->addAction(packetDecoderAction);
     auto* kiwiAction = toolsMenu->addAction("Configure KiwiSDR...");
@@ -1639,7 +1645,7 @@ void MainWindow::buildMenuBar()
     swrScanAction->setEnabled(false);
     swrScanAction->setProperty(kTxKeyingProperty, true);
     connect(swrScanAction, &QAction::triggered, this, [this] {
-        startSwrSweep(-1, 1, 0.0, 0.0, /*forceLicenseConfirm=*/true);
+        startSwrSweep();
     });
     auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
     m_preTuneAction = preTuneAction;
@@ -1719,12 +1725,8 @@ void MainWindow::buildMenuBar()
 
     toolsMenu->addSeparator();
     toolsMenu->addAction("Radio Health...", this, [this] {
-        auto* dlg = new RadioHealthDialog(&m_radioModel, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showOrRaiseCanon(m_radioHealthDialog,
+                         [this] { return new RadioHealthDialog(&m_radioModel, this); });
     });
     auto* gpsDashboardAction = toolsMenu->addAction("AetherGPS...", this, [this] {
         showGpsLocationDialog();
@@ -1774,61 +1776,30 @@ void MainWindow::buildMenuBar()
     // ── Learn & news ──────────────────────────────────────────────────────
     // Orientation first: how to get going, the full manual, and what changed.
     helpMenu->addAction("Getting Started...", this, [this]() {
-        auto* dlg = new HelpDialog("Getting Started", ":/help/getting-started.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Getting Started"), QStringLiteral(":/help/getting-started.md"));
     });
     helpMenu->addAction("AetherSDR Help...", this, [this]() {
-        auto* dlg = new HelpDialog("AetherSDR Help", ":/help/aethersdr-help.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("AetherSDR Help"), QStringLiteral(":/help/aethersdr-help.md"));
     });
     helpMenu->addAction("What's New...", this, [this]() {
-        if (m_whatsNewDialog) {
-            m_whatsNewDialog->show();
-            m_whatsNewDialog->raise();
-            m_whatsNewDialog->activateWindow();
-            return;
-        }
-        m_whatsNewDialog = WhatsNewDialog::showAll(this);
-        m_whatsNewDialog->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-        trackPersistentDialog(m_whatsNewDialog);
+        showOrRaiseCanon(m_whatsNewDialog, [this] {
+            return new WhatsNewDialog(QString(), QCoreApplication::applicationVersion(), this,
+                                      false, true);
+        });
     });
     helpMenu->addSeparator();
 
     // ── Feature guides ────────────────────────────────────────────────────
     // Deeper topic walkthroughs for specific parts of the app.
     helpMenu->addAction("Understanding Noise Cancellation...", this, [this]() {
-        auto* dlg = new HelpDialog("Understanding Noise Cancellation", ":/help/understanding-noise-cancellation.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Understanding Noise Cancellation"), QStringLiteral(":/help/understanding-noise-cancellation.md"));
     });
     auto* controlsHelpAction = helpMenu->addAction("Configuring AetherSDR Controls...", this, [this]() {
-        auto* dlg = new HelpDialog("Configuring AetherSDR Controls", ":/help/configuring-aethersdr-controls.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Configuring AetherSDR Controls"), QStringLiteral(":/help/configuring-aethersdr-controls.md"));
     });
     controlsHelpAction->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
     auto* dataModesAction = helpMenu->addAction("Configuring Data Modes...", this, [this]() {
-        auto* dlg = new HelpDialog("Configuring Data Modes", ":/help/understanding-data-modes.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Configuring Data Modes"), QStringLiteral(":/help/understanding-data-modes.md"));
     });
     dataModesAction->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
     helpMenu->addSeparator();
@@ -1852,12 +1823,7 @@ void MainWindow::buildMenuBar()
         SupportDialog::fileIssue(this, &m_radioModel);
     });
     helpMenu->addAction("Contributing to AetherSDR...", this, [this]() {
-        auto* dlg = new HelpDialog("Contributing to AetherSDR", ":/help/contributing-to-aethersdr.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Contributing to AetherSDR"), QStringLiteral(":/help/contributing-to-aethersdr.md"));
     });
     helpMenu->addSeparator();
 
@@ -1865,12 +1831,11 @@ void MainWindow::buildMenuBar()
     // Tools for capturing logs, chasing slice problems, resetting local
     // settings, and staying up to date.
     helpMenu->addAction("Support && Diagnostics...", this, [this]() {
-        auto* dlg = new SupportDialog(this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setRadioModel(&m_radioModel);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
+        showOrRaiseCanon(m_supportDialog, [this] {
+            auto* dlg = new SupportDialog(this);
+            dlg->setRadioModel(&m_radioModel);
+            return dlg;
+        });
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(
@@ -2448,4 +2413,14 @@ void MainWindow::setAutomaticUpdateCheck(bool on)
         restoreKnownUpdate();
     }
 }
+// One canon window per guide: a second click on the same Help entry raises
+// the open window rather than stacking another copy on top of it (#7049).
+void MainWindow::showHelpGuide(const QString& title, const QString& resourcePath)
+{
+    QPointer<HelpDialog>& slot = m_helpDialogs[resourcePath];
+    showOrRaiseCanon(slot, [this, title, resourcePath] {
+        return new HelpDialog(title, resourcePath, this);
+    });
+}
+
 } // namespace AetherSDR

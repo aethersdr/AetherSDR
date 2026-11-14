@@ -1,7 +1,7 @@
 ---
 title: "AetherLab"
 slug: "/aetherlab"
-description: "Connect a RigExpert Stick Pro over USB for an experimental antenna quick check."
+description: "Connect a RigExpert Stick 230, 500, Pro or XPro over USB for an experimental antenna quick check."
 status: "Experimental"
 applies_to: ["All radios"]
 platforms: ["macOS"]
@@ -13,23 +13,28 @@ platforms: ["macOS"]
 
 :::
 
-AetherLab is a USB proof of concept for the **RigExpert Stick Pro**. It opens an
+AetherLab is a USB proof of concept for **RigExpert Stick** analyzers. It opens an
 antenna analyzer workspace in the main window, with an SWR plot, marker
 readouts and separate series/parallel impedance models. Basic USB sweeps are verified on
 one Stick Pro identifying as **Stick Pro 108** on macOS. Broader qualification
 is pending. The workspace retains your radio session and does not inhibit radio TX.
 
+**Stick 230**, **Stick 500** and **Stick XPro** are **Experimental — hardware
+testing pending**. They share the USB command path, with a separate frequency
+limit for each model. Their device entries and model details show the experimental
+label. Software tests do not establish compatibility with their actual firmware.
+
 ## Requirements
 
-- A normal-mode Stick Pro connected by a data-capable USB cable.
-- A build with USB HID support. Other RigExpert models and bootloader mode are
+- A normal-mode Stick 230, Stick 500, Stick Pro or Stick XPro connected by a data-capable USB cable.
+- A build with USB HID support. Other RigExpert families and bootloader mode are
   excluded; Bluetooth is not implemented.
 - AntScope and other analyzer clients closed.
 - A known load or antenna physically isolated from any transmitting radio.
 
 :::warning[Protect the analyzer]
 
-The Stick Pro emits measurement RF and must not be connected to a transmitting
+The analyzer emits measurement RF and must not be connected to a transmitting
 radio. AetherLab has no station-wide TX interlock. A successful Stop or USB
 close does not confirm RF silence.
 
@@ -39,8 +44,9 @@ close does not confirm RF silence.
 
 1. Open the **+** radio switcher and choose **AetherLab**, below **Rescan radios**.
    **Tools → AetherLab…** opens the same workspace.
-2. Click **Refresh USB**, select the Stick Pro interface, then **Connect**.
-3. Wait for **Ready** and the full Stick Pro identity. Firmware identifying as
+2. Click **Refresh USB**, select your analyzer interface, then **Connect**.
+3. Wait for **Ready** and the full analyzer identity. The identity must match
+   the model detected from USB. Firmware identifying as
    **Stick Pro 108** uses a bounded compatibility path for its FULLINFO metadata.
    Connecting only requests
    device information; it does not start a sweep.
@@ -66,8 +72,8 @@ isolation. No measurement restarts automatically. A new Connect clears the previ
 samples and protocol trace; save them first if needed.
 
 **Save session…** writes JSON containing raw samples, derived values, status,
-USB identity and a bounded protocol trace. Saved files contain device serial
-and path information. **Return to radio**, or selecting a radio tab, stops an open instrument
+USB identity, model, experimental status, frequency limits and a bounded
+protocol trace. Saved files contain device serial and path information. **Return to radio**, or selecting a radio tab, stops an open instrument
 session and restores the radio workspace. The AetherLab tab and last trace
 remain available. Opening the tab again does not reconnect or sweep. The radio
 connection, tuning and audio session are retained; restore the antenna path
@@ -85,9 +91,16 @@ components; undefined values have no finite result at that operating point.
 
 ## Reference
 
+| Model | Start / Stop limits | USB serial prefixes | Qualification |
+|---|---|---|---|
+| Stick 230 | 0.1–230 MHz | 4230 / 4231 | Experimental — hardware testing pending |
+| Stick 500 | 0.1–500 MHz | 4500 / 4501 | Experimental — hardware testing pending |
+| Stick Pro | 0.1–600 MHz | 4600 / 4601 | Basic USB sweeps verified on one Stick Pro 108 on macOS; broader qualification pending |
+| Stick XPro | 0.1–1000 MHz | 4999 / 4998 | Experimental — hardware testing pending |
+
 | Control | Meaning |
 |---|---|
-| Start / Stop | 0.1–600 MHz, entered to 1 Hz. Use an even positive span in Hz. USB frequency stepping is unqualified. |
+| Start / Stop | Uses the selected model's limits above, entered to 1 Hz. Selecting a model with a lower limit clamps the editors to that limit. Use an even positive span in Hz. USB frequency stepping is unqualified. |
 | Intervals | Experimental wire count N, 1–1000. The host expects N+1 returned rows. N=1, 2, 10 and 200 are verified over 14.000–14.350 MHz on the tested Stick Pro 108; other settings remain experimental. |
 | R / X | Resistance and reactance in ohms returned by the device; no host calibration applied. |
 | SWR / RL | Calculated at 50 Ω. Perfect match gives SWR 1 and infinite return loss; invalid/non-passive derived values are undefined. |
@@ -114,8 +127,8 @@ alone does not authorize analyzer RF. See [Automation Bridge and MCP](./automati
 ### No USB devices are listed
 
 The cable carries power only, another program holds the analyzer, or the
-analyzer is not in normal USB mode. Only Stick Pro serial prefixes 4600/4601
-in normal USB mode are listed.
+analyzer is not in normal USB mode. Only the Stick model serial prefixes in
+the table above are listed in normal USB mode.
 
 1. Check that the cable is a data cable.
 2. Close AntScope and any other analyzer client.
@@ -127,7 +140,7 @@ Another AetherSDR instance or analyzer client holds the device, this build
 lacks HID support, or the wrong interface is selected.
 
 1. Close other AetherSDR instances and analyzer clients.
-2. Select the Stick Pro in the interface list and click **Connect** again.
+2. Select your analyzer in the interface list and click **Connect** again.
 
 ### A sweep stops with a deadline, count or endpoint error
 

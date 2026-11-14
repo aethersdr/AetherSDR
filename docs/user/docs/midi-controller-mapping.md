@@ -25,9 +25,11 @@ AetherSDR supports class-compliant USB MIDI controllers for hands-on control of 
 
 **MIDI Device**
 
-<img src="/img/screens/midi-mapping-dialog.png" width="700" alt="MIDI Controller Mapping window. The MIDI Device group has a Port selector, Refresh and Connect buttons, a Disconnected status and Auto-connect on startup ticked. The Parameter Bindings table, with columns Parameter, MIDI Source, Channel, Invert and Relative, is empty. Below are a category filter, a parameter selector set to [RX] AF Gain with Learn and Manual… buttons, and Clear All, Profile, Save, Load, Import… and Export… controls, with Close at the bottom." />
+<img src="/img/screens/midi-mapping-dialog.png" width="700" alt="MIDI Controller Mapping window, with a round close button in its top-right corner. The MIDI Device group has a Port selector, Refresh and Connect buttons, a Disconnected status and Auto-connect on startup ticked. The Parameter Bindings table, with columns Parameter, MIDI Source, Channel, Invert and Relative, is empty. Below are a category filter, a parameter selector set to [RX] AF Gain with Learn and Manual… buttons, and Clear All, Profile, Save, Load, Import… and Export… controls." />
 
 *The MIDI Controller Mapping window, before any control is bound.*
+
+It is a window of its own that remembers its size and position. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux); choosing **MIDI Mapping...** while it is open brings it to the front.
 
 - **Port** with **Refresh** and **Connect / Disconnect**
 - **Auto-connect on startup** — reconnect to the last device at launch
@@ -49,11 +51,13 @@ AetherSDR supports class-compliant USB MIDI controllers for hands-on control of 
 3. Move a knob, press a button or slide a fader.
 4. AetherSDR captures the message and creates the binding. Bindings are saved automatically.
 
+Closing the window cancels a Learn that is still waiting for a control. Minimising it, or hiding AetherSDR, does not: the Learn stays armed and saves the binding when you move the control.
+
 ### Manual entry
 
 Click **Manual…** to type a binding instead of learning it: **Channel** (Any or 1–16), **Type** (Note On, Control Change (CC) or Pitch Bend), **Number** (note or CC number), plus **Invert value range** and **Relative (knob sends deltas)**.
 
-The **✎** button on any row opens the same form filled in, so you can fix a binding that Learn captured wrongly without re-learning it. If two bindings share the same source, AetherSDR warns you — only the last one would work.
+The **✎** button on any row opens the same form filled in, so you can fix a binding that Learn captured wrongly without re-learning it. If two bindings share the same source, AetherSDR asks before going ahead, because only the last one would work: **Replace** removes the older binding, and **Cancel** (the default, so also Return, **Esc** or the **✕**) leaves both as they were and adds nothing.
 
 ## Using relative encoders
 

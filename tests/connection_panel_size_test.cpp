@@ -9,6 +9,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QJsonObject>
 #include <QComboBox>
 #include <QFont>
 #include <QFile>
@@ -395,6 +396,8 @@ void checkFooterReachable(QApplication& app,
 void checkIcomUsesRoutedRetention()
 {
     auto& settings = AppSettings::instance();
+    const QJsonObject previousWorkspace = settings.radioFeatureExact("local", "", "ConnectionWorkspace");
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
     const QString previousProfiles =
         settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}")).toString();
     settings.setValue(
@@ -445,6 +448,8 @@ void checkIcomUsesRoutedRetention()
     report("manual Icom carries the selected source-path settings",
            emitted && requested.bindSettings.mode == RadioBindMode::Auto);
 
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
+    if (!previousWorkspace.isEmpty()) { settings.setRadioFeature("local", "", "ConnectionWorkspace", 1, previousWorkspace); }
     settings.setValue(QStringLiteral("RoutedProfilesJson"), previousProfiles);
     settings.save();
 }

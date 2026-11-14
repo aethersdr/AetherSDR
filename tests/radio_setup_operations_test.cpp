@@ -151,11 +151,10 @@ private slots:
         QVERIFY(!start->isEnabled());
         backend->replyLast({RadioSetupReply::Kind::Accepted});
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        emit radio.frequencyCalibrationReported(true, QString());
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")},
-                                                            {QStringLiteral("freq_error_ppb"), QStringLiteral("-23")}});
+        emit radio.frequencyCalibrationReported(false, QString());
+        emit radio.frequencyCalibrationReported(true, QStringLiteral("-23"));
         QVERIFY(start->isEnabled());
         bool completed = false;
         for (QLabel* label : group->findChildren<QLabel*>()) {
@@ -197,8 +196,8 @@ private slots:
         backend->live = false;
         emit radio.connectionStateChanged(false);
         QVERIFY(start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        emit radio.frequencyCalibrationReported(false, QString());
+        emit radio.frequencyCalibrationReported(true, QString());
         bool disconnected = false;
         for (QLabel* label : group->findChildren<QLabel*>()) {
             disconnected |= label->text() == QStringLiteral("Disconnected");
@@ -234,8 +233,8 @@ private slots:
         backend->acceptCalibrationPrelude();
         backend->replyLast({RadioSetupReply::Kind::Accepted});
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        emit radio.frequencyCalibrationReported(false, QString());
+        emit radio.frequencyCalibrationReported(true, QString());
         QVERIFY(start->isEnabled());
     }
 

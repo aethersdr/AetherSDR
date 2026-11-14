@@ -1,5 +1,4 @@
 #include "RadioConnection.h"
-#include <QPointer>
 #include "FlexPttWireSession.h"
 #include "LanBindAddress.h"
 #include "core/LogManager.h"
@@ -140,7 +139,6 @@ bool RadioConnection::isDemoTarget(const RadioInfo& info)
 void RadioConnection::startSyntheticDemoConnect()
 {
     resetSessionState();
-    m_setupStatusSource.begin();
     // Pin this session. m_syntheticDemo alone cannot distinguish "still the
     // demo session I queued from" from "a NEW demo session started after mine
     // was torn down" -- a fast disconnect/reconnect sets the flag back to true
@@ -229,17 +227,11 @@ void RadioConnection::injectFaultStatus(const QString& line)
 void RadioConnection::emitSyntheticStatus(const QString& line)
 {
     // Parse the raw status line into (object, kvs) exactly as the real receive
-    // path does, then emit statusReceived — so RadioModel sees an identical
-    // payload to a live radio's. (RFC #4288 Stage 3)
-    const auto lifetime = m_setupStatusSource.lifetime();
-    const QPointer<RadioConnection> alive(this);
+    // path does, then emit it — so RadioModel sees an identical payload to a
+    // live radio's. (RFC #4288 Stage 3)
     const ParsedMessage msg = CommandParser::parseLine(line);
     if (msg.type == MessageType::Status) {
-        if (const auto observation = m_setupStatusSource.decode(msg.object, msg.kvs, lifetime)) {
-            emit setupStatusObserved(*observation);
-            if (!alive) { return; }
-        }
-        emit statusReceived(msg.object, msg.kvs);
+        emit lineReceived(msg, m_lineEpoch.load());
     }
 }
 
@@ -266,7 +258,6 @@ void RadioConnection::connectToHost(const QHostAddress& address,
         resetSocket();
     }
     resetSessionState();
-    m_setupStatusSource.begin();
 
     const QHostAddress preferredBindAddr =
         (bindMode == RadioBindMode::Explicit) ? explicitBindAddr : sessionBindAddr;
@@ -325,7 +316,6 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
-    m_setupStatusSource.retire();
     m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
@@ -418,10 +408,18 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
         << " totalMs=" << totalTimer.elapsed();
 }
 
+bool RadioConnection::writeSessionCommand(quint32 seq, const QString& command,
+                                          quint64 generation, const SessionCommandGuard& guard)
+{
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
+    writeCommand(seq, command);
+    return true;
+}
+
 bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& command,
     quint64 generation, const SessionCommandGuard& guard)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return false; }
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
     if (m_commandSinkForTest) {
         m_commandSinkForTest(seq, command);
         return true;
@@ -503,11 +501,10 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                 }
             }
             if (!echo.isEmpty()) {
-                // Defer the echo to the next event-loop cycle. Emitting
-                // statusReceived synchronously here re-enters SliceModel, which
-                // can re-emit the mode intent → back into writeCommand → infinite
-                // recursion → crash. A real radio's echo also arrives async (over
-                // the socket), so this matches reality and breaks the loop.
+                // Defer the echo to the next event-loop cycle, as a real radio's
+                // arrives over the socket. A synchronous echo once re-entered
+                // SliceModel (mode intent → writeCommand → recursion); the status
+                // ingress hop is queued now, and the deferral keeps it that way.
                 const QString line =
                     QStringLiteral("SDE300001|slice 0 client_handle=0xDE300001 %1")
                         .arg(echo.join(QLatin1Char(' ')));
@@ -698,8 +695,6 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
-    const auto setupLifetime = m_setupStatusSource.lifetime();
-    const QPointer<RadioConnection> setupOwner(this);
     if (m_independentPtt && !isSyntheticDemo()) {
         m_independentPtt->observe(line, TxCoordinator::monotonicMs());
         updateIndependentPttTimer();
@@ -724,10 +719,7 @@ void RadioConnection::processLine(const QString& line)
     }
 
     ParsedMessage msg = CommandParser::parseLine(line);
-    const auto setupObservation = msg.type == MessageType::Status
-        ? m_setupStatusSource.decode(msg.object, msg.kvs, setupLifetime) : std::nullopt;
-    emit messageReceived(msg);
-    if (!setupOwner) { return; }
+    emit lineReceived(msg, m_lineEpoch.load());
 
     switch (msg.type) {
     case MessageType::Version: {
@@ -774,13 +766,6 @@ void RadioConnection::processLine(const QString& line)
     case MessageType::Response:
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;
-    case MessageType::Status:
-        if (setupObservation && setupObservation->current()) {
-            emit setupStatusObserved(*setupObservation);
-            if (!setupOwner) { return; }
-        }
-        emit statusReceived(msg.object, msg.kvs);
-        break;
     default:
         break;
     }
@@ -821,7 +806,6 @@ int RadioConnection::kernelRttMs() const
 
 void RadioConnection::setState(ConnectionState s)
 {
-    if (s == ConnectionState::Disconnected || s == ConnectionState::Error) { m_setupStatusSource.retire(); }
     m_state.store(s);
     emit stateChanged(s);
 }

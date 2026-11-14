@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/SetupStatusObservation.h"
+
 #include <QDate>
 #include <QDateTime>
 #include <QString>
@@ -44,26 +46,10 @@ struct LicenseSubscriptionState {
     }
 };
 
-// The radio's `expiration=` value: an ISO-8601 date-time, or a bare date, which
-// FlexLib's DateTime.TryParse reads as local midnight.
-inline QDateTime parseLicenseExpiration(const QString& text)
-{
-    const QString trimmed = text.trimmed();
-    QDateTime dateTime = QDateTime::fromString(trimmed, Qt::ISODate);
-    if (!dateTime.isValid()) {
-        const QDate date = QDate::fromString(trimmed.left(10), Qt::ISODate);
-        if (date.isValid()) {
-            dateTime = date.startOfDay();
-        }
-    }
-    return dateTime;
-}
-
-// Folds one `license subscription name=<n> expiration=<date>` status into the
-// held state. Unknown names and unparseable dates leave it unchanged.
+// Folds one `license subscription` report into the held state: the later
+// expiration wins. Unknown names and invalid dates leave it unchanged.
 inline LicenseSubscriptionState mergeLicenseSubscription(
-    const LicenseSubscriptionState& held, const QString& wireName,
-    const QString& expiration)
+    const LicenseSubscriptionState& held, const QString& wireName, const QDateTime& expiration)
 {
     const QString name = wireName.trimmed().toLower();
     QString display;
@@ -74,14 +60,16 @@ inline LicenseSubscriptionState mergeLicenseSubscription(
     } else {
         return held;
     }
-    const QDateTime parsed = parseLicenseExpiration(expiration);
-    if (!parsed.isValid()) {
+    if (!expiration.isValid() || (held.expiration.isValid() && held.expiration >= expiration)) {
         return held;
     }
-    if (held.expiration.isValid() && held.expiration >= parsed) {
-        return held;
-    }
-    return {display, parsed};
+    return {display, expiration};
+}
+
+inline LicenseSubscriptionState mergeLicenseSubscription(
+    const LicenseSubscriptionState& held, const QString& wireName, const QString& expiration)
+{
+    return mergeLicenseSubscription(held, wireName, parseLicenseExpiration(expiration));
 }
 
 }  // namespace AetherSDR

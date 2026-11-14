@@ -74,10 +74,6 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
-    connect(m_connection, &RadioConnection::setupStatusObserved, this,
-            [this](const SetupStatusObservation& observation) {
-        if (observation.current()) { emit setupStatusObserved(observation); }
-    });
 
     // Re-emit wire errors as the interface's own signal (as FlexBackend does).
     // connected and disconnected are re-emitted by the ordered handlers below.
@@ -134,15 +130,32 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // Seam geometry for dynamically created pans (#4887 phase 4): each needs the
     // panCenterBandwidthChanged bridge pan 0 gets in emitInitialState(), but only
     // after RadioModel has claimed the pan or the geometry is cached by index and
-    // the pane starts blank. The zero-timer hop runs after RadioModel's own queued
-    // copy of this status, regardless of connection order.
-    connect(m_connection, &RadioConnection::statusReceived, this,
-            [this](const QString& object, const QMap<QString, QString>& kvs) {
-        Q_UNUSED(kvs);
-        if (m_pansAwaitingGeometry.isEmpty()
-            || !object.startsWith(QLatin1String("display pan ")))
+    // the pane starts blank. The zero-timer hop runs after RadioModel has handled
+    // the accepted line, regardless of connection order.
+    m_statusIngress.bind(m_connection);
+    m_statusIngress.setDecodeValues(false);   // the native producer owns the values
+    // Identity only: a TGXL named in replayed captured status.
+    connect(&m_statusIngress, &FlexStatusIngress::tunerChanged, this, &IRadioBackend::tunerChanged);
+    connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
+    // The native producer has no setup inventory; replayed setup status is the Demo's.
+    connect(&m_statusIngress, &FlexStatusIngress::setupStatusObserved, this, &IRadioBackend::setupStatusObserved);
+    connect(&m_statusIngress, &FlexStatusIngress::displayObserved, this,
+            [this](DisplayObservation observation) {
+        if (!m_connected) { return; }
+        // Demo geometry/rates come from its native producer. The synthetic
+        // connection supplies resource identity and resize observations only.
+        DisplayValues dimensions;
+        dimensions.xPixels = observation.values.xPixels;
+        dimensions.yPixels = observation.values.yPixels;
+        observation.values = dimensions;
+        emit displayObserved(observation);
+    });
+    connect(&m_statusIngress, &FlexStatusIngress::lineAccepted, this,
+            [this](const ParsedMessage& line) {
+        if (line.type != MessageType::Status || m_pansAwaitingGeometry.isEmpty()
+            || !line.object.startsWith(QLatin1String("display pan ")))
             return;
-        const QString panId = object.section(QLatin1Char(' '), 2, 2).toLower();
+        const QString panId = line.object.section(QLatin1Char(' '), 2, 2).toLower();
         if (!m_pansAwaitingGeometry.remove(panId))
             return;
         QTimer::singleShot(0, this, [this, panId]() {
@@ -162,6 +175,7 @@ SimBackend::~SimBackend()
     // quit/wait), then panStream — the #502 order.
     if (m_connection)
         disconnect(m_connection, nullptr, this, nullptr);
+    m_statusIngress.unbind();
 
     // The producer goes first: stop the tick on its own thread, then let the
     // thread drain — the same BlockingQueued-stop shape as the two below.
@@ -282,8 +296,12 @@ RadioCapabilities SimBackend::capabilities() const
     caps.family = familyName();
     caps.cwReceiveControl = std::nullopt;
     caps.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
+    caps.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    // No Flex stream plane: receive audio is native and graphic EQ is host-side.
+    caps.audioStreamControl = std::nullopt;
+    caps.radioGraphicEqControl = std::nullopt;
     // The demo cannot key at all (Principle VI), let alone synthesise tones.
     caps.twoToneGenerator = std::nullopt;
     caps.firmwareUpdateSource = std::nullopt;  // synthetic radio; nothing to compare.
@@ -457,25 +475,11 @@ void SimBackend::emitInitialState()
     radio.slicesAvailable = capabilities().maxSlices;
     emit radioChanged(radio);
 
-    // Pan center/bandwidth via the typed seam. On the live (hybrid) path this is
-    // what actually drives the VFO/display: RadioModel decodes real Flex pan wire
-    // status only through FlexBackend (decodePanCenterBandwidth is m_flexBackend-
-    // gated), which is null in demo mode — so the wire "display pan center=14.100"
-    // the synthetic connection sends is delivered but never decoded. Emitting the
-    // normalized panCenterBandwidthChanged here bridges that gap through the seam
-    // RadioModel already wires for every backend. panId must match the wire pan id
-    // ("0x40000000") RadioModel claimed. (RFC #4288 — the VFO=0 fix.)
+    // Native Demo values accompany the synthetic resource lifecycle; synthetic
+    // display observations carry only identity and dimensions.
     emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
                                    m_sliceFreqMhz, kDemoPanBandwidthMhz);
 
-    // …and the waterfall rate, for exactly the same reason. The synthetic connect
-    // declares it on a proper `display waterfall` status line, but RadioModel
-    // decodes that through m_flexBackend->decodeWaterfallLineDuration(), which is
-    // null in demo mode — so the value was parsed off the wire and dropped, and
-    // PanadapterModel::waterfallLineDuration() stayed 0 while the neutral row
-    // pacer fell back to its own default. panWaterfallLineDurationChanged is the
-    // universal seam signal RadioModel wires for every backend, so emitting it
-    // here closes the gap.
     emit panWaterfallLineDurationChanged(QStringLiteral("0x40000000"),
                                          kWaterfallRate);
 
@@ -939,7 +943,7 @@ bool SimBackend::createPanadapterWithId(QString* createdId)
     // the SAME "display pan"/"display waterfall" status shape the synthetic
     // connect script uses (RadioConnection::startSyntheticDemoConnect), so
     // RadioModel claims it over the wire and ONE path creates a demo pane.
-    // The normalized geometry bridge is emitted by the ctor's statusReceived
+    // The normalized geometry bridge is emitted by the ctor's status-ingress
     // listener once the claim has landed.
     if (!m_connected)
         return false;

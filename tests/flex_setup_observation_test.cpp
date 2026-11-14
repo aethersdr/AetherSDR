@@ -13,6 +13,27 @@
 #include <atomic>
 #include <cstdio>
 
+namespace AetherSDR {
+// A connected LAN session on the backend's own connection, with an injected
+// writer: no socket is opened.
+class SessionControlTestAccess {
+public:
+    static void begin(RadioModel& model, FlexBackend& backend)
+    {
+        model.m_connection = backend.connection();
+        model.m_connection->m_state.store(ConnectionState::Connected);
+        model.m_sessionCommands = SessionCommandGuard::create();
+        model.m_sessionWire = model.m_connection;
+        model.m_sessionWireGeneration = model.m_connection->commandSessionGeneration();
+        model.m_connectedStatusEpoch = model.beginStatusSession();
+        model.m_connection->setLineEpoch(model.m_statusEpoch);
+    }
+    static quint64 statusEpoch(const RadioModel& model) { return model.m_statusEpoch; }
+    static void installWriter(RadioConnection& connection, std::function<void(quint32, const QString&)> writer)
+    { connection.m_commandSinkForTest = std::move(writer); }
+};
+} // namespace AetherSDR
+
 using namespace AetherSDR;
 namespace {
 int failures = 0;
@@ -25,9 +46,8 @@ using Fields = QMap<QString, QString>;
 
 void parserSemantics()
 {
-    const auto lifetime = std::make_shared<SetupStatusLifetime>();
-    const auto decode = [&](const QString& object, const Fields& fields) {
-        return decodeFlexSetupStatus(object, fields, lifetime);
+    const auto decode = [](const QString& object, const Fields& fields) {
+        return decodeFlexSetupStatus(object, fields);
     };
     const auto sharp = decode("radio filter_sharpness cw", {{"level", "99"}, {"auto_level", "255"}});
     check(sharp && sharp->sharpness.level == 3 && sharp->sharpness.automatic == true,
@@ -60,8 +80,20 @@ void parserSemantics()
     check(!decode("license feature", {{"name", "x"}, {"enabled", "2"}}), "license grants require strict zero or one");
     check(!decode("license subscription", {{"name", "smartsdr+"}, {"expiration", "2026-11-01garbage"}}),
           "license dates do not accept trailing junk");
-    lifetime->retire();
-    check(!decode("xvtr 1", {{"name", "2m"}}), "retired source cannot decode into a new session");
+    const auto announced = decode("xvtr 3", {{"in_use", "1"}});
+    check(announced && !announced->transverter.removed && !decode("xvtr 3", {{"in_use", "7"}}),
+          "a bare in_use=1 announces a transverter; an invalid in_use alone is no report");
+    const auto bounded = decode("usb_cable SN bit 0", {{"ptt_delay", "2147483647"}, {"tx_delay", "250"}});
+    const auto rates = decode("usb_cable SN", {{"type", "cat"}, {"speed", "99999999"}});
+    const auto rate = decode("usb_cable SN", {{"type", "cat"}, {"speed", "115200"}});
+    check(bounded && !bounded->usbCable.pttDelayMs && bounded->usbCable.txDelayMs == 250
+        && rates && !rates->usbCable.speed && rate && rate->usbCable.speed == 115200,
+          "USB delays and serial rates are bounded like their siblings");
+    check(isFlexSetupStatusObject("xvtr 1") && isFlexSetupStatusObject("usb_cable SN removed")
+        && isFlexSetupStatusObject("license") && isFlexSetupStatusObject("license feature")
+        && isFlexSetupStatusObject("radio filter_sharpness VOICE") && !isFlexSetupStatusObject("radio")
+        && !isFlexSetupStatusObject("xvtrs") && !isFlexSetupStatusObject("radio filter_sharpnessX"),
+          "the ingress owns exactly the four setup objects");
 }
 
 void acknowledgedSharpness()
@@ -104,36 +136,37 @@ void acknowledgedSharpness()
           "retired session cannot restore acknowledged sharpness values");
 }
 
-void sourceLifecycle()
+void entityLifecycle()
 {
-    FlexSetupStatusSource source;
-    const auto lifetime = source.lifetime();
-    check(!source.decode("xvtr 22", {{"in_use", "0"}}, lifetime)
-        && !source.decode("usb_cable UNKNOWN removed", {}, lifetime),
-        "unknown removals cannot acquire an unbound identity");
-    const auto first = source.decode("usb_cable SN", {{"type", "cat"}, {"name", "base"}, {"enable", "1"}}, lifetime);
-    const auto partial = source.decode("usb_cable SN", {{"name", "new"}}, lifetime);
-    check(first && partial && first->entityLifetime == partial->entityLifetime,
-          "ordinary partial updates preserve the cable incarnation");
-    check(!source.decode("usb_cable UNKNOWN bit 0", {{"enable", "1"}}, lifetime),
+    UsbCableModel cables;
+    applyCableStatus(cables, "UNKNOWN", {});
+    QMap<QString, QString> none;
+    const auto removeUnknown = decodeFlexSetupStatus("usb_cable UNKNOWN removed", none);
+    check(removeUnknown && (cables.applyObservation(removeUnknown->usbCable), cables.cables().isEmpty()),
+          "unknown removals and untyped first reports create nothing");
+    applyCableStatus(cables, "SN", {{"type", "cat"}, {"name", "base"}, {"enable", "1"}});
+    const auto first = cables.cables().value("SN").lifetime;
+    applyCableStatus(cables, "SN", {{"name", "new"}});
+    check(first && cables.cables().value("SN").lifetime == first, "ordinary partial updates preserve the cable identity");
+    const auto bit = decodeFlexSetupStatus("usb_cable UNKNOWN bit 0", {{"enable", "1"}});
+    check(bit && (cables.applyObservation(bit->usbCable), !cables.cables().contains("UNKNOWN")),
           "unknown per-bit reports cannot create phantom cables");
-    const auto retyped = source.decode("usb_cable SN", {{"type", "bit"}}, lifetime);
-    check(retyped && !first->entityLifetime->current() && retyped->entityLifetime->current()
-        && first->entityLifetime != retyped->entityLifetime,
-        "retyping retires queued writes before owner-thread delivery");
-    check(retyped && retyped->usbCable.name == QStringLiteral("new") && retyped->usbCable.enabled == true,
-          "a queued partial retype preserves base fields from its retired predecessor");
-    const auto bcd = source.decode("usb_cable BCD", {{"type", "bcd"}}, lifetime);
-    const auto vbcd = source.decode("usb_cable BCD", {{"type", "vbcd"}}, lifetime);
-    check(bcd && vbcd && bcd->entityLifetime == vbcd->entityLifetime, "BCD subtypes preserve incarnation");
-    const auto removal = source.decode("usb_cable SN removed", {}, lifetime);
-    const auto replacement = source.decode("usb_cable SN", {{"type", "bit"}}, lifetime);
-    check(removal && replacement && !retyped->entityLifetime->current()
-        && replacement->entityLifetime != retyped->entityLifetime,
-        "same-serial remove/recreate invalidates the old editor and final write");
-    source.begin();
-    check(!lifetime->current() && !replacement->entityLifetime->current()
-        && !source.decode("xvtr 1", {{"name", "stale"}}, lifetime), "source rotation retires every old entity");
+    applyCableStatus(cables, "SN", {{"type", "bit"}});
+    const auto retyped = cables.cables().value("SN").lifetime;
+    check(retyped && !first->current() && retyped->current() && first != retyped,
+          "retyping retires the old identity before any later write");
+    check(cables.cables().value("SN").name == QStringLiteral("new") && cables.cables().value("SN").enabled,
+          "a retype keeps the fields every family shares");
+    applyCableStatus(cables, "BCD", {{"type", "bcd"}});
+    const auto bcd = cables.cables().value("BCD").lifetime;
+    applyCableStatus(cables, "BCD", {{"type", "vbcd"}});
+    check(cables.cables().value("BCD").lifetime == bcd && bcd->current(), "BCD subtypes keep their identity");
+    const auto removal = decodeFlexSetupStatus("usb_cable SN removed", none);
+    cables.applyObservation(removal->usbCable);
+    applyCableStatus(cables, "SN", {{"type", "bit"}});
+    const auto replacement = cables.cables().value("SN").lifetime;
+    check(!retyped->current() && replacement && replacement != retyped && cables.cables().value("SN").name.isEmpty(),
+          "same-serial remove/recreate is a new cable: old identity retired, old fields gone");
 }
 
 void modelSemantics()
@@ -187,26 +220,21 @@ void modelSemantics()
           "retype keeps base fields while retiring the former identity");
     check(radio.requestUsbCable({"SN", -1, UsbCableRequest::Field::Enabled, false, cableIdentity}) == ReceiveDispatch::Unsupported,
           "stale USB intent cannot target a retyped cable");
-    FlexSetupStatusSource source;
-    const auto old = source.decode("xvtr 7", {{"name", "old"}, {"rf_freq", "144"}}, source.lifetime());
-    FlexSetupStatusTestPeer::apply(radio, *old);
-    const auto removed = source.decode("xvtr 7", {{"in_use", "0"}}, source.lifetime());
-    const auto fresh = source.decode("xvtr 7", {{"name", "fresh"}}, source.lifetime());
-    FlexSetupStatusTestPeer::apply(radio, *fresh);
-    FlexSetupStatusTestPeer::apply(radio, *removed);
+    deliver("xvtr 7", {{"name", "old"}, {"rf_freq", "144"}});
+    const auto oldXvtr = radio.xvtrList().value(7).lifetime;
+    deliver("xvtr 7", {{"in_use", "0"}});
+    deliver("xvtr 7", {{"name", "fresh"}});
     check(radio.xvtrList().value(7).name == "fresh" && radio.xvtrList().value(7).rfFreq == 0
-        && radio.xvtrList().value(7).lifetime == fresh->entityLifetime,
-        "replacement resets old fields and identity even if its removal arrives late");
-    const auto usbOld = source.decode("usb_cable REUSED", {{"type", "cat"}, {"name", "old cable"}, {"enable", "1"}}, source.lifetime());
-    FlexSetupStatusTestPeer::apply(radio, *usbOld);
-    const auto usbRemoved = source.decode("usb_cable REUSED removed", {}, source.lifetime());
-    const auto usbNew = source.decode("usb_cable REUSED", {{"type", "cat"}}, source.lifetime());
-    FlexSetupStatusTestPeer::apply(radio, *usbNew);
-    FlexSetupStatusTestPeer::apply(radio, *usbRemoved);
+        && oldXvtr && !oldXvtr->current() && radio.xvtrList().value(7).lifetime != oldXvtr,
+        "a same-index replacement starts from fresh fields and a fresh identity");
+    deliver("usb_cable REUSED", {{"type", "cat"}, {"name", "old cable"}, {"enable", "1"}});
+    const auto oldCable = radio.usbCableModel().cables().value("REUSED").lifetime;
+    deliver("usb_cable REUSED removed", {});
+    deliver("usb_cable REUSED", {{"type", "cat"}});
     check(radio.usbCableModel().cables().value("REUSED").name.isEmpty()
         && !radio.usbCableModel().cables().value("REUSED").enabled
-        && radio.usbCableModel().cables().value("REUSED").lifetime == usbNew->entityLifetime,
-        "same-serial replacement cannot inherit removed-cable fields or a late removal");
+        && oldCable && !oldCable->current() && radio.usbCableModel().cables().value("REUSED").lifetime != oldCable,
+        "a same-serial replacement cannot inherit the removed cable's fields or identity");
     FlexSetupStatusTestPeer::reset(radio);
     check(radio.xvtrList().isEmpty() && radio.usbCableModel().cables().isEmpty()
         && radio.licenseRadioId().isEmpty() && radio.licenseMaxVersion().isEmpty()
@@ -234,46 +262,90 @@ void reentrancy()
 void finalWriteFence()
 {
     RadioModel radio;
-    installRadioSetupBackend(radio);
-    QThread worker;
-    auto connection = std::make_unique<RadioConnection>();
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    SessionControlTestAccess::begin(radio, *backend);
+    RadioConnection* connection = backend->connection();
     std::atomic_int writes{0};
-    FlexSetupStatusTestPeer::writer(*connection, [&](quint32, const QString&) { ++writes; });
-    connection->moveToThread(&worker);
-    worker.start();
-    FlexSetupStatusTestPeer::connection(radio, connection.get());
+    SessionControlTestAccess::installWriter(*connection, [&](quint32, const QString&) { ++writes; });
     const auto queueBehind = [&](const std::shared_ptr<SetupStatusLifetime>& identity, bool retire) {
         QSemaphore entered, release;
-        QMetaObject::invokeMethod(connection.get(), [&] { entered.release(); release.tryAcquire(1, 5000); });
+        QMetaObject::invokeMethod(connection, [&] { entered.release(); release.tryAcquire(1, 5000); });
         check(entered.tryAcquire(1, 5000), "worker barrier entered");
         check(FlexSetupStatusTestPeer::send(radio, identity), "configuration command admitted to the worker queue");
         if (retire) { identity->retire(); }
         release.release();
-        QMetaObject::invokeMethod(connection.get(), [] {}, Qt::BlockingQueuedConnection);
+        QMetaObject::invokeMethod(connection, [] {}, Qt::BlockingQueuedConnection);
     };
     queueBehind(std::make_shared<SetupStatusLifetime>(), true);
     check(writes == 0, "final queued write refuses an entity retired after model admission");
     queueBehind(std::make_shared<SetupStatusLifetime>(), false);
     check(writes == 1, "current configuration intent reaches the injected writer exactly once");
-    FlexSetupStatusTestPeer::connection(radio, static_cast<RadioConnection*>(nullptr));
-    QMetaObject::invokeMethod(connection.get(), [&] { connection->moveToThread(QCoreApplication::instance()->thread()); },
-                              Qt::BlockingQueuedConnection);
-    worker.quit();
-    worker.wait();
 }
 
-template<typename Transport> void transportOrigin(const char* label)
+// The model applies a setup report only from the session being run, and
+// none once that session has begun to end.
+void sessionFence()
 {
-    Transport transport;
-    int reports = 0;
-    QObject::connect(&transport, &Transport::setupStatusObserved, &transport,
-                     [&](const SetupStatusObservation&) { ++reports; });
-    FlexSetupStatusTestPeer::feed(transport, "S1|radio filter_sharpness VOICE level=3");
-    check(reports == 1, label);
-    QObject::connect(&transport, &Transport::messageReceived, &transport,
-                     [&](const ParsedMessage&) { FlexSetupStatusTestPeer::begin(transport); });
-    FlexSetupStatusTestPeer::feed(transport, "S1|radio filter_sharpness VOICE level=1");
-    check(reports == 1, "a callback that rotates the transport cannot restamp the old report");
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    SessionControlTestAccess::begin(radio, *backend);
+    const quint64 first = SessionControlTestAccess::statusEpoch(radio);
+    const auto report = [](quint64 epoch, const char* name) {
+        auto observation = decodeFlexSetupStatus("xvtr 1", {{"name", name}});
+        observation->statusEpoch = epoch;
+        return *observation;
+    };
+    emit backend->setupStatusObserved(report(first, "a"));
+    check(radio.xvtrList().value(1).name == "a", "a report from the running session applies");
+    SessionControlTestAccess::begin(radio, *backend);
+    const quint64 second = SessionControlTestAccess::statusEpoch(radio);
+    emit backend->setupStatusObserved(report(first, "stale"));
+    check(second != first && radio.xvtrList().value(1).name == "a", "a report from an earlier session is refused");
+    RadioSetupControlTestAccess::disconnected(radio);
+    emit backend->setupStatusObserved(report(second, "late"));
+    check(!radio.xvtrList().contains(1), "a session that has begun to end applies nothing more");
+}
+
+// A transport error that leaves the link up ends nothing: setup status
+// keeps applying through the ingress, on LAN and on SmartLink.
+void sessionSurvivesTransportError()
+{
+    const auto line = [](const char* text) { return CommandParser::parseLine(QString::fromLatin1(text)); };
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        SessionControlTestAccess::begin(radio, *backend);
+        RadioConnection* lan = backend->connection();
+        emit lan->lineReceived(line("S1|xvtr 4 name=6m rf_freq=50 if_freq=28"), lan->lineEpoch());
+        QCoreApplication::sendPostedEvents();
+        check(radio.xvtrList().value(4).name == "6m", "LAN setup status reaches the model through the ingress");
+        FlexSetupStatusTestPeer::connectionError(radio);
+        emit lan->lineReceived(line("S1|radio filter_sharpness VOICE level=0"), lan->lineEpoch());
+        emit lan->lineReceived(line("S1|xvtr 4 name=4m"), lan->lineEpoch());
+        QCoreApplication::sendPostedEvents();
+        check(radio.filterSharpnessVoice() == 0 && radio.xvtrList().value(4).name == "4m"
+            && radio.xvtrList().value(4).lifetime->current(),
+              "a LAN error that leaves the link up keeps setup status and entity authority");
+    }
+    {
+        WanConnection wan;
+        RadioModel radio;
+        installRadioSetupBackend(radio);
+        FlexSetupStatusTestPeer::connectWan(radio, &wan);
+        emit wan.lineReceived(line("S1|usb_cable SN type=cat name=rig"), wan.lineEpoch());
+        QCoreApplication::sendPostedEvents();
+        check(radio.usbCableModel().cables().value("SN").name == "rig",
+              "SmartLink setup status reaches the model through the ingress");
+        QMetaObject::invokeMethod(&wan, "onSocketError", Qt::DirectConnection,
+                                  Q_ARG(QAbstractSocket::SocketError, QAbstractSocket::SocketTimeoutError));
+        FlexSetupStatusTestPeer::connectionError(radio);
+        emit wan.lineReceived(line("S1|usb_cable SN name=rig2"), wan.lineEpoch());
+        QCoreApplication::sendPostedEvents();
+        check(radio.usbCableModel().cables().value("SN").name == "rig2"
+            && radio.usbCableModel().cables().value("SN").lifetime->current(),
+              "a SmartLink socket error keeps setup status and entity authority");
+        FlexSetupStatusTestPeer::releaseWan(radio);
+    }
 }
 }
 
@@ -284,11 +356,11 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     parserSemantics();
     acknowledgedSharpness();
-    sourceLifecycle();
+    entityLifecycle();
     modelSemantics();
     reentrancy();
     finalWriteFence();
-    transportOrigin<RadioConnection>("LAN emits exactly one typed observation");
-    transportOrigin<WanConnection>("WAN emits exactly one typed observation");
+    sessionFence();
+    sessionSurvivesTransportError();
     return failures ? 1 : 0;
 }

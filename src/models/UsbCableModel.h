@@ -75,8 +75,7 @@ public:
 
     const QMap<QString, UsbCable>& cables() const { return m_cables; }
 
-    void applyObservation(const UsbCableStatusValues& observation,
-                          const std::shared_ptr<SetupStatusLifetime>& identity = {});
+    void applyObservation(const UsbCableStatusValues& observation);
     void handleRemoved(const QString& serialNumber);
     void clear();
 

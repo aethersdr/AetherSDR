@@ -82,12 +82,17 @@ func validAllow(allow []string) bool {
 	return true
 }
 
+// lanAddr reports whether a is on the radio's LAN: private or link-local,
+// and not its internal container network.
+func lanAddr(a netip.Addr) bool {
+	return !containerNet.Contains(a) && (a.IsPrivate() || a.IsLinkLocalUnicast())
+}
+
 // lanOnly admits callers on private or link-local addresses, excluding the
 // radio's internal container network (172.30.1.0/24), so another container
 // cannot provision the shim. The tailnet side never reaches this server: it
 // lives in tsnet's own network stack.
 func lanOnly(next http.Handler) http.Handler {
-	internal := netip.MustParsePrefix("172.30.0.0/16")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ap, err := netip.ParseAddrPort(r.RemoteAddr)
 		if err != nil {
@@ -95,7 +100,7 @@ func lanOnly(next http.Handler) http.Handler {
 			return
 		}
 		ip := ap.Addr().Unmap()
-		if internal.Contains(ip) || !(ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		if !lanAddr(ip) {
 			log.Printf("api: refused %s %s from %s", r.Method, r.URL.Path, ip)
 			writeJSON(w, http.StatusForbidden, apiError{"only LAN callers may use this API"})
 			return
@@ -257,7 +262,49 @@ func NewAPI(n *Node) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, n.Status())
 	})
-	return lanOnly(mux)
+	// Apps on the radio itself publish a port to the tailnet here. This is
+	// the one path for callers lanOnly refuses: it is open only to the
+	// radio, and it can only publish a port already reachable on the LAN.
+	local := http.NewServeMux()
+	local.HandleFunc("POST /v1/local/expose", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Port int    `json:"port"`
+			Name string `json:"name"`
+		}
+		if err := decode(r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{"bad request: " + err.Error()})
+			return
+		}
+		lease, listening, err := n.exposed.register(req.Port, req.Name)
+		switch {
+		case errors.Is(err, errExposeConflict):
+			writeJSON(w, http.StatusConflict, apiError{err.Error()})
+			return
+		case errors.Is(err, errExposeListen), errors.Is(err, errExposeLookup):
+			writeJSON(w, http.StatusServiceUnavailable, apiError{err.Error()})
+			return
+		case err != nil:
+			writeJSON(w, http.StatusBadRequest, apiError{err.Error()})
+			return
+		}
+		// listening is false while the tailnet node is down; the port opens
+		// when it comes up.
+		writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "expires_in_s": int(lease.Seconds()),
+			"listening": listening})
+	})
+	lan := lanOnly(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/local/") {
+			lan.ServeHTTP(w, r)
+			return
+		}
+		ap, err := netip.ParseAddrPort(r.RemoteAddr)
+		if err != nil || !n.localCaller(ap.Addr()) {
+			writeJSON(w, http.StatusForbidden, apiError{"only apps on the radio may use this API"})
+			return
+		}
+		local.ServeHTTP(w, r)
+	})
 }
 
 // ServeAPI runs the provisioning API. It starts before, and independently

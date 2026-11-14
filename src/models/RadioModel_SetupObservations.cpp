@@ -14,7 +14,6 @@ void RadioModel::retireSetupObservations()
 {
     ++m_setupObservationGeneration;
     for (quint64& revision : m_filterSharpnessRevisions) { ++revision; }
-    if (m_setupObservationLifetime) { m_setupObservationLifetime->retire(); }
     for (const XvtrInfo& value : m_xvtrList) { if (value.lifetime) { value.lifetime->retire(); } }
     for (const UsbCable& value : m_usbCableModel.cables()) { if (value.lifetime) { value.lifetime->retire(); } }
 }
@@ -52,31 +51,28 @@ bool RadioModel::refreshLicenseSubscription(const QDateTime& now)
 
 void RadioModel::applySetupObservation(const SetupStatusObservation& observation)
 {
-    if (!observation.current()) { return; }
-    m_setupObservationLifetime = observation.lifetime;
+    if (!observationSessionCurrent(observation.statusEpoch)) { return; }
     const quint64 generation = m_setupObservationGeneration;
     const QPointer<RadioModel> alive(this);
     const auto current = [&] {
-        return alive && observation.current() && generation == alive->m_setupObservationGeneration;
+        return alive && generation == alive->m_setupObservationGeneration
+            && alive->observationSessionCurrent(observation.statusEpoch);
     };
     switch (observation.kind) {
     case SetupStatusObservation::Kind::Transverter: {
         const auto& value = observation.transverter;
         if (value.id < 0) { return; }
-        if (!value.removed && observation.entityLifetime && !observation.entityLifetime->current()) { return; }
         auto it = m_xvtrList.find(value.id);
         if (value.removed) {
-            if (it != m_xvtrList.end() && (!observation.entityLifetime || it->lifetime == observation.entityLifetime)) {
-                if (it->lifetime) { it->lifetime->retire(); }
-                m_xvtrList.erase(it);
-            }
+            if (it == m_xvtrList.end()) { return; }
+            if (it->lifetime) { it->lifetime->retire(); }
+            m_xvtrList.erase(it);
         } else {
-            if (it == m_xvtrList.end() || (observation.entityLifetime && it->lifetime != observation.entityLifetime)) {
-                if (it == m_xvtrList.end() && m_xvtrList.size() >= 256) { return; }
-                if (it != m_xvtrList.end() && it->lifetime) { it->lifetime->retire(); }
+            if (it == m_xvtrList.end()) {
+                if (m_xvtrList.size() >= 256) { return; }
                 XvtrInfo fresh;
                 fresh.index = value.id;
-                fresh.lifetime = observation.entityLifetime ? observation.entityLifetime : std::make_shared<SetupStatusLifetime>();
+                fresh.lifetime = std::make_shared<SetupStatusLifetime>();
                 it = m_xvtrList.insert(value.id, fresh);
             }
             assign(it->order, value.order);
@@ -92,7 +88,7 @@ void RadioModel::applySetupObservation(const SetupStatusObservation& observation
         break;
     }
     case SetupStatusObservation::Kind::UsbCable:
-        m_usbCableModel.applyObservation(observation.usbCable, observation.entityLifetime);
+        m_usbCableModel.applyObservation(observation.usbCable);
         return;
     case SetupStatusObservation::Kind::FilterSharpness: {
         const auto& value = observation.sharpness;
@@ -120,14 +116,8 @@ void RadioModel::applySetupObservation(const SetupStatusObservation& observation
             refreshLicenseSubscription(QDateTime::currentDateTime());
             break;
         case LicenseStatusValues::Kind::Subscription:
-            if (!value.expiration.isValid() || (value.name != QLatin1String("smartsdr+")
-                && value.name != QLatin1String("smartsdr+_early_access"))) { return; }
-            if (!m_licenseSubscription.expiration.isValid() || value.expiration > m_licenseSubscription.expiration) {
-                m_licenseSubscription = {
-                    value.name == QLatin1String("smartsdr+_early_access")
-                        ? QStringLiteral("SmartSDR+ Early Access") : QStringLiteral("SmartSDR+"),
-                    value.expiration};
-            }
+            if (!value.expiration.isValid()) { return; }
+            m_licenseSubscription = mergeLicenseSubscription(m_licenseSubscription, value.name, value.expiration);
             refreshLicenseSubscription(QDateTime::currentDateTime());
             m_licenseExpiryTimer.start();
             break;

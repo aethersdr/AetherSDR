@@ -75,21 +75,29 @@ bool identifier(const QString& value)
 }
 }
 
-std::optional<SetupStatusObservation> decodeFlexSetupStatus(
-    const QString& object, const QMap<QString, QString>& fields,
-    const std::shared_ptr<SetupStatusLifetime>& lifetime)
+bool isFlexSetupStatusObject(const QString& object)
 {
-    if (!lifetime || !lifetime->current() || object.size() > 256 || fields.size() > 64) { return {}; }
+    const auto word = [&](QLatin1String prefix) {
+        return object == prefix || object.startsWith(prefix + u' ');
+    };
+    return word(QLatin1String("xvtr")) || word(QLatin1String("usb_cable"))
+        || word(QLatin1String("license")) || word(QLatin1String("radio filter_sharpness"));
+}
+
+std::optional<SetupStatusObservation> decodeFlexSetupStatus(
+    const QString& object, const QMap<QString, QString>& fields)
+{
+    if (object.size() > 256 || fields.size() > 64) { return {}; }
     const QStringList words = object.split(u' ', Qt::SkipEmptyParts);
     if (words.isEmpty()) { return {}; }
     SetupStatusObservation result;
-    result.lifetime = lifetime;
     if (words[0] == QLatin1String("xvtr") && words.size() == 2) {
         const auto id = integer(words[1], 0, std::numeric_limits<int>::max());
         if (!id) { return {}; }
         auto& value = result.transverter;
         value.id = *id;
-        value.removed = boolean(fields, QStringLiteral("in_use")) == std::optional<bool>(false);
+        const auto inUse = boolean(fields, QStringLiteral("in_use"));
+        value.removed = inUse == std::optional<bool>(false);
         value.order = integer(fields, QStringLiteral("order"), 0, 16);
         value.name = text(fields, QStringLiteral("name"));
         value.rfFreq = number(fields, QStringLiteral("rf_freq"));
@@ -99,8 +107,10 @@ std::optional<SetupStatusObservation> decodeFlexSetupStatus(
         value.maxPower = number(fields, QStringLiteral("max_power"));
         value.rxOnly = boolean(fields, QStringLiteral("rx_only"));
         value.isValid = boolean(fields, QStringLiteral("is_valid"));
-        if (!value.removed && !value.order && !value.name && !value.rfFreq && !value.ifFreq
-            && !value.loError && !value.rxGain && !value.maxPower && !value.rxOnly && !value.isValid) { return {}; }
+        // A bare in_use=1 announces the transverter.
+        if (!inUse && !value.order && !value.name
+            && !value.rfFreq && !value.ifFreq && !value.loError && !value.rxGain && !value.maxPower
+            && !value.rxOnly && !value.isValid) { return {}; }
     } else if (words[0] == QLatin1String("usb_cable") && words.size() >= 2) {
         result.kind = SetupStatusObservation::Kind::UsbCable;
         auto& value = result.usbCable;
@@ -134,11 +144,17 @@ std::optional<SetupStatusObservation> decodeFlexSetupStatus(
         value.sourceSlice = text(fields, QStringLiteral("source_slice"));
         value.parity = choice(fields, QStringLiteral("parity"), {QStringLiteral("none"), QStringLiteral("odd"), QStringLiteral("even"), QStringLiteral("mark"), QStringLiteral("space")});
         value.flowControl = choice(fields, QStringLiteral("flow_control"), {QStringLiteral("none"), QStringLiteral("rts_cts"), QStringLiteral("dtr_dsr"), QStringLiteral("xon_xoff")});
-        value.speed = integer(fields, QStringLiteral("speed"), 0);
+        // FlexLib 4.3.16 UsbCatCable.StringToSerialSpeed names these rates.
+        if (const auto speed = choice(fields, QStringLiteral("speed"), {QStringLiteral("300"),
+                QStringLiteral("600"), QStringLiteral("1200"), QStringLiteral("2400"), QStringLiteral("4800"),
+                QStringLiteral("9600"), QStringLiteral("14400"), QStringLiteral("19200"), QStringLiteral("38400"),
+                QStringLiteral("57600"), QStringLiteral("115200"), QStringLiteral("230400"),
+                QStringLiteral("460800"), QStringLiteral("921600")})) { value.speed = speed->toInt(); }
         value.dataBits = integer(fields, QStringLiteral("data_bits"), 7, 8);
         value.stopBits = integer(fields, QStringLiteral("stop_bits"), 1, 2);
-        value.pttDelayMs = integer(fields, QStringLiteral("ptt_delay"));
-        value.txDelayMs = integer(fields, QStringLiteral("tx_delay"));
+        // The bit editor's range; FlexLib leaves the delays unbounded.
+        value.pttDelayMs = integer(fields, QStringLiteral("ptt_delay"), 0, 10000);
+        value.txDelayMs = integer(fields, QStringLiteral("tx_delay"), 0, 10000);
         value.band = text(fields, QStringLiteral("band"));
         value.output = choice(fields, QStringLiteral("output"), {QStringLiteral("band"), QStringLiteral("freq_range")});
         value.lowFreqMhz = number(fields, QStringLiteral("low_freq"));
@@ -169,12 +185,8 @@ std::optional<SetupStatusObservation> decodeFlexSetupStatus(
             if (value.name != QLatin1String("smartsdr+") && value.name != QLatin1String("smartsdr+_early_access")) { return {}; }
             const auto expiration = text(fields, QStringLiteral("expiration"), 64);
             if (!expiration) { return {}; }
-            value.expiration = QDateTime::fromString(*expiration, Qt::ISODate);
-            if (!value.expiration.isValid()) {
-                const QDate date = QDate::fromString(*expiration, Qt::ISODate);
-                if (!date.isValid() || date.toString(Qt::ISODate) != *expiration) { return {}; }
-                value.expiration = date.startOfDay();
-            }
+            value.expiration = parseLicenseExpiration(*expiration);
+            if (!value.expiration.isValid()) { return {}; }
         } else if (words[1] == QLatin1String("feature")) {
             value.kind = LicenseStatusValues::Kind::Feature;
             const auto name = text(fields, QStringLiteral("name"), 128);
@@ -187,63 +199,6 @@ std::optional<SetupStatusObservation> decodeFlexSetupStatus(
         } else { return {}; }
     } else { return {}; }
     return result;
-}
-
-std::optional<SetupStatusObservation> FlexSetupStatusSource::decode(
-    const QString& object, const QMap<QString, QString>& fields,
-    const std::shared_ptr<SetupStatusLifetime>& source)
-{
-    auto report = decodeFlexSetupStatus(object, fields, source);
-    if (!report) { return {}; }
-    const std::scoped_lock lock(m_mutex);
-    if (source != m_lifetime || !source->current()) { return {}; }
-    QString key;
-    QString family;
-    bool removed = false;
-    bool canCreate = true;
-    if (report->kind == SetupStatusObservation::Kind::Transverter) {
-        key = QStringLiteral("xvtr:%1").arg(report->transverter.id);
-        removed = report->transverter.removed;
-    } else if (report->kind == SetupStatusObservation::Kind::UsbCable) {
-        key = QStringLiteral("usb:") + report->usbCable.serial;
-        removed = report->usbCable.removed;
-        family = report->usbCable.type.value_or(QString());
-        if (family == QLatin1String("vbcd") || family == QLatin1String("bcd_vbcd")) { family = QStringLiteral("bcd"); }
-        canCreate = report->usbCable.bit < 0 && !family.isEmpty();
-    } else { return report; }
-    auto it = m_entities.find(key);
-    if (removed) {
-        if (it == m_entities.end()) { return {}; }
-        report->entityLifetime = it->lifetime;
-        it->lifetime->retire();
-        m_entities.erase(it);
-        return report;
-    }
-    if (it != m_entities.end() && !family.isEmpty() && family != it->family && report->usbCable.bit < 0) {
-        auto& value = report->usbCable;
-        if (!value.name) { value.name = it->base.name; }
-        if (!value.enabled) { value.enabled = it->base.enabled; }
-        if (!value.present) { value.present = it->base.present; }
-        if (!value.loggingEnabled) { value.loggingEnabled = it->base.loggingEnabled; }
-        it->lifetime->retire();
-        m_entities.erase(it);
-        it = m_entities.end();
-    }
-    if (it == m_entities.end()) {
-        if (!canCreate || m_entities.size() >= 512) { return {}; }
-        it = m_entities.insert(key, {family, std::make_shared<SetupStatusLifetime>(), {}});
-    }
-    if (report->kind == SetupStatusObservation::Kind::UsbCable && report->usbCable.bit >= 0
-        && it->family != QLatin1String("bit")) { return {}; }
-    if (report->kind == SetupStatusObservation::Kind::UsbCable && report->usbCable.bit < 0) {
-        const auto& value = report->usbCable;
-        if (value.name) { it->base.name = value.name; }
-        if (value.enabled) { it->base.enabled = value.enabled; }
-        if (value.present) { it->base.present = value.present; }
-        if (value.loggingEnabled) { it->base.loggingEnabled = value.loggingEnabled; }
-    }
-    report->entityLifetime = it->lifetime;
-    return report;
 }
 
 } // namespace AetherSDR

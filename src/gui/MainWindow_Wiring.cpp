@@ -1927,7 +1927,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // report "skipping" for the overwhelmingly common case of no key at
         // all, which is noise in exactly the captures this logging exists for.
         const bool radioHasDax = m_radioModel.backendCapabilities().hasDaxStreams;
-        if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
+        if (m_radioModel.daxChannelReserved(savedDax)) {
+            // A program on the radio (the WSPR receiver) holds that channel;
+            // putting it on our slice would take it from theirs (#7139).
+            qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
+                           << key << "=" << savedDax << "for slice" << s->sliceId()
+                           << ": a reserved slot holds that channel";
+        } else if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
             // QPointer guards against a dangling slice: a raw SliceModel*
             // stays non-null after the slice is destroyed, so the `s &&`
             // check below is only meaningful if the capture auto-nulls.
@@ -1935,7 +1941,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
             // add/remove) would otherwise dereference freed memory. (#3646)
             QPointer<SliceModel> sp(s);
             QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
-                if (sp && !profileLoadRadioStateWritesHeld()) {
+                if (sp && !profileLoadRadioStateWritesHeld()
+                    && !m_radioModel.daxChannelReserved(savedDax)) {
                     // The send path below (SliceModel::controlRequested) has no
                     // logging of its own; without this line the restore is
                     // invisible in any capture (#4558).
@@ -2378,7 +2385,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     });
 
     // Update RTTY mark/space lines on spectrum when mark/shift changes;
-    // also push new params to the decoder when Auto mark is selected.
+    // the active slice's new mark and shift also go to the decoder and its combos.
     connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) {
         pushSliceOverlay(s);
         if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
@@ -4026,12 +4033,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
-    // This connection belongs to the pane's wiring, not decoder routing:
+    // These connections belong to the pane's wiring, not decoder routing:
     // routeRttyDecoderOutput() may already have selected this same applet,
     // and its unchanged-target fast path cannot restore a connection removed
-    // by the bulk disconnect above. Every close must persist dismissal (#5353).
+    // by the bulk disconnect above. Every close must persist dismissal (#5353),
+    // and every Mark and Shift choice must reach the slice (#7094, #6968).
     connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
             this, &MainWindow::onRttyPanelCloseRequested);
+    connect(applet, &PanadapterApplet::rttyMarkHzChanged,
+            this, &MainWindow::onRttyDecoderMarkChosen);
+    connect(applet, &PanadapterApplet::rttyShiftHzChanged,
+            this, &MainWindow::onRttyDecoderShiftChosen);
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]
@@ -4184,6 +4196,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // connect — the local radio's limit clamping a zoom the Kiwi can fill.
         // (#4470)
         applyPanBandwidthLimitsToWidget(panId, sw, minMhz, maxMhz);
+        refreshPanZoomControls();
     });
 
     // Set panId on the overlay menu so +RX routes to the correct pan
@@ -4816,9 +4829,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, applet](int channel) {
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (!pan) return;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 daxiq_channel=%2")
-                .arg(applet->panId()).arg(channel));
+        m_radioModel.requestPanIqBinding(pan, channel);
     });
 
     // WFM software-demod toggle from the DAX panel. Acts on the menu's slice;

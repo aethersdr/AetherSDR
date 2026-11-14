@@ -21,19 +21,16 @@ QString UsbCableModel::normalizeTypeFamily(const QString& type)
     return type == QLatin1String("vbcd") || type == QLatin1String("bcd_vbcd") ? QStringLiteral("bcd") : type;
 }
 
-void UsbCableModel::applyObservation(const UsbCableStatusValues& value,
-                                      const std::shared_ptr<SetupStatusLifetime>& identity)
+void UsbCableModel::applyObservation(const UsbCableStatusValues& value)
 {
     if (value.serial.isEmpty() || value.serial.size() > 128 || value.bit < -1 || value.bit > 7) { return; }
     if (value.removed) {
-        if (!identity || m_cables.value(value.serial).lifetime == identity) { handleRemoved(value.serial); }
+        handleRemoved(value.serial);
         return;
     }
-    if (identity && !identity->current()) { return; }
     auto existing = m_cables.constFind(value.serial);
     if (value.bit >= 0) {
-        if (existing == m_cables.cend() || existing->type != QLatin1String("bit")
-            || (identity && existing->lifetime != identity)) { return; }
+        if (existing == m_cables.cend() || existing->type != QLatin1String("bit")) { return; }
         ++m_changeRevision;
         auto& bit = m_cables[value.serial].bits[value.bit];
         assign(bit.enabled, value.enabled);
@@ -54,26 +51,26 @@ void UsbCableModel::applyObservation(const UsbCableStatusValues& value,
     }
     const bool isNew = existing == m_cables.cend();
     if (isNew && (!value.type || m_cables.size() >= 256)) { return; }
-    const bool retype = !isNew && ((identity && identity != existing->lifetime)
-        || (value.type && normalizeTypeFamily(*value.type) != normalizeTypeFamily(existing->type)));
+    // A new type family is a new cable: fresh identity and fields, keeping
+    // only what every family shares.
+    const bool retype = !isNew && value.type
+        && normalizeTypeFamily(*value.type) != normalizeTypeFamily(existing->type);
     UsbCable cable = isNew ? UsbCable{} : *existing;
     const quint64 revision = ++m_changeRevision;
     if (retype) {
         cable.lifetime->retire();
         const UsbCable base = cable;
         cable = {};
-        if (!identity) {
-            cable.name = base.name;
-            cable.enabled = base.enabled;
-            cable.present = base.present;
-            cable.loggingEnabled = base.loggingEnabled;
-        }
+        cable.name = base.name;
+        cable.enabled = base.enabled;
+        cable.present = base.present;
+        cable.loggingEnabled = base.loggingEnabled;
         m_cables.remove(value.serial);
         const QPointer<UsbCableModel> alive(this);
         emit cableRemoved(value.serial);
         if (!alive || revision != m_changeRevision) { return; }
     }
-    if (isNew || retype) { cable.lifetime = identity ? identity : std::make_shared<SetupStatusLifetime>(); }
+    if (isNew || retype) { cable.lifetime = std::make_shared<SetupStatusLifetime>(); }
     cable.serialNumber = value.serial;
     assign(cable.type, value.type);
     assign(cable.name, value.name);

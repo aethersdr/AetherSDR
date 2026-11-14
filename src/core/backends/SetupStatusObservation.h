@@ -9,12 +9,28 @@
 
 namespace AetherSDR {
 
-// Shared cancellation evidence may be checked at the final worker-thread write.
+// One transverter or USB cable as RadioModel knows it. The model mints one per
+// entity and retires it when the entity is removed or replaced or its session
+// ends; a write aimed at it is refused at the final worker-thread write after
+// that.
 struct SetupStatusLifetime {
     std::atomic_bool active{true};
     bool current() const { return active.load(std::memory_order_acquire); }
     void retire() { active.store(false, std::memory_order_release); }
 };
+
+// The radio's `expiration=` value: an ISO-8601 date-time, or a bare date, which
+// FlexLib's DateTime.TryParse reads as local midnight. Anything else, trailing
+// text included, is invalid.
+inline QDateTime parseLicenseExpiration(const QString& text)
+{
+    const QString trimmed = text.trimmed();
+    if (const QDateTime dateTime = QDateTime::fromString(trimmed, Qt::ISODate); dateTime.isValid()) {
+        return dateTime;
+    }
+    const QDate date = QDate::fromString(trimmed, Qt::ISODate);
+    return date.isValid() && date.toString(Qt::ISODate) == trimmed ? date.startOfDay() : QDateTime();
+}
 
 struct TransverterStatusValues {
     int id{-1};
@@ -60,9 +76,7 @@ struct SetupStatusObservation {
     UsbCableStatusValues usbCable;
     FilterSharpnessStatusValues sharpness;
     LicenseStatusValues license;
-    std::shared_ptr<SetupStatusLifetime> lifetime;
-    std::shared_ptr<SetupStatusLifetime> entityLifetime;
-    bool current() const { return lifetime && lifetime->current(); }
+    quint64 statusEpoch{0};   // the status session it arrived in
 };
 
 } // namespace AetherSDR

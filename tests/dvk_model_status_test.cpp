@@ -295,7 +295,7 @@ int main(int argc, char* argv[])
         status(QStringLiteral("digital_voice_keyer"), QStringLiteral("0"));
         report("a not-licensed status keeps the refusal", radio.dvkLicenseRefused());
         status(QStringLiteral("some_other_feature"), QStringLiteral("1"));
-        report("another feature's licence does not clear it", radio.dvkLicenseRefused());
+        report("another feature's license does not clear it", radio.dvkLicenseRefused());
         status(QStringLiteral("digital_voice_keyer"), QStringLiteral("1"));
         report("the radio reporting DVK licensed clears the refusal", !radio.dvkLicenseRefused());
     }

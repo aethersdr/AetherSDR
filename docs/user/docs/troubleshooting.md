@@ -78,7 +78,8 @@ The panadapter and waterfall run but nothing comes out of the speakers. PC Audio
 1. Check that **PC Audio** is on in the title bar and that the right **Output** device is selected under **Radio Setup → Audio**. See [Audio Settings](./audio-settings.md).
 2. Check the slice is not muted, and that the title-bar speaker and master slider are not muted or at zero.
 3. Turn on the **Audio** log category in **Help → Support & Diagnostics...** and look for device-open errors.
-4. **Linux with PipeWire:** if the PipeWire library is installed but PipeWire's client configuration is not, AetherSDR keeps Qt's audio off PipeWire at startup rather than crashing. Install your distribution's `pipewire` (Arch) or `pipewire-bin` (Debian/Ubuntu) package.
+4. **FlexRadio:** if the radio never answered the request for the receive audio stream, AetherSDR does not ask again in that session, because the radio may have created the stream anyway. Reconnect to the radio to start a fresh request.
+5. **Linux with PipeWire:** if the PipeWire library is installed but PipeWire's client configuration is not, AetherSDR keeps Qt's audio off PipeWire at startup rather than crashing. Install your distribution's `pipewire` (Arch) or `pipewire-bin` (Debian/Ubuntu) package.
 
 ### The audio device lists show only "Dummy Output"
 
@@ -134,7 +135,7 @@ AetherSDR saves a floating panadapter only after the pop-out succeeds, so a cras
 
 ### A stored setting stops AetherSDR from starting
 
-A bad stored value, such as a window placed off-screen, is applied at startup.
+A bad stored value can stop AetherSDR from starting. A main window saved on a display that has since changed is recentered automatically; other values may need removing by hand.
 
 1. Use `AetherSDR --config` to inspect or remove the value. See [Settings and Backups](./settings-and-backups.md).
 
