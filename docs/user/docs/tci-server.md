@@ -318,8 +318,11 @@ temperature only:
 hw_sensors:NaN,NaN,42.0;
 ```
 
-A FLEX reports supply voltage and temperature. A radio that measures none of
-the three sends nothing.
+A FLEX reports supply voltage and temperature. An ANAN reports its supply rail
+only, `hw_sensors:<volts>,NaN,NaN;`. An IC-705, IC-9700 or IC-7300MK2 reports
+its Vd meter (the PA drain-side rail) in the first field, `hw_sensors:<volts>,NaN,NaN;`;
+no Icom profile declares a temperature, and other Icom models send nothing. A
+radio that measures none of the three sends nothing.
 
 The SWR field is the same trusted SWR the S-meter shows. A reading taken
 without measurable forward power, for example in a speech pause, does not
