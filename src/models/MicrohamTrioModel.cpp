@@ -4,6 +4,7 @@
 #include "core/MicrohamTrioTcpTransport.h"
 
 #include <QStringList>
+#include <QVector>
 
 namespace AetherSDR {
 
@@ -280,7 +281,6 @@ MicrohamTrioModel::View MicrohamTrioModel::view() const
                                           m_settings.dummyLoadLabel);
         }
     }
-    out.labelsPending = m_session && m_session->commandPending();
     if (!out.configured) {
         out.session = SessionWord::NotConfigured;
         return out;
@@ -337,8 +337,6 @@ void MicrohamTrioModel::startSession()
             this, &MicrohamTrioModel::onSnapshot);
     connect(m_session, &MicrohamTrioSession::sessionStateChanged,
             this, &MicrohamTrioModel::onSessionState);
-    connect(m_session, &MicrohamTrioSession::labelsResult,
-            this, &MicrohamTrioModel::onLabelsResult);
     MicrohamTrioSession::Config config;
     const MicrohamTrioSettings& target = m_testing ? m_testTarget : m_settings;
     config.host = target.host;
@@ -527,135 +525,6 @@ MicrohamTrioModel::BindResult MicrohamTrioModel::confirmDummyLoad()
         return BindResult::NoSuchPort;
     }
     return markDummyLoad(m_settings.dummyLoadKey);
-}
-
-MicrohamTrioModel::LabelVerdict MicrohamTrioModel::labelPreconditions() const
-{
-    LabelVerdict out;
-    if (m_transmitBlocked && m_transmitBlocked()) {
-        out.message = tr("Not while the radio is transmitting: renaming changes the Trio.");
-        return out;
-    }
-    if (m_testing || !m_session || !isConnected() || !m_snapshot) {
-        out.message = tr("Connect to the Trio first.");
-        return out;
-    }
-    if (m_session->commandPending()) {
-        out.message = tr("The Trio has not answered the last rename yet.");
-        return out;
-    }
-    out.allowed = true;
-    return out;
-}
-
-MicrohamTrioModel::LabelVerdict
-MicrohamTrioModel::writeLabels(const QVector<MicrohamTrio::LabelEdit>& edits, bool confirmDummyRename)
-{
-    LabelVerdict out = labelPreconditions();
-    if (!out.allowed) {
-        return out;
-    }
-    QVector<MicrohamTrio::LabelEdit> edited;
-    LabelFollowUp followUp;
-    for (const MicrohamTrio::LabelEdit& edit : edits) {
-        const MicrohamTrio::Selector& group = edit.group == QLatin1String("radio")
-            ? m_snapshot->radio : m_snapshot->antenna;
-        const MicrohamTrio::Button* button = group.find(edit.key);
-        if (button && button->label == edit.label.trimmed()) {
-            continue;   // unchanged: not sent
-        }
-        edited.append(edit);
-        followUp.dummyRenamed = followUp.dummyRenamed
-            || (edit.group == QLatin1String("antenna") && edit.key == m_settings.dummyLoadKey);
-        followUp.slotRenamed = followUp.slotRenamed
-            || (edit.group == QLatin1String("radio") && m_binding.stored == MicrohamTrioBinding::Stored::Bound
-                && edit.key == m_binding.slotKey);
-    }
-    if (edited.isEmpty()) {
-        out.message = tr("No name changed.");
-        return out;
-    }
-    if (followUp.dummyRenamed && !confirmDummyRename) {
-        out.allowed = false;
-        out.needsDummyConfirmation = true;
-        out.message = tr("This renames the port marked as the dummy load (%1). Confirm to go on.")
-                          .arg(m_settings.dummyLoadLabel);
-        return out;
-    }
-    if (m_session->writeLabels(edited) != MicrohamTrioSession::CommandRefusal::None) {
-        out.allowed = false;
-        out.message = tr("A name is empty, too long (more than %1 characters) or not a port of "
-                         "this Trio.").arg(MicrohamTrio::kMaxLabelChars);
-        return out;
-    }
-    qCInfo(lcDevices) << "MicrohamTrioModel: wrote" << edited.size() << "port names";
-    m_labelFollowUp = followUp;
-    out.sent = true;
-    emit changed();
-    return out;
-}
-
-MicrohamTrioModel::LabelVerdict MicrohamTrioModel::resetLabels(bool confirmDummyRename)
-{
-    LabelVerdict out = labelPreconditions();
-    if (!out.allowed) {
-        return out;
-    }
-    LabelFollowUp followUp;
-    followUp.reset = true;
-    followUp.dummyRenamed = !m_settings.dummyLoadKey.isEmpty();
-    followUp.slotRenamed = m_binding.stored == MicrohamTrioBinding::Stored::Bound;
-    if (followUp.dummyRenamed && !confirmDummyRename) {
-        out.allowed = false;
-        out.needsDummyConfirmation = true;
-        out.message = tr("The Trio's defaults rename the port marked as the dummy load (%1). "
-                         "Confirm to go on.").arg(m_settings.dummyLoadLabel);
-        return out;
-    }
-    if (m_session->resetLabels() != MicrohamTrioSession::CommandRefusal::None) {
-        out.allowed = false;
-        out.message = tr("The Trio could not be asked to reset its names.");
-        return out;
-    }
-    qCInfo(lcDevices) << "MicrohamTrioModel: reset the Trio's port names";
-    m_labelFollowUp = followUp;
-    out.sent = true;
-    emit changed();
-    return out;
-}
-
-void MicrohamTrioModel::onLabelsResult(MicrohamTrioSession::CommandOutcome outcome)
-{
-    const std::optional<LabelFollowUp> followUp = m_labelFollowUp;
-    m_labelFollowUp.reset();
-    if (outcome != MicrohamTrioSession::CommandOutcome::Confirmed) {
-        emit labelsWritten(false, outcome == MicrohamTrioSession::CommandOutcome::Disagrees
-                                      ? tr("The Trio did not take every name; its own names are shown.")
-                                      : tr("The Trio did not answer; reading its state again."));
-        emit changed();
-        return;
-    }
-    // Names AetherSDR wrote on purpose: the marks follow them.
-    if (followUp && m_snapshot) {
-        if (followUp->dummyRenamed && !m_settings.dummyLoadKey.isEmpty()) {
-            if (const MicrohamTrio::Button* dummy = m_snapshot->antenna.find(m_settings.dummyLoadKey)) {
-                m_settings.dummyLoadLabel = dummy->label;
-                m_settings.save();
-            }
-        }
-        if (followUp->slotRenamed && m_binding.stored == MicrohamTrioBinding::Stored::Bound) {
-            if (const MicrohamTrio::Button* slot = m_snapshot->radio.find(m_binding.slotKey)) {
-                MicrohamTrioBinding binding = m_binding;
-                binding.slotLabel = slot->label;
-                if (binding.save(m_scope)) {
-                    m_binding = binding;
-                }
-            }
-        }
-    }
-    emit labelsWritten(true, followUp && followUp->reset ? tr("The Trio's names are back to its defaults.")
-                                                         : tr("Names written to the Trio."));
-    emit changed();
 }
 
 QString MicrohamTrioModel::forLog(const QString& text)

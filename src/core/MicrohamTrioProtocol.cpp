@@ -1,7 +1,5 @@
 #include "core/MicrohamTrioProtocol.h"
 
-#include <QChar>
-#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -195,12 +193,6 @@ bool parseToggle(const QJsonObject& groups, const QString& name,
                         toggle.buttons, failure);
 }
 
-bool isLowerHex(QChar ch)
-{
-    const char16_t code = ch.unicode();
-    return (code >= u'0' && code <= u'9') || (code >= u'a' && code <= u'f');
-}
-
 qint64 backoffMs(int consecutiveFailures, const Policy& policy)
 {
     qint64 wait = std::max<qint64>(policy.failureBackoffMs, 0);
@@ -290,7 +282,7 @@ QByteArray encodeKeepAlive()
     return QByteArrayLiteral("ping");
 }
 
-Frame classify(quint8 firstByte, const QByteArray& payload, const QString& pendingRequestId)
+Frame classify(quint8 firstByte, const QByteArray& payload)
 {
     Frame out;
     if (firstByte == kPongFrame) {
@@ -308,84 +300,8 @@ Frame classify(quint8 firstByte, const QByteArray& payload, const QString& pendi
     }
     out.state = parse(payload);
     if (out.state.snapshot) {
-        out.kind = acknowledges(*out.state.snapshot, pendingRequestId) ? FrameKind::StateReply
-                                                                       : FrameKind::State;
+        out.kind = FrameKind::State;
     }
-    return out;
-}
-
-// Lowercase 8-4-4-4-12, and not the id the device uses for a push nobody
-// asked for: a reply carrying that one could not be told from a push.
-bool isUsableRequestId(const QString& id)
-{
-    if (id.size() != 36 || id == QLatin1String(kUnsolicitedId)) {
-        return false;
-    }
-    for (int i = 0; i < id.size(); ++i) {
-        const bool hyphenSlot = (i == 8 || i == 13 || i == 18 || i == 23);
-        if (hyphenSlot ? id.at(i) != QLatin1Char('-') : !isLowerHex(id.at(i))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool acknowledges(const Snapshot& snapshot, const QString& requestId)
-{
-    return isUsableRequestId(requestId) && snapshot.id == requestId;
-}
-
-LabelCommand encodeSetLabels(const Snapshot& snapshot, const QVector<LabelEdit>& edits,
-                             const QString& requestId)
-{
-    LabelCommand out;
-    if (edits.isEmpty()) {
-        out.error = LabelError::NoEdits;
-        return out;
-    }
-    QJsonArray changes;
-    for (const LabelEdit& edit : edits) {
-        const Selector* group = edit.group == QLatin1String("radio") ? &snapshot.radio
-            : edit.group == QLatin1String("antenna") ? &snapshot.antenna : nullptr;
-        if (group == nullptr || group->find(edit.key) == nullptr) {
-            out.error = LabelError::NoSuchButton;
-            return out;
-        }
-        const QString label = edit.label.trimmed();
-        bool control = false;
-        for (const QChar ch : label) {
-            control = control || ch.category() == QChar::Other_Control;
-        }
-        if (label.isEmpty() || label.size() > kMaxLabelChars || control) {
-            out.error = LabelError::BadLabel;
-            return out;
-        }
-        QJsonObject change;
-        change.insert(QStringLiteral("bid"), edit.key);
-        change.insert(QStringLiteral("gid"), edit.group);
-        change.insert(QStringLiteral("l"), label);
-        changes.append(change);
-    }
-    if (!isUsableRequestId(requestId)) {
-        out.error = LabelError::BadRequestId;
-        return out;
-    }
-    // Key order as the page sends it: a, c, id. QJsonObject would sort them.
-    out.frame = QByteArrayLiteral("{\"a\":\"set_labels\",\"c\":")
-                + QJsonDocument(changes).toJson(QJsonDocument::Compact)
-                + QByteArrayLiteral(",\"id\":\"") + requestId.toLatin1() + QByteArrayLiteral("\"}");
-    return out;
-}
-
-LabelCommand encodeResetLabels(const QString& requestId)
-{
-    LabelCommand out;
-    if (!isUsableRequestId(requestId)) {
-        out.error = LabelError::BadRequestId;
-        return out;
-    }
-    out.frame = QByteArrayLiteral("{\"a\":\"reset_labels\",\"id\":\"") + requestId.toLatin1()
-                + QByteArrayLiteral("\"}");
     return out;
 }
 

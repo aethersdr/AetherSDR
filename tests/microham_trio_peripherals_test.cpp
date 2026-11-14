@@ -3,8 +3,8 @@
 // reads DIRECT / OFFLINE / Needs attention, the detail page shows the state and
 // every label the Trio reports, the Web UI button lets go of the session before
 // opening the Trio's page, Remove clears the address, every string the Trio
-// supplies is shown as plain text, and nothing the page does sends anything
-// that selects. A scripted Trio (tests/MicrohamTrioTestPeer.h):
+// supplies is shown as plain text, and nothing the page does sends a command.
+// A scripted Trio (tests/MicrohamTrioTestPeer.h):
 // no socket. Offscreen; a private settings profile.
 //
 // Run:  QT_QPA_PLATFORM=offscreen ./build/microham_trio_peripherals_test
@@ -43,8 +43,6 @@ public slots:
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
-#include <QMessageBox>
-#include <QTimer>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QUrl>
@@ -91,16 +89,15 @@ QString listLine(QListWidget* list, const QString& id)
     return {};
 }
 
-// Nothing the model sent selects anything: the handshake, keep-alives and close only.
+// Nothing the model sent is a command: the handshake, keep-alives and close only.
 bool sentOnlyReads(const Peer& peer)
 {
     for (const QByteArray& bytes : peer.transport.sent) {
         if (bytes.startsWith("GET /") || static_cast<quint8>(bytes.at(0)) == 0x88) {
             continue;
         }
-        const QByteArray text = clientText(bytes);
-        if (text != QByteArrayLiteral("ping") && !text.startsWith(R"({"a":"set_labels")")) {
-            return false;   // anything else would select something
+        if (clientText(bytes) != QByteArrayLiteral("ping")) {
+            return false;   // anything else would be a command
         }
     }
     return true;
@@ -178,13 +175,19 @@ void testRowLifecycle()
                && state->text().contains(QStringLiteral("A2 Fan Dipole")),
            state->text().toStdString());
 
-    auto* radio2Name = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralTrioName_radio_radio2"));
+    auto* radio2Name = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioName_radio_radio2"));
     auto* radio2This = dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioThis_radio2"));
-    auto* ant6Name = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralTrioName_antenna_ant6"));
+    auto* ant6Name = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioName_antenna_ant6"));
     auto* ant6Dummy = dialog.findChild<QCheckBox*>(QStringLiteral("peripheralTrioDummy_ant6"));
-    report("Radio Ports and Antenna Ports list the Trio's names, editable",
+    report("Radio Ports and Antenna Ports list the Trio's names",
            radio2Name && radio2Name->text() == QStringLiteral("HL2") && ant6Name
                && ant6Name->text() == QStringLiteral("Dummy") && ant6Dummy);
+    // Read-only: no text field, and Confirm Dummy Load the one button there.
+    auto* ports = dialog.findChild<QWidget*>(QStringLiteral("peripheralTrioPorts"));
+    const QList<QPushButton*> portButtons = ports ? ports->findChildren<QPushButton*>() : QList<QPushButton*>{};
+    report("the ports panel edits nothing on the Trio",
+           ports && ports->findChildren<QLineEdit*>().isEmpty() && portButtons.size() == 1
+               && portButtons.first()->objectName() == QStringLiteral("peripheralTrioConfirmDummy"));
     report("the marker \"this AetherSDR\" is disabled with no radio connected",
            radio2This && !radio2This->isEnabled()
                && state->text().contains(QStringLiteral("This radio: no radio connected")));
@@ -198,41 +201,7 @@ void testRowLifecycle()
                       == QStringLiteral("Dummy"));
     report("choosing markers sent nothing", sentOnlyReads(peer));
 
-    // Write names: the set_labels command, and its reply.
-    auto* writeNames = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTrioWriteNames"));
-    auto* namesResult = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioNamesResult"));
-    auto* ant1Name = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralTrioName_antenna_ant1"));
-    if (writeNames && namesResult && ant1Name && ant6Name) {
-        ant1Name->setText(QStringLiteral("EFHW 80"));
-        ant1Name->setModified(true);
-        writeNames->click();
-        const QByteArray sent = peer.transport.sent.isEmpty() ? QByteArray()
-                                                               : clientText(peer.transport.sent.last());
-        report("Write Names sends one set_labels with the changed name only",
-               sent.startsWith(R"({"a":"set_labels","c":[{"bid":"ant1","gid":"antenna","l":"EFHW 80"}],"id":")"),
-               sent.toStdString());
-        const QByteArray id = sent.mid(sent.indexOf("\"id\":\"") + 6, 36);
-        peer.push(stateDoc("radio2", "ant6", id).replace("\"l\":\"EFHW\"", "\"l\":\"EFHW 80\""));
-        report("its reply confirms it", namesResult->text().contains(QStringLiteral("written")),
-               namesResult->text().toStdString());
-
-        // Renaming the dummy-load port asks first.
-        QStringList asked;
-        RadioSetupDialog::setTrioConfirmationHookForTest(
-            [&asked](const QString&, const QString& text) { asked << text; return false; });
-        const int before = peer.transport.sent.size();
-        ant6Name->setText(QStringLiteral("Load"));
-        ant6Name->setModified(true);
-        writeNames->click();
-        report("renaming the dummy-load port asks, and a No sends nothing",
-               asked.size() == 1 && asked.first().contains(QStringLiteral("dummy load"))
-                   && peer.transport.sent.size() == before);
-        RadioSetupDialog::setTrioConfirmationHookForTest({});
-        ant6Name->setText(QStringLiteral("Dummy"));
-        ant6Name->setModified(false);
-    }
-
-    // A rename outside AetherSDR: warning, until confirmed.
+    // A rename on the Trio: warning, until confirmed; the shown name follows.
     auto* dummyWarning = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioDummyWarning"));
     auto* confirmDummy = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTrioConfirmDummy"));
     peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "Spare"));
@@ -244,6 +213,7 @@ void testRowLifecycle()
     if (confirmDummy) {
         confirmDummy->click();
     }
+    report("the shown name follows the Trio", ant6Name && ant6Name->text() == QStringLiteral("Spare"));
     report("Confirm Dummy Load accepts the new label",
            PeripheralSettings::deviceString(QStringLiteral("trio"), QStringLiteral("DummyLoadLabel"))
                    == QStringLiteral("Spare")
@@ -291,14 +261,7 @@ void testRowLifecycle()
            status->text().contains(QStringLiteral("released to the Trio's web page")),
            status->text().toStdString());
 
-    report("nothing the page did sent a selection", sentOnlyReads(peer));
-    report("and only one rename went out", [&peer]() {
-        int labels = 0;
-        for (const QByteArray& bytes : peer.transport.sent) {
-            labels += clientText(bytes).contains("set_labels") ? 1 : 0;
-        }
-        return labels == 1;
-    }());
+    report("nothing the page did sent a command", sentOnlyReads(peer));
 
     // Test Connection: one session, read, released.
     auto* testButton = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTest_trio"));
@@ -314,7 +277,7 @@ void testRowLifecycle()
                testResult->text().toStdString());
         report("and leaves no session behind", !trio.hasSession());
     }
-    report("still nothing sent that selects", sentOnlyReads(peer));
+    report("still no command sent", sentOnlyReads(peer));
 
     // Remove: address gone, row gone.
     RadioSetupDialog::setRemovalConfirmationHookForTest(
@@ -383,10 +346,8 @@ void testDeviceTextIsPlain()
     auto* ant6Dummy = dialog.findChild<QCheckBox*>(QStringLiteral("peripheralTrioDummy_ant6"));
     auto* dummyWarning = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioDummyWarning"));
     auto* confirmDummy = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTrioConfirmDummy"));
-    auto* writeNames = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTrioWriteNames"));
-    auto* namesResult = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioNamesResult"));
-    auto* ant6Name = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralTrioName_antenna_ant6"));
-    if (!ant6Dummy || !dummyWarning || !confirmDummy || !writeNames || !namesResult || !ant6Name) {
+    auto* ant6Name = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioName_antenna_ant6"));
+    if (!ant6Dummy || !dummyWarning || !confirmDummy || !ant6Name) {
         report("markup: the port widgets exist", false);
         return;
     }
@@ -396,44 +357,10 @@ void testDeviceTextIsPlain()
            dummyWarning->textFormat() == Qt::PlainText && dummyWarning->isVisibleTo(&dialog)
                && dummyWarning->text().contains(QStringLiteral("<h1>TX OK</h1>")),
            dummyWarning->text().toStdString());
-    confirmDummy->click();
-
-    // Renaming the dummy-load port: the real confirmation box, answered here.
-    Qt::TextFormat boxFormat = Qt::AutoText;
-    QString boxText;
-    bool cancelIsDefault = false;
-    bool boxSeen = false;
-    QTimer::singleShot(0, [&]() {
-        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-        if (!box) {
-            return;
-        }
-        boxSeen = true;
-        boxFormat = box->textFormat();
-        boxText = box->text();
-        cancelIsDefault = box->defaultButton() == box->button(QMessageBox::Cancel);
-        box->button(QMessageBox::Cancel)->click();
-    });
-    QTimer::singleShot(3000, []() {   // never hang the suite on a missed box
-        for (QWidget* widget : QApplication::topLevelWidgets()) {
-            if (auto* box = qobject_cast<QMessageBox*>(widget); box && box->isVisible()) {
-                box->reject();
-            }
-        }
-    });
-    const int before = peer.transport.sent.size();
-    ant6Name->setText(QStringLiteral("Load"));
-    ant6Name->setModified(true);
-    writeNames->click();
-    report("markup: the rename question is a plain-text box, Cancel the default",
-           boxSeen && boxFormat == Qt::PlainText && cancelIsDefault
-               && boxText.contains(QStringLiteral("<h1>TX OK</h1>")),
-           boxText.toStdString());
-    report("markup: its Cancel sends nothing", peer.transport.sent.size() == before);
-    report("markup: the names result is plain text, the label shown literally",
-           namesResult->textFormat() == Qt::PlainText
-               && namesResult->text().contains(QStringLiteral("<h1>TX OK</h1>")),
-           namesResult->text().toStdString());
+    report("markup: the port name is plain text, shown literally",
+           ant6Name->textFormat() == Qt::PlainText
+               && ant6Name->text() == QStringLiteral("<h1>TX OK</h1>"),
+           ant6Name->text().toStdString());
     MicrohamTrioSettings::remove();
 }
 

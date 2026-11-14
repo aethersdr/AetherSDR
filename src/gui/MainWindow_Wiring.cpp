@@ -7503,16 +7503,10 @@ void MainWindow::wireMeters()
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
-    // ── microHAM Trio antenna switch — switches nothing, no radio awareness ─
-    // The Peripherals page shows its state and labels; nothing here selects
+    // ── microHAM Trio antenna switch — read-only, switches nothing ────────
+    // The Peripherals page shows its state and labels; nothing here changes
     // anything on it. Its session is taken at startup only with "Connect
     // automatically" on, like the KPA500/KAT500 rows.
-    // Renaming ports changes the Trio: refused while this radio transmits.
-    m_trioModel.setTransmitBlocked([this]() {
-        const TransmitModel& tx = m_radioModel.transmitModel();
-        return tx.isTransmitting() || tx.isMox() || tx.isTuning()
-               || m_radioModel.isRadioTransmitting();
-    });
     m_trioModel.loadSettings(PeripheralSettings::autoConnect(
         QLatin1String(MicrohamTrioSettings::kPeripheralId)));
     // The Trio is told which radio is connected, so the Peripherals page can

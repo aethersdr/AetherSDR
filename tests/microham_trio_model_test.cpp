@@ -1,9 +1,8 @@
 // microHAM TRIO model tests: the stored address, the session words the
 // Peripherals page shows, an eviction that is never taken back, the release
-// to the Trio's own web page, the port-name writes, device text kept out of
-// log lines as control characters, and the proof that nothing but the
-// handshake, keep-alives, a close frame and the asked-for port-name writes
-// ever leaves. The device is a
+// to the Trio's own web page, the dummy-load mark and its warning, device text
+// kept out of log lines as control characters, and the proof that nothing but
+// the handshake, keep-alives and a close frame ever leaves. The device is a
 // scripted transport and a hand-moved clock (tests/MicrohamTrioTestPeer.h):
 // no socket, no event loop. The settings store is a private temporary profile.
 //
@@ -66,8 +65,8 @@ struct Rig {
 
     SessionWord word() const { return model.view().session; }
 
-    // Everything the model has sent since the handshake, other than keep-alives
-    // and a close frame: 'selects nothing', checked on the bytes.
+    // Nothing the model sent is a command: the handshake, keep-alives and a
+    // close frame only, checked on the bytes.
     bool sentOnlyReads() const
     {
         for (const QByteArray& bytes : peer.transport.sent) {
@@ -77,10 +76,8 @@ struct Rig {
             if (static_cast<quint8>(bytes.at(0)) == 0x88) {
                 continue;   // close
             }
-            const QByteArray text = clientText(bytes);
-            if (text != QByteArrayLiteral("ping") && !text.startsWith(R"({"a":"set_labels")")
-                && !text.startsWith(R"({"a":"reset_labels")")) {
-                return false;   // anything else would select something
+            if (clientText(bytes) != QByteArrayLiteral("ping")) {
+                return false;   // anything else would be a command
             }
         }
         return true;
@@ -381,83 +378,39 @@ void testTestConnection()
     }
 }
 
-void testLabels()
+// The dummy-load mark follows the label the Trio reports; a port renamed on
+// the Trio is a warning until confirmed, and a port that is gone is one too.
+void testDummyLoadMark()
 {
-    using MicrohamTrio::LabelEdit;
     Rig rig;
-    bool keyed = false;
-    rig.model.setTransmitBlocked([&keyed]() { return keyed; });
-    QStringList results;
-    QObject::connect(&rig.model, &MicrohamTrioModel::labelsWritten,
-                     [&results](bool ok, const QString& m) { results << (ok ? "ok:" : "fail:") + m; });
-    const QVector<LabelEdit> rename = {{QStringLiteral("antenna"), QStringLiteral("ant1"), QStringLiteral("EFHW 80")}};
-    report("not connected: renaming refused", !rig.model.writeLabels(rename).sent);
+    report("no Trio: nothing to mark",
+           rig.model.markDummyLoad(QStringLiteral("ant6")) == MicrohamTrioModel::BindResult::NoTrio);
     rig.model.connectNetwork(QLatin1String(kHost), 80);
     rig.peer.connectHeld(rig.model, "radio2", "ant6");
-    const RadioSettingsScope scope(QStringLiteral("hl2"), QStringLiteral("trio-label-radio"));
-    rig.model.setRadio(scope);
-    rig.model.bindRadioSlot(QStringLiteral("radio2"));
+    report("an unknown port cannot be marked",
+           rig.model.markDummyLoad(QStringLiteral("ant9")) == MicrohamTrioModel::BindResult::NoSuchPort);
     rig.model.markDummyLoad(QStringLiteral("ant6"));
     report("the dummy load is marked with its label",
            rig.model.view().dummyLoadKey == QStringLiteral("ant6")
                && rig.model.view().dummyLoadLabel == QStringLiteral("Dummy")
                && rig.model.view().dummyLoadIssue.isEmpty());
 
-    keyed = true;
-    const MicrohamTrioModel::LabelVerdict whileKeyed = rig.model.writeLabels(rename);
-    report("keyed: renaming refused, nothing sent",
-           !whileKeyed.sent && whileKeyed.message.contains(QStringLiteral("transmitting"))
-               && rig.sentOnlyReads());
-    report("keyed: reset refused too", !rig.model.resetLabels(true).sent && rig.sentOnlyReads());
-    keyed = false;
-
-    report("an unchanged name is not sent",
-           !rig.model.writeLabels({{QStringLiteral("antenna"), QStringLiteral("ant1"), QStringLiteral("EFHW")}}).sent);
-    report("a name longer than the limit is refused",
-           !rig.model.writeLabels({{QStringLiteral("antenna"), QStringLiteral("ant1"),
-                                    QString(MicrohamTrio::kMaxLabelChars + 1, QLatin1Char('x'))}}).sent);
-    report("a rename goes out", rig.model.writeLabels(rename).sent && rig.model.view().labelsPending);
-    report("a second while the first is unanswered is refused", !rig.model.writeLabels(rename).sent);
-    const QByteArray command = clientText(rig.peer.transport.sent.last());
-    const QByteArray id = command.mid(command.indexOf("\"id\":\"") + 6, 36);
-    rig.peer.push(stateDoc("radio2", "ant6", id).replace("\"l\":\"EFHW\"", "\"l\":\"EFHW 80\""));
-    report("its reply confirms it", results.size() == 1 && results.last().startsWith("ok:"));
-
-    const QVector<LabelEdit> dummyRename = {{QStringLiteral("antenna"), QStringLiteral("ant6"), QStringLiteral("Load")}};
-    const MicrohamTrioModel::LabelVerdict unconfirmed = rig.model.writeLabels(dummyRename);
-    report("renaming the dummy-load port needs a confirmation",
-           !unconfirmed.sent && unconfirmed.needsDummyConfirmation);
-    report("confirmed, it goes out", rig.model.writeLabels(dummyRename, true).sent);
-    const QByteArray command2 = clientText(rig.peer.transport.sent.last());
-    const QByteArray id2 = command2.mid(command2.indexOf("\"id\":\"") + 6, 36);
-    rig.peer.push(stateDoc("radio2", "ant6", id2, "HL2", "Load"));
-    report("and the mark follows the name AetherSDR wrote, with no warning",
-           rig.model.view().dummyLoadLabel == QStringLiteral("Load")
+    rig.peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "Spare"));
+    report("the port renamed on the Trio: a warning naming both labels",
+           rig.model.view().dummyLoadIssue.contains(QStringLiteral("Spare"))
+               && rig.model.view().dummyLoadIssue.contains(QStringLiteral("Dummy")));
+    report("confirm accepts the new label", rig.model.confirmDummyLoad() == MicrohamTrioModel::BindResult::Ok
+               && rig.model.view().dummyLoadLabel == QStringLiteral("Spare")
                && rig.model.view().dummyLoadIssue.isEmpty());
 
-    const QVector<LabelEdit> slotRename = {{QStringLiteral("radio"), QStringLiteral("radio2"), QStringLiteral("HL2 bench")}};
-    rig.model.writeLabels(slotRename);
-    const QByteArray command3 = clientText(rig.peer.transport.sent.last());
-    const QByteArray id3 = command3.mid(command3.indexOf("\"id\":\"") + 6, 36);
-    rig.peer.push(stateDoc("radio2", "ant6", id3, "HL2 bench", "Load"));
-    report("renaming this AetherSDR's radio port keeps the binding, no label error",
-           rig.model.view().slotLabel == QStringLiteral("HL2 bench")
-               && rig.model.view().bindingIssue.isEmpty());
-
-    rig.peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2 bench", "Spare"));
-    report("a rename outside AetherSDR is a dummy-load warning",
-           rig.model.view().dummyLoadIssue.contains(QStringLiteral("Spare")));
-    report("confirm accepts it", rig.model.confirmDummyLoad() == MicrohamTrioModel::BindResult::Ok
+    rig.peer.push(stateDoc("radio2", "ant1").replace(R"("ant6":)", R"("ant7":)"));
+    report("the marked port gone from the Trio: a warning",
+           rig.model.view().dummyLoadIssue.contains(QStringLiteral("gone")),
+           rig.model.view().dummyLoadIssue.toStdString());
+    rig.model.clearDummyLoad();
+    report("clearing the mark clears the warning", rig.model.view().dummyLoadKey.isEmpty()
                && rig.model.view().dummyLoadIssue.isEmpty());
-
-    report("reset with a dummy load marked needs a confirmation",
-           rig.model.resetLabels(false).needsDummyConfirmation);
-    report("confirmed, reset_labels goes out", rig.model.resetLabels(true).sent
-               && clientText(rig.peer.transport.sent.last()).startsWith(R"({"a":"reset_labels","id":")"));
-    rig.peer.advance(rig.model, 2000);
-    report("no reply in two seconds: reported, the state read again",
-           !results.isEmpty() && results.last().startsWith("fail:") && !rig.model.view().labelsPending);
-    MicrohamTrioBinding::remove(scope);
+    report("and nothing was sent to the Trio", rig.sentOnlyReads());
 }
 
 void testRemove()
@@ -535,7 +488,7 @@ int main(int argc, char** argv)
     testFailures();
     testBinding();
     testTestConnection();
-    testLabels();
+    testDummyLoadMark();
     testRemove();
     testControlCharactersAreNotLogged();
 

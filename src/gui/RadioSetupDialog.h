@@ -141,9 +141,6 @@ public:
         std::function<bool()> hasRadioRelay;
     };
     PeripheralLinkProbes swapPeripheralLinkForTest(const QString& id, PeripheralLinkProbes probes);
-    // Test seam: answers the Trio's "rename the dummy load?" question.
-    static void setTrioConfirmationHookForTest(
-        std::function<bool(const QString& title, const QString& text)> hook);
     static void setRemovalConfirmationHookForTest(
         std::function<bool(const QString& label, const QString& text)> hook);
 

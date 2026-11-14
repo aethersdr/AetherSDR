@@ -527,44 +527,6 @@ void testKeepAliveAndFrameKinds()
            split.kind == FrameKind::Unknown && split.state.error == ParseError::MissingKey);
 }
 
-// Renames, in the form the Trio's own page builds them (ui.shtml, d180).
-void testLabelCommands()
-{
-    const Snapshot hl2 = snapshotOf(kHl2OnDummy);
-    const QString id = QStringLiteral("2d00ea67-27bd-4e3f-8bc6-8408674d7a59");
-    const LabelCommand one = encodeSetLabels(hl2, {{QStringLiteral("antenna"), QStringLiteral("ant1"),
-                                                    QStringLiteral("  EFHW 80 ")}}, id);
-    report("set_labels: a, c, id; the label trimmed",
-           one.error == LabelError::None
-               && one.frame == QByteArray(R"({"a":"set_labels","c":[{"bid":"ant1","gid":"antenna","l":"EFHW 80"}],"id":")")
-                                   + id.toLatin1() + "\"}", one.frame.toStdString());
-    const LabelCommand two = encodeSetLabels(hl2, {{QStringLiteral("radio"), QStringLiteral("radio2"), QStringLiteral("HL2 \"bench\"")},
-                                                   {QStringLiteral("antenna"), QStringLiteral("ant6"), QStringLiteral("Dümmy")}}, id);
-    report("several at once, quotes escaped, UTF-8 kept",
-           two.error == LabelError::None && two.frame.contains(R"("l":"HL2 \"bench\"")")
-               && two.frame.contains("\"l\":\"D\xc3\xbcmmy\""), two.frame.toStdString());
-    report("no edits: refused", encodeSetLabels(hl2, {}, id).error == LabelError::NoEdits);
-    report("an unknown group or key: refused",
-           encodeSetLabels(hl2, {{QStringLiteral("rxant"), QStringLiteral("rx1"), QStringLiteral("X")}}, id).error
-                   == LabelError::NoSuchButton
-               && encodeSetLabels(hl2, {{QStringLiteral("antenna"), QStringLiteral("ant9"), QStringLiteral("X")}}, id).error
-                      == LabelError::NoSuchButton);
-    report("empty, too long or a control character: refused",
-           encodeSetLabels(hl2, {{QStringLiteral("antenna"), QStringLiteral("ant1"), QStringLiteral("   ")}}, id).error
-                   == LabelError::BadLabel
-               && encodeSetLabels(hl2, {{QStringLiteral("antenna"), QStringLiteral("ant1"),
-                                         QString(kMaxLabelChars + 1, QLatin1Char('x'))}}, id).error == LabelError::BadLabel
-               && encodeSetLabels(hl2, {{QStringLiteral("antenna"), QStringLiteral("ant1"), QStringLiteral("a\tb")}}, id).error
-                      == LabelError::BadLabel);
-    report("exactly the limit is accepted",
-           encodeSetLabels(hl2, {{QStringLiteral("antenna"), QStringLiteral("ant1"),
-                                  QString(kMaxLabelChars, QLatin1Char('x'))}}, id).error == LabelError::None);
-    report("reset_labels", encodeResetLabels(id).frame
-               == QByteArray(R"({"a":"reset_labels","id":")") + id.toLatin1() + "\"}");
-    report("a bad request id is refused", encodeResetLabels(QLatin1String(kUnsolicitedId)).error
-               == LabelError::BadRequestId);
-}
-
 void testD184Split()
 {
     report("d184 split frames are 1015 bytes, the others 995 and 994",
@@ -768,7 +730,6 @@ int main()
     testSessionKeepAliveAndLiveness();
     testEvictionAndRelease();
     testD184Split();
-    testLabelCommands();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);
     return g_failed ? 1 : 0;

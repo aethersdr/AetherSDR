@@ -1,9 +1,8 @@
 #pragma once
 
 // microHAM TRIO antenna-switch controller: one held session and the state it
-// reports, for the Peripherals page, and the port names written back to it
-// (writeLabels / resetLabels). A radio-agnostic peripheral, never behind
-// IRadioBackend. Nothing here selects a radio, an antenna, split or RX EXT.
+// reports, for the Peripherals page. A radio-agnostic peripheral, never behind
+// IRadioBackend. Read-only: nothing here changes anything on the Trio.
 // Wire and decisions: core/MicrohamTrioProtocol.h, core/MicrohamTrioSession.h.
 // Main-thread only; no session and no timer while none is wanted.
 
@@ -14,9 +13,7 @@
 
 #include <QObject>
 #include <QString>
-#include <QVector>
 
-#include <functional>
 #include <memory>
 #include <optional>
 
@@ -66,20 +63,12 @@ public:
         QString bindingIssue;
 
         // The antenna port marked as the dummy load. `dummyLoadIssue` is a
-        // sentence while its label differs from the one stored (renamed
-        // outside AetherSDR, or the port is gone): until the mark is
-        // confirmed, the port is no dummy load and is offered nowhere.
+        // sentence while its label differs from the one stored (the port was
+        // renamed on the Trio, or is gone): until the mark is confirmed, the
+        // port is no dummy load and is offered nowhere.
         QString dummyLoadKey;
         QString dummyLoadLabel;
         QString dummyLoadIssue;
-        bool    labelsPending{false};   // a rename sent, not answered yet
-    };
-
-    struct LabelVerdict {
-        bool    allowed{false};
-        bool    sent{false};
-        bool    needsDummyConfirmation{false};   // allowed only with confirmDummyRename
-        QString message;
     };
 
     enum class BindResult {
@@ -132,20 +121,8 @@ public:
     // The dummy-load mark, per Trio: the port and the label it carries now.
     BindResult markDummyLoad(const QString& antennaKey);
     void clearDummyLoad();
-    // After a rename outside AetherSDR: the port's current label is accepted.
+    // After the port was renamed on the Trio: its current label is accepted.
     BindResult confirmDummyLoad();
-
-    // Write port names to the Trio. Changes the device, so refused while the
-    // radio is transmitting (setTransmitBlocked), without a held session with
-    // its state, and with a command unanswered. Renaming the dummy-load port
-    // needs `confirmDummyRename`; the stored mark then follows the new name
-    // once the Trio confirms it. A renamed bound radio port keeps its binding.
-    LabelVerdict writeLabels(const QVector<MicrohamTrio::LabelEdit>& edits,
-                             bool confirmDummyRename = false);
-    // Every label back to the Trio's defaults; renames the dummy-load port
-    // too, so needs the same confirmation while one is marked.
-    LabelVerdict resetLabels(bool confirmDummyRename = false);
-    void setTransmitBlocked(std::function<bool()> blocked) { m_transmitBlocked = std::move(blocked); }
 
     bool isConnected() const { return view().session == SessionWord::Direct; }
     bool isConnecting() const { return view().session == SessionWord::Connecting; }
@@ -175,14 +152,11 @@ signals:
     void connectionFailed(const QString& error);
     // The answer to testConnection(): reachable or not, and what was read.
     void testFinished(bool reachable, const QString& report);
-    // The answer to writeLabels() / resetLabels().
-    void labelsWritten(bool ok, const QString& message);
 
 private slots:
     void onSnapshot(const AetherSDR::MicrohamTrio::Snapshot& snapshot,
                     AetherSDR::MicrohamTrioSession::SnapshotSource source);
     void onSessionState(AetherSDR::MicrohamTrioSession::Status status);
-    void onLabelsResult(AetherSDR::MicrohamTrioSession::CommandOutcome outcome);
 
 private:
     void startSession();
@@ -201,15 +175,6 @@ private:
     bool m_released{false};
     bool m_evicted{false};
     bool m_testing{false};
-    std::function<bool()> m_transmitBlocked;
-    // What the last label command was meant to do to the marks.
-    struct LabelFollowUp {
-        bool    reset{false};
-        bool    dummyRenamed{false};
-        bool    slotRenamed{false};
-    };
-    std::optional<LabelFollowUp> m_labelFollowUp;
-    LabelVerdict labelPreconditions() const;
     bool m_resumeAfterTest{false};
     MicrohamTrioSettings m_testTarget;
     void finishTest(bool reachable, const QString& report);
