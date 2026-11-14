@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // A radio's announcement payload: a real field set, with lookalike keys
@@ -520,7 +522,7 @@ func TestReuseAddrControl(t *testing.T) {
 	var aerr, perr error
 	raw.Control(func(fd uintptr) {
 		addr, aerr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR)
-		port, perr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT)
+		port, perr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, unix.SO_REUSEPORT)
 	})
 	if aerr != nil || perr != nil {
 		t.Fatal(aerr, perr)
