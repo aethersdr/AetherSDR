@@ -1512,6 +1512,7 @@ set(GUI_SOURCES
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/FavoritesPickerDialog.cpp
     src/gui/RxApplet.cpp
+    src/gui/BandApplet.cpp
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/AnalogMeterFaceTheme.cpp
