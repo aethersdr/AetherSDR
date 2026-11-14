@@ -538,7 +538,7 @@ void PanadapterStream::stop()
     }
     m_audioPlc.clear();
     m_audioPlcGenerations.clear();
-    m_opusCodec.reset();
+    m_opusCodecs.clear();
     restartAllStreamSequences();
     m_pcmProducer.invalidate();
     {
@@ -648,6 +648,16 @@ void PanadapterStream::unregisterWfStream(quint32 streamId)
     restartStreamSequence(streamId);
 }
 
+void PanadapterStream::restartStreamLocked(quint32 streamId, StreamStats& stats)
+{
+    m_pendingRxStreams.remove(streamId);
+    m_queuedAudioBytes -= stats.reorder.queuedBytes();
+    stats.reorder.reset();
+    ++stats.generation;
+    stats.lastSeq = -1;
+    stats.started = false;
+}
+
 void PanadapterStream::restartStreamSequence(quint32 streamId)
 {
     QMutexLocker statsLock(&m_statsMutex);
@@ -655,11 +665,7 @@ void PanadapterStream::restartStreamSequence(quint32 streamId)
     m_pendingRxStreams.remove(streamId);
     const auto it = m_streamStats.find(streamId);
     if (it != m_streamStats.end()) {
-        m_queuedAudioBytes -= it->reorder.queuedBytes();
-        it->reorder.reset();
-        ++it->generation;
-        it->lastSeq = -1;
-        it->started = false;
+        restartStreamLocked(streamId, it.value());
     }
 }
 
@@ -668,11 +674,7 @@ void PanadapterStream::restartAllStreamSequences()
     QMutexLocker statsLock(&m_statsMutex);
     m_pendingRxStreams.clear();
     for (auto it = m_streamStats.begin(); it != m_streamStats.end(); ++it) {
-        m_queuedAudioBytes -= it->reorder.queuedBytes();
-        it->reorder.reset();
-        ++it->generation;
-        it->lastSeq = -1;
-        it->started = false;
+        restartStreamLocked(it.key(), it.value());
     }
 }
 
@@ -982,12 +984,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         if (stats.packetClassCode != 0
             && (stats.packetClassCode != pcc || stats.category != cat)) {
             m_audioStreamStats.remove(streamId);
-            m_pendingRxStreams.remove(streamId);
-            m_queuedAudioBytes -= stats.reorder.queuedBytes();
-            stats.reorder.reset();
-            ++stats.generation;
-            stats.lastSeq = -1;
-            stats.started = false;
+            restartStreamLocked(streamId, stats);
         }
         stats.packetClassCode = pcc;
         stats.category = cat;
@@ -1003,7 +1000,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         }
         if (cat == CatAudio) {
             const int payloadBytes = data.size() - VITA49_HEADER_BYTES - (hasTrailer ? 4 : 0);
-            recordAudioStreamPacketLocked(streamId, pcc, payloadBytes, false);
+            recordAudioStreamPacketLocked(streamId, pcc, payloadBytes);
             if (m_audioPacketTimerStarted) {
                 const int gapMs = static_cast<int>(m_audioPacketTimer.restart());
                 m_audioPacketGapMs.store(gapMs);
@@ -1040,7 +1037,6 @@ void PanadapterStream::processDatagram(const QByteArray& data)
             }
             m_queuedAudioBytes += stats.reorder.queuedBytes() - queuedBefore;
             m_catStats[cat].reordered += reordered.reordered ? 1 : 0;
-            m_catStats[cat].duplicates += reordered.duplicate ? 1 : 0;
         }
         audioGeneration = stats.generation;
         recordRxLossLocked(stats, streamId, reordered.lost, reordered.breaks,
@@ -1221,9 +1217,7 @@ void PanadapterStream::deliverRxAudio(quint32 streamId, quint64 generation,
         }
         if (m_audioPlcGenerations.value(streamId) != generation) {
             m_audioPlc.remove(streamId);
-            if (m_opusCodec && m_opusCodecStreamId == streamId) {
-                m_opusCodec.reset();
-            }
+            m_opusCodecs.erase(streamId);
             m_audioPlcGenerations[streamId] = generation;
         }
         const auto& delivery = result.ready[i];
@@ -1746,15 +1740,21 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
     if (payloadBytes <= 0) return;
 
-    // Decoder history belongs to the active Opus stream, independently of PCM/DAX.
-    if (!m_opusCodec || m_opusCodecStreamId != streamId) {
-        m_opusCodec = std::make_unique<OpusCodec>();
-        if (!m_opusCodec->isValid()) {
+    // Decoder history belongs to each Opus stream, independently of PCM/DAX.
+    // A stream that ends sends nothing more to retire its decoder, so keep
+    // only a few; the lowest id is the oldest the radio allocated.
+    constexpr std::size_t kMaxOpusDecoders = 4;
+    if (!m_opusCodecs.count(streamId) && m_opusCodecs.size() >= kMaxOpusDecoders) {
+        m_opusCodecs.erase(m_opusCodecs.begin());
+    }
+    std::unique_ptr<OpusCodec>& codec = m_opusCodecs[streamId];
+    if (!codec) {
+        codec = std::make_unique<OpusCodec>();
+        if (!codec->isValid()) {
             qCWarning(lcVita49) << "PanadapterStream: Opus codec init failed";
-            m_opusCodec.reset();
+            m_opusCodecs.erase(streamId);
             return;
         }
-        m_opusCodecStreamId = streamId;
         qCDebug(lcVita49) << "PanadapterStream: Opus decoder initialized";
     }
 
@@ -1767,7 +1767,7 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
     if (m_plcEnabled.load() && plc.pendingMissed > 0) {
         const int n = std::min(plc.pendingMissed, kMaxConcealPackets);
         for (int i = 0; i < n; ++i) {
-            QByteArray frame = m_opusCodec->concealLost();
+            QByteArray frame = codec->concealLost();
             if (frame.isEmpty()) break;
             int16Concealed.append(frame);
         }
@@ -1776,7 +1776,7 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
 
     // Opus payload is raw bytes — no byte-swapping needed
     QByteArray opusFrame(reinterpret_cast<const char*>(raw + payloadStart), payloadBytes);
-    QByteArray int16pcm = m_opusCodec->decode(opusFrame);
+    QByteArray int16pcm = codec->decode(opusFrame);
     if (int16pcm.isEmpty()) return;
 
     QByteArray combined = int16Concealed;
@@ -1865,8 +1865,7 @@ void PanadapterStream::resetAudioStreamDiagnostics()
 
 void PanadapterStream::recordAudioStreamPacketLocked(quint32 streamId,
                                                      quint16 pcc,
-                                                     int payloadBytes,
-                                                     bool sequenceError)
+                                                     int payloadBytes)
 {
     const int frames = audioPayloadFrames(pcc, payloadBytes);
     if (frames <= 0) {
@@ -1882,9 +1881,6 @@ void PanadapterStream::recordAudioStreamPacketLocked(quint32 streamId,
     tracker.packetClassCode = pcc;
     ++tracker.packets;
     tracker.frames += frames;
-    if (sequenceError) {
-        ++tracker.sequenceErrors;
-    }
 
     tracker.expectedPacketMs = frames * 1000.0 / kAudioSampleRate;
     if (tracker.lastArrivalMs >= 0) {

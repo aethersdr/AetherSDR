@@ -361,6 +361,8 @@ private:
         int  startTotalCount{0};   // totalCount before its first packet
         VitaSequenceLossLimiter lossLog;
     };
+    // Restarts one stream instance's ordering state; m_statsMutex must be held.
+    void restartStreamLocked(quint32 streamId, StreamStats& stats);
 
 public:
     // Per-category network statistics
@@ -372,7 +374,6 @@ public:
         int    late{0};    // FFT/waterfall packets discarded as late (#6883)
         int    reordered{0};
         int    breaks{0};
-        int    duplicates{0};
     };
     struct AudioStreamDiagnostics {
         quint32 streamId{0};
@@ -457,8 +458,7 @@ private:
     void resetAudioStreamStats();
     void recordAudioStreamPacketLocked(quint32 streamId,
                                        quint16 pcc,
-                                       int payloadBytes,
-                                       bool sequenceError);
+                                       int payloadBytes);
     static int audioPayloadFrames(quint16 pcc, int payloadBytes);
 
 public:
@@ -486,8 +486,7 @@ private:
     double m_audioPacketJitterEstimateMs{0.0};
 
     // Opus audio decoder (lazy-initialized on first Opus packet)
-    std::unique_ptr<OpusCodec> m_opusCodec;
-    quint32 m_opusCodecStreamId{0};
+    std::map<quint32, std::unique_ptr<OpusCodec>> m_opusCodecs; // worker only
 
     // DAX stream routing: stream ID → DAX channel (1-8)
     QMap<quint32, int> m_daxStreamIds;

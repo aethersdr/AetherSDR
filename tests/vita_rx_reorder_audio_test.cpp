@@ -431,5 +431,57 @@ int main(int argc, char** argv)
         }
     }
     std::printf("vita_rx_reorder_audio: %d failures\n", failures);
+#ifdef HAVE_OPUS
+    {
+        // Two live Opus streams keep separate decoder history: interleaving
+        // them decodes each exactly as it decodes alone.
+        OpusCodec encoderA;
+        OpusCodec encoderB;
+        std::vector<QByteArray> streamA;
+        std::vector<QByteArray> streamB;
+        for (int i = 0; i < 40; ++i) {
+            for (int which = 0; which < 2; ++which) {
+                QByteArray tone(240 * 2 * sizeof(qint16), Qt::Uninitialized);
+                auto* dst = reinterpret_cast<qint16*>(tone.data());
+                for (int n = 0; n < 240; ++n) {
+                    const double rate = which ? 0.071 : 0.13;
+                    dst[2 * n] = dst[2 * n + 1] =
+                        static_cast<qint16>(7000 * std::sin((i * 240 + n) * rate));
+                }
+                QByteArray datagram = packet(i, 0x8005,
+                    (which ? encoderB : encoderA).encode(tone));
+                qToBigEndian<quint32>(kStream + which, reinterpret_cast<uchar*>(datagram.data()) + 4);
+                (which ? streamB : streamA).push_back(datagram);
+            }
+        }
+        const auto decode = [](const std::vector<const QByteArray*>& order) {
+            PanadapterStream stream;
+            std::vector<QVector<float>> frames;
+            QObject::connect(&stream, &PanadapterStream::pcmFrameReady,
+                [&frames](const PcmFrame& frame) { frames.push_back(frame.samples()); });
+            qint64 nowMs = 0;
+            for (const QByteArray* datagram : order) {
+                VitaSequenceLossLogTestAccess::feed(stream, *datagram, nowMs++);
+            }
+            VitaSequenceLossLogTestAccess::flush(stream, 100000);
+            return frames;
+        };
+        std::vector<const QByteArray*> onlyA, onlyB, interleaved;
+        for (int i = 0; i < 40; ++i) {
+            onlyA.push_back(&streamA[i]);
+            onlyB.push_back(&streamB[i]);
+            interleaved.push_back(&streamA[i]);
+            interleaved.push_back(&streamB[i]);
+        }
+        const auto aloneA = decode(onlyA);
+        const auto aloneB = decode(onlyB);
+        const auto mixed = decode(interleaved);
+        bool same = aloneA.size() == 40 && aloneB.size() == 40 && mixed.size() == 80;
+        for (int i = 0; same && i < 40; ++i) {
+            same = mixed[2 * i] == aloneA[i] && mixed[2 * i + 1] == aloneB[i];
+        }
+        check(same, "interleaved Opus streams decode exactly as each stream alone");
+    }
+#endif
     return failures == 0 ? 0 : 1;
 }
