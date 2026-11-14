@@ -3,6 +3,7 @@
 #include "core/backends/AutoRfGainControl.h"
 #include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/CtcssTones.h"
+#include "core/SettingsSanitizer.h"
 #include "core/RadioCertification.h"
 #include "LogManager.h"
 #include "SettingsPaths.h"
@@ -6693,7 +6694,12 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     if (a == QLatin1String("profiles")) {
-        return QJsonObject{{"ok", true}, {"profiles", conn->automationConnectionProfiles()}};
+        QJsonObject profiles = conn->automationConnectionProfiles();
+        if (m_readOnly) {
+            // Observe-only clients see the workspace shape, not account identities.
+            profiles = SettingsSanitizer::maskPersonalFields(profiles).toObject();
+        }
+        return QJsonObject{{"ok", true}, {"profiles", profiles}};
     }
     if (a == QLatin1String("profile")) {
         const QStringList parts = arg.simplified().split(' ');

@@ -1650,6 +1650,55 @@ void ConnectionPanel::clearPendingIcomCredentials()
     m_pendingIcomSessionBindAddress.clear();
 }
 
+ConnectionPanel::~ConnectionPanel()
+{
+    if (m_browseSaveTimer && m_browseSaveTimer->isActive()) { flushBrowsedRadio(); }
+}
+
+void ConnectionPanel::flushBrowsedRadio()
+{
+    if (m_browseSaveTimer) { m_browseSaveTimer->stop(); }
+    QString error;
+    if (!ConnectionWorkspace::save(m_workspace, &error)) {
+        qWarning() << "ConnectionPanel: saving the browsed radio failed:" << error;
+    }
+}
+
+QString ConnectionPanel::icomBinding(const QString& host, const QString& username)
+{
+    return normalizeManualIp(host) + QLatin1Char('|') + username.trimmed();
+}
+
+QString ConnectionPanel::currentIcomBinding() const
+{
+    QString user = m_manualIcomUserEdit ? m_manualIcomUserEdit->text().trimmed() : QString();
+    if (user.isEmpty()) { user = IcomSettings::username(); }   // as the connect path does
+    return icomBinding(m_manualIpEdit ? m_manualIpEdit->text() : QString(), user);
+}
+
+void ConnectionPanel::latchIcomCredential(const QString& id, bool legacy, const QString& host, const QString& username)
+{
+    m_activeIcomCredentialId = id;
+    m_allowLegacyIcomCredential = legacy;
+    QString user = username.trimmed();
+    if (user.isEmpty()) { user = IcomSettings::username(); }
+    m_activeIcomCredentialBinding = icomBinding(host, user);
+}
+
+QString ConnectionPanel::boundIcomCredentialId() const
+{
+    return m_activeIcomCredentialBinding == currentIcomBinding() ? m_activeIcomCredentialId : QString();
+}
+
+bool ConnectionPanel::legacyIcomCredentialUsable() const
+{
+    if (!m_allowLegacyIcomCredential) { return false; }
+    // The pre-workspace password belongs to the one host it was used with.
+    if (!m_activeIcomCredentialBinding.isEmpty()) { return m_activeIcomCredentialBinding == currentIcomBinding(); }
+    return m_manualIpEdit && !normalizeManualIp(m_manualIpEdit->text()).isEmpty()
+        && normalizeManualIp(m_manualIpEdit->text()) == normalizeManualIp(IcomSettings::lastHost());
+}
+
 void ConnectionPanel::setConnected(bool connected)
 {
     // Credentials staged by probeRadio() are persisted only here, so a wrong
@@ -1661,7 +1710,7 @@ void ConnectionPanel::setConnected(bool connected)
         const QString credentialId = ConnectionWorkspace::connectionCredentialId(
             m_pendingIcomHost + QLatin1Char(':') + QString::number(m_pendingIcomBasePort), m_pendingIcomUsername);
         IcomCredentials::saveForConnection(credentialId, m_pendingIcomPassword);
-        m_activeIcomCredentialId = credentialId;
+        latchIcomCredential(credentialId, false, m_pendingIcomHost, m_pendingIcomUsername);
         if (!m_pendingIcomHost.isEmpty()) {
             IcomSettings::setLastHost(m_pendingIcomHost);
             // The routed profile restores the family and source path for this
@@ -1871,6 +1920,17 @@ bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp,
     // applySavedSourceSelection() cannot overwrite an explicit request.
     if (!wantedFamily.isEmpty())
         setManualFamily(wantedFamily);
+    if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
+        // Use the credential saved for this address, never one latched for another.
+        const QJsonObject path = savedManualPath(normalizeManualIp(target), QString::fromLatin1(kFamilyIcom));
+        if (!path.isEmpty()) {
+            if (m_manualIcomUserEdit->text().trimmed().isEmpty()) {
+                m_manualIcomUserEdit->setText(path.value("username").toString());
+            }
+            latchIcomCredential(path.value("credentialId").toString(), path.value("legacyCredentials").toBool(),
+                target, m_manualIcomUserEdit->text());
+        }
+    }
     onManualConnectClicked();
     return true;
 }
@@ -2791,15 +2851,17 @@ void ConnectionPanel::updateManualFamilyHints()
             populateIcomCivCombo();
         if (m_manualIpEdit && m_manualIpEdit->text().isEmpty())
             m_manualIpEdit->setText(IcomSettings::lastHost());
+        const QString boundId = boundIcomCredentialId();
+        const bool legacy = boundId.isEmpty() && legacyIcomCredentialUsable();
         if (m_manualIcomPassEdit && m_manualIcomPassEdit->text().isEmpty()
-            && (!m_activeIcomCredentialId.isEmpty() || m_allowLegacyIcomCredential)) {
-            const QString credentialId = m_activeIcomCredentialId;
-            const QString host = m_manualIpEdit->text().trimmed();
-            const bool legacy = m_allowLegacyIcomCredential;
-            IcomCredentials::loadForConnection(credentialId, this, [this, credentialId, host, legacy](const QString& password) {
-                if (m_activeIcomCredentialId == credentialId && m_allowLegacyIcomCredential == legacy
-                    && m_manualIpEdit->text().trimmed() == host && m_manualIcomPassEdit->text().isEmpty()) {
+            && (!boundId.isEmpty() || legacy)) {
+            const QString binding = currentIcomBinding();
+            IcomCredentials::loadForConnection(boundId, this, [this, boundId, binding, legacy](const QString& password) {
+                const bool stillBound = currentIcomBinding() == binding
+                    && (legacy ? legacyIcomCredentialUsable() : boundIcomCredentialId() == boundId);
+                if (stillBound && m_manualIcomPassEdit->text().isEmpty() && !password.isEmpty()) {
                     m_manualIcomPassEdit->setText(password);
+                    m_icomPasswordPrefilled = true;
                 }
             });
         }
@@ -3028,11 +3090,11 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // read that key, not the single pre-workspace password.
         const QJsonObject path = savedManualPath(trimmedIp, QString::fromLatin1(kFamilyIcom));
         if (!path.isEmpty()) {
-            m_activeIcomCredentialId = path.value("credentialId").toString();
-            m_allowLegacyIcomCredential = path.value("legacyCredentials").toBool();
             if (!path.value("username").toString().isEmpty()) {
                 m_manualIcomUserEdit->setText(path.value("username").toString());
             }
+            latchIcomCredential(path.value("credentialId").toString(), path.value("legacyCredentials").toBool(),
+                trimmedIp, m_manualIcomUserEdit->text());
         }
     }
 
@@ -3073,6 +3135,12 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // surfaces as a session failure rather than as "nothing there".
         QString user = m_manualIcomUserEdit ? m_manualIcomUserEdit->text().trimmed()
                                             : QString();
+        // A saved password filled in for one radio never follows the fields to
+        // another; only a password the operator typed is sent as-is.
+        if (m_icomPasswordPrefilled && boundIcomCredentialId().isEmpty() && !legacyIcomCredentialUsable()) {
+            m_manualIcomPassEdit->clear();
+            m_icomPasswordPrefilled = false;
+        }
         QString pass = m_manualIcomPassEdit ? m_manualIcomPassEdit->text() : QString();
         // Fall back to stored credentials when the fields are empty. This is
         // what makes the bridge's `connect ip <host> icom` work at all: an
@@ -3080,7 +3148,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // could only ever report "needs a user name and password".
         if (user.isEmpty())
             user = IcomSettings::username();
-        if (pass.isEmpty() && m_activeIcomCredentialId.isEmpty() && m_allowLegacyIcomCredential)
+        const QString boundCredentialId = boundIcomCredentialId();
+        if (pass.isEmpty() && boundCredentialId.isEmpty() && legacyIcomCredentialUsable())
             pass = IcomCredentials::sessionPassword();
         if (user.isEmpty()) {
             resetManualConnectButton();
@@ -3094,7 +3163,9 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             return;
         }
         if (pass.isEmpty()) {
-            if (m_activeIcomCredentialId.isEmpty() && !m_allowLegacyIcomCredential) {
+            // An empty bound ID with the legacy credential usable reads the
+            // pre-workspace keychain entry, as IcomCredentials defines.
+            if (boundCredentialId.isEmpty() && !legacyIcomCredentialUsable()) {
                 resetManualConnectButton();
                 setManualMessage(tr("Enter this radio's password. It will be saved after a successful connection."), true);
                 reportStartupProbeFailure(tr("This Icom needs its own saved password."), true);
@@ -3108,22 +3179,25 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             const QString requestedHost = trimmedIp;
             setManualMessage(QStringLiteral("Loading the saved Icom password…"));
             QPointer<ConnectionPanel> panel(this);
-            const QString credentialId = m_activeIcomCredentialId;
+            const QString credentialId = boundCredentialId;
+            const QString binding = currentIcomBinding();
             const quint64 generation = m_connectionGeneration;
-            IcomCredentials::loadForConnection(credentialId, this, [panel, requestedHost, credentialId, generation](const QString& password) {
+            IcomCredentials::loadForConnection(credentialId, this, [panel, requestedHost, credentialId, binding, generation](const QString& password) {
                 if (!panel || panel->m_connectionGeneration != generation) {
                     return;
                 }
-                if (panel->m_activeIcomCredentialId != credentialId
+                const bool stillBound = panel->currentIcomBinding() == binding
+                    && (credentialId.isEmpty() ? panel->legacyIcomCredentialUsable()
+                                               : panel->boundIcomCredentialId() == credentialId);
+                if (!stillBound
                     || panel->currentManualFamily() != QLatin1String(kFamilyIcom)
                     || !panel->m_manualIpEdit
                     || panel->m_manualIpEdit->text().trimmed() != requestedHost) {
                     panel->resetManualConnectButton();
                     panel->m_manualConnectPending = false;
-                    // An operator edit has normally cleared the latch already,
-                    // making this a no-op; if the route changed under the read
-                    // any other way, the startup attempt still ends here and
-                    // must not leave the overlay with no owner.
+                    // The host or user changed under the read: the password it
+                    // returns belongs to the previous radio, so the attempt ends
+                    // here and must not leave the overlay with no owner.
                     panel->reportStartupProbeFailure(
                         QStringLiteral("The saved Icom route changed before its password loaded."));
                     return;
@@ -4087,14 +4161,14 @@ void ConnectionPanel::renameConnectionTarget(const QString& id)
     }
 }
 
-bool ConnectionPanel::validateConnectionTarget(const QJsonObject& target, QString* reason) const
+bool ConnectionPanel::validateConnectionTarget(const QJsonObject& target, QString* reason, bool listed) const
 {
     const auto refuse = [reason](const QString& text) {
         if (reason) { *reason = text; }
         return false;
     };
     const QJsonObject path = target.value("path").toObject();
-    if (path.isEmpty() || connectionTarget(target.value("id").toString()).isEmpty()) {
+    if (path.isEmpty() || (!listed && connectionTarget(target.value("id").toString()).isEmpty())) {
         return refuse(tr("This saved connection is no longer available."));
     }
     const QString kind = path.value("kind").toString();
@@ -4134,6 +4208,8 @@ void ConnectionPanel::requestConnectionTarget(const QString& id)
 void ConnectionPanel::rememberSuccessfulTarget(const QJsonObject& target)
 {
     m_connectedTarget = target;
+    m_pendingWorkspaceStation.clear();
+    m_pendingWorkspaceConnection.clear();
     refreshWorkspaceDetails();
     if (!target.value("saved").toBool()) { return; }
     QJsonObject next = m_workspace;
@@ -4158,6 +4234,12 @@ void ConnectionPanel::connectTarget(const QJsonObject& target)
     if (kind == QLatin1String("local")) {
         for (int row = 0; row < m_radios.size(); ++row) {
             if (m_radios[row].serial == path.value("serial").toString() && (path.value("family").toString().isEmpty() || m_radios[row].family == path.value("family").toString())) {
+                if (target.value("saved").toBool() && path.value("family").toString().isEmpty()) {
+                    // Legacy saved paths carry no family; discovery names it.
+                    QJsonObject resolved = path;
+                    resolved["family"] = m_radios[row].family;
+                    storeWorkspaceConnection(resolved, target.value("stationId").toString(), true);
+                }
                 m_radioList->setCurrentRow(row);
                 onLocalConnectClicked();
                 return;
@@ -4188,6 +4270,8 @@ void ConnectionPanel::cancelConnectionAttempt()
 {
     ++m_connectionGeneration;
     m_pendingSmartLinkConnection = {};
+    m_pendingWorkspaceStation.clear();
+    m_pendingWorkspaceConnection.clear();
     m_attemptTarget = {};
     m_attemptOperator = {};
     m_startupProbe = false;
@@ -4515,29 +4599,44 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         m_pendingWorkspaceConnection.clear();
         m_pendingWorkspaceStation.clear();
         m_activeIcomCredentialId.clear();
+        m_activeIcomCredentialBinding.clear();
         m_allowLegacyIcomCredential = false;
         m_manualIcomPassEdit->clear();
+        m_icomPasswordPrefilled = false;
         m_manualConnectionName->clear();
         setCurrentMode(ManualMode);
     });
-    connect(m_manualIpEdit, &QLineEdit::textEdited, this, [this] {
-        m_activeIcomCredentialId.clear();
-        m_allowLegacyIcomCredential = false;
-        m_manualIcomPassEdit->clear();
-    });
-    connect(m_manualIcomUserEdit, &QLineEdit::textEdited, this, [this] {
-        m_activeIcomCredentialId.clear();
-        m_allowLegacyIcomCredential = false;
-        m_manualIcomPassEdit->clear();
-    });
+    // The credential latch checks its host|user binding at use, so editing
+    // these fields needs no reset here. A saved password we filled in goes as
+    // soon as the fields name another radio; one the operator typed stays.
+    const auto dropPrefilledPassword = [this] {
+        if (m_icomPasswordPrefilled && m_activeIcomCredentialBinding != currentIcomBinding()) {
+            m_manualIcomPassEdit->clear();
+            m_icomPasswordPrefilled = false;
+        }
+    };
+    connect(m_manualIpEdit, &QLineEdit::textChanged, this, dropPrefilledPassword);
+    connect(m_manualIcomUserEdit, &QLineEdit::textChanged, this, dropPrefilledPassword);
+    connect(m_manualIcomPassEdit, &QLineEdit::textEdited, this, [this] { m_icomPasswordPrefilled = false; });
     connect(accounts, &QPushButton::clicked, this, [this] { setCurrentMode(SmartLinkMode); });
     connect(m_workspaceRadioList, &QListWidget::currentRowChanged, this, [this](int) {
         if (m_workspaceRadioList->currentItem()) {
-            QJsonObject next = m_workspace;
-            QJsonObject browsed = next.value("browsedRadios").toObject();
-            browsed[next.value("selectedStation").toString()] = m_workspaceRadioList->currentItem()->data(Qt::UserRole).toString();
-            next["browsedRadios"] = browsed;
-            if (next != m_workspace) { persistWorkspace(next); }
+            // Browsing changes nothing visible, so it updates the in-memory
+            // document now and writes it once the operator settles on a row.
+            QJsonObject browsed = m_workspace.value("browsedRadios").toObject();
+            const QString station = m_workspace.value("selectedStation").toString();
+            const QString radio = m_workspaceRadioList->currentItem()->data(Qt::UserRole).toString();
+            if (browsed.value(station).toString() != radio) {
+                browsed[station] = radio;
+                m_workspace["browsedRadios"] = browsed;
+                if (!m_browseSaveTimer) {
+                    m_browseSaveTimer = new QTimer(this);
+                    m_browseSaveTimer->setSingleShot(true);
+                    m_browseSaveTimer->setInterval(1000);
+                    connect(m_browseSaveTimer, &QTimer::timeout, this, &ConnectionPanel::flushBrowsedRadio);
+                }
+                m_browseSaveTimer->start();
+            }
         }
         refreshWorkspaceDetails();
     });
@@ -4931,8 +5030,10 @@ QJsonObject ConnectionPanel::savedManualPath(const QString& host, const QString&
 void ConnectionPanel::rememberWorkspaceRadio(const RadioInfo& info, const QString& kind)
 {
     if (m_workspace.isEmpty()) { return; }
-    storeWorkspaceConnection({{"id", m_dispatchingTarget && !m_pendingWorkspaceConnection.isEmpty() ? m_pendingWorkspaceConnection : ConnectionWorkspace::newId()}, {"name", info.nickname.isEmpty() ? info.model : info.nickname},
-        {"model", info.model}, {"serial", info.serial}, {"family", info.family}, {"kind", kind}}, m_pendingWorkspaceStation);
+    // Saving is an explicit action on the Location being viewed.
+    storeWorkspaceConnection({{"id", ConnectionWorkspace::newId()}, {"name", info.nickname.isEmpty() ? info.model : info.nickname},
+        {"model", info.model}, {"serial", info.serial}, {"family", info.family}, {"kind", kind}},
+        m_workspace.value("selectedStation").toString());
 }
 
 void ConnectionPanel::rememberWorkspaceWan(const WanRadioInfo& info)
@@ -4940,7 +5041,8 @@ void ConnectionPanel::rememberWorkspaceWan(const WanRadioInfo& info)
     if (!m_smartLink) { return; }
     storeWorkspaceConnection({{"id", ConnectionWorkspace::newId()}, {"name", info.nickname.isEmpty() ? info.model : info.nickname},
         {"model", info.model}, {"serial", info.serial}, {"family", "flex"}, {"kind", "smartlink"},
-        {"accountId", m_smartLink->accountId()}, {"lowBandwidth", m_lowBwCheck->isChecked()}}, m_pendingWorkspaceStation);
+        {"accountId", m_smartLink->accountId()}, {"lowBandwidth", m_lowBwCheck->isChecked()}},
+        m_workspace.value("selectedStation").toString());
 }
 
 void ConnectionPanel::rememberWorkspaceManual(const QString& host, const QJsonObject& route)
@@ -4952,7 +5054,7 @@ void ConnectionPanel::rememberWorkspaceManual(const QString& host, const QJsonOb
         {"model", m_manualRadioTypeCombo->currentText()},
         {"kind", "manual"}, {"family", currentManualFamily()}, {"host", host}, {"route", route},
         {"username", m_manualIcomUserEdit->text().trimmed()}, {"civ", m_manualIcomCivCombo->currentData().toString()},
-        {"credentialId", m_activeIcomCredentialId},
+        {"credentialId", boundIcomCredentialId()},
         {"customCiv", m_manualIcomCivEdit->text()}, {"lowBandwidth", m_lowBwCheck->isChecked()}}, m_pendingWorkspaceStation, false);
 }
 
@@ -5035,9 +5137,18 @@ bool ConnectionPanel::applyWorkspaceOperator()
 
 void ConnectionPanel::connectWorkspaceSelection()
 {
-    const QJsonObject path = m_workspacePath->currentData().toJsonObject();
+    QJsonObject path = m_workspacePath->currentData().toJsonObject();
     QJsonObject target = connectionTarget(path.value("id").toString());
-    if (target.isEmpty()) { return; }
+    if (target.isEmpty() && path.value("nearby").toBool() && !path.value("serial").toString().isEmpty()) {
+        // An empty Location lists every discovered radio, including ones
+        // saved at another Location; connect those through their saved entry.
+        target = connectionTarget(path.value("serial").toString());
+        path = target.value("path").toObject();
+    }
+    if (target.isEmpty()) {
+        setStatusText(tr("This radio is not currently available. Power it on, retry discovery or add a saved IP path."));
+        return;
+    }
     beginExplicitConnection();
     target["path"] = path;
     target["operator"] = m_attemptOperator;
@@ -5050,9 +5161,10 @@ void ConnectionPanel::restoreWorkspaceManual(const QJsonObject& path)
     m_pendingWorkspaceConnection = path.value("id").toString();
     m_pendingWorkspaceStation = m_attemptTarget.isEmpty() ? m_workspace.value("selectedStation").toString()
         : m_attemptTarget.value("stationId").toString();
-    m_activeIcomCredentialId = path.value("credentialId").toString();
-    m_allowLegacyIcomCredential = path.value("legacyCredentials").toBool();
+    latchIcomCredential(path.value("credentialId").toString(), path.value("legacyCredentials").toBool(),
+        path.value("host").toString(), path.value("username").toString());
     m_manualIcomPassEdit->clear();
+    m_icomPasswordPrefilled = false;
     IcomCredentials::clearSession();
     m_manualIcomUserEdit->setText(path.value("username").toString());
     setManualFamily(path.value("family").toString());
@@ -5562,8 +5674,10 @@ void ConnectionPanel::importAddressHistory()
         m_pendingWorkspaceConnection.clear();
         m_pendingWorkspaceStation.clear();
         m_activeIcomCredentialId.clear();
+        m_activeIcomCredentialBinding.clear();
         m_allowLegacyIcomCredential = false;
         m_manualIcomPassEdit->clear();
+        m_icomPasswordPrefilled = false;
         m_manualConnectionName->clear();
         setCurrentMode(ManualMode);
         m_manualIpEdit->setText(address);

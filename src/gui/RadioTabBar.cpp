@@ -894,16 +894,53 @@ void RadioTabBar::finishStripDrag(bool cancel)
             const int right = m_dragOriginalOrder.indexOf(b->entry().id);
             return (left < 0 ? m_dragOriginalOrder.size() : left) < (right < 0 ? m_dragOriginalOrder.size() : right);
         });
-        for (int index = 0; index < m_tabs.size(); ++index) {
-            m_tabsLayout->removeWidget(m_tabs[index]);
-            m_tabsLayout->insertWidget(index, m_tabs[index]);
-        }
-        m_tabsLayout->activate();
+        relayoutTabs();
         return;
     }
     QStringList order;
     for (const RadioTabEntry& entry : m_radios) { order.append(entry.id); }
     if (order != m_dragOriginalOrder) { emit radioOrderChanged(order); }
+}
+
+int RadioTabBar::radioIndex(const QString& id) const
+{
+    for (int index = 0; index < m_radios.size(); ++index) {
+        if (m_radios[index].id == id) { return index; }
+    }
+    return -1;
+}
+
+void RadioTabBar::relayoutTabs()
+{
+    for (int index = 0; index < m_tabs.size(); ++index) {
+        m_tabsLayout->removeWidget(m_tabs[index]);
+        m_tabsLayout->insertWidget(index, m_tabs[index]);
+    }
+    m_tabsLayout->activate();
+}
+
+int RadioTabBar::radioNeighbor(const QString& id, int direction) const
+{
+    const int from = radioIndex(id);
+    if (from < 0 || from >= m_tabs.size() || !m_tabs[from]->isVisible()) { return -1; }
+    for (int index = from + direction; index >= 0 && index < m_radios.size(); index += direction) {
+        if (m_radios[index].kind == RadioTabEntry::Kind::Radio && m_tabs[index]->isVisible()) { return index; }
+    }
+    return -1;
+}
+
+bool RadioTabBar::moveRadioTab(const QString& id, int direction)
+{
+    const int to = radioNeighbor(id, direction);
+    if (to < 0) { return false; }
+    const int from = radioIndex(id);
+    m_radios.swapItemsAt(from, to);
+    m_tabs.swapItemsAt(from, to);
+    relayoutTabs();
+    QStringList order;
+    for (const RadioTabEntry& entry : std::as_const(m_radios)) { order.append(entry.id); }
+    emit radioOrderChanged(order);
+    return true;
 }
 
 QSize RadioTabBar::sizeHint() const
@@ -1476,9 +1513,25 @@ QMenu* RadioTabBar::createRadioMenu(const RadioTabEntry& entry, QWidget* parent)
         active ? tr("Disconnect and keep this workspace tab.") : tr("This radio is not connected."));
     menu->addSeparator();
     add(tr("Rename…"), QStringLiteral("rename"), entry.canRename,
-        entry.canRename ? tr("Change the saved connection name in tabs and Locations.") : tr("Save this radio to a Location before renaming it. The simulator keeps its safety label."));
+        entry.canRename ? tr("Change the saved connection name in tabs and Locations.")
+            : (entry.renameReason.isEmpty() ? tr("Save this radio to a Location before renaming it.") : entry.renameReason));
     add(tr("Connection settings…"), QStringLiteral("settings"), true,
         tr("Open this radio's Location and saved connection path."));
+    menu->addSeparator();
+    for (const int direction : {-1, 1}) {
+        const bool canMove = radioNeighbor(id, direction) >= 0;
+        QAction* move = menu->addAction(direction < 0 ? tr("Move left") : tr("Move right"));
+        move->setObjectName(QStringLiteral("radioSwitcher_") + (direction < 0 ? QStringLiteral("moveLeft_") : QStringLiteral("moveRight_")) + id);
+        move->setEnabled(canMove);
+        const QString reason = canMove ? tr("Change this tab's position in the title bar.")
+            : tr("There is no tab on that side to swap with.");
+        move->setStatusTip(reason);
+        move->setToolTip(reason);
+        connect(move, &QAction::triggered, this, [this, id, direction] {
+            if (m_popover) { m_popover->close(); }
+            moveRadioTab(id, direction);
+        });
+    }
     menu->addSeparator();
     add(entry.visibleInTabs ? tr("Remove from tabs") : tr("Add to tabs"),
         entry.visibleInTabs ? QStringLiteral("remove") : QStringLiteral("restore"), !active && !entry.canCancel,

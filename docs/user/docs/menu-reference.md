@@ -187,7 +187,7 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 - Up to two recent radio shortcuts appear in the title bar. The active radio remains visible; a pending connection uses the other slot. Saved radios remain in the drawer when discovery cannot find them. Line one shows the saved name; line two shows the state and Location in words.
 - Click a disconnected tab to connect through its preferred saved path. If another radio is live, confirm **Switch** before it disconnects. Clicking the active tab keeps the current view.
-- Right-click a tab, or focus it and press **Shift+F10**, for **Connect** / **Switch to this radio…**, **Disconnect**, **Rename…**, **Connection settings…**, and **Remove from tabs**. A pending connection offers **Cancel connection**. Removing a tab keeps its saved connection; restore it through **Radio options… → Add to tabs** in the connection window.
+- Right-click a tab, or focus it and press **Shift+F10**, for **Connect** / **Switch to this radio…**, **Disconnect**, **Rename…**, **Connection settings…**, **Move left** / **Move right**, and **Remove from tabs**. A pending connection offers **Cancel connection**. **Move left** and **Move right** reorder tabs from the keyboard, the same as dragging them. Removing a tab keeps its saved connection; restore it through **Radio options… → Add to tabs** in the connection window.
 - **⋯ More radios** opens the full saved/discovered radio drawer. **Locations and connections…** opens Locations at the browsed Location. Connection settings opens the matching saved radio and path. Browsing preserves the active connection; see [Location and Operator Profiles](./station-profiles.md#using-workspace-radio-tabs).
 - The dot on the active tab is the **radio-link indicator**. It pulses with discovery heartbeats and shows link loss in red. The tab also spells out **Link lost**. **View → Blink Status Indicator** controls blinking.
 - Drag tabs to reorder them; the order persists across restarts. **Esc** cancels a drag. When tabs no longer fit, drag near an edge to scroll while reordering, use the mouse wheel, or drag empty strip space.
@@ -230,7 +230,7 @@ In **Minimal Mode** the bar shrinks to the active radio tab and status badges; t
 
 **Help → About AetherSDR** opens a rounded, borderless window showing:
 
-<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 licence, the GitHub link, trademark notices and an OK button follow." />
+<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 license, the GitHub link, trademark notices and an OK button follow." />
 
 *The About AetherSDR window: version, build and renderer details.*
 

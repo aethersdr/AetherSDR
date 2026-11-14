@@ -843,6 +843,10 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
 
     if (!m_radioModel.prepareWanConnection()) {
         const QString reason = tr("Disconnect the current radio before preparing SmartLink.");
+        // As the guard below: let the next reconnect tick try again rather
+        // than re-arm behind an attempt that never started.
+        setPanadapterConnectionAnimation(false);
+        m_wanReconnectAttemptInProgress = false;
         if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(reason); }
         else { m_connPanel->setStatusText(reason); }
         return;
@@ -7136,7 +7140,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_userDisconnected) {
             if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
             if (m_titleBar) m_titleBar->clearLinkAlarm();
-            m_lastSessionTab = {};
             scheduleRadioTabRefresh();
         }
 

@@ -4329,6 +4329,13 @@ bool RadioModel::prepareWanConnection()
     return prepareFlexBackendForWan();
 }
 
+void RadioModel::cancelAutomaticReconnect()
+{
+    if (isConnected()) { return; }
+    m_intentionalDisconnect = true;
+    m_reconnectTimer.stop();
+}
+
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
     discardTuneInhibit();

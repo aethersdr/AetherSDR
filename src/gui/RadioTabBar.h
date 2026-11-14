@@ -6,7 +6,6 @@
 #include <QSizeF>
 #include <QString>
 #include <QStringList>
-#include <QStringList>
 #include <QVariantMap>
 #include <QPointer>
 #include <QWidget>
@@ -53,6 +52,7 @@ struct RadioTabEntry {
     bool           canConnect{true};
     bool           canCancel{false};
     QString        connectReason;
+    QString        renameReason;   // why Rename is unavailable, when it is
     QString        serial;
     QString        location;
     QString        id;         // stable saved workspace identity; hardware serial is separate
@@ -68,7 +68,7 @@ struct RadioTabEntry {
             && transport == o.transport && status == o.status
             && canRename == o.canRename && visibleInTabs == o.visibleInTabs
             && canConnect == o.canConnect && canCancel == o.canCancel
-            && connectReason == o.connectReason && serial == o.serial && location == o.location && kind == o.kind;
+            && connectReason == o.connectReason && renameReason == o.renameReason && serial == o.serial && location == o.location && kind == o.kind;
     }
 };
 
@@ -220,6 +220,9 @@ public:
     void showDiscoveryPopover();
     bool isDiscoveryPopoverVisible() const;
     bool showRadioContextMenu(const QString& id);
+    // Keyboard path for drag reordering: swap a strip tab with its visible
+    // radio neighbor (-1 left, +1 right) and report the order as a drag does.
+    bool moveRadioTab(const QString& id, int direction);
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -237,7 +240,6 @@ signals:
     void radioOrderChanged(const QStringList& ids);
     void rescanRequested();
     void aetherLabRequested();
-    void discoveryPopoverRequested();
     void connectManuallyRequested();
 
 private:
@@ -259,6 +261,9 @@ private:
     bool handleStripDrag(QObject* watched, QEvent* ev);
     void reorderDraggedTab(int globalX);
     void finishStripDrag(bool cancel = false);
+    int radioNeighbor(const QString& id, int direction) const;
+    int radioIndex(const QString& id) const;
+    void relayoutTabs();
     QPointer<QAbstractButton> m_dragPressedTab;
     int                  m_dragPressX{0};
     int                  m_dragStartValue{0};

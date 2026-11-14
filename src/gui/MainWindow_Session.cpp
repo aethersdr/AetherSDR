@@ -100,6 +100,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -303,9 +304,12 @@ void MainWindow::refreshRadioTabs()
         entry.transport = path.value("kind").toString() == QLatin1String("smartlink") ? QStringLiteral("SmartLink")
             : path.value("host").toString(QStringLiteral("LAN / USB"));
         entry.canRename = target.value("saved").toBool() && path.value("serial").toString() != SimBackend::demoSerial();
+        if (path.value("serial").toString() == SimBackend::demoSerial()) {
+            entry.renameReason = tr("The simulator keeps its \"not on the air\" safety label.");
+        }
         entry.status = RadioTabStatus::Saved;
         QString reason;
-        entry.canConnect = m_connPanel->validateConnectionTarget(target, &reason);
+        entry.canConnect = m_connPanel->validateConnectionTarget(target, &reason, true);
         entry.connectReason = reason;
         if (path.value("kind").toString() == QLatin1String("local")) {
             entry.status = entry.canConnect ? RadioTabStatus::Available : RadioTabStatus::Unavailable;
@@ -399,13 +403,34 @@ void MainWindow::beginExplicitRadioChoice()
         m_userDisconnected = true;
         m_smartLink.setAccountLocked(false);
         m_wanConnection.disconnectFromRadio();
+        m_radioModel.cancelAutomaticReconnect();
         if (m_radioModel.isConnectAttemptInFlight()) {
-            m_radioDisconnectPending = true;
+            awaitRadioTeardown();
             m_radioModel.disconnectFromRadio();
         }
         setPanadapterConnectionAnimation(false);
     }
     scheduleRadioTabRefresh();
+}
+
+void MainWindow::awaitRadioTeardown()
+{
+    // The next connect waits for the aborted attempt's disconnect edge. An
+    // abort that never reached Connected may not emit one, so the wait is
+    // bounded rather than parking every later connect.
+    m_radioDisconnectPending = true;
+    const quint64 token = ++m_radioTeardownToken;
+    QTimer::singleShot(5000, this, [this, token] {
+        if (token != m_radioTeardownToken || !m_radioDisconnectPending) { return; }
+        qCWarning(lcGui) << "radio switch: no disconnect edge from the aborted attempt after 5 s; continuing";
+        m_radioDisconnectPending = false;
+        if (m_afterRadioDisconnect) {
+            auto next = std::move(m_afterRadioDisconnect);
+            m_afterRadioDisconnect = {};
+            next();
+        }
+        if (!m_pendingRadioTarget.isEmpty()) { continueRadioSwitch(m_radioChoiceGeneration); }
+    });
 }
 
 void MainWindow::requestRadioTarget(const QJsonObject& target)
@@ -525,16 +550,22 @@ void MainWindow::failRadioSwitch(const QString& reason)
     m_pendingRadioTarget = {};
     m_radioSwitchPhase.clear();
     ++m_radioChoiceGeneration;
+    m_afterRadioDisconnect = {};
     m_connPanel->cancelConnectionAttempt();
     m_userDisconnected = true;
     m_wanReconnectTimer.stop();
     m_pendingWanRadio = {};
-    if (!m_radioModel.isConnected()) { m_radioModel.disconnectFromRadio(); }
+    if (!m_radioModel.isConnected()) {
+        if (m_radioModel.isConnectAttemptInFlight()) { awaitRadioTeardown(); }
+        m_radioModel.disconnectFromRadio();
+    }
     setPanadapterConnectionAnimation(false);
     m_connPanel->selectConnectionTarget(m_failedRadioTarget.value("id").toString());
     m_connPanel->setStatusText(reason);
     showConnectionDialog();
+    if (m_radioSwitchFailurePrompt) { m_radioSwitchFailurePrompt->close(); }
     auto* prompt = new CanonWindow(tr("Connection failed"), this);
+    m_radioSwitchFailurePrompt = prompt;
     prompt->setObjectName(QStringLiteral("radioSwitchFailure"));
     prompt->setAttribute(Qt::WA_DeleteOnClose);
     styleRadioSwitchPrompt(prompt);
@@ -556,8 +587,10 @@ void MainWindow::failRadioSwitch(const QString& reason)
         });
     };
     addRetry(tr("Retry %1").arg(failed.value("name").toString()), failed, QStringLiteral("radioSwitchRetry"));
-    if (!m_previousRadioTarget.isEmpty()) {
-        addRetry(tr("Reconnect to %1").arg(m_previousRadioTarget.value("name").toString()), m_previousRadioTarget,
+    // The previous radio is offered once, for the switch that replaced it.
+    const QJsonObject previous = std::exchange(m_previousRadioTarget, QJsonObject{});
+    if (!previous.isEmpty() && previous.value("id") != failed.value("id")) {
+        addRetry(tr("Reconnect to %1").arg(previous.value("name").toString()), previous,
             QStringLiteral("radioSwitchReconnectPrevious"));
     }
     prompt->resize(420, 190);
@@ -597,7 +630,15 @@ void MainWindow::handleRadioTabAction(const QString& id, const QString& action)
             if (value.toString() != id && (action != QLatin1String("restore")
                 || value.toString() != target.value("path").toObject().value("serial").toString())) { updated.append(value); }
         }
-        if (action == QLatin1String("remove")) { updated.append(id); }
+        if (action == QLatin1String("remove")) {
+            updated.append(id);
+            // Removing the dropped radio's tab dismisses its link alarm, as a
+            // deliberate disconnect would.
+            if (!m_radioModel.isConnected() && id == m_activeRadioTarget.value("id").toString()) {
+                if (m_heartbeatMissTimer) { m_heartbeatMissTimer->stop(); }
+                m_titleBar->clearLinkAlarm();
+            }
+        }
         document["version"] = 1;
         document["hiddenRadios"] = updated;
         if (action == QLatin1String("restore")) {
@@ -624,7 +665,12 @@ void MainWindow::connectSelectedRadio(const RadioInfo& info)
     }
     QList<quint32> disconnectHandles;
     if (!confirmClientSlotAvailability(info, &disconnectHandles)) {
-        m_connPanel->setStatusText("Connection canceled");
+        if (!m_pendingRadioTarget.isEmpty()) {
+            // Declining the client-slot picker cancels the switch, as the tab's Cancel does.
+            m_connPanel->cancelConnectionAttempt();
+            beginExplicitRadioChoice();
+        }
+        m_connPanel->setStatusText(tr("Connection canceled"));
         setPanadapterConnectionAnimation(false);
         return;
     }
@@ -821,13 +867,32 @@ void MainWindow::wireDiscovery()
     });
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
         if (connected) {
-            if (!m_pendingRadioTarget.isEmpty()) {
+            // A pending choice is adopted only when the radio that connected is
+            // the one chosen; the previous radio's retry must never wear its tab.
+            const QJsonObject pendingPath = m_pendingRadioTarget.value("path").toObject();
+            const QString pendingSerial = pendingPath.value("serial").toString();
+            bool pendingMatches = !m_pendingRadioTarget.isEmpty();
+            if (pendingMatches && !pendingSerial.isEmpty()) {
+                pendingMatches = pendingSerial == m_radioModel.serial();
+            } else if (pendingMatches && pendingPath.value("kind").toString() == QLatin1String("manual")) {
+                // An IP path learns its serial only after its first connect;
+                // until then the address it dialed is its identity.
+                const QHostAddress host(pendingPath.value("host").toString());
+                pendingMatches = host.isNull() || (!m_radioModel.isWan()
+                    && m_radioModel.lastRadioInfo().address.isEqual(host, QHostAddress::TolerantConversion));
+            }
+            QJsonObject supersededTarget;
+            if (!m_pendingRadioTarget.isEmpty() && !pendingMatches) {
+                supersededTarget = m_pendingRadioTarget;
+            }
+            if (pendingMatches) {
                 const QJsonObject resolved = m_connPanel->connectionTarget(m_pendingRadioTarget.value("path").toObject().value("id").toString());
                 m_activeRadioTarget = resolved.isEmpty() ? m_connPanel->connectionTarget(m_radioModel.serial()) : resolved;
                 m_activeRadioTarget["operator"] = m_pendingRadioTarget.value("operator");
                 m_pendingRadioTarget = {};
                 m_radioSwitchPhase.clear();
                 m_failedRadioTarget = {};
+                m_previousRadioTarget = {};
             } else {
                 const QJsonObject last = m_connPanel->connectionTarget(m_connPanel->workspaceSnapshot().value("lastConnection").toObject().value("pathId").toString());
                 m_activeRadioTarget = last.value("path").toObject().value("serial").toString() == m_radioModel.serial()
@@ -844,11 +909,26 @@ void MainWindow::wireDiscovery()
             switcher["version"] = 1;
             switcher["recentRadios"] = recent;
             settings.setValue("RadioSwitcher", QString::fromUtf8(QJsonDocument(switcher).toJson(QJsonDocument::Compact)));
-            settings.setValue("LastConnectedRadioSerial", m_radioModel.serial());
-            const RadioInfo info = m_radioModel.lastRadioInfo();
-            if (info.isRouted) { settings.setValue("LastRoutedRadioIp", info.address.toString()); }
-            else { settings.remove("LastRoutedRadioIp"); }
+            // lastRadioInfo() describes LAN sessions only; SmartLink never sets it.
+            if (!m_radioModel.isWan()) {
+                settings.setValue("LastConnectedRadioSerial", m_radioModel.serial());
+                const RadioInfo info = m_radioModel.lastRadioInfo();
+                if (info.isRouted) { settings.setValue("LastRoutedRadioIp", info.address.toString()); }
+                else { settings.remove("LastRoutedRadioIp"); }
+            }
             settings.save();
+            if (!supersededTarget.isEmpty()) {
+                // The live session is a real connection, not a failed switch:
+                // end the choice without marking it user-disconnected.
+                m_pendingRadioTarget = {};
+                m_previousRadioTarget = {};
+                m_radioSwitchPhase.clear();
+                ++m_radioChoiceGeneration;
+                m_connPanel->cancelConnectionAttempt();
+                statusBar()->showMessage(tr("%1 reconnected before %2 could connect.")
+                    .arg(m_activeRadioTarget.value("name").toString(m_radioModel.model()),
+                         supersededTarget.value("name").toString()), 8000);
+            }
             hideConnectionDialog();
         } else {
             m_radioDisconnectPending = false;
@@ -1011,8 +1091,11 @@ void MainWindow::wireDiscovery()
             QJsonObject document = QJsonDocument::fromJson(settings.value("RadioSwitcher", "{}").toString().toUtf8()).object();
             QJsonArray order;
             for (const QString& id : ids) { order.append(id); }
+            // Keep ranks for saved radios not in the strip; drop deleted ones.
+            QSet<QString> known;
+            for (const QJsonValue& target : m_connPanel->connectionTargets()) { known.insert(target.toObject().value("id").toString()); }
             for (const QJsonValue& old : document.value("tabOrder").toArray()) {
-                if (!ids.contains(old.toString())) { order.append(old); }
+                if (!ids.contains(old.toString()) && known.contains(old.toString())) { order.append(old); }
             }
             document["version"] = 1;
             document["tabOrder"] = order;

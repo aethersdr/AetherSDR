@@ -69,6 +69,7 @@ Right-click a tab, or focus it and press **Shift+F10**, for these actions:
 | **Disconnect** | Disconnect this client's live radio and keep its tab. |
 | **Rename…** | Change the saved connection label in both tabs and Locations. The simulator retains its safety label. |
 | **Connection settings…** | Open the matching Location, radio and saved path in the connection window. |
+| **Move left** / **Move right** | Swap the tab with its neighbor; the order is saved, as it is after dragging. |
 | **Remove from tabs** | Hide a disconnected tab while preserving its saved paths and radio settings. |
 
 To restore a hidden shortcut, open **⋯ More radios** and choose the saved radio, or use **Actions → Add to tabs** in the drawer. **Remove** in the saved radio menu deletes saved entries after confirmation; it is separate from **Remove from tabs**.

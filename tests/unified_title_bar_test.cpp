@@ -46,6 +46,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QAction>
 #include <QMouseEvent>
 #include <QMenuBar>
 #include <QOperatingSystemVersion>
@@ -1025,7 +1026,17 @@ int main(int argc, char** argv)
         QApplication::sendEvent(first, &menuKey);
         check(reorder.state().value("contextMenuVisible").toBool() && reorder.activeRadioId() == a.id,
             "Shift+F10 opens the tab menu without switching radios");
+        // The tab menu is the keyboard path for the same reorder.
+        QAction* left = reorder.findChild<QAction*>(QStringLiteral("radioSwitcher_moveLeft_") + a.id);
+        QAction* right = reorder.findChild<QAction*>(QStringLiteral("radioSwitcher_moveRight_") + a.id);
+        check(left && right && left->isEnabled() && !right->isEnabled(),
+            "the last tab's menu offers Move left but not Move right");
+        if (left) { left->trigger(); }
+        check(savedOrder == QStringList{b.id, a.id, c.id} && saves == 2 && visualOrder() == savedOrder
+                && reorder.activeRadioId() == a.id,
+            "Move left swaps with the neighbor and saves the order like a drag");
         if (QMenu* menu = reorder.findChild<QMenu*>()) { menu->close(); }
+        check(!reorder.moveRadioTab(b.id, -1) && saves == 2, "the first tab cannot move further left");
     }
 
     // A tab's menu targets that tab, including with keyboard activation.

@@ -180,6 +180,7 @@ accessible names. Search and controls are keyboard reachable.
 | Disconnect | Enabled only for this client's connected radio; uses the intentional-disconnect path. |
 | Rename | Client-owned names use the per-radio identity store and a non-modal dialog (built by MainWindow; `ConnectionPanel` decides and applies). Radio-owned names open Radio Setup while connected and are disabled while disconnected. The demo radio's "not on the air" name is a safety label and cannot be renamed. An empty nickname resets it. |
 | Radio setup | Enabled only for this client's connected radio. |
+| Move left / Move right | Keyboard path for drag reordering: swaps the tab with its visible radio neighbor and saves `RadioSwitcher.tabOrder`. Disabled at either end of the strip. |
 | Remove from tabs | Available only while not connected here. Hides the tab; does not erase credentials, operating state, or the radio. |
 | Add to tabs | Restores a hidden tab. Hidden radios stay in the "+" list; selecting one also restores it. |
 | Connect manually | Opens the IP connection page. |

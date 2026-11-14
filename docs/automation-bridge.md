@@ -2950,7 +2950,8 @@ persists a selection, including while a radio is live. Location selection does
 not connect or change audio. Explicitly switching operators recalls the saved
 computer audio/layout preferences, without changing radio-owned state, and is refused while transmitting. This mutation is refused
 in Observe-only mode. Profile creation and editing are exercised through the
-normal `connectionProfileEditor` widgets with `invoke`.
+normal `connectionProfileEditor` widgets with `invoke`. In an Observe-only session the
+`connect profiles` reply shows every email and user name field as `[REDACTED]`.
 
 `connect show` and `connect hide` idempotently show/raise or hide the
 modeless **Connect to Radio** dialog for visual debugging; they do not toggle,

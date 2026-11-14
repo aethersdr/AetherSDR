@@ -16,6 +16,7 @@
 #include <QPushButton>
 #include <QDialog>
 #include <QTest>
+#include <QHostAddress>
 #include <QMenu>
 #include <QAction>
 #include <QDialogButtonBox>
@@ -34,6 +35,14 @@ struct ConnectionPanelWorkspaceTestAccess {
     static QString station(const ConnectionPanel& panel) { return panel.m_pendingWorkspaceStation; }
     static QJsonObject attemptOperator(const ConnectionPanel& panel) { return panel.m_attemptOperator; }
     static void finish(ConnectionPanel& panel, const RadioInfo& info) { panel.finishManualProbe(info); }
+    static void connectSelection(ConnectionPanel& panel) { panel.connectWorkspaceSelection(); }
+    static void saveSelectedNearby(ConnectionPanel& panel) { panel.saveWorkspaceSelection(); }
+    static void latchIcom(ConnectionPanel& panel, const QString& id, const QString& host, const QString& user)
+    {
+        panel.latchIcomCredential(id, false, host, user);
+    }
+    static QString boundIcomId(const ConnectionPanel& panel) { return panel.boundIcomCredentialId(); }
+    static void markPrefilled(ConnectionPanel& panel) { panel.m_icomPasswordPrefilled = true; }
 };
 struct SmartLinkClientTestAccess {
     static void seed(SmartLinkClient& client)
@@ -56,6 +65,8 @@ struct SmartLinkClientTestAccess {
         client.finishRefreshReply(reply, generation);
     }
     static QString refreshToken(const SmartLinkClient& client) { return client.m_refreshToken; }
+    static void cacheSession(SmartLinkClient& client, const QString& id) { client.m_sessionCredentials[id] = "cached-" + id; }
+    static bool cached(const SmartLinkClient& client, const QString& id) { return client.m_sessionCredentials.contains(id); }
 };
 struct ConnectionPanelSmartLinkTestAccess {
     static QString icomCredentialId(const ConnectionPanel& panel) { return panel.m_activeIcomCredentialId; }
@@ -338,14 +349,23 @@ int main(int argc, char** argv)
                 && SmartLinkClientTestAccess::clean(client));
             const quint64 current = SmartLinkClientTestAccess::generation(client);
             SmartLinkClientTestAccess::seed(client);
+            SmartLinkClientTestAccess::cacheSession(client, secondAccount);
             CannedReply offline(QByteArray(), QNetworkReply::HostNotFoundError, 0);
             SmartLinkClientTestAccess::finishRefresh(client, &offline, current);
             check("a transport failure keeps the refresh token for the next retry", failures.count() == 1
-                && SmartLinkClientTestAccess::refreshToken(client) == "test-refresh");
+                && SmartLinkClientTestAccess::refreshToken(client) == "test-refresh"
+                && SmartLinkClientTestAccess::cached(client, secondAccount));
             CannedReply rejected(QByteArray(R"({"error_description":"expired"})"), QNetworkReply::ContentAccessDenied, 403);
             SmartLinkClientTestAccess::finishRefresh(client, &rejected, SmartLinkClientTestAccess::generation(client));
             check("an Auth0 rejection discards the refresh token", failures.count() == 2
                 && failures.last().first().toString() == "expired" && SmartLinkClientTestAccess::clean(client));
+            check("auto-login stops offering a token Auth0 rejected", !SmartLinkClientTestAccess::cached(client, secondAccount)
+                && SmartLinkClientTestAccess::retained(client));
+            SmartLinkClientTestAccess::seed(client);
+            SmartLinkClientTestAccess::cacheSession(client, secondAccount);
+            CannedReply throttled(QByteArray(R"({"error_description":"too many requests"})"), QNetworkReply::UnknownContentError, 429);
+            SmartLinkClientTestAccess::finishRefresh(client, &throttled, SmartLinkClientTestAccess::generation(client));
+            check("rate limiting does not forget a valid refresh token", SmartLinkClientTestAccess::cached(client, secondAccount));
         }
         client.setAccountLocked(true);
         client.setAccountId("legacy");
@@ -701,6 +721,101 @@ int main(int argc, char** argv)
         check("legacy family resolution updates the same saved path", connects.count() == 1 && saved.size() == 1
             && saved.first().toObject().value("id").toString() == "legacy-discovered"
             && saved.first().toObject().value("family").toString() == "flex");
+    }
+    {
+        // Two Locations: the demo saved at A, B empty and selected.
+        QJsonObject state = ConnectionWorkspace::load();
+        QJsonArray stations = state.value("stations").toArray();
+        QJsonObject savedAt = stations.first().toObject();
+        savedAt["id"] = "loc-a"; savedAt["name"] = "Location A";
+        savedAt["connections"] = QJsonArray{QJsonObject{{"id", "demo-a"}, {"name", "Demo at A"},
+            {"kind", "local"}, {"family", "sim"}, {"serial", "DEMO-0001"}, {"model", "AetherSDR Demo"}}};
+        QJsonObject empty = savedAt;
+        empty["id"] = "loc-b"; empty["name"] = "Location B"; empty["connections"] = QJsonArray{};
+        state["stations"] = QJsonArray{savedAt, empty};
+        state["selectedStation"] = "loc-b";
+        state["preferredPaths"] = QJsonObject{};
+        check("two-Location fixture saves", ConnectionWorkspace::save(state));
+        ConnectionPanel panel;
+        RadioInfo demo;
+        demo.family = "sim"; demo.serial = "DEMO-0001"; demo.model = "AetherSDR Demo";
+        demo.address = QHostAddress::LocalHost;
+        panel.onRadioDiscovered(demo);
+        RadioInfo other;
+        other.family = "flex"; other.serial = "nearby-only"; other.model = "FLEX-6400";
+        other.address = QHostAddress("192.0.2.77");
+        panel.onRadioDiscovered(other);
+        panel.selectWorkspaceProfile("stations", "loc-b");
+        auto* radios = panel.findChild<QListWidget*>("connectionWorkspaceRadios");
+        int demoRow = -1, otherRow = -1;
+        for (int row = 0; row < radios->count(); ++row) {
+            for (const QJsonValue& path : radios->item(row)->data(Qt::UserRole + 1).toJsonArray()) {
+                if (path.toObject().value("serial").toString() == "DEMO-0001") { demoRow = row; }
+                if (path.toObject().value("serial").toString() == "nearby-only") { otherRow = row; }
+            }
+        }
+        check("an empty Location lists a radio saved at another Location", demoRow >= 0 && otherRow >= 0);
+        QSignalSpy choices(&panel, &ConnectionPanel::connectionTargetRequested);
+        radios->setCurrentRow(demoRow);
+        ConnectionPanelWorkspaceTestAccess::connectSelection(panel);
+        check("Connect on it connects through its saved entry", choices.count() == 1
+            && choices.first().first().toJsonObject().value("path").toObject().value("id").toString() == "demo-a"
+            && choices.first().first().toJsonObject().value("stationId").toString() == "loc-a");
+
+        // A dispatched attempt must not decide where a later save lands.
+        if (!choices.isEmpty()) { panel.connectTarget(choices.first().first().toJsonObject()); }
+        panel.selectWorkspaceProfile("stations", "loc-b");
+        radios->setCurrentRow(otherRow);
+        ConnectionPanelWorkspaceTestAccess::saveSelectedNearby(panel);
+        const QJsonArray atA = ConnectionWorkspace::find(panel.workspaceSnapshot().value("stations").toArray(), "loc-a").value("connections").toArray();
+        const QJsonArray atB = ConnectionWorkspace::find(panel.workspaceSnapshot().value("stations").toArray(), "loc-b").value("connections").toArray();
+        check("Save to location writes into the Location being viewed", atA.size() == 1 && atB.size() == 1
+            && atB.first().toObject().value("serial").toString() == "nearby-only");
+    }
+    {
+        // A migrated connection keeps the pre-workspace keychain password.
+        QJsonObject state = ConnectionWorkspace::load();
+        QJsonArray stations = state.value("stations").toArray();
+        QJsonObject station = stations.first().toObject();
+        station["connections"] = QJsonArray{QJsonObject{{"id", "legacy-icom"}, {"name", "Old Icom"}, {"kind", "manual"},
+            {"family", "icom"}, {"host", "192.0.2.31"}, {"username", "portable"}, {"legacyCredentials", true}}};
+        state["stations"] = QJsonArray{station};
+        state["selectedStation"] = station.value("id");
+        ConnectionWorkspace::save(state);
+        ConnectionPanel startup;
+        startup.probeRadio(QStringLiteral("192.0.2.31"), /*restoreSavedFamily=*/true);
+        QCoreApplication::processEvents();
+        bool keychainRead = false, refused = false;
+        for (QLabel* label : startup.findChildren<QLabel*>()) {
+            keychainRead = keychainRead || label->text().contains("saved Icom password");
+            refused = refused || label->text().contains("Enter this radio's password");
+        }
+        check("a migrated Icom connection reads its legacy keychain password", keychainRead && !refused);
+    }
+    {
+        // A latched Icom credential belongs to one host and user.
+        ConnectionPanel panel;
+        auto* host = panel.findChild<QLineEdit*>("connectionManualIp");
+        auto* user = panel.findChild<QLineEdit*>("connectionManualIcomUser");
+        auto* pass = panel.findChild<QLineEdit*>("connectionManualIcomPassword");
+        check("Icom manual fields exist", host && user && pass);
+        if (host && user && pass) {
+            host->setText("192.0.2.50");
+            user->setText("op");
+            ConnectionPanelWorkspaceTestAccess::latchIcom(panel, QString(64, QLatin1Char('a')), "192.0.2.50", "op");
+            check("the credential is offered for its own radio", ConnectionPanelWorkspaceTestAccess::boundIcomId(panel) == QString(64, QLatin1Char('a')));
+            host->setText("192.0.2.51");   // e.g. picked from the address history: no textEdited
+            check("a different host never receives it", ConnectionPanelWorkspaceTestAccess::boundIcomId(panel).isEmpty());
+            host->setText("192.0.2.50");
+            check("returning to the saved host offers it again", !ConnectionPanelWorkspaceTestAccess::boundIcomId(panel).isEmpty());
+            pass->setText("typed");
+            ConnectionPanelWorkspaceTestAccess::markPrefilled(panel);
+            host->setText("192.0.2.52");
+            check("a filled-in saved password is dropped when the host changes", pass->text().isEmpty());
+            QTest::keyClicks(pass, "typed");
+            QTest::keyClicks(user, "x");
+            check("a typed password survives editing the user name", pass->text() == "typed");
+        }
     }
     check("newer settings schema can be staged for guard test",
         settings.setRadioFeature("local", "", "ConnectionWorkspace", 2, document));

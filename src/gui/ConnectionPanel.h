@@ -15,6 +15,7 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QTimer>
 #include <QLineEdit>
 #include <QButtonGroup>
 #include <QCommandLinkButton>
@@ -44,6 +45,7 @@ class ConnectionPanel : public CanonWindow, public IConnectionAutomation {
 
 public:
     explicit ConnectionPanel(QWidget* parent = nullptr);
+    ~ConnectionPanel() override;
 
     static constexpr int kSafeMinimumWidth = 640;
     static constexpr int kSafeMinimumHeight = 360;
@@ -145,7 +147,9 @@ public slots:
     QJsonObject connectionTarget(const QString& id) const;
     bool selectConnectionTarget(const QString& id, bool edit = false);
     void renameConnectionTarget(const QString& id);
-    bool validateConnectionTarget(const QJsonObject& target, QString* reason = nullptr) const;
+    // `listed`: the caller took `target` from connectionTargets() just now,
+    // so the per-call rebuild that checks it still exists can be skipped.
+    bool validateConnectionTarget(const QJsonObject& target, QString* reason = nullptr, bool listed = false) const;
     void requestConnectionTarget(const QString& id);
     void rememberSuccessfulTarget(const QJsonObject& target);
     void connectTarget(const QJsonObject& target);
@@ -356,6 +360,7 @@ private:
     quint64 m_connectionGeneration{0};
     QPointer<QTcpSocket> m_probeSocket;
     bool m_dispatchingTarget{false};
+    QTimer* m_browseSaveTimer{nullptr};
     bool m_allowLegacyIcomCredential{true};
     QLineEdit* m_manualConnectionName{nullptr};
 
@@ -441,9 +446,20 @@ private:
     // Drop a staged Icom credential that did not belong to the connect that
     // actually happened. See setConnected().
     void clearPendingIcomCredentials();
+    void flushBrowsedRadio();
+    QString currentIcomBinding() const;
+    static QString icomBinding(const QString& host, const QString& username);
+    void latchIcomCredential(const QString& id, bool legacy, const QString& host, const QString& username);
+    QString boundIcomCredentialId() const;
+    bool legacyIcomCredentialUsable() const;
 
     QString      m_pendingIcomPassword;
     QString      m_activeIcomCredentialId;
+    // The host|user the latched credential belongs to. A latch is honored only
+    // while the manual fields still name that radio, however they changed.
+    QString      m_activeIcomCredentialBinding;
+    // The password field holds a saved password we filled in, not typed text.
+    bool         m_icomPasswordPrefilled{false};
     QString      m_pendingIcomUsername;
     QString      m_pendingIcomHost;
     QString      m_pendingIcomResolvedHost;
