@@ -979,6 +979,9 @@ private:
     void refuseControlAction(const QString& name, bool transmitSetup = false);
     QAction* findMenuAction(const QStringList& path) const;
     void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
+    // F<id> on the voice keyer for an outside input, started under that
+    // input's request; false when the slot cannot play now.
+    bool fireVoiceKeyerSlot(int id, const TxController::Input& input);
     // Band stack stepping and the band-plan strip toggle (registry actions).
     bool hasBandStackEntries() const;
     // Pan ids as the operator sees them: the workspace canvas order when it

@@ -50,7 +50,12 @@ public:
     // panel's F-keys are armed (a voice TX slice and a usable keyer); fireSlot
     // does what F<id> does; stopOperation does what Escape does.
     bool fKeysArmed() const;
-    void fireSlot(int id) { selectSlot(id); togglePlayback(id); }
+    // Pieces of F<id> for an outside "Macro N": stop this slot if it is
+    // playing, or say whether it may start now (togglePlayback's rule) and
+    // select it. The caller starts it under its own input's request.
+    bool stopSlotIfPlaying(int id);
+    bool slotStartable(int id) const;
+    void markSelected(int id) { selectSlot(id); }
     void stopOperation() { stopActiveOperation(); }
 
     // Show one line in the panel's status area. For notices the keyer itself

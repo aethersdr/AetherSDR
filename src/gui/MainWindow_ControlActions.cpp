@@ -68,8 +68,12 @@ void MainWindow::fireCwxMacro(int index, const TxController::Input& input)
 {
     if (m_cwxPanel && m_cwxPanel->fKeysArmed() && m_cwxPanel->fireMacro(index, input))
         return;
+    // The voice keyer starts under this input's request, so closing the
+    // device fences a playback still waiting for its stream or settle hop.
     if (m_dvkPanel && m_dvkPanel->fKeysArmed()) {
-        m_dvkPanel->fireSlot(index + 1);
+        if (!fireVoiceKeyerSlot(index + 1, input)) {
+            showShortcutNotice(tr("Voice keyer slot %1 can't play now").arg(index + 1), 5000);
+        }
         return;
     }
     showShortcutNotice(

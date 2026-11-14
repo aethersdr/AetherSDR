@@ -384,6 +384,16 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
     showShortcutNotice(tr("Keyboard shortcuts are off"), 10000);
 }
 
+bool MainWindow::fireVoiceKeyerSlot(int id, const TxController::Input& input)
+{
+    if (!m_dvkPanel || !m_dvkPanel->keyer()) return false;
+    if (m_dvkPanel->stopSlotIfPlaying(id)) return true;
+    if (!m_dvkPanel->slotStartable(id)) return false;
+    m_dvkPanel->markSelected(id);
+    m_dvkPanel->keyer()->playbackStartFrom(id, input.request());
+    return true;
+}
+
 void MainWindow::refuseControlAction(const QString& name, bool transmitSetup)
 {
     // A held key or a spinning encoder refuses many times a second: say it

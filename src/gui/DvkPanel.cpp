@@ -1100,4 +1100,19 @@ bool DvkPanel::fKeysArmed() const
     return !m_shortcuts.isEmpty() && m_shortcuts.first()->isEnabled();
 }
 
+bool DvkPanel::stopSlotIfPlaying(int id)
+{
+    if (m_model->status() == VoiceKeyer::Playback && m_model->activeId() == id) {
+        m_model->playbackStop(id);
+        return true;
+    }
+    return false;
+}
+
+bool DvkPanel::slotStartable(int id) const
+{
+    return m_model->canStartOperation() && m_unavailableReason.isEmpty()
+        && durationForSlot(id) > 0;
+}
+
 } // namespace AetherSDR

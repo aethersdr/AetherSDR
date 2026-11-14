@@ -7416,6 +7416,7 @@ add_executable(voice_keyer_dvk_model_test
     src/models/DvkModel.cpp
     src/models/DvkModel.h
     src/models/VoiceKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/models/VoiceKeyer.h
 )
 target_include_directories(voice_keyer_dvk_model_test PRIVATE src)
@@ -7432,6 +7433,7 @@ add_executable(dvk_panel_test
     # The slot context menu goes through roundMenuTree().
     src/gui/RoundedMenu.cpp
     src/models/VoiceKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/models/VoiceKeyer.h
     # DvkPanel.cpp applies theme stylesheets through ThemeManager; pull in the
     # manager + its logging deps so the test links (as cwx_panel_test does).
@@ -7484,6 +7486,7 @@ add_executable(local_voice_keyer_test
     src/core/VoiceKeyerWavDecoder.cpp
     src/core/Resampler.cpp
     src/core/GeneratedAudioTransmitter.cpp
+    src/core/TxCoordinator.cpp
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_settings>

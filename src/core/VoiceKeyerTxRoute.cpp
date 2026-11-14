@@ -83,6 +83,20 @@ bool VoiceKeyerTxRoute::admitOperation()
     return m_request.valid();
 }
 
+bool VoiceKeyerTxRoute::admitOperationFrom(const TxCoordinator::Request& origin)
+{
+    // The originating device's request, not this route's producer: closing
+    // that device discards it, and keyOn() after the settle hop then has
+    // nothing valid to key against (docs/agents/backends.md, step 4).
+    if (!origin.valid())
+        return false;
+    m_request = origin;
+    if (needsStream()) {
+        m_radio.noteDaxTxInput(m_request);
+    }
+    return true;
+}
+
 bool VoiceKeyerTxRoute::keyOn()
 {
     // The request was taken at the input boundary by admitOperation(); this
