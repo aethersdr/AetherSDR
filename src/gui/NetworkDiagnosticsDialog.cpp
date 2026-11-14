@@ -1139,7 +1139,7 @@ static QString tciRoleHint(const TciClientInfo& c)
 {
     if (c.audio) return QStringLiteral("Audio (WSJT-X / digital mode)");
     if (c.iq)    return QStringLiteral("IQ stream (panadapter / SDR client)");
-    if (c.rxSensors || c.txSensors)
+    if (c.rxSensors || c.txSensors || c.hwSensors)
                  return QStringLiteral("Telemetry / monitor");
     return QStringLiteral("Control only");
 }

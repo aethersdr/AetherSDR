@@ -1164,6 +1164,7 @@ QVector<TciClientInfo> TciServer::connectedClients() const
         info.iq           = !cs.iqReceivers.isEmpty();
         info.rxSensors    = cs.rxSensorsEnabled;
         info.txSensors    = cs.txSensorsEnabled;
+        info.hwSensors    = cs.hwSensorsEnabled;
         out.append(info);
     }
     return out;
@@ -1535,6 +1536,7 @@ void TciServer::onTextMessage(const QString& msg)
                               << (request->enabled ? "enabled" : "disabled")
                               << request->intervalMs << "ms";
                 m_hwSensorsTimer->start(0);
+                emit clientsChanged();
             }
             continue;
         }

@@ -62,6 +62,7 @@ struct TciClientInfo {
     bool    iq{false};
     bool    rxSensors{false};
     bool    txSensors{false};
+    bool    hwSensors{false};
 };
 
 // TCI WebSocket server — exposes radio state and audio over the TCI protocol.

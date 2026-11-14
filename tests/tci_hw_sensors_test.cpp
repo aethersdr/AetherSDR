@@ -213,11 +213,22 @@ void testServerSendsOnlyAfterEnable()
         return int(l.filter(QStringLiteral("hw_sensors:")).size());
     };
 
+    int clientsChangedCount = 0;
+    QObject::connect(&server, &TciServer::clientsChanged, &server,
+                     [&] { ++clientsChangedCount; });
+    const auto hwSubscribed = [&](int client) {
+        return server.connectedClients().value(client).hwSensors;
+    };
+
     QCoreApplication::processEvents();
     check(hwCount(toEnabled) == 0 && !TciHwSensorsTestAccess::timerActive(server),
           "server: no hw_sensors and no timer before enable");
+    check(!hwSubscribed(0) && !hwSubscribed(1), "diagnostics: no client subscribed before enable");
 
     emit enabled.textMessageReceived(QStringLiteral("HW_SENSORS_ENABLE:true,5;"));
+    check(clientsChangedCount == 1, "diagnostics: enable emits clientsChanged()");
+    check(hwSubscribed(0) && !hwSubscribed(1),
+          "diagnostics: the client list shows which client enabled hw_sensors");
     check(toEnabled.filter(QStringLiteral("hw_sensors_enable")).isEmpty(),
           "server: the unidirectional enable is not answered");
     check(TciHwSensorsTestAccess::intervalMs(server, 0) == 30, "server: interval held at 30 ms");
@@ -230,6 +241,8 @@ void testServerSendsOnlyAfterEnable()
     check(hwCount(toSilent) == 0, "server: a client that did not enable receives nothing");
 
     emit enabled.textMessageReceived(QStringLiteral("hw_sensors_enable:false;"));
+    check(clientsChangedCount == 2 && !hwSubscribed(0),
+          "diagnostics: disable emits clientsChanged() and clears the subscription");
     check(pumpUntil([&] { return !TciHwSensorsTestAccess::timerActive(server); }, 5000),
           "server: disabling the last client stops the timer");
     const int after = hwCount(toEnabled);
