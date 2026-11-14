@@ -437,15 +437,18 @@ static void testShiftBoundRefusesTheOver()
     const std::int64_t leadMs = Access::leadSamples() * 1000 / kRate;
     const std::int64_t boundMs = Access::maxShiftSamples() * 1000 / kRate;
     {
-        // One element on time, then a key-down later than lead + bound: refused,
-        // and the rest of the over with it, even edges that arrive on time.
+        // A key-down later than lead + bound is refused, and the rest of the
+        // over with it, even edges that arrive on time.
         Bench b;
-        b.play({{100, true, 100, true, 140}, {140, false, 140},
+        // The first element is shifted (30 ms past the lead), so the over's
+        // shift is non-zero when the refusal ends it.
+        b.play({{100, true, 100 + leadMs + 30, true, 140}, {140, false, 140 + leadMs + 30},
                 {180, true, 180 + leadMs + boundMs + 20, true, 220}, {220, false, 220 + leadMs + boundMs + 20},
                 {600, true, 600, true, 640}, {640, false, 640}}, 1000);
+        check(b.client.cwShiftSamples() > 0, "past the bound: the over had shifted before it was refused");
         const auto runs = carriers(b.iTrace);
         check(runs.size() == 1 && within(runs[0].length, samplesOfMs(40), 1),
-              "past the bound: the on-time element is sent whole, the late one and the rest of the over are not");
+              "past the bound: the shifted element is sent whole, the late one and the rest of the over are not");
         check(b.client.cwRefusedDowns() == 2 && !b.client.cwKeyDown() && Access::pending(b.client) == 0,
               "past the bound: both refused downs are counted, the key is up, nothing pending");
         b.client.clearCwKeying();   // the over ends (break-in hang, MOX off)
