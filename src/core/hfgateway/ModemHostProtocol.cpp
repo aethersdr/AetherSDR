@@ -99,9 +99,9 @@ Notification unknown(const QString& raw)
 
 // ── Framing ─────────────────────────────────────────────────────────────────
 
-QList<QString> LineSplitter::feed(const QByteArray& bytes)
+QList<Line> LineSplitter::feed(const QByteArray& bytes)
 {
-    QList<QString> out;
+    QList<Line> out;
     for (const char c : bytes) {
         if (c == kLf) {
             continue;
@@ -109,8 +109,9 @@ QList<QString> LineSplitter::feed(const QByteArray& bytes)
         if (c == kCr) {
             if (m_overflow || m_badByte) {
                 ++m_rejected;
+                out.append(Line{QString(), true});
             } else if (!m_line.isEmpty()) {
-                out.append(QString::fromLatin1(m_line));
+                out.append(Line{QString::fromLatin1(m_line), false});
             }
             m_line.clear();
             m_overflow = false;
@@ -138,14 +139,14 @@ void LineSplitter::reset()
     m_line.clear();
     m_overflow = false;
     m_badByte = false;
+    m_rejected = 0;
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
 
 bool isValidCallsign(const QString& call)
 {
-    static const QRegularExpression re(
-        QStringLiteral("^(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{1,7}(-(1[0-5]|[0-9]))?$"));
+    static const QRegularExpression re(QStringLiteral("^[A-Z0-9]([A-Z0-9/-]{0,13}[A-Z0-9])?$"));
     return re.match(call).hasMatch();
 }
 
@@ -289,7 +290,7 @@ Command parseCommand(const QString& raw)
 {
     Command c;
     c.raw = raw;
-    const QStringList t = tokens(raw);
+    const QStringList t = tokens(raw.toUpper());
     if (t.isEmpty()) {
         return c;
     }

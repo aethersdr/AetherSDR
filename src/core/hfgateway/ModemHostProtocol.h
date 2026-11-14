@@ -15,10 +15,10 @@
 //   * host -> modem: commands a host application sends (the gateway as the
 //     server its back end connects to)
 //
-// Every token here is cited in docs/hf-gateway-host-interface.md. Sources are
-// the vendored Data2G host layer (third_party/data2g/core/host/host.hpp and
-// host.cpp) and Mercury's published docs/TNC.md. Nothing here is specific to
-// any one modem implementation.
+// Every token here is cited in docs/hf-gateway-host-interface.md, to one of
+// two sources: the vendored Data2G host layer (third_party/data2g/core/host/)
+// or Mercury's published docs/TNC.md. Nothing here is specific to any one
+// modem implementation.
 //
 // Input is untrusted. Lines are length-capped and must be printable ASCII;
 // tokens are matched exactly; numbers and callsigns are range-checked. A line
@@ -43,19 +43,26 @@ inline constexpr double kMinSnDb = -50.0;
 inline constexpr double kMaxSnDb = 60.0;
 
 // Default ports: command on the base port, data on base + 1
-// (Mercury docs/TNC.md; Data2G docs/arq.md §9).
+// (Mercury docs/TNC.md).
 inline constexpr quint16 kDefaultCommandPort = 8300;
 
+// One framed line. A rejected line keeps its place in the stream, because
+// replies on the command port are positional: a server must still answer a
+// rejected command with WRONG, in order.
+struct Line {
+    QString text;           // empty when rejected
+    bool rejected = false;  // over kMaxLineBytes, or bytes outside printable ASCII
+};
+
 // Splits a command-port byte stream into lines. Handles reads that join
-// several lines or split one. A line longer than kMaxLineBytes, or one that
-// contains bytes outside printable ASCII, is discarded and counted; LF is
-// ignored so a CRLF sender still frames cleanly.
+// several lines or split one. LF is ignored so a CRLF sender still frames
+// cleanly; empty lines are dropped.
 class LineSplitter {
 public:
-    QList<QString> feed(const QByteArray& bytes);
+    QList<Line> feed(const QByteArray& bytes);
     void reset();
 
-    // Lines discarded since construction or the last reset().
+    // Lines rejected since construction or the last reset().
     int rejectedLines() const { return m_rejected; }
 
 private:
@@ -65,9 +72,11 @@ private:
     int m_rejected = 0;
 };
 
-// True for a callsign the gateway will pass on: 1-7 letters/digits with at
-// least one digit and one letter, plus an optional -SSID of 0-15.
-// Normalises nothing; callers upper-case first if they want to.
+// True for a callsign the gateway will pass on: 1-15 characters of A-Z, 0-9,
+// '/' and '-', starting and ending with a letter or digit. This is the union
+// of Mercury's limit (15 characters) and Data2G's alphabet (A-Z 0-9 / -);
+// a modem with a narrower rule answers WRONG for itself. Upper case only:
+// parseCommand() upper-cases its input first.
 bool isValidCallsign(const QString& call);
 
 // A bandwidth token the cited modems use: 500, 1200, 2300 or 2750 Hz.
@@ -162,6 +171,9 @@ struct Command {
     QStringList args;       // remaining tokens, for logging
 };
 
+// Keywords and arguments are matched case-insensitively, as the Data2G host
+// layer does (it upper-cases the command word and its first argument); the
+// whole line is upper-cased first, so callsigns come back upper case.
 Command parseCommand(const QString& line);
 
 // Notifications the gateway sends to its back end. Each returns the bytes to
