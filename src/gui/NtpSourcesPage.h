@@ -13,6 +13,7 @@
 class QCheckBox;
 class QComboBox;
 class QGroupBox;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -51,6 +52,8 @@ private:
     void rebuild();
     void updateButtons();
     void selectTab();
+    bool hasAddDraft() const;
+    bool editorHasChanges() const;
     void updateDashboard();
     void setMessage(const QString& text, const QString& token);
     QString selectedId() const;
@@ -79,6 +82,7 @@ private:
     QLabel* m_health;
     QLabel* m_gps;
     QLabel* m_gpsDetails;
+    QFrame* m_gpsCard{nullptr};
     QLabel* m_sourceState;
     QLabel* m_stratum;
     QLabel* m_reach;
@@ -94,7 +98,7 @@ private:
     QCheckBox* m_prefer;
     QLabel* m_editorIssue;
     QPushButton* m_save;
-    QPushButton* m_cancel;
+    QPushButton* m_reset;
     QLabel* m_message;
     QLabel* m_reason;
     Confirm m_confirm;
@@ -105,8 +109,16 @@ private:
     bool m_adding{false};
     bool m_rebuilding{false};
     QString m_editorId;
+    NtpSourceDefinition m_editorBaseline;
     int m_editorTab{0};
-    QHash<int, NtpSourceDefinition> m_drafts;
+    struct EditorDraft {
+        NtpSourceDefinition definition;
+        bool adding{false};
+    };
+    QHash<int, EditorDraft> m_drafts;
+    // Accepted commands do not establish live state: hold the slot until status.
+    QHash<QString, NtpSourceDefinition> m_creates;
+    std::function<bool()> m_sessionCurrent;
 };
 
 } // namespace AetherSDR

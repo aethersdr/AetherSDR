@@ -27,6 +27,16 @@ namespace AetherSDR {
 
 namespace {
 
+NtpSourceDefinition sourceDefinition(const NtpSourceState& source)
+{
+    return {source.id, source.address, source.directive, source.description, source.prefer};
+}
+
+bool sameDefinition(const NtpSourceDefinition& a, const NtpSourceDefinition& b)
+{
+    return a.id == b.id && a.address == b.address && a.directive == b.directive
+        && a.description == b.description && a.prefer == b.prefer;
+}
 
 bool confirmWithBox(QWidget* parent, const QString& title, const QString& text, const QString& accept)
 {
@@ -134,7 +144,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
       m_editor(new QGroupBox(m_body)), m_id(new QLineEdit(m_editor)), m_address(new QLineEdit(m_editor)),
       m_directive(new GuardedComboBox(m_editor)), m_description(new QLineEdit(m_editor)),
       m_prefer(new QCheckBox(tr("Prefer this source"), m_editor)), m_editorIssue(new QLabel(m_editor)),
-      m_save(new QPushButton(m_editor)), m_cancel(new QPushButton(tr("Cancel"), m_editor)),
+      m_save(new QPushButton(m_editor)), m_reset(new QPushButton(tr("Reset"), m_editor)),
       m_message(new QLabel(this)), m_reason(new QLabel(this))
 {
     setObjectName(QStringLiteral("ntpSourcesPage"));
@@ -194,14 +204,14 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     bodyLayout->addWidget(hero);
     auto* overview = new QHBoxLayout;
     overview->addWidget(card(tr("SOURCE HEALTH"), m_health, "ntpHealth"), 1);
-    QFrame* gpsCard = card(tr("ONBOARD REFERENCE"), m_gps, "ntpGpsReference");
-    gpsCard->setObjectName(QStringLiteral("ntpGpsCard"));
+    m_gpsCard = card(tr("ONBOARD REFERENCE"), m_gps, "ntpGpsReference");
+    m_gpsCard->setObjectName(QStringLiteral("ntpGpsCard"));
     m_gpsDetails->setObjectName(QStringLiteral("ntpGpsDetails"));
     m_gpsDetails->setTextFormat(Qt::PlainText);
     m_gpsDetails->setWordWrap(true);
     setTone(m_gpsDetails, Tone::Hint);
-    gpsCard->layout()->addWidget(m_gpsDetails);
-    overview->addWidget(gpsCard, 1);
+    m_gpsCard->layout()->addWidget(m_gpsDetails);
+    overview->addWidget(m_gpsCard, 1);
     bodyLayout->addLayout(overview);
 
     auto* heading = new QHBoxLayout;
@@ -256,7 +266,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     sourceActions->addStretch();
     sourceActions->addWidget(m_remove);
     bodyLayout->addLayout(sourceActions);
-    for (QPushButton* button : {m_remove, m_save, m_cancel}) { button->setAutoDefault(false); }
+    for (QPushButton* button : {m_remove, m_save, m_reset}) { button->setAutoDefault(false); }
 
     m_editor->setObjectName(QStringLiteral("ntpSourceEditor"));
     auto* form = new QFormLayout(m_editor);
@@ -281,7 +291,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     m_editorIssue->setTextFormat(Qt::PlainText);
     m_editorIssue->setAccessibleName(tr("Why the source cannot be saved"));
     m_save->setObjectName(QStringLiteral("ntpSourceSave"));
-    m_cancel->setObjectName(QStringLiteral("ntpSourceCancel"));
+    m_reset->setObjectName(QStringLiteral("ntpSourceReset"));
     form->addRow(tr("ID:"), m_id);
     form->addRow(tr("Address:"), m_address);
     form->addRow(tr("Type:"), m_directive);
@@ -290,7 +300,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     form->addRow(m_editorIssue);
     auto* editorButtons = new QHBoxLayout;
     editorButtons->addStretch();
-    editorButtons->addWidget(m_cancel);
+    editorButtons->addWidget(m_reset);
     editorButtons->addWidget(m_save);
     form->addRow(editorButtons);
     m_editor->setVisible(false);
@@ -349,8 +359,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
     connect(m_directive, &QComboBox::currentIndexChanged, this, &NtpSourcesPage::validateEditor);
     connect(m_prefer, &QCheckBox::toggled, this, &NtpSourcesPage::validateEditor);
     connect(m_save, &QPushButton::clicked, this, &NtpSourcesPage::saveEditor);
-    m_cancel->setText(tr("Reset"));
-    connect(m_cancel, &QPushButton::clicked, this, [this] {
+    connect(m_reset, &QPushButton::clicked, this, [this] {
         m_drafts.remove(m_tabs->currentIndex());
         openEditor(source(selectedId()));
         updateDashboard();
@@ -403,6 +412,7 @@ int NtpSourcesPage::enabledCount() const
 
 void NtpSourcesPage::track(const QString& id, NtpSourceRequest::Action action)
 {
+    if (!m_sessionCurrent || !m_sessionCurrent()) { rebuild(); }
     m_pending.insert(id, action);
     rebuild();
 }
@@ -420,24 +430,43 @@ QString NtpSourcesPage::selectedId() const
     return m_slots.value(m_tabs->currentIndex());
 }
 
+bool NtpSourcesPage::hasAddDraft() const
+{
+    return m_adding && !m_creates.contains(m_editorId) && (!m_id->text().trimmed().isEmpty()
+        || !m_address->text().trimmed().isEmpty() || !m_description->text().isEmpty()
+        || m_prefer->isChecked() || m_directive->currentData() != QStringLiteral("server"));
+}
+
+bool NtpSourcesPage::editorHasChanges() const
+{
+    return m_adding ? hasAddDraft() : !sameDefinition(editorDefinition(), m_editorBaseline);
+}
+
 void NtpSourcesPage::selectTab()
 {
     if (m_rebuilding) { return; }
     if (m_editorSessionCurrent && m_editorSessionCurrent()) {
-        if (!m_editor->isHidden()) { m_drafts.insert(m_editorTab, editorDefinition()); }
+        if (!m_editor->isHidden() && !m_creates.contains(m_slots.value(m_editorTab))) {
+            if (editorHasChanges()) {
+                m_drafts.insert(m_editorTab, {editorDefinition(), m_adding});
+            } else {
+                m_drafts.remove(m_editorTab);
+            }
+        }
     } else {
         m_drafts.clear();
     }
     openEditor(source(selectedId()));
     const auto draft = m_drafts.constFind(m_tabs->currentIndex());
-    if (draft != m_drafts.cend() && (m_adding || draft->id == selectedId())) {
+    if (draft != m_drafts.cend() && draft->adding == m_adding
+        && (m_adding || draft->definition.id == selectedId())) {
         const QSignalBlocker id(m_id), address(m_address), description(m_description),
             directive(m_directive), prefer(m_prefer);
-        m_id->setText(draft->id);
-        m_address->setText(draft->address);
-        m_directive->setCurrentIndex(m_directive->findData(draft->directive));
-        m_description->setText(draft->description);
-        m_prefer->setChecked(draft->prefer);
+        m_id->setText(draft->definition.id);
+        m_address->setText(draft->definition.address);
+        m_directive->setCurrentIndex(m_directive->findData(draft->definition.directive));
+        m_description->setText(draft->definition.description);
+        m_prefer->setChecked(draft->definition.prefer);
     }
     validateEditor();
     updateDashboard();
@@ -448,34 +477,92 @@ void NtpSourcesPage::rebuild()
     const QString reason = unavailableReason(m_model.isConnected(), m_model.backendCapabilities());
     m_reason->setText(reason);
     m_reason->setVisible(!reason.isEmpty());
+    if (!m_sessionCurrent || !m_sessionCurrent()) {
+        m_creates.clear();
+        m_pending.clear();
+        m_drafts.clear();
+        if (reason.isEmpty()) {
+            const RadioControlSession session = m_model.controlSession();
+            const QPointer<RadioModel> model(&m_model);
+            m_sessionCurrent = [model, session] { return model && model->controlSessionCurrent(session); };
+        }
+    }
     m_rebuilding = true;
-    // Preserve a slot's identity while live sources arrive, disappear or reorder.
+    QStringList notices;
+    for (auto it = m_creates.begin(); it != m_creates.end();) {
+        if (source(it.key())) { it = m_creates.erase(it); } else { ++it; }
+    }
+    // Preserve reported identities and creations waiting for authoritative status.
     for (QString& id : m_slots) {
-        if (!id.isEmpty() && !source(id) && !pending(id)) { id.clear(); }
+        if (!id.isEmpty() && !source(id) && !pending(id) && !m_creates.contains(id)) {
+            if (m_editorId == id && !m_adding) {
+                notices.append(tr("The radio no longer lists %1. Its edit draft was discarded.").arg(id));
+            }
+            id.clear();
+        }
+    }
+    for (auto it = m_drafts.begin(); it != m_drafts.end();) {
+        if (!it->adding && !source(it->definition.id)) {
+            const QString notice = tr("The radio no longer lists %1. Its edit draft was discarded.")
+                .arg(it->definition.id);
+            if (!notices.contains(notice)) { notices.append(notice); }
+            it = m_drafts.erase(it);
+        } else {
+            ++it;
+        }
     }
     for (const NtpSourceState& state : m_model.ntpSources()) {
         if (m_slots.contains(state.id)) { continue; }
-        const int empty = m_slots.indexOf(QString());
+        int empty = -1;
+        for (int i = 0; i < m_slots.size(); ++i) {
+            const bool typing = i == m_editorTab && !m_editor->isHidden() && hasAddDraft();
+            if (m_slots.at(i).isEmpty() && !typing && !m_drafts.contains(i)) { empty = i; break; }
+        }
+        if (empty < 0) { empty = m_slots.indexOf(QString()); }
+        // A full reported inventory also outranks an unreported create reservation.
+        if (empty < 0) {
+            for (int i = 0; i < m_slots.size(); ++i) {
+                if (!source(m_slots.at(i))) { empty = i; break; }
+            }
+        }
         if (empty < 0) { break; }
+        const bool typing = empty == m_editorTab && !m_editor->isHidden() && hasAddDraft();
+        if (typing || m_drafts.contains(empty)) {
+            notices.append(tr("The radio filled server tab %1. Its unsaved draft was discarded.").arg(empty + 1));
+            m_drafts.remove(empty);
+            if (empty == m_editorTab) { closeEditor(); }
+        }
         m_slots[empty] = state.id;
     }
     for (int i = 0; i < m_slots.size(); ++i) {
         const NtpSourceState* state = source(m_slots.at(i));
+        const auto create = m_creates.constFind(m_slots.at(i));
         m_tabs->setTabText(i, state && state->enabled && state->inUse()
             ? tr("%1 ★").arg(i + 1) : QString::number(i + 1));
-        m_tabs->setTabToolTip(i, state ? tr("Server %1: %2 — %3").arg(i + 1).arg(state->address, statusText(*state))
-                                              : tr("Server %1: empty configuration slot").arg(i + 1));
+        const QString description = state ? tr("Server %1, %2, %3, %4").arg(i + 1)
+            .arg(state->id, state->address, statusText(*state))
+            : create != m_creates.cend() ? tr("Server %1, %2, %3, adding; waiting for radio status").arg(i + 1)
+                .arg(create->id, create->address)
+            : tr("Server %1: empty configuration slot").arg(i + 1);
+        m_tabs->setAccessibleTabName(i, description);
+        m_tabs->setTabToolTip(i, QStringLiteral("<qt>%1</qt>").arg(description.toHtmlEscaped()));
     }
     m_rebuilding = false;
     m_count->setText(tr("%1 of %2 sources").arg(m_model.ntpSources().size()).arg(maxSources()));
     const QString id = selectedId();
+    const bool staleForm = reason.isEmpty() && (!m_editorSessionCurrent || !m_editorSessionCurrent());
+    const NtpSourceState* current = source(id);
+    const bool pristineDefinitionChanged = current && !m_adding && !editorHasChanges()
+        && !sameDefinition(m_editorBaseline, sourceDefinition(*current));
     if (m_editor->isHidden() || (!m_adding && m_editorId != id)
-        || (m_adding && m_id->text().isEmpty() && !id.isEmpty())) {
+        || (m_adding && !id.isEmpty() && !m_creates.contains(id))
+        || (m_adding && !m_editorId.isEmpty() && m_editorId != id) || staleForm || pristineDefinitionChanged) {
         openEditor(source(id));
     }
     validateEditor();
     updateDashboard();
     updateButtons();
+    if (!notices.isEmpty()) { setMessage(notices.join(QLatin1Char('\n')), QStringLiteral("color.accent.warning")); }
 }
 
 void NtpSourcesPage::updateDashboard()
@@ -499,7 +586,7 @@ void NtpSourcesPage::updateDashboard()
     m_health->setAccessibleDescription(tr("Reachable means at least one reply in the last eight polls; "
         "these counts describe configured sources, not individual servers resolved from a pool."));
     const bool gpsdo = m_model.isConnected() && m_model.gpsdoPresent();
-    const bool gpsLocked = gpsdo && m_model.gpsStatus() == QLatin1String("Locked");
+    const bool gpsLocked = gpsdo && m_model.oscLocked();
     m_gps->setText(gpsLocked ? tr("GPSDO locked") : gpsdo ? tr("GPSDO · %1").arg(m_model.gpsStatus())
                                                            : tr("No GPSDO reported"));
     m_gpsDetails->setText(gpsdo
@@ -509,17 +596,16 @@ void NtpSourcesPage::updateDashboard()
     m_gps->setToolTip(tr("Local NTP service stratum is not reported by this radio."));
     m_gps->setAccessibleDescription(tr("The radio does not report its local NTP service stratum. "
         "A GPSDO lock alone does not confirm stratum 1."));
-    QWidget* gpsCard = findChild<QWidget*>(QStringLiteral("ntpGpsCard"));
-    if (gpsCard->property("ntpGold").toBool() != gpsLocked) {
-        gpsCard->setProperty("ntpGold", gpsLocked);
-        gpsCard->style()->unpolish(gpsCard);
-        gpsCard->style()->polish(gpsCard);
+    if (m_gpsCard->property("ntpGold").toBool() != gpsLocked) {
+        m_gpsCard->setProperty("ntpGold", gpsLocked);
+        m_gpsCard->style()->unpolish(m_gpsCard);
+        m_gpsCard->style()->polish(m_gpsCard);
     }
     ThemeManager::instance().setWidgetForegroundToken(m_gps, gpsLocked
         ? QStringLiteral("color.canon.sparkGold") : QStringLiteral("color.canon.inkSoft"));
     const NtpSourceState* state = source(selectedId());
     const bool measured = usable && state && state->enabled;
-    m_sourceState->setText(!state ? tr("Empty slot") : m_model.ntpSourceReplaceActive(state->id)
+    m_sourceState->setText(m_creates.contains(selectedId()) ? tr("Adding…") : !state ? tr("Empty slot") : m_model.ntpSourceReplaceActive(state->id)
         ? tr("Updating…") : statusText(*state));
     setTone(m_sourceState, measured && state->inUse() ? Tone::Ok : Tone::Value);
     m_stratum->setText(measured && state->stratum >= 0 ? QString::number(state->stratum) : tr("Not reported"));
@@ -565,29 +651,35 @@ void NtpSourcesPage::setMessage(const QString& text, const QString& token)
 
 void NtpSourcesPage::openEditor(const NtpSourceState* existing)
 {
+    const auto create = m_creates.constFind(selectedId());
+    const bool creating = !existing && create != m_creates.cend();
+    const NtpSourceDefinition definition = existing
+        ? sourceDefinition(*existing)
+        : creating ? *create : NtpSourceDefinition{};
     m_adding = existing == nullptr;
-    m_editorId = existing ? existing->id : QString();
+    m_editorId = definition.id;
+    m_editorBaseline = definition;
     m_editorTab = m_tabs->currentIndex();
     const RadioControlSession session = m_model.controlSession();
     const QPointer<RadioModel> model(&m_model);
     m_editorSessionCurrent = [model, session] { return model && model->controlSessionCurrent(session); };
     const QSignalBlocker blockId(m_id), blockAddress(m_address), blockDescription(m_description),
         blockDirective(m_directive), blockPrefer(m_prefer);
-    m_id->setText(existing ? existing->id : QString());
+    m_id->setText(definition.id);
     m_id->setReadOnly(!m_adding);
     m_id->setAccessibleDescription(m_adding ? QString() : tr("The ID cannot be changed."));
-    m_address->setText(existing ? existing->address : QString());
-    const int type = m_directive->findData(existing ? existing->directive : QStringLiteral("server"));
+    m_address->setText(definition.address);
+    const int type = m_directive->findData(definition.directive);
     m_directive->setCurrentIndex(type >= 0 ? type : 0);
-    m_description->setText(existing ? existing->description : QString());
-    m_prefer->setChecked(existing && existing->prefer);
-    m_editor->setTitle(m_adding ? tr("New NTP source") : tr("Edit %1").arg(existing->id));
+    m_description->setText(definition.description);
+    m_prefer->setChecked(definition.prefer);
+    m_editor->setTitle(creating ? tr("Adding %1…").arg(definition.id)
+        : m_adding ? tr("New NTP source") : tr("Edit %1").arg(definition.id));
     m_save->setText(m_adding ? tr("Add Source") : tr("Save Changes"));
     m_save->setAccessibleName(m_adding ? tr("Add the NTP source") : tr("Save the NTP source changes"));
     m_editor->setVisible(true);
     validateEditor();
     updateButtons();
-
 }
 
 void NtpSourcesPage::closeEditor()
@@ -606,11 +698,11 @@ NtpSourceDefinition NtpSourcesPage::editorDefinition() const
 void NtpSourcesPage::validateEditor()
 {
     const NtpSourceDefinition d = editorDefinition();
-    QStringList creates;
-    for (auto it = m_pending.cbegin(); it != m_pending.cend(); ++it) {
-        if (it.value() == NtpSourceRequest::Action::Create) { creates.append(it.key()); }
-    }
-    QString issue = definitionIssue(d, m_adding, m_model.ntpSources(), maxSources(), creates);
+    const QStringList creates = m_creates.keys();
+    const bool creating = m_creates.contains(selectedId());
+    m_editor->setEnabled(!creating);
+    QString issue = creating ? tr("Waiting for the radio to report %1.").arg(selectedId())
+        : definitionIssue(d, m_adding, m_model.ntpSources(), maxSources(), creates);
     if (issue.isEmpty() && !m_adding) {
         const NtpSourceState* current = source(d.id);
         if (!current) {
@@ -644,6 +736,7 @@ void NtpSourcesPage::saveEditor()
         closeEditor();
         return;
     }
+    if (!m_sessionCurrent || !m_sessionCurrent()) { rebuild(); }
     validateEditor();
     if (!m_save->isEnabled()) { return; }   // the reason is shown under the form
     const NtpSourceDefinition d = editorDefinition();
@@ -654,14 +747,18 @@ void NtpSourcesPage::saveEditor()
         const int slot = m_tabs->currentIndex();
         if (slot >= 0 && m_slots.at(slot).isEmpty()) { m_slots[slot] = d.id; }
         setMessage(tr("Adding %1…").arg(d.id), {});
+        m_creates.insert(d.id, d);
         closeEditor();
         track(d.id, Action::Create);
         m_model.requestNtpSource({Action::Create, d}, this,
-            [self, id = d.id](const RadioControlReply& reply) {
-                if (!self) { return; }
+            [self, id = d.id, session](const RadioControlReply& reply) {
+                if (!self || self->m_model.controlSession() != session) { return; }
+                if (reply.kind != RadioControlReply::Kind::Accepted) { self->m_creates.remove(id); }
                 self->untrack(id, Action::Create);
                 if (reply.kind == RadioControlReply::Kind::Accepted) {
-                    self->setMessage(tr("The radio added %1.").arg(id), QStringLiteral("color.accent.success"));
+                    self->setMessage(self->m_creates.contains(id)
+                        ? tr("The radio accepted adding %1; waiting for its source status.").arg(id)
+                        : tr("The radio added %1.").arg(id), QStringLiteral("color.accent.success"));
                 } else {
                     self->setMessage(tr("The radio did not add %1: %2").arg(id, replyReason(reply)),
                                      QStringLiteral("color.accent.danger"));

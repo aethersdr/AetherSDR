@@ -37,9 +37,10 @@ public:
 
 class NtpSourcesTestAccess {
 public:
-    static void gpsdo(RadioModel& radio, bool present, const QString& status) {
+    static void gpsdo(RadioModel& radio, bool present, const QString& status, bool locked = false) {
         radio.m_gpsdoPresent = present;
         radio.m_gpsStatus = status;
+        radio.m_oscLocked = locked;
         emit radio.oscillatorChanged();
     }
     static void publish(RadioModel& radio) { radio.publishCapabilities(radio.isConnected()); }
@@ -633,10 +634,6 @@ struct PageRig : Rig {
     QTabBar* tabs() { return find<QTabBar>("ntpServerTabs"); }
     void select(int slot) {
         tabs()->setCurrentIndex(slot);
-        // Re-selecting a tab can explicitly reload a stale session's editor.
-        if (find<QLineEdit>("ntpSourceId")->text() != radio.ntpSources().value(slot).id) {
-            find<QPushButton>("ntpSourceCancel")->click();
-        }
     }
     QCheckBox* enabled() { return find<QCheckBox>("ntpSourceEnabled"); }
     void add(const QString& id, int slot = 1) {
@@ -741,14 +738,14 @@ void page()
     rig.tabs()->setCurrentIndex(1);
     rig.tabs()->setCurrentIndex(0);
     check(address->text() == QLatin1String("draft.example"), "switching tabs preserves unsaved per-server drafts");
-    NtpSourcesTestAccess::gpsdo(rig.radio, true, QStringLiteral("Locked"));
+    NtpSourcesTestAccess::gpsdo(rig.radio, true, QStringLiteral("Fine Lock"), true);
     check(rig.find<QWidget>("ntpGpsCard")->property("ntpGold").toBool()
               && rig.find<QLabel>("ntpGpsReference")->text() == QLatin1String("GPSDO locked")
               && !rig.find<QLabel>("ntpSourceStratum")->text().contains(QLatin1String("1")),
           "GPSDO lock gets gold chrome without inventing local stratum one");
     NtpSourcesTestAccess::gpsdo(rig.radio, false, QStringLiteral("Not Present"));
     check(!rig.find<QWidget>("ntpGpsCard")->property("ntpGold").toBool(), "gold clears when GPSDO is no longer present");
-    rig.find<QPushButton>("ntpSourceCancel")->click();
+    rig.find<QPushButton>("ntpSourceReset")->click();
     check(address->text() == *measured.address && !save->isEnabled(), "Reset restores the radio definition");
     rig.answer = false;
     rig.enabled()->click();
@@ -820,8 +817,9 @@ void pageSafeguards()
         rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("time.nist.gov"));
         for (int i = 0; i < 10; ++i) { rig.source(QStringLiteral("s%1").arg(i)); }
         check(!rig.find<QPushButton>("ntpSourceSave")->isEnabled()
-                  && rig.find<QLabel>("ntpSourceIssue")->text().contains(QLatin1String("at most 10")),
-              "another client filling list invalidates unsaved create");
+                  && rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("s9")
+                  && rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("draft was discarded")),
+              "a full radio inventory replaces a draft with the reported source and an explicit notice");
     }
     {
         PageRig rig;
@@ -853,6 +851,146 @@ void pageSafeguards()
     }
 }
 
+void pageReviewRegressions()
+{
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.select(1);
+        rig.backend->live = false;
+        NtpSourcesTestAccess::publish(rig.radio);
+        RadioSetupControlTestAccess::replaceConnectionGeneration(rig.radio);
+        rig.backend->live = true;
+        NtpSourcesTestAccess::publish(rig.radio);
+        rig.source(QStringLiteral("a"));
+        rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("after-reconnect"));
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("clock.example"));
+        check(rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "reconnect refreshes the empty tab session without switching tabs or resetting");
+    }
+    {
+        PageRig rig;
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("draft.example"));
+        rig.select(0);
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceAddress")->clear();
+        rig.select(0);
+        rig.select(1);
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text().isEmpty(),
+              "clearing an add draft does not resurrect its parked text");
+    }
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.source(QStringLiteral("a"), true, QStringLiteral("changed.example"));
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text() == QLatin1String("changed.example")
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "an untouched form follows reported definition changes without inventing an edit");
+        rig.select(1);
+        rig.source(QStringLiteral("a"), true, QStringLiteral("changed-again.example"));
+        rig.select(0);
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text() == QLatin1String("changed-again.example")
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "visiting a source does not save a stale pristine form as a draft");
+    }
+    for (bool parked : {false, true}) {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.select(1);
+        // An address-only draft is still a draft, even before its ID is entered.
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("mine.example"));
+        if (parked) { rig.select(0); }
+        rig.source(QStringLiteral("theirs"), true, QStringLiteral("theirs.example"));
+        rig.select(1);
+        check(rig.find<QLineEdit>("ntpSourceAddress")->text() == QLatin1String("mine.example")
+                  && !rig.find<QPushButton>("ntpRemoveSource")->isEnabled()
+                  && !rig.enabled()->isEnabled()
+                  && rig.tabs()->tabToolTip(2).contains(QLatin1String("theirs.example")),
+              "another client skips both active and parked add drafts while a free slot exists");
+    }
+    for (bool parked : {false, true}) {
+        PageRig rig;
+        rig.source(QStringLiteral("a"));
+        rig.source(QStringLiteral("b"));
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("edited.example"));
+        if (parked) { rig.select(0); }
+        rig.removed(QStringLiteral("b"));
+        rig.select(1);
+        check(rig.find<QLineEdit>("ntpSourceId")->text().isEmpty()
+                  && rig.find<QLineEdit>("ntpSourceAddress")->text().isEmpty()
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled()
+                  && rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("The radio no longer lists b")),
+              "removed-source edit drafts are discarded with a notice and cannot become an add");
+    }
+    for (bool replyFirst : {false, true}) {
+        PageRig rig;
+        rig.add(QStringLiteral("mine"), 2);
+        check(rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("mine")
+                  && rig.find<QLabel>("ntpSelectionState")->text().contains(QLatin1String("Adding"))
+                  && !rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "an unreported create shows its definition and a pending state");
+        if (replyFirst) { rig.accept(); }
+        rig.select(1);
+        rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("mine"));
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("duplicate.example"));
+        check(!rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "an accepted but unreported create still prevents duplicate IDs");
+        rig.source(QStringLiteral("mine"), true, QStringLiteral("other.example"));
+        if (!replyFirst) { rig.accept(); }
+        rig.select(2);
+        check(rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("mine")
+                  && rig.find<QLineEdit>("ntpSourceId")->isReadOnly()
+                  && rig.tabs()->tabToolTip(0).contains(QLatin1String("empty")),
+              "create keeps its requested tab with either reply/status ordering");
+    }
+    {
+        PageRig rig;
+        for (int i = 0; i < 9; ++i) { rig.source(QStringLiteral("s%1").arg(i)); }
+        rig.add(QStringLiteral("mine"), 9);
+        rig.accept();
+        rig.source(QStringLiteral("theirs"));
+        check(rig.find<QLineEdit>("ntpSourceId")->text() == QLatin1String("theirs")
+                  && rig.find<QLineEdit>("ntpSourceId")->isReadOnly()
+                  && !rig.find<QLabel>("ntpSourcesMessage")->text().contains(QLatin1String("draft was discarded")),
+              "a full reported inventory outranks an unreported create without calling it a discarded draft");
+    }
+    {
+        PageRig rig;
+        rig.add(QStringLiteral("refused"), 2);
+        rig.refuse();
+        check(rig.find<QLineEdit>("ntpSourceId")->text().isEmpty(),
+              "failed create releases its reservation and returns to an empty form");
+        rig.add(QStringLiteral("unreported"), 2);
+        rig.accept();
+        rig.backend->live = false;
+        NtpSourcesTestAccess::publish(rig.radio);
+        RadioSetupControlTestAccess::replaceConnectionGeneration(rig.radio);
+        rig.backend->live = true;
+        NtpSourcesTestAccess::publish(rig.radio);
+        rig.select(2);
+        rig.find<QLineEdit>("ntpSourceId")->setText(QStringLiteral("unreported"));
+        rig.find<QLineEdit>("ntpSourceAddress")->setText(QStringLiteral("clock.example"));
+        check(rig.find<QPushButton>("ntpSourceSave")->isEnabled(),
+              "new session retires accepted but unreported create reservations");
+    }
+    {
+        PageRig rig;
+        rig.source(QStringLiteral("hostile"), true, QStringLiteral("<b>spoof</b><img src='file:///tmp/x'>"));
+        check(!rig.tabs()->tabToolTip(0).contains(QLatin1String("<b>"))
+                  && rig.tabs()->tabToolTip(0).contains(QLatin1String("&lt;b&gt;")),
+              "radio addresses are escaped before they enter rich-text tooltips");
+        check(rig.tabs()->accessibleTabName(0).contains(QLatin1String("hostile"))
+                  && rig.tabs()->accessibleTabName(0).contains(QLatin1String("Server 1"))
+                  && rig.tabs()->accessibleTabName(1).contains(QLatin1String("empty")),
+              "screen readers receive source identity and state, including empty tabs");
+        NtpSourcesTestAccess::gpsdo(rig.radio, true, QStringLiteral("Locked"), false);
+        check(!rig.find<QWidget>("ntpGpsCard")->property("ntpGold").toBool(),
+              "GPSDO text alone cannot override an unlocked oscillator flag");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -869,6 +1007,7 @@ int main(int argc, char** argv)
     replaceSequence();
     page();
     pageSafeguards();
+    pageReviewRegressions();
     pagePendingPositiveRequests();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ok", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

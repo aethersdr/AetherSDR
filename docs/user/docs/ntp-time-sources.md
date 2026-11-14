@@ -28,7 +28,7 @@ On a FLEX-6300 running SmartSDR 4.3.16, the radio reports its sources and accept
 
 - **Network time** identifies the radio's selected network reference, or says that it is awaiting a reference. Selection is the radio's report, not an independent clock-accuracy measurement.
 - **Source health** counts enabled sources and sources with at least one reply in the last eight polls. A pool is one configured source, even when it resolves to several servers.
-- **Onboard reference** shows the radio's GPSDO status. A locked GPSDO receives gold chrome. GPSDO lock does not confirm the local NTP service is stratum 1; the radio does not currently report that service stratum.
+- **Onboard reference** shows the radio's GPSDO status. A GPSDO with a reported oscillator lock receives gold chrome, including **Fine Lock**. GPSDO lock does not confirm the local NTP service is stratum 1; the radio does not currently report that service stratum.
 
 Select a numbered tab to see that source's selection state, upstream **Source stratum**, and **Reach** in chrony's octal notation, alongside the number of answered polls. The eight poll indicators run from oldest on the left to newest on the right: a tick means a reply, a cross means no reply, and a dash means no measurement is reported. These are reach-register bits, not a time-scaled graph.
 
@@ -46,7 +46,11 @@ The ID can use letters, digits and hyphens (up to 64 characters, not starting or
 
 **Save Changes** stays dimmed until something changes. Editing removes and re-creates the source with its original ID, preserving its enabled state. During the edit the source reads **Updating…** and cannot be changed again. If the radio refuses the new settings, AetherSDR attempts to restore the old definition and reports the result. If the session ends or the radio stops answering, AetherSDR stops the operation and shows the radio's reported state.
 
-Status refreshes preserve text being edited in the current tab. Switching tabs preserves unsaved drafts for each server while the page and radio session remain open. **Reset** discards the current tab's draft. Updates from another client keep existing source tab assignments stable. Any change to the source list restarts the radio's time service, so statistics may briefly be unreported.
+Status refreshes preserve text being edited in the current tab; untouched fields follow the radio’s reported settings. Switching tabs preserves unsaved drafts for each server while the page and radio session remain open. **Reset** discards the current tab's draft.
+
+Updates from another client keep existing source tab assignments stable. New radio sources use tabs without add drafts first. If all ten tabs fill, reported sources take priority and the page names any discarded draft. When the radio removes a source, its edit draft is discarded with **The radio no longer lists** and the source ID.
+
+An added source keeps its requested tab while AetherSDR waits for the radio to report it, even if the command reply arrives first. The tab shows **Adding…** and cannot be edited during that wait. A failed create or ended session releases the reservation. Reconnecting refreshes an empty tab’s form for the new session. Any change to the source list restarts the radio's time service, so statistics may briefly be unreported.
 
 ## Known issues
 
