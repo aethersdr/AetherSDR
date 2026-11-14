@@ -64,11 +64,11 @@ public:
     // A meter plugged into a FlexRadio's USB port, reached through the radio's
     // passthrough cable (see LpMeter::CableSnapshot). This class stays free of
     // radio types: the owner supplies the hooks and forwards the cable's status
-    // and data. Choosing the cable is the operator's go-ahead to set it to
+    // and data. An operator Connect is the go-ahead to set the cable to
     // passthrough 115200 8N1; it is left that way on disconnect. The link
-    // follows the radio's cable status, so no reconnect timer is used, and a
-    // cable another client moves off passthrough is not taken back until it
-    // is replugged, the radio reconnects, or the operator connects again.
+    // follows the radio's cable status, so no reconnect timer is used. Only an
+    // operator Connect changes a cable that is neither CAT nor passthrough;
+    // startup, a replug or a radio reconnect refuses it instead.
     struct RadioCableHooks {
         std::function<LpMeter::CableSnapshot(const QString& serial)> snapshot;
         // Each returns false when the radio session refused the request.
@@ -76,7 +76,14 @@ public:
         std::function<bool(const QString& serial, const QByteArray& bytes)> write;
     };
     void setRadioCableHooks(RadioCableHooks hooks);
-    void connectRadioCable(const QString& serial);
+    // The radio's view of a cable through the snapshot hook; unknown without it.
+    LpMeter::CableSnapshot radioCableSnapshot(const QString& serial) const
+    {
+        return m_radioHooks.snapshot ? m_radioHooks.snapshot(serial) : LpMeter::CableSnapshot{};
+    }
+    enum class RadioCableIntent { Operator, Saved };
+    void connectRadioCable(const QString& serial,
+                           RadioCableIntent intent = RadioCableIntent::Operator);
     // The radio's current view of a cable; other serials are ignored. Send an
     // unknown snapshot when the cable is removed or the radio disconnects.
     void onRadioCableStatus(const QString& serial, const LpMeter::CableSnapshot& cable);
@@ -186,6 +193,12 @@ private:
     bool m_radioWanted{false};
     bool m_radioConfiguring{false};
     bool m_radioCablePresent{false};
+    // This configure cycle began with an operator Connect on a present cable,
+    // so it may change a cable of another type.
+    bool m_radioMayRetype{false};
+    // The link dropped and is waiting to resume on its own (auto-reconnect),
+    // not on an operator Connect; turning auto-reconnect off cancels it.
+    bool m_radioResumeAutomatic{false};
     std::optional<LpMeter::CableChange> m_lastCableChange;
     // The radio must confirm each change by status within this window.
     QTimer m_cableConfigureTimer;

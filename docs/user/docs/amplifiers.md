@@ -403,11 +403,16 @@ ways:
 - **Radio USB:** the meter is plugged into a FlexRadio's USB port. Pick its
   cable from the list. The radio names the cable after the meter's USB serial
   number, and at first labels it as a CAT cable. Only CAT and passthrough
-  cables are listed. The first time you connect, AetherSDR asks before it sets
-  the cable on the radio to passthrough at 115200 8N1, because that replaces
-  the cable's settings there. The cable stays in passthrough afterwards. If another program changes the cable's settings, AetherSDR
-  stops using it and does not change them back. To use it again, press
-  **Connect**, or unplug the meter and plug it back in.
+  cables are listed. When you press **Connect**, AetherSDR asks before it
+  changes any of the cable's settings on the radio to passthrough at 115200
+  8N1, because that replaces them there. The cable stays in passthrough
+  afterwards. If another program changes the cable's settings, AetherSDR stops
+  using it and does not change them back. To use it again, press **Connect**,
+  or, with **Reconnect automatically** on, unplug the meter and plug it back
+  in. At startup, or after a replug, AetherSDR never changes a cable that is
+  no longer a CAT or passthrough cable: it reports it and waits for you to
+  press **Connect**. Radio USB is dimmed, with the reason, when the radio
+  reports no CAT or passthrough cable.
 
 **Poll Interval** (100–1000 ms, default 100) sets how often AetherSDR asks the
 meter for a reading. In Radio USB mode the radio sends each reading to every

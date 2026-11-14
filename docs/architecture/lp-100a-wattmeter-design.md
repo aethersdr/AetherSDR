@@ -509,9 +509,14 @@ Measured on a FLEX-8600 (4.3.16) on 2026-11-13:
 Design rulings (maintainer, 2026-11-13):
 
 - **The cable list offers only CAT and passthrough cables.** Bit, BCD and
-  LDPA cables drive other equipment. Before Connect retypes a cable, the
-  operator confirms it (`lp100aRadioCableConfirm`). A saved choice at startup
-  counts as that confirmation.
+  LDPA cables drive other equipment. Before Connect changes any of a cable's
+  settings, the operator confirms it (`lp100aRadioCableConfirm`). A saved
+  choice at startup counts as that confirmation for a CAT or passthrough
+  cable only: startup, a replug or a radio reconnect refuses a cable that is
+  now of another type (`RadioCableIntent::Saved`, `m_radioMayRetype`), and
+  only an operator Connect on a reported cable may retype it. Radio USB is
+  dimmed with its reason when the radio reports no eligible cable; there is
+  no capability flag.
 - **Choosing the cable is the operator's go-ahead to configure it.**
   `LpMeterConnection` walks it to passthrough 115200 8N1 one setting at a
   time, type first (`LpMeter::nextCableChange()`). Each step is confirmed by
@@ -519,16 +524,19 @@ Design rulings (maintainer, 2026-11-13):
   left configured on disconnect.
 - **The link follows the radio's status, not a reconnect timer.** A cable that
   is unplugged, or lost because the radio disconnects, is configured again
-  when it comes back. A cable that another client moves off passthrough drops
-  the link and is not taken back until it is replugged, the radio reconnects,
-  or the operator connects again.
+  when it comes back, but only with auto-reconnect on; turning auto-reconnect
+  off while it is gone cancels that resume. A cable that another client moves
+  off passthrough drops the link and is not taken back until it is replugged
+  or the radio reconnects (with auto-reconnect on), or the operator connects
+  again.
 - **The seam carries bytes, not meter knowledge.**
   `IRadioBackend::requestUsbCableWrite()` takes bytes for one cable, and
   `UsbCableModel::passthroughDataReceived` delivers what comes back.
-  `RadioModel` splits `data:base64` off the cable status before the cable
-  model sees it, so a reply never counts as a settings change. Text-mode data
-  (`data:text`) from another client splits on spaces in the parse, so it is
-  dropped.
+  The Flex setup-status decoder (`FlexSetupStatus.cpp`) decodes
+  `data:base64` into `UsbCableStatusValues::passthroughData`, and
+  `UsbCableModel::applyObservation` delivers it and returns before
+  `cableChanged`, so a reply never counts as a settings change. Text-mode data
+  (`data:text`) from another client is marked and dropped.
 - **The poll interval is an operator setting** (`Lp100a/PollIntervalMs`,
   100–1000 ms, default 100), applied in every connection mode. It exists
   because the radio relays every reply to every client.

@@ -7662,7 +7662,8 @@ void MainWindow::wireMeters()
             // Waits for the radio to report the cable; no radio is needed yet.
             const QString cable = PeripheralSettings::deviceString("Lp100a", "RadioCable");
             if (!cable.isEmpty())
-                m_lpMeterConn.connectRadioCable(cable);
+                m_lpMeterConn.connectRadioCable(
+                    cable, AetherSDR::LpMeterConnection::RadioCableIntent::Saved);
         }
 #ifdef HAVE_SERIALPORT
         else {

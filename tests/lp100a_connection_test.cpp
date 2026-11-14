@@ -347,9 +347,81 @@ private:
             LpMeterConnection connection;
             rig.attach(connection);
             connection.connectRadioCable(sn);
+            const bool armed = connection.m_cableConfigureTimer.isActive();
             QMetaObject::invokeMethod(&connection.m_cableConfigureTimer, "timeout", Qt::DirectConnection);
             check("a setting the radio never confirms fails the attempt",
-                  rig.failures.size() == 1 && rig.failures[0].contains(QStringLiteral("type passthrough")));
+                  armed && rig.failures.size() == 1 && rig.failures[0].contains(QStringLiteral("type passthrough")));
+        }
+        {
+            // Auto-reconnect switched off while the cable is gone cancels the
+            // resume the drop left pending.
+            RadioRig rig;
+            rig.cable = catCable();
+            rig.cable.type = QStringLiteral("passthrough");
+            rig.cable.speed = 115200;
+            LpMeterConnection connection;
+            connection.setAutoReconnect(true);
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            const bool up = connection.isConnected();
+            connection.onRadioCableStatus(sn, LpMeter::CableSnapshot{});
+            connection.setAutoReconnect(false);
+            rig.cable = catCable();
+            connection.onRadioCableStatus(sn, rig.cable);
+            const bool untouched = rig.changes.isEmpty() && !connection.m_cableConfigureTimer.isActive();
+            rig.cable.type = QStringLiteral("passthrough");
+            rig.cable.speed = 115200;
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("auto-reconnect turned off during an outage cancels the pending resume",
+                  up && untouched && rig.connectedCount == 1 && !connection.isConnected());
+            connection.connectRadioCable(sn);
+            check("an operator Connect afterwards still connects", connection.isConnected()
+                  && rig.connectedCount == 2);
+        }
+        {
+            RadioRig rig;
+            rig.cable = catCable();
+            rig.cable.type = QStringLiteral("bit");
+            LpMeterConnection connection;
+            rig.attach(connection);
+            connection.connectRadioCable(sn, LpMeterConnection::RadioCableIntent::Saved);
+            check("a saved cable that is now a BIT cable is refused at startup, not retyped",
+                  rig.changes.isEmpty() && rig.failures.size() == 1
+                  && rig.failures[0].contains(QStringLiteral("bit")) && !connection.isConnected());
+            rig.cable.type = QStringLiteral("passthrough");
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a refused cable is left alone afterwards", rig.changes.isEmpty());
+            rig.cable.type = QStringLiteral("bit");
+            connection.connectRadioCable(sn);
+            check("an operator Connect may retype a BIT cable",
+                  rig.changes.size() == 1 && rig.changes[0].setting == Setting::Type);
+        }
+        {
+            RadioRig rig;
+            rig.cable = catCable();
+            rig.cable.type = QStringLiteral("passthrough");
+            rig.cable.speed = 115200;
+            LpMeterConnection connection;
+            connection.setAutoReconnect(true);
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            const bool up = connection.isConnected();
+            connection.onRadioCableStatus(sn, LpMeter::CableSnapshot{});
+            rig.cable.type = QStringLiteral("ldpa");
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a cable replugged as another type is refused, not retyped",
+                  up && rig.changes.isEmpty() && rig.failures.size() == 1 && !connection.isConnected());
+        }
+        {
+            RadioRig rig;
+            LpMeterConnection connection;
+            rig.attach(connection);
+            connection.connectRadioCable(sn);   // not reported yet: nothing was confirmed
+            rig.cable = catCable();
+            rig.cable.type = QStringLiteral("bcd");
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a cable first reported after Connect as another type is refused",
+                  rig.changes.isEmpty() && rig.failures.size() == 2);
         }
         {
             LpMeterConnection connection;

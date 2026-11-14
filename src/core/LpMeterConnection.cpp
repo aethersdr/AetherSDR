@@ -198,6 +198,14 @@ void LpMeterConnection::setAutoReconnect(bool on)
         // Cancel a retry already counting down; the flag alone does not
         // reach it.
         m_reconnectTimer.stop();
+        if (m_mode == Mode::Radio && m_radioResumeAutomatic && !m_connected) {
+            m_radioWanted = false;
+            m_radioConfiguring = false;
+            m_radioMayRetype = false;
+            m_radioResumeAutomatic = false;
+            m_cableConfigureTimer.stop();
+            m_lastCableChange.reset();
+        }
     }
 }
 
@@ -291,16 +299,19 @@ void LpMeterConnection::setRadioCableHooks(RadioCableHooks hooks)
     m_radioHooks = std::move(hooks);
 }
 
-void LpMeterConnection::connectRadioCable(const QString& serial)
+void LpMeterConnection::connectRadioCable(const QString& serial, RadioCableIntent intent)
 {
     prepareConnection(Mode::Radio, serial);
     m_deliberateDisconnect = false;
     m_radioWanted = true;
     m_radioConfiguring = true;
-    m_radioCablePresent = false;
+    m_radioResumeAutomatic = false;
     m_lastCableChange.reset();
     const LpMeter::CableSnapshot cable = m_radioHooks.snapshot
         ? m_radioHooks.snapshot(serial) : LpMeter::CableSnapshot{};
+    // A cable that appears later starts its own cycle, which may not retype.
+    m_radioCablePresent = cable.known && cable.pluggedIn;
+    m_radioMayRetype = intent == RadioCableIntent::Operator && m_radioCablePresent;
     if (!cable.known || !cable.pluggedIn) {
         // Not final: the link still comes up when the radio reports the cable.
         const QString reason = cable.known
@@ -331,6 +342,7 @@ void LpMeterConnection::evaluateRadioCable(const LpMeter::CableSnapshot& cable)
     if (present && !m_radioCablePresent) {
         // Plugged in, or the radio (re)connected: configure it again.
         m_radioConfiguring = true;
+        m_radioMayRetype = false;
         m_lastCableChange.reset();
     }
     m_radioCablePresent = present;
@@ -338,6 +350,8 @@ void LpMeterConnection::evaluateRadioCable(const LpMeter::CableSnapshot& cable)
     if (LpMeter::cableReady(cable)) {
         m_cableConfigureTimer.stop();
         m_radioConfiguring = false;
+        m_radioMayRetype = false;
+        m_radioResumeAutomatic = false;
         m_lastCableChange.reset();
         if (!m_connected) { onTransportUp(); }
         return;
@@ -351,9 +365,20 @@ void LpMeterConnection::evaluateRadioCable(const LpMeter::CableSnapshot& cable)
         // Like the serial and network modes: without auto-reconnect, a
         // dropped link stays down until the operator connects again.
         if (!m_autoReconnect) { m_radioWanted = false; }
+        else { m_radioResumeAutomatic = true; }
         onTransportDown();
     }
     if (!present || !m_radioConfiguring) { return; }
+    if (!m_radioMayRetype && cable.type != QLatin1String("cat")
+        && cable.type != QLatin1String("passthrough")) {
+        // Left alone: only an operator Connect may retype it.
+        m_radioWanted = false;
+        m_radioResumeAutomatic = false;
+        failRadioCable(QStringLiteral("USB cable %1 is now a %2 cable; press Connect to set it to passthrough")
+                           .arg(m_lastRadioSerial,
+                                cable.type.isEmpty() ? QStringLiteral("non-passthrough") : cable.type));
+        return;
+    }
 
     const std::optional<LpMeter::CableChange> change = LpMeter::nextCableChange(cable);
     if (!change) { return; }
@@ -374,6 +399,7 @@ void LpMeterConnection::evaluateRadioCable(const LpMeter::CableSnapshot& cable)
 void LpMeterConnection::failRadioCable(const QString& reason)
 {
     m_radioConfiguring = false;
+    m_radioMayRetype = false;
     m_cableConfigureTimer.stop();
     m_lastCableChange.reset();
     qCWarning(lcTuner).noquote() << "LpMeterConnection:" << reason;
@@ -419,6 +445,8 @@ void LpMeterConnection::disconnect()
     m_radioWanted = false;
     m_radioConfiguring = false;
     m_radioCablePresent = false;
+    m_radioMayRetype = false;
+    m_radioResumeAutomatic = false;
     m_lastCableChange.reset();
     m_connected = false;
     teardownDevice();
