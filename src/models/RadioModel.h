@@ -1151,6 +1151,11 @@ public:
                                  QObject* replyContext = nullptr,
                                  const RadioSetupCompletion& completion = {});
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request);
+    // Only to a known passthrough cable that is plugged in.
+    ReceiveDispatch requestUsbCableWrite(const QString& serial, const QByteArray& bytes);
+    // Asks the radio to resend every cable's status. It pushes one for a type
+    // change but not for a serial setting (measured on a FLEX-8600, 4.3.16).
+    ReceiveDispatch requestUsbCableStatus();
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                       QObject* replyContext = nullptr,
                                       const RadioSetupCompletion& completion = {},

@@ -72,6 +72,7 @@
 #include "VfoWidget.h"
 #include "AppletPanel.h"
 #include "DemoApplet.h"
+#include "LpMeterApplet.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
 #include "SMeterWidget.h"
@@ -3703,6 +3704,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
     // and HID-encoder edits. The Ulanzi/HID branches below run regardless of
     // HAVE_SERIALPORT because those backends exist on all platforms (#3257).
+    connect(dlg, &RadioSetupDialog::lpMeterPollIntervalChanged, this, [this](int ms) {
+        m_appletPanel->lpMeterApplet()->setPollIntervalMs(ms);
+    });
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
 #ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });

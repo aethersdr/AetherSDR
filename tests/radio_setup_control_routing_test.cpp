@@ -230,6 +230,22 @@ void usbEncoding()
     check(backend.commands.isEmpty(), "invalid cable input produces no wire output");
     check(backend.requestUsbCable({QStringLiteral("FTDI01"), 2, F::Band, QString()}) == ReceiveDispatch::Dispatched
         && backend.commands == QStringList{"usb_cable setbit FTDI01 2 band="}, "empty USB bit band retains the SDK clearing operation");
+
+    // Passthrough bytes: FlexLib v4.3.16 UsbPassthroughCable.WriteBase64().
+    backend.commands.clear();
+    check(backend.requestUsbCableWrite(QStringLiteral("ABBDMO0I"), QByteArray("P")) == ReceiveDispatch::Dispatched
+        && backend.commands == QStringList{"usb_cable write ABBDMO0I base64 UA=="},
+        "passthrough bytes are written as base64, exactly as measured on a FLEX-8600");
+    backend.commands.clear();
+    check(backend.requestUsbCableWrite(QStringLiteral("ABBDMO0I"), QByteArray(" |\n\0", 4)) == ReceiveDispatch::Dispatched
+        && backend.commands == QStringList{"usb_cable write ABBDMO0I base64 IHwKAA=="},
+        "spaces, pipes, newlines and NUL cross the command line intact");
+    backend.commands.clear();
+    check(backend.requestUsbCableWrite(QStringLiteral("SN transmit"), QByteArray("P")) == ReceiveDispatch::Unsupported
+        && backend.requestUsbCableWrite(QString(), QByteArray("P")) == ReceiveDispatch::Unsupported
+        && backend.requestUsbCableWrite(QStringLiteral("SN"), QByteArray()) == ReceiveDispatch::Unsupported
+        && backend.requestUsbCableWrite(QStringLiteral("SN"), QByteArray(1025, 'P')) == ReceiveDispatch::Unsupported
+        && backend.commands.isEmpty(), "malformed passthrough writes produce no wire output");
 }
 
 void routingAndReplies()
@@ -273,6 +289,39 @@ void routingAndReplies()
         && intents.size() == 1
         && radio.usbCableModel().metaObject()->indexOfSignal("commandReady(QString)") == -1,
           "production cable model has one typed route and no raw emission");
+    backend->commands.clear();
+    check(radio.requestUsbCableWrite(QStringLiteral("FTDI01"), QByteArray("P")) == ReceiveDispatch::Unsupported
+        && radio.requestUsbCableWrite(QStringLiteral("unknown"), QByteArray("P")) == ReceiveDispatch::Unsupported
+        && backend->commands.isEmpty(), "bytes go only to a known passthrough cable");
+    RadioSetupControlTestAccess::status(radio, QStringLiteral("usb_cable ABBDMO0I"),
+        {{QStringLiteral("type"), QStringLiteral("passthrough")}, {QStringLiteral("plugged_in"), QStringLiteral("0")},
+         {QStringLiteral("speed"), QStringLiteral("115200")}});
+    check(radio.requestUsbCableWrite(QStringLiteral("ABBDMO0I"), QByteArray("P")) == ReceiveDispatch::Unsupported
+        && backend->commands.isEmpty(), "an unplugged passthrough cable takes no bytes");
+    RadioSetupControlTestAccess::status(radio, QStringLiteral("usb_cable ABBDMO0I"),
+        {{QStringLiteral("plugged_in"), QStringLiteral("1")}});
+    check(radio.requestUsbCableWrite(QStringLiteral("ABBDMO0I"), QByteArray("P")) == ReceiveDispatch::Dispatched
+        && backend->commands == QStringList{"usb_cable write ABBDMO0I base64 UA=="},
+        "a plugged-in passthrough cable takes bytes");
+    {
+        QSignalSpy data(&radio.usbCableModel(), &UsbCableModel::passthroughDataReceived);
+        QSignalSpy changed(&radio.usbCableModel(), &UsbCableModel::cableChanged);
+        // Verbatim from a FLEX-8600: the reply to one poll, '=' padding included,
+        // as a raw line through the parser and the typed setup decoder.
+        RadioSetupControlTestAccess::line(radio, QStringLiteral(
+            "S12345678|usb_cable ABBDMO0I data:base64=OzAwMDAuMDAsMDQ3LjUsMDcxLjYsMCxMUC0xMDAsMiwxLC0yLjMsMS4wMA=="));
+        check(data.size() == 1 && data.at(0).at(0).toString() == QStringLiteral("ABBDMO0I")
+            && data.at(0).at(1).toByteArray() == QByteArray(";0000.00,047.5,071.6,0,LP-100,2,1,-2.3,1.00")
+            && changed.isEmpty(), "passthrough data is delivered decoded and is not a cable setting change");
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable ABBDMO0I data:base64=UEE="));
+        check(data.size() == 2 && data.at(1).at(1).toByteArray() == QByteArray("PA") && changed.isEmpty(),
+              "single '=' padding survives the raw parse");
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable ABBDMO0I data:base64=not*base64"));
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable ABBDMO0I data:text=;0000 x"));
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable OTHERSN data:base64=UA=="));
+        check(data.size() == 2 && changed.isEmpty(),
+              "malformed, text-mode and unknown-cable data are dropped without a settings change");
+    }
     backend->commands.clear();
     check(radio.requestUsbCable({QStringLiteral("unknown"), -1, UsbCableRequest::Field::Enabled, true})
         == ReceiveDispatch::Unsupported && backend->commands.isEmpty(), "unknown cable serial cannot acquire a wire target");

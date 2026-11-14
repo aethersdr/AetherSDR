@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QMetaType>
 #include <QString>
@@ -50,6 +51,10 @@ struct UsbCableStatusValues {
     std::optional<bool> enabled, present, loggingEnabled, autoReport, activeHigh, preamp, pttDependent;
     std::optional<int> speed, dataBits, stopBits, pttDelayMs, txDelayMs;
     std::optional<double> lowFreqMhz, highFreqMhz;
+    // Bytes a passthrough cable's device sent (`data:base64`, decoded). Data,
+    // never a setting; textData marks `data:text`, which carries none we read.
+    std::optional<QByteArray> passthroughData;
+    bool textData{false};
 };
 
 struct FilterSharpnessStatusValues {

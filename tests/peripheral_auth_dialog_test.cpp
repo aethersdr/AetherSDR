@@ -2017,8 +2017,22 @@ int checkInteraction(QApplication& app)
     PeripheralSettings::setDeviceInt(QStringLiteral("Lp100a"), QStringLiteral("RangeHighW"), 3000);
     PeripheralSettings::setDeviceString(QStringLiteral("Vkamp"), QStringLiteral("ManualIp"),
                                         QStringLiteral("192.0.2.20"));
+    PeripheralSettings::setDeviceString(QStringLiteral("Lp100a"), QStringLiteral("ConnectionMode"),
+                                        QStringLiteral("Radio"));
+    PeripheralSettings::setDeviceString(QStringLiteral("Lp100a"), QStringLiteral("RadioCable"),
+                                        QStringLiteral("ABBDMO0I"));
+    PeripheralSettings::setDeviceInt(QStringLiteral("Lp100a"), QStringLiteral("PollIntervalMs"), 500);
     PeripheralSettings::clearDeviceConnection(QStringLiteral("Vkamp"));
     PeripheralSettings::clearDeviceConnection(QStringLiteral("Lp100a"));
+    // A removed Radio USB target must not survive to be reused at startup,
+    // where a saved cable counts as the go-ahead to configure it.
+    if (!PeripheralSettings::deviceString(QStringLiteral("Lp100a"), QStringLiteral("RadioCable")).isEmpty()
+        || !PeripheralSettings::deviceString(QStringLiteral("Lp100a"),
+                                              QStringLiteral("ConnectionMode")).isEmpty()
+        || PeripheralSettings::deviceInt(QStringLiteral("Lp100a"), QStringLiteral("PollIntervalMs")) != 500) {
+        std::fprintf(stderr, "Removing the LP-100A left its Radio USB cable, or dropped its poll interval\n");
+        return 1;
+    }
     if (PeripheralSettings::deviceInt(QStringLiteral("Vkamp"), QStringLiteral("Variant")) != 1
         || PeripheralSettings::deviceInt(QStringLiteral("Lp100a"),
                                          QStringLiteral("RangeHighW")) != 3000

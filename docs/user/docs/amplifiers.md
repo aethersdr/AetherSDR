@@ -395,8 +395,28 @@ network PTT.
 ## Using the LP-100A wattmeter
 
 The TelePost LP-100A is a wattmeter, not an amplifier, but it is set up the
-same way: **Peripherals → Add → LP-100A Meter**, over a local serial port
-(115200 8N1) or a ser2net proxy in raw mode (default TCP 2000).
+same way: **Peripherals → Add → LP-100A Meter**. It connects in one of three
+ways:
+
+- **Serial:** a local serial port at 115200 8N1.
+- **Network:** a ser2net proxy in raw mode (default TCP 2000).
+- **Radio USB:** the meter is plugged into a FlexRadio's USB port. Pick its
+  cable from the list. The radio names the cable after the meter's USB serial
+  number, and at first labels it as a CAT cable. Only CAT and passthrough
+  cables are listed. When you press **Connect**, AetherSDR asks before it
+  changes any of the cable's settings on the radio to passthrough at 115200
+  8N1, because that replaces them there. The cable stays in passthrough
+  afterwards. If another program changes the cable's settings, AetherSDR stops
+  using it and does not change them back. To use it again, press **Connect**,
+  or, with **Reconnect automatically** on, unplug the meter and plug it back
+  in. At startup, or after a replug, AetherSDR never changes a cable that is
+  no longer a CAT or passthrough cable: it reports it and waits for you to
+  press **Connect**. Radio USB is dimmed, with the reason, when the radio
+  reports no CAT or passthrough cable.
+
+**Poll Interval** (100–1000 ms, default 100) sets how often AetherSDR asks the
+meter for a reading. In Radio USB mode the radio sends each reading to every
+program connected to it, so a longer interval means less traffic for them.
 
 The **LP-100A Meter** applet is in the **Metering** category and is
 **read-only**: it does not change the meter's range, mode or alarm.
@@ -419,7 +439,7 @@ The **LP-100A Meter** applet is in the **Metering** category and is
 | VK3AMP Amplifier | Network only: TCP control, UDP telemetry | TCP 5005; UDP 5010 |
 | Elecraft KPA500 | Serial, or network through a raw TCP ser2net proxy | 4800 8N1; selectable locally, configured on the server for TCP; TCP 2000 |
 | Elecraft KPA1500 | Network only: TCP | TCP 1500 |
-| LP-100A Meter | Serial, or network through a ser2net proxy in raw mode | 115200 8N1; TCP 2000 |
+| LP-100A Meter | Serial, network through a ser2net proxy in raw mode, or a FlexRadio's USB port | 115200 8N1; TCP 2000; poll 100 ms |
 
 ## Known issues
 

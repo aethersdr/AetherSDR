@@ -13,6 +13,7 @@
 
 #include "RadioSetupDialog.h"
 #include "RadioSetupDialogCommon.h"
+#include "CanonMessageBox.h"
 #include "Kpa500AdvancedWidget.h"
 #include "Kxpa100AdvancedWidget.h"
 #include "models/Kxpa100Model.h"
@@ -28,6 +29,7 @@
 #include "core/Kpa1500Connection.h"
 #include "core/Kpa500Connection.h"
 #include "core/LpMeterConnection.h"
+#include <QStandardItemModel>
 #include "core/PeripheralRemovalGuard.h"
 #include "core/PeripheralSettings.h"
 #include "core/PgxlConnection.h"
@@ -136,6 +138,25 @@ struct PeripheralDeviceUi {
     std::function<void()> openWebUi;          // ShackSwitch only
     std::function<void(const QString&, quint16)> connectNetwork;  // serial-or-network devices
     std::function<void(const QString&)> connectSerial;
+    // Optional third mode: a device on the radio's own USB port, reached
+    // through the radio's passthrough cable (LP-100A). Choices are
+    // {serial number, label} pairs of the cables the radio reports.
+    std::function<void(const QString&)> connectRadioCable;
+    std::function<QVector<QPair<QString, QString>>()> radioCables;
+    // Asked before connecting; false when the operator declines.
+    std::function<bool(const QString& serial)> confirmRadioCable;
+    // True when the radio reports this serial at all, of any type: an excluded
+    // type is not "not reported by the radio".
+    std::function<bool(const QString& serial)> radioCableReported;
+    // Why Radio USB cannot be used on this radio; empty when it can.
+    std::function<QString()> radioUsbUnavailableReason;
+    QComboBox* radioCableCombo{nullptr};
+    std::function<void()> resetRadioCable;  // forget the selection (Remove)
+    // Optional poll-interval row (LP-100A). Stored under settingsGroup/"PollIntervalMs".
+    std::function<void(int)> applyPollInterval;
+    int pollIntervalDefaultMs{0};
+    int pollIntervalMinMs{0};
+    int pollIntervalMaxMs{0};
     std::function<QString()> description;
 
     // Serial-or-network presentation
@@ -187,6 +208,9 @@ struct PeripheralDeviceUi {
             return {};
         }
         QWidget* current = addressStack->currentWidget();
+        if (auto* cable = qobject_cast<QComboBox*>(current)) {
+            return cable->currentData().toString();  // Radio USB: the cable's serial
+        }
         if (QComboBox* serial = current->findChild<QComboBox*>()) {
             QString text = serial->currentData().toString();
             if (text == QStringLiteral("__custom__")) {
@@ -636,6 +660,9 @@ void resetFields(PeripheralDeviceUi& ui)
     if (ui.codeEdit) {
         ui.codeEdit->clear();
     }
+    if (ui.resetRadioCable) {
+        ui.resetRadioCable();
+    }
     ui.state = PeripheralDeviceStatus{};
 }
 
@@ -1021,6 +1048,9 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     ui.modeCombo->addItem("Serial", "Serial");
 #endif
     ui.modeCombo->addItem("Network", "Network");
+    if (ui.connectRadioCable) {
+        ui.modeCombo->addItem(tr("Radio USB"), "Radio");
+    }
     if (!ui.networkTooltip.isEmpty()) {
         ui.modeCombo->setToolTip(ui.networkTooltip);
     }
@@ -1088,6 +1118,62 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     netLay->addWidget(netIpEdit);
     const int netPageIdx = ui.addressStack->addWidget(netPage);
 
+    // Radio USB: the cables the radio reports, by serial number and name.
+    int radioPageIdx = -1;
+    QComboBox* radioCableCombo = nullptr;
+    if (ui.connectRadioCable) {
+        radioCableCombo = new QComboBox;
+        radioCableCombo->setObjectName(QStringLiteral("peripheralRadioCable_%1").arg(ui.id));
+        radioCableCombo->setAccessibleName(tr("%1 radio USB cable").arg(ui.label));
+        radioCableCombo->setAccessibleDescription(
+            tr("The USB cable on the radio this device is plugged into. Connecting sets "
+               "that cable to passthrough at the device's serial speed."));
+        radioCableCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        radioCableCombo->setMinimumContentsLength(14);
+        auto reseedCables = [combo = QPointer<QComboBox>(radioCableCombo), u, group]() {
+            if (!combo) {
+                return;
+            }
+            const QString current = combo->count() > 0
+                ? combo->currentData().toString()
+                : PeripheralSettings::deviceString(group, "RadioCable");
+            const QSignalBlocker block(combo);
+            combo->clear();
+            for (const auto& [serial, label] : u->radioCables()) {
+                combo->addItem(label, serial);
+            }
+            if (!current.isEmpty() && combo->findData(current) < 0
+                && !(u->radioCableReported && u->radioCableReported(current))) {
+                combo->addItem(tr("%1 (not reported by the radio)").arg(current), current);
+            }
+            const int idx = combo->findData(current);
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+        };
+        reseedCables();
+        pageReseeds->append(reseedCables);
+        ui.radioCableCombo = radioCableCombo;
+        ui.resetRadioCable = [combo = QPointer<QComboBox>(radioCableCombo), reseedCables]() {
+            if (!combo) {
+                return;
+            }
+            {
+                const QSignalBlocker block(combo);
+                combo->clear();
+            }
+            reseedCables();
+        };
+        if (m_model) {
+            UsbCableModel* cables = &m_model->usbCableModel();
+            for (auto signal : {&UsbCableModel::cableAdded, &UsbCableModel::cableRemoved,
+                                // plugged_in and name changes; replies never emit this.
+                                &UsbCableModel::cableChanged}) {
+                connect(cables, signal, radioCableCombo, reseedCables);
+                connect(cables, signal, radioCableCombo, refresh);  // availability
+            }
+        }
+        radioPageIdx = ui.addressStack->addWidget(radioCableCombo);
+    }
+
     // Port column: fixed text for serial (mandated by the device's own protocol
     // spec) or a port spin box for network mode.
     ui.portStack = new QStackedWidget;
@@ -1110,9 +1196,21 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     netPortSpin->setValue(PeripheralSettings::deviceInt(group, "ManualPort", ui.defaultPort));
     netPortSpin->setAccessibleName(tr("%1 network port").arg(ui.label));
     const int netPortIdx = ui.portStack->addWidget(netPortSpin);
+    int radioSpeedIdx = -1;
+    if (radioPageIdx >= 0) {
+        auto* radioSpeedLbl = new QLabel(tr("%1 (set on the radio)").arg(ui.fixedBaud));
+        setTone(radioSpeedLbl, Tone::Hint);
+        radioSpeedIdx = ui.portStack->addWidget(radioSpeedLbl);
+    }
 
     auto applyMode = [stack = ui.addressStack, ports = ui.portStack,
-                      serialPageIdx, serialBaudIdx, netPageIdx, netPortIdx](const QString& mode) {
+                      serialPageIdx, serialBaudIdx, netPageIdx, netPortIdx,
+                      radioPageIdx, radioSpeedIdx](const QString& mode) {
+        if (mode == "Radio" && radioPageIdx >= 0) {
+            stack->setCurrentIndex(radioPageIdx);
+            ports->setCurrentIndex(radioSpeedIdx);
+            return;
+        }
 #ifdef HAVE_SERIALPORT
         if (mode == "Serial" && serialPageIdx >= 0) {
             stack->setCurrentIndex(serialPageIdx);
@@ -1147,7 +1245,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
 
     ui.connectButton = makeConnectButton(ui);
     connect(ui.connectButton, &QPushButton::clicked, this,
-            [u, group, netIpEdit, netPortSpin, serialCombo, serialCustomEdit, refresh]() {
+            [u, group, netIpEdit, netPortSpin, serialCombo, serialCustomEdit, radioCableCombo, refresh]() {
         if (u->isConnected() || (u->isConnecting && u->isConnecting())) {
             u->disconnectNow();
             return;
@@ -1166,6 +1264,19 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
             PeripheralSettings::setDeviceInt(group, "ManualPort", port);
             u->state.connecting = true;
             u->connectNetwork(ip, static_cast<quint16>(port));
+        } else if (mode == "Radio" && radioCableCombo) {
+            const QString cable = radioCableCombo->currentData().toString();
+            if (cable.isEmpty()) {
+                refresh();
+                return;
+            }
+            if (u->confirmRadioCable && !u->confirmRadioCable(cable)) {
+                refresh();
+                return;
+            }
+            PeripheralSettings::setDeviceString(group, "RadioCable", cable);
+            u->state.connecting = true;
+            u->connectRadioCable(cable);
         }
 #ifdef HAVE_SERIALPORT
         else {
@@ -1217,6 +1328,25 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     addFormRow(detail, tr("Connection Type"), ui.modeCombo);
     addFormRow(detail, tr("Address/Serial Port"), ui.addressStack);
     addFormRow(detail, tr("TCP Port/Speed"), ui.portStack);
+    if (ui.applyPollInterval) {
+        auto* pollSpin = new QSpinBox;
+        pollSpin->setObjectName(QStringLiteral("peripheralPollInterval_%1").arg(ui.id));
+        pollSpin->setRange(ui.pollIntervalMinMs, ui.pollIntervalMaxMs);
+        pollSpin->setSingleStep(50);
+        pollSpin->setSuffix(tr(" ms"));
+        pollSpin->setKeyboardTracking(false);  // apply the typed value once, not per keystroke
+        pollSpin->setValue(PeripheralSettings::deviceInt(group, "PollIntervalMs", ui.pollIntervalDefaultMs));
+        pollSpin->setAccessibleName(tr("%1 poll interval").arg(ui.label));
+        pollSpin->setAccessibleDescription(
+            tr("How often AetherSDR asks the device for a reading when no other program "
+               "is polling it, %1 to %2 milliseconds. Applies immediately.")
+                .arg(ui.pollIntervalMinMs).arg(ui.pollIntervalMaxMs));
+        connect(pollSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [u, group](int ms) {
+            PeripheralSettings::setDeviceInt(group, "PollIntervalMs", ms);
+            u->applyPollInterval(ms);
+        });
+        addFormRow(detail, tr("Poll Interval"), pollSpin);
+    }
     if (ui.deviceInfo) {
         ui.deviceInfoLabel = new QLabel(ui.deviceInfo());
         ui.deviceInfoLabel->setObjectName(QStringLiteral("peripheralDeviceInfo_%1").arg(ui.id));
@@ -2209,6 +2339,76 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->disconnectNow = [this]() { m_lpMeter->disconnect(); };
         ui->connectNetwork = [this](const QString& h, quint16 p) { m_lpMeter->connectNetwork(h, p); };
         ui->connectSerial = [this](const QString& port) { m_lpMeter->connectSerial(port); };
+        ui->connectRadioCable = [this](const QString& serial) { m_lpMeter->connectRadioCable(serial); };
+        ui->radioCables = [this]() {
+            QVector<QPair<QString, QString>> choices;
+            if (!m_model) {
+                return choices;
+            }
+            const auto& cables = m_model->usbCableModel().cables();
+            for (auto it = cables.cbegin(); it != cables.cend(); ++it) {
+                // Bit, BCD and LDPA cables drive other equipment; retyping one
+                // would erase its settings on the radio. The meter's FT232R
+                // first appears as CAT.
+                if (it->type != QLatin1String("cat") && it->type != QLatin1String("passthrough")) {
+                    continue;
+                }
+                const QString label = it->name.isEmpty()
+                    ? it.key()
+                    : QStringLiteral("%1 — %2").arg(it.key(), it->name);
+                choices.append({it.key(), it->present ? label : tr("%1 (unplugged)").arg(label)});
+            }
+            return choices;
+        };
+        ui->radioCableReported = [this](const QString& serial) {
+            return m_model && m_model->usbCableModel().cables().contains(serial);
+        };
+        ui->radioUsbUnavailableReason = [this, u = ui.get()]() {
+            return u->radioCables().isEmpty()
+                ? tr("The radio reports no CAT or passthrough USB cable for the LP-100A.")
+                : QString();
+        };
+        ui->confirmRadioCable = [this](const QString& serial) {
+            if (!m_model) {
+                return true;
+            }
+            const auto& cables = m_model->usbCableModel().cables();
+            const auto it = cables.constFind(serial);
+            if (it == cables.constEnd()) {
+                return true;  // it waits for the radio
+            }
+            // Asked whenever any setting would change, as the prompt says.
+            LpMeter::CableSnapshot settings = m_lpMeter->radioCableSnapshot(serial);
+            settings.pluggedIn = true;  // an unplugged cable keeps its settings
+            if (LpMeter::cableReady(settings)) {
+                return true;
+            }
+            const QString name = it->name.isEmpty() ? serial
+                                                    : QStringLiteral("%1 (%2)").arg(serial, it->name);
+            CanonMessageBox box(tr("Use This USB Cable?"),
+                                tr("Set USB cable %1 on the radio to passthrough at 115200 8N1 "
+                                   "for the LP-100A?").arg(name),
+                                this);
+            box.setObjectName(QStringLiteral("lp100aRadioCableConfirm"));
+            box.setInformativeText(
+                tr("Its %1 settings on the radio will be replaced, and it stays in passthrough "
+                   "after you disconnect. Choose this only if the LP-100A is the device on "
+                   "this cable.").arg(it->type.toUpper()));
+            auto* cancel = box.addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+            cancel->setObjectName(QStringLiteral("lp100aRadioCableCancel"));
+            auto* apply = box.addButton(tr("Set to Passthrough"), CanonMessageBox::Role::Destructive);
+            apply->setObjectName(QStringLiteral("lp100aRadioCableApply"));
+            box.setDefaultButton(cancel);
+            box.exec();
+            return box.clickedButton() == apply;
+        };
+        ui->applyPollInterval = [this](int ms) {
+            m_lpMeter->setPollIntervalMs(ms);
+            emit lpMeterPollIntervalChanged(static_cast<int>(m_lpMeter->pollIntervalMs()));
+        };
+        ui->pollIntervalDefaultMs = static_cast<int>(LpMeter::PollGate::kSoloPollIntervalMs);
+        ui->pollIntervalMinMs = static_cast<int>(LpMeter::PollGate::kSoloPollIntervalMs);
+        ui->pollIntervalMaxMs = static_cast<int>(LpMeter::PollGate::kMaxSoloPollIntervalMs);
         ui->description = [this]() { return m_lpMeter->description(); };
         ui->afterRemoval = [this]() { m_lpMeter->disconnect(); };
         buildSerialNetworkDevice(*ui, detailStack, refresh, serialReseeds);
@@ -2825,6 +3025,26 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             if (ui.editHint) {
                 ui.editHint->setText(reason);
                 ui.editHint->setVisible(locked);
+            }
+            if (ui.radioUsbUnavailableReason && ui.modeCombo) {
+                // Radio USB stays listed but dimmed, with the reason, on a radio
+                // that offers no cable for it.
+                const QString why = ui.radioUsbUnavailableReason();
+                if (auto* items = qobject_cast<QStandardItemModel*>(ui.modeCombo->model())) {
+                    if (QStandardItem* item = items->item(ui.modeCombo->findData(QStringLiteral("Radio")))) {
+                        item->setEnabled(why.isEmpty());
+                        item->setData(why.isEmpty() ? QVariant() : QVariant(why), Qt::ToolTipRole);
+                        item->setData(why.isEmpty() ? QVariant() : QVariant(why), Qt::AccessibleDescriptionRole);
+                    }
+                }
+                const bool radioMode = ui.modeCombo->currentData().toString() == QLatin1String("Radio");
+                const bool blocked = radioMode && !why.isEmpty() && !connected && !connecting;
+                if (blocked) {
+                    updateFieldAvailability(ui, ui.radioCableCombo, true, why);
+                }
+                ui.connectButton->setEnabled(!blocked);
+                ui.connectButton->setToolTip(blocked ? why : QString());
+                ui.connectButton->setAccessibleDescription(blocked ? why : QString());
             }
             if (ui.serialRefreshButton) {
                 ui.serialRefreshButton->setEnabled(!locked);

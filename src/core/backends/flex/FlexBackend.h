@@ -201,6 +201,7 @@ public:
                                      const RadioControlCompletion& completion = {},
                                      const RadioControlFence& current = {}) override;
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
+    ReceiveDispatch requestUsbCableWrite(const QString& serial, const QByteArray& bytes) override;
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                        const RadioSetupCompletion& completion = {}) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;

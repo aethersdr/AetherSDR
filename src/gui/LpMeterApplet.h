@@ -43,6 +43,7 @@ public:
     // on its replies. Surfaced because it dictates the update rate, which the
     // operator would otherwise read as a fault.
     void setRidingAlong(bool riding, qint64 foreignIntervalMs);
+    void setPollIntervalMs(qint64 ms) { m_pollIntervalMs = ms; }
 
     LpMeter::RangeCeilings ceilings() const { return m_ceilings; }
     void setCeilings(const LpMeter::RangeCeilings& ceilings);
@@ -84,6 +85,7 @@ private:
     bool   m_dataFlowing{false};
     bool   m_ridingAlong{false};
     qint64 m_foreignIntervalMs{-1};
+    qint64 m_pollIntervalMs{LpMeter::PollGate::kSoloPollIntervalMs};
     double m_ceilingW{0.0};
     bool   m_ceilingAutoExpanded{false};
 

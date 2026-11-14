@@ -816,6 +816,86 @@ int main()
                    && std::isfinite(static_cast<float>(r->zOhms)));
     }
 
+    // ---- Radio USB passthrough cable ------------------------------------
+    {
+        using Setting = CableChange::Setting;
+        // As the radio first reports the meter's FT232R (FLEX-8600, 4.3.16).
+        CableSnapshot cable{true, true, QStringLiteral("cat"), 9600, 8,
+                            QStringLiteral("none"), 1, QStringLiteral("none")};
+        auto change = nextCableChange(cable);
+        report("type is changed before anything else",
+               change && change->setting == Setting::Type
+                   && change->text == QStringLiteral("passthrough"));
+        // Changing the type resets the speed, so speed comes only after it.
+        cable.type = QStringLiteral("passthrough");
+        change = nextCableChange(cable);
+        report("speed follows the type change",
+               change && change->setting == Setting::Speed && change->number == 115200);
+        cable.speed = 115200;
+        report("passthrough 115200 8N1 is ready", cableReady(cable) && !nextCableChange(cable));
+        CableSnapshot framing = cable;
+        framing.dataBits = 7;
+        framing.parity = QStringLiteral("even");
+        framing.stopBits = 2;
+        framing.flowControl = QStringLiteral("rts_cts");
+        std::vector<Setting> walked;
+        for (int i = 0; i < 8; ++i) {
+            const auto step = nextCableChange(framing);
+            if (!step) { break; }
+            walked.push_back(step->setting);
+            switch (step->setting) {
+                case Setting::DataBits: framing.dataBits = step->number; break;
+                case Setting::Parity: framing.parity = step->text; break;
+                case Setting::StopBits: framing.stopBits = step->number; break;
+                case Setting::FlowControl: framing.flowControl = step->text; break;
+                default: break;
+            }
+        }
+        report("framing is walked one setting at a time to 8N1, no flow control",
+               walked == std::vector<Setting>{Setting::DataBits, Setting::Parity,
+                                              Setting::StopBits, Setting::FlowControl}
+                   && cableReady(framing));
+        CableSnapshot unplugged = cable;
+        unplugged.pluggedIn = false;
+        report("an unplugged cable is neither ready nor configured",
+               !cableReady(unplugged) && !nextCableChange(unplugged));
+        report("an unknown cable is neither ready nor configured",
+               !cableReady(CableSnapshot{}) && !nextCableChange(CableSnapshot{}));
+    }
+
+    // ---- Configurable solo poll interval --------------------------------
+    {
+        PollGate gate;
+        report("the default solo interval is 100 ms",
+               gate.soloIntervalMs() == PollGate::kSoloPollIntervalMs
+                   && gate.maxOutstandingPolls() == 10);
+        gate.setSoloIntervalMs(50);
+        report("an interval below the floor clamps to it",
+               gate.soloIntervalMs() == PollGate::kSoloPollIntervalMs);
+        gate.setSoloIntervalMs(5000);
+        report("an interval above the ceiling clamps to it",
+               gate.soloIntervalMs() == PollGate::kMaxSoloPollIntervalMs
+                   && gate.maxOutstandingPolls() == 1);
+        gate.setSoloIntervalMs(250);
+        gate.reset();
+        report("reset keeps the operator's interval", gate.soloIntervalMs() == 250);
+        // At 250 ms the gate holds 4 unmatched polls: after six polls and a
+        // stall, the first four replies are ours and the next two are foreign
+        // (at the default cap of 10 all six would have been absorbed).
+        qint64 now = 0;
+        for (int i = 0; i < 6; ++i, now += 10) {
+            gate.shouldPoll(now);
+        }
+        for (int i = 0; i < 4; ++i) {
+            gate.onRecord(now);
+        }
+        const bool ownAbsorbed = gate.foreignIntervalMs() < 0;
+        gate.onRecord(now + 1);
+        gate.onRecord(now + 51);
+        report("outstanding polls are capped by the slower interval",
+               ownAbsorbed && gate.foreignIntervalMs() == 50);
+    }
+
     std::printf("\n%s\n", g_failed == 0 ? "all passed"
                                         : "FAILURES PRESENT");
     return g_failed == 0 ? 0 : 1;

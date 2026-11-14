@@ -7,6 +7,8 @@
 #include <QTcpSocket>
 #include <QTimer>
 
+#include <functional>
+
 #ifdef HAVE_SERIALPORT
 #include <QSerialPort>
 #endif
@@ -58,7 +60,40 @@ public:
     // route). The proxy's connect banner, if any, is discarded by the
     // parser's resync rather than needing special handling here.
     void connectNetwork(const QString& host, quint16 port);
+
+    // A meter plugged into a FlexRadio's USB port, reached through the radio's
+    // passthrough cable (see LpMeter::CableSnapshot). This class stays free of
+    // radio types: the owner supplies the hooks and forwards the cable's status
+    // and data. An operator Connect is the go-ahead to set the cable to
+    // passthrough 115200 8N1; it is left that way on disconnect. The link
+    // follows the radio's cable status, so no reconnect timer is used. Only an
+    // operator Connect changes a cable that is neither CAT nor passthrough;
+    // startup, a replug or a radio reconnect refuses it instead.
+    struct RadioCableHooks {
+        std::function<LpMeter::CableSnapshot(const QString& serial)> snapshot;
+        // Each returns false when the radio session refused the request.
+        std::function<bool(const QString& serial, const LpMeter::CableChange& change)> configure;
+        std::function<bool(const QString& serial, const QByteArray& bytes)> write;
+    };
+    void setRadioCableHooks(RadioCableHooks hooks);
+    // The radio's view of a cable through the snapshot hook; unknown without it.
+    LpMeter::CableSnapshot radioCableSnapshot(const QString& serial) const
+    {
+        return m_radioHooks.snapshot ? m_radioHooks.snapshot(serial) : LpMeter::CableSnapshot{};
+    }
+    enum class RadioCableIntent { Operator, Saved };
+    void connectRadioCable(const QString& serial,
+                           RadioCableIntent intent = RadioCableIntent::Operator);
+    // The radio's current view of a cable; other serials are ignored. Send an
+    // unknown snapshot when the cable is removed or the radio disconnects.
+    void onRadioCableStatus(const QString& serial, const LpMeter::CableSnapshot& cable);
+    void onRadioCableData(const QString& serial, const QByteArray& bytes);
+
     void disconnect();
+
+    // Solo poll interval, clamped to the PollGate bounds. Applies at once.
+    void setPollIntervalMs(qint64 ms);
+    qint64 pollIntervalMs() const { return m_gate.soloIntervalMs(); }
 
     // Disabling must also CANCEL a retry already armed. Flipping the flag
     // alone left a pending 5 s timer to fire and reconnect once after the
@@ -114,7 +149,7 @@ private:
     friend class LpMeterConnectionTest;
     friend class LpMeterConnectionClockTest;
 
-    enum class Mode { None, Serial, Network };
+    enum class Mode { None, Serial, Network, Radio };
 
     void prepareConnection(Mode mode, const QString& endpoint, quint16 port = 0);
     void onTransportUp();
@@ -125,6 +160,10 @@ private:
     void armReconnect();
     void pollTick();
     void setDataFlowing(bool flowing);
+    void ingest(const QByteArray& chunk);
+    bool writePoll();
+    void evaluateRadioCable(const LpMeter::CableSnapshot& cable);
+    void failRadioCable(const QString& reason);
     // Monotonic: every PollGate and RangeTracker decision is a difference of
     // two of these, and a wall-clock step backward would freeze them (#6803).
     qint64 nowMs() const;
@@ -145,6 +184,24 @@ private:
     QString   m_lastSerialPort;
     QString   m_lastHost;
     quint16   m_lastPort{0};
+    QString   m_lastRadioSerial;
+
+    RadioCableHooks m_radioHooks;
+    // Walking the cable to passthrough 115200 8N1. Set by an operator connect
+    // and by the cable (re)appearing; cleared once ready, on failure, and when
+    // a ready cable is changed away by someone else.
+    bool m_radioWanted{false};
+    bool m_radioConfiguring{false};
+    bool m_radioCablePresent{false};
+    // This configure cycle began with an operator Connect on a present cable,
+    // so it may change a cable of another type.
+    bool m_radioMayRetype{false};
+    // The link dropped and is waiting to resume on its own (auto-reconnect),
+    // not on an operator Connect; turning auto-reconnect off cancels it.
+    bool m_radioResumeAutomatic{false};
+    std::optional<LpMeter::CableChange> m_lastCableChange;
+    // The radio must confirm each change by status within this window.
+    QTimer m_cableConfigureTimer;
 
     bool m_connected{false};
     bool m_autoReconnect{false};
