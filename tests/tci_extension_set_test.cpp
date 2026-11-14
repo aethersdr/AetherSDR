@@ -5,6 +5,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/TciClient.h"
+#include "core/TciExtensionNotice.h"
 #include "core/TciExtensionSet.h"
 #include "core/TciProtocol.h"
 #include "core/TciServer.h"
@@ -12,6 +13,7 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -397,6 +399,53 @@ void resentHookAndReannounce()
           "with no client enabled, a changed list runs no hook");
 }
 
+// Spins the event loop for `ms`, so posted sends and the interval run.
+void spin(int ms)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (clock.elapsed() < ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    }
+}
+
+// The groups' change notice: one posted send per event-loop turn, then a rate
+// limit with one trailing send. Interval generous against a loaded host.
+void noticeCoalescesAndLimits()
+{
+    QObject context;
+    int calls = 0;
+    bool sends = true;
+    TciExtensionNotice notice(&context, 200, [&] {
+        ++calls;
+        return sends;
+    });
+
+    notice.queue();
+    notice.queue();
+    notice.queue();
+    check(calls == 0, "a queued notice is posted, not sent inline");
+    QCoreApplication::processEvents();
+    check(calls == 1, "three changes in one turn go out as one send");
+
+    notice.queue();
+    notice.queue();
+    QCoreApplication::processEvents();
+    check(calls == 1, "after a send, changes wait for the interval");
+    spin(400);
+    check(calls == 2, "and go out as one trailing send");
+    spin(400);
+    check(calls == 2, "with nothing queued, the interval sends nothing");
+
+    sends = false;
+    notice.queue();
+    QCoreApplication::processEvents();
+    check(calls == 3, "a queue after the interval is sent at once");
+    notice.queue();
+    QCoreApplication::processEvents();
+    check(calls == 4, "a send that sent nothing starts no interval");
+}
+
 // Deliberately unlike the *_sensors_enable precedent, which takes only `true`
 // (TCI 2.1 §4.7 note 3 allows 1); RFC #7181 review, item 2.
 void enableBooleans()
@@ -438,6 +487,7 @@ int main(int argc, char** argv)
     enableBooleans();
     handlerThatRegisters();
     resentHookAndReannounce();
+    noticeCoalescesAndLimits();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
