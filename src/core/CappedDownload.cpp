@@ -9,6 +9,21 @@
 
 namespace AetherSDR {
 
+bool isRetryableBeforeBody(QNetworkReply::NetworkError error, bool http2Used)
+{
+    switch (error) {
+    case QNetworkReply::RemoteHostClosedError:
+    case QNetworkReply::ContentReSendError:
+    case QNetworkReply::ProtocolUnknownError:
+    case QNetworkReply::ProtocolFailure:
+        return true;
+    case QNetworkReply::UnknownNetworkError:
+        return http2Used;
+    default:
+        return false;
+    }
+}
+
 CappedDownload::CappedDownload(QObject* parent)
     : QObject(parent)
     , m_nam(new QNetworkAccessManager(this))
@@ -20,12 +35,22 @@ CappedDownload::CappedDownload(QObject* parent)
 void CappedDownload::get(const QUrl& url, qint64 limit, const QString& tooLarge)
 {
     cancel();
+    m_url = url;
+    m_retried = false;
     m_limit = limit;
     m_tooLarge = tooLarge;
     m_body.clear();
-    QNetworkRequest request(url);
+    startRequest();
+}
+
+void CappedDownload::startRequest()
+{
+    QNetworkRequest request(m_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
+    // A retry must not be queued onto the HTTP/2 session that sent GOAWAY.
+    if (m_retried)
+        request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     m_reply = m_nam->get(request);
     m_reply->setReadBufferSize(64 * 1024);
     connect(m_reply, &QNetworkReply::metaDataChanged, this, [this] {
@@ -48,6 +73,7 @@ void CappedDownload::cancel()
         reply->abort();
         reply->deleteLater();
     }
+    m_retried = false;
 }
 
 bool CappedDownload::readBody()
@@ -76,9 +102,21 @@ void CappedDownload::onFinished()
     if (reply->error() == QNetworkReply::NoError && !readBody())
         return;   // refused: too large
     m_reply = nullptr;
+    reply->disconnect(this);
     reply->deleteLater();
     const QUrl url = reply->url();
     if (reply->error() != QNetworkReply::NoError) {
+        // Retry once; never join partial bodies.
+        const bool connectionError = isRetryableBeforeBody(
+            reply->error(),
+            reply->attribute(QNetworkRequest::Http2WasUsedAttribute).toBool());
+        if (!m_retried && connectionError && m_body.isEmpty() &&
+            reply->bytesAvailable() == 0) {
+            m_retried = true;
+            startRequest();
+            return;
+        }
+        m_body.clear();
         emit failed(QCoreApplication::translate("CappedDownload", "Could not download %1: %2")
                         .arg(url.fileName(), reply->errorString()));
         return;
