@@ -33,6 +33,7 @@
 #include <QPushButton>
 #include <QTextEdit>
 #include <QTextCharFormat>
+#include <QTextDocument>
 #include <QWindow>
 #include <QGuiApplication>
 #include <QClipboard>
@@ -222,8 +223,10 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
     m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
+    m_cwSensSlider->setAccessibleName(tr("CW decode sensitivity"));
     applyPrimarySliderStyle(m_cwSensSlider);
-    m_cwCostThreshold = cwSensCostThreshold(savedSens);
+    // The slider clamps a hand-edited value; the threshold reads it back.
+    m_cwCostThreshold = cwSensCostThreshold(m_cwSensSlider->value());
     connectSliderSetting(m_cwSensSlider,
         [this](int v) {
             m_cwSensUnsaved = true;
@@ -934,9 +937,6 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
         : tr("%1 does not support manual decoder tuning.")
               .arg(m_cwEngineCombo->currentText());
     // Sens works with every decoder, each on its own saved value.
-    if (m_cwSensSlider->accessibleName().isEmpty()) {
-        m_cwSensSlider->setAccessibleName(tr("CW decode sensitivity"));
-    }
     showCwSensFor(key);
     // A description with no name gives a screen reader nothing to anchor it to
     // (docs/a11y.md; #4896), so name them here rather than only explaining why
@@ -973,8 +973,10 @@ void PanadapterApplet::showCwSensFor(const QString& backend)
         : CwDecodeSettings::sensitivity(backend);
     const QSignalBlocker blocker(m_cwSensSlider);
     m_cwSensSlider->setValue(sens);
-    if (ggmorse) { m_cwCostThreshold = cwSensCostThreshold(sens); }
-    else { m_cwNeuralCostThreshold = cwSensCostThreshold(sens); }
+    // Read back the clamped value: a hand-edited ggmorse key can be out of span.
+    const float threshold = cwSensCostThreshold(m_cwSensSlider->value());
+    if (ggmorse) { m_cwCostThreshold = threshold; }
+    else { m_cwNeuralCostThreshold = threshold; }
 }
 void PanadapterApplet::appendUnscoredCwText(const QString& text)
 {
@@ -998,10 +1000,18 @@ void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
     // per chunk). It picks the color (ggmorse's four bands, as theme tokens),
     // and text at or above this decoder's own Sens threshold is not shown.
     // Text that is only a space is always shown, so hidden DeepFist letters
-    // never join two words; a hidden DeepCW chunk goes with its spaces.
+    // never join two words, and a hidden DeepCW chunk that held a space
+    // leaves one (CwDecodeSettings::shownNeuralText).
     QString clean = text;
     clean.replace('\n', ' ');
-    if (cost >= m_cwNeuralCostThreshold && !clean.trimmed().isEmpty()) { return; }
+    const QTextDocument* doc = m_cwText->document();
+    // After a TX burst the insert below adds a separator space anyway.
+    const bool paneEndsInSpace = doc->isEmpty() || m_lastCwTextSource == CwTextSource::Tx
+        || doc->characterAt(doc->characterCount() - 2).isSpace();
+    const QString shown = CwDecodeSettings::shownNeuralText(
+        clean, cost, m_cwNeuralCostThreshold, paneEndsInSpace);
+    if (shown.isEmpty() && !clean.isEmpty()) { return; }
+    clean = shown;
     m_cwText->moveCursor(QTextCursor::End);
     if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
     m_lastCwTextSource = CwTextSource::Rx;

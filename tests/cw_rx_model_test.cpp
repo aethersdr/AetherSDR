@@ -10,6 +10,7 @@
 #include <QThread>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 using namespace AetherSDR;
@@ -185,6 +186,43 @@ bool savedRangesStayInsideTheSliders()
 
 // Each neural decoder keeps its own Sens beside the other CW decoder settings,
 // and a missing, malformed or out-of-span value never reaches the slider.
+// What the pane shows of neural text at a Sens threshold: a hidden DeepCW
+// chunk that held a space leaves one, so the words either side stay apart
+// (maintainer ruling on #7210, 2026-11-14).
+bool hiddenNeuralTextKeepsOneSpace()
+{
+    struct Chunk { const char* text; float cost; };
+    // CONSTRUCTED chunks shaped like DeepCwCommitter's cuts (#7240 review):
+    // a cut can land inside a word, and a chunk after one that ended in a
+    // space has no leading space. Threshold 0.5, so cost 0.9 is hidden.
+    auto pane = [](std::initializer_list<Chunk> chunks) {
+        QString shown;
+        for (const Chunk& c : chunks) {
+            const bool endsInSpace = shown.isEmpty() || shown.back().isSpace();
+            shown += CwDecodeSettings::shownNeuralText(QString::fromLatin1(c.text), c.cost, 0.5f,
+                                                       endsInSpace);
+        }
+        return shown;
+    };
+    if (!require(pane({{"DE K1", 0.1f}, {"ABC ", 0.9f}, {"K1ABC", 0.1f}}) == "DE K1 K1ABC",
+                 "A hidden chunk ending in a space fused the words either side")) { return false; }
+    if (!require(pane({{"DE K1A", 0.1f}, {"BC K1", 0.9f}, {"ABC K", 0.1f}}) == "DE K1A ABC K",
+                 "A hidden chunk with an inner space fused the words either side")) { return false; }
+    if (!require(pane({{"DE K1A", 0.1f}, {"BC", 0.9f}, {" K", 0.1f}}) == "DE K1A K",
+                 "A hidden chunk with no space left something in the pane")) { return false; }
+    if (!require(pane({{"DE ", 0.1f}, {"K1ABC ", 0.9f}, {"K1ABC", 0.1f}}) == "DE K1ABC",
+                 "A hidden chunk's space doubled the pane's own")) { return false; }
+    if (!require(pane({{"K1ABC ", 0.9f}, {"DE", 0.1f}}) == "DE",
+                 "A hidden chunk put a space at the start of the pane")) { return false; }
+    // DeepFist gives a space its own cost; it is always shown, as before.
+    if (!require(pane({{"K", 0.1f}, {" ", 0.9f}, {"1", 0.1f}}) == "K 1",
+                 "A low-confidence space was hidden")) { return false; }
+    return require(pane({{"DE", std::numeric_limits<float>::quiet_NaN()}, {" K1", 0.95f}})
+                       == "DE " && pane({{"DE K1", 0.95f}}).isEmpty()
+                       && CwDecodeSettings::shownNeuralText("DE", 0.9f, 1.0f, false) == "DE",
+                   "Shown text at or below the threshold changed");
+}
+
 bool neuralSensIsSavedPerDecoder()
 {
     auto& s = AppSettings::instance();
@@ -300,6 +338,7 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     if (!savedRangesStayInsideTheSliders()) { return 1; }
     if (!neuralSensIsSavedPerDecoder()) { return 1; }
+    if (!hiddenNeuralTextKeepsOneSpace()) { return 1; }
     if (!pitchRangeFollowsTheRadioPitch()) { return 1; }
     CwDecodeSettings::setBackend(QStringLiteral("unknown"));
     if (!require(!CwDecodeSettings::neuralSelected(),
