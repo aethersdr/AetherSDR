@@ -1,6 +1,7 @@
 #include "WindowGeometryRestore.h"
 
 #include <QDataStream>
+#include <QWidget>
 #include <QtGlobal>
 
 namespace AetherSDR {
@@ -95,6 +96,78 @@ QRect clampFrameToWorkArea(const QRect& savedFrame, const QRect& availableGeomet
     wanted.moveLeft(qMax(wanted.left(), availableGeometry.left()));
     wanted.moveTop(qMax(wanted.top(), availableGeometry.top()));
     return wanted;
+}
+
+namespace {
+
+QRect fallbackForSize(const QSize& preferred, const QRect& primaryAvailableGeometry,
+                      const QMargins& frameMargins)
+{
+    // The client rect must leave room for the frame, or a native title bar
+    // ends up above the work area when the saved window is too big to fit.
+    const QRect clientArea = primaryAvailableGeometry.marginsRemoved(frameMargins);
+    if (!clientArea.isValid()) {
+        return QRect();
+    }
+    const QSize fitted(qBound(1, preferred.width(), clientArea.width()),
+                       qBound(1, preferred.height(), clientArea.height()));
+    const QRect centered(
+        clientArea.x() + (clientArea.width() - fitted.width()) / 2,
+        clientArea.y() + (clientArea.height() - fitted.height()) / 2,
+        fitted.width(), fitted.height());
+    return clampFrameToWorkArea(centered, clientArea);
+}
+
+}  // namespace
+
+QRect fallbackGeometryForRejectedRestore(const QByteArray& geometryBlob,
+                                         const QRect& primaryAvailableGeometry,
+                                         const QSize& currentSize,
+                                         const QMargins& frameMargins)
+{
+    SavedWindowGeometry saved;
+    const QSize preferred = parseSavedWindowGeometry(geometryBlob, &saved)
+                                ? saved.normalRect.size() : currentSize;
+    return fallbackForSize(preferred, primaryAvailableGeometry, frameMargins);
+}
+
+bool placeWindowAfterRejectedRestore(QWidget* window,
+                                     const QByteArray& geometryBlob,
+                                     const QRect& primaryAvailableGeometry)
+{
+    if (!window) {
+        return false;
+    }
+
+    // The window is mapped by now, so its frame margins are known; on the
+    // Windows custom frame they are about zero.
+    const QRect frame = window->frameGeometry();
+    const QRect client = window->geometry();
+    const QMargins frameMargins(qMax(0, client.left() - frame.left()),
+                                qMax(0, client.top() - frame.top()),
+                                qMax(0, frame.right() - client.right()),
+                                qMax(0, frame.bottom() - client.bottom()));
+
+    SavedWindowGeometry saved;
+    const bool decoded = parseSavedWindowGeometry(geometryBlob, &saved);
+    const QRect fallback = fallbackForSize(
+        decoded ? saved.normalRect.size() : window->size(),
+        primaryAvailableGeometry, frameMargins);
+    if (!fallback.isValid()) {
+        return false;
+    }
+
+    if (window->windowState() & (Qt::WindowMinimized | Qt::WindowMaximized
+                                 | Qt::WindowFullScreen)) {
+        window->showNormal();
+    }
+    window->setGeometry(fallback);
+    if (decoded && saved.fullScreen) {
+        window->showFullScreen();
+    } else if (decoded && saved.maximized) {
+        window->showMaximized();
+    }
+    return true;
 }
 
 }  // namespace AetherSDR

@@ -1272,20 +1272,28 @@ void MetisClient::ingestControlResponse(const Ep6Response& resp)
     publishControlVerdict();
 }
 
-void MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
+bool MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
 {
-    setMoxImpl(keyed, operation, false);
+    return setMoxImpl(keyed, operation, false);
 }
 
-void MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation)
+bool MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation)
 {
-    setMoxImpl(keyed, operation, true);
+    return setMoxImpl(keyed, operation, true);
 }
 
-void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn)
+bool MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn)
 {
     if (!TxCoordinator::Command{operation, keyed}.permitsDispatch(TxCoordinator::monotonicMs())) {
-        return;
+        return false;
+    }
+    // #7216: the unkey's flushTxIq() is skipped once a new operation acquires,
+    // and so is its setMox(false), leaving no edge below. A key under another
+    // operation while that flush is owed starts a new over: run it here, before
+    // the over's first frame. A repeat key under the same operation does not.
+    const bool newOver = keyed && m_overFlushOwed && !m_moxOperation.sameOperation(operation);
+    if (newOver) {
+        flushTxIq();
     }
     const bool was = m_mox;
     if (keyed && (!m_txAllowed || !m_running)) {
@@ -1296,14 +1304,15 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         keyed = false;
     }
     m_mox = keyed;
+    m_overFlushOwed = m_overFlushOwed || m_mox;
     m_moxOperation = keyed
         ? (cwBreakIn ? operation.heldCwKeying() : operation.heldKeying()) : operation;
     // main 2c693d1c: the bandscope transmit interlock runs on real key edges
     // only. The operation fence above is set first and unconditionally — a
     // repeat key from a NEW producer must re-anchor the fence even though the
     // wire state did not change.
-    if (m_mox == was)
-        return;
+    if (m_mox == was && !(newOver && m_mox))
+        return newOver;
 
     // The key-down report (#6052): armed on the rising edge, disarmed on the
     // falling one so an over that never carried queued IQ says nothing.
@@ -1339,6 +1348,7 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         // 178-285 ms past the falling edge; kBandscopeUnkeyHoldoffMs clears it.
         m_sinceUnkey.restart();
     }
+    return newOver;
 }
 
 void MetisClient::setTxFrequencyHz(std::uint32_t hz)
@@ -1500,6 +1510,7 @@ void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoord
 
 void MetisClient::flushTxIq()
 {
+    m_overFlushOwed = false;
     abandonTxIq();
     // A flush is how an over ends, so it is also where a starvation that ran
     // to the end of that over stops. Without this the run would sit unreported
@@ -1517,6 +1528,8 @@ void MetisClient::armTxIqPrime() noexcept
 void MetisClient::abandonTxIq()
 {
     m_txIq.clear();
+    // A trim armed by the abandoned audio must not cut the audio that replaces it.
+    m_txIqTrimArmed = false;
     armTxIqPrime();
 }
 
@@ -1548,8 +1561,24 @@ bool MetisClient::txIqPrimeHolds()
     return false;
 }
 
+void MetisClient::trimTxIqAfterUnderflow()
+{
+    if (!m_txIqTrimArmed || m_txIq.size() <= kTxPrimeTargetSamples + kTxTrimMarginSamples)
+        return;
+    // Oldest first, as overflow does: one skip, then the over runs at the primed depth.
+    const std::size_t drop = m_txIq.size() - kTxPrimeTargetSamples;
+    m_txIq.erase(m_txIq.begin(), m_txIq.begin() + static_cast<std::ptrdiff_t>(drop));
+    m_txTrimSamples += drop;
+    ++m_txTrimEvents;
+    qCDebug(lcHl2Tx) << "HL2 tx fifo: backlog after a mid-over starvation trimmed by" << drop
+                     << "sample(s) to the prime target" << kTxPrimeTargetSamples
+                     << "(totals since process start:" << m_txTrimEvents << "trim(s) /"
+                     << m_txTrimSamples << "samples).";
+}
+
 void MetisClient::reportTxUnderflowRun()
 {
+    m_txIqTrimArmed = false;
     m_txUnderflowRunQuietPackets = 0;
     if (m_txUnderflowRunPackets == 0)
         return;
@@ -1560,7 +1589,8 @@ void MetisClient::reportTxUnderflowRun()
                      << "(totals SINCE PROCESS START, not since this link came"
                      << "up and not per radio: underflow" << m_txUnderflowPackets
                      << "packets /" << m_txUnderflowSamples << "samples, overflow"
-                     << m_txOverflowSamples << "samples)."
+                     << m_txOverflowSamples << "samples, trim" << m_txTrimSamples
+                     << "samples)."
                      << "This is the CLIENT's queue, not the radio's DSIQ FIFO:"
                      << "the EP2 frame went out full size on schedule, so the"
                      << "gateware's fill and pacingFault readings are unaffected"
@@ -1776,12 +1806,18 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
             m_txUnderflowRunSamples += shortBy;
             // Still starving: whatever gap was accumulating was not a recovery.
             m_txUnderflowRunQuietPackets = 0;
+            // Only once the prime has let go: it is armed on every key-down and every
+            // abandon, so front-loaded audio at the start of either is never cut.
+            if (m_txIqPrimeTarget == 0)
+                m_txIqTrimArmed = true;
         } else if (m_txUnderflowRunPackets > 0) {
             // A full packet does NOT end the run on its own -- see
             // kUnderflowRunQuietPackets. It only starts the clock on the gap
             // that will.
-            if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets)
+            if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets) {
+                trimTxIqAfterUnderflow();
                 reportTxUnderflowRun();
+            }
         }
         if (n > 0 && m_keyDownReportPending)
             reportKeyDown();
@@ -1872,14 +1908,23 @@ void MetisClient::sendControlPacket()
     // until it has seen it. Re-asserting it rather than sending it once keeps a
     // device that reconnects or resets mid-session from silently going quiet.
     TxCoordinator::Dispatch audioDispatch;
-    // Count the writer through sendTo(), including CW/TUNE packets which have
-    // no queued PCM. Cancellation cannot retract an already-entered write.
+    // Count the writer through sendTo() for keyed frames (CW/TUNE included) and
+    // for the first written OFF frame: cancellation cannot retract a write
+    // already entered. That frame then retires m_moxOperation, so an idle frame
+    // does not hold the counter acquire() needs at zero.
     TxCoordinator::Dispatch keyDispatch = m_moxOperation.beginDispatch(
         TxCoordinator::monotonicMs(), m_mox);
     if (m_mox && !keyDispatch) {
         m_mox = false;
+        keyDispatch = m_moxOperation.beginDispatch(TxCoordinator::monotonicMs(), false);
     }
-    if (!m_txIq.empty()) {
+    // Only a keyed frame carries queued IQ, so only it takes the audio dispatch:
+    // an idle frame must not hold the counter acquire() needs at zero (#7212).
+    // Audio still queued on an idle frame is stale and is abandoned, uncounted.
+    // A re-key with no idle frame between it and the unkey is #7216's case.
+    if (!m_txIq.empty() && !(m_mox && m_txAllowed)) {
+        abandonTxIq();
+    } else if (!m_txIq.empty()) {
         audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
         if (!audioDispatch) {
             abandonTxIq();
@@ -1888,6 +1933,9 @@ void MetisClient::sendControlPacket()
     const auto packet = buildNextControlPacket();
     const qint64 written = m_packetSinkForTest ? m_packetSinkForTest(packet)
                                               : sendTo(*m_socket, packet, m_host, m_port);
+    if (written > 0 && !m_mox) {
+        m_moxOperation = {};
+    }
     countTx(written);
     // AFTER the write, and taking its return value: this is the seam where a
     // RQST bank stops being something we intend to send and becomes something

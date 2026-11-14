@@ -2026,6 +2026,7 @@ target_link_libraries(AetherSDR PRIVATE
 add_executable(aetherd
     src/aetherd/main.cpp
     src/aetherd/CredentialStartup.cpp
+    src/aetherd/GracefulStop.cpp
     src/aetherd/GrantAdminClient.cpp
 )
 target_link_libraries(aetherd PRIVATE
@@ -3819,7 +3820,7 @@ include(GNUInstallDirs)
 
 if(LINUX AND NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
     # Keep pinned or non-system Qt loadable after install; explicit builder overrides win.
-    set_property(TARGET AetherSDR PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+    set_property(TARGET AetherSDR aetherd PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
 
 if(APPLE)
@@ -3861,6 +3862,17 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    # The headless engine ships beside the app on Linux, so the AppImage (and
+    # an install made from it) can run it: `AetherSDR --aetherd [options]`.
+    # aetherd is always a target, but a build of the app alone (the x86_64
+    # AppImage builds only named targets) leaves no binary: OPTIONAL then
+    # installs without it.
+    if(LINUX)
+        install(TARGETS aetherd
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            OPTIONAL
+        )
     endif()
     if(LINUX AND HIDAPI_FOUND)
         install(FILES packaging/linux/70-aethersdr-ctr2.rules

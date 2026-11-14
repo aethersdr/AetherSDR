@@ -17,6 +17,7 @@
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 class QUdpSocket;
@@ -363,10 +364,12 @@ public:
 
     // Key / unkey. A key is refused unless enableTransmit(true) was called and the
     // session is streaming (start() until stop()); stop() drops a held key.
-    void setMox(bool keyed, const TxCoordinator::Operation& operation);
+    // Returns true when a key under a new operation ran the previous over's
+    // skipped cleanup (#7216): the caller then resets the modulator too.
+    bool setMox(bool keyed, const TxCoordinator::Operation& operation);
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
-    void setCwMox(bool keyed, const TxCoordinator::Operation& operation);
+    bool setCwMox(bool keyed, const TxCoordinator::Operation& operation);
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
@@ -420,6 +423,10 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
+    // Backlog dropped once when a mid-over starvation ends with the queue above the
+    // prime target plus kTxTrimMarginSamples: latency returns to the primed depth.
+    [[nodiscard]] std::uint64_t txTrimSamples() const noexcept { return m_txTrimSamples; }
+    [[nodiscard]] std::uint64_t txTrimEvents() const noexcept { return m_txTrimEvents; }
     // Empty-queue keyed silence at the head of the most recent over that
     // carried queued IQ, in EP2 samples: txUnderflowSamples from MOX-on to the
     // first queued sample. Logged at that moment under lcHl2Tx. Same THREAD
@@ -842,17 +849,27 @@ private:
     // empty when each block is due and any lateness is keyed zeros mid-over.
     // Armed on the keyed edge and on every abandon; the keyed queued-IQ arm then
     // sends silence until the target is queued. Margin = target - one block:
-    // two blocks (42.67 ms) cover every over measured; that is also the latency.
-    static constexpr std::size_t kTxPrimeBlockSamples = 1024;   // Hl2TxDsp block at 48 kHz; hl2_tx_gate_test pins it
-    static constexpr std::size_t kTxPrimeMarginBlocks = 2;
+    // 42.67 ms covers every over measured, whatever the block; that is also the latency.
+    // Hl2TxDsp's default block, at the EP2 rate: derived, so it follows the block.
+    static constexpr std::size_t kTxPrimeBlockSamples =
+        static_cast<std::size_t>(Hl2TxDsp::Config{}.dspBlockSize)
+        * static_cast<std::size_t>(Hl2TxDsp::Config{}.outputSampleRateHz
+                                   / Hl2TxDsp::Config{}.inputSampleRateHz);
+    static constexpr std::size_t kTxPrimeMarginSamples = 2048;  // 42.67 ms at 48 kHz
     static constexpr std::size_t kTxPrimeTargetSamples =
-        (kTxPrimeMarginBlocks + 1) * kTxPrimeBlockSamples;
+        kTxPrimeMarginSamples + kTxPrimeBlockSamples;
     // Deadline in packets: twice the margin's arrival time. A stopped producer is let go.
     static constexpr std::uint64_t kTxPrimeMaxHoldPackets =
-        (2 * kTxPrimeMarginBlocks * kTxPrimeBlockSamples)
-            / static_cast<std::size_t>(kTxSamplesPerPacket);
+        (2 * kTxPrimeMarginSamples) / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
+    // Depth above the target that is still steady state: a producer delivers up
+    // to 2048 samples (42.67 ms) at once, whatever the DSP block: a TCI client's
+    // 2048-sample mono TX_AUDIO frame. More than that after a mid-over starvation
+    // is a backlog, trimmed once to the target (trimTxIqAfterUnderflow()).
+    static constexpr std::size_t kTxTrimMarginSamples = 2048;
+    static_assert(kTxPrimeTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
+                  "the trim threshold must sit below the overflow bound");
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
     std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
     std::uint64_t m_txPrimeHoldPackets = 0;     // process total
@@ -868,6 +885,8 @@ private:
     std::uint64_t m_txUnderflowPackets = 0;
     std::uint64_t m_txUnderflowSamples = 0;
     std::uint64_t m_txOverflowSamples = 0;
+    std::uint64_t m_txTrimSamples = 0;
+    std::uint64_t m_txTrimEvents = 0;
     // Length of the starvation currently in progress, in packets and in
     // substituted silent samples, so ONE log line describes the whole EPISODE
     // instead of one line per EP2 frame at 380 frames/second. Reported and
@@ -885,7 +904,12 @@ private:
         (static_cast<std::uint64_t>(kEp2AudioRateHz) / 10u)
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
-    void reportTxUnderflowRun();
+    void reportTxUnderflowRun();   // also disarms the trim
+    // Set by a short packet once the prime has let go, so neither the key-down
+    // underflow nor a re-primed context arms it; abandonTxIq() disarms it. Acted
+    // on once, when the episode ends quietly.
+    bool m_txIqTrimArmed = false;
+    void trimTxIqAfterUnderflow();
     // Key-down report (#6052): armed on MOX's rising edge with the underflow and
     // prime-hold totals, reported once on the first keyed packet carrying queued
     // IQ. The differences are the silence this queue put at the head of the over
@@ -903,10 +927,13 @@ private:
     bool m_cwKeyDown = false;
     double m_cwEnvelope = 0.0;  // 0..1 raised-cosine ramp position
     bool m_mox = false;         // requested key state, only honoured if m_txAllowed
+    // Empty once the first OFF frame after an unkey is written (sendControlPacket).
     TxCoordinator::Operation m_moxOperation;
     TxCoordinator::Operation m_cwOperation;
     TxCoordinator::Operation m_toneOperation;
-    void setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
+    bool setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
+    // Set by an accepted key, cleared by flushTxIq(): the over's cleanup is owed.
+    bool m_overFlushOwed = false;
 
     std::uint32_t m_txSeq = 0;           // outgoing EP2 sequence
     unsigned m_roundRobin = 0;
