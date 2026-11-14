@@ -29,6 +29,7 @@ public slots:
 #include "core/AppSettings.h"
 #include "core/MicrohamTrioSettings.h"
 #include "core/PeripheralSettings.h"
+#include "core/RadioSettingsScope.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/MicrohamTrioModel.h"
 #include "models/RadioModel.h"
@@ -210,6 +211,9 @@ void testRowLifecycle()
                && dummyWarning->text().contains(QStringLiteral("Spare"))
                && dummyWarning->text().contains(QStringLiteral("Dummy")),
            dummyWarning ? dummyWarning->text().toStdString() : std::string());
+    report("the warning has an accessible name and carries its text as the description",
+           dummyWarning && !dummyWarning->accessibleName().isEmpty()
+               && dummyWarning->accessibleDescription() == dummyWarning->text());
     if (confirmDummy) {
         confirmDummy->click();
     }
@@ -364,6 +368,99 @@ void testDeviceTextIsPlain()
     MicrohamTrioSettings::remove();
 }
 
+// Opens a Setup dialog on the Peripherals page with the Trio row added, its
+// address entered and Connect clicked. Null when the row is missing.
+struct TrioPage {
+    RadioModel radio;
+    Peer peer;
+    MicrohamTrioModel trio{peer.environment()};
+    RadioSetupDialog dialog{&radio, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                            &trio};
+    QLineEdit* address{nullptr};
+
+    bool open()
+    {
+        dialog.selectTab(QStringLiteral("Peripherals"));
+        auto* add = dialog.findChild<QPushButton*>(QStringLiteral("peripheralAddButton"));
+        QAction* action = add && add->menu() ? addAction(add->menu(), QStringLiteral("trio")) : nullptr;
+        if (!action) {
+            return false;
+        }
+        action->trigger();
+        address = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralAddress_trio"));
+        auto* connectButton = dialog.findChild<QPushButton*>(QStringLiteral("peripheralConnect_trio"));
+        if (!address || !connectButton) {
+            return false;
+        }
+        address->setText(QLatin1String(kHost));
+        connectButton->click();
+        return peer.connectHeld(trio, "radio2", "ant6");
+    }
+};
+
+// The "this AetherSDR" markers share an exclusive group with "on none of
+// them": a marker must still uncheck when the binding it shows goes away.
+void testRadioMarkerFollowsTheBinding()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    const RadioSettingsScope hl2(QStringLiteral("hl2"), QStringLiteral("trio-page-radio-a"));
+    MicrohamTrioBinding::remove(hl2);
+    TrioPage page;
+    page.trio.loadSettings(false);
+    if (!page.open()) {
+        report("marker: the Trio row connects", false);
+        return;
+    }
+    page.trio.setRadio(hl2);
+    auto* radio2This = page.dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioThis_radio2"));
+    auto* notOnTrio = page.dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioNotOnTrio"));
+    if (!radio2This || !notOnTrio) {
+        report("marker: the radio-port markers exist", false);
+        return;
+    }
+    radio2This->click();
+    report("marker: \"this AetherSDR\" on radio2 is checked and stored",
+           radio2This->isChecked() && MicrohamTrioBinding::load(hl2).stored
+                                          == MicrohamTrioBinding::Stored::Bound);
+    page.trio.clearBinding();
+    report("marker: the binding forgotten, the marker unchecks", !radio2This->isChecked());
+    radio2This->click();
+    page.trio.setRadio(RadioSettingsScope(QStringLiteral("hl2"), QString()));
+    report("marker: no radio connected, the marker unchecks",
+           !radio2This->isChecked() && !notOnTrio->isChecked());
+    page.trio.setRadio(hl2);
+    report("marker: the radio back, its binding shows again", radio2This->isChecked());
+    MicrohamTrioBinding::remove(hl2);
+    MicrohamTrioSettings::remove();
+}
+
+// An address cleared on the page and Setup closed forgets the Trio through the
+// model, so a later dummy-load change cannot write the old address back.
+void testClearedAddressGoesThroughTheModel()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    TrioPage page;
+    page.trio.loadSettings(false);
+    if (!page.open()) {
+        report("cleared: the Trio row connects", false);
+        return;
+    }
+    page.trio.markDummyLoad(QStringLiteral("ant6"));
+    page.trio.disconnect();
+    page.address->clear();
+    page.dialog.done(QDialog::Rejected);
+    report("cleared: the address is gone from the store and from the model",
+           PeripheralSettings::deviceString(QStringLiteral("trio"), QStringLiteral("ManualIp")).isEmpty()
+               && !page.trio.view().configured && !page.trio.hasSession());
+    page.trio.clearDummyLoad();
+    page.trio.markDummyLoad(QStringLiteral("ant6"));
+    report("cleared: a later dummy-load change writes no address back",
+           PeripheralSettings::deviceString(QStringLiteral("trio"), QStringLiteral("ManualIp")).isEmpty()
+               && !MicrohamTrioSettings::load().isConfigured());
+    MicrohamTrioSettings::remove();
+}
+
 void testConfiguredRowIsListed()
 {
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
@@ -404,6 +501,8 @@ int main(int argc, char** argv)
     testRowLifecycle();
     testDeviceTextIsPlain();
     testConfiguredRowIsListed();
+    testRadioMarkerFollowsTheBinding();
+    testClearedAddressGoesThroughTheModel();
 
     std::printf("\n%s (%d failed)\n", g_failed == 0 ? "ALL PASSED" : "FAILURES", g_failed);
     return g_failed == 0 ? 0 : 1;

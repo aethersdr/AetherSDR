@@ -1800,6 +1800,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     auto* antennaGrid = new QGridLayout(antennaGroup);
     auto* dummyWarning = new QLabel(antennaGroup);
     dummyWarning->setObjectName(QStringLiteral("peripheralTrioDummyWarning"));
+    dummyWarning->setAccessibleName(tr("Trio dummy load warning"));
     dummyWarning->setWordWrap(true);
     dummyWarning->setTextFormat(Qt::PlainText);
     setTone(dummyWarning, Tone::Error);
@@ -1918,7 +1919,9 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
             antennaGrid->addWidget(dummyWarning, antennaRow, 0, 1, 3);
             antennaGrid->addWidget(confirmDummy, antennaRow + 1, 1);
         }
-        // Names follow the Trio.
+        // Names follow the Trio. The markers share an exclusive group, in which
+        // a checked button cannot be unchecked: off while they are set.
+        thisRadio->setExclusive(false);
         for (const PortRow& row : *rows) {
             const MicrohamTrio::Selector* group = !view.snapshot ? nullptr
                 : row.group == QLatin1String("radio") ? &view.snapshot->radio : &view.snapshot->antenna;
@@ -1941,11 +1944,20 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
             notOnTrio->setChecked(view.binding == MicrohamTrioBinding::Stored::NotOnTrio);
             notOnTrio->setEnabled(view.radioKnown && view.configured && view.snapshot.has_value());
         }
+        thisRadio->setExclusive(true);
         radioGroup->setEnabled(view.snapshot.has_value());
         antennaGroup->setEnabled(view.snapshot.has_value());
-        dummyWarning->setText(view.dummyLoadIssue.isEmpty() ? QString()
-                              : RadioSetupDialog::tr("DUMMY LOAD WARNING: %1.").arg(view.dummyLoadIssue));
-        dummyWarning->setVisible(!view.dummyLoadIssue.isEmpty());
+        const QString warning = view.dummyLoadIssue.isEmpty() ? QString()
+            : RadioSetupDialog::tr("DUMMY LOAD WARNING: %1.").arg(view.dummyLoadIssue);
+        dummyWarning->setVisible(!warning.isEmpty());
+        if (dummyWarning->text() != warning) {
+            dummyWarning->setText(warning);
+            dummyWarning->setAccessibleDescription(warning);
+            if (!warning.isEmpty()) {
+                QAccessibleEvent event(dummyWarning, QAccessible::DescriptionChanged);
+                QAccessible::updateAccessibility(&event);
+            }
+        }
         confirmDummy->setVisible(!view.dummyLoadIssue.isEmpty()
                                  && view.snapshot && view.snapshot->antenna.find(view.dummyLoadKey));
     };
@@ -1992,18 +2004,21 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         "Open the Trio's own web page in your browser. The Trio serves one session, so this "
         "app lets go of it first; click Connect to take it back."));
 
-    m_peripheralRowSavers.append([u, group]() {
+    // An address cleared on the page forgets the Trio through its model, the
+    // one owner of what is stored.
+    m_peripheralRowSavers.append([u, group, trio]() {
         if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
             return;
         }
-        const QString savedIp = PeripheralSettings::deviceString(group, "ManualIp");
-        if (savedIp.isEmpty()) {
+        const bool stored = !PeripheralSettings::deviceString(group, "ManualIp").isEmpty();
+        if (trio) {
+            if (stored || trio->view().configured) {
+                trio->removeTrio();
+            }
             return;
         }
-        PeripheralSettings::clearDeviceField(group, "ManualIp");
-        PeripheralSettings::clearDeviceField(group, "ManualPort");
-        if (u->description().startsWith(savedIp + ":")) {
-            u->disconnectNow();
+        if (stored) {
+            MicrohamTrioSettings::remove();
         }
     });
     finishDetailPage(detail, ui, {ui.webUiButton});
