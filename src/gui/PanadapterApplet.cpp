@@ -950,6 +950,8 @@ void PanadapterApplet::appendUnscoredCwText(const QString& text)
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
     // For a backend that reports no per-letter score.
+
+    emit cwRxTextDisplayed(clean);
 }
 void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
 {
@@ -970,6 +972,8 @@ void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
     QTextCursor cursor = m_cwText->textCursor();
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
+
+    emit cwRxTextDisplayed(clean);
 }
 #endif
 

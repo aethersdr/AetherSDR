@@ -20,7 +20,8 @@ Output has no calibrated
 ggmorse cost. Each letter is coloured by the model's own posterior (cost =
 1 − posterior, the four ggmorse colour bands) and is never filtered by the
 sensitivity slider; pitch and speed are not invented.
-DeepFist output does not feed automatic callsign spotting. Other monitored
+DeepFist output feeds automatic callsign spotting through the text shown in
+the pane. Other monitored
 slices and speaker gain/mute do not alter the selected decoder input. This is
 an audio slice tap, not an RF separation claim.
 
