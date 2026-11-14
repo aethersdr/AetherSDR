@@ -248,6 +248,45 @@ void testFailures()
                    && rig.word() == SessionWord::Direct && rig.connects == 2);
     }
     {
+        // A Trio that stops answering is a failed attempt: with Reconnect
+        // automatically off it is closed, not reopened.
+        Rig rig;
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        rig.peer.connectHeld(rig.model);
+        rig.peer.hold(rig.model, 2000);
+        rig.peer.autoPong = false;
+        const int opens = rig.peer.transport.opens;
+        rig.peer.advance(rig.model, 30000);
+        report("reconnect off: a silent session is Offline, closed, not reopened",
+               rig.word() == SessionWord::Offline && !rig.model.hasSession()
+                   && rig.peer.transport.opens == opens && rig.failures.size() == 1
+                   && rig.failures.first().contains(QStringLiteral("stopped answering"))
+                   && rig.disconnects == 1,
+               "opens=" + std::to_string(rig.peer.transport.opens - opens)
+                   + " failures=" + std::to_string(rig.failures.size()));
+        rig.peer.advance(rig.model, 600000);
+        report("and nothing reconnects later", rig.peer.transport.opens == opens);
+    }
+    {
+        Rig rig;
+        rig.model.setAutoReconnect(true);
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        rig.peer.connectHeld(rig.model);
+        rig.peer.hold(rig.model, 2000);
+        rig.peer.autoPong = false;
+        const int opens = rig.peer.transport.opens;
+        for (int i = 0; i < 300 && rig.peer.transport.opens == opens; ++i) {
+            rig.peer.advance(rig.model, 100);
+        }
+        report("reconnect on: a silent session is reopened",
+               rig.model.hasSession() && rig.peer.transport.opens == opens + 1
+                   && rig.failures.size() == 1,
+               "opens=" + std::to_string(rig.peer.transport.opens - opens));
+        rig.peer.autoPong = true;
+        report("which holds again", rig.peer.handshakeWithState()
+                   && rig.word() == SessionWord::Direct && rig.connects == 2);
+    }
+    {
         Rig rig;
         rig.model.connectNetwork(QLatin1String(kHost), 80);
         rig.peer.connectHeld(rig.model);

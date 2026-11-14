@@ -1144,11 +1144,12 @@ void testCloseAndPing()
     quiet.connectHeld(rare);
     quiet.advance(1);
     const qint64 lastPong = quiet.clock.now;
-    quiet.advance(4000);
+    const qint64 quietBound = rare.policy.sessionDeadAfterMs;
+    quiet.advance(quietBound - 1000);
     quiet.transport.peerSends(serverFrame(0x89, QByteArray()));
-    quiet.advance(4000);
+    quiet.advance(quietBound - 1000);
     report("a ping resets the silence bound",
-           quiet.pings == 1 && quiet.clock.now == lastPong + 8000
+           quiet.pings == 1 && quiet.clock.now == lastPong + 2 * quietBound - 2000
                && quiet.session.status() == Status::Held);
     quiet.advance(1001);
     report("and without another frame the bound runs out",

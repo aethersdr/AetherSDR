@@ -132,7 +132,7 @@ enum class Link {
 // Timing parameters. None is a device constant; all are the caller's to set.
 struct Policy {
     qint64 keepAliveIntervalMs{5000};  // the device's own web page uses 5 s
-    qint64 sessionDeadAfterMs{5000};   // silent, or a keep-alive unanswered, this long (page: 10 s)
+    qint64 sessionDeadAfterMs{10000};  // silent, or a keep-alive unanswered, this long (as the page)
     qint64 failureBackoffMs{5000};     // doubles per consecutive failure
     qint64 maxBackoffMs{600000};
 };

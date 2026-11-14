@@ -181,7 +181,12 @@ void MicrohamTrioSession::evaluate()
     switch (decision.action) {
     case SessionAction::Connect:
         if (decision.reason == SessionReason::SessionDead) {
-            m_failure = Failure::SessionSilent;
+            // A failed attempt like any other: the owner sees Failed, and
+            // stops here when it does not reconnect. Otherwise the retry
+            // decision runs at once.
+            fail(Failure::SessionSilent);
+            evaluate();
+            return;
         }
         startAttempt(now);
         return;

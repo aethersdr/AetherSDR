@@ -613,8 +613,8 @@ void testPredicates()
     s.link = Link::Evicted;
     report("only a held session can be dead", !sessionDead(s));
 
-    report("the defaults: keep-alive 5 s, lost after 5 s, backoff 5 s up to 10 min",
-           policy.keepAliveIntervalMs == 5000 && policy.sessionDeadAfterMs == 5000
+    report("the defaults: keep-alive 5 s, lost after 10 s, backoff 5 s up to 10 min",
+           policy.keepAliveIntervalMs == 5000 && policy.sessionDeadAfterMs == 10000
                && policy.failureBackoffMs == 5000 && policy.maxBackoffMs == 600000);
     s = goodState();
     s.unansweredKeepAliveAgeMs = policy.sessionDeadAfterMs;
