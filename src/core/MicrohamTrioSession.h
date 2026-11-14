@@ -80,7 +80,6 @@ public:
         Held,
         Evicted,      // the peer closed the held session; not retaken
         Failed,       // retried after a backoff
-        Released,     // left to the web page
     };
 
     enum class Failure {
@@ -116,8 +115,6 @@ public:
     void start(const Config& config);
     // A held session is closed with a WebSocket close frame first.
     void stop();
-    // Give the session to the web page, or take it back.
-    void setReleasedForBrowser(bool released);
 
     bool    isRunning() const { return m_running; }
     Status  status() const { return m_status; }
@@ -185,7 +182,6 @@ private:
 
     Config m_config;
     bool   m_running{false};
-    bool   m_released{false};
 
     Phase   m_phase{Phase::Idle};
     Status  m_status{Status::Idle};

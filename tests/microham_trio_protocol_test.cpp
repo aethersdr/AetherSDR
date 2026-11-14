@@ -673,7 +673,7 @@ void testSessionKeepAliveAndLiveness()
 
 // The device serves one session. An eviction is never retaken, however long
 // ago: connecting would evict the other client in turn.
-void testEvictionAndRelease()
+void testEviction()
 {
     const Policy policy;
     State s;
@@ -687,14 +687,6 @@ void testEvictionAndRelease()
     s.consecutiveFailures = 5;
     report("whatever came before: still wait",
            is(decideSession(s), SessionAction::Wait, SessionReason::Evicted, 0));
-
-    s = goodState();
-    s.releasedForBrowser = true;
-    report("released while held: disconnect",
-           is(decideSession(s), SessionAction::Disconnect, SessionReason::Released, 0));
-    s.link = Link::NeverConnected;
-    report("released and not held: wait",
-           is(decideSession(s), SessionAction::Wait, SessionReason::Released, 0));
 
     s = State{};
     s.link = Link::Failed;
@@ -728,7 +720,7 @@ int main()
     testKeepAliveAndFrameKinds();
     testPredicates();
     testSessionKeepAliveAndLiveness();
-    testEvictionAndRelease();
+    testEviction();
     testD184Split();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);

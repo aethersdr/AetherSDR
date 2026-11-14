@@ -323,9 +323,6 @@ MicrohamTrioModel::View MicrohamTrioModel::view() const
     case MicrohamTrioSession::Status::Evicted:
         out.session = SessionWord::Evicted;
         break;
-    case MicrohamTrioSession::Status::Released:
-        out.session = SessionWord::Released;
-        break;
     case MicrohamTrioSession::Status::Idle:
     case MicrohamTrioSession::Status::Connecting:
         out.session = SessionWord::Connecting;
@@ -442,7 +439,6 @@ void MicrohamTrioModel::onSessionState(MicrohamTrioSession::Status status)
     case MicrohamTrioSession::Status::Idle:
     case MicrohamTrioSession::Status::Connecting:
     case MicrohamTrioSession::Status::Held:
-    case MicrohamTrioSession::Status::Released:
         break;
     }
     setWord(view().session);

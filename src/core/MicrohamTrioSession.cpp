@@ -81,17 +81,6 @@ void MicrohamTrioSession::stop()
     setStatus(Status::Idle);
 }
 
-void MicrohamTrioSession::setReleasedForBrowser(bool released)
-{
-    if (m_released == released) {
-        return;
-    }
-    m_released = released;
-    if (m_running) {
-        schedule(1);
-    }
-}
-
 State MicrohamTrioSession::state() const
 {
     return buildState(m_clock->nowMs());
@@ -100,7 +89,6 @@ State MicrohamTrioSession::state() const
 State MicrohamTrioSession::buildState(qint64 nowMs) const
 {
     State state;
-    state.releasedForBrowser = m_released;
     state.link = m_link;
     state.lastMessageAgeMs = m_lastMessageAtMs ? nowMs - *m_lastMessageAtMs : 0;
     if (m_lastKeepAliveAtMs) {
@@ -131,14 +119,7 @@ void MicrohamTrioSession::evaluate()
     const Policy& policy = m_config.policy;
     const bool connecting = m_phase != Phase::Idle && m_phase != Phase::Open;
 
-    if (m_released) {
-        // A connect under way is given up; a held session is closed by the
-        // decision below.
-        if (connecting) {
-            dropConnection();
-            m_link = Link::NeverConnected;
-        }
-    } else if (connecting) {
+    if (connecting) {
         const qint64 elapsed = now - m_lastConnectAtMs.value_or(now);
         if (elapsed >= m_config.connectTimeoutMs) {
             fail(Failure::ConnectTimeout);
@@ -191,13 +172,6 @@ void MicrohamTrioSession::evaluate()
         startAttempt(now);
         return;
 
-    case SessionAction::Disconnect:
-        dropConnection();
-        m_link = Link::NeverConnected;
-        setStatus(Status::Released);
-        schedule(kMaxTickMs);
-        return;
-
     case SessionAction::SendKeepAlive:
         sendText(encodeKeepAlive());
         m_lastKeepAliveAtMs = now;
@@ -213,9 +187,7 @@ void MicrohamTrioSession::evaluate()
     }
 
     Status status = Status::Failed;
-    if (m_released) {
-        status = Status::Released;
-    } else if (m_link == Link::Held) {
+    if (m_link == Link::Held) {
         status = Status::Held;
     } else if (m_link == Link::Evicted) {
         status = Status::Evicted;

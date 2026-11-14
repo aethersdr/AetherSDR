@@ -140,7 +140,6 @@ struct Policy {
 // Everything decideSession() looks at. Ages are measured by the caller at the
 // moment of the call; a negative age is treated as unusable.
 struct State {
-    bool releasedForBrowser{false};   // the operator gave the session to the web page
     Link   link{Link::NeverConnected};
     qint64 lastMessageAgeMs{0};       // any frame received on the held session
     std::optional<qint64> lastKeepAliveAgeMs;
@@ -156,7 +155,6 @@ bool sessionDead(const State& state, const Policy& policy = {});
 enum class SessionAction {
     Wait,             // waitMs 0: ask again when the state changes
     Connect,          // drop any socket and open a new session
-    Disconnect,
     SendKeepAlive,    // encodeKeepAlive()
 };
 
@@ -166,7 +164,6 @@ enum class SessionReason {
     RetryAfterFailure,
     BackoffAfterFailure,
     SessionDead,
-    Released,
     AwaitingState,
     KeepAliveDue,
     KeepAliveNotDue,
@@ -181,8 +178,8 @@ struct SessionDecision {
 // What to do with the session now. An eviction is never retaken: connecting
 // again would evict the other client in turn (the device's own web page, most
 // often), so only the operator's Connect takes the session back. A failure is
-// retried after a doubling backoff; a session released for the browser is
-// closed and left alone.
+// retried after a doubling backoff. A session given to the Trio's own web
+// page is not decided here: its owner stops the session.
 SessionDecision decideSession(const State& state, const Policy& policy = {});
 
 } // namespace MicrohamTrio

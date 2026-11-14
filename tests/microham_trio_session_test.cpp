@@ -1031,17 +1031,19 @@ void testRelease()
     h.connectHeld();
     h.hold(2000);
     const int closes = h.transport.closes;
-    h.session.setReleasedForBrowser(true);
-    h.advance(1);
-    report("a release closes the held session",
-           h.session.status() == Status::Released && h.transport.closes > closes
-               && !h.transport.connected);
+    // The model gives the session to the Trio's web page by stopping it.
+    h.session.stop();
+    const ClientFrame closeFrame = decodeClient(h.lastSent());
+    report("stop() closes the held session with a close frame",
+           h.session.status() == Status::Idle && h.transport.closes > closes
+               && !h.transport.connected && closeFrame.ok && closeFrame.opcode == 0x8
+               && closeFrame.payload == QByteArray("\x03\xe8", 2));
     const int opens = h.transport.opens;
     h.advance(600000);
-    report("and nothing reconnects while released", h.transport.opens == opens);
-    h.session.setReleasedForBrowser(false);
+    report("and nothing reconnects after it", h.transport.opens == opens);
+    h.session.start(Harness::config());
     h.advance(1);
-    report("taking it back connects", h.transport.opens == opens + 1);
+    report("start() takes it back", h.transport.opens == opens + 1);
 }
 
 void testErrorPage()

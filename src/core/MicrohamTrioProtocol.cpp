@@ -320,11 +320,6 @@ bool sessionDead(const State& state, const Policy& policy)
 
 SessionDecision decideSession(const State& state, const Policy& policy)
 {
-    if (state.releasedForBrowser) {
-        return act(state.link == Link::Held ? SessionAction::Disconnect : SessionAction::Wait,
-                   SessionReason::Released);
-    }
-
     switch (state.link) {
     case Link::NeverConnected:
         return act(SessionAction::Connect, SessionReason::FirstConnect);
