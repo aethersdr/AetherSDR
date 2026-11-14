@@ -51,22 +51,24 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
 
 *The TGXL applet with a Tuner Genius XL connected.*
 
-- **Fwd Power** gauge. It starts at 0–200 W, changes to 0–2,000 W above
+- **Fwd Power** gauge. Use **Settings** at the bottom of the applet to select
+  **Auto (200 / 2,000 W)** (the default) or **Fixed 600 W**. The choice is saved.
+  Fixed 600 W retains its scale at all power levels, including after reconnecting;
+  readings and peak markers above full scale are clamped to the end of the bar.
+  Auto starts at 0–200 W, changes to 0–2,000 W above
   200 W, and returns to the low scale after forward power stays below 0.5 W
   for 800 ms. This hold prevents range changes between syllables or CW elements.
   Peak and MAX do not select the range.
   The peak marker uses the tuner's own peak reading on a direct connection.
   It is hidden when that reading rounds to 0 W.
-  The red MAX marker shows the tuner's reported `max` value. The manual describes
-  a maximum-power indicator for tuning-solution limits; the mapping of this API
-  field to that indicator still needs physical hardware verification.
-  When peak and MAX share a position, the marker is white above and red below.
+  The tuner's `max` field is still parsed, but no MAX marker is displayed until
+  a physical hardware capture establishes what it means.
 - **SWR** gauge. It starts at 1.0–3.0, changes to 1.0–10.0 above 3.0,
   and returns to the low scale at 1.0. Green, yellow, amber and red show
   the 1.5, 2.0 and 2.5 SWR boundaries on either scale.
   Below 5 W the bar is empty and idle readings cannot select the high range.
   A reported 1.0 still restores the low range.
-  Accessible meter descriptions include full scale and reported MAX.
+  Accessible meter descriptions include the selected full scale.
 - **C1**, **L** and **C2** relay bars.
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;
   pressing it stops the tune. The tuner stays in operate.

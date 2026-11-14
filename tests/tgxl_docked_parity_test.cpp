@@ -17,13 +17,18 @@
 #include "models/TunerModel.h"
 #include "core/TgxlConnection.h"
 #include "core/backends/TunerDelta.h"
+#include "core/AppSettings.h"
+#include "TestSettingsProfile.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QDeadlineTimer>
 #include <QLabel>
 #include <QMetaObject>
 #include <QFontMetrics>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPushButton>
 
 #include <cstdio>
@@ -80,8 +85,15 @@ bool aVisibleKeyReads(QWidget* applet, const QString& caption)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("tgxl-docked-parity"));
+    if (!profile.isValid()) return 1;
     qputenv("AETHER_AUTOMATION", "1");  // HGauge publishes its range for assertions.
     QApplication app(argc, argv);
+    auto& settings = AppSettings::instance();
+    settings.load();
+    CHECK(settings.storeWritable());
+    settings.setValue(QStringLiteral("TunerApplet"), QStringLiteral("{\"futureSetting\":true}"));
+    settings.save();
 
     TunerModel model;
     model.setHandle(QStringLiteral("0x2000"));
@@ -114,13 +126,13 @@ int main(int argc, char** argv)
             CHECK(power->property("gaugeMax").toFloat() == 200.0f);
             CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
             power->resize(200, 24);
-            const QImage withLimit = power->grab().toImage();
+            CHECK(power->peakHeld());
             meters.setDeviceMeters(200.0f, 3.0f, 0.0f, 0.0f);
             CHECK(!power->peakHeld());
             const QImage withoutLimit = power->grab().toImage();
-            CHECK(withLimit.width() >= 40 && withLimit.height() >= 16);
-            const QPoint end(withLimit.width() - 2, withLimit.height() - 6);
-            CHECK(withLimit.pixelColor(end) != withoutLimit.pixelColor(end));
+            meters.setDeviceMeters(200.0f, 3.0f, 0.0f, 3000.0f);
+            const QImage withLimit = power->grab().toImage();
+            CHECK(withLimit == withoutLimit); // MAX parsing must not draw an unverified marker.
             meters.setDeviceMeters(0.0f, 1.0f, 0.000000001f, 0.0f);
             CHECK(!power->peakHeld());
             meters.setDeviceMeters(0.0f, 1.0f, 0.5f, 0.0f);
@@ -155,7 +167,7 @@ int main(int argc, char** argv)
             CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
             meters.setDeviceMeters(0.14f, 99.9f, 1000.0f, 1750.0f);
             CHECK(spin([&] { return power->property("gaugeMax").toFloat() == 200.0f; }, 1500));
-            CHECK(power->accessibleDescription().contains(QStringLiteral("1750")));
+            CHECK(!power->accessibleDescription().contains(QStringLiteral("MAX")));
             CHECK(power->accessibleDescription().contains(QStringLiteral("200 W")));
             CHECK(swr->value() == 1.0f);
             CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
@@ -186,9 +198,69 @@ int main(int argc, char** argv)
             CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
             CHECK(power->property("gaugeMax").toFloat() == 200.0f);
             CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-            CHECK(power->accessibleDescription().contains(QStringLiteral("No MAX")));
+            CHECK(!power->accessibleDescription().contains(QStringLiteral("MAX")));
             meters.setRadioMeters(100.0f, 1.3f);
             CHECK(power->value() == 100.0f); // Disconnect also releases the direct freshness gate.
+
+            auto* automatic = meters.findChild<QAction*>(QStringLiteral("tunerPowerAuto"));
+            auto* fixed = meters.findChild<QAction*>(QStringLiteral("tunerPower600"));
+            CHECK(automatic && fixed);
+            if (automatic && fixed) {
+                CHECK(automatic->isChecked());
+                meters.setDeviceMeters(800.0f, 1.3f, 1000.0f, 1750.0f);
+                meters.setDeviceMeters(0.0f, 1.0f, 0.0f, 0.0f); // Auto idle timer is pending.
+                fixed->trigger();
+                CHECK(fixed->isChecked());
+                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
+                settle(900);
+                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
+                QString persisted;
+                CHECK(settings.readAppRowFromDisk(QStringLiteral("TunerApplet"), persisted));
+                const auto document = QJsonDocument::fromJson(persisted.toUtf8()).object();
+                CHECK(document.value(QStringLiteral("powerRange")).toString() == QLatin1String("fixed600"));
+                CHECK(document.value(QStringLiteral("futureSetting")).toBool());
+                {
+                    settings.load();
+                    TunerApplet restored;
+                    auto* restoredFixed = restored.findChild<QAction*>(QStringLiteral("tunerPower600"));
+                    CHECK(restoredFixed && restoredFixed->isChecked());
+                    bool foundPower = false;
+                    for (auto* widget : restored.findChildren<QWidget*>()) {
+                        auto* gauge = dynamic_cast<HGauge*>(widget);
+                        if (gauge && gauge->accessibleName() == QLatin1String("Forward power")) {
+                            foundPower = true;
+                            CHECK(gauge->property("gaugeMax").toFloat() == 600.0f);
+                        }
+                    }
+                    CHECK(foundPower);
+                }
+                meters.setDeviceMeters(1200.0f, 1.3f, 1300.0f, 1750.0f);
+                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
+                CHECK(power->accessibleDescription().contains(QStringLiteral("600 W")));
+                automatic->trigger();
+                CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+                CHECK(qAbs(power->filledFraction() - 0.6f) < 0.00001f);
+                fixed->trigger();
+                CHECK(power->filledFraction() == 1.0f);
+                meters.setDeviceMeters(100.0f, 1.3f, 0.0f, 0.0f);
+                automatic->trigger();
+                CHECK(power->property("gaugeMax").toFloat() == 200.0f);
+                CHECK(qAbs(power->filledFraction() - 0.5f) < 0.00001f);
+                fixed->trigger();
+                CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                                                Q_ARG(QString, QStringLiteral("V1.2.17"))));
+                CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
+                CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                                                Q_ARG(QString, QStringLiteral("V1.2.17"))));
+                meters.setDeviceMeters(700.0f, 1.3f, 0.0f, 0.0f);
+                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
+                automatic->trigger();
+                CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
+                CHECK(settings.readAppRowFromDisk(QStringLiteral("TunerApplet"), persisted));
+                CHECK(QJsonDocument::fromJson(persisted.toUtf8()).object()
+                    .value(QStringLiteral("powerRange")).toString() == QLatin1String("auto"));
+            }
         }
     }
 

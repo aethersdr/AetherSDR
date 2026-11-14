@@ -1,12 +1,12 @@
 #pragma once
 
 #include <QElapsedTimer>
-#include <QColor>
 #include <QHash>
 #include <QString>
 #include <QWidget>
 
 class QPushButton;
+class QAction;
 class QLabel;
 class QTimer;
 class QVBoxLayout;
@@ -96,6 +96,7 @@ private:
     void updateMeters(float fwdPower, float swr, float fwdPeak = -1.0f,
                       float maxPower = 0.0f);
     void setPowerHighRange(bool high);
+    void setFixedPowerRange(bool fixed);
     void setSwrHighRange(bool high);
     void updateMeterAccessibility(bool force = false);
 
@@ -257,8 +258,10 @@ private:
 
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
-    float m_maxPower{0.0f};
-    QColor m_limitColor;
+    bool m_fixedPowerRange{false};
+    QPushButton* m_settingsButton{nullptr};
+    QAction* m_powerAutoAction{nullptr};
+    QAction* m_power600Action{nullptr};
     QTimer* m_powerRangeTimer{nullptr};
     QElapsedTimer m_accessibleReadoutClock;
     // Latched by the first forward-power sample at or above 5 W; released by

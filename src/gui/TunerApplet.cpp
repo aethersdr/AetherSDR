@@ -6,9 +6,14 @@
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
 #include "models/BandSettings.h"
+#include "core/AppSettings.h"
 #include <QElapsedTimer>
 
 #include <QAccessible>
+#include <QActionGroup>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMenu>
 #include <QPushButton>
 #include <QLabel>
 #include <QVBoxLayout>
@@ -22,6 +27,21 @@
 namespace AetherSDR {
 
 namespace {
+
+constexpr const char* kTunerAppletSettingsKey = "TunerApplet";
+
+QJsonObject readTunerAppletSettings()
+{
+    const QString json = AppSettings::instance().value(kTunerAppletSettingsKey, QString()).toString();
+    if (json.isEmpty()) return {};
+    QJsonParseError error;
+    const auto document = QJsonDocument::fromJson(json.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        qWarning() << "TunerApplet: invalid settings document" << error.errorString();
+        return {};
+    }
+    return document.object();
+}
 
 // Expanded panel design size: metrics are their literal values at scale 1.0
 // and scale uniformly by the limiting dimension (like CrossNeedleMeterWidget,
@@ -102,6 +122,12 @@ TunerApplet::TunerApplet(QWidget* parent)
     theme::setContainer(this, QStringLiteral("applet/tuner"));
     hide();   // hidden by default until toggled on
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    const auto range = readTunerAppletSettings().value(QStringLiteral("powerRange"));
+    if (!range.isUndefined() && range != QJsonValue(QStringLiteral("auto"))
+            && range != QJsonValue(QStringLiteral("fixed600"))) {
+        qWarning() << "TunerApplet: invalid powerRange setting" << range;
+    }
+    m_fixedPowerRange = range == QJsonValue(QStringLiteral("fixed600"));
 
     // Silence between syllables or CW elements is not the end of a transmission.
     m_powerRangeTimer = new QTimer(this);
@@ -208,6 +234,7 @@ void TunerApplet::buildUI()
     m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "", "",
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
         this, 80.0f);
+    setPowerHighRange(false);
     static_cast<HGauge*>(m_fwdGauge)->setWindowPeakEnabled(true);
     static_cast<HGauge*>(m_fwdGauge)->setPeakAtEdgesEnabled(true);
     m_fwdGauge->setAccessibleName(tr("Forward power"));
@@ -233,8 +260,6 @@ void TunerApplet::buildUI()
             theme.color(m_swrGauge, QStringLiteral("color.meter.swr.yellow")));
         static_cast<HGauge*>(m_swrGauge)->setExtraZone(
             2.0f, theme.color(m_swrGauge, QStringLiteral("color.accent.warning")));
-        m_limitColor = theme.color(m_fwdGauge, QStringLiteral("color.accent.danger"));
-        static_cast<HGauge*>(m_fwdGauge)->setLimitMarker(m_maxPower, m_limitColor);
     };
     applyMeterColors();
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, applyMeterColors);
@@ -395,7 +420,35 @@ void TunerApplet::buildUI()
     m_sourceLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     m_sourceLabel->setAccessibleName(tr("TGXL OFFLINE"));
     m_sourceLabel->setAccessibleDescription(tr("No TGXL connection is available."));
-    vbox->addWidget(m_sourceLabel, 0, Qt::AlignRight);
+    auto* footer = new QHBoxLayout;
+    m_settingsButton = new QPushButton(tr("Settings"), this);
+    m_settingsButton->setObjectName(QStringLiteral("tunerSettingsButton"));
+    m_settingsButton->setAccessibleName(tr("TGXL meter settings"));
+    m_settingsButton->setAccessibleDescription(tr("Choose automatic power ranging or a fixed 600 W scale."));
+    m_settingsButton->setFocusPolicy(Qt::StrongFocus);
+    auto* menu = new QMenu(m_settingsButton);
+    auto* ranges = new QActionGroup(menu);
+    ranges->setExclusive(true);
+    m_powerAutoAction = menu->addAction(tr("Power range: Auto (200 / 2,000 W)"));
+    m_powerAutoAction->setObjectName(QStringLiteral("tunerPowerAuto"));
+    m_power600Action = menu->addAction(tr("Power range: Fixed 600 W"));
+    m_power600Action->setObjectName(QStringLiteral("tunerPower600"));
+    m_powerAutoAction->setData(false);
+    m_power600Action->setData(true);
+    for (auto* action : {m_powerAutoAction, m_power600Action}) {
+        action->setCheckable(true);
+        ranges->addAction(action);
+    }
+    m_powerAutoAction->setChecked(!m_fixedPowerRange);
+    m_power600Action->setChecked(m_fixedPowerRange);
+    connect(ranges, &QActionGroup::triggered, this, [this](QAction* action) {
+        setFixedPowerRange(action->data().toBool());
+    });
+    m_settingsButton->setMenu(menu);
+    footer->addWidget(m_settingsButton);
+    footer->addStretch();
+    footer->addWidget(m_sourceLabel);
+    vbox->addLayout(footer);
 
     updatePortRows();
 
@@ -596,6 +649,11 @@ void TunerApplet::applyDensityAtScale(qreal scale)
     // A design-pixel metric at the current scale.
     auto px = [s](int base) { return qMax(1, qRound(base * s)); };
     applySourceIndicatorStyle(scale);
+    m_settingsButton->setFixedHeight(f ? px(18) : 18);
+    theme.applyStyleSheet(m_settingsButton, QStringLiteral(
+        "QPushButton { background: transparent; color: {{color.text.secondary}}; "
+        "border: none; font-size: %1px; }"
+        "QPushButton:hover { color: {{color.text.primary}}; }").arg(f ? px(11) : 10));
 
     // The stretch owns the gap below controls; leave a small frame inset
     // below the indicator in the expanded panel.
@@ -1082,8 +1140,6 @@ void TunerApplet::setTunerModel(TunerModel* model)
                     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
                     gauge->setWindowPeakEnabled(true);
                     gauge->clearPeak();
-                    m_maxPower = 0.0f;
-                    gauge->setLimitMarker(0.0f, m_limitColor);
                     m_powerRangeTimer->stop();
                     setPowerHighRange(false);
                     setSwrHighRange(false);
@@ -1285,11 +1341,10 @@ void TunerApplet::setDeviceMeters(float fwdPower, float swr, float fwdPeak, floa
     updateMeters(fwdPower, swr, fwdPeak, maxPower);
 }
 
-void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float maxPower)
+void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float /*maxPower*/)
 {
     m_fwdPower = fwdPower;
     m_swr = swr;
-    m_maxPower = maxPower;
     // Active antenna button turns red while transmitting. Threshold matches
     // the meter label floor so both react to the same power level. Only
     // update the button on the edge — setStyleSheet at 60 Hz while keyed
@@ -1299,7 +1354,9 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float m
         if (m_ant1Btn) updateAntennaButtons(m_model ? m_model->antennaA() : -1);
     }
     auto* powerGauge = static_cast<HGauge*>(m_fwdGauge);
-    if (fwdPower >= 0.5f) {
+    if (m_fixedPowerRange) {
+        m_powerRangeTimer->stop();
+    } else if (fwdPower >= 0.5f) {
         m_powerRangeTimer->stop();
         if (!m_powerHighRange && fwdPower > 200.0f) {
             setPowerHighRange(true);
@@ -1320,7 +1377,7 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float m
     // At idle, 0 dB return loss means no usable SWR measurement, not a full red bar.
     if (fwdPower >= 5.0f) swrGauge->setValue(swr);
     else swrGauge->setValueImmediate(1.0f);
-    powerGauge->setLimitMarker(maxPower, m_limitColor);
+    // MAX stays parsed in the model, but is not displayed until hardware settles its meaning.
     // Use the device's own peak when present: `fwd` is a sparse instant sample
     // (on voice it mostly reads near zero while `peak` reads the envelope). The
     // device peak owns the external-peak mode while direct telemetry is present;
@@ -1336,15 +1393,40 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float m
 
 void TunerApplet::setPowerHighRange(bool high)
 {
-    m_powerHighRange = high;
+    m_powerHighRange = !m_fixedPowerRange && high;
     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
-    if (high) {
+    if (m_fixedPowerRange) {
+        gauge->setRange(0.0f, 600.0f, 500.0f,
+            {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
+             {400, "400"}, {500, "500"}, {600, "600"}}, 400.0f);
+    } else if (high) {
         gauge->setRange(0.0f, 2000.0f, 1500.0f,
             {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1K5"}, {2000, "2K"}}, 1000.0f);
     } else {
         gauge->setRange(0.0f, 200.0f, 125.0f,
             {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}}, 80.0f);
     }
+}
+
+void TunerApplet::setFixedPowerRange(bool fixed)
+{
+    if (fixed == m_fixedPowerRange) return;
+    auto& settings = AppSettings::instance();
+    if (!settings.storeWritable()) {
+        qWarning() << "TunerApplet: cannot save power range; settings store is not writable";
+        m_powerAutoAction->setChecked(!m_fixedPowerRange);
+        m_power600Action->setChecked(m_fixedPowerRange);
+        return;
+    }
+    auto document = readTunerAppletSettings();
+    document.insert(QStringLiteral("powerRange"), fixed ? QStringLiteral("fixed600") : QStringLiteral("auto"));
+    const QString json = QString::fromUtf8(QJsonDocument(document).toJson(QJsonDocument::Compact));
+    settings.setValue(kTunerAppletSettingsKey, json);
+    settings.save();
+    m_fixedPowerRange = fixed;
+    m_powerRangeTimer->stop();
+    setPowerHighRange(!fixed && m_fwdPower > 200.0f);
+    updateMeterAccessibility(true);
 }
 
 void TunerApplet::setSwrHighRange(bool high)
@@ -1365,11 +1447,8 @@ void TunerApplet::updateMeterAccessibility(bool force)
     if (!force && m_accessibleReadoutClock.isValid()
             && m_accessibleReadoutClock.elapsed() < kMeterReadoutUpdateMs) return;
     m_accessibleReadoutClock.restart();
-    QString power = tr("Forward power %1 W; full scale %2 W.")
-        .arg(m_fwdPower, 0, 'f', 0).arg(m_powerHighRange ? 2000 : 200);
-    power += m_maxPower > 0.0f
-        ? tr(" Reported MAX %1 W.").arg(m_maxPower, 0, 'f', 0)
-        : tr(" No MAX indicator.");
+    const QString power = tr("Forward power %1 W; full scale %2 W.")
+        .arg(m_fwdPower, 0, 'f', 0).arg(m_fixedPowerRange ? 600 : m_powerHighRange ? 2000 : 200);
     const QString swr = m_fwdPower >= 5.0f
         ? tr("SWR %1:1; full scale %2:1.").arg(m_swr, 0, 'f', 2).arg(m_swrHighRange ? 10 : 3)
         : tr("SWR unavailable below 5 W; full scale %1:1.").arg(m_swrHighRange ? 10 : 3);
