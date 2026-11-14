@@ -3043,6 +3043,7 @@ RadioModel::RadioModel(QObject* parent)
                 // initial connect gives a session that authenticates once and
                 // then fails every automatic retry.
                 populateFamilyParams(req, m_family, m_lastInfo.sessionBindAddress);
+                req.automaticReconnect = true;
                 handRestoredStateToBackend();
                 m_backend->connectRadio(req);
             }

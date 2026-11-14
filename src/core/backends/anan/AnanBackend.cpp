@@ -9,6 +9,7 @@
 
 #include <QHostAddress>
 #include <QJsonArray>
+#include <QUdpSocket>
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QMetaObject>
@@ -795,6 +796,81 @@ RestoredRadioState AnanBackend::currentOperatingState() const
 
 void AnanBackend::connectRadio(const RadioConnectRequest& request)
 {
+    cancelBusyProbe();
+    if (request.automaticReconnect && !QHostAddress(request.host).isNull()) {
+        beginBusyProbe(request);
+        return;
+    }
+    m_busyWarned = false;
+    startConnect(request);
+}
+
+void AnanBackend::beginBusyProbe(const RadioConnectRequest& request)
+{
+    const QHostAddress host(request.host);
+    m_busyProbeRequest = request;
+    const quint64 generation = ++m_busyProbeGeneration;
+    m_busyProbe = new QUdpSocket(this);
+    if (!m_busyProbe->bind(QHostAddress::AnyIPv4, 0)) {
+        finishBusyProbe(generation, std::nullopt);   // no probe possible: never blocks
+        return;
+    }
+    connect(m_busyProbe, &QUdpSocket::readyRead, this, [this, generation, host] {
+        while (m_busyProbe && m_busyProbe->hasPendingDatagrams()) {
+            QByteArray datagram(static_cast<qsizetype>(m_busyProbe->pendingDatagramSize()), Qt::Uninitialized);
+            QHostAddress sender;
+            m_busyProbe->readDatagram(datagram.data(), datagram.size(), &sender);
+            if (QHostAddress(sender.toIPv4Address()) != QHostAddress(host.toIPv4Address()))
+                continue;
+            const auto reply = parseDiscoveryReply(std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(datagram.constData()),
+                static_cast<std::size_t>(datagram.size())));
+            if (reply) {
+                finishBusyProbe(generation, reply->streaming);
+                return;
+            }
+        }
+    });
+    const auto request60 = buildDiscovery();
+    m_busyProbe->writeDatagram(reinterpret_cast<const char*>(request60.data()),
+                               static_cast<qint64>(request60.size()), host, kRadioPort);
+    QTimer::singleShot(kBusyProbeTimeoutMs, this, [this, generation] {
+        finishBusyProbe(generation, std::nullopt);
+    });
+}
+
+void AnanBackend::finishBusyProbe(quint64 generation, std::optional<bool> streaming)
+{
+    if (generation != m_busyProbeGeneration || !m_busyProbe)
+        return;   // superseded, cancelled, or already answered
+    m_busyProbe->deleteLater();
+    m_busyProbe = nullptr;
+    if (!reconnectMayProceed(streaming)) {
+        qCInfo(lcAnan) << "ANAN: not reconnecting to" << m_busyProbeRequest.host
+                       << "- another client has the radio";
+        if (!m_busyWarned) {
+            m_busyWarned = true;
+            emit configurationWarning(QStringLiteral(
+                "ANAN: the radio at %1 is in use by another client. AetherSDR will "
+                "reconnect once it is free, without taking it over.").arg(m_busyProbeRequest.host));
+        }
+        return;   // RadioModel's reconnect timer asks again
+    }
+    m_busyWarned = false;
+    startConnect(m_busyProbeRequest);
+}
+
+void AnanBackend::cancelBusyProbe()
+{
+    ++m_busyProbeGeneration;
+    if (m_busyProbe) {
+        m_busyProbe->deleteLater();
+        m_busyProbe = nullptr;
+    }
+}
+
+void AnanBackend::startConnect(const RadioConnectRequest& request)
+{
     const QHostAddress hostAddr(request.host);
     if (hostAddr.isNull()) {
         emit connectionError(QStringLiteral("ANAN: invalid host '%1'").arg(request.host));
@@ -1077,6 +1153,7 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
+    cancelBusyProbe();
     retirePcmStreams();
     m_droopCalibrator.stop(false);
     m_droopCalibrator.setLandedRate(0);

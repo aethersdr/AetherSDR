@@ -25,6 +25,7 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QSignalSpy>
+#include <QUdpSocket>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -53,6 +54,23 @@ public:
 
 // AnanBackend's friend: the supply rail's meter definition and its averaging
 // window, against an injected clock rather than a status packet every 200 ms.
+// The automatic-reconnect busy probe without a socket: arm it as connectRadio()
+// would, then hand it the radio's answer.
+class AnanBusyProbeTestAccess {
+public:
+    static quint64 arm(AnanBackend& backend, const RadioConnectRequest& request)
+    {
+        backend.cancelBusyProbe();
+        backend.m_busyProbeRequest = request;
+        backend.m_busyProbe = new QUdpSocket(&backend);   // never bound: no socket opens
+        return ++backend.m_busyProbeGeneration;
+    }
+    static void answer(AnanBackend& backend, quint64 generation, std::optional<bool> streaming)
+    {
+        backend.finishBusyProbe(generation, streaming);
+    }
+    static bool probing(const AnanBackend& backend) { return backend.m_busyProbe != nullptr; }
+};
 class AnanSupplyRailTestAccess {
 public:
     static void defineMeters(AnanBackend& backend) { backend.defineMeters(); }
@@ -82,6 +100,12 @@ namespace {
 class ConnectedAnan : public AnanBackend {
 public:
     bool isConnected() const override { return true; }
+};
+// Records each connect request and opens nothing.
+class RecordingAnan : public AnanBackend {
+public:
+    std::vector<RadioConnectRequest> requests;
+    void connectRadio(const RadioConnectRequest& request) override { requests.push_back(request); }
 };
 }  // namespace
 
@@ -327,6 +351,73 @@ int main(int argc, char** argv)
                   == ReceiveDispatch::Dispatched
                   && seen.ritOn == false && seen.ritFreq == -120,
               "the typed RIT request (desktop and headless) reaches the same state");
+    }
+
+    // ---- an automatic reconnect never takes the radio from another client ----
+    // Protocol 2 obeys the last controller, so two at once chatter the relays.
+    // An unparseable host stands for the connect itself: startConnect() refuses
+    // it with an error at once, which is how "the connect ran" is observed here
+    // without opening a socket.
+    {
+        check(AnanBackend::reconnectMayProceed(std::nullopt)
+                  && AnanBackend::reconnectMayProceed(false)
+                  && !AnanBackend::reconnectMayProceed(true),
+              "only a reply saying the radio is streaming stops a reconnect; silence never does");
+        AnanBackend backend;
+        QSignalSpy errors(&backend, &IRadioBackend::connectionError);
+        QSignalSpy warnings(&backend, &IRadioBackend::configurationWarning);
+        RadioConnectRequest retry;
+        retry.host = QStringLiteral("not-an-address");
+        retry.automaticReconnect = true;
+
+        quint64 g = AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, g, true);
+        check(errors.isEmpty() && warnings.count() == 1 && !AnanBusyProbeTestAccess::probing(backend),
+              "a busy radio: no connect, and the operator is told once");
+        g = AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, g, true);
+        check(errors.isEmpty() && warnings.count() == 1,
+              "still busy on the next retry: still no connect, and no second warning");
+        AnanBusyProbeTestAccess::answer(backend, g, false);
+        check(errors.isEmpty(), "a stale answer for a finished probe does nothing");
+
+        g = AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, g, false);
+        check(errors.count() == 1, "a free radio: the reconnect goes ahead");
+        g = AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, g, std::nullopt);
+        check(errors.count() == 2, "no reply in time: the reconnect goes ahead (fail open)");
+
+        g = AnanBusyProbeTestAccess::arm(backend, retry);
+        backend.disconnectRadio();
+        AnanBusyProbeTestAccess::answer(backend, g, false);
+        check(errors.count() == 2 && !AnanBusyProbeTestAccess::probing(backend),
+              "a disconnect during the probe cancels the reconnect");
+
+        RadioConnectRequest manual = retry;
+        manual.automaticReconnect = false;
+        backend.connectRadio(manual);
+        check(errors.count() == 3 && !AnanBusyProbeTestAccess::probing(backend),
+              "an operator's connect is not probed");
+    }
+
+    // ---- RadioModel marks its automatic retry, and only that ----
+    {
+        RadioModel radio;
+        auto owned = std::make_unique<RecordingAnan>();
+        RecordingAnan* backend = owned.get();
+        radio.setBackendForTest(std::move(owned), QStringLiteral("anan"));
+        RadioInfo info;
+        info.family = QStringLiteral("anan");
+        info.serial = QStringLiteral("ANAN-RECONNECT");
+        info.address = QHostAddress(QStringLiteral("192.0.2.10"));   // TEST-NET-1: never contacted
+        info.port = 1024;
+        radio.connectToRadio(info);
+        radio.triggerAutoReconnectForTest();
+        check(backend->requests.size() == 2 && !backend->requests[0].automaticReconnect
+                  && backend->requests[1].automaticReconnect
+                  && backend->requests[1].host == QStringLiteral("192.0.2.10"),
+              "the operator's connect is not marked; RadioModel's automatic retry is");
     }
 
     // ---- the G2's own speaker: declared, accepted, reported ----
