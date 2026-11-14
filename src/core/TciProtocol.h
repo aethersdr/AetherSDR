@@ -10,8 +10,10 @@
 
 namespace AetherSDR {
 
+class MeterModel;
 class RadioModel;
 class SliceModel;
+struct RadioCapabilities;
 class TciRoutingState;
 class TciTrxMap;
 
@@ -272,6 +274,35 @@ public:
     // CW keyer; trxCount is the same dynamic count advertised to TCI clients.
     [[nodiscard]] static QString cwMacrosTextFromArgs(const QStringList& args,
                                                       int trxCount);
+
+    // TCI 2.1 §HW_SENSORS_ENABLE: arg1 enables, arg2 is the interval in ms
+    // (30-1000, optional). Empty when arg1 is missing.
+    static constexpr int kHwSensorsMinIntervalMs = 30;
+    static constexpr int kHwSensorsMaxIntervalMs = 1000;
+    static constexpr int kHwSensorsDefaultIntervalMs = 200;
+    struct HwSensorsEnable
+    {
+        bool enabled { false };
+        int intervalMs { kHwSensorsDefaultIntervalMs };
+    };
+    [[nodiscard]] static std::optional<HwSensorsEnable>
+    parseHwSensorsEnable(const QString& argText);
+
+    // §HW_SENSORS fields: supply V, current consumption A, temperature °C. A
+    // field is engaged only when the backend declares that telemetry and a
+    // fresh sample exists. No backend reports device current consumption.
+    struct HwSensorReadings
+    {
+        std::optional<double> supplyVolts;
+        std::optional<double> currentAmps;
+        std::optional<double> temperatureC;
+    };
+    [[nodiscard]] static HwSensorReadings hwSensorReadings(const RadioCapabilities& caps,
+                                                           const MeterModel& meters);
+    // The three fields are positional and the spec forbids empty arguments,
+    // so a field the radio does not measure is sent as NaN, never as a number.
+    // Empty when no field is measured: such a radio sends no hw_sensors.
+    [[nodiscard]] static std::optional<QString> hwSensorsMessage(const HwSensorReadings& r);
 
 private:
 

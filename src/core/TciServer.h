@@ -80,6 +80,7 @@ class TciServer : public QObject {
     friend class TciRxAudioTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
+    friend class TciHwSensorsTestAccess;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -208,6 +209,9 @@ private slots:
     void onTextMessage(const QString& msg);
     void onBinaryMessage(const QByteArray& data);
     void broadcastStatus();
+    // Sends hw_sensors to each enabled client whose interval is due, then
+    // re-arms m_hwSensorsTimer for the earliest next one.
+    void serviceHwSensors();
 
 private:
     struct ClientState;
@@ -332,6 +336,9 @@ private:
         quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
+        bool         hwSensorsEnabled{false};
+        int          hwSensorsIntervalMs{TciProtocol::kHwSensorsDefaultIntervalMs};
+        qint64       hwSensorsDueAtMs{-1};   // m_tciPttTelemetryClock time
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
         // several skimmers over one WebSocket by sending iq_start for each
         // receiver; a single scalar silently replaced the previous receiver
@@ -484,6 +491,7 @@ private:
     quint64 m_routeTransitionGeneration { 0 };
     QString m_lastRouteError;
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
+    QTimer*           m_hwSensorsTimer{nullptr};  // single-shot, per-client intervals
     QTimer*           m_daxReleaseTimer{nullptr}; // debounced DAX RX teardown
     // Rate limiter for drive:/tune_drive: (#4161). A power-slider drag steps
     // the value ~40 times a second and each step is a separate radio command,
