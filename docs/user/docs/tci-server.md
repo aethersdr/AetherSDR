@@ -333,7 +333,8 @@ aethersdr_ext_enable:true;
 ```
 
 The server answers with the set's version and the items this radio offers,
-then one line with the current state of each item:
+then the current state of the offered items. An item sends as many state lines
+as it needs, and may send none:
 
 ```
 aethersdr_ext:1;
@@ -342,8 +343,8 @@ aethersdr_ext:1;
 - Every command of the set starts with `aethersdr_`. Before the enable, the
   server ignores them without a reply, like any unknown command.
 - The list holds only what the connected radio can do, and an enabled client
-  gets a new `aethersdr_ext:` line when that changes. A command for an item
-  not in the list is ignored.
+  gets a new `aethersdr_ext:` line, followed again by the state lines, when
+  that changes. A command for an item not in the list is ignored.
 - The enable is per connection. `aethersdr_ext_enable:false;` stops all
   extension traffic to that client, and so does disconnecting.
 - No commands are in the set yet, so the list is empty.
