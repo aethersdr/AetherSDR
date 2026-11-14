@@ -220,6 +220,13 @@ if(ENABLE_DATA2G)
     add_test(NAME data2g_receive_model_test COMMAND data2g_receive_model_test)
     set_tests_properties(data2g_receive_model_test PROPERTIES TIMEOUT 120)
 
+    # The connected-mode adapter against a second station; no radio (RFC #7159 Stage 2).
+    add_executable(data2g_session_test tests/data2g_session_test.cpp)
+    target_link_libraries(data2g_session_test PRIVATE aether_hfdata aether_data2g_core)
+    add_test(NAME data2g_session_test COMMAND data2g_session_test)
+    # About 11 s plain and 2 min under ASan + UBSan on a fast desktop.
+    set_tests_properties(data2g_session_test PROPERTIES TIMEOUT 900)
+
     # A recording the adapter did not make: two upstream data2g-host 0.4.3
     # processes working each other, held to upstream data2g-monitor's reading.
     add_executable(data2g_replay_test tests/data2g_replay_test.cpp)

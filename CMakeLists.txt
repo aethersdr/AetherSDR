@@ -1911,9 +1911,11 @@ if(ENABLE_DATA2G)
         target_link_libraries(aether_data2g_core PUBLIC zlibstatic)
     endif()
 
-    # The AetherSDR side of the seam: Qt-free, receive only.
+    # The AetherSDR side of the seam, Qt-free. Neither class has a radio: the
+    # session adapter only asks to key, and nothing is wired to that request yet.
     add_library(aether_hfdata STATIC
         src/core/hfdata/Data2gMonitor.cpp
+        src/core/hfdata/Data2gSession.cpp
     )
     target_include_directories(aether_hfdata PUBLIC ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(aether_hfdata PUBLIC cxx_std_20)
