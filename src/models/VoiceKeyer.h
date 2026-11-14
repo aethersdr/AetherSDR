@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/TxCoordinator.h"
+
 #include <QObject>
 #include <QString>
 #include <QVector>
@@ -40,6 +42,11 @@ public:
     virtual void previewStart(int id) = 0;
     virtual void previewStop(int id) = 0;
     virtual void playbackStart(int id) = 0;  // on-air
+    // On-air playback started by an outside input (a MIDI or keyboard "Macro
+    // N"), carrying the request that input captured. The default — a keyer
+    // whose start is one immediate command — checks the request is still live
+    // and starts; a keyer that keys after a delay admits under it.
+    virtual void playbackStartFrom(int id, const TxCoordinator::Request& origin);
     virtual void playbackStop(int id) = 0;
     virtual void clear(int id) = 0;
     virtual void remove(int id) = 0;

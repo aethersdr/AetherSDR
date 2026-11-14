@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7878,
+          "line": 7891,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7799,
+          "line": 7812,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7850,
+          "line": 7863,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7706,
+          "line": 7719,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 9061,
+          "line": 9074,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8097,
+          "line": 8110,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,7 +227,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8075,
+          "line": 8088,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
@@ -237,7 +237,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8154,
+          "line": 8167,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -298,7 +298,7 @@
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 531,
+          "line": 541,
           "text": "SmartLinkClient: registration invalid"
         }
       ]
@@ -337,7 +337,7 @@
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 468,
+          "line": 478,
           "text": "SmartLinkClient: SSL error:"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12857,
+          "line": 12870,
           "text": "RadioModel: DAX TX create failed"
         }
       ]

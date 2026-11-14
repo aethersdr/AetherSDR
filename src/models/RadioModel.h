@@ -958,6 +958,11 @@ public:
     // One explicit wake, followed by one bounded connection attempt. Never persisted.
     bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
     bool radioWakeActive() const { return m_radioWakeActive; }
+    // Prepare the disconnected SmartLink transport before its UDP hole punch.
+    bool prepareWanConnection();
+    // An explicit radio choice supersedes the previous radio's armed
+    // automatic reconnect; the next connect clears the intent again.
+    void cancelAutomaticReconnect();
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     // SmartLink only reaches Flex radios. A session that last ran another family
     // (IC-705, HL2) still holds that backend, which has no PanadapterStream for the
@@ -2785,6 +2790,8 @@ private:
 
 public:
     const QMap<int, TxBandInfo>& txBandSettings() const { return m_txBandSettings; }
+    // The TX band table's id for a frequency; -1 outside the table's bands.
+    int txBandIdForFrequency(double freqMhz) const { return bandIdForFrequency(freqMhz); }
 
     struct XvtrInfo {
         std::shared_ptr<SetupStatusLifetime> lifetime;
