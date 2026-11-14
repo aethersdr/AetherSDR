@@ -31,6 +31,7 @@
 #include "models/CwDecodeSettings.h"   // rxEnabled() gate for the RX-audio CW feed
 #include "core/CwxLocalKeyer.h"
 #include "core/IambicKeyer.h"
+#include "core/KiwiSdrManager.h"
 #include "core/PerfTelemetry.h"
 #if defined(Q_OS_MACOS)
 #include "core/UlanziDialMacOSManager.h"
@@ -3129,9 +3130,21 @@ void MainWindow::wireCatPorts()
 
     // A TCI RX-antenna set releases a KiwiSDR virtual antenna first, as the
     // RX applet, VFO and overlay menus do (flexRxAntennaSelected). Direct:
-    // the clear must run before the set.
-    connect(tciServer(), &TciServer::rxAntennaSetByTci,
-            this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice, Qt::DirectConnection);
+    // the clear must run before the set. Only when something is held: a peer
+    // may send many sets, and the clear logs and resyncs the UI every time.
+    // A band-recall preparation and the saved mute exist only while a profile
+    // is assigned; they are checked too, so none is left behind.
+    connect(tciServer(), &TciServer::rxAntennaSetByTci, this, [this](int sliceId) {
+        const SliceModel* slice = m_radioModel.slice(sliceId);
+        const bool held =
+            (m_kiwiSdrManager && !m_kiwiSdrManager->assignedProfileForSlice(sliceId).isEmpty())
+            || m_kiwiSdrBandRecallPreparations.contains(sliceId)
+            || m_kiwiSdrVirtualPreviousMute.contains(sliceId)
+            || (slice && slice->externalReceiveReplacementActive());
+        if (held) {
+            clearKiwiSdrVirtualAntennaForSlice(sliceId);
+        }
+    }, Qt::DirectConnection);
 
     // Wire slice state changes -> TCI broadcasts. TCI receivers are contiguous
     // indexes within our owned slice list; Flex slice ids can be non-zero when
