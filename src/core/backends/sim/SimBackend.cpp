@@ -139,6 +139,12 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
     // The native producer has no setup inventory; replayed setup status is the Demo's.
     connect(&m_statusIngress, &FlexStatusIngress::setupStatusObserved, this, &IRadioBackend::setupStatusObserved);
+    // Radio-global values are the native producer's; the synthetic wire's
+    // client, oscillator and static-network reports are relayed.
+    connect(&m_statusIngress, &FlexStatusIngress::radioStatusObserved, this,
+            [this](const RadioStatusObservation& observation) {
+        if (observation.kind != RadioStatusObservation::Kind::Radio) { emit radioStatusObserved(observation); }
+    });
     // Slice identity, ownership, presence and mode list: Demo publishes its
     // values through its native sliceChanged producer.
     connect(&m_statusIngress, &FlexStatusIngress::sliceObserved, this,

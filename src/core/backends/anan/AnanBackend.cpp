@@ -795,6 +795,53 @@ RestoredRadioState AnanBackend::currentOperatingState() const
 
 void AnanBackend::connectRadio(const RadioConnectRequest& request)
 {
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbe->cancel();
+    const QHostAddress host(request.host);
+    if (request.automaticReconnect && !host.isNull()) {
+        // The previous session first, as start() would have stopped it: a client
+        // left running after a connect timeout keeps sending this radio its
+        // high-priority settings, and a busy answer below starts nothing new.
+        // Abandoned, not stopped: whether another client has the radio is what
+        // the probe is about to find out, and a run=0 from us would stop it.
+        if (m_client)
+            QMetaObject::invokeMethod(m_client, "abandon", Qt::BlockingQueuedConnection);
+        m_busyProbeRequest = request;
+        const auto discovery = buildDiscovery();
+        m_busyProbe->start(host, kRadioPort,
+            QByteArray(reinterpret_cast<const char*>(discovery.data()),
+                       static_cast<qsizetype>(discovery.size())),
+            [](std::span<const std::uint8_t> datagram) -> std::optional<bool> {
+                const auto reply = parseDiscoveryReply(datagram);
+                return reply ? std::optional<bool>(reply->streaming) : std::nullopt;
+            },
+            [this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
+        return;
+    }
+    m_busyWarned = false;
+    startConnect(request);
+}
+
+void AnanBackend::finishBusyProbe(std::optional<bool> streaming)
+{
+    if (!ReconnectBusyProbe::mayProceed(streaming)) {
+        qCInfo(lcAnan) << "ANAN: not reconnecting to" << m_busyProbeRequest.host
+                       << "- another client has the radio";
+        if (!m_busyWarned) {
+            m_busyWarned = true;
+            emit configurationWarning(QStringLiteral(
+                "ANAN: the radio at %1 is in use by another client. AetherSDR will "
+                "reconnect once it is free, without taking it over.").arg(m_busyProbeRequest.host));
+        }
+        return;   // RadioModel's reconnect timer asks again
+    }
+    m_busyWarned = false;
+    startConnect(m_busyProbeRequest);
+}
+
+void AnanBackend::startConnect(const RadioConnectRequest& request)
+{
     const QHostAddress hostAddr(request.host);
     if (hostAddr.isNull()) {
         emit connectionError(QStringLiteral("ANAN: invalid host '%1'").arg(request.host));
@@ -1077,6 +1124,8 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
+    if (m_busyProbe)
+        m_busyProbe->cancel();
     retirePcmStreams();
     m_droopCalibrator.stop(false);
     m_droopCalibrator.setLandedRate(0);

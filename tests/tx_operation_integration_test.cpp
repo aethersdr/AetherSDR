@@ -1,4 +1,5 @@
 #include "FlexSliceStatusTestSupport.h"
+#include "FlexRadioStatusTestSupport.h"
 // Socket-free production-path tests. Only an injected transport recorder is
 // used; no radio, peer, listener, discovery or transmitter is opened.
 #include "core/backends/flex/FlexCwxStatus.h"
@@ -56,7 +57,7 @@ class TxOperationIntegrationTestAccess {
 public:
     static void clientStatus(RadioModel& radio, quint32 handle, bool localPtt, bool full)
     {
-        radio.handleStatusForTest(QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
+        observeRadioStatus(radio, QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
             .arg(full ? QStringLiteral(" connected") : QString()), {{"local_ptt", localPtt ? "1" : "0"}});
     }
     static void connectInert(RadioConnection& connection)

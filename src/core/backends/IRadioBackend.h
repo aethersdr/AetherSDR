@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RadioStatusObservation.h"
 #include "core/ReceiveData.h"
 #include "SetupStatusObservation.h"
 
@@ -76,6 +77,10 @@ struct RadioConnectRequest {
     RadioSerialIdentity serialIdentity;
     // Local IPv4 address that reached the radio; null lets the OS choose.
     QHostAddress localBindAddress;
+    // RadioModel's automatic retry after a lost link, not an operator's connect.
+    // A backend whose radio obeys any controller (ANAN Protocol 2) checks the
+    // radio is free first, so a retry never fights another client for it.
+    bool automaticReconnect = false;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
@@ -1336,6 +1341,11 @@ signals:
     // residual). Typed + compiler-checked; the backend populates only the fields
     // the wire reported and RadioModel applies them + its own orchestration.
     void radioChanged(const RadioDelta& delta);
+    // A Flex radio-global, client, oscillator or static-network report, stamped
+    // with the status epoch it arrived in (Flex: FlexStatusIngress). Flex
+    // radio-global status arrives here and never also on radioChanged, which
+    // carries native backends and Flex's nickname/info replies.
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
 
     // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
     // backend tokenizes the vendor GPS status line into a present-only GpsDelta;

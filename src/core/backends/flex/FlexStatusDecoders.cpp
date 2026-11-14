@@ -5,6 +5,7 @@
 #include "FlexDisplayStatus.h"
 #include "FlexSetupStatus.h"
 #include "FlexSliceStatus.h"
+#include "FlexRadioStatus.h"
 
 #include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
@@ -130,6 +131,17 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
             emit sliceObserved(*slice);
         } else {
             qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected slice status" << line.object;
+        }
+        return;
+    }
+    // Client lifecycle, the oscillator and static network are the Demo's too;
+    // SimBackend drops the radio-global values its native producer owns.
+    if (isFlexRadioStatusObject(line.object)) {
+        if (auto radio = decodeFlexRadioStatus(line.object, line.kvs)) {
+            radio->statusEpoch = m_epoch;
+            emit radioStatusObserved(*radio);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected radio status" << line.object;
         }
         return;
     }

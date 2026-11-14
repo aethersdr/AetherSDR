@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
 #include "core/AppSettings.h"

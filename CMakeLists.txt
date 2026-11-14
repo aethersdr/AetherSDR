@@ -911,6 +911,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend_ReceiveData.cpp
     src/core/backends/flex/FlexDisplayStatus.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexRadioStatus.cpp
     src/core/backends/flex/FlexCwControls.cpp
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
@@ -965,6 +966,7 @@ set(CORE_SOURCES
     src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
     src/core/backends/anan/AnanDroopDefaults.cpp   # derived per-gateware droop defaults (generated data)
     src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
+    src/core/backends/ReconnectBusyProbe.cpp # automatic reconnect never takes a busy HPSDR radio
     src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
@@ -1287,6 +1289,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_RadioObservations.cpp
     src/models/RadioModel_TransferControls.cpp
     src/models/RadioModel_WaveformEnv.cpp
     src/models/RadioModel_NtpSources.cpp

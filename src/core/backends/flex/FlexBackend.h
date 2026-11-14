@@ -237,14 +237,13 @@ public:
 
     // ---- status decode (aetherd RFC 2.3) ----
 
-    // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
-    // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
-    // residual). Present-only, ok-guarded numeric parses.
-    void decodeRadioStatus(const QMap<QString, QString>& kvs);
     // Drop the cached amp/tuner encode handles (#4198). Called on radio
     // disconnect/reset, where RadioModel clears the model-side presence outside
     // the decode path — without this the stale handle could survive a reconnect
     // to a *different* radio and be used to build a bogus relay command.
+    // Relay one ingress radio/client report, then any capability revision a
+    // model-name change causes.
+    void acceptRadioStatus(const RadioStatusObservation& observation);
     void clearExtensionHandles();
 
 signals:
@@ -270,6 +269,7 @@ signals:
 
 private:
     SetupEntitySink m_setupEntitySink;
+    quint64 m_radioModelRevision{0};
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
