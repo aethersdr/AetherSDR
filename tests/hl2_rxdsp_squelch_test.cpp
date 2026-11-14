@@ -94,6 +94,10 @@ int main(int argc, char** argv)
     cfg.dspBlockSize = 1024;
     cfg.fftSize = 256;
     cfg.mode = WdspChannel::Mode::Usb;
+    // FM's default width, where fmsq's width offset is 0, so the FM thresholds
+    // below are the plain level map. amsq does not depend on the filter.
+    cfg.filterLowHz = -8000.0;
+    cfg.filterHighHz = 8000.0;
 
     Hl2RxDsp dsp;
     check(!dsp.appliedSquelch().has_value(), "no channel, nothing applied");

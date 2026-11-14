@@ -358,6 +358,10 @@ void SetRXAFMDeviation(int channel, double deviationHz);
 //          against 10^(thresholdDb/20) of wire full scale. Any mode.
 void SetRXAFMSQRun(int channel, int run);
 void SetRXAFMSQThreshold(int channel, double threshold);
+// Patch 24: 1 while fmsq passes audio (any state but MUTED, so ramps and the
+// tail count as open), 0 while muted or flushed, as of the last processed
+// block. Lock-free; meaningful only while the stage runs.
+int GetRXAFMSQGateOpen(int channel);
 void SetRXAAMSQRun(int channel, int run);
 void SetRXAAMSQThreshold(int channel, double thresholdDb);
 void SetTXAMode(int channel, int mode);
