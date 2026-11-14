@@ -319,6 +319,77 @@ keyer:0,true;                     # key down
 keyer:0,false;                    # key up
 ```
 
+### AetherSDR extension set
+
+AetherSDR offers its own TCI commands as one opt-in set. A client that does not
+ask for it receives exactly the same traffic as without it. To turn it on for
+one connection, the client sends:
+
+```
+aethersdr_ext_enable:true;
+```
+
+The server answers with the set's version and the items this radio offers,
+then one line with the current state of each item:
+
+```
+aethersdr_ext:1;
+```
+
+- Every command of the set starts with `aethersdr_`. Before the enable, the
+  server ignores them without a reply, like any unknown command.
+- The list holds only what the connected radio can do, and an enabled client
+  gets a new `aethersdr_ext:` line when that changes. A command for an item
+  not in the list is ignored.
+- The enable is per connection. `aethersdr_ext_enable:false;` stops all
+  extension traffic to that client, and so does disconnecting.
+- The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
+  `rx_ctun_ex`) work without the enable, as before.
+
+#### Span: `rx_span`
+
+Offered when the connected radio lets the panadapter's span be changed (the
+desktop's -/+ span buttons are live), for example a Flex, a Hermes-Lite 2, an
+ANAN, an Icom with a scope or an RTL-SDR. Not on the simulator.
+
+```
+aethersdr_rx_span_rates;          # read: how span works on this radio
+aethersdr_rx_span:1;              # read the span of receiver 1, Hz
+aethersdr_rx_span:1,192000;       # set it
+```
+
+- `aethersdr_rx_span_rates:<follows_rate>,<radio_wide>[,<hz>...];` says what
+  the span is. `follows_rate` is `true` where the span is the receiver's sample
+  rate, so only the listed values exist (a Hermes-Lite 2:
+  `aethersdr_rx_span_rates:true,true,48000,96000,192000,384000;`).
+  `radio_wide` is `true` where every panadapter shares one span, so a set on
+  any receiver changes them all. The list holds the rates a set can reach now:
+  a Hermes-Lite 2 drops its wider ones as receivers open (the network link is
+  shared) and in low bandwidth mode, and the line is sent again when that
+  changes. A radio with a continuous span lists none.
+- `<trx>` is the receiver; the span is that of the panadapter it is on. A
+  receiver that does not exist is ignored.
+- A set goes where the desktop's span buttons send it. Where the span is the
+  sample rate, it is moved to the nearest listed rate; otherwise it is kept
+  inside the panadapter's limits, when the radio reports them.
+- The answer is `aethersdr_rx_span:<trx>,<hz>;` with the span the radio
+  reports, sent to every client that enabled the set, for every receiver whose
+  span moved. A radio that keeps its span (a Hermes-Lite 2 refuses a span the
+  network link cannot carry) is answered with the span it kept; with no report
+  after two seconds, the span in force is sent. A set that the rounding left at
+  the current span is answered to the sender only; a set of exactly the current
+  span gets no answer.
+- Every change from any source (the desktop, a band change, another client) is
+  sent the same way. The line is also sent, unasked, when a receiver appears or
+  moves to another panadapter. This is not the TCI `iq_samplerate`, which keeps
+  its own meaning.
+- Where the span is the sample rate, a set is refused while transmitting or
+  tuning, and answered to the sender with the span in force. On a Hermes-Lite 2
+  a span change rebuilds every receiver's DSP at the new rate. The connection
+  and the stream stay up; the panadapter and the audio of every receiver may
+  glitch briefly, and the answer comes when the rebuild is done. Elsewhere a
+  set is allowed while transmitting, as the span buttons are.
+
 ## Known issues
 
 - If a client that holds PTT dies without closing its connection (power loss, a pulled cable, a dropped Wi-Fi link), the radio stays keyed until the operating system gives up on the TCP connection ([#5985](https://github.com/aethersdr/AetherSDR/issues/5985)).
