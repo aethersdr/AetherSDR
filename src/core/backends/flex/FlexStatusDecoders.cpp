@@ -3,6 +3,7 @@
 // Moved from FlexBackend / FlexNtpSourceControls unchanged.
 #include "FlexStatusIngress.h"
 #include "FlexDisplayStatus.h"
+#include "FlexSetupStatus.h"
 
 #include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
@@ -106,6 +107,17 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
             display->sourceHandle = line.handle;
             display->statusEpoch = m_epoch;
             emit displayObserved(*display);
+        }
+        return;
+    }
+    // Setup inventory and settings: the model applies them for every backend
+    // that relays them, so they are decoded before the value gate too.
+    if (isFlexSetupStatusObject(line.object)) {
+        if (auto setup = decodeFlexSetupStatus(line.object, line.kvs)) {
+            setup->statusEpoch = m_epoch;
+            emit setupStatusObserved(*setup);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected setup status" << line.object;
         }
         return;
     }

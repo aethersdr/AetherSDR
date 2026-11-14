@@ -8665,8 +8665,16 @@ target_link_libraries(aetherd_amp_tuner_encode_test PRIVATE aethercore Qt6::Core
 set_target_properties(aetherd_amp_tuner_encode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_amp_tuner_encode_test COMMAND aetherd_amp_tuner_encode_test)
 
+# No sockets are opened: parser input, injected backends, and transport callbacks only.
+add_executable(flex_setup_observation_test tests/flex_setup_observation_test.cpp)
+target_include_directories(flex_setup_observation_test PRIVATE src tests)
+target_link_libraries(flex_setup_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_setup_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_setup_observation_test COMMAND flex_setup_observation_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
+    src/core/backends/flex/FlexSetupStatus.cpp
     src/models/UsbCableModel.cpp
 )
 target_include_directories(usb_cable_model_test PRIVATE src)
@@ -11167,6 +11175,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_setup_observation_test
     session_control_test
     audio_control_routing_test
     dax_tx_backend_test

@@ -81,6 +81,11 @@ public:
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
         const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    // Transverter and USB cable writes carry the entity they were aimed at, so
+    // the final write can refuse one that was removed or replaced meanwhile.
+    using SetupEntitySink = std::function<bool(const QString&, const RadioSetupCompletion&,
+                                               const std::shared_ptr<SetupStatusLifetime>&)>;
+    void setSetupEntityCommandSink(SetupEntitySink sink) { m_setupEntitySink = std::move(sink); }
     using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&,
                                                     const RadioControlCompletion&)>;
     void setTransferCommandSink(TransferCommandSink sink) { m_transferSink = std::move(sink); }
@@ -266,6 +271,7 @@ signals:
     void interlockStatusObserved(const AetherSDR::InterlockStatusDelta& delta);
 
 private:
+    SetupEntitySink m_setupEntitySink;
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)

@@ -10,6 +10,7 @@
 // .github/workflows/static-checks.yml, on every pull request, without a build.
 
 AETHER_SEAM_PROBE(displayObserved);
+AETHER_SEAM_PROBE(setupStatusObserved);
 AETHER_SEAM_PROBE(audioStreamChanged);
 AETHER_SEAM_PROBE(independentTxStopped);
 AETHER_SEAM_PROBE(transmitControlAnswered);

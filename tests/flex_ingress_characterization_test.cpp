@@ -111,6 +111,34 @@ void dumpState(RadioModel& model)
             .arg(pan->ownerHandle(), 0, 16);
     }
     qInfo("STATE pans %s", qPrintable(pans.join(QLatin1Char(' '))));
+    parts.clear();
+    for (const auto& x : model.xvtrList()) {
+        parts << QStringLiteral("xvtr%1[%2 o=%3 rf=%4 if=%5 lo=%6 g=%7 p=%8 rx=%9 v=%10/%11]").arg(x.index).arg(x.name)
+            .arg(x.order).arg(x.rfFreq).arg(x.ifFreq).arg(x.loError).arg(x.rxGain).arg(x.maxPower).arg(int(x.rxOnly))
+            .arg(int(x.isValid)).arg(int(x.hasIsValid));
+    }
+    for (const UsbCable& c : model.usbCableModel().cables()) {
+        QString bits;
+        for (int i = 0; i < 8; ++i) {
+            const UsbCableBit& b = c.bits[i];
+            bits += QStringLiteral(" b%1[%2 %3 %4 %5 %6 %7 %8 %9 %10]").arg(i).arg(int(b.enabled)).arg(b.source, b.band)
+                .arg(b.lowFreqMhz).arg(b.highFreqMhz).arg(int(b.activeHigh)).arg(int(b.pttDependent))
+                .arg(b.pttDelayMs).arg(b.txDelayMs);
+        }
+        parts << QStringLiteral("usb[%1 %2 %3 en=%4 in=%5 log=%6 %7/%8/%9/%10/%11 src=%12 auto=%13 hi=%14 ldpa=%15/%16%17]")
+            .arg(c.serialNumber, c.type, c.name).arg(int(c.enabled)).arg(int(c.present)).arg(int(c.loggingEnabled))
+            .arg(c.speed).arg(c.dataBits).arg(c.parity).arg(c.stopBits).arg(c.flowControl).arg(c.source)
+            .arg(int(c.autoReport)).arg(int(c.activeHigh)).arg(c.ldpaBand).arg(int(c.preamp)).arg(bits);
+    }
+    qInfo("STATE setup %s sharp=%d/%d,%d/%d,%d/%d", qPrintable(parts.join(QLatin1Char(' '))),
+          model.filterSharpnessVoice(), int(model.filterSharpnessVoiceAuto()), model.filterSharpnessCw(),
+          int(model.filterSharpnessCwAuto()), model.filterSharpnessDigital(), int(model.filterSharpnessDigitalAuto()));
+    qInfo("STATE license id=%s max=%s sub=%s exp=%s dvk=%d/%d nr=%d/%d", qPrintable(model.licenseRadioId()),
+          qPrintable(model.licenseMaxVersion()), qPrintable(model.licenseSubscription()),
+          qPrintable(model.licenseExpirationDate()), int(model.licenseFeatureSeen(QStringLiteral("digital_voice_keyer"))),
+          int(model.licenseFeatureEnabled(QStringLiteral("digital_voice_keyer"))),
+          int(model.licenseFeatureSeen(QStringLiteral("noise_reduction"))),
+          int(model.licenseFeatureEnabled(QStringLiteral("noise_reduction"))));
 }
 } // namespace
 

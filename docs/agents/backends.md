@@ -107,7 +107,7 @@ Contract: [`docs/aetherd-stage4-tx-coordinator.md`](../aetherd-stage4-tx-coordin
 `FlexStatusIngress` decodes Flex panadapter/waterfall reports, LAN and WAN
 alike, into present-only `DisplayObservation` values stamped with the status
 epoch they arrived in. RadioModel applies one, live or deferred, only while its
-display session is open for that epoch. The session closes at disconnect,
+observation session is open for that epoch. The session closes at disconnect,
 reconnect and backend teardown, so a queued or deferred report never acquires
 new-session authority. RadioModel owns the bounded inventory, ownership,
 pairing, retirement and publication policy. Initialize available fields before
@@ -197,6 +197,24 @@ connection/backend generations fence calibration and transverter creation;
 acceptance does not confirm completion. Entity editors retain their original
 session, and USB inventory is retired at disconnect/replacement. Preserve the
 client-owned TX-waterfall flag and station settings separately from radio state.
+Flex setup reports cross the seam as `SetupStatusObservation`: transverters,
+USB cables and bits, licensing, and filter sharpness. `FlexStatusIngress`
+decodes them (`FlexSetupStatus.cpp`), bounding each field and keeping
+absent-versus-empty, and stamps the status epoch; RadioModel applies one only
+while the observation session it shares with display reports is open for that
+epoch. RadioModel mints an identity for each transverter and cable, retired on
+removal, cable-family replacement and session end; an editor holds the identity
+it opened with, and its write is refused at the final write once that identity
+is retired. Filter sharpness commands on firmware 4.3.16 do not echo status to
+their originating client, so accepted values are retained with per-field
+revisions and later status always wins. These are radio-global inventories, not
+client-owned slice data. The model keeps at most 256 transverters, 256 USB
+cables and 128 license feature names, and rejects new entries beyond those
+bounds without evicting existing state. The latest subscription expiration
+selects the displayed subscription, including lapsed ones. Reported feature
+records remain authoritative; CW auto-tune uses an active subscription only
+when firmware has not reported that feature.
+
 Profile and memory dialogs use typed `ProfileRequest` / `MemoryRequest` values
 through `RadioModel`; `FlexStoredControls` owns encoding, including recall
 corrections. Local memories consume neutral patches directly and retain their
@@ -364,8 +382,9 @@ connection.
   skips that and must still wire the ingress.
 - **Demo** turns value decoding off (`setDecodeValues(false)`): its native
   producer owns the values. Identity and lifecycle are still decoded: a TGXL's
-  handle, and display pan/waterfall reports, whose values `SimBackend` drops
-  except their dimensions. Its synthetic wire carries radio, display and slice
+  handle, display pan/waterfall reports, whose values `SimBackend` drops
+  except their dimensions, and setup reports, which it relays whole (its
+  native producer has no setup inventory). Its synthetic wire carries radio, display and slice
   status only, so the Flex-only relays above are not wired for it.
 - **Tests feed lines through `RadioModel::handleLineForTest()` or
   `handleStatusForTest()`**, never `onStatusReceived` directly: that skips the
@@ -375,8 +394,7 @@ connection.
   `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
   corpus for before/after comparison of an ingress change.
 - **Still inline in `RadioModel`**, each awaiting its own PR: radio/client
-  lifecycle (#6907), slice ownership (#6878), setup status — transverters, USB cables, filter
-  sharpness, licenses (#6916) — and DVK/NAVTEX (#6870). Each moves into the
+  lifecycle (#6907), slice ownership (#6878) and DVK/NAVTEX (#6870). Each moves into the
   ingress as a domain decoder; none adds its own transport decoder or
   lifetime token.
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/SetupStatusObservation.h"
+
 #include "core/TxGrantManager.h"
 #include "core/SpotRequestQueue.h"
 #include "core/SpectrumDecodeScale.h"
@@ -1795,6 +1797,17 @@ private:
     // (IRadioBackend::gpsChanged / memoryChanged / profileChanged). aetherd RFC
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
+    friend class FlexSetupStatusTestPeer;
+    void applySetupObservation(const SetupStatusObservation& observation);
+    void retireSetupObservations();
+    void resetSetupObservations();
+    bool refreshLicenseSubscription(const QDateTime& now);
+    quint64 m_setupObservationGeneration{0};
+    std::array<quint64, 6> m_filterSharpnessRevisions{};   // bumped by status and session end
+    std::array<quint64, 6> m_filterSharpnessAccepted{};    // request sequence last applied
+    quint64 m_filterSharpnessRequestSequence{0};
+    QString m_licenseSubscriptionLabel;
+    QTimer m_licenseExpiryTimer;
     void resetGpsState();
     void wireGpsSessionReceivers();
     // A fresh status epoch for the connect about to be issued: every wire line
@@ -1806,12 +1819,13 @@ private:
     void applyTxBandChanges(const TxBandDelta& delta);
     QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
     quint64 m_statusEpoch{0};            // the epoch of the session being run
-    // Display reports apply only from the session being run, and not after it
-    // has begun to end (RadioModel_DisplayObservations.cpp).
+    // Display and setup reports apply only from the session being run, and not
+    // after it has begun to end (RadioModel_DisplayObservations.cpp,
+    // RadioModel_SetupObservations.cpp).
     // How long a deferred display report stays applicable.
     static constexpr qint64 kDeferredDisplayAgeMs = 30'000;
-    quint64 m_displayEpoch{0};
-    bool m_displaySessionOpen{true};
+    quint64 m_observationEpoch{0};
+    bool m_observationSessionOpen{true};
     quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for
     quint64 m_wanRoute{0};               // fences queued SmartLink lifecycle per bind
     void handleMessageReceived(const ParsedMessage& msg);
@@ -1827,8 +1841,9 @@ private:
     void applyPendingDStarRuntimeConfiguration();
     void syncDigitalVoiceTxSelection(bool force = false);
     void onDisplayObservation(const DisplayObservation& observation);
-    void openDisplaySession(quint64 epoch);
-    void retireDisplaySession();
+    void openObservationSession(quint64 epoch);
+    void retireObservationSession();
+    bool observationSessionCurrent(quint64 statusEpoch) const;
     bool displayObservationCurrent(const DisplayObservation& observation) const;
     void applyDisplayObservation(const DisplayObservation& observation);
     bool applyDisplayValues(PanadapterModel* pan, const DisplayObservation& observation);
@@ -2316,7 +2331,9 @@ private:
                                                bool requiresLiveSession = true);
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
-    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    // dispatchAllowed, when given, is checked again at the final write.
+    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {},
+                                      std::function<bool()> dispatchAllowed = {});
     using TransferCommandWriter = std::function<bool(const QString&, const FileTransferGuard&, ResponseCallback)>;
     using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&, const RadioControlCompletion&)>;
     TransferCommandSink transferCommandSink(const TransferCommandWriter& writer = {});
@@ -2324,6 +2341,10 @@ private:
     FileTransferHandle m_fileTransferOperation;
     using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
     AudioCommandSink audioCommandSink();
+    // A transverter or USB cable write, refused at the final write once the
+    // entity it was aimed at has been removed or replaced.
+    bool sendSetupEntityCommand(const QString& command, const RadioSetupCompletion& completion,
+                                const std::shared_ptr<SetupStatusLifetime>& identity);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
@@ -2732,6 +2753,7 @@ public:
     const QMap<int, TxBandInfo>& txBandSettings() const { return m_txBandSettings; }
 
     struct XvtrInfo {
+        std::shared_ptr<SetupStatusLifetime> lifetime;
         int     index{0};
         int     order{-1};
         QString name;

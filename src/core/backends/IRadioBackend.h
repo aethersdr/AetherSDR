@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SetupStatusObservation.h"
+
 #include "IndependentTxControl.h"
 #include "CwControlRequest.h"
 
@@ -1213,6 +1215,9 @@ signals:
     // and present-only values. Delivered on the owner thread behind the
     // backend's status fence (Flex: FlexStatusIngress).
     void displayObserved(const AetherSDR::DisplayObservation& observation);
+    // A typed transverter, USB cable, filter sharpness or license report,
+    // stamped with the status epoch it arrived in (Flex: FlexStatusIngress).
+    void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
     void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose

@@ -15,6 +15,8 @@ S00000071|radio lineout_gain=45 headphone_mute=1 callsign=W1AW/7 rtty_mark_defau
 S00000071|radio filter_sharpness VOICE level=2 auto_level=1
 S00000071|radio filter_sharpness CW level=3 auto_level=0
 S00000071|radio filter_sharpness DIGITAL level=3 auto_level=0
+S00000071|radio filter_sharpness VOICE level=1
+S00000071|radio filter_sharpness cw auto_level=1
 # radio oscillator: gpsdo_present spelling, then gnss_present=0 alias clearing presence
 S00000071|radio oscillator state=gpsdo setting=auto locked=1 ext_present=0 gpsdo_present=1 tcxo_present=1
 S00000071|radio oscillator state=tcxo locked=0 gnss_present=0
@@ -30,12 +32,15 @@ S00000071|license feature name=digital_voice_keyer enabled=1 reason=plus
 S00000071|license feature name=noise_reduction enabled=1 reason=built_in
 S00000071|license feature name=noise_reduction enabled=0 reason=license_file
 S00000071|license feature name=auto_agc_t enabled=maybe reason=ea
+S00000071|license subscription name=smartsdr+ expiration=2028-01-01garbage
 # xvtr N: create (with is_valid), second without is_valid, update, in_use=0 removal (known + unknown idx)
 S00000071|xvtr 0 name=2m order=0 rf_freq=144.000000 if_freq=28.000000 lo_error=0.000000 rx_gain=0.0 max_power=10.0 rx_only=0 is_valid=1 preferred=1 two_meter_int=0
 S00000071|xvtr 1 name=70cm order=1 rf_freq=432.000000 if_freq=28.000000 lo_error=0.000000 rx_gain=0.0 max_power=5.0 rx_only=1
 S00000071|xvtr 0 lo_error=0.001200 max_power=8.0
 S00000071|xvtr 1 in_use=0
 S00000071|xvtr 5 in_use=0
+S00000071|xvtr 2 in_use=1
+S00000071|xvtr 3 rf_freq=nan
 # display pan: handle-less fragment for unclaimed pan -> Defer into pending
 S00000071|display pan 0x40000000 center=14.100000 bandwidth=0.200000
 # display pan: ours, full status -> Claim (ensureOwnedPanadapter) + all pan decoders; tiny x/y pixels
@@ -227,9 +232,12 @@ S00000071|spot 12 removed
 # usb_cable: cat cable create, bit cable + per-bit status, family type change, removed
 S00000071|usb_cable A50285BI type=cat enable=1 plugged_in=1 name=CATPort log=0 speed=9600 data_bits=8 parity=none stop_bits=1 flow_control=none source=active_slice auto_report=1
 S00000071|usb_cable A50285BI speed=38400
+S00000071|usb_cable A50285BI speed=99999999
 S00000071|usb_cable FT4VXJ2K type=bit enable=1 plugged_in=1 name=BandDecoder log=0
 S00000071|usb_cable FT4VXJ2K bit 0 enable=1 source=tx_ant output=active_high polarity=active_high ptt_dependent=1 ptt_delay=10 tx_delay=0 source_tx_ant=ANT1
 S00000071|usb_cable FT4VXJ2K bit 3 enable=1 source=band band=20 low_freq=14.000000 high_freq=14.350000
+S00000071|usb_cable FT4VXJ2K bit 0 ptt_delay=2147483647
+S00000071|usb_cable NEWCABLE name=untyped
 S00000071|usb_cable A50285BI type=bcd source=active_slice
 S00000071|usb_cable A50285BI removed
 # cwx: sent index, speed/delay/qsk, macro (0x7F space, 0x1E quote, * -> =), erase range, queue drain

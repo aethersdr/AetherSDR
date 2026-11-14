@@ -90,6 +90,8 @@ int main()
            unknown.label(now) == current.label(now) && unknown.expiration == current.expiration);
     const auto badDate = mergeLicenseSubscription(base, plus, QStringLiteral("soon"));
     report("an unparseable expiration is ignored", badDate.label(now) == QStringLiteral("SmartSDR"));
+    const auto trailing = mergeLicenseSubscription(base, plus, QStringLiteral("2026-11-01garbage"));
+    report("an expiration with trailing text is ignored", trailing.label(now) == QStringLiteral("SmartSDR"));
 
     return failures ? 1 : 0;
 }

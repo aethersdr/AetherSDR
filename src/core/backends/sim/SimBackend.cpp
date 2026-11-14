@@ -137,6 +137,8 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // Identity only: a TGXL named in replayed captured status.
     connect(&m_statusIngress, &FlexStatusIngress::tunerChanged, this, &IRadioBackend::tunerChanged);
     connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
+    // The native producer has no setup inventory; replayed setup status is the Demo's.
+    connect(&m_statusIngress, &FlexStatusIngress::setupStatusObserved, this, &IRadioBackend::setupStatusObserved);
     connect(&m_statusIngress, &FlexStatusIngress::displayObserved, this,
             [this](DisplayObservation observation) {
         if (!m_connected) { return; }
