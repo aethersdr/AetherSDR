@@ -1711,35 +1711,25 @@ void RadioCertification::stageMeterScale(const Options& o)
         tone->setEnabled(false);
     spin(900);
 
-    const double micPeak = keyed.value(QStringLiteral("micPeakDbfs")).toDouble(-999.0);
-    const double swr = keyed.value(QStringLiteral("swr")).toDouble(-1.0);
+    const MeterScaleReading r = judgeMeterScale(keyedOk, keyed, o.rfStimulusDbfs);
     QJsonObject m{
         {QStringLiteral("injectedToneDbfs"), o.rfStimulusDbfs},
-        {QStringLiteral("micPeakDbfs"), micPeak},
-        {QStringLiteral("micPeakErrorDb"), micPeak - o.rfStimulusDbfs},
-        {QStringLiteral("swr"), swr},
+        {QStringLiteral("keyConfirmed"), keyedOk},
+        {QStringLiteral("micPeakDbfs"), r.micPeakDbfs},
+        {QStringLiteral("micPeakErrorDb"),
+         r.micPeakDbfs.isDouble() ? QJsonValue(r.micPeakDbfs.toDouble() - o.rfStimulusDbfs)
+                                  : QJsonValue()},
+        {QStringLiteral("micPeakStale"), keyed.contains(QStringLiteral("micPeakDbfsStale"))},
+        {QStringLiteral("swr"), r.swr},
         {QStringLiteral("swrStale"), keyed.contains(QStringLiteral("swrStale"))},
-        // The SWR row above is only a measurement of anything if RF happened.
-        // `swr: -1` at zero drive is the absence of a transmission, not the
-        // absence of a meter, and this is where a reader finds out which.
+        // Whether RF happened, so a null swr can be told apart: no transmission
+        // versus a meter that was not fed during one.
         {QStringLiteral("keyedRfConfirmed"), keyedRfConfirmed()},
         {QStringLiteral("maxFwdWattsWhileKeyed"),
          m_keyedRfSamples > 0 ? QJsonValue(m_keyedFwdWattsMax) : QJsonValue()},
     };
-
-    QStringList problems;
-    if (micPeak < -998.0)
-        problems << QStringLiteral("no mic peak reading while transmitting a tone");
-    else if (std::fabs(micPeak - o.rfStimulusDbfs) > 3.0)
-        problems << QStringLiteral(
-            "mic peak reads %1 dBFS for a %2 dBFS tone — a scale error of %3 dB")
-            .arg(micPeak, 0, 'f', 1).arg(o.rfStimulusDbfs, 0, 'f', 1)
-            .arg(micPeak - o.rfStimulusDbfs, 0, 'f', 1);
-    if (swr > 50.0)
-        problems << QStringLiteral(
-            "SWR reads %1 into a load — a value that large usually means the "
-            "ratio saturated its fixed-point range rather than a real mismatch")
-            .arg(swr, 0, 'f', 1);
+    if (!r.swrNote.isEmpty())
+        m[QStringLiteral("swrNote")] = r.swrNote;
 
     record(QStringLiteral("meter-scale"),
            QStringLiteral("Meters read the right NUMBER, not just a number"),
@@ -1750,8 +1740,54 @@ void RadioCertification::stageMeterScale(const Options& o)
                "1.0:1. Absolute POWER is deliberately not checked — the counts "
                "are uncalibrated and presenting them as watts is the error this "
                "project already avoided once."),
-           problems.join(QStringLiteral("; ")),
+           r.problems.join(QStringLiteral("; ")),
            QStringLiteral("docs/HERMES.md 14.4; SWR gating and the dB reference"));
+}
+
+RadioCertification::MeterScaleReading RadioCertification::judgeMeterScale(
+    bool keyedOk, const QJsonObject& keyed, double toneDbfs)
+{
+    // Same freshness rule as stageRf and stageControlEffect: a stale value is
+    // the last key's leftover, and a refused key measured nothing.
+    MeterScaleReading r;
+    if (!keyedOk) {
+        r.problems << QStringLiteral(
+            "INCONCLUSIVE — the key was refused, so neither meter was read while "
+            "transmitting");
+        return r;
+    }
+
+    const bool haveMicPeak = keyed.contains(QStringLiteral("micPeakDbfs"))
+                          && !keyed.contains(QStringLiteral("micPeakDbfsStale"));
+    if (!haveMicPeak) {
+        r.problems << QStringLiteral("no fresh mic peak reading while transmitting a tone");
+    } else {
+        const double micPeak = keyed.value(QStringLiteral("micPeakDbfs")).toDouble();
+        r.micPeakDbfs = micPeak;
+        if (std::fabs(micPeak - toneDbfs) > 3.0) {
+            r.problems << QStringLiteral(
+                "mic peak reads %1 dBFS for a %2 dBFS tone — a scale error of %3 dB")
+                .arg(micPeak, 0, 'f', 1).arg(toneDbfs, 0, 'f', 1)
+                .arg(micPeak - toneDbfs, 0, 'f', 1);
+        }
+    }
+
+    const bool haveSwr = keyed.contains(QStringLiteral("swr"))
+                      && !keyed.contains(QStringLiteral("swrStale"));
+    if (!haveSwr) {
+        r.swrNote = QStringLiteral(
+            "SWR not measurable: the meter was not fed during this key");
+        return r;
+    }
+    const double swr = keyed.value(QStringLiteral("swr")).toDouble();
+    r.swr = swr;
+    if (swr > 50.0) {
+        r.problems << QStringLiteral(
+            "SWR reads %1 into a load — a value that large usually means the "
+            "ratio saturated its fixed-point range rather than a real mismatch")
+            .arg(swr, 0, 'f', 1);
+    }
+    return r;
 }
 
 void RadioCertification::stageTuning(const Options& o)

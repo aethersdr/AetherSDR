@@ -1257,6 +1257,9 @@ operator setting it lowered. Where a backend withholds SWR below its own forward
 gate (the health keys `forwardPowerSwrGateCounts` and `forwardPowerSwrGateClears`), `rf`
 reports `swrResult: gate-not-reached` with the gate, the key's forward peak, the
 tone and the drive, instead of "no SWR reading".
+`meter-scale` publishes `swr` and `micPeakDbfs` only from a confirmed key and a
+fresh meter. Otherwise the value is `null` and is not judged, and `swrNote`
+says the SWR was not measurable.
 Full drive does not establish adequate stimulus: a quiet tone can still leave
 the forward reading below the gate. Check the selected tone level and
 independently measured forward power before drawing conclusions about the
