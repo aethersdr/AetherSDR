@@ -992,6 +992,54 @@ void rawOverflowFade()
     }
 }
 
+void delayedOverflowBounded()
+{
+    // An overflow while a presentation delay holds raw audio cuts only the
+    // oldest excess; the held delay is neither drained through DSP nor
+    // emitted to the post-DSP taps ahead of schedule.
+    for (Effect effect : {Effect::None, Effect::Rn2}) {
+        for (int delayMs : {500, 2000}) {
+            Fixture fixture(48000);
+            fixture.engine.setRxBufferCapMs(100);
+            if (!enableEffect(fixture.engine, effect)) {
+                continue;
+            }
+            AudioEngineRatesTestAccess::prepareKiwi(fixture.engine);
+            fixture.engine.setReceivePresentationDelays(delayMs, 0, {});
+            PcmProducer producer;
+            producer.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+            quint64 phase = 0;
+            for (int packet = 0; packet < delayMs / 10 + 30; ++packet) {
+                feed(fixture.engine, producer, tone(24000, 240, phase));
+                phase += 240;
+                fixture.tick();
+            }
+            fixture.capture();
+            const qsizetype heldFrames =
+                AudioEngineRatesTestAccess::rawBytes(fixture.engine) / kFrameBytes;
+            const int capFrames = 24000 * (delayMs + 100) / 1000;
+            const int burstFrames = capFrames + 24000 * 50 / 1000 - int(heldFrames);
+            feed(fixture.engine, producer, tone(24000, burstFrames, phase));
+            const qsizetype rawFrames =
+                AudioEngineRatesTestAccess::rawBytes(fixture.engine) / kFrameBytes;
+            const qsizetype outputFrames =
+                AudioEngineRatesTestAccess::outputBytes(fixture.engine) / kFrameBytes;
+            const qsizetype postFrames =
+                fixture.captured(QStringLiteral("post")).size() / kFrameBytes;
+            std::printf("delayed overflow %s delay=%d held=%lld raw=%lld output=%lld post=%lld\n",
+                effectName(effect), delayMs, static_cast<long long>(heldFrames),
+                static_cast<long long>(rawFrames), static_cast<long long>(outputFrames),
+                static_cast<long long>(postFrames));
+            check(rawFrames >= 24000 * delayMs / 1000,
+                  "overflow keeps the presentation delay held as raw input");
+            check(postFrames > 0 && postFrames <= 48000 * 100 / 1000,
+                  "overflow processes only the excess and its fade tail through DSP");
+            check(rawFrames + (outputFrames * 24000 + 47999) / 48000 <= capFrames,
+                  "overflow restores the combined presentation cap");
+        }
+    }
+}
+
 void boundedNrTrim()
 {
     for (Effect effect : {Effect::Rn2, Effect::Dfnr}) {
@@ -1601,6 +1649,7 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"steadyOutputOverflowFade", std::nullopt},
              AudioCase{"rawOverflowFade", std::nullopt},
              AudioCase{"boundedNrTrim", std::nullopt},
+             AudioCase{"delayedOverflowBounded", std::nullopt},
          }) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate;
@@ -1685,6 +1734,9 @@ int main(int argc, char** argv)
     }
     if (selected("boundedNrTrim")) {
         runStage("boundedNrTrim", boundedNrTrim);
+    }
+    if (selected("delayedOverflowBounded")) {
+        runStage("delayedOverflowBounded", delayedOverflowBounded);
     }
     if (selected("overflowPreservesDspHistory")) {
         runStage("overflowPreservesDspHistory", overflowPreservesDspHistory);

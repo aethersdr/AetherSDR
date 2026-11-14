@@ -5698,23 +5698,30 @@ void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
     const int outputRate = std::max(1, m_rxOutputRate.load());
     targetRawBytes = alignedStereoFloatBytes(targetRawBytes);
     constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
-    const auto excessBytes = [&]() {
+    const auto outputRawBytes = [&]() {
         const qsizetype outputFrames = m_rxOutputBuffer.size() / kFrameBytes;
-        const qsizetype outputRawFrames =
-            (outputFrames * producerRate + outputRate - 1) / outputRate;
+        return (outputFrames * producerRate + outputRate - 1) / outputRate * kFrameBytes;
+    };
+    const auto excessBytes = [&]() {
         return alignedStereoFloatBytes(m_rxBuffer.size())
             + queuedAudioBytes(m_rxPackets)
-            + outputRawFrames * kFrameBytes - targetRawBytes;
+            + outputRawBytes() - targetRawBytes;
     };
     constexpr int kMaxTrimBlockMs = 20;
     const qsizetype maxBlockBytes = std::max(
         kFrameBytes, audioBytesForMsAtRate(producerRate, kMaxTrimBlockMs));
+    // Covers the 6 ms quiet-point search and the 2 ms fade past the cut.
+    constexpr int kRetainedTailMs = 10;
+    const qsizetype retainedTailBytes = audioBytesForMsAtRate(producerRate, kRetainedTailMs);
     for (qsizetype excess = excessBytes(); excess > 0; excess = excessBytes()) {
         const qsizetype rawBytes = alignedStereoFloatBytes(m_rxBuffer.size());
-        if (rawBytes > 0 && m_rxPackets.empty()) {
-            // Build the retained tail before the quiet-point cut and fade.
-            // Bounded blocks also prevent NR wrappers from retaining seconds
-            // of output behind an input-sized startup-silence response.
+        if (rawBytes > 0 && m_rxPackets.empty()
+            && outputRawBytes() < excess + retainedTailBytes) {
+            // Process only the oldest raw the cut needs, plus a tail for the
+            // quiet-point search and fade; the rest stays held for the
+            // presentation delay. Bounded blocks also prevent NR wrappers
+            // from retaining seconds of output behind an input-sized
+            // startup-silence response.
             const qsizetype bytes = std::min(maxBlockBytes, rawBytes);
             const QByteArray pcm = m_rxBuffer.left(bytes);
             m_rxBuffer.remove(0, bytes);
