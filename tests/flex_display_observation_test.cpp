@@ -14,10 +14,10 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class FlexDisplayStatusTestAccess {
 public:
-    static quint64 displayEpoch(const RadioModel& radio) { return radio.m_displayEpoch; }
+    static quint64 displayEpoch(const RadioModel& radio) { return radio.m_observationEpoch; }
     static quint64 sessionGeneration(const RadioModel& radio) { return radio.m_sessionGeneration; }
-    static void closeDisplays(RadioModel& radio) { radio.retireDisplaySession(); }
-    static void reopenDisplays(RadioModel& radio, quint64 epoch) { radio.openDisplaySession(epoch); }
+    static void closeDisplays(RadioModel& radio) { radio.retireObservationSession(); }
+    static void reopenDisplays(RadioModel& radio, quint64 epoch) { radio.openObservationSession(epoch); }
     static quint64 beginSession(RadioModel& radio) { return radio.beginStatusSession(); }
     static void endSession(RadioModel& radio)
     { QMetaObject::invokeMethod(&radio, "onDisconnected", Qt::DirectConnection); }

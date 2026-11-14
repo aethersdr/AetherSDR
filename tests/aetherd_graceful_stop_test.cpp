@@ -85,10 +85,19 @@ int childTeardownDone(QCoreApplication& app)
 // cannot end a loop that has not started, so stopRequested() is what main() checks.
 int childEarlyStop(QCoreApplication& app)
 {
-    const aetherd::GracefulStop stop(app, std::chrono::seconds(5));
+    aetherd::GracefulStop stop(app, std::chrono::seconds(5));
     ::raise(SIGTERM);
     QCoreApplication::processEvents();   // the notifier runs here, before exec()
-    return stop.stopRequested() ? 11 : app.exec();   // 11: skipped exec(), no grace kill
+    return stop.takeStopBeforeLoop() ? 11 : app.exec();   // 11: skipped exec(), no grace kill
+}
+
+// A stop that arrives before the loop and before any event processing: main()'s
+// check is the first to see it, and must say so as the loop's handler would.
+int childStopBeforeAnyEvents(QCoreApplication& app)
+{
+    aetherd::GracefulStop stop(app, std::chrono::seconds(5));
+    ::raise(SIGTERM);
+    return stop.takeStopBeforeLoop() ? 12 : app.exec();
 }
 
 // A stray SIGALRM before any stop request is not the grace timer.
@@ -111,6 +120,7 @@ int childIgnoredHup(QCoreApplication& app)
 }
 
 struct Outcome {
+    QByteArray err;
     bool finished = false;
     QProcess::ExitStatus status = QProcess::NormalExit;
     int code = -1;
@@ -129,6 +139,7 @@ Outcome runChild(const QString& self, const QString& mode)
         p.kill();
         p.waitForFinished(1000);
     }
+    o.err = p.readAllStandardError();
     o.status = p.exitStatus();
     o.code = p.exitCode();
     o.ms = t.elapsed();
@@ -220,6 +231,7 @@ int main(int argc, char* argv[])
         if (mode == "stuck") return childStuck(app);
         if (mode == "teardown-done") return childTeardownDone(app);
         if (mode == "early-stop") return childEarlyStop(app);
+        if (mode == "stop-before-events") return childStopBeforeAnyEvents(app);
         if (mode == "stray-alarm") return childStrayAlarm(app);
         if (mode == "ignored-hup") return childIgnoredHup(app);
         return 1;
@@ -255,6 +267,12 @@ int main(int argc, char* argv[])
     ok &= check(early.finished && early.status == QProcess::NormalExit && early.code == 11
                     && early.ms < 4000,
                 "a stop during startup is seen before exec() and ends without the grace kill");
+
+    const Outcome beforeEvents = runChild(self, QStringLiteral("stop-before-events"));
+    ok &= check(beforeEvents.finished && beforeEvents.status == QProcess::NormalExit
+                    && beforeEvents.code == 12
+                    && beforeEvents.err.count("received: stopping and releasing the radio") == 1,
+                "a stop seen only by main()'s check is announced once, as the loop would");
 
     ok &= check(childTermSignal(self, "stray-alarm") == SIGALRM,
                 "a stray SIGALRM before any stop dies as SIGALRM, not as a stop");

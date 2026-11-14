@@ -51,12 +51,15 @@ identity. It refuses to overwrite any existing authority, including an empty
 one. Subsequent actions require the selected authority; IDs and roles are the
 only output. Secrets are never accepted in argv or exported to stdout, ordinary
 settings or files. The initial local-client integration will retrieve its selected
-credential through the native-vault adapter; no token export command is provided.
+credential through the native-vault adapter; no token export command is provided. Remote clients receive theirs through
+pairing ([`aetherd-remote-clients.md`](aetherd-remote-clients.md)), once, over TLS.
 Combining an offline action with discovery/control/TX or another action is rejected
 before storage access or radio construction.
 
-Serving with `--credential-authority <authority-id>` only loads existing records
-and enables their verifier; it never creates or writes credentials. Missing,
+Serving with `--credential-authority <authority-id>` loads existing records
+and enables their verifier. It creates and writes a credential only through
+remote-client pairing on the TLS listener ([`aetherd-remote-clients.md`](aetherd-remote-clients.md)
+§3), which adds one `remote-control` record; it never creates a local one. Missing,
 denied, malformed or unavailable storage refuses that explicitly selected startup
 before clients are admitted. Without the option, observe/control behavior is
 unchanged and `hello.auth` is still rejected. Credential verification alone
@@ -65,7 +68,9 @@ does not enable any daemon TX methods.
 Authentication and control permission remain separate: explicitly selecting an
 authority without `--allow-local-control` permits credential verification and
 negotiation, not receive mutations or TX. `capabilities.get` describes only the
-session's existing grants; the credential itself adds no observe/control grant.
+session's existing grants; a local credential itself adds no observe/control
+grant. The exception is a remote scope on a network session, where the scope
+is the grant (`remote-observe`, `remote-control`; [`aetherd-remote-clients.md`](aetherd-remote-clients.md) §2).
 The daemon's ordinary current-user observe permission remains in effect, and
 TX/admin services are constructed only with the separate TX/control opt-ins.
 
@@ -393,6 +398,8 @@ native-vault/actual-daemon checks have been exercised. The PR records final
 revision-specific results and limitations; unit-test injection is never a
 substitute for the hardware evidence above.
 
-SIP, remote listeners, Stage 5 audio transport and new backend feature parity
-remain out of scope. No timer, client grant or local ownership claim guarantees
+SIP, Stage 5 audio transport and new backend feature parity remain out of
+scope. Remote listeners are specified receive-only in
+[`aetherd-remote-clients.md`](aetherd-remote-clients.md): network sessions never
+reach `tx.*` or `txAdmin.*`. No timer, client grant or local ownership claim guarantees
 exclusivity against physical PTT or other radio clients.

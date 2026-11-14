@@ -61,6 +61,18 @@ const char* signalName(int sig)
     }
 }
 
+// Once per process, from the owner thread: the loop's handler and main()'s
+// before-exec check both end a run here, whichever sees the stop first.
+bool g_announced = false;
+void announceStop()
+{
+    if (g_announced)
+        return;
+    g_announced = true;
+    QTextStream(stderr) << "aetherd: " << signalName(int(g_received))
+                        << " received: stopping and releasing the radio\n";
+}
+
 } // namespace
 
 GracefulStop::GracefulStop(QCoreApplication& app, std::chrono::seconds grace)
@@ -80,8 +92,7 @@ GracefulStop::GracefulStop(QCoreApplication& app, std::chrono::seconds grace)
     QObject::connect(notifier, &QSocketNotifier::activated, &app, [] {
         char drain[16];
         while (::read(g_wake[0], drain, sizeof drain) > 0) {}
-        QTextStream(stderr) << "aetherd: " << signalName(int(g_received))
-                            << " received: stopping and releasing the radio\n";
+        announceStop();
         QCoreApplication::quit();
     });
     hl2::installSignalHandlerUnlessIgnored(SIGALRM, escalate);
@@ -98,6 +109,14 @@ GracefulStop::~GracefulStop()
 bool GracefulStop::stopRequested() const noexcept
 {
     return g_received != 0;
+}
+
+bool GracefulStop::takeStopBeforeLoop()
+{
+    if (!stopRequested())
+        return false;
+    announceStop();
+    return true;
 }
 
 #else
@@ -156,6 +175,14 @@ GracefulStop::~GracefulStop()
 bool GracefulStop::stopRequested() const noexcept
 {
     return g_requested != 0;
+}
+
+bool GracefulStop::takeStopBeforeLoop()
+{
+    if (!stopRequested())
+        return false;
+    QTextStream(stderr) << "aetherd: console control event received: stopping and releasing the radio\n";
+    return true;
 }
 
 #endif

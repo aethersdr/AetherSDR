@@ -35,6 +35,10 @@ public:
     ~GracefulStop();
     // A stop signal or console event has arrived.
     [[nodiscard]] bool stopRequested() const noexcept;
+    // For main(), just before exec(): true when a stop already arrived (exec()
+    // is then skipped), having said so on stderr once, as the loop's own
+    // handler would have.
+    [[nodiscard]] bool takeStopBeforeLoop();
     GracefulStop(const GracefulStop&) = delete;
     GracefulStop& operator=(const GracefulStop&) = delete;
 };
