@@ -2311,6 +2311,32 @@ static const char *band_for_cycle(const config_t *c, const char *grid, long long
  *
  * The dial is fixed at the 20 m FT8 frequency because a WAV carries no dial:
  * it only sets the absolute frequency printed, never what decodes. */
+#ifdef AETHER_WITH_OSD
+#include "osd/osd174_91.h"
+/* OSD search depth. Read by ft8_lib's decode.c when belief propagation
+ * fails. Settable from the environment so the "with and without" the
+ * #7114 ruling asks for is one binary and two runs, not two builds --
+ * a rebuild between arms would leave the comparison open to a compiler
+ * or source difference nobody checked for.
+ *
+ * AETHER_FT8_OSD=0 disables it, matching the pre-OSD decoder exactly:
+ * depth 0 still returns early, so nothing new runs and nothing new is
+ * found. That is the control arm. */
+static osd_depth_t g_osd_depth = OSD_DEPTH_2;
+
+osd_depth_t aether_osd_depth(void) { return g_osd_depth; }
+
+static void osd_depth_from_env(void)
+{
+    const char *s = getenv("AETHER_FT8_OSD");
+    if (!s || !*s) return;
+    int v = atoi(s);
+    if (v < 0) v = 0;
+    if (v > 6) v = 6;
+    g_osd_depth = (osd_depth_t)v;
+}
+#endif
+
 static int decode_wav_file(const char *path)
 {
     static float audio[15 * FT8_RATE];
@@ -2356,6 +2382,9 @@ int main(int argc, char *argv[])
     const char *tmp = getenv("TMPDIR") && *getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
     snprintf(g_work, sizeof g_work, "%s/aether-wspr", tmp);
     mkdir(g_work, 0700);
+#ifdef AETHER_WITH_OSD
+    osd_depth_from_env();
+#endif
     if (argc >= 2 && !strcmp(argv[1], "selftest")) return selftest();
     /* decodewav: one WAV in, its messages out, nothing else. Dispatched here
      * beside selftest and BEFORE the status listener is bound, because it is

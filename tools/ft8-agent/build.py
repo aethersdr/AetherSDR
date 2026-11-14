@@ -55,7 +55,12 @@ FT8_LIB = [
 
 ARMV7 = ['-target', 'arm-linux-musleabihf', '-mcpu=cortex_a8']
 ARM64 = ['-target', 'aarch64-linux-musl']
-CFLAGS = ['-O2', '-std=gnu11', '-Wall', '-ffunction-sections', '-fdata-sections', f'-ffile-prefix-map={HERE}=.']
+CFLAGS = ['-O2', '-std=gnu11', '-Wall', '-ffunction-sections', '-fdata-sections', f'-ffile-prefix-map={HERE}=.',
+          # Ordered-statistics decoding (#7114 ruling 3). Compiled in for
+          # every target; the depth is a RUNTIME setting (AETHER_FT8_OSD),
+          # so the with/without comparison is two runs of one binary rather
+          # than two builds that could differ in more than the thing measured.
+          '-DAETHER_WITH_OSD=1']
 LDFLAGS = ['-static', '-s', '-Wl,--gc-sections', '-Wl,--build-id=none']
 
 
@@ -72,7 +77,8 @@ def zig_cc(args, out, cache):
         objs.append(str(o))
     subprocess.run(['zig', 'cc', *args, *CFLAGS, *LDFLAGS, '-Wextra', '-Werror',
                     '-I', str(HERE), '-I', str(HERE / 'ft8_lib'), '-o', str(out),
-                    str(HERE / 'agent.c'), str(HERE / 'grayline.c'), *objs, '-lm'],
+                    str(HERE / 'agent.c'), str(HERE / 'grayline.c'),
+                    str(HERE / 'osd' / 'osd174_91.c'), *objs, '-lm'],
                    check=True, env=env)
     for o in objs:
         os.unlink(o)

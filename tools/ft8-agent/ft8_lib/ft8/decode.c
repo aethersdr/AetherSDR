@@ -6,6 +6,14 @@
 #include <stdbool.h>
 #include <math.h>
 
+#ifdef AETHER_WITH_OSD
+#include "../../osd/osd174_91.h"
+// Set by the agent so the OSD depth can be measured and tuned without a
+// rebuild. Defined in agent.c; declared here rather than in a header
+// because it is the only thing this library needs from the agent.
+osd_depth_t aether_osd_depth(void);
+#endif
+
 // #define LOG_LEVEL LOG_DEBUG
 // #include "debug.h"
 
@@ -344,7 +352,38 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 
     if (status->ldpc_errors > 0)
     {
+#ifdef AETHER_WITH_OSD
+        // Belief propagation did not converge. Ordered-statistics decoding
+        // is the second pass WSJT-X makes here, and it recovers a share of
+        // these. It is GPL-3 code from WSJT-X living outside this
+        // MIT-licensed library on purpose -- see ../../osd/PROVENANCE.md.
+        //
+        // osd174_91_decode checks the CRC itself and returns the 91 message
+        // bits only when it passes, so a success here is as trustworthy as
+        // one from the path below.
+        // AETHER_FT8_OSD=0 means OSD does not run AT ALL, so that arm is
+        // byte-for-byte the pre-OSD decoder. Note that osd174_91_decode's
+        // depth 0 is NOT that: it still does the Gaussian elimination and
+        // the order-0 re-encode, which recovers frames on its own. Treating
+        // depth 0 as the control overstated the baseline by 3 messages
+        // before this guard was added.
+        const osd_depth_t depth = aether_osd_depth();
+        if (depth == OSD_DEPTH_OFF)
+        {
+            return false;
+        }
+        uint8_t osd_msg91[FTX_LDPC_K];
+        int osd_nhard = 0;
+        if (!osd174_91_decode(log174, FTX_LDPC_K, depth, osd_msg91, &osd_nhard))
+        {
+            return false;
+        }
+        for (int i = 0; i < FTX_LDPC_N; i++)
+            plain174[i] = (i < FTX_LDPC_K) ? osd_msg91[i] : 0;
+        status->ldpc_errors = 0;
+#else
         return false;
+#endif
     }
 
     // Extract payload + CRC (first FTX_LDPC_K bits) packed into a byte array
