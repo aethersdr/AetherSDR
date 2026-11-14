@@ -126,7 +126,7 @@ The Full Screen and Minimize keys can be rebound in Configure Shortcuts, and the
 
 ### The shortcut keys do nothing
 
-Operating shortcuts are off, which is the default. The status bar says **"Keyboard shortcuts are off"** the first time you press one.
+Operating shortcuts are off, which is the default. A notice above the status bar says **"Keyboard shortcuts are off"** the first time you press one. The status controls stay in place.
 
 1. Turn on **Settings → Keyboard Shortcuts**.
 2. Press the key again.
