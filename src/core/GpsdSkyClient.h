@@ -3,6 +3,7 @@
 #include <QHostAddress>
 #include <QJsonObject>
 #include <QList>
+#include <QMap>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -29,6 +30,28 @@ struct GpsSatellite {
     bool hasSkyPosition() const { return std::isfinite(elevationDeg) && std::isfinite(azimuthDeg); }
 };
 
+// The receiver detail gpsd reports beside the satellites, for AetherGPS's
+// readouts. Unset values are NaN, 0 or empty. Position is deliberately not
+// here: AetherGPS shows the radio's own.
+struct GpsdDetail {
+    int mode{0};                // TPV: 0 unknown, 1 no fix, 2 2D, 3 3D
+    double hdop{NAN};           // SKY dilutions of precision
+    double vdop{NAN};
+    double pdop{NAN};
+    double tdop{NAN};
+    double gdop{NAN};
+    double ephM{NAN};           // TPV: estimated horizontal error, m (95%)
+    double epvM{NAN};           // estimated vertical error, m (95%)
+    double eptS{NAN};           // estimated time error, s (95%)
+    bool hasPps{false};
+    qint64 ppsOffsetNs{0};      // PPS: the radio's clock minus GPS time at the pulse,
+                                // within the second (-0.5 s..+0.5 s)
+    QString device;             // DEVICES: the receiver's path, driver and speed
+    QString driver;
+    int bps{0};
+    QString ppsDevice;          // the PPS source, when gpsd has one
+};
+
 namespace gpsdsky {
 
 // The AetherGPS relay (tools/aether-gps) serves the radio's gpsd here, at
@@ -46,6 +69,11 @@ QString constellationName(Constellation c);
 // Bounded: at most 128 satellites, values outside their ranges dropped.
 std::optional<QList<GpsSatellite>> parseSky(const QByteArray& line);
 std::optional<QList<GpsSatellite>> parseSky(const QJsonObject& report);
+
+// Folds one gpsd report (SKY, TPV, PPS or DEVICES) into `detail`, range-
+// checking every value; other classes and out-of-range values change
+// nothing. True when it applied.
+bool applyDetail(const QJsonObject& report, GpsdDetail& detail);
 
 // The relay answers on the radio's local network, or through the tailnet
 // shim (a tailnet address, TailnetAddress.h). Over SmartLink the remembered
@@ -83,7 +111,11 @@ public:
     bool relayReached() const { return m_reached; }
 
 signals:
+    // The merged sky view, by PRN. gpsd can split one epoch's sky across
+    // reports (a FLEX-8600 alternates GPS+GLONASS with GPS+GLONASS+Galileo),
+    // so a satellite stays until it is missing from 4 reports in a row.
     void skyUpdated(const QList<AetherSDR::GpsSatellite>& satellites);
+    void detailUpdated(const AetherSDR::GpsdDetail& detail);
     // `detail` says why when Unavailable.
     void stateChanged(AetherSDR::GpsdSkyClient::State state, const QString& detail);
     // Connected, but no full SKY for 30 s: what was shown is no longer live.
@@ -109,6 +141,12 @@ private:
     QByteArray m_buffer;
     bool m_overflow{false};   // discarding up to the next newline
     QString m_release;
+    struct Tracked {
+        GpsSatellite satellite;
+        int missed{0};
+    };
+    QMap<int, Tracked> m_sky;   // by PRN
+    GpsdDetail m_detail;
     bool m_reached{false};
     State m_state{State::Stopped};
 };

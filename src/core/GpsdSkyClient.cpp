@@ -19,6 +19,29 @@ constexpr int kStaleMs = 30000;
 // constellation stays well inside this.
 constexpr qsizetype kMaxLine = 64 * 1024;
 constexpr qsizetype kMaxSatellites = 128;
+// SKY reports a satellite may be missing from before it leaves the view.
+constexpr int kMissedLimit = 4;
+
+double ranged(const QJsonObject& o, const char* key, double lo, double hi)
+{
+    const QJsonValue v = o.value(QLatin1String(key));
+    if (!v.isDouble()) {
+        return NAN;
+    }
+    const double d = v.toDouble();
+    return d >= lo && d <= hi ? d : NAN;
+}
+
+QString printable(const QJsonValue& v, int max)
+{
+    QString s = v.toString().left(max);
+    for (const QChar c : s) {
+        if (!c.isPrint()) {
+            return {};
+        }
+    }
+    return s;
+}
 }  // namespace
 
 namespace gpsdsky {
@@ -113,6 +136,87 @@ std::optional<QList<GpsSatellite>> parseSky(const QJsonObject& o)
     return out;
 }
 
+bool applyDetail(const QJsonObject& o, GpsdDetail& d)
+{
+    const QString cls = o.value(QStringLiteral("class")).toString();
+    if (cls == QLatin1String("SKY")) {
+        // A DOP that is absent from this report keeps its last value.
+        auto dop = [&](const char* key, double& field) {
+            const double v = ranged(o, key, 0.0, 100.0);
+            if (std::isfinite(v)) {
+                field = v;
+            }
+        };
+        dop("hdop", d.hdop);
+        dop("vdop", d.vdop);
+        dop("pdop", d.pdop);
+        dop("tdop", d.tdop);
+        dop("gdop", d.gdop);
+        return true;
+    }
+    if (cls == QLatin1String("TPV")) {
+        const int mode = o.value(QStringLiteral("mode")).toInt(-1);
+        if (mode < 0 || mode > 3) {
+            return false;
+        }
+        d.mode = mode;
+        // Errors gpsd leaves out (no fix) are unknown, not the last value.
+        d.ephM = ranged(o, "eph", 0.0, 1.0e6);
+        d.epvM = ranged(o, "epv", 0.0, 1.0e6);
+        d.eptS = ranged(o, "ept", 0.0, 1.0e3);
+        return true;
+    }
+    if (cls == QLatin1String("PPS")) {
+        const QJsonValue rs = o.value(QStringLiteral("real_sec")), rn = o.value(QStringLiteral("real_nsec"));
+        const QJsonValue cs = o.value(QStringLiteral("clock_sec")), cn = o.value(QStringLiteral("clock_nsec"));
+        if (!rs.isDouble() || !rn.isDouble() || !cs.isDouble() || !cn.isDouble()) {
+            return false;
+        }
+        const qint64 rns = rn.toInteger(-1), cns = cn.toInteger(-1);
+        if (rns < 0 || rns >= 1000000000 || cns < 0 || cns >= 1000000000) {
+            return false;
+        }
+        const qint64 secs = cs.toInteger() - rs.toInteger();
+        if (secs < -100 || secs > 100) {
+            return false;   // the clock is far off: an offset in ns means nothing
+        }
+        // A pulse marks the start of a second; which second comes from the
+        // receiver's NMEA, and gpsd can label it one off (a FLEX-8600 reports
+        // clock_sec one behind real_sec with clock_nsec ~100 us). So the offset
+        // is only meaningful within the second: fold it into -0.5 s..+0.5 s.
+        qint64 offset = (secs * 1000000000 + (cns - rns)) % 1000000000;
+        if (offset >= 500000000) {
+            offset -= 1000000000;
+        } else if (offset < -500000000) {
+            offset += 1000000000;
+        }
+        d.ppsOffsetNs = offset;
+        d.hasPps = true;
+        return true;
+    }
+    if (cls == QLatin1String("DEVICES")) {
+        d.device.clear();
+        d.driver.clear();
+        d.bps = 0;
+        d.ppsDevice.clear();
+        for (const QJsonValue& v : o.value(QStringLiteral("devices")).toArray()) {
+            const QJsonObject dev = v.toObject();
+            const QString driver = printable(dev.value(QStringLiteral("driver")), 32);
+            const QString path = printable(dev.value(QStringLiteral("path")), 64);
+            if (driver == QLatin1String("PPS")) {
+                d.ppsDevice = path;
+            } else if (d.device.isEmpty()) {
+                d.device = path;
+                d.driver = driver;
+                const int bps = dev.value(QStringLiteral("bps")).toInt(0);
+                d.bps = bps > 0 && bps <= 10000000 ? bps : 0;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 bool reachableRadio(bool overWan, const QHostAddress& address)
 {
     if (overWan || address.isNull()) {
@@ -171,6 +275,8 @@ void GpsdSkyClient::openSession()
     m_overflow = false;
     m_release.clear();
     m_reached = false;
+    m_sky.clear();
+    m_detail = {};
     auto* socket = new QTcpSocket(this);
     m_socket = socket;
     setState(State::Connecting);
@@ -181,7 +287,7 @@ void GpsdSkyClient::openSession()
         m_reached = true;
         m_stale->start();
         setState(State::Streaming);
-        socket->write("?WATCH={\"enable\":true,\"json\":true};\n");
+        socket->write("?WATCH={\"enable\":true,\"json\":true,\"pps\":true};\n");
     });
     connect(socket, &QTcpSocket::readyRead, this, [this, socket] {
         if (socket == m_socket) {
@@ -258,7 +364,23 @@ void GpsdSkyClient::handleLine(const QByteArray& line)
     const QJsonObject o = QJsonDocument::fromJson(line.trimmed()).object();
     if (const auto sky = gpsdsky::parseSky(o)) {
         m_stale->start();
-        emit skyUpdated(*sky);
+        for (auto it = m_sky.begin(); it != m_sky.end(); ++it) {
+            ++it->missed;
+        }
+        for (const GpsSatellite& s : *sky) {
+            m_sky.insert(s.prn, {s, 0});
+        }
+        m_sky.removeIf([](const auto& entry) { return entry.value().missed >= kMissedLimit; });
+        QList<GpsSatellite> merged;
+        for (const Tracked& t : std::as_const(m_sky)) {
+            if (merged.size() < kMaxSatellites) {
+                merged.append(t.satellite);
+            }
+        }
+        emit skyUpdated(merged);
+    }
+    if (gpsdsky::applyDetail(o, m_detail)) {
+        emit detailUpdated(m_detail);
         return;
     }
     const QString cls = o.value(QStringLiteral("class")).toString();

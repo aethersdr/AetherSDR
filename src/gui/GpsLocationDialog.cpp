@@ -3,6 +3,7 @@
 #include "CanonIndicators.h"
 #include "CanonScrollBarStyle.h"
 #include "CanonTableStyle.h"
+#include "AetherGpsTools.h"
 #include "GpsSkyPlot.h"
 #include "FramelessResizer.h"
 
@@ -338,6 +339,37 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     scroll->setWidgetResizable(true);
     outer->addWidget(scroll);
 
+    // ── AetherGPS on the radio: install or remove ─────────────────────────
+    // Like "Install radio health tools" in the Waveforms window, this
+    // checkbox is the waveform's only control; the Waveforms list hides it.
+    m_gpsToolsBar = new QFrame(bodyWidget());
+    m_gpsToolsBar->setObjectName(QStringLiteral("gpsToolsBar"));
+    m_gpsToolsBar->setProperty("gpsHeader", true);
+    auto* toolsLayout = new QHBoxLayout(m_gpsToolsBar);
+    toolsLayout->setContentsMargins(18, 10, 18, 10);
+    toolsLayout->setSpacing(16);
+    m_gpsToolsCheck = new QCheckBox(tr("Install AetherGPS on the radio"), m_gpsToolsBar);
+    m_gpsToolsCheck->setObjectName(QStringLiteral("gpsToolsCheck"));
+    m_gpsToolsCheck->setAccessibleName(tr("Install AetherGPS on the radio"));
+    m_gpsToolsLabel = new QLabel(m_gpsToolsBar);
+    m_gpsToolsLabel->setObjectName(QStringLiteral("gpsToolsStatus"));
+    m_gpsToolsLabel->setProperty("gpsRole", QStringLiteral("muted"));
+    m_gpsToolsLabel->setTextFormat(Qt::PlainText);
+    m_gpsToolsLabel->setWordWrap(true);
+    m_gpsToolsLabel->setAccessibleName(tr("AetherGPS on the radio"));
+    toolsLayout->addWidget(m_gpsToolsCheck);
+    toolsLayout->addWidget(m_gpsToolsLabel, 1);
+    outer->addWidget(m_gpsToolsBar);
+    connect(m_gpsToolsCheck, &QCheckBox::toggled, this, &GpsLocationDialog::onGpsToolsToggled);
+    m_gpsTools = new AetherGpsTools(radioModel, this);
+    connect(m_gpsTools, &AetherGpsTools::changed, this, &GpsLocationDialog::updateGpsTools);
+    connect(m_gpsTools, &AetherGpsTools::installProgress, this, [this](int percent) {
+        m_gpsToolsLabel->setText(tr("Installing AetherGPS on the radio… %1%").arg(percent));
+    });
+    connect(m_gpsTools, &AetherGpsTools::failed, this, [this](const QString& message) {
+        m_gpsToolsLabel->setText(message);
+    });
+
     auto* content = new QWidget(scroll);
     auto* root = new QGridLayout(content);
     root->setContentsMargins(4, 4, 4, 4);
@@ -544,6 +576,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
 
     // ── Sky view: each satellite, from the radio's gpsd via AetherGPS ──
     m_skyGroup = new QGroupBox(content);
+    m_skyGroup->setObjectName(QStringLiteral("gpsSkyGroup"));
     m_skyGroup->setAccessibleName(tr("Sky View"));
     auto* skyLayout = new QGridLayout(m_skyGroup);
     skyLayout->setContentsMargins(14, 12, 14, 12);
@@ -575,6 +608,42 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     skyLayout->addWidget(m_skyTable, 2, 1);
     skyLayout->setColumnStretch(0, 5);
     skyLayout->setColumnStretch(1, 6);
+
+    // The receiver detail gpsd reports beside the satellites.
+    auto* detailGrid = new QGridLayout;
+    detailGrid->setHorizontalSpacing(18);
+    detailGrid->setVerticalSpacing(7);
+    detailGrid->setColumnStretch(1, 1);
+    detailGrid->setColumnStretch(3, 1);
+    int detailIndex = 0;
+    auto addDetail = [&](QLabel*& label, const char* objectName, const QString& title,
+                         const QString& accessibleName) {
+        label = new QLabel(QStringLiteral("—"), m_skyGroup);
+        configureReadout(label, QString::fromLatin1(objectName), accessibleName);
+        auto* caption = new QLabel(title, m_skyGroup);
+        caption->setProperty("gpsRole", QStringLiteral("fieldTitle"));
+        const int row = detailIndex / 2, column = (detailIndex % 2) * 2;
+        detailGrid->addWidget(caption, row, column, Qt::AlignTop);
+        detailGrid->addWidget(label, row, column + 1, Qt::AlignTop);
+        ++detailIndex;
+    };
+    addDetail(m_fixModeLabel, "gpsdFixMode", tr("Fix mode"), tr("GPS fix mode reported by gpsd"));
+    addDetail(m_dopLabel, "gpsdDop", tr("HDOP / VDOP / PDOP"),
+              tr("Horizontal, vertical and position dilution of precision"));
+    addDetail(m_errorHorizontalLabel, "gpsdErrorHorizontal", tr("Est. horizontal error"),
+              tr("Estimated horizontal position error, 95 percent"));
+    addDetail(m_dopTimeLabel, "gpsdDopTime", tr("TDOP / GDOP"),
+              tr("Time and geometric dilution of precision"));
+    addDetail(m_errorVerticalLabel, "gpsdErrorVertical", tr("Est. vertical error"),
+              tr("Estimated vertical position error, 95 percent"));
+    addDetail(m_errorTimeLabel, "gpsdErrorTime", tr("Est. time error"),
+              tr("Estimated time error, 95 percent"));
+    addDetail(m_ppsOffsetLabel, "gpsdPpsOffset", tr("Radio clock vs PPS"),
+              tr("The radio clock's offset from GPS time at the pulse per second"));
+    addDetail(m_ppsSourceLabel, "gpsdPpsSource", tr("PPS source"), tr("Pulse-per-second source"));
+    addDetail(m_receiverLabel, "gpsdReceiver", tr("Receiver"), tr("GPS receiver device, driver and speed"));
+    addDetail(m_gpsdVersionLabel, "gpsdVersion", tr("gpsd"), tr("gpsd version on the radio"));
+    skyLayout->addLayout(detailGrid, 3, 0, 1, 2);
     root->addWidget(m_skyGroup, 3, 0, 1, 2);
 
     m_skyClient = new GpsdSkyClient(this);
@@ -583,6 +652,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     connect(m_skyClient, &GpsdSkyClient::skyStale, this, [this] {
         clearSky(tr("The radio's GPS hasn't reported satellites for 30 seconds."));
     });
+    connect(m_skyClient, &GpsdSkyClient::detailUpdated, this, &GpsLocationDialog::showDetail);
 
     auto* timeGroup = new QGroupBox(content);
     timeGroup->setAccessibleName(tr("Satellite Time"));
@@ -724,10 +794,10 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                 this, &GpsLocationDialog::updateNtpServerTip);
         connect(m_radioModel, &RadioModel::gpsTimeSettingsChanged,
                 this, &GpsLocationDialog::updateGpsTimeControls);
+        // AetherGpsTools also follows connection, capabilities and the
+        // radio's waveform list, and reports through changed().
         connect(m_radioModel, &RadioModel::capabilitiesChanged,
-                this, [this] { refreshGps(false); updateSkySource(); });
-        connect(m_radioModel, &RadioModel::connectionStateChanged,
-                this, &GpsLocationDialog::updateSkySource);
+                this, [this] { refreshGps(false); });
         connect(m_ntpEnabledCheck, &QCheckBox::clicked,
                 m_radioModel, &RadioModel::setGpsNtpEnabled);
         connect(m_gpsTimeCorrectionCheck, &QCheckBox::clicked,
@@ -761,7 +831,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
 void GpsLocationDialog::showEvent(QShowEvent* event)
 {
     CanonWindow::showEvent(event);
-    updateSkySource();
+    updateGpsTools();
 }
 
 void GpsLocationDialog::hideEvent(QHideEvent* event)
@@ -770,12 +840,103 @@ void GpsLocationDialog::hideEvent(QHideEvent* event)
     updateSkySource();
 }
 
+void GpsLocationDialog::updateGpsTools()
+{
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    m_gpsToolsInstalled = m_gpsTools->installed();
+    // A radio family without waveforms (an IC-705) has nothing to install.
+    m_gpsToolsBar->setVisible(!connected || m_gpsTools->radioTakesWaveforms());
+    const bool busy = m_gpsTools->busy();
+    const QString reason = m_gpsTools->blockerReason();
+    {
+        const QSignalBlocker block(m_gpsToolsCheck);
+        m_gpsToolsCheck->setChecked(m_gpsToolsInstalled);
+    }
+    m_gpsToolsCheck->setEnabled(reason.isEmpty() && !busy);
+
+    const QString about = tr("Installs a small tool on the radio that shows each satellite, the "
+                             "receiver's accuracy and PPS timing here, and shares the radio's GPS, "
+                             "including its position, with gpsd and NMEA programs on your network.");
+    if (busy) {
+        // An install reports its progress through installProgress.
+        if (m_gpsToolsInstalled) {
+            m_gpsToolsLabel->setText(tr("Removing AetherGPS from the radio…"));
+        } else if (!m_gpsToolsLabel->text().startsWith(tr("Installing AetherGPS"))) {
+            m_gpsToolsLabel->setText(tr("Installing AetherGPS on the radio…"));
+        }
+    } else if (!reason.isEmpty()) {
+        m_gpsToolsLabel->setText(reason);
+    } else if (!m_gpsToolsInstalled) {
+        m_gpsToolsLabel->setText(about);
+    } else {
+        m_gpsToolsLabel->setText(tr("Installed. Clear the box to remove it from the radio."));
+    }
+    // The reason a disabled checkbox gives, on the accessible channel too.
+    m_gpsToolsCheck->setAccessibleDescription(!reason.isEmpty() ? reason : about);
+    m_gpsToolsCheck->setToolTip(m_gpsToolsCheck->accessibleDescription());
+
+    updateSkySource();
+}
+
+void GpsLocationDialog::onGpsToolsToggled(bool install)
+{
+    if (install) {
+        m_gpsTools->install();
+    } else {
+        m_gpsTools->remove();
+    }
+}
+
+void GpsLocationDialog::showDetail(const GpsdDetail& d)
+{
+    const QLocale locale;
+    auto value = [&](double v, int decimals, const QString& unit = {}) {
+        if (!std::isfinite(v)) {
+            return QStringLiteral("—");
+        }
+        const QString n = locale.toString(v, 'f', decimals);
+        return unit.isEmpty() ? n : tr("%1 %2").arg(n, unit);
+    };
+    static const char* const kModes[] = {QT_TR_NOOP("Unknown"), QT_TR_NOOP("No fix"), QT_TR_NOOP("2D"),
+                                         QT_TR_NOOP("3D")};
+    m_fixModeLabel->setText(tr(kModes[qBound(0, d.mode, 3)]));
+    m_dopLabel->setText(tr("%1 / %2 / %3").arg(value(d.hdop, 1), value(d.vdop, 1), value(d.pdop, 1)));
+    m_dopTimeLabel->setText(tr("%1 / %2").arg(value(d.tdop, 1), value(d.gdop, 1)));
+    m_errorHorizontalLabel->setText(value(d.ephM, 0, tr("m")));
+    m_errorVerticalLabel->setText(value(d.epvM, 0, tr("m")));
+    m_errorTimeLabel->setText(std::isfinite(d.eptS) ? value(d.eptS * 1000.0, 1, tr("ms"))
+                                                    : QStringLiteral("—"));
+    if (d.hasPps) {
+        const double us = double(d.ppsOffsetNs) / 1000.0;
+        m_ppsOffsetLabel->setText(std::abs(us) >= 1000.0
+                                      ? tr("%1 ms").arg(locale.toString(us / 1000.0, 'f', 3))
+                                      : tr("%1 µs").arg(locale.toString(us, 'f', 1)));
+    } else {
+        m_ppsOffsetLabel->setText(QStringLiteral("—"));
+    }
+    m_ppsSourceLabel->setText(d.ppsDevice.isEmpty() ? QStringLiteral("—") : d.ppsDevice);
+    QStringList receiver;
+    if (!d.device.isEmpty()) {
+        receiver << d.device;
+    }
+    if (!d.driver.isEmpty()) {
+        receiver << d.driver;
+    }
+    if (d.bps > 0) {
+        receiver << tr("%1 baud").arg(d.bps);
+    }
+    m_receiverLabel->setText(receiver.isEmpty() ? QStringLiteral("—") : receiver.join(QStringLiteral(" · ")));
+    const QString release = m_skyClient->gpsdRelease();
+    m_gpsdVersionLabel->setText(release.isEmpty() ? QStringLiteral("—") : release);
+}
+
 void GpsLocationDialog::updateSkySource()
 {
     const bool takesWaveforms = m_radioModel && m_radioModel->isConnected()
         && m_radioModel->backendCapabilities().hasWaveforms;
-    m_skyGroup->setVisible(takesWaveforms);
-    const bool reachable = takesWaveforms
+    // The Sky View is what the waveform adds: it shows only while installed.
+    m_skyGroup->setVisible(takesWaveforms && m_gpsToolsInstalled);
+    const bool reachable = takesWaveforms && m_gpsToolsInstalled
         && gpsdsky::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
     if (!isVisible() || !reachable) {
         m_skyClient->stop();
@@ -805,10 +966,10 @@ void GpsLocationDialog::showSkyState(GpsdSkyClient::State state, const QString& 
         if (!text.isEmpty() && !text.endsWith(QLatin1Char('.'))) {
             text += QLatin1Char('.');
         }
-        // Only when nothing answered is the waveform likely missing.
+        // The radio lists AetherGPS (this view shows only then), so when
+        // nothing answered it is most likely still starting.
         if (!m_skyClient->relayReached()) {
-            text += tr(" To see each satellite, install the AetherGPS waveform on the radio "
-                       "(Waveforms → Install).");
+            text += tr(" AetherGPS may still be starting on the radio; trying again every 10 seconds.");
         }
         clearSky(text.trimmed());
         break;
@@ -821,6 +982,7 @@ void GpsLocationDialog::showSkyState(GpsdSkyClient::State state, const QString& 
 void GpsLocationDialog::clearSky(const QString& status)
 {
     showSky({});
+    showDetail({});
     m_skyStatusLabel->setText(status);
 }
 

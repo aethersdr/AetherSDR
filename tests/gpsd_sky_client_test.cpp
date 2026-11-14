@@ -15,8 +15,11 @@
 #include <QDir>
 #include <QFile>
 #include <QHostAddress>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -145,6 +148,77 @@ int main(int argc, char** argv)
         check(views == 1, "the next report still parses");
         client.ingest(QByteArray(70 * 1024, 'y'));
         check(client.pendingBytes() == 0, "an unterminated tail over the bound is not kept");
+    }
+
+    {
+        // A FLEX-8600's gpsd alternates a GPS+GLONASS SKY with a full one
+        // that adds Galileo (2026-11-14); the view must not flicker.
+        const QByteArray partial = R"({"class":"SKY","satellites":[{"PRN":5,"gnssid":0,"el":40,"az":10,"ss":30},)"
+                                   R"({"PRN":70,"gnssid":6,"el":20,"az":200,"ss":20}]})";
+        const QByteArray full = R"({"class":"SKY","satellites":[{"PRN":5,"gnssid":0,"el":40,"az":10,"ss":31},)"
+                                R"({"PRN":70,"gnssid":6,"el":20,"az":200,"ss":20},)"
+                                R"({"PRN":301,"gnssid":2,"el":60,"az":90,"ss":25}]})";
+        StreamProbe client;
+        QList<int> sizes;
+        QList<GpsSatellite> last;
+        QObject::connect(&client, &GpsdSkyClient::skyUpdated, [&](const QList<GpsSatellite>& v) {
+            sizes.append(int(v.size()));
+            last = v;
+        });
+        client.ingest(full + "\n" + partial + "\n" + full + "\n" + partial + "\n");
+        check(sizes == QList<int>({3, 3, 3, 3}), "alternating partial and full reports give a steady view");
+        check(last.size() == 3 && last.at(0).prn == 5 && last.at(0).snrDbHz == 30.0,
+              "merged by PRN, each satellite from its latest report");
+        // Galileo already missed the last partial above; two more make three.
+        client.ingest(partial + "\n" + partial + "\n");
+        check(sizes.last() == 3, "a satellite stays while missing from 3 reports in a row");
+        client.ingest(partial + "\n");
+        check(sizes.last() == 2, "and leaves once missing from 4");
+    }
+    {
+        GpsdDetail d;
+        check(gpsdsky::applyDetail(QJsonDocument::fromJson(
+                  R"({"class":"SKY","hdop":7.0,"vdop":7.0,"pdop":10.0,"tdop":8.24,"gdop":13.29})").object(), d)
+                  && d.hdop == 7.0 && d.pdop == 10.0 && d.gdop == 13.29,
+              "SKY dilutions of precision");
+        gpsdsky::applyDetail(QJsonDocument::fromJson(R"({"class":"SKY","hdop":6.0,"gdop":250})").object(), d);
+        check(d.hdop == 6.0 && d.gdop == 13.29 && d.pdop == 10.0,
+              "a DOP missing or out of range keeps its last value");
+        check(gpsdsky::applyDetail(QJsonDocument::fromJson(
+                  R"({"class":"TPV","mode":3,"eph":133.0,"epv":161.0,"ept":0.005,"lat":1,"lon":2})").object(), d)
+                  && d.mode == 3 && d.ephM == 133.0 && d.epvM == 161.0 && d.eptS == 0.005,
+              "TPV fix mode and estimated errors");
+        gpsdsky::applyDetail(QJsonDocument::fromJson(R"({"class":"TPV","mode":1})").object(), d);
+        check(d.mode == 1 && std::isnan(d.ephM) && std::isnan(d.eptS),
+              "errors gpsd leaves out are unknown, not stale");
+        check(!gpsdsky::applyDetail(QJsonDocument::fromJson(R"({"class":"TPV","mode":9})").object(), d)
+                  && d.mode == 1,
+              "an impossible mode is refused");
+        check(gpsdsky::applyDetail(QJsonDocument::fromJson(
+                  R"({"class":"PPS","real_sec":1000,"real_nsec":0,"clock_sec":1000,"clock_nsec":99855})").object(), d)
+                  && d.hasPps && d.ppsOffsetNs == 99855,
+              "PPS: the radio clock's offset from GPS time, in ns");
+        gpsdsky::applyDetail(QJsonDocument::fromJson(
+            R"({"class":"PPS","real_sec":1000,"real_nsec":0,"clock_sec":999,"clock_nsec":999999000})").object(), d);
+        check(d.ppsOffsetNs == -1000, "a clock just behind the pulse is negative");
+        gpsdsky::applyDetail(QJsonDocument::fromJson(
+            R"({"class":"PPS","real_sec":1000,"real_nsec":0,"clock_sec":999,"clock_nsec":99855})").object(), d);
+        check(d.ppsOffsetNs == 99855,
+              "a pulse gpsd labels one second off reads as its offset within the second (FLEX-8600)");
+        check(!gpsdsky::applyDetail(QJsonDocument::fromJson(
+                  R"({"class":"PPS","real_sec":1000,"real_nsec":0,"clock_sec":5000,"clock_nsec":0})").object(), d)
+                  && d.ppsOffsetNs == 99855
+                  && !gpsdsky::applyDetail(QJsonDocument::fromJson(
+                         R"({"class":"PPS","real_sec":1000,"real_nsec":2000000000,"clock_sec":1000,"clock_nsec":0})").object(), d),
+              "a clock far off, or nanoseconds out of range, are refused");
+        check(gpsdsky::applyDetail(QJsonDocument::fromJson(
+                  R"({"class":"DEVICES","devices":[{"path":"/dev/ttyGPS","driver":"NMEA0183","bps":38400},)"
+                  R"({"path":"/dev/pps0","driver":"PPS"}]})").object(), d)
+                  && d.device == QLatin1String("/dev/ttyGPS") && d.driver == QLatin1String("NMEA0183")
+                  && d.bps == 38400 && d.ppsDevice == QLatin1String("/dev/pps0"),
+              "DEVICES: the receiver and the PPS source");
+        check(!gpsdsky::applyDetail(QJsonDocument::fromJson(R"({"class":"VERSION"})").object(), d),
+              "other classes are not detail");
     }
 
     check(gpsdsky::reachableRadio(false, QHostAddress(QStringLiteral("192.168.50.100")))

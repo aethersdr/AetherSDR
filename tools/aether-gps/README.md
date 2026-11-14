@@ -49,7 +49,8 @@ gpsd on loopback and pin the relay to `127.0.0.1` with the shim
 registration off (`-s 0`).
 
 AetherSDR ships both packages as Qt resources, pinned by SHA-256 and size in
-`src/core/AetherGpsPackage.h`. **Waveforms → Install → AetherGPS** picks the one
-the radio takes. Once installed it is an ordinary row in the installed list.
+`src/core/AetherGpsPackage.h`. The **Install AetherGPS on the radio** checkbox at
+the foot of the AetherGPS window installs the one the radio takes, and removes it.
+Like the radio health tools, the Waveforms list hides it.
 To change the relay, rebuild, copy both files to `resources/waveforms/`, and
 update the pins and the version together.

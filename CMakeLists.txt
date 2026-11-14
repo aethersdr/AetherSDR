@@ -1376,6 +1376,7 @@ set(GUI_SOURCES
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
     src/gui/GpsSkyPlot.cpp
+    src/gui/AetherGpsTools.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/WfmDeviceDialog.cpp

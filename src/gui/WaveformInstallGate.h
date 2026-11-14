@@ -84,4 +84,31 @@ inline DockerWaveformInstallBlocker dockerWaveformInstallBlocker(
     return DockerWaveformInstallBlocker::None;
 }
 
+// Why AetherGPS's "Install AetherGPS on the radio" checkbox is unavailable,
+// or None. The relay ships as a legacy waveform for a radio without a
+// Waveform Processor (the FLEX-6000) and as a container for the rest, which
+// the Docker gate governs. Unlike the health tools it needs no LAN address
+// to install: AetherGPS reaches it on the LAN or through the tailnet shim.
+enum class AetherGpsBlocker {
+    None,
+    NotConnected,
+    NoWaveforms,   // this radio family installs no waveforms
+    Container,     // the container path, held by the Docker gate
+};
+
+inline AetherGpsBlocker aetherGpsBlocker(bool connected, bool hasWaveforms, bool nativePackage,
+                                         DockerWaveformInstallBlocker docker)
+{
+    if (!connected) {
+        return AetherGpsBlocker::NotConnected;
+    }
+    if (!hasWaveforms) {
+        return AetherGpsBlocker::NoWaveforms;
+    }
+    if (!nativePackage && docker != DockerWaveformInstallBlocker::None) {
+        return AetherGpsBlocker::Container;
+    }
+    return AetherGpsBlocker::None;
+}
+
 }  // namespace AetherSDR
