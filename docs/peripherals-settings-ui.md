@@ -3,7 +3,7 @@
 **Radio Setup → Peripherals** configures the accessories AetherSDR talks to
 directly: Tuner Genius XL (TGXL), Power Genius XL (PGXL), Antenna Genius (AG),
 ShackSwitch, ACOM and SPE Expert amplifiers, VK3AMP, the LP-100A meter, and
-the microHAM Trio antenna switch (it switches nothing; it can rename its ports).
+the microHAM Trio antenna switch (read-only: it changes nothing on the Trio).
 
 ## Layout
 
@@ -100,15 +100,10 @@ The **microHAM Trio** row connects to the Trio antenna-switch controller's own
 web interface (`ws://<address>/ui.ws`, port 80 by default) and shows what it
 reports: the radio with transmit focus, its antenna (both halves in split), the
 RX antenna, RX EXT and the PA loop, and the label of every radio and antenna
-port. AetherSDR switches nothing on the Trio: it selects no radio, antenna,
-split or RX EXT. The one thing it writes to the Trio is port names, and only
-when you ask (see **Write Names to the Trio** below; refused while the radio
-transmits). Besides that, the session sends only its handshake, keep-alives and
-a close. Positions are the controller's echo of its own selection, never relay
-sense. Every name the Trio reports is shown as plain text, never as markup.
-
-The protocol is reverse-observed from the device's own web page on one unit;
-microHAM documents none.
+port. It is read-only: AetherSDR selects no radio, antenna, split or RX EXT and
+writes no port name. After the handshake the session sends only keep-alives,
+WebSocket pongs and a close. Every name the Trio reports is shown as plain
+text, never as markup.
 
 - The Trio is not discovered: enter the address its own menu shows.
 - **Connect automatically** (off: connect only on **Connect**) and the global
@@ -124,21 +119,64 @@ microHAM documents none.
   marker **this AetherSDR** says which one the connected radio is cabled to
   (stored for that radio only; it changes nothing on the Trio).
 - **Antenna Ports** lists the six antenna ports with their names; **Dummy
-  load** marks one, stored with the name it carries. If that port is renamed
-  outside AetherSDR, the page warns and the port is not treated as the dummy
-  load until **Confirm Dummy Load**.
-- Names are editable. **Write Names to the Trio** writes the changed ones to the
-  Trio itself (`set_labels`); **Reset to Trio Defaults** puts every name back
-  (`reset_labels`). Both change the device: they are refused while the radio is
-  transmitting, and renaming the dummy-load port (a reset does) asks first.
-  The form of both commands is read from the Trio's own web page source; they
-  were not recorded on the wire.
+  load** marks one, stored with the name it carries. If the Trio later reports
+  another name for that port, or no such port, the page warns and the port is
+  not treated as the dummy load until **Confirm Dummy Load**.
+- Names are shown as the Trio reports them; a port is renamed on the Trio's
+  own web page (**Web UI**).
 - **Web UI** closes AetherSDR's session first, then opens the Trio's page in
   the browser. **Connect** takes the session back.
 - Stored as `Peripherals.trio.ManualIp`, `Peripherals.trio.ManualPort`,
   `Peripherals.trio.AutoConnect`, `Peripherals.trio.DummyLoadKey` and
   `Peripherals.trio.DummyLoadLabel`; the radio's port as the radio-scoped
   feature `TrioBinding`.
+
+### Transport and protocol limits
+
+**The protocol is reverse-observed, not published.** microHAM documents no
+network protocol for the Trio. What AetherSDR speaks was read from the Trio's
+own web page (`/ui.shtml`) and recorded on the wire against one unit; its
+firmware version is not readable over the network, so no firmware version is
+known to be covered.
+
+**Transport.** One `QTcpSocket` at a time (`core/MicrohamTrioTcpTransport`)
+carrying a minimal HTTP and RFC 6455 client (`core/MicrohamTrioWebSocket`):
+`GET /ui.shtml`, whose response sets a `WID` cookie, then a second connection
+upgrading `/ui.ws` with that cookie. QtWebSockets is not used: it is an
+optional dependency of this build, and the Trio row must work without it. The
+session (`core/MicrohamTrioSession`) takes bytes and time through injected
+interfaces, so its tests drive it against a scripted peer; those tests show
+what the code does with the recorded bytes, not how other firmware behaves.
+
+**Observed on one unit:**
+
+- The `WID` cookie is required: an upgrade without it is answered `400`. It is
+  a session handle, not a credential.
+- The complete state document arrives unasked right after the upgrade.
+- A held session is pushed a complete state document when the front panel or
+  band data changes a selection, the radio focus included (seen on a session
+  held for an hour).
+- The text `ping` is answered with the text `pong`; the Trio also sends an
+  empty WebSocket pong about once a second.
+- One session only: a second connection closes the first at once.
+- Selections are the controller's echo of its last selection, not relay
+  position sense: the schema has no field for a relay that disagrees, and the
+  reply to a selection comes back faster than a relay can move. The page shows
+  them as the Trio's selections; a failed relay or cable reads the same.
+
+**Assumed, not shown:** that other units and firmware use the same schema; that
+a session longer than an hour stays up; how fast a change is pushed.
+
+**What the code does with an unexpected answer:**
+
+| Answer | Result |
+|---|---|
+| No WebSocket acceptance of our key, a redirect, or another status than `101` | Attempt failed; retried after a doubling backoff (5 s up to 10 min) while **Reconnect automatically** is on, else the session is closed |
+| An HTML error page as the first frame, or no state within 6 s of the upgrade | Retried after 1.5 s, up to three attempts, then as a failed attempt |
+| A state document with any missing, extra or mistyped group, key or field (an RX extension module included) | No partial reading: the attempt fails as unreadable and is retried as above |
+| A frame the decoder refuses (fragmented, masked, reserved bits, over 16 KiB) | The connection is dropped as a protocol error and retried as above |
+| Silence, or a `ping` unanswered, for more than 5 s | The session is treated as dead and reconnected |
+| The held session closed by the Trio | Taken as another client holding it: not retaken; **Connect** takes it back |
 
 ## Settings
 
