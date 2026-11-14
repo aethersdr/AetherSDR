@@ -72,4 +72,14 @@ constexpr bool graphicEqReloadRequired(bool connected, bool hostModulates,
     return connected && hostModulates && modelFromRadio;
 }
 
+// May the shared ClientEq enables be mirrored back onto the graphic EQ, so its
+// ON buttons follow an EQ toggled in the strip, the chain tiles or the CEQ
+// applet? Only on a backend that modulates on this host, and only while the
+// graphic EQ owns those bands: a strip the graphic EQ never wrote must not light
+// the applet's ON button.
+constexpr bool graphicEqMirrorAllowed(bool hostModulates, bool chainOwned) noexcept
+{
+    return hostModulates && chainOwned;
+}
+
 }  // namespace AetherSDR

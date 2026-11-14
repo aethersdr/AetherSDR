@@ -1,5 +1,9 @@
+#include "FlexSliceStatusTestSupport.h"
+#include "FlexRadioStatusTestSupport.h"
 // Socket-free production-path tests. Only an injected transport recorder is
 // used; no radio, peer, listener, discovery or transmitter is opened.
+#include "core/backends/flex/FlexCwxStatus.h"
+#include "core/backends/flex/FlexStatusIngress.h"
 #include "TestSettingsProfile.h"
 #include "TestEventLoop.h"
 #include "TxTestAuthority.h"
@@ -53,7 +57,7 @@ class TxOperationIntegrationTestAccess {
 public:
     static void clientStatus(RadioModel& radio, quint32 handle, bool localPtt, bool full)
     {
-        radio.onStatusReceived(QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
+        observeRadioStatus(radio, QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
             .arg(full ? QStringLiteral(" connected") : QString()), {{"local_ptt", localPtt ? "1" : "0"}});
     }
     static void connectInert(RadioConnection& connection)
@@ -2016,7 +2020,7 @@ void queuedCwxConfiguration()
         check(tcp == QStringList({"cwx wpm 31"}),
               "first operator speed reaches the terminal before the replacement edit");
         f.radio.cwxModel().setSpeed(35);
-        f.radio.cwxModel().applyStatus({{"wpm", "31"}});
+        f.radio.cwxModel().applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(f.radio.cwxModel().speed() == 35,
               "older operator WPM echo cannot overwrite the newer pending selection");
         f.radio.cwxModel().send("NEW");
@@ -2024,8 +2028,8 @@ void queuedCwxConfiguration()
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         check(tcp == QStringList({"cwx wpm 31", "cwx wpm 35", "cwx send \"NEW\" 1"}),
               "delayed first-speed status cannot drop the replacement WPM before text");
-        f.radio.cwxModel().applyStatus({{"wpm", "35"}});
-        f.radio.cwxModel().applyStatus({{"wpm", "33"}});
+        f.radio.cwxModel().applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        f.radio.cwxModel().applyStatusDelta(flexCwxStatus({{"wpm", "33"}}));
         check(f.radio.cwxModel().speed() == 33,
               "uncorrelated radio WPM remains authoritative after operator echoes settle");
     }
@@ -3027,7 +3031,7 @@ struct DaxTciFixture {
         };
         TxOperationIntegrationTestAccess::injectTcp(f.radio, identity, wire);
         TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
-        f.radio.handleSliceStatusForTest(0, {
+        applyFlexSliceStatus(f.radio, 0, {
             {QStringLiteral("in_use"), QStringLiteral("1")},
             {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
         SliceDelta sliceState;
@@ -3155,7 +3159,7 @@ void tciDaxCreationKeepsOriginalRequest()
         } else if (interruption == 5) {
             TxOperationIntegrationTestAccess::disconnect(f.f.radio);
         } else {
-            f.f.radio.handleSliceStatusForTest(0, {}, true);
+            applyFlexSliceStatus(f.f.radio, 0, {}, true);
         }
         if (interruption != 2 && interruption != 3 && create) {
             create(0, QStringLiteral("0x4a000001"));
@@ -3579,8 +3583,8 @@ void tciPermissionRequiresConfirmedOwnership()
         }
     });
     const QMap<QString, QString> early{{QStringLiteral("in_use"), QStringLiteral("1")}};
-    f.radio.handleSliceStatusForTest(0, early);
-    f.radio.handleSliceStatusForTest(1, early);
+    applyFlexSliceStatus(f.radio, 0, early);
+    applyFlexSliceStatus(f.radio, 1, early);
     SliceDelta tx;
     tx.txSlice = true;
     tx.mode = QStringLiteral("USB");
@@ -3597,13 +3601,13 @@ void tciPermissionRequiresConfirmedOwnership()
     check(!TxOperationIntegrationTestAccess::tciPromotion(server, 0),
           "an unknown owner cannot bypass permission by requesting TX directly");
     for (const QString& owner : {QStringLiteral("0x0"), QStringLiteral("invalid")}) {
-        f.radio.handleSliceStatusForTest(0, {{QStringLiteral("client_handle"), owner}});
+        applyFlexSliceStatus(f.radio, 0, {{QStringLiteral("client_handle"), owner}});
         check(!TciProtocol::transmitPermitted(&f.radio, f.radio.slice(0)),
               "zero or malformed ownership does not grant TX permission");
     }
     TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(sent.contains(QStringLiteral("tx_enable:0,true;"))
               && !sent.contains(QStringLiteral("tx_enable:1,true;"))
@@ -3620,18 +3624,18 @@ void tciPermissionRequiresConfirmedOwnership()
     TxOperationIntegrationTestAccess::tciRequest(server, client, false, 1);
     TxOperationIntegrationTestAccess::tciSplit(server, false);
     sent.clear();
-    f.radio.handleSliceStatusForTest(1, {
+    applyFlexSliceStatus(f.radio, 1, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     check(!f.radio.slice(1) && f.radio.isSlotForeign(1)
               && sent.contains(QStringLiteral("tx_enable:1,false;"))
               && !TxOperationIntegrationTestAccess::tciPromotion(server, 1),
           "foreign owner settlement removes RX and explicitly denies TX");
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     check(!f.radio.slice(0) && sent.contains(QStringLiteral("tx_enable:0,false;")),
           "a receiver transferred away loses permission before the close debounce");
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("in_use"), QStringLiteral("1")},
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(TciProtocol::transmitPermitted(&f.radio, f.radio.slice(0)),
@@ -3648,7 +3652,7 @@ void tciPermissionRequiresConfirmedOwnership()
               && !TxOperationIntegrationTestAccess::tciPromotion(server, 0),
           "reconnect reclamation cannot reuse the old session's ownership proof");
     sent.clear();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
     check(sent.contains(QStringLiteral("tx_enable:0,true;")),
           "fresh owner confirmation republishes permission after reconnect");
@@ -3682,15 +3686,15 @@ void tciPromotionRechecksPermissionAfterReply()
               "owned receiver promotion waits for the injected command reply");
         return f.backend->selectionReplies.back();
     };
-    f.radio.handleSliceStatusForTest(0, ours);
+    applyFlexSliceStatus(f.radio, 0, ours);
     RadioControlCompletion reply = begin();
-    f.radio.handleSliceStatusForTest(0, {
+    applyFlexSliceStatus(f.radio, 0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
     reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && !permitted,
           "a successful promotion reply cannot key a receiver whose ownership changed");
 
-    f.radio.handleSliceStatusForTest(0, ours);
+    applyFlexSliceStatus(f.radio, 0, ours);
     reply = begin();
     SliceDelta mode;
     mode.mode = QStringLiteral("WFM");

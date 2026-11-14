@@ -6,7 +6,7 @@ slice of RFC #3849. It supplements
 the envelope, limits, errors, authentication, and TX rules in that document
 remain normative.
 
-The seven resource types below are observational. No method in this catalogue
+The eight resource types below are observational. No method in this catalogue
 mutates a model or can reach a backend intent. Typed receive intents are
 specified separately in [local receive control](aetherd-local-receive-control.md).
 
@@ -22,6 +22,7 @@ An exact identity has one of these shapes:
 {"type":"panadapter","radioSession":"radio-1","id":"0x40000000"}
 {"type":"meter","radioSession":"radio-1","id":"0"}
 {"type":"transmitState","radioSession":"radio-1"}
+{"type":"frontEndOverload","radioSession":"radio-1"}
 ```
 
 `resource.get` requires an exact identity. `resource.subscribe` also accepts
@@ -30,8 +31,8 @@ an omitted `id` as an all-current-and-future selector for `radioSession`,
 `radioSession`. Unknown fields and unsupported resource types are rejected.
 `server` and `radioCatalogue` are singletons: neither accepts `id` or
 `radioSession`, including empty or null values.
-`transmitState` is one singleton per radio session: `radioSession` is required
-and `id` is forbidden.
+`transmitState` and `frontEndOverload` are one singleton per radio session:
+`radioSession` is required and `id` is forbidden.
 
 ## Methods
 
@@ -234,11 +235,30 @@ commands. Create a new instance to restart discovery.
   - `canTransmit`, `maximumTransmitWatts`, `hasTuner`, `hasAmplifier`;
   - `extensions`, containing namespace names only, never extension payloads.
   - Optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,
-    `receivePanCenterControl`, `receivePanBandwidthControl`: null when
-    unqualified. Records carry `authority` (`radio`, `engine`, `unknown`). Mode
-    carries `modes`; filter carries per-mode minimum/maximum low cut, high cut
-    and width; audio carries gain bounds 0–100; pan records carry inclusive
-    `minimumHz`/`maximumHz`. See the receive-control contract for eligibility.
+    `receivePanCenterControl`, `receivePanBandwidthControl`,
+    `receiveCwPitchControl`: null when unqualified. Records carry `authority`
+    (`radio`, `engine`, `unknown`). `receiveCwPitchControl` also carries
+    inclusive `minimumHz`/`maximumHz` and `stepHz` for the session-wide
+    receive BFO pitch. Mode carries `modes`; filter carries per-mode
+    minimum/maximum low cut, high cut and width; audio carries gain bounds
+    0–100; pan records carry inclusive `minimumHz`/`maximumHz`. See the
+    receive-control contract for eligibility.
+  - Optional `receiveDspControl`: `authority`, `maximumRitOffsetHz` and
+    `features`, an object naming each steerable host DSP feature
+    (`agcThreshold`, `noiseBlanker`, `noiseReduction`, `rit`) with the modes
+    it applies in; a feature that applies in no mode is omitted.
+  - Optional `radioSpeakerControl`: `authority` only, for
+    `radioSession.setRadioSpeaker` (the radio's own speaker; ANAN declares it).
+  - Optional `receivePanRfGainControl`: `authority`, inclusive
+    `minimumDb`/`maximumDb`, and `stepDb`. A backend whose stage is an
+    attenuator declares it negated (ANAN: −31 to 0).
+- `receiveObservation.radioSpeaker`: `{known, enabled}`, whether the backend is
+  feeding the radio's own speaker, as it last reported in this session; unknown
+  while disconnected.
+- `receiveObservation.cwPitch`: `{known, hz}`, the pitch the backend last
+  reported in this session, with `known:false` and `hz:null` while unknown or
+  disconnected. It is session-wide, shared by every CW receiver, so it lives
+  here rather than on each slice.
 
 `canTransmit` is observation only. It does not advertise a protocol TX method
 or grant and cannot key a radio.
@@ -271,6 +291,10 @@ control methods are specified in
   required for a known ordered passband. These are backend publications,
   separate from the legacy optimistic mode/filter/audio values above. A changed
   mode invalidates previous cuts; partial fields do not invent missing partners.
+- `receiveObservation.agcThreshold` (integer 0–100), `.noiseBlanker` and
+  `.noiseReduction` (booleans): `{known, value, authority}`, backend
+  publications. `receiveObservation.rit` carries `known`, nullable `enabled`
+  and `offsetHz`, and `authority`; known needs both halves.
 - `receive.antenna`, `receive.rfGain`.
 - `receive.agc.mode`, `receive.agc.threshold`, `receive.agc.offLevel`.
 - `receive.squelch.enabled`, `receive.squelch.level`.
@@ -289,6 +313,9 @@ for control admission, observation and concurrent-intent semantics.
   `bandwidthKnown`, `centerAuthority` / `bandwidthAuthority`. Only normalized
   backend geometry updates these fields. Reconnect or an ownership change
   invalidates them, including when legacy visible geometry is retained.
+- `rfGainObservation`: `{known, value, authority}`, the RF gain in dB the
+  backend last reported applying. The `receive.rfGain` value below can be the
+  desktop slider's own; this field is not. An ownership change invalidates it.
 - `centerHz`, `centerKnown`, `bandwidthHz`.
 - `dbmRange.minimum`, `dbmRange.maximum`.
 - `bandwidthLimitsHz.minimum`, `bandwidthLimitsHz.maximum`; zero means the
@@ -351,14 +378,43 @@ coalescing, resync and hard transport caps still apply.
 This resource is readable with `observe`, including on an observe-only daemon.
 It introduces no TX verb, grant, lease, policy decision or safety guarantee.
 
+### `frontEndOverload`
+
+Present only while the radio session is connected to a backend that declares
+`RadioCapabilities::frontEndOverloadObservation`; otherwise absent, and
+`capabilities.get` lists `frontEndOverload.read` only while it is present.
+A backend without the record is never offered it, even if it reports a reading.
+
+- `level`: `unobserved` (no converter reading in this connection yet, or a
+  window with too few samples to classify; not the same as clean), `clean`,
+  `marginal` (the converter railed in some observations), `hot` (in more of
+  them than not), or `atFloor` (still clipping with the automatic gain loop as
+  deep as it may go).
+- `autoGain`: `armed` (whether the automatic RF-gain loop runs) and `offsetDb`
+  (how far below the operator's own setting the loop holds the gain, in whole
+  dB; meaningful only while `armed`).
+
+The level is the backend's own classification of its converter; the resource
+changes only when the backend's reading does. The backend's free-text reason is
+not projected. Disconnect and backend replacement remove the resource, and a
+reconnect starts at `unobserved`. A stream interruption within a session also
+reads `unobserved` until the next window after the stream resumes. Changes never
+touch the `radioSession`, slice or pan revisions.
+
 FFT bins, waterfall rows, audio, and other high-rate streams never enter these
 JSON resources; they belong to the later bounded binary data plane.
 
 ## HL2 backend observations
 
 What an HL2 session shows through the resources above, from
-`Hl2Backend::defineMeters` and `Hl2Backend::capabilities`. Nothing here adds a
-method or a resource.
+`Hl2Backend::defineMeters` and `Hl2Backend::capabilities`.
+
+### ADC overload
+
+The HL2 declares `frontEndOverloadObservation`, so a connected HL2 session has
+a `frontEndOverload` resource. Its level comes from the pre-DDC clip flag the
+gateware reports in response address 0, bit 24, classified per telemetry window
+by the same law the automatic RF-gain loop uses (`Hl2AutoGainPolicy.h`).
 
 ### Meters
 
@@ -387,8 +443,6 @@ comes from an uncalibrated reference curve, not a calibrated power reading.
 
 - Supply voltage and PA current telemetry: not offered. The HL2 sets
   `hasSupplyVoltageTelemetry` and `hasPaCurrentTelemetry` to false.
-- ADC overload: the backend emits `frontEndOverloadChanged`, but no daemon
-  resource carries it.
 - `radioSession` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
   meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
   projected into any resource.

@@ -296,35 +296,52 @@ int main(int argc, char** argv)
     check(unconfigured(Hl2Backend::gatherDspChains({}, &dsp)),
           "session deactivation hides all previous-session values");
 
-    // Actual backend lifecycle, without ever starting a transport. Read-back
-    // crosses the same I/O queue as invalidation, so it also checks ordering.
+    // Actual backend lifecycle, without ever starting a transport. dspChains()
+    // answers from a cache the I/O thread publishes into: a configure is seen
+    // once settled, and every withdrawal is seen AT ONCE, with no settle, then
+    // again after the I/O queue has drained behind it.
     {
         using Access = AetherSDR::hl2::Hl2DspReadbackTestAccess;
         Hl2Backend backend;
+        const auto settled = [&backend] {
+            backend.settleDspChainsForTest();
+            return backend.dspChains();
+        };
         check(unconfigured(backend.dspChains()), "fresh backend reports TX not-configured");
-        check(Access::configure(backend) && !unconfigured(backend.dspChains()),
+        check(unconfigured(settled()), "and a fresh gather agrees");
+        check(Access::configure(backend) && !unconfigured(settled()),
               "backend reads its configured I/O-owned modulator");
         backend.disconnectRadio();
         check(unconfigured(backend.dspChains()), "disconnect withdraws the session config");
+        check(unconfigured(settled()), "and the I/O thread's next publish agrees");
         check(Access::configure(backend, Qt::QueuedConnection), "queue a new configuration");
         backend.disconnectRadio();
         check(unconfigured(backend.dspChains()),
+              "cancellation withdraws a configuration already queued");
+        check(unconfigured(settled()),
               "cancellation invalidation runs after a configuration already queued");
         check(Access::configure(backend), "restore before receiver teardown");
+        check(!unconfigured(settled()), "restored");
         Access::tearDown(backend);
         check(unconfigured(backend.dspChains()), "receiver teardown withdraws TX read-back");
+        check(unconfigured(settled()), "and stays withdrawn once the I/O queue drains");
         check(Access::configure(backend), "restore before injected link loss");
+        check(!unconfigured(settled()), "restored before link loss");
         Access::linkDown(backend);
         check(!unconfigured(backend.dspChains()),
               "link loss preserves the applied configuration of retained DSP");
+        check(!unconfigured(settled()), "and the I/O thread still reports it");
         check(Access::configure(backend), "restore before injected connection failure");
+        check(!unconfigured(settled()), "restored before connection failure");
         Access::connectFailed(backend);
         check(unconfigured(backend.dspChains()), "connection failure withdraws TX read-back");
+        check(unconfigured(settled()), "and stays withdrawn once the I/O queue drains");
         check(Access::configure(backend), "restore before transient link loss");
+        check(!unconfigured(settled()), "restored before transient link loss");
         Access::linkDown(backend);
-        check(!unconfigured(backend.dspChains()), "transient silence retains config");
+        check(!unconfigured(settled()), "transient silence retains config");
         Access::linkUp(backend);
-        check(!unconfigured(backend.dspChains()), "link resume preserves the same valid config");
+        check(!unconfigured(settled()), "link resume preserves the same valid config");
     }
 
     // A restored MIC level is a one-shot connect seed. MetisClient re-emits
