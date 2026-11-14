@@ -488,6 +488,32 @@ void MainWindow::registerControlActions()
                        [memoryStep](float) { memoryStep(-1); })
         .inMidiCategory("Global").when(hasMemories));
 
+    // ── Global profiles: load by position in the radio's own list ──────
+    // The radio stores them; Profile Manager and the Profiles menu load them
+    // through the same typed request. Offered only when the radio reports
+    // at least that many.
+    struct GlobalProfile { const char* key; const char* midiId; const char* name; int n; };
+    static constexpr GlobalProfile kGlobalProfiles[] = {
+        {"global_profile_1", "global.globalProfile1", "Load Global Profile 1", 1},
+        {"global_profile_2", "global.globalProfile2", "Load Global Profile 2", 2},
+        {"global_profile_3", "global.globalProfile3", "Load Global Profile 3", 3},
+        {"global_profile_4", "global.globalProfile4", "Load Global Profile 4", 4},
+        {"global_profile_5", "global.globalProfile5", "Load Global Profile 5", 5},
+    };
+    for (const auto& gp : kGlobalProfiles) {
+        const int n = gp.n;
+        reg.add(A::trigger(gp.key, gp.midiId, gp.name, "Display",
+                           [this, n](float) {
+                               const QStringList profiles = m_radioModel.globalProfiles();
+                               if (n <= profiles.size())
+                                   m_radioModel.loadGlobalProfile(profiles.at(n - 1));
+                           })
+                    .inMidiCategory("Global")
+                    .when([this, n] {
+                        return m_radioModel.isConnected() && m_radioModel.globalProfiles().size() >= n;
+                    }));
+    }
+
     // ── Antennas: pick by position in the radio's own list, or step ────
     // Position N is the Nth choice the RX/TX antenna menu offers, so the
     // binding means the same thing on any radio that lists antennas.

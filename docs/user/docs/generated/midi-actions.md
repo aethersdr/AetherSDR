@@ -211,6 +211,11 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | Recall Memory 10 | `global.memoryRecall10` | Trigger |   |   |
 | Next Memory | `global.memoryNext` | Trigger |   |   |
 | Previous Memory | `global.memoryPrev` | Trigger |   |   |
+| Load Global Profile 1 | `global.globalProfile1` | Trigger |   |   |
+| Load Global Profile 2 | `global.globalProfile2` | Trigger |   |   |
+| Load Global Profile 3 | `global.globalProfile3` | Trigger |   |   |
+| Load Global Profile 4 | `global.globalProfile4` | Trigger |   |   |
+| Load Global Profile 5 | `global.globalProfile5` | Trigger |   |   |
 | Band Stack Up | `global.bandStackUp` | Trigger |   |   |
 | Band Stack Down | `global.bandStackDown` | Trigger |   |   |
 | Open SpotHub | `global.openSpotHub` | Trigger |   |   |
