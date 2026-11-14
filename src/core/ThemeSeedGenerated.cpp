@@ -32,6 +32,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accessory.dial.face", QString("#0070c0"));
     m_tokens.insert("color.accessory.dial.needle", QString("#e6f0fa"));
     m_tokens.insert("color.accessory.dial.rim", QString("#3a4a5a"));
+    m_tokens.insert("color.accessory.indicator.bypass.foreground", QString("#e0a000"));
+    m_tokens.insert("color.accessory.indicator.operate.foreground", QString("#00e060"));
     m_tokens.insert("color.accessory.key.bypass.background", QString("#8a6000"));
     m_tokens.insert("color.accessory.key.bypass.foreground", QString("#ffd9a0"));
     m_tokens.insert("color.accessory.key.meffa.active.background", QString("#006030"));
@@ -39,8 +41,6 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accessory.key.meffa.active.foreground", QString("#e6f0fa"));
     m_tokens.insert("color.accessory.key.meffa.active.hover", QString("#007040"));
     m_tokens.insert("color.accessory.key.meffa.standby.foreground", QString("#008040"));
-    m_tokens.insert("color.accessory.indicator.operate.foreground", QString("#00e060"));
-    m_tokens.insert("color.accessory.indicator.bypass.foreground",  QString("#e0a000"));
     m_tokens.insert("color.accessory.key.standby.background", QString("#5a3a0a"));
     m_tokens.insert("color.accessory.key.standby.foreground", QString("#ffb84d"));
     m_tokens.insert("color.background.0", QString("#0f0f1a"));
