@@ -52,6 +52,7 @@ A line the splitter rejects keeps its place in its output. A server can then ans
 | `REGISTERED call` | one line per callsign after `MYCALL`'s `OK` | D2G (`host.cpp`), MER ("REGISTERED") |
 | `VERSION text` | free text | D2G, MER |
 | `CQFRAME src bw` | — | D2G, MER |
+| `MONITOR mode kind detail... SNR=x` | mode, kind, `FROM=`, `BW=`, `SNR=` when present; display-only | MER ("MONITOR", asynchronous response) |
 
 Accepted notification bandwidths are 500 and 2300 (D2G `arq/modes.cpp` `bw_name` and MER "BW"), 1200 (D2G only), and 2750 (MER only). D2G accepts the `BW2750` command and maps it to the 2300 cap (`host.cpp` `bw_cap`).
 
@@ -65,7 +66,8 @@ Accepted notification bandwidths are 500 and 2300 (D2G `arq/modes.cpp` `bw_name`
 | `LISTEN ON` / `LISTEN OFF` | D2G, MER |
 | `DISCONNECT` | D2G, MER |
 | `ABORT` | D2G, MER |
-| `VERSION`, `BUFFER`, `SN` | D2G, MER |
+| `VERSION` | D2G, MER |
+| `MONITOR ON` / `MONITOR OFF` (Mercury only) | MER ("MONITOR": "read-only … the transmitter is never keyed on account of what is heard") |
 
 Two behaviours the gateway's design relies on, both from MER:
 
