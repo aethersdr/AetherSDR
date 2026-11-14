@@ -72,9 +72,12 @@ never put on the include path of the rest of the tree.
 1. Pick an upstream release tag and record its commit above.
 2. Replace `core/` with upstream `native/core/` less the four backend
    directories, and `third_party/pocketfft/` with upstream's. Copy `LICENSE`
-   and `LICENSE_ion`.
+   and `LICENSE_ion`, and `LICENSE_exception` once the pinned version has it
+   (upstream added it after 0.4.3; RFC #7159 requires it before Stage 3).
 3. Update `DATA2G_VERSION` in the root `CMakeLists.txt`, the version check in
    `tests/data2g_monitor_test.cpp`, and the `THIRD_PARTY_LICENSES` entry.
 4. Compare upstream's `native/CMakeLists.txt` for changed flags or new
    per-file options, and carry them over.
-5. Build and run `data2g_monitor_test`.
+5. Build and run `data2g_monitor_test` and `data2g_replay_test`. The second
+   replays a session recorded from upstream 0.4.3: if it fails after a
+   re-pin, read `tests/fixtures/data2g/README.md` before changing it.
