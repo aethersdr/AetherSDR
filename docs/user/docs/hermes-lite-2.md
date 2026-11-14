@@ -102,6 +102,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 - After you unkey, receive stays muted through the transmit/receive turnaround, so you don't hear the PA's own carrier.
 - **S-meter** reads WDSP's average level. It holds steady across key-down and unkey.
 - **AM and SAM** audio is DC-blocked and clean.
+- **FM** audio passes through WDSP's FM limiter, so it stays below full scale, open-squelch noise included. Valid modulation also plays about 8 dB quieter than before the limiter: a 1 kHz tone at the full 5 kHz deviation comes out at 0.43 of full scale instead of 1.08. If FM is too quiet, raise the slice's AF gain or your listening level.
 - **CW:** the passband is centered on the signal marker (a real BFO at your CW pitch).
 
 > **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up.
@@ -210,7 +211,6 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - Paddle CW timing can vary with load: each dit and dah edge from AetherSDR's keyer waits in the app's main event queue before it reaches the radio, so a busy computer can stretch or shorten elements ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
 - One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
 - One user reports that a transmission keyed over TCI on v26.11.2 drops out every few seconds. It is not reproduced: in 31 TCI overs into a dummy load on another HL2, on v26.11.2 and on later code, transmit and audio held for the whole over ([#7188](https://github.com/aethersdr/AetherSDR/issues/7188)).
-- aetherd does not catch termination signals (SIGTERM, Ctrl+C, or closing its terminal), so stopping it that way can leave the HL2 streaming to a host that is gone; the radio then stops answering discovery until it is power-cycled. Found by reading the code, not reproduced ([#7163](https://github.com/aethersdr/AetherSDR/issues/7163)).
 
 ### What has not been tested
 
