@@ -29,6 +29,12 @@ public:
 
     void reset();
 
+    // Forget every block's text but keep the block boundaries, which the
+    // segmenter still reports while no recogniser runs. For a preview turned
+    // off: a later session starts from empty blocks, and its first text is
+    // returned even when it matches what was on screen before.
+    void clearText();
+
     // Segment `id` closed at `endSample`: block `id` ends there and block
     // id + 1 starts there. The worker can report the edge after the recogniser
     // has already run past it (it was decoding the previous segment), so text

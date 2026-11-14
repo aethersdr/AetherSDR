@@ -115,12 +115,12 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     logHint->setEnabled(false); // dimmed, informational
     form->addRow(QString(), logHint);
 
-    // Provisional grey text from a streaming recogniser while the selected model
+    // Provisional gray text from a streaming recogniser while the selected model
     // waits for its segment to close. The controller sets availability.
     m_livePreview = new QCheckBox(tr("Show a live preview while the model decodes"), this);
     m_livePreview->setObjectName(QStringLiteral("CopyAssistLivePreview"));
     m_livePreviewToolTip = tr(
-        "Grey text appears within about a second of speech and is replaced by the "
+        "Gray text appears within about a second of speech and is replaced by the "
         "selected model's text when each segment is decoded. The preview is less "
         "accurate than the model and is only a first look.");
     m_livePreview->setToolTip(m_livePreviewToolTip);
@@ -134,7 +134,7 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     m_previewRecognizer->setObjectName(QStringLiteral("CopyAssistLivePreviewRecognizer"));
     m_previewRecognizer->setAccessibleName(tr("Live preview recognizer"));
     m_previewRecognizerToolTip = tr(
-        "The speech recognizer that draws the live preview. Both run on this computer, "
+        "The speech recognizer that draws the live preview. It runs on this computer, "
         "so audio never leaves it.");
     m_previewRecognizer->setToolTip(m_previewRecognizerToolTip);
     connect(m_previewRecognizer, &QComboBox::currentIndexChanged, this, [this](int) {

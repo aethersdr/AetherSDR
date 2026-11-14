@@ -449,6 +449,49 @@ int main(int argc, char** argv)
                "segment edges stay on the preview's timeline when the worker skips audio");
     }
 
+    // ---- Off, then on again: the old session's text stays gone -------------
+    {
+        auto log = std::make_shared<FakeLog>();
+        AsrEngine engine(backend(0, "OVER"));
+        expect(readyEngine(engine), "re-enable engine ready");
+        engine.setLivePreviewFactory(fakeFactory(log));
+        QSignalSpy previews(&engine, &AsrEngine::previewText);
+        const auto session = [&](size_t n) {
+            LivePreviewCallbacks cb;
+            waitFor([&] {
+                engine.pushAudio(silence(20), kRate);
+                const std::lock_guard<std::mutex> lock(log->mu);
+                return log->sessions.size() > n;
+            }, 3000);
+            const std::lock_guard<std::mutex> lock(log->mu);
+            if (log->sessions.size() > n) {
+                cb = log->sessions[n];
+            }
+            return cb;
+        };
+        const LivePreviewCallbacks first = session(0);
+        if (!first.onResult) {
+            expect(false, "a first preview session exists to fire from");
+            return 1;
+        }
+        fireFromThread(first, 0, 1600, "old words", true);
+        fireFromThread(first, 1600, 3200, "same", false);
+        waitFor([&] { return previews.count() >= 2; }, 3000);
+        engine.setLivePreviewFactory({});
+        engine.setLivePreviewFactory(fakeFactory(log));
+        const LivePreviewCallbacks second = session(1);
+        if (!second.onResult) {
+            expect(false, "a second preview session exists to fire from");
+            return 1;
+        }
+        previews.clear();
+        fireFromThread(second, 1600, 3200, "same", false);
+        waitFor([&] { return previews.count() >= 1; }, 3000);
+        expect(previews.count() == 1 && previews.first().at(1).toString() == QStringLiteral("same"),
+               "after off and on, the new session's text is shown alone, even when it "
+               "repeats what was shown before");
+    }
+
     // ---- Turning it off, and an unavailable recogniser ---------------------
     {
         auto log = std::make_shared<FakeLog>();

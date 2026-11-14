@@ -88,9 +88,10 @@ launch** button appear under **Compute** (see *GPU acceleration*).
       reused. English only. Needs a build with sherpa-onnx (the release builds
       have it; Intel Macs do not).
     - **Apple speech recognition**, macOS 26+ only (Apple's on-device
-      `SpeechTranscriber`). Listed on every Mac; dimmed, with its reason in the
-      item's accessible description, where it cannot run. Follows the
-      transcription language.
+      `SpeechTranscriber`). Listed on every Mac and nowhere else: hidden, not
+      dimmed, on Windows and Linux, where no user could ever pick it. On a Mac
+      that cannot run it, dimmed, with its reason in the item's accessible
+      description. Follows the transcription language.
 - **Transcribe from unprocessed audio (bypasses NR and RX effects)** — **off by
   default**, and a fresh profile transcribes after noise reduction exactly as
   every earlier build did. Ticked, the recogniser is fed the receive audio from
@@ -403,20 +404,37 @@ CPU). They lose whole stretches of weak signal; a +12 dB feed did not help.
 **sherpa-onnx (`SherpaLivePreview.cpp`).** An online transducer with its own
 endpointing off: the segmenter's edges and the 10 s forcing decide where text
 is finalised. A sherpa stream cannot split its text at an arbitrary sample, so
-`finalizeThrough(s)` finishes the stream (0.5 s of tail padding, input
-finished, decoded out), takes the tokens timed before `s` as the final for
-`[origin, s)`, then starts a fresh stream at `s` and feeds it again the audio
-already received after `s` (the feeder's lead over the worker, normally under
-a second). A stream is replaced, never reset, so token times are always
-relative to its origin. The model itself loads once per factory (about a
-second on an M2) and is shared by every session after it, so a retune, which
-starts a new session, costs a new stream, not a reload; the controller keeps
-the factory while the sherpa preview stays on, so engine rebuilds reuse it
-too. The model is `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06`
-(sherpa-onnx's packaging of Banafo's Kroko community model; the model card
-at huggingface.co/Banafo/Kroko-ASR gives the licence as CC-BY-SA), fetched by
-`AsrModelManager::ensureBundle` from `AsrModelCatalog::sherpaLivePreviewModel()`:
-each file pinned by size and SHA-256 and verified like the whisper tiers.
+`finalizeThrough(s)` waits until 0.6 s has been fed past `s`, finishes the
+stream (1.5 s of tail padding, which Kroko's ~1.3 s decoding chunks need; 0.5
+s left the last half second of words undecoded), and takes the words whose
+first token is before `s` as the final for `[origin, s)`. Splitting between
+whole words, not tokens, keeps a word across `s` intact: cutting at the token
+turned "background" into "backgr" + "ound". A fresh stream then starts at the
+quietest 20 ms before the next word's first token (Kroko times a token 0.2–0.3
+s after the word starts), primed with 2 s of the audio before it, because a
+cold stream drops or mangles its first word; the words it hears while priming
+are already in the final and are dropped. Its results are still reported from
+`s`, so finals tile the timeline. If a segment edge arrives after a split has
+already been made past it (the 10 s forcing came first), the last final is
+split again at the edge: the same start with the words before it, then a final
+for the rest, which the assembler files under the next block. On the demo clip
+looped six times, splitting every 5 s, the split text now matches an unsplit
+decode word for word (12 word errors before); on three off-air recordings,
+word errors against the unsplit decode fell from 70/76/104 to 65/38/68
+(splitting at the feed). Priming and the wait cost about half as much CPU
+again as the stream itself (a 1 s prime cost a third, with about 15% more
+errors; 3 s, two thirds, with about 12% fewer). A stream is replaced, never
+reset, so token times are always relative to its origin. The model itself
+loads once per factory (about a second on an M2) and is shared by every
+session after it, so a retune, which starts a new session, costs a new stream,
+not a reload; the controller keeps the factory while the sherpa preview stays
+on, so engine rebuilds reuse it too. The model is
+`sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06` (sherpa-onnx's packaging
+of Banafo's Kroko community model; the model card at
+huggingface.co/Banafo/Kroko-ASR gives the licence as CC-BY-SA), fetched by
+`AsrModelManager::ensureBundle` from
+`AsrModelCatalog::sherpaLivePreviewModel()`: each file pinned by size and
+SHA-256 and verified like the whisper tiers.
 
 **Apple (`AppleLivePreview.cpp`).** The recogniser takes the Copy Assist
 language setting, so the preview has no language control of its own. That
@@ -431,16 +449,22 @@ use as its message. On macOS 26 Apple covers English, Spanish, French, German,
 Italian, Portuguese, Mandarin, Cantonese, Japanese and Korean (31 locales,
 `SpeechTranscriber.supportedLocales`); anything else reports Failed with the
 reason and shows no preview. A locale not yet installed is downloaded first,
-reported as Preparing. Apple's API is Swift-only. `src/asr/apple/AppleLivePreview.swift` exports a C
-interface (`AppleLivePreviewC.h`) that `AppleLivePreview.cpp` wraps as an
+reported as Preparing. Apple's API is Swift-only.
+`src/asr/apple/AppleLivePreview.swift` exports a C interface
+(`AppleLivePreviewC.h`) that `AppleLivePreview.cpp` wraps as an
 `ILivePreview`. CMake compiles the Swift file with `swiftc` through a custom
 command (CMake's own Swift support needs the Ninja or Xcode generator), once
 per architecture, then `lipo`s the slices. Everything Swift-side is gated on
 macOS 26 at runtime, so the app's deployment floor is unchanged. The bridge
 needs the macOS 26 SDK (Xcode 26) to compile; with an older SDK CMake builds
-the stub instead and says so. Elsewhere
-`appleLivePreviewSupported()` is false and its entry in the recognizer list is
-dimmed with the reason.
+the stub instead and says so. `appleLivePreviewSupported()` is false on a Mac
+before macOS 26, which dims the entry with the reason; off macOS the entry is
+not listed at all. Finalize requests reach `SpeechAnalyzer.finalize(through:)`
+in the order they were made, through one task draining a stream of positions
+(a task per request ran in no set order). Apple's results carry no word times,
+so unlike sherpa it cannot re-split a final at a segment edge that arrives
+late: the words after that edge stay under the earlier block until its final
+replaces them, then reappear under the next block when that one's final lands.
 
 ### Build flags
 
@@ -496,5 +520,10 @@ also covers a segment edge reported after the recogniser ran past it. The real r
 exercised by hand: `apple_live_preview_smoke <file.16k.wav> [seconds]
 [language]` (macOS 26+) and `sherpa_live_preview_smoke <model-dir>
 <file.16k.wav> [seconds]` (checks the finals tile the timeline, that
-splitting behind the feed loses no words, and that a second session reuses
-the loaded model), each on a 16 kHz mono float32 WAV.
+splitting behind the feed loses no words, that split text matches an unsplit
+decode within 5% word error, so no word is cut in two, that a late segment
+edge re-splits the last final without losing words, and that a second
+session reuses the loaded model), each on a 16 kHz mono float32 WAV. The
+word checks hold on clean speech such as `resources/demo_voice.wav` (looped
+to a minute or more); off-air recordings differ more, because a split
+changes what a noisy decode hears.

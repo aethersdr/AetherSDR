@@ -1,8 +1,8 @@
 // Live preview for Copy Assist: one continuous SpeechTranscriber session that
 // turns 16 kHz audio into provisional text within a fraction of a second.
 // The C interface is declared in AppleLivePreviewC.h; see that header for the
-// contract. Built by CMake with swiftc (src/asr/apple/CMakeLists fragment in
-// the top-level CMakeLists.txt), linked into aetherasr on macOS only.
+// contract. Built by CMake with swiftc (an inline block in the top-level
+// CMakeLists.txt), linked into aetherasr on macOS only.
 //
 // Fast results are on and provisional results are reported: the preview's job
 // is speed. Final text in Copy Assist still comes from the selected backend.
@@ -84,6 +84,10 @@ private final class Session: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var prepareTask: Task<Void, Never>?
     private var resultsTask: Task<Void, Never>?
+    // Finalize positions, drained in order by finalizeTask (unstructured tasks
+    // run in no particular order, and a split must not land after a later one).
+    private var finalizes: AsyncStream<Int64>.Continuation?
+    private var finalizeTask: Task<Void, Never>?
     private var stopped = false
     private let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: kRate,
                                             channels: 1, interleaved: false)!
@@ -158,6 +162,18 @@ private final class Session: @unchecked Sendable {
         lock.withLock { self.resultsTask = resultsTask }
         try await analyzer.start(inputSequence: stream)
 
+        let (positions, finalizes) = AsyncStream<Int64>.makeStream()
+        let finalizeTask = Task {
+            var last = Int64.min
+            for await sample in positions {
+                // A position at or before one already finalised splits nothing.
+                guard sample > last else { continue }
+                last = sample
+                try? await analyzer.finalize(
+                    through: CMTime(value: sample, timescale: CMTimeScale(kRate)))
+            }
+        }
+
         // stop() may have run during the awaits above; it could not see this
         // analyzer, so tear it down here instead of publishing it.
         let wasStopped = lock.withLock {
@@ -166,11 +182,15 @@ private final class Session: @unchecked Sendable {
                 self.analyzerFormat = format
                 self.converter = converter
                 self.continuation = continuation
+                self.finalizes = finalizes
+                self.finalizeTask = finalizeTask
             }
             return stopped
         }
         if wasStopped {
             continuation.finish()
+            finalizes.finish()
+            finalizeTask.cancel()
             await analyzer.cancelAndFinishNow()
             return
         }
@@ -217,12 +237,9 @@ private final class Session: @unchecked Sendable {
 
     func finalizeThrough(_ sample: Int64) {
         lock.lock()
-        let analyzer = self.analyzer
+        let finalizes = self.finalizes
         lock.unlock()
-        guard let analyzer else { return }
-        Task {
-            try? await analyzer.finalize(through: CMTime(value: sample, timescale: CMTimeScale(kRate)))
-        }
+        finalizes?.yield(sample)
     }
 
     func stop() {
@@ -233,10 +250,14 @@ private final class Session: @unchecked Sendable {
         let analyzer = self.analyzer
         continuation?.finish()
         continuation = nil
+        finalizes?.finish()
+        finalizes = nil
+        let finalizeTask = self.finalizeTask
         self.analyzer = nil
         let resultsTask = self.resultsTask
         lock.unlock()
         resultsTask?.cancel()
+        finalizeTask?.cancel()
         if let analyzer {
             Task { await analyzer.cancelAndFinishNow() }
         }

@@ -15,6 +15,11 @@ void LivePreviewAssembler::reset()
     m_lastResolved = 0;
 }
 
+void LivePreviewAssembler::clearText()
+{
+    m_content.clear();
+}
+
 std::vector<LivePreviewAssembler::Update> LivePreviewAssembler::closeBlock(quint64 id,
                                                                           qint64 endSample)
 {

@@ -21,8 +21,11 @@ struct LivePreviewResult {
     qint64 startSample = 0;
     qint64 endSample = 0;
     QString text;
-    // Final: the recogniser will not revise this span. Provisional: a later
-    // result starting at the same position replaces it.
+    // Final: the recogniser will not revise this span, with one exception: a
+    // segment edge reported inside it after it was finalised splits it, as a
+    // final with the same start and less text followed by a final for the
+    // rest. Provisional: a later result starting at the same position
+    // replaces it.
     bool isFinal = false;
 };
 
@@ -39,7 +42,8 @@ public:
     // Mono 16 kHz samples starting at startSample. Audio fed before the
     // recogniser reports Ready is dropped.
     virtual void feed(const float* samples, int count, qint64 startSample) = 0;
-    // Ask for everything up to `sample` to be finalised (asynchronous).
+    // Ask for everything up to `sample` to be finalised (asynchronous: the
+    // sherpa recogniser waits for a little audio past `sample` first).
     virtual void finalizeThrough(qint64 sample) = 0;
 };
 

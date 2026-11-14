@@ -126,14 +126,14 @@ Copy Assist can show a quick first look at what is being said while the selected
 - When the model has decoded that stretch of audio, its text replaces the gray text and is colored by confidence as usual. A stretch is decoded when the speaker pauses (**Silence**) or when the **Buffer** fills, whichever comes first, so a shorter Buffer brings the colored text sooner.
 - The preview is less accurate than the whisper models on noisy signals, so treat it as a first look. The colored text is the transcript; only it is saved to the transcript file, and only it is read by a screen reader.
 - It works with every model, including the sherpa-onnx and remote backends.
-- Audio never leaves your computer.
+- The preview itself runs on your computer.
 
 **Preview recognizer** picks what draws the gray text:
 
 - **Kroko streaming, English (sherpa-onnx)** is the default, on Windows, Linux and Apple-silicon Macs. It is English only: with any other **Language** set, the status line adds "Live preview understands English only". The first time you press **Enable** with the preview on, Copy Assist downloads its model (about 71 MB, checked against a pinned SHA-256) into the models folder; the status line shows the progress.
 - **Apple speech recognition** is available on macOS 26 and later. It follows the **Language** setting, so there is no separate preview language to set. The accent it expects comes from the Mac's region (System Settings → General → Language & Region) where Apple supports that pairing: Spanish on a Mac set to the United States uses US Spanish. It understands English, Spanish, French, German, Italian, Portuguese, Chinese (Mandarin and Cantonese), Japanese and Korean, in their main regional variants. The first use of a language may download Apple's speech model for it; the status line says so while it does. For any other language the status line says it is not supported and no gray text appears; the colored transcript is unaffected.
 
-A recognizer your computer cannot run is shown dimmed, with the reason.
+Apple speech recognition is listed on Macs only. A listed recognizer your computer cannot run is shown dimmed, with the reason.
 
 ### The Queue readout
 

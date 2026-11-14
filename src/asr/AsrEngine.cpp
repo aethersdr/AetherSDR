@@ -557,6 +557,7 @@ void LivePreviewFeeder::reset(quint64 generation)
 {
     m_generation = generation;
     m_preview.reset();
+    m_toSixteenK.reset(); // as AsrWorker::reset() does, so the two stay alike
     m_fedAny = false;
 }
 
@@ -1037,7 +1038,9 @@ void AsrEngine::setLivePreviewFactory(LivePreviewFactory factory)
     m_livePreviewEnabled = static_cast<bool>(factory);
     if (wasEnabled && !m_livePreviewEnabled) {
         // Nothing will replace or retract the gray text already shown for
-        // audio the backend may never finalise, so take it down now.
+        // audio the backend may never finalise, so take it down now, and
+        // forget it, so turning the preview back on starts clean.
+        m_previewAssembler.clearText();
         emit livePreviewReset(m_generation);
     }
     if (m_livePreviewEnabled) {

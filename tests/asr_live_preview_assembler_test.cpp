@@ -134,9 +134,16 @@ int main()
         expect(is(a.addResult(11 * kSec, 13 * kSec, QStringLiteral("five six seven"), false), 1,
                   "four five six seven"),
                "later text from past the edge joins it there, not twice");
+        // The recogniser splits its straddling final again at the edge: the
+        // same start with less text, then the rest from the edge on.
+        expect(is(a.addResult(0, 8 * kSec, QStringLiteral("one two"), true), 0, "one two"),
+               "a final re-issued with the same start replaces the earlier one");
+        expect(is(a.addResult(8 * kSec, 10 * kSec, QStringLiteral("three"), true), 1,
+                  "three four five six seven"),
+               "the re-split's remainder joins the next block, in audio order");
         a.resolve(0);
         expect(is(a.addResult(13 * kSec, 14 * kSec, QStringLiteral("eight"), true), 1,
-                  "four five six seven eight"),
+                  "three four five six seven eight"),
                "resolving the closed block keeps the moved text");
     }
     {
