@@ -23,7 +23,7 @@ static int g_failures = 0;
 static GpsDelta decodeGps(FlexBackend& b, const QString& body)
 {
     QSignalSpy spy(&b, &IRadioBackend::gpsChanged);
-    b.decodeGpsStatus(body);
+    b.statusIngress()->decodeGpsStatus(body);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<GpsDelta>();
 }
@@ -31,7 +31,7 @@ static GpsDelta decodeGps(FlexBackend& b, const QString& body)
 static MemoryDelta decodeMem(FlexBackend& b, int idx, const QMap<QString, QString>& kvs)
 {
     QSignalSpy spy(&b, &IRadioBackend::memoryChanged);
-    b.decodeMemoryStatus(idx, kvs);
+    b.statusIngress()->decodeMemoryStatus(idx, kvs);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<MemoryDelta>();
 }
@@ -39,7 +39,7 @@ static MemoryDelta decodeMem(FlexBackend& b, int idx, const QMap<QString, QStrin
 static ProfileDelta decodeProfile(FlexBackend& b, const QString& type, const QString& body)
 {
     QSignalSpy spy(&b, &IRadioBackend::profileChanged);
-    b.decodeProfileStatus(type, body);
+    b.statusIngress()->decodeProfileStatus(type, body);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<ProfileDelta>();
 }
@@ -189,14 +189,14 @@ int main(int argc, char** argv)
         CHECK(clean.unsavedChanges.has_value() && !*clean.unsavedChanges);
 
         QSignalSpy spy(&b, &IRadioBackend::profileChanged);
-        b.decodeProfileFlags({{QStringLiteral("unsaved_changes_cw"), QStringLiteral("1")}});
+        b.statusIngress()->decodeProfileFlags({{QStringLiteral("unsaved_changes_cw"), QStringLiteral("1")}});
         CHECK(spy.count() == 1);
         const ProfileDelta flag = spy.takeFirst().at(0).value<ProfileDelta>();
         CHECK(flag.type == QStringLiteral("cw"));
         CHECK(flag.unsavedChanges.has_value() && *flag.unsavedChanges);
 
         QSignalSpy spy2(&b, &IRadioBackend::profileChanged);
-        b.decodeProfileFlags({{QStringLiteral("unsaved_changes_tx"), QStringLiteral("0")}});
+        b.statusIngress()->decodeProfileFlags({{QStringLiteral("unsaved_changes_tx"), QStringLiteral("0")}});
         CHECK(spy2.count() == 1);
         CHECK(spy2.takeFirst().at(0).value<ProfileDelta>().type == QStringLiteral("tx"));
     }
@@ -204,20 +204,20 @@ int main(int argc, char** argv)
     // ---- Profile: unknown key for a type → no emission ----
     {
         QSignalSpy spy(&b, &IRadioBackend::profileChanged);
-        b.decodeProfileStatus(QStringLiteral("tx"), QStringLiteral("bogus=1"));
+        b.statusIngress()->decodeProfileStatus(QStringLiteral("tx"), QStringLiteral("bogus=1"));
         CHECK(spy.count() == 0);
     }
 
     // ---- Profile flags fallback: space-free kv-set ----
     {
         QSignalSpy spy(&b, &IRadioBackend::profileChanged);
-        b.decodeProfileFlags({{QStringLiteral("exporting"), QStringLiteral("1")}});
+        b.statusIngress()->decodeProfileFlags({{QStringLiteral("exporting"), QStringLiteral("1")}});
         CHECK(spy.count() == 1);
         const ProfileDelta d = spy.takeFirst().at(0).value<ProfileDelta>();
         CHECK(d.exporting.has_value() && *d.exporting == true);
 
         QSignalSpy spy2(&b, &IRadioBackend::profileChanged);
-        b.decodeProfileFlags({{QStringLiteral("unrelated"), QStringLiteral("x")}});
+        b.statusIngress()->decodeProfileFlags({{QStringLiteral("unrelated"), QStringLiteral("x")}});
         CHECK(spy2.count() == 0);   // neither flag present → no-op
     }
 

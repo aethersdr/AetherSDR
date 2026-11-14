@@ -196,6 +196,104 @@ bool ControlService::bindTransmitTarget(TransmitControlTarget* target)
     return true;
 }
 
+bool ControlService::bindPairing(PairingBinding binding)
+{
+    if (m_resources->thread() != QThread::currentThread() || !binding.issuer || !binding.nowMs
+        || binding.certificateSha256.size() != 64 || m_pairingBinding || m_dispatchStarted) {
+        return false;
+    }
+    for (const QChar c : binding.certificateSha256) {
+        if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return false; }
+    }
+    m_pairingBinding = std::move(binding);
+    return true;
+}
+
+ServiceReply ControlService::beginPairing(const ProtocolRequest& request,
+    const ControlSession& session) const
+{
+    if (session.isNetwork() || !session.canControl()) {
+        return failure(request.id, {QStringLiteral("auth.grant_denied"),
+            QStringLiteral("pairing starts only on the local control socket"), {}, false});
+    }
+    if (!m_pairingBinding) {
+        return failure(request.id, {QStringLiteral("capability.unavailable"),
+            QStringLiteral("no secure remote listener is configured"), {}, false});
+    }
+    if (!request.params.isEmpty()) {
+        return failure(request.id, {QStringLiteral("request.invalid_params"),
+            QStringLiteral("pairing.begin takes no parameters"), {}, false});
+    }
+    const ControlPairing::Opened opened =
+        m_pairing.begin(m_pairingBinding->certificateSha256, m_pairingBinding->nowMs());
+    return {ControlProtocolCodec::successResponse(request.id, {
+        {QStringLiteral("code"), opened.code},
+        {QStringLiteral("expiresInMs"), double(opened.expiresInMs)},
+        {QStringLiteral("certificateSha256"), opened.certificateSha256}}), false};
+}
+
+ServiceReply ControlService::completePairing(const ProtocolRequest& request,
+    ControlSession* session) const
+{
+    // Every answer closes the connection, so one connection makes one attempt;
+    // the pairing's own attempt limit bounds a client that reconnects.
+    const auto refuse = [&](const char* code, const char* message) {
+        return failure(request.id, {QString::fromLatin1(code), QString::fromLatin1(message), {}, false}, true);
+    };
+    if (!m_pairingBinding || !session->pairingAllowed()) {
+        return refuse("capability.unavailable", "pairing is not available on this listener");
+    }
+    const QJsonValue code = request.params.value(QStringLiteral("code"));
+    const QJsonValue name = request.params.value(QStringLiteral("clientName"));
+    // A code that is not ten digits is malformed, not wrong: it uses up no attempt.
+    if (request.params.size() != 2 || !code.isString() || !ControlPairing::digitsOf(code.toString())
+        || !name.isString() || name.toString().trimmed().isEmpty()
+        || !ControlCredentials::validName(name.toString())) {
+        return refuse("request.invalid_params",
+                      "pairing.complete takes a ten-digit code and clientName (1 to 32 bytes of UTF-8)");
+    }
+    switch (m_pairing.attempt(code.toString(), m_pairingBinding->nowMs())) {
+    case ControlPairing::Attempt::Accepted:
+        break;
+    case ControlPairing::Attempt::Wrong:
+        return refuse("auth.invalid", "pairing code rejected");
+    case ControlPairing::Attempt::NotOpen:
+    case ControlPairing::Attempt::Expired:
+        return refuse("capability.unavailable", "no pairing is open on the radio");
+    }
+    // An issuer may answer before issue() returns (an early refusal). That
+    // answer becomes this call's ordinary reply: the pump only waits for a
+    // deferred one after handle() has returned.
+    struct Pending {
+        bool issuing{true};
+        std::optional<QJsonObject> early;
+    };
+    const auto pending = std::make_shared<Pending>();
+    const QPointer<ControlSession> target(session);
+    const QString id = request.id;
+    m_pairingBinding->issuer->issue(name.toString().trimmed(),
+        [target, id, pending](std::optional<PairingIssuer::Issued> issued) {
+            const QJsonObject message = issued
+                ? ControlProtocolCodec::successResponse(id, {
+                      {QStringLiteral("credentialId"), issued->credentialId},
+                      {QStringLiteral("token"), issued->token}})
+                : ControlProtocolCodec::errorResponse(id, {QStringLiteral("engine.failed"),
+                      QStringLiteral("the credential could not be stored"), {}, false});
+            if (pending->issuing) {
+                pending->early = message;
+                return;
+            }
+            if (target) { (void)target->completeDeferred(message, true); }
+        });
+    pending->issuing = false;
+    if (pending->early) {
+        return {*pending->early, true};
+    }
+    ServiceReply reply;
+    reply.deferred = true;
+    return reply;
+}
+
 ServiceReply ControlService::handle(
     const QByteArray& bytes, ControlSession* session) const
 {
@@ -231,6 +329,10 @@ ServiceReply ControlService::handle(
     }
 
     const ProtocolRequest& request = *parsed.request;
+    if (!session->isNegotiated() && request.isPairingComplete() && session->isNetwork()
+        && !session->isAuthenticated()) {
+        return completePairing(request, session);
+    }
     if (!session->isNegotiated()) {
         ControlCredentials::Principal principal;
         QJsonObject helloParams = request.params;
@@ -270,8 +372,13 @@ ServiceReply ControlService::handle(
             return failure(request.id, {QStringLiteral("auth.invalid"),
                 QStringLiteral("credential binding failed"), {}, false}, true);
         }
+        if (!session->isAuthenticated()) {   // a network session without a remote scope
+            return failure(request.id, {QStringLiteral("auth.invalid"),
+                QStringLiteral("credential rejected"), {}, false}, true);
+        }
         session->completeNegotiation();
-        if (m_transmit && !m_transmit->attach(session)) {
+        // Network sessions never reach transmit (aetherd-remote-clients.md).
+        if (m_transmit && !session->isNetwork() && !m_transmit->attach(session)) {
             session->endAuthorization();
             return failure(request.id, {QStringLiteral("auth.grant_denied"),
                 QStringLiteral("client lifetime registration failed"), {}, false}, true);
@@ -301,7 +408,14 @@ ServiceReply ControlService::handle(
     }
     if (m_transmit && (request.method.startsWith(QLatin1String("tx."))
         || request.method.startsWith(QLatin1String("txAdmin.")))) {
+        if (session->isNetwork()) {
+            return failure(request.id, {QStringLiteral("auth.grant_denied"),
+                QStringLiteral("transmit is not available to network sessions"), {}, false});
+        }
         return {m_transmit->handle(request, session), false};
+    }
+    if (request.method == QStringLiteral("pairing.begin")) {
+        return beginPairing(request, *session);
     }
     if (request.method == QStringLiteral("radio.connect")
         || request.method == QStringLiteral("radio.disconnect")) {
@@ -551,8 +665,10 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     if (!m_receiveTarget) {
         return reject("capability.unavailable", "receive control unavailable");
     }
-    const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth;
-    const bool sessionScoped = operation == ReceiveOperation::CwPitch;
+    const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth
+        || operation == ReceiveOperation::PanRfGain;
+    const bool sessionScoped = operation == ReceiveOperation::CwPitch
+        || operation == ReceiveOperation::RadioSpeaker;
     const QString idKey = pan ? QStringLiteral("panadapter") : QStringLiteral("slice");
     QSet<QString> keys{QStringLiteral("radioSession"), QStringLiteral("expectedRevision")};
     if (!sessionScoped) {
@@ -567,6 +683,13 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::PanCenter:
     case ReceiveOperation::PanBandwidth:
     case ReceiveOperation::CwPitch: keys.insert(QStringLiteral("hz")); break;
+    case ReceiveOperation::AgcThreshold: keys.insert(QStringLiteral("threshold")); break;
+    case ReceiveOperation::NoiseBlanker:
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: keys.insert(QStringLiteral("enabled")); break;
+    case ReceiveOperation::Rit:
+        keys.insert(QStringLiteral("enabled")); keys.insert(QStringLiteral("offsetHz")); break;
+    case ReceiveOperation::PanRfGain: keys.insert(QStringLiteral("gainDb")); break;
     }
     if (const auto error = onlyKeys(request.params, keys)) {
         return failure(request.id, *error);
@@ -598,6 +721,12 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     const QJsonValue gain = request.params.value(QStringLiteral("gain"));
     const QJsonValue muted = request.params.value(QStringLiteral("muted"));
     const QJsonValue hz = request.params.value(QStringLiteral("hz"));
+    const QJsonValue threshold = request.params.value(QStringLiteral("threshold"));
+    const QJsonValue enabled = request.params.value(QStringLiteral("enabled"));
+    const QJsonValue offsetHz = request.params.value(QStringLiteral("offsetHz"));
+    const QJsonValue gainDb = request.params.value(QStringLiteral("gainDb"));
+    constexpr double kIntMin = std::numeric_limits<int>::min();
+    constexpr double kIntMax = std::numeric_limits<int>::max();
     bool valid = true;
     switch (operation) {
     case ReceiveOperation::Mode:
@@ -618,6 +747,12 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::PanBandwidth: valid = integer(hz, 1, 9'007'199'254'740'991.0); break;
     case ReceiveOperation::CwPitch:
         valid = integer(hz, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()); break;
+    case ReceiveOperation::AgcThreshold: valid = integer(threshold, kIntMin, kIntMax); break;
+    case ReceiveOperation::NoiseBlanker:
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: valid = enabled.isBool(); break;
+    case ReceiveOperation::Rit: valid = enabled.isBool() && integer(offsetHz, kIntMin, kIntMax); break;
+    case ReceiveOperation::PanRfGain: valid = integer(gainDb, kIntMin, kIntMax); break;
     }
     if (!valid) {
         return reject("request.invalid_params", "invalid typed receive-control value");
@@ -645,6 +780,16 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::PanCenter: error = m_receiveTarget->setPanCenter(id.toString(), hz.toInteger()); break;
     case ReceiveOperation::PanBandwidth: error = m_receiveTarget->setPanBandwidth(id.toString(), hz.toInteger()); break;
     case ReceiveOperation::CwPitch: error = m_receiveTarget->setCwPitch(hz.toInt()); break;
+    case ReceiveOperation::AgcThreshold:
+        error = m_receiveTarget->setAgcThreshold(sliceId, threshold.toInt()); break;
+    case ReceiveOperation::NoiseBlanker:
+        error = m_receiveTarget->setNoiseBlanker(sliceId, enabled.toBool()); break;
+    case ReceiveOperation::NoiseReduction:
+        error = m_receiveTarget->setNoiseReduction(sliceId, enabled.toBool()); break;
+    case ReceiveOperation::Rit:
+        error = m_receiveTarget->setRit(sliceId, enabled.toBool(), offsetHz.toInt()); break;
+    case ReceiveOperation::PanRfGain: error = m_receiveTarget->setPanRfGain(id.toString(), gainDb.toInt()); break;
+    case ReceiveOperation::RadioSpeaker: error = m_receiveTarget->setRadioSpeaker(enabled.toBool()); break;
     }
     return error ? failure(request.id, *error) : ServiceReply{
         ControlProtocolCodec::successResponse(request.id, {{QStringLiteral("accepted"), true}}), false};
@@ -705,7 +850,10 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
             }
         }
     }
-    if (m_transmit) {
+    if (m_pairingBinding && session.canControl() && !session.isNetwork()) {
+        available.append(QStringLiteral("pairing.begin"));
+    }
+    if (m_transmit && !session.isNetwork()) {
         for (const QJsonValue& method : m_transmit->methods(session)) {
             available.append(method);
         }

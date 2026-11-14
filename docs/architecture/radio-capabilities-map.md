@@ -45,7 +45,7 @@ require a live eligible slice; zero bounds or unknown authority fail closed.
 | HL2 | engine | 100,000–38,400,000 | TX-enabled sessions need normalized idle readback, currently absent |
 | Sim | engine | 1–1,000,000,000,000 | Explicit simulator API domain, not RF coverage |
 | Icom | radio | Profile `tuningMinHz` / `tuningMaxHz` | Declared band union and confirmed idle; no current daemon catalogue connection |
-| ANAN | engine | 0 / 0 (unknown) | Unavailable pending verified coverage |
+| ANAN | engine | 10,000–61,430,000 | Measured G2 (gateware 27) tuning span, not sensitivity; below `phaseWord()`'s alias at 61.44 MHz; the pan follows every tune (one DDC, centered on the slice); no TX capability |
 | RTL-SDR | engine | 24,000–1,766,000,000 | Backend/build availability; no TX capability |
 
 The default struct declares unknown authority and zero bounds. Every backend
@@ -152,6 +152,12 @@ reaches the desktop through `ModeFilters` (`RxApplet`, `VfoWidget`): which FM ro
 are declared decides whether the FM width presets show and whether the passband
 widget is enabled or replaced by the "Filter unavailable" placeholder, and a
 declared row range-checks saved presets for its mode.
+`receivePanRfGainControl` gates `panadapter.setRfGain` and `radioSpeakerControl`
+gates `radioSession.setRadioSpeaker` the same way; only ANAN declares them. `receiveDspControl`
+gates `slice.setAgcThreshold`, `slice.setNoiseBlanker`, `slice.setNoiseReduction`
+and `slice.setRit` per observed mode, but only with a known authority, which only
+ANAN sets: RTL's record keeps an unknown authority and stays GUI gating. On the
+desktop the record decides which DSP buttons the VFO shows, per declared feature.
 Null or unknown authority fails closed. Their full per-backend support matrix,
 range contracts, TX-idle restrictions and remaining no-op/coupling limitations
 are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).

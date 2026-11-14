@@ -6,6 +6,7 @@
 #include <QList>
 #include <QMap>
 #include <QString>
+#include "core/backends/WaveformStatusDelta.h"
 
 namespace AetherSDR {
 
@@ -49,21 +50,11 @@ public:
     QString wfpIpAddress() const { return m_wfpIpAddress; }
     const QList<QMap<QString, QString>>& statusReports() const { return m_statusReports; }
 
-    // ── Status parsing (called from RadioModel::onStatusReceived) ─────────────
-    // object == "waveform"
-    void handleInstalledList(const QMap<QString, QString>& kvs);
-    // object == "waveform container"
-    void handleContainerStatus(const QMap<QString, QString>& kvs);
-    // object == "waveform wfp_status"
-    void handleWfpStatus(const QMap<QString, QString>& kvs);
-    // object == "waveform status"
+    // ── Status (decoded by the Flex status ingress) ─────────────────────────
+    void applyStatus(const WaveformStatusDelta& status);
+    // A waveform-defined status report, kept as reported ("waveform status"
+    // and a slice's waveform_status).
     void handleGenericStatus(const QMap<QString, QString>& kvs);
-    // object == "waveform restarted"
-    void handleRestarted(const QMap<QString, QString>& kvs);
-
-    // `env=` is base64 of a JSON object of strings (FlexLib Radio.cs:11733-11746).
-    // Anything malformed decodes to an empty environment, as in FlexLib.
-    static QMap<QString, QString> decodeEnvironment(const QString& base64);
 
     void clear();
 
@@ -93,6 +84,9 @@ signals:
                          const QString& message);
 
 private:
+    void applyInstalledList(const WaveformStatusDelta& d);
+    void applyContainer(const WaveformStatusDelta& d);
+    void applyWfpStatus(const WaveformStatusDelta& d);
     QList<FlexWaveformEntry> m_waveforms;
     bool    m_wfpStatusSeen{false};
     bool    m_wfpPowered{false};

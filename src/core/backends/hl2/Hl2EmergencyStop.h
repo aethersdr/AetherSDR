@@ -40,4 +40,15 @@ void fireEmergencyStop() noexcept;
 // early in main(); safe with no radio connected.
 void installEmergencyStopSignalHandlers() noexcept;
 
+// The termination path for a handler of its own (aetherd's GracefulStop
+// escalation): fire the stop, restore the default disposition and re-raise
+// `sig`, so the process dies exactly as it would have without a handler.
+// ASYNC-SIGNAL-SAFE.
+void fireEmergencyStopAndReraise(int sig) noexcept;
+
+// Install `handler` for `sig` unless the process inherited SIG_IGN for it:
+// nohup ignores SIGHUP, and a handler would make it fatal again. Returns false
+// when the signal was left ignored.
+bool installSignalHandlerUnlessIgnored(int sig, void (*handler)(int)) noexcept;
+
 }  // namespace AetherSDR::hl2
