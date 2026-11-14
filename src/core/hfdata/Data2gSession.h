@@ -81,9 +81,11 @@ struct Data2gSessionStep {
 class Data2gSession {
 public:
     // How long after a session ends its closing identification may still be
-    // handed back. Past it, by the engine's clock, it is dropped (maintainer
-    // ruling, 2026-11-14).
-    static constexpr double kClosingIdSeconds = 6.0;
+    // handed back, for a busy channel to clear. Past it, by the engine's
+    // clock, it is dropped and "IDENTIFICATION not sent" is reported; once it
+    // has been handed back the window closes at once (maintainer ruling,
+    // 2026-11-14).
+    static constexpr double kClosingIdSeconds = 60.0;
     // Identification. A station must identify at least every 10 minutes
     // during a communication and at its end (47 CFR 97.119(a), and its like
     // elsewhere). The engine sends an ID frame every interval, ahead of one
@@ -108,6 +110,12 @@ public:
 
     bool isValid() const;
     int sampleRate() const;
+
+    // A CW identification, "DE <call>" at 20 WPM, as mono float32 at
+    // sampleRate with its envelope peaking at 1.0. For a deliberate ID when
+    // no session can send one. Empty for a call that cannot be keyed or an
+    // unsupported rate. Any thread.
+    static std::vector<float> identificationAudio(const std::string& call, int sampleRate = 24000);
 
     // Any thread. Applied at the start of the next step().
     void requestConnect(std::string peerCall, Data2gBandwidth bandwidth);

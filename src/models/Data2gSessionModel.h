@@ -74,7 +74,9 @@ public:
         qint64 idleMs = 315'000;
         qint64 linkLostMs = 105'000;
         qint64 connectingMs = 120'000;
-        qint64 closingMs = 8'000;      // the closing-ID window, then disarm
+        // The closing ID has up to a minute for a busy channel to clear. The
+        // arm ends as soon as that ID has gone, or here at the latest.
+        qint64 closingMs = 62'000;
         qint64 maxBacklogMs = 5'000;   // audio waiting for the engine, at most
     };
 
@@ -103,6 +105,15 @@ public:
     void abortSession(const QString& reason);
     bool sendData(const QByteArray& bytes);
 
+    // A station must identify at the end of a communication. A session that
+    // closes normally does so itself. One that was aborted, or whose closing
+    // ID could not go, leaves an identification owed: nothing is transmitted
+    // for it automatically, and the page says so and offers this.
+    bool identificationOwed() const;
+    // The operator's Send ID: one CW "DE <call>", a deliberate transmission
+    // outside any session. False, with a reason, when refused.
+    bool sendIdentification(QString& error);
+
     void setDriveDb(double db);   // clamped to kMinDriveDb..kMaxDriveDb; default 0
     double driveDb() const;
 
@@ -128,6 +139,7 @@ signals:
     void sessionEvent(const QString& event);
     void dataReceived(const QByteArray& bytes);
     void sessionAborted(const QString& reason);
+    void identificationOwedChanged(bool owed);
 
 private:
     struct Impl;

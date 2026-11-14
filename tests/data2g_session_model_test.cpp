@@ -226,7 +226,8 @@ void session()
     const bool closed = bench.runUntil(120.0, [&] { return bench.sawEvent("DISCONNECTED"); });
     check(closed, "the session disconnects");
     const bool disarmed = bench.runUntil(30.0, [&] { return !bench.model.isArmed(); });
-    check(disarmed, "the arm ends with the session");
+    check(disarmed, "the arm ends once the closing ID has gone, well inside its 60 s window");
+    check(!bench.model.identificationOwed(), "a session that closed with its ID owes none");
     check(bench.aborts.isEmpty(), "a clean session aborts nothing");
 
     const int startsAfter = bench.sink.starts;
@@ -344,6 +345,49 @@ void abortPaths()
     }
 }
 
+// An aborted session stops without its closing ID. Nothing is sent for it
+// automatically; the operator's Send ID is one CW identification.
+void identificationOwed()
+{
+    Bench bench;
+    QString error;
+    check(!bench.model.identificationOwed(), "a station that has not transmitted owes no ID");
+    check(bench.connect(), "connected before the abort");
+    bench.runUntil(30.0, [&] { return !bench.sink.isActive(); });
+    const int startsInSession = bench.sink.starts;
+    check(!bench.model.sendIdentification(error) && error.contains(QLatin1String("session")),
+          "Send ID is refused during a session");
+    check(bench.sink.starts == startsInSession, "and transmits nothing");
+    bench.model.abortSession(QStringLiteral("operator"));
+    check(bench.model.identificationOwed(), "an aborted session leaves an ID owed");
+    const int starts = bench.sink.starts;
+    bench.run(20.0);
+    check(bench.sink.starts == starts, "and nothing is sent for it automatically");
+
+    qputenv("AETHER_AUTOMATION_NO_TX", "1");
+    check(!bench.model.sendIdentification(error), "Send ID is refused under AETHER_AUTOMATION_NO_TX");
+    qunsetenv("AETHER_AUTOMATION_NO_TX");
+    bench.sink.refusal = QStringLiteral("The bound receiver is not the transmit slice.");
+    check(!bench.model.sendIdentification(error) && error == bench.sink.refusal,
+          "and when the transmitter may not transmit");
+    bench.sink.refusal.clear();
+    check(bench.sink.starts == starts, "a refused Send ID transmits nothing");
+
+    check(bench.model.sendIdentification(error), "Send ID is taken");
+    check(bench.sink.starts == starts + 1 && bench.sink.isActive(), "as one transmission");
+    check(!bench.model.sendIdentification(error), "a second while it plays is refused");
+    check(bench.model.identificationOwed(), "the ID is owed until it has gone out");
+    bench.run(15.0);
+    check(!bench.sink.isActive() && !bench.model.identificationOwed(), "and then it is not");
+    check(bench.sink.starts == starts + 1, "Send ID sends exactly one");
+    check(!bench.model.isArmed(), "and arms nothing");
+
+    Bench never;
+    never.model.connectTo(QStringLiteral("W1AW"), 2400, error);
+    never.model.abortSession(QStringLiteral("operator"));
+    check(!never.model.identificationOwed(), "an abort before anything was sent owes no ID");
+}
+
 // The watchdog enforces the link-lost and idle limits from outside the engine.
 // The limits here are far inside upstream's own (90 s and 300 s), so it is
 // the watchdog that acts, not the engine.
@@ -412,6 +456,7 @@ int main(int argc, char** argv)
     drive();
     refusedArm();
     abortPaths();
+    identificationOwed();
     watchdog();
     silentTap();
     if (g_failures) {

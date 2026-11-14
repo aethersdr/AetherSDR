@@ -128,6 +128,10 @@ struct Data2gSessionModel::Impl {
     State state = State::Idle;
     bool armed = false;
     bool aborting = false;
+    bool idOwed = false;
+    bool idPlaying = false;          // the operator's Send ID is on the air
+    bool closingIdDone = false;
+    quint64 transmissionsAtArm = 0;
     double driveDb = 0.0;
     Stats stats;
 
@@ -147,6 +151,14 @@ struct Data2gSessionModel::Impl {
             return;
         state = next;
         emit owner->stateChanged(state);
+    }
+
+    void setIdOwed(bool next)
+    {
+        if (idOwed == next)
+            return;
+        idOwed = next;
+        emit owner->identificationOwedChanged(idOwed);
     }
 
     void setArmed(bool next)
@@ -188,6 +200,8 @@ struct Data2gSessionModel::Impl {
         runStartMs = -1;
         fedSamples = 0;
         closingAtMs = -1;
+        closingIdDone = false;
+        transmissionsAtArm = stats.transmissions;
         tick.start();
     }
 
@@ -295,6 +309,8 @@ struct Data2gSessionModel::Impl {
             lastDataMs = t;
         if (step.abortTx)
             sink->stop();
+        if (step.identified && stateOf(step.state) == State::Idle)
+            closingIdDone = true;
 
         if (!step.transmission.empty()) {
             // The gate. Nothing below this line runs for an unarmed model.
@@ -318,6 +334,8 @@ struct Data2gSessionModel::Impl {
 
         for (const std::string& event : step.events) {
             const QString text = QString::fromUtf8(event);
+            if (text.startsWith(QLatin1String("IDENTIFICATION not sent")))
+                setIdOwed(true);
             emit owner->sessionEvent(text);
             if (current != run)
                 return;
@@ -368,8 +386,12 @@ struct Data2gSessionModel::Impl {
             abort(QStringLiteral("Watchdog: the other station has not been heard."));
         } else if (state == State::Connected && t - lastDataMs > limits.idleMs) {
             abort(QStringLiteral("Watchdog: the session has been idle."));
-        } else if (state == State::Idle && closingAtMs >= 0 && t >= closingAtMs && !sink->isActive()) {
-            // The session is over and its closing ID has had its window.
+        } else if (state == State::Idle && closingAtMs >= 0 && (closingIdDone || t >= closingAtMs)
+                   && !sink->isActive()) {
+            // The session is over, and its closing ID has gone or has had
+            // its window.
+            if (closingIdDone)
+                setIdOwed(false);
             endRun(false);
             setArmed(false);
         }
@@ -383,6 +405,10 @@ struct Data2gSessionModel::Impl {
             return;
         aborting = true;
         setArmed(false);
+        // The station has been on the air in this session and now stops
+        // without its closing ID.
+        if (stats.transmissions != transmissionsAtArm)
+            setIdOwed(true);
         sink->stop();
         run->session->requestAbort();
         endRun(false);
@@ -417,6 +443,12 @@ Data2gSessionModel::Data2gSessionModel(Data2gTransmitSink* sink, Limits limits,
 #endif
     if (sink) {
         sink->onFinished = [this](bool ok, const QString& why) {
+            if (m_impl->idPlaying) {
+                m_impl->idPlaying = false;
+                if (ok)
+                    m_impl->setIdOwed(false);
+                return;
+            }
             if (!ok && m_impl->armed && !m_impl->aborting)
                 m_impl->abort(QStringLiteral("The transmission failed: %1").arg(why));
         };
@@ -511,6 +543,7 @@ bool Data2gSessionModel::connectTo(const QString& peerCall, int bandwidthHz, QSt
         error = QStringLiteral("%1 is not a call sign Data2G can send.").arg(impl.myCall);
         return false;
     }
+    impl.setIdOwed(false);   // a new communication; the last one's debt is the operator's
     impl.peer = peerCall.trimmed().toUpper();
     impl.connectStartMs = impl.now();
     impl.run->session->setKeyLeadSeconds(hfdata::Data2gSession::kDefaultKeyLeadSeconds);
@@ -548,6 +581,53 @@ bool Data2gSessionModel::sendData(const QByteArray& bytes)
     return true;
 #else
     Q_UNUSED(bytes);
+    return false;
+#endif
+}
+
+bool Data2gSessionModel::identificationOwed() const
+{
+    return m_impl->idOwed;
+}
+
+bool Data2gSessionModel::sendIdentification(QString& error)
+{
+#ifdef HAVE_DATA2G
+    Impl& impl = *m_impl;
+    if (impl.run) {
+        error = QStringLiteral("A session is under way; it identifies itself.");
+        return false;
+    }
+    if (!impl.sink) {
+        error = QStringLiteral("No transmitter is attached.");
+        return false;
+    }
+    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX")) {
+        error = QStringLiteral("Transmit is disabled for this run (AETHER_AUTOMATION_NO_TX).");
+        return false;
+    }
+    if (impl.sink->isActive()) {
+        error = QStringLiteral("A transmission is already on the air.");
+        return false;
+    }
+    const QString refusal = impl.sink->startRefusal();
+    if (!refusal.isEmpty()) {
+        error = refusal;
+        return false;
+    }
+    const std::vector<float> audio =
+        hfdata::Data2gSession::identificationAudio(impl.myCall.toStdString(), kSampleRateHz);
+    if (audio.empty()) {
+        error = QStringLiteral("Set a call sign that can be sent first.");
+        return false;
+    }
+    if (!impl.sink->start(impl.forTransmit(audio), error))
+        return false;
+    impl.idPlaying = true;
+    ++impl.stats.transmissions;
+    return true;
+#else
+    error = QStringLiteral("This build does not include Data2G.");
     return false;
 #endif
 }

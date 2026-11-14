@@ -7,6 +7,7 @@
 #include "arq/session.hpp"
 #include "audio/filters.hpp"
 #include "config/config.hpp"
+#include "cwid/cwid.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -190,6 +191,23 @@ Data2gSession::Data2gSession(std::string myCall, int sampleRate, std::uint64_t s
 
 Data2gSession::~Data2gSession() = default;
 
+std::vector<float> Data2gSession::identificationAudio(const std::string& call, int sampleRate)
+{
+    if (!Data2gMonitor::isSupportedSampleRate(sampleRate))
+        return {};
+    try {
+        data2g::arq::pack_call(call);   // throws for a call Data2G could not send
+        const std::string text = data2g::cwid::id_text(call);
+        std::vector<double> atFs = data2g::cwid::audio(text);
+        atFs.insert(atFs.end(), 64, 0.0);
+        data2g::audio::Interpolator interpolator(sampleRate);
+        const std::vector<double> atRate = interpolator(atFs);
+        return {atRate.begin(), atRate.end()};
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
 bool Data2gSession::isValid() const
 {
     return m_impl->valid;
@@ -336,6 +354,7 @@ Data2gSessionStep Data2gSession::step(std::span<const float> mono)
             if (impl.sessionEnded && engine.now() - impl.endedSeconds > kClosingIdSeconds) {
                 impl.operatorSession = false;
                 impl.sessionEnded = false;
+                out.events.emplace_back("IDENTIFICATION not sent: the channel did not clear");
             }
         }
 
@@ -353,6 +372,11 @@ Data2gSessionStep Data2gSession::step(std::span<const float> mono)
             if (impl.idSent && ours) {
                 out.identified = true;
                 impl.lostIds = 0;
+                if (impl.sessionEnded) {
+                    // That was the closing ID: nothing more may follow it.
+                    impl.operatorSession = false;
+                    impl.sessionEnded = false;
+                }
             } else if (impl.idSent && out.state != Data2gLinkState::Idle) {
                 // The engine believes it identified and will not try again
                 // for a whole interval.

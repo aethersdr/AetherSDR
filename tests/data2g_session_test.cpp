@@ -268,6 +268,7 @@ void session()
         return count(link.theirEvents, "ID N0CALL") > idsBefore;
     });
     check(identified, "the other station heard the closing identification");
+    check(!has(link.ourEvents, "IDENTIFICATION not sent"), "which is not reported as missed");
     check(link.ours.suppressedTransmissions() == droppedInSession,
           "nothing of the session's own was dropped");
 
@@ -313,11 +314,28 @@ void closingDeadline()
     check(closed, "disconnected, and the closing window has just opened");
 
     const std::uint64_t droppedBefore = link.ours.suppressedTransmissions();
-    const std::vector<float> eightSeconds(8 * Link::kRate, 0.0f);
-    const Data2gSessionStep late = link.ours.step(eightSeconds);
+    const std::vector<float> pastTheWindow(
+        static_cast<std::size_t>((Data2gSession::kClosingIdSeconds + 1.0) * Link::kRate), 0.0f);
+    const Data2gSessionStep late = link.ours.step(pastTheWindow);
     check(late.transmission.empty(), "an identification past the deadline is not handed back");
     check(!late.transmitting, "nor reported as transmitting");
     check(link.ours.suppressedTransmissions() == droppedBefore + 1, "it is dropped and counted");
+    check(has(late.events, "IDENTIFICATION not sent"), "and reported as not sent");
+}
+
+// The operator's own ID, for when no session can send one.
+void identificationAudio()
+{
+    const std::vector<float> id = Data2gSession::identificationAudio("N0CALL", 24000);
+    check(!id.empty(), "a CW identification is produced");
+    float peak = 0.0f;
+    for (float v : id)
+        peak = std::max(peak, std::fabs(v));
+    check(peak > 0.9f && peak < 1.1f, "it peaks at full scale");
+    const double seconds = static_cast<double>(id.size()) / 24000;
+    check(seconds > 3.0 && seconds < 12.0, "DE N0CALL at 20 WPM lasts a few seconds");
+    check(Data2gSession::identificationAudio("NOT A CALL SIGN!", 24000).empty(), "a bad call produces nothing");
+    check(Data2gSession::identificationAudio("N0CALL", 44100).empty(), "nor does an unsupported rate");
 }
 
 // Abort mid-session: transmit stops at once and nothing follows, the closing
@@ -447,6 +465,7 @@ int main()
     session();
     strangerCalls();
     closingDeadline();
+    identificationAudio();
     lostIdentification();
     idInterval();
     abortMidSession();
