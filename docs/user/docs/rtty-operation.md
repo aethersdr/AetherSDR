@@ -44,9 +44,9 @@ When you switch to RTTY mode, AetherSDR displays two dashed vertical lines on th
 
 When you tune to an RTTY signal, position the two dashed lines so that the Mark line sits on the higher-frequency tone and the Space line sits on the lower-frequency tone. When both tones fall on their respective lines, the signal is properly tuned and can be decoded.
 
-<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode." />
+<img src="/img/screens/rtty-ms-lines.png" width="680" alt="Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode. The flag's DSP tab is open: noise-filter buttons, the AetherRX and AetherTX launchers, a Parameters row, and Mark 2125 and Shift 170, each between a left and a right arrow button." />
 
-*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.*
+*RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband. The VFO's DSP tab is open, showing Mark 2125 and Shift 170.*
 
 ```
 Panadapter view (RTTY mode):
@@ -72,7 +72,7 @@ When the selected slice is in **RTTY**, a decoder pane opens below the waterfall
 
 The stats bar updates about twice a second with the mark and space levels, the SNR and **LOCKED** / **UNLOCK**. Baud, REV and Sens are remembered. Mark and Shift are not: they are the slice's mark and shift, which the radio holds, and a new slice starts at a 170 Hz shift.
 
-<img src="/img/screens/rtty-decoder-pane.png" width="1331" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
+<img src="/img/screens/rtty-decoder-pane.png" width="1226" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: 2125, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
 
 *The RTTY decoder pane under the waterfall.*
 

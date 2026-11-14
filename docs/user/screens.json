@@ -3107,6 +3107,12 @@
         },
         {
           "sleep": 15
+        },
+        {
+          "cmd": "invoke",
+          "target": "DSP settings",
+          "action": "click",
+          "_sleep": 0.8
         }
       ],
       "grab": {
@@ -3122,6 +3128,12 @@
         ]
       },
       "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "DSP settings",
+          "action": "click",
+          "_sleep": 0.8
+        },
         {
           "cmd": "invoke",
           "target": "panZoomOutBtn",
@@ -3186,8 +3198,8 @@
           "_sleep": 1.0
         }
       ],
-      "caption": "RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.",
-      "alt": "Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode."
+      "caption": "RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband. The VFO's DSP tab is open, showing Mark 2125 and Shift 170.",
+      "alt": "Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode. The flag's DSP tab is open: noise-filter buttons, the AetherRX and AetherTX launchers, a Parameters row, and Mark 2125 and Shift 170, each between a left and a right arrow button."
     },
     {
       "id": "rtty-decoder-pane",
@@ -3207,6 +3219,13 @@
           "cmd": "slice",
           "action": "mode",
           "value": "RTTY"
+        },
+        {
+          "cmd": "invoke",
+          "target": "rttySensSlider",
+          "action": "setValue",
+          "value": "38",
+          "_sleep": 0.5
         },
         {
           "cmd": "invoke",
@@ -3275,6 +3294,13 @@
       "cleanup": [
         {
           "cmd": "invoke",
+          "target": "rttySensSlider",
+          "action": "setValue",
+          "value": "0",
+          "_sleep": 0.5
+        },
+        {
+          "cmd": "invoke",
           "target": "panZoomOutBtn",
           "action": "click",
           "_sleep": 0.7
@@ -3338,7 +3364,7 @@
         }
       ],
       "caption": "The RTTY decoder pane under the waterfall.",
-      "alt": "The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area."
+      "alt": "The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: 2125, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area."
     },
     {
       "id": "offscreen-vfo-indicator",
