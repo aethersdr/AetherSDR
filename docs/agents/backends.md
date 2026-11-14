@@ -425,9 +425,11 @@ connection.
   than pass with every decoder skipped. `tests/flex_ingress_characterization_test` (run with
   `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
   corpus for before/after comparison of an ingress change.
-- **Still inline in `RadioModel`**, awaiting its own PR: DVK/NAVTEX (#6870). Each moves into the
-  ingress as a domain decoder; none adds its own transport decoder or
-  lifetime token.
+- **No Flex status is decoded in `RadioModel`.** Every domain is a decoder
+  in the ingress, the voice keyer and NAVTEX (`FlexTransmitServiceStatus.cpp`)
+  last; a new one joins them, with no transport decoder or lifetime token of
+  its own. One raw relay remains: `slice N waveform_status` reports reach
+  FlexWaveformModel as their fields from `RadioModel::onStatusReceived`.
 
 Do not pre-emptively restructure code toward the RFC — no new engine/UI
 seams, backend interfaces, or speculative library targets ahead of a landed

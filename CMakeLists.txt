@@ -915,7 +915,9 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexCwControls.cpp
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
+    src/core/backends/flex/FlexTransmitServices.cpp
     src/core/backends/flex/FlexSetupStatus.cpp
+    src/core/backends/flex/FlexTransmitServiceStatus.cpp
     src/core/backends/flex/FlexSessionControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
@@ -1286,6 +1288,7 @@ set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RadioModel_DaxTx.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_TransmitServices.cpp
     src/models/RadioModel_SetupObservations.cpp
     src/models/RadioModel_SessionControls.cpp
     src/models/RadioModel_Administration.cpp
