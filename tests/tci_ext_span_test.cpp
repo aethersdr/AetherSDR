@@ -34,6 +34,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -53,6 +54,10 @@ public:
         return server.m_extensions.offeredTokens();
     }
     static TxCoordinator& coordinator(RadioModel& model) { return model.m_txCoordinator; }
+    static bool registerGroup(TciServer& server, TciExtensionSet::Group group)
+    {
+        return server.registerExtensionGroup(std::move(group));
+    }
 };
 
 namespace {
@@ -635,6 +640,48 @@ void ownershipBeforeMox()
           "while transmit ownership is held, a set is refused and answered with the span in force");
 }
 
+// A group registered after the span group, as the later groups of the set
+// are. A capability change that leaves the list as it was sends no state, so
+// a rates change in the same turn still goes out as a notice; one that changes
+// the list sends the state once, and the notice does not repeat it.
+void groupRegisteredAfterSpan()
+{
+    Fixture f(true, true, 0.096, 0.096);
+    bool probeOffered = true;
+    TciExtensionSet::Group probe;
+    probe.token = QStringLiteral("zz_probe");
+    probe.commands = QStringList{QStringLiteral("aethersdr_zz_probe")};
+    probe.offered = [&probeOffered] { return probeOffered; };
+    probe.handle = [](const QString&, const QStringList&) { return TciExtensionSet::Result{}; };
+    check(TciSpanExtensionTest::registerGroup(*f.server, std::move(probe)),
+          "a second group registers after the span group");
+    Wire a;
+    TciSpanExtensionTest::attach(*f.server, a.client, f.model);
+    settle(600);
+    a.take();
+    a.send("aethersdr_ext_enable:true;");
+    check(expect(a, lines({"aethersdr_ext:1,rx_span,zz_probe;",
+                           "aethersdr_rx_span_rates:true,true,48000,96000,192000,384000;",
+                           "aethersdr_rx_span:0,96000;", "aethersdr_rx_span:1,96000;"})),
+          "the enable lists both groups and the span state");
+
+    f.limits(0.048, 0.096);
+    f.republishCapabilities();
+    settle();
+    check(expect(a, lines({"aethersdr_rx_span_rates:true,true,48000,96000;"})),
+          "a rates change with the list unchanged is sent, not taken as sent by the capability edge");
+
+    probeOffered = false;
+    f.limits(0.048, 0.048);
+    f.republishCapabilities();
+    check(expect(a, lines({"aethersdr_ext:1,rx_span;",
+                           "aethersdr_rx_span_rates:true,true,48000;",
+                           "aethersdr_rx_span:0,96000;", "aethersdr_rx_span:1,96000;"})),
+          "a list change sends the list with the new rates");
+    settle();
+    check(expect(a, {}), "and the notice that follows repeats none of it");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -650,6 +697,7 @@ int main(int argc, char** argv)
     rateRadioWide();
     continuousPerPan();
     ownershipBeforeMox();
+    groupRegisteredAfterSpan();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;

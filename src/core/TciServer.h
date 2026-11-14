@@ -273,7 +273,6 @@ private:
     TciExtensionSet::Result handleSpan(const QString& name, const QStringList& args);
     void queueSpanNotice();
     bool broadcastSpan();
-    void resyncSpanAnnounced();
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
@@ -559,7 +558,6 @@ private:
     };
     QHash<int, SpanAnswer> m_spanAnswerOwed;
     bool              m_spanAnswerExpired{false};
-    QString           m_spanAdvertisementSeen;
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};

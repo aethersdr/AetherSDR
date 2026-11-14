@@ -3928,15 +3928,25 @@ void TciServer::registerSpanGroup()
     group.handle = [this](const QString& name, const QStringList& args) {
         return handleSpan(name, args);
     };
+    // Every enabled client has just been sent the state lines: take them as
+    // sent, so the notice repeats none of them.
+    group.resent = [this] {
+        if (spanOffered()) {
+            m_spanAnnounced = currentSpans();
+            m_spanRatesAnnounced = spanRatesLine();
+        } else {
+            m_spanAnnounced.clear();
+            m_spanRatesAnnounced.clear();
+        }
+    };
     registerExtensionGroup(std::move(group));
-    m_spanAdvertisementSeen = m_extensions.advertisement();
     if (!m_model) {
         return;
     }
     // Re-sent when the span moves and also when what a line describes moves: a
     // receiver appears, goes or changes pan, or the capability changes.
     connect(m_model, &RadioModel::capabilitiesChanged, this,
-            [this](bool, const RadioCapabilities&) { resyncSpanAnnounced(); });
+            [this](bool, const RadioCapabilities&) { queueSpanNotice(); });
     connect(m_model, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
         wireSpanSlice(slice);
         queueSpanNotice();
@@ -3994,24 +4004,6 @@ void TciServer::wireSpanPan(PanadapterModel* pan)
     });
     connect(pan, &PanadapterModel::bandwidthLimitsChanged, this,
             [this](double, double) { queueSpanNotice(); });
-}
-
-// When the list changed, the mechanism has just sent every enabled client
-// the state lines; adopt them as sent so the notice repeats none of them.
-void TciServer::resyncSpanAnnounced()
-{
-    const QString advertisement = m_extensions.advertisement();
-    if (advertisement != m_spanAdvertisementSeen) {
-        m_spanAdvertisementSeen = advertisement;
-        if (spanOffered()) {
-            m_spanAnnounced = currentSpans();
-            m_spanRatesAnnounced = spanRatesLine();
-        } else {
-            m_spanAnnounced.clear();
-            m_spanRatesAnnounced.clear();
-        }
-    }
-    queueSpanNotice();
 }
 
 TciExtensionSet::Result TciServer::handleSpan(const QString& name, const QStringList& args)
