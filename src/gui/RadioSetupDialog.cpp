@@ -4695,8 +4695,12 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             // QVariant off a generic seam, and a slider given a value outside
             // its range silently takes the nearest end — which would then be
             // persisted by the next drag as if the operator had chosen it.
-            spkSlider->setValue(std::clamp(
-                m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
+            // Not under the operator's drag: a reseed for a change made
+            // elsewhere would snap the handle back. The release writes it.
+            if (!spkSlider->isSliderDown()) {
+                spkSlider->setValue(std::clamp(
+                    m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
+            }
             // Inside the blockers with everything else, though these three
             // only relabel and dim now — nothing here writes a control's value.
             refreshDither();
