@@ -5527,6 +5527,23 @@ target_include_directories(wsjtx_dial_tracker_test PRIVATE src)
 target_link_libraries(wsjtx_dial_tracker_test PRIVATE Qt6::Core)
 add_test(NAME wsjtx_dial_tracker_test COMMAND wsjtx_dial_tracker_test)
 
+# SpotHub WSJT-X feed: Rx/Tx frequency overlay (#4526). Header-only and
+# Qt-Core-only, same lane as wsjtx_dial_tracker_test above — pins the dial+
+# offset resolution and the refuse-rather-than-guess fallback when Status's
+# later fields could not be read, AND (RFC #4526 review item 1) the actual
+# QDataStream byte parsing in parseWsjtxStatusBody() — field order/framing
+# for DX Call/Report/Tx Mode/Tx Enabled/Transmitting/Decoding/[Rx DF/Tx DF] —
+# via hand-built buffers using the same wsjtxReadQString/wsjtxReadBool
+# primitives WsjtxClient.cpp itself calls (WsjtxWireHelpers.h). Still does
+# NOT link WsjtxClient.cpp/LogManager/AppSettings — parseWsjtxStatusBody()
+# is exercised directly, header-only, same as the rest of this target.
+add_executable(wsjtx_status_freq_test
+    tests/wsjtx_status_freq_test.cpp
+)
+target_include_directories(wsjtx_status_freq_test PRIVATE src)
+target_link_libraries(wsjtx_status_freq_test PRIVATE Qt6::Core)
+add_test(NAME wsjtx_status_freq_test COMMAND wsjtx_status_freq_test)
+
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp
     src/core/N1MMSpotParser.cpp

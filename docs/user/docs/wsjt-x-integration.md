@@ -76,6 +76,14 @@ Split is reported per CAT client, so every instance can use **Split Operation: F
 
 AetherSDR can listen to WSJT-X's UDP decode messages and put the stations it decodes on the panadapter. Each spot lands on the band of the WSJT-X instance that reported it. See the WSJT-X tab on the [SpotHub](./spothub.md) page for filters (CQ, CQ POTA, Calling Me) and colors.
 
+### Rx/Tx frequency overlay
+
+AetherSDR can draw live bracket markers on the waterfall showing exactly where each running WSJT-X instance's Rx and Tx frequencies sit. The brackets are scaled to the mode's occupied bandwidth (FT8: 50 Hz, FT4: 90 Hz, FT2: 150 Hz). Rx brackets are green; Tx brackets are red and appear only when WSJT-X is transmitting or has set a split Tx frequency.
+
+To enable the overlay, right-click on a panadapter and tick **Show WSJT-X Rx/Tx Frequency**. The setting is per-panadapter and independent of decode spotting. AetherSDR starts the WSJT-X UDP listener automatically when the overlay is enabled, so you do not need to turn on **Autostart** in SpotHub separately.
+
+To post decoded stations as spots independently of the overlay, use the **Post decoded stations as spots** checkbox on the WSJT-X tab in [SpotHub](./spothub.md). The two settings can be used in any combination.
+
 ## Known issues
 
 - FT8 transmit audio can drop out for about half a second roughly one second into each transmission ([#5469](https://github.com/aethersdr/AetherSDR/issues/5469)).
