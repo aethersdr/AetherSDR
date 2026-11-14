@@ -710,7 +710,8 @@ bool testSimBackendEndToEnd()
                                       "extensions", "sliceFrequencyControl", "receiveModeControl",
                                       "receiveFilterControl", "receiveAudioControl",
                                       "receivePanCenterControl", "receivePanBandwidthControl",
-                                      "receiveCwPitchControl"})
+                                      "receiveCwPitchControl", "receiveDspControl",
+                                      "receivePanRfGainControl", "radioSpeakerControl"})
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
                                       "frequencyHz", "frequencyObservation", "mode", "filter", "active",
@@ -728,7 +729,7 @@ bool testSimBackendEndToEnd()
                                      {"enabled", "level"})
                    && hasExactlyKeys(panValue,
                                      {"id", "centerHz", "centerKnown", "owned", "geometryObservation",
-                                      "bandwidthHz", "dbmRange", "bandwidthLimitsHz",
+                                      "rfGainObservation", "bandwidthHz", "dbmRange", "bandwidthLimitsHz",
                                       "receive", "displayCadence"})
                    && hasExactlyKeys(panValue.value(QStringLiteral("dbmRange")).toObject(),
                                      {"minimum", "maximum"})
@@ -741,7 +742,12 @@ bool testSimBackendEndToEnd()
                                      {"fps", "averageFrames", "averageIsRequest", "fpsIsRequest",
                                       "radioReportedAverage", "radioReportedFps", "weightedAverage",
                                       "weightedAverageKnown", "waterfallRate"}),
-               "SimBackend resources must match the complete documented v1 schemas")) {
+               "SimBackend resources must match the complete documented v1 schemas")
+        || !check(!panValue.value(QStringLiteral("rfGainObservation")).toObject()
+                       .value(QStringLiteral("known")).toBool()
+                  && panValue.value(QStringLiteral("rfGainObservation")).toObject()
+                       .value(QStringLiteral("authority")).toString() == QLatin1String("unknown"),
+                  "a backend with no RF-gain record publishes no RF-gain observation")) {
         radio.disconnectFromRadio();
         return false;
     }

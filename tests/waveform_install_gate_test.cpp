@@ -109,6 +109,21 @@ int main()
     report("health: a non-LAN address (e.g. a tailnet) -> NotLan",
            radioHealthBlocker(true, true, false, false) == H::NotLan);
 
+    // ── AetherGPS: legacy on a FLEX-6000, else a container under the Docker gate ──
+    using G = AetherGpsBlocker;
+    using D = DockerWaveformInstallBlocker;
+    report("gps: a connected FLEX-6000 takes the legacy package -> None",
+           aetherGpsBlocker(true, true, true, D::UnsupportedPlatform) == G::None);
+    report("gps: a container radio with its WFP ready -> None",
+           aetherGpsBlocker(true, true, false, D::None) == G::None);
+    report("gps: a container radio whose WFP isn't ready -> Container",
+           aetherGpsBlocker(true, true, false, D::WfpNotReady) == G::Container
+               && aetherGpsBlocker(true, true, false, D::RuntimeStatusUnknown) == G::Container);
+    report("gps: not connected wins",
+           aetherGpsBlocker(false, true, false, D::NotConnected) == G::NotConnected);
+    report("gps: a radio family without waveforms -> NoWaveforms",
+           aetherGpsBlocker(true, false, true, D::None) == G::NoWaveforms);
+
     if (g_failed == 0) {
         std::printf("\nAll %d waveform-install-gate tests passed.\n", g_total);
         return 0;

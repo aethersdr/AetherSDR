@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 // Socket-free nickname encoding, model admission and production dialog edits.
 #include "TestSettingsProfile.h"
 #include "SeamThreadAffinityProbe.h"
@@ -182,18 +183,18 @@ void modelAndDialog()
         QTest::keyClick(edit, Qt::Key_Return);
         check(finished.size() == 1, "Return finishes an untouched early field");
         check(commands.isEmpty(), "untouched empty field cannot clear a newly connected radio");
-        backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("LateName")}});
+        observeRadioStatus(*backend, {{QStringLiteral("nickname"), QStringLiteral("LateName")}});
         check(edit->text() == QStringLiteral("LateName") && !edit->isModified(),
               "late radio identity refreshes untouched field without marking an edit");
         QTest::keyClick(edit, Qt::Key_Return);
         check(commands.isEmpty(), "untouched populated field cannot reassert a stale nickname");
         edit->setText(QStringLiteral("OperatorEdit"));
         edit->setModified(true);
-        backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
+        observeRadioStatus(*backend, {{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
         check(edit->text() == QStringLiteral("OperatorEdit"),
               "radio status preserves an operator edit in progress");
     }
-    backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("Original")}});
+    observeRadioStatus(*backend, {{QStringLiteral("nickname"), QStringLiteral("Original")}});
     check(radio.nickname() == QStringLiteral("Original"), "radio status seeds nickname");
     QSignalSpy dropped(&radio, &RadioModel::commandDropped);
     {
@@ -220,7 +221,7 @@ void modelAndDialog()
         check(!edit->isModified(), "dispatch consumes the operator edit");
         QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
         check(commands.size() == 1, "repeated editingFinished cannot dispatch the same clear twice");
-        backend->decodeRadioStatus({{QStringLiteral("model"), QStringLiteral("FLEX-8600")}});
+        observeRadioStatus(*backend, {{QStringLiteral("model"), QStringLiteral("FLEX-8600")}});
         check(radio.nickname() == QStringLiteral("Original"), "absent status keeps nickname");
         check(edit->text().isEmpty() && !edit->isModified(),
               "unrelated identity refresh cannot replace a pending clear with the old name");
@@ -229,7 +230,7 @@ void modelAndDialog()
         check(radio.nickname().isEmpty() && edit->text().isEmpty()
                   && identityChanged.size() == 1,
               "R|0 alone clears model and field and notifies identity consumers");
-        backend->decodeRadioStatus({{QStringLiteral("nickname"), QString()}});
+        observeRadioStatus(*backend, {{QStringLiteral("nickname"), QString()}});
         check(radio.nickname().isEmpty() && edit->text().isEmpty(),
               "present empty status clears model and open dialog nickname");
         commands.clear();
@@ -247,7 +248,7 @@ void modelAndDialog()
         check(commands.last() == QStringLiteral("radio name DeskName"),
               "real typed Return dispatches sanitized nickname");
         const qsizetype sent = commands.size();
-        backend->decodeRadioStatus({{QStringLiteral("model"), QStringLiteral("FLEX-8600")},
+        observeRadioStatus(*backend, {{QStringLiteral("model"), QStringLiteral("FLEX-8600")},
                                     {QStringLiteral("nickname"), QStringLiteral("OldName")}});
         check(edit->text() == QStringLiteral("Desk Name_"),
               "full radio status with the old name preserves the pending operator edit");
@@ -273,7 +274,7 @@ void modelAndDialog()
         emit radio.connectionStateChanged(false);
         backend->connected = true;
         emit radio.connectionStateChanged(true);
-        backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("Reconnected")}});
+        observeRadioStatus(*backend, {{QStringLiteral("nickname"), QStringLiteral("Reconnected")}});
         check(edit->text() == QStringLiteral("Reconnected") && !edit->isModified(),
               "disconnect with a discarded reply releases pending field refresh on reconnect");
         finishEdit(*edit, QStringLiteral("AnotherLostReply"));
@@ -316,34 +317,36 @@ void replyOrdering()
         replies.append(std::move(reply));
         return true;
     });
-    QSignalSpy changes(backend.get(), &IRadioBackend::radioChanged);
+    QList<RadioDelta> changes;
+    QObject::connect(backend.get(), &IRadioBackend::radioChanged, backend.get(), [&](const RadioDelta& value) { changes.append(value); });
+    QObject::connect(backend.get(), &IRadioBackend::radioStatusObserved, backend.get(), [&](const RadioStatusObservation& value) { changes.append(value.radio); });
     backend->requestRadioNickname(QStringLiteral("First"));
     backend->requestRadioNickname(QStringLiteral("Second"));
     replies[1](0, QString());
     replies[0](0, QString());
     check(changes.size() == 1
-              && qvariant_cast<RadioDelta>(changes.first().first()).nickname == QStringLiteral("Second"),
+              && changes.first().nickname == QStringLiteral("Second"),
           "an older success cannot overwrite a newer successful nickname reply");
     changes.clear();
     backend->requestRadioNickname(QStringLiteral("RaceName"));
-    backend->decodeRadioStatus({{QStringLiteral("slices"), QStringLiteral("0")},
+    observeRadioStatus(*backend, {{QStringLiteral("slices"), QStringLiteral("0")},
                                 {QStringLiteral("panadapters"), QStringLiteral("1")},
                                 {QStringLiteral("nickname"), QStringLiteral("OldName")}});
     replies.last()(0, QString());
     check(changes.size() == 2
-              && qvariant_cast<RadioDelta>(changes.last().first()).nickname == QStringLiteral("RaceName"),
+              && changes.last().nickname == QStringLiteral("RaceName"),
           "R|0 confirms rename after an intervening full radio status carrying the old name");
-    backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
+    observeRadioStatus(*backend, {{QStringLiteral("nickname"), QStringLiteral("OtherClient")}});
     check(changes.size() == 3
-              && qvariant_cast<RadioDelta>(changes.last().first()).nickname == QStringLiteral("OtherClient"),
+              && changes.last().nickname == QStringLiteral("OtherClient"),
           "nickname status arriving after confirmation remains authoritative");
     changes.clear();
     backend->setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
     backend->requestRadioNickname(QString());
-    backend->decodeRadioStatus({{QStringLiteral("nickname"), QStringLiteral("OldName")}});
+    observeRadioStatus(*backend, {{QStringLiteral("nickname"), QStringLiteral("OldName")}});
     replies.last()(0, QString());
     check(changes.size() == 2
-              && qvariant_cast<RadioDelta>(changes.last().first()).nickname == QString(),
+              && changes.last().nickname == QString(),
           "R|0 confirms clear after an intervening status carrying the old name");
     changes.clear();
     bool accepted = true;

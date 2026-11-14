@@ -451,18 +451,10 @@
       "page": "menu-reference",
       "anchor_heading": "intro",
       "grab": {
-        "target": "MainWindow"
+        "target": "AetherSDR::TitleBar"
       },
-      "crop": {
-        "box": [
-          0,
-          0,
-          1600,
-          52
-        ]
-      },
-      "caption": "The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.",
-      "alt": "The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimise, maximise and close buttons."
+      "caption": "The title bar shows two recent radio shortcuts, More radios, PC Audio and volume controls.",
+      "alt": "The AetherSDR title bar with the connected simulator, a Home radio shortcut, More radios and audio controls."
     },
     {
       "id": "customize-button-bar",
@@ -3696,19 +3688,16 @@
         },
         {
           "wait_visible": "MemoryBrowsePanel"
+        },
+        {
+          "cmd": "invoke",
+          "target": "memorySearchButton",
+          "action": "click",
+          "_sleep": 0.3
         }
       ],
       "grab": {
-        "target": "pan-visible",
-        "selector": "0"
-      },
-      "crop": {
-        "box": [
-          0,
-          14,
-          380,
-          250
-        ]
+        "target": "MemoryBrowsePanel"
       },
       "cleanup": [
         {
@@ -3718,8 +3707,11 @@
           "_sleep": 0.8
         }
       ],
-      "caption": "The Memory panel, opened from the Memory button on the overlay menu.",
-      "alt": "Memory panel beside the overlay menu, with the Memory button lit. An Add Memory button sits above a Frequency and Name list: 0.670000 AM News, 14.085000 RTTY 20m, 14.236000 FreeDV 20m, 146.780000 and 146.960000, two repeater memories named by their callsign and club."
+      "caption": "The Memory panel with Search memories expanded below Add Memory.",
+      "alt": "Memory panel with Add Memory and a Search memories icon at the top. The Search memory names field is expanded above the Frequency and Name list, populated with synthetic Memory 1 through Memory 14 entries.",
+      "radio": "demo",
+      "offscreen": true,
+      "device_pixel_ratio": 1.0
     },
     {
       "id": "copy-assist-panel",
@@ -4195,56 +4187,6 @@
       ],
       "caption": "The Add menu on the Peripherals page: every device type AetherSDR can configure.",
       "alt": "Peripherals Add menu: Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM Amplifier, SPE Expert Amplifier, VK3AMP Amplifier, RF-KIT Amplifier, Elecraft KPA1500 and LP-100A Meter."
-    },
-    {
-      "id": "radio-list-popup",
-      "page": "menu-reference",
-      "anchor_heading": "Radio tabs",
-      "offscreen": true,
-      "settle": 1.0,
-      "steps": [
-        {
-          "cmd": "titlebar",
-          "action": "showDiscovery",
-          "_sleep": 1.5
-        },
-        {
-          "wait_visible": "discoveredRadiosPopover"
-        }
-      ],
-      "grab": {
-        "target": "discoveredRadiosPopover"
-      },
-      "cleanup": [
-        {
-          "cmd": "close",
-          "target": "discoveredRadiosPopover",
-          "_allow_fail": true
-        },
-        {
-          "cmd": "close",
-          "target": "QMenu",
-          "_allow_fail": true,
-          "_sleep": 0.5
-        }
-      ],
-      "caption": "The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.",
-      "alt": "Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom.",
-      "redact": [
-        [
-          14,
-          86,
-          98,
-          20
-        ],
-        [
-          14,
-          143,
-          98,
-          20
-        ]
-      ],
-      "widget_redact": false
     },
     {
       "id": "spothub-add-spot",
@@ -4881,6 +4823,343 @@
       ],
       "caption": "Start from defaults or another profile, then choose microphone, output and pan arrangement. Enter saves the profile.",
       "alt": "Create Operator profile dialog with a name, source profile, microphone, audio output, pan arrangement and Create and use profile action."
+    },
+    {
+      "id": "radio-tab-context-menu",
+      "page": "menu-reference",
+      "anchor_heading": "Radio tabs",
+      "radio": "demo",
+      "offscreen": true,
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex test"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionSaveManual",
+          "action": "click"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "contextMenu",
+          "target": "Radio Cabin Flex test, Saved"
+        },
+        {
+          "cmd": "hover",
+          "target": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Each radio tab has a context menu. Unavailable actions remain visible with a reason.",
+      "alt": "A saved radio tab context menu with Connect or Switch, Disconnect, Rename, Connection settings and Remove from tabs actions."
+    },
+    {
+      "id": "radio-tab-switch-confirmation",
+      "page": "station-profiles",
+      "anchor_heading": "Using workspace radio tabs",
+      "radio": "demo",
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex test"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionSaveManual",
+          "action": "click"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Radio Cabin Flex test, Saved",
+          "action": "click"
+        },
+        {
+          "wait_visible": "radioSwitchConfirmation"
+        }
+      ],
+      "grab": {
+        "target": "radioSwitchConfirmation"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "radioSwitchConfirmation",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "Confirm a replacement while the current radio remains connected. Location names distinguish similarly named radios.",
+      "alt": "Switch radio prompt naming the source and destination Locations, explaining that the current radio will disconnect, with Cancel and Switch buttons."
+    },
+    {
+      "id": "radio-ip-startup-recovery",
+      "page": "station-profiles",
+      "anchor_heading": "Startup and recovery",
+      "radio": "demo",
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "disconnect"
+        },
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualConnectButton",
+          "action": "click"
+        },
+        {
+          "sleep": 4.0
+        }
+      ],
+      "grab": {
+        "target": "connectionPanel"
+      },
+      "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click"
+        }
+      ],
+      "caption": "A failed saved IP path retains its name. Back to Locations returns to its saved radio.",
+      "alt": "Connect by IP shows a saved connection name, a documentation IP address, the failed connection reason and a Back to Locations button."
+    },
+    {
+      "id": "radio-tab-context-menu-light",
+      "page": "menu-reference",
+      "anchor_heading": "Radio tabs",
+      "radio": "demo",
+      "offscreen": true,
+      "settle": 0.5,
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionBackToStation",
+          "action": "click",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionStationList",
+          "action": "selectRow",
+          "value": "0"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddRadio",
+          "action": "click"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualName",
+          "action": "setText",
+          "value": "Cabin Flex test"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualRadioType",
+          "action": "setCurrentText",
+          "value": "FlexRadio"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionManualIp",
+          "action": "setText",
+          "value": "192.0.2.55"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionSaveManual",
+          "action": "click"
+        },
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "invoke",
+          "target": "Default Light",
+          "action": "trigger"
+        },
+        {
+          "cmd": "contextMenu",
+          "target": "Radio Cabin Flex test, Saved"
+        },
+        {
+          "cmd": "hover",
+          "target": "QMenu"
+        }
+      ],
+      "grab": {
+        "target": "QMenu"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "QMenu",
+          "_allow_fail": true
+        },
+        {
+          "cmd": "invoke",
+          "target": "Default Dark",
+          "action": "trigger"
+        }
+      ],
+      "caption": "Highlighted menu text uses the matching canon foreground and selection surface in the light theme.",
+      "alt": "Light-theme radio tab context menu with Rename highlighted and readable dark text on a light selection surface."
+    },
+    {
+      "id": "radio-recent-drawer",
+      "page": "menu-reference",
+      "anchor_heading": "Radio tabs",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioTabAddButton",
+          "action": "click"
+        }
+      ],
+      "grab": {
+        "target": "discoveredRadiosPopover"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "discoveredRadiosPopover",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "More radios keeps all saved and nearby radios available beyond the two title-bar shortcuts.",
+      "alt": "Radio drawer with Home, POTA and Cabin connections, search, per-radio actions and Locations and connections."
     }
   ]
 }
