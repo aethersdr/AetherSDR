@@ -16,6 +16,22 @@ ControlInputPump::ControlInputPump(ControlService& service, ControlSession& sess
 {
     Q_ASSERT(session.thread() == thread());
     Q_ASSERT(m_read && m_write && m_close);
+    session.setDeferredReplySink(
+        [guard = QPointer<ControlInputPump>(this)](const QJsonObject& message, bool close) {
+            if (guard) { guard->resumeWithReply({message, close}); }
+        });
+}
+
+void ControlInputPump::resumeWithReply(const ServiceReply& reply)
+{
+    if (QThread::currentThread() != thread() || m_finished || !m_awaitingDeferred) {
+        return;
+    }
+    m_awaitingDeferred = false;
+    if (!deliver(reply)) {
+        return;
+    }
+    schedule();   // input that arrived while the reply was owed
 }
 
 ControlInputPump::~ControlInputPump()
@@ -83,7 +99,7 @@ void ControlInputPump::schedule()
 void ControlInputPump::readAvailable()
 {
     if (QThread::currentThread() != thread() || m_finished || m_reading || m_scheduled
-        || !m_session || m_session->isRevoked()) {
+        || m_awaitingDeferred || !m_session || m_session->isRevoked()) {
         return;
     }
     const QPointer<ControlInputPump> guard(this);
@@ -126,6 +142,10 @@ void ControlInputPump::readAvailable()
         if (frame.endsWith('\r')) { frame.chop(1); }
         const ServiceReply reply = m_service.handle(frame, m_session);
         if (!guard || m_finished || !m_session) { return; }
+        if (reply.deferred) {
+            m_awaitingDeferred = true;   // resumeWithReply() writes it and reads on
+            return;
+        }
         if (!deliver(reply)) { return; }
     }
     schedule();

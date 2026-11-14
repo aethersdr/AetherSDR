@@ -14,9 +14,10 @@ namespace AetherSDR::control {
 namespace {
 constexpr qsizetype kHeaderBytes = 9;
 constexpr qsizetype kRecordBytes = 65; // 32 ASCII id + 1 role + 32 secret bytes
+constexpr qsizetype kRecordBytesV2 = kRecordBytes + ControlCredentials::kMaximumNameBytes; // + name, zero-padded UTF-8
 constexpr auto kMagic = "AETHTX01";   // local roles only (0 Client, 1 GrantAdmin)
 // Adds the remote scopes (2 RemoteObserve, 3 RemoteControl), whose 32 bytes are
-// a token digest. Written only when a remote record exists, so an aetherd that
+// a token digest, and a client name to every record. Written only when a remote record exists, so an aetherd that
 // predates it still reads every vault without one.
 constexpr auto kMagicV2 = "AETHTX02";
 
@@ -58,6 +59,11 @@ std::optional<QByteArray> ControlCredentialVault::encode(const QList<ControlCred
         bytes.append(record.id.toLatin1());
         bytes.append(static_cast<char>(roleByte(record.role)));
         bytes.append(record.secret);
+        if (anyRemote) {
+            QByteArray name = record.name.toUtf8();
+            name.append(QByteArray(ControlCredentials::kMaximumNameBytes - name.size(), '\0'));
+            bytes.append(name);
+        }
     }
     return bytes;
 }
@@ -67,19 +73,32 @@ std::optional<QList<ControlCredentials::Record>> ControlCredentialVault::decode(
     const bool v2 = bytes.startsWith(kMagicV2);
     if (bytes.size() < kHeaderBytes || (!v2 && !bytes.startsWith(kMagic))) { return {}; }
     const qsizetype count = static_cast<unsigned char>(bytes[8]);
-    if (count > ControlCredentials::kMaximumRecords || bytes.size() != kHeaderBytes + count * kRecordBytes) {
+    const qsizetype recordBytes = v2 ? kRecordBytesV2 : kRecordBytes;
+    if (count > ControlCredentials::kMaximumRecords || bytes.size() != kHeaderBytes + count * recordBytes) {
         return {};
     }
     QList<ControlCredentials::Record> records;
     for (qsizetype i = 0; i < count; ++i) {
-        const qsizetype offset = kHeaderBytes + i * kRecordBytes;
+        const qsizetype offset = kHeaderBytes + i * recordBytes;
         const unsigned char role = static_cast<unsigned char>(bytes[offset + 32]);
         if (role > (v2 ? 3 : 1)) { return {}; }
         static constexpr ControlCredentials::Role kRoles[] = {
             ControlCredentials::Role::Client, ControlCredentials::Role::GrantAdmin,
             ControlCredentials::Role::RemoteObserve, ControlCredentials::Role::RemoteControl};
+        QString name;
+        if (v2) {
+            QByteArray field = bytes.mid(offset + kRecordBytes, ControlCredentials::kMaximumNameBytes);
+            const qsizetype end = field.indexOf('\0');
+            if (end >= 0) {
+                // Zero padding only: a NUL followed by anything else is corrupt.
+                if (field.mid(end).count('\0') != field.size() - end) { return {}; }
+                field.truncate(end);
+            }
+            name = QString::fromUtf8(field);
+            if (name.toUtf8() != field) { return {}; }
+        }
         records.append({QString::fromLatin1(bytes.mid(offset, 32)), kRoles[role],
-            bytes.mid(offset + 33, ControlCredentials::kSecretBytes)});
+            bytes.mid(offset + 33, ControlCredentials::kSecretBytes), name});
     }
     return ControlCredentials::validRecords(records) ? std::optional{records} : std::nullopt;
 }

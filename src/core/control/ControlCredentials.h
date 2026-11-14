@@ -34,6 +34,10 @@ public:
         // roles: the SHA-256 digest of the client's token instead. The daemon
         // never needs a remote secret back, so it never keeps one.
         QByteArray secret;
+        // Remote roles only: the name the client gave at pairing, at most
+        // kMaximumNameBytes of UTF-8 with no control characters. Empty for a
+        // local role, which has no name.
+        QString name;
     };
     class Principal {
     public:
@@ -50,6 +54,8 @@ public:
     };
     static constexpr qsizetype kMaximumRecords = 32;
     static constexpr qsizetype kSecretBytes = 32;
+    static constexpr qsizetype kMaximumNameBytes = 32;
+    [[nodiscard]] static bool validName(const QString& name);
 
     explicit ControlCredentials(QObject* parent = nullptr);
     ~ControlCredentials() override;
@@ -62,6 +68,10 @@ public:
     // unchanged records. Invalid input fails closed and retires old identities.
     // Provisioning and durable write success must precede this call.
     [[nodiscard]] bool replace(const QList<Record>& records);
+    // Adds one record, already durably stored, without retiring any other
+    // identity (a reload would end every live session). False when the set
+    // with it would be invalid.
+    [[nodiscard]] bool add(const Record& record);
     [[nodiscard]] bool revoke(const QString& id);
     void clear();
     [[nodiscard]] Principal verify(const QJsonValue& auth) const;

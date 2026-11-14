@@ -62,7 +62,10 @@ advertised `tx.*` or `txAdmin.*`, and those methods are refused with
 
 The vault record format goes to version 2. The role byte gains the two remote
 scopes, and remote records store only the token's SHA-256 digest, since the
-daemon never needs the secret back. Version-1 vaults read unchanged.
+daemon never needs the secret back. Each v2 record also carries the client's
+name in 32 zero-padded bytes of UTF-8 (empty for a local role). Version 2 is
+written only while a remote record exists; version-1 vaults read unchanged.
+`--list-credentials` prints the role and, for a remote record, the name.
 
 ### 3. Pairing
 
@@ -70,16 +73,34 @@ daemon never needs the secret back. Version-1 vaults read unchanged.
   grant. It returns `{code, expiresInMs, certificateSha256}`. One pairing can be
   open at a time; a new `begin` replaces it. The code expires after 5 minutes.
 - **The code** is ten digits shown as `123-456-7890`: six random digits, then four
-  check digits derived from the six and the certificate fingerprint (the first
-  four decimal digits of SHA-256(six digits ‖ fingerprint)). The client checks
+  check digits derived from the six and the certificate fingerprint: the first
+  four bytes of SHA-256(six digits ‖ fingerprint), read as a big-endian
+  unsigned integer, mod 10 000, zero-padded. The six digits and the fingerprint
+  (64 lowercase hex characters) are hashed as ASCII text. The client checks
   them against the certificate it actually sees **before** it sends anything, so
   a man in the middle with another certificate is caught (1 in 10 000) without
   the operator comparing fingerprints by hand.
-- **`pairing.complete {code, clientName}`** (new). Allowed only on the network
-  listener, before `hello`, once per connection. A correct code mints a
-  `remote-control` credential, stores it in the vault, and returns
-  `{credentialId, token}` exactly once. The connection then closes and the
-  client reconnects with the token. Five wrong codes end the open pairing.
+- **`pairing.complete {code, clientName}`** (new). Allowed only on the TLS
+  listener (the check digits pin its certificate; the tailnet listener refuses
+  it with `capability.unavailable`), before `hello`, with no `sessionId`, once
+  per connection. `clientName` is 1 to 32 bytes of UTF-8 with no control
+  characters, trimmed. A correct code mints a `remote-control` credential,
+  stores it in the vault, and returns `{credentialId, token}` exactly once;
+  `token` is 64 lowercase hex characters, presented at `hello` as
+  `{scheme:"bearer", token}`. Every answer closes the connection, so a client
+  reconnects with the token. Five wrong codes end the open pairing.
+- **Errors:** a wrong code is `auth.invalid`; no open or an expired pairing is
+  `capability.unavailable`; malformed parameters are `request.invalid_params`
+  (they do not use up an attempt); a credential the vault would not store is
+  `engine.failed`.
+- **The reply is deferred** while the credential is written: the service
+  returns no reply at once, the connection reads no further input, and the
+  answer is written when the vault write completes. The handshake deadline is
+  extended once, to 30 s, for that write. If the client disconnects first, the
+  stored credential is an orphan: aetherd logs its id for removal.
+- **Adding a credential retires no one.** A paired record joins the live
+  verifier directly; a full reload would end every live session, the radio's
+  own panel included.
 - **Revocation:** `--remove-credential <id>` (existing) and the radio's own
   pairing screen list and remove paired clients.
 

@@ -196,6 +196,90 @@ bool ControlService::bindTransmitTarget(TransmitControlTarget* target)
     return true;
 }
 
+bool ControlService::bindPairing(PairingBinding binding)
+{
+    if (m_resources->thread() != QThread::currentThread() || !binding.issuer || !binding.nowMs
+        || binding.certificateSha256.size() != 64 || m_pairingBinding || m_dispatchStarted) {
+        return false;
+    }
+    for (const QChar c : binding.certificateSha256) {
+        if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return false; }
+    }
+    m_pairingBinding = std::move(binding);
+    return true;
+}
+
+ServiceReply ControlService::beginPairing(const ProtocolRequest& request,
+    const ControlSession& session) const
+{
+    if (session.isNetwork() || !session.canControl()) {
+        return failure(request.id, {QStringLiteral("auth.grant_denied"),
+            QStringLiteral("pairing starts only on the local control socket"), {}, false});
+    }
+    if (!m_pairingBinding) {
+        return failure(request.id, {QStringLiteral("capability.unavailable"),
+            QStringLiteral("no secure remote listener is configured"), {}, false});
+    }
+    if (!request.params.isEmpty()) {
+        return failure(request.id, {QStringLiteral("request.invalid_params"),
+            QStringLiteral("pairing.begin takes no parameters"), {}, false});
+    }
+    const ControlPairing::Opened opened =
+        m_pairing.begin(m_pairingBinding->certificateSha256, m_pairingBinding->nowMs());
+    return {ControlProtocolCodec::successResponse(request.id, {
+        {QStringLiteral("code"), opened.code},
+        {QStringLiteral("expiresInMs"), double(opened.expiresInMs)},
+        {QStringLiteral("certificateSha256"), opened.certificateSha256}}), false};
+}
+
+ServiceReply ControlService::completePairing(const ProtocolRequest& request,
+    ControlSession* session) const
+{
+    // Every answer closes the connection, so one connection makes one attempt;
+    // the pairing's own attempt limit bounds a client that reconnects.
+    const auto refuse = [&](const char* code, const char* message) {
+        return failure(request.id, {QString::fromLatin1(code), QString::fromLatin1(message), {}, false}, true);
+    };
+    if (!m_pairingBinding || !session->pairingAllowed()) {
+        return refuse("capability.unavailable", "pairing is not available on this listener");
+    }
+    const QJsonValue code = request.params.value(QStringLiteral("code"));
+    const QJsonValue name = request.params.value(QStringLiteral("clientName"));
+    if (request.params.size() != 2 || !code.isString() || !name.isString()
+        || name.toString().trimmed().isEmpty()
+        || !ControlCredentials::validName(name.toString())) {
+        return refuse("request.invalid_params",
+                      "pairing.complete takes code and clientName (1 to 32 bytes of UTF-8)");
+    }
+    switch (m_pairing.attempt(code.toString(), m_pairingBinding->nowMs())) {
+    case ControlPairing::Attempt::Accepted:
+        break;
+    case ControlPairing::Attempt::Wrong:
+        return refuse("auth.invalid", "pairing code rejected");
+    case ControlPairing::Attempt::NotOpen:
+    case ControlPairing::Attempt::Expired:
+        return refuse("capability.unavailable", "no pairing is open on the radio");
+    }
+    const QPointer<ControlSession> target(session);
+    const QString id = request.id;
+    m_pairingBinding->issuer->issue(name.toString().trimmed(),
+        [target, id](std::optional<PairingIssuer::Issued> issued) {
+            if (!target) { return; }
+            if (!issued) {
+                (void)target->completeDeferred(ControlProtocolCodec::errorResponse(id,
+                    {QStringLiteral("engine.failed"),
+                     QStringLiteral("the credential could not be stored"), {}, false}), true);
+                return;
+            }
+            (void)target->completeDeferred(ControlProtocolCodec::successResponse(id, {
+                {QStringLiteral("credentialId"), issued->credentialId},
+                {QStringLiteral("token"), issued->token}}), true);
+        });
+    ServiceReply reply;
+    reply.deferred = true;
+    return reply;
+}
+
 ServiceReply ControlService::handle(
     const QByteArray& bytes, ControlSession* session) const
 {
@@ -231,6 +315,10 @@ ServiceReply ControlService::handle(
     }
 
     const ProtocolRequest& request = *parsed.request;
+    if (!session->isNegotiated() && request.isPairingComplete() && session->isNetwork()
+        && !session->isAuthenticated()) {
+        return completePairing(request, session);
+    }
     if (!session->isNegotiated()) {
         ControlCredentials::Principal principal;
         QJsonObject helloParams = request.params;
@@ -311,6 +399,9 @@ ServiceReply ControlService::handle(
                 QStringLiteral("transmit is not available to network sessions"), {}, false});
         }
         return {m_transmit->handle(request, session), false};
+    }
+    if (request.method == QStringLiteral("pairing.begin")) {
+        return beginPairing(request, *session);
     }
     if (request.method == QStringLiteral("radio.connect")
         || request.method == QStringLiteral("radio.disconnect")) {
@@ -744,6 +835,9 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
                 available.append(QString::fromLatin1(method));
             }
         }
+    }
+    if (m_pairingBinding && session.canControl() && !session.isNetwork()) {
+        available.append(QStringLiteral("pairing.begin"));
     }
     if (m_transmit && !session.isNetwork()) {
         for (const QJsonValue& method : m_transmit->methods(session)) {

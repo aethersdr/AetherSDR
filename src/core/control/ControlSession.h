@@ -81,6 +81,18 @@ public:
     // A late binding to an ended session is retired immediately.
     [[nodiscard]] bool bindAuthorityLifetime(QObject* context, std::function<void()> retire);
 
+    // Set by a listener whose transport authenticates the server to the client
+    // (the TLS listener), before any input: only there may pairing.complete run.
+    void allowPairing() { m_pairingAllowed = true; }
+    [[nodiscard]] bool pairingAllowed() const { return m_pairingAllowed; }
+
+    // Deferred replies (ServiceReply::deferred). The input pump registers the
+    // sink once; a handler that deferred calls completeDeferred() exactly once,
+    // on this thread. A connection that ended first drops the reply.
+    using DeferredReplySink = std::function<void(const QJsonObject& message, bool closeAfterWrite)>;
+    void setDeferredReplySink(DeferredReplySink sink) { m_deferredSink = std::move(sink); }
+    bool completeDeferred(const QJsonObject& message, bool closeAfterWrite);
+
     // Bind once on the owning thread; neither endpoint may move threads afterward.
     // Invalid/repeated binds log and leave the existing wiring unchanged.
     // The transport context bounds callback
@@ -140,6 +152,8 @@ private:
     QString m_sessionId;
     bool m_revoked{false};
     bool m_abortRequested{false};
+    DeferredReplySink m_deferredSink;
+    bool m_pairingAllowed{false};
     bool m_authorityLifetimeBound{false};
     QPointer<QObject> m_authorityContext;
     std::function<void()> m_retireAuthority;

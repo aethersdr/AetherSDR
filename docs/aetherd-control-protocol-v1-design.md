@@ -261,7 +261,11 @@ Initial non-TX methods are `capabilities.get`, `resource.get`,
 `resource.subscribe`, `resource.unsubscribe`, `radio.connect`,
 `radio.disconnect`, `slice.setFrequency`, `slice.setMode`, `slice.setFilter`,
 `slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`,
-`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Connect requests use
+`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Remote-client
+pairing adds `pairing.begin` (local socket, `control`) and `pairing.complete`
+(sent instead of `hello` on the TLS network listener, so like `hello` it
+carries no `sessionId`); see [`aetherd-remote-clients.md`](aetherd-remote-clients.md)
+§3.  Connect requests use
 typed family-neutral fields; backend-specific connection data lives in a
 namespaced validated object and never includes a persistent plaintext credential.
 

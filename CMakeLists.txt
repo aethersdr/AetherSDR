@@ -888,6 +888,8 @@ set(CORE_SOURCES
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
     src/core/control/ControlCredentials.cpp   # explicit credential identity, not TX grants
+    src/core/control/ControlPairing.cpp  # aetherd remote clients: pairing (aetherd-remote-clients.md)
+    src/core/control/VaultPairingIssuer.cpp  # aetherd remote clients: paired credentials into the vault
     src/core/control/ControlCredentialVault.cpp # OS-vault-only, explicit provisioning composition
     src/core/control/ControlCredentialProvisioner.cpp
     src/core/control/ControlInputPump.cpp     # bounded input turns and terminal authority lifetime
@@ -2869,6 +2871,7 @@ if(Qt6WebSockets_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_WEBSOCKETS)
     target_sources(aethercore PRIVATE
         src/core/FreeDvClient.cpp
+        src/core/control/RemoteControlServer.cpp  # aetherd network listener (aetherd-remote-clients.md)
     )
     target_sources(AetherSDR PRIVATE
         src/gui/FreeDvReporterDialog.cpp

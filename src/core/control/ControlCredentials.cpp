@@ -113,6 +113,18 @@ ControlCredentials::Record ControlCredentials::generateRemote(Role role, QByteAr
     return result;
 }
 
+bool ControlCredentials::validName(const QString& name)
+{
+    // A lone surrogate does not survive the UTF-8 round trip the vault makes.
+    const QByteArray utf8 = name.toUtf8();
+    if (utf8.size() > kMaximumNameBytes || QString::fromUtf8(utf8) != name) { return false; }
+    for (const QChar c : name) {
+        if (c.category() == QChar::Other_Control || c.category() == QChar::Other_Format
+            || c == QChar::ReplacementCharacter) { return false; }
+    }
+    return true;
+}
+
 bool ControlCredentials::validRecords(const QList<Record>& records)
 {
     QSet<QString> ids;
@@ -122,7 +134,8 @@ bool ControlCredentials::validRecords(const QList<Record>& records)
         if (!validId(record.id) || record.secret.size() != kSecretBytes
             || (record.role != Role::Client && record.role != Role::GrantAdmin
                 && !isRemote(record.role))
-            || ids.contains(record.id)) { return false; }
+            || ids.contains(record.id)
+            || (isRemote(record.role) ? !validName(record.name) : !record.name.isEmpty())) { return false; }
         const QByteArray digest = recordDigest(record);
         if (digests.contains(digest)) { return false; }
         ids.insert(record.id);
@@ -152,6 +165,29 @@ bool ControlCredentials::replace(const QList<Record>& records)
     m_records = valid ? std::move(next) : QList<std::shared_ptr<State>>{};
     emit changed();
     return self && valid;
+}
+
+bool ControlCredentials::add(const Record& record)
+{
+    if (!onThread() || m_changing || m_closing) { return false; }
+    QList<Record> combined{record};
+    // validRecords needs whole records; the live set keeps only digests, so
+    // check the new record alone and then its id and digest against the set.
+    if (!validRecords(combined) || m_records.size() >= kMaximumRecords) { return false; }
+    const QByteArray digest = recordDigest(record);
+    for (const auto& existing : m_records) {
+        if (existing->id == record.id || existing->digest == digest) { return false; }
+    }
+    auto state = std::make_shared<State>();
+    state->id = record.id;
+    state->role = record.role;
+    state->digest = digest;
+    m_records.append(std::move(state));
+    m_changing = true;
+    const QPointer<ControlCredentials> self(this);
+    const auto restore = qScopeGuard([self] { if (self) { self->m_changing = false; } });
+    emit changed();
+    return true;
 }
 
 bool ControlCredentials::revoke(const QString& id)

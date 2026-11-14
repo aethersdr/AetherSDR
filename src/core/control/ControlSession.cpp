@@ -206,6 +206,16 @@ bool ControlSession::bindAuthorityLifetime(QObject* context, std::function<void(
     return true;
 }
 
+bool ControlSession::completeDeferred(const QJsonObject& message, bool closeAfterWrite)
+{
+    if (QThread::currentThread() != thread() || !m_deferredSink) {
+        return false;
+    }
+    const DeferredReplySink sink = m_deferredSink;   // the sink may end this session
+    sink(message, closeAfterWrite);
+    return true;
+}
+
 void ControlSession::bindOutputTransport(
     QObject* transportContext,
     std::function<bool(const QByteArray&)> writeFrame,
