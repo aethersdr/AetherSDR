@@ -48,6 +48,14 @@ Constants: `WdspChannel::kFmSquelchFitMinHalfWidthHz`,
 `fmSquelchWidthOffsetLevels()`, `fmSquelchThresholdFor()`. The threshold is
 re-applied on every filter change in FM, on a mode change and on a channel rebuild.
 
+The fit was made at the RX detector's 5000 Hz deviation (`Config::fmDeviationHz`),
+which scales `fmsq`'s input (`fmd.c`: `audio = again · …`, `again = rate /
+(deviation · 2π)`). The HL2 receive chain never changes it. A backend that does
+would move the noise point down by `50 · log10(5000 / deviation)` levels (inferred
+from the source, not measured). The FM limiter
+(`SetRXAFMLimRun`) acts on `fmd`'s output after the de-emphasis and audio filters,
+not on the `audio` buffer `fmsq` reads, so it does not change the gate.
+
 **What it does not address.**
 
 - **Modulation depth.** A modulated signal raises `avnoise` too, and at a filter
