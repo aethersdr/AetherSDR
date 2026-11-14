@@ -275,10 +275,14 @@ void enableAndGate()
 // A handler that registers a group grows the registry under itself. The
 // handler that runs must be a copy, or the growth destroys it mid-call. Seen
 // with libc++, where a small std::function is copied, not moved, on growth;
-// libstdc++ keeps this callable on the heap and cannot show the fault.
+// libstdc++ keeps this callable on the heap and cannot show the fault. The
+// lambda captures one pointer, so libc++ keeps it in the std::function itself.
 struct Lifetime {
     bool running{false};
     QVector<const void*> destroyed;
+    bool executingDestroyed{true};
+    int registered{0};
+    TciServer* server{nullptr};
 };
 
 struct Sentinel {
@@ -298,14 +302,13 @@ void handlerThatRegisters()
     RadioModel model;
     TciServer server(&model);
     Lifetime life;
-    bool executingDestroyed = true;
-    int registered = 0;
+    life.server = &server;
     TciExtensionSet::Group grow;
     grow.token = QStringLiteral("grow");
     grow.commands = {QStringLiteral("aethersdr_grow")};
     grow.offered = [] { return true; };
-    grow.handle = [sentinel = Sentinel{&life}, &executingDestroyed, &registered, &server](
-                      const QString&, const QStringList&) {
+    static_assert(sizeof(Sentinel) == sizeof(void*));
+    grow.handle = [sentinel = Sentinel{&life}](const QString&, const QStringList&) {
         const void* self = &sentinel;
         Lifetime* l = sentinel.life;
         l->running = true;
@@ -315,10 +318,10 @@ void handlerThatRegisters()
             g.commands = {QStringLiteral("aethersdr_g%1").arg(i)};
             g.offered = [] { return false; };
             g.handle = [](const QString&, const QStringList&) { return TciExtensionSet::Result{}; };
-            registered += server.registerExtensionGroup(std::move(g)) ? 1 : 0;
+            l->registered += l->server->registerExtensionGroup(std::move(g)) ? 1 : 0;
         }
         l->running = false;
-        executingDestroyed = l->destroyed.contains(self);
+        l->executingDestroyed = l->destroyed.contains(self);
         TciExtensionSet::Result result;
         result.reply = QStringLiteral("aethersdr_grow:1;");
         return result;
@@ -329,8 +332,8 @@ void handlerThatRegisters()
     a.send("aethersdr_ext_enable:true;");
     a.take();
     a.send("aethersdr_grow;");
-    check(registered == 64, "a handler can register groups");
-    check(!executingDestroyed, "the running handler survives the registry growing under it");
+    check(life.registered == 64, "a handler can register groups");
+    check(!life.executingDestroyed, "the running handler survives the registry growing under it");
     check(a.take() == QStringList{QStringLiteral("aethersdr_grow:1;")},
           "and its reply still reaches the sender");
 }
