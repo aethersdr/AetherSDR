@@ -2097,6 +2097,9 @@ void RadioModel::teardownBackend()
     settlePanCreations();
     ++m_receiveControlGeneration;
     m_backendObservedTransmit = false;   // an observation dies with its backend
+    m_radioPttKeyed = false;             // and so does the key that followed it
+    m_radioPttInput = {};
+    m_radioPttProducer = {};
     m_tgxlTune.reset();
     m_tgxlConfirmTimer.stop();
     if (m_backend) {
@@ -5377,6 +5380,9 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
         publishBackendTransmitEdge(*delta.mox);
     }
     m_transmitModel.applyChanges(delta);
+    if (delta.radioPtt) {
+        followRadioPtt(*delta.radioPtt);
+    }
     if (delta.atuStatusRaw && operation.sameOperation(m_txOperation)
         && atuEpoch == m_atuCommandEpoch
         && atuIntent.pending()) {
@@ -5388,6 +5394,45 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     }
     if (delta.cwSpeed && !usesFlexCommandPlane()) {
         m_cwxModel.adoptSpeed(*delta.cwSpeed);
+    }
+}
+
+// A host-modulated radio's own PTT press is a host key through the gated
+// producer path a footswitch takes, so every transmit preflight applies. Only
+// what this path keyed is released here; a key the host already held owns its
+// own release. CW keys itself.
+void RadioModel::followRadioPtt(bool down)
+{
+    if (!down) {
+        if (m_radioPttKeyed) {
+            m_radioPttKeyed = false;
+            const TxCoordinator::Request input = m_radioPttInput;
+            m_radioPttInput = {};
+            (void)setProducerTransmit(input, false, TransmitModel::PttSource::Footswitch);
+        }
+        return;
+    }
+    if (m_radioPttKeyed || !m_backend
+        || !m_backend->capabilities().radioPttObservation.has_value()
+        || m_txRequested || m_transmitModel.isTransmitting()
+        || m_transmitModel.isTuning()) {
+        return;
+    }
+    const SliceModel* ts = txSlice();
+    const QString mode = (ts ? ts->mode() : m_transmitModel.txSliceMode()).trimmed().toUpper();
+    if (mode.startsWith(QStringLiteral("CW"))) {
+        return;
+    }
+    if (!m_radioPttProducer.valid()) {
+        m_radioPttProducer = registerTxProducer(m_backend.get());
+    }
+    if (!m_radioPttProducer.valid()) {
+        return;
+    }
+    const TxCoordinator::Request input = m_radioPttProducer.request();
+    if (setProducerTransmit(input, true, TransmitModel::PttSource::Footswitch)) {
+        m_radioPttInput = input;
+        m_radioPttKeyed = true;
     }
 }
 
@@ -8667,6 +8712,8 @@ void RadioModel::onDisconnected()
         emit txAudioGateChanged(false);
     }
     m_backendObservedTransmit = false;
+    m_radioPttKeyed = false;
+    m_radioPttInput = {};
     m_radioTransmitting = false;
     emit radioTransmittingChanged(false);
     if (m_profileDatabaseImporting) {

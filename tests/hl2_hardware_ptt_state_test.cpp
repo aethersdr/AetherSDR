@@ -1,7 +1,13 @@
-// #5998: the HL2's own PTT/key input (EP6 ptt_resp) is an observation. It moves the
-// transmit state and mutes receive; it never keys, modulates or touches drive.
+// #5998: the HL2's own PTT/key input (EP6 ptt_resp) is an observation. In the
+// backend it moves the transmit state and mutes receive; it never keys, modulates
+// or touches drive. RadioModel follows it with a host key through the gated
+// producer path, so the front-panel PTT modulates like MOX, and releases only that.
+// A PTT already held when the stream starts or resumes is shown and keys nothing:
+// only a press after a release seen on the wire is a key request (#7067 review).
+// So is only a level carried by a packet newer than every one already believed: a
+// rewound or duplicate EP6 packet neither presses, releases nor arms (#7067 review).
 // Socket-free: EP6 status frames go into the backend's own MetisClient on its I/O
-// thread. The silence leg waits out MetisClient's real silence timeout once.
+// thread. The silence legs wait out MetisClient's real silence timeout, twice.
 
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
@@ -90,17 +96,23 @@ struct Hl2HardwarePttTestAccess {
         onIo(backend, [](MetisClient&) {});
         drain(backend);
     }
-    // One EP6 datagram whose two status frames carry ptt_resp in C0 bit 0.
-    static void radioPtt(Hl2Backend& backend, bool ptt)
+    // The sequence number the next radioPtt() frame carries.
+    static std::uint32_t& nextSeq()
     {
         static std::uint32_t seq = 0;
+        return seq;
+    }
+    // One EP6 datagram whose two status frames carry ptt_resp in C0 bit 0.
+    static void radioPtt(Hl2Backend& backend, bool ptt) { radioPttAt(backend, ptt, nextSeq()++); }
+    // The same with an explicit sequence number: a replay, a rewind or a wrap.
+    static void radioPttAt(Hl2Backend& backend, bool ptt, std::uint32_t seq)
+    {
         std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
         pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
         pkt[4] = static_cast<std::uint8_t>((seq >> 24) & 0xFF);
         pkt[5] = static_cast<std::uint8_t>((seq >> 16) & 0xFF);
         pkt[6] = static_cast<std::uint8_t>((seq >> 8) & 0xFF);
         pkt[7] = static_cast<std::uint8_t>(seq & 0xFF);
-        ++seq;
         const std::size_t frames[2] = {8, 8 + kFrameSize};
         for (const std::size_t fs : frames) {
             pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;
@@ -226,6 +238,21 @@ void pumpUntilUnmuted(Hl2Backend& backend, int deadlineMs)
         QThread::msleep(1);
     }
 }
+
+// The radioPtt values transmitChanged carried, in order: what RadioModel is
+// offered as a key request (true) or a release (false).
+struct KeyRequests {
+    QList<bool> seen;
+    explicit KeyRequests(Hl2Backend& backend)
+    {
+        QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend,
+                         [this](const TransmitDelta& delta) {
+            if (delta.radioPtt) {
+                seen << *delta.radioPtt;
+            }
+        });
+    }
+};
 
 // The mox values transmitChanged carried, in order.
 struct MoxEdges {
@@ -426,6 +453,60 @@ void testLinkLossFailsToReceive()
     }
 }
 
+void testHeldPttIsNotAKeyRequest()
+{
+    std::printf("\n  a PTT held when the stream starts or resumes\n");
+    Hl2Backend backend;
+    Access::prepare(backend);
+    Access::setHoldMs(backend, 0);
+    MoxEdges edges(backend);
+    KeyRequests requests(backend);
+
+    Access::radioPtt(backend, true);
+    check(edges.seen == QList<bool>{true}, "first frame held: transmit is shown");
+    check(Access::mixerGateClosed(backend), "first frame held: receive is muted");
+    check(requests.seen.isEmpty(), "first frame held: no key request is offered");
+    Access::radioPtt(backend, false);
+    check(requests.seen == QList<bool>{false}, "the release is offered");
+    Access::radioPtt(backend, true);
+    check(requests.seen == (QList<bool>{false, true}),
+          "a press after a seen release is a key request");
+    Access::radioPtt(backend, false);
+    requests.seen.clear();
+
+    // Silence with the PTT held: the stream resumes with it still held.
+    Access::radioPtt(backend, true);
+    check(requests.seen == QList<bool>{true}, "control: a fresh press is a key request");
+    QThread::msleep(static_cast<unsigned long>(
+        AetherSDR::hl2::MetisClientTestAccess::silenceTimeoutMs() + 100));
+    Access::silenceWatchdog(backend);
+    check(requests.seen == (QList<bool>{true, false}), "silence: the release is offered");
+    Access::onIo(backend, [](AetherSDR::hl2::MetisClient& metis) {
+        AetherSDR::hl2::MetisClientTestAccess::setStreaming(metis);
+    });
+    Access::radioPtt(backend, true);
+    check(Access::clientRadioPtt(backend) && edges.seen.last(),
+          "after silence: the held PTT is shown again");
+    check(requests.seen == (QList<bool>{true, false}),
+          "after silence: the held PTT is no key request");
+    Access::radioPtt(backend, false);
+    Access::radioPtt(backend, true);
+    check(requests.seen == (QList<bool>{true, false, false, true}),
+          "after silence: release then press is a key request");
+    requests.seen.clear();
+
+    // A release seen before a stop does not arm the next stream either.
+    Access::radioPtt(backend, false);
+    Access::stopStream(backend);
+    Access::onIo(backend, [](AetherSDR::hl2::MetisClient& metis) {
+        AetherSDR::hl2::MetisClientTestAccess::setStreaming(metis);
+    });
+    Access::radioPtt(backend, true);
+    check(requests.seen == QList<bool>{false}, "after a restart: the held PTT is no key request");
+    check(!Access::hostMoxOnWire(backend), "the host never asserted MOX");
+    Access::tearDown(backend);
+}
+
 void installTxSlice(RadioModel& model)
 {
     if (!model.automationApplySliceFixture(0, QStringLiteral("A")) || !model.slice(0)) {
@@ -437,7 +518,7 @@ void installTxSlice(RadioModel& model)
     model.slice(0)->applyChanges(delta);
 }
 
-void testModelFollowsWithoutIntent()
+void testModelKeysForRadioPtt()
 {
     std::printf("\n  RadioModel on an HL2\n");
     RadioModel model;
@@ -456,12 +537,6 @@ void testModelFollowsWithoutIntent()
     QList<bool> edges;
     QObject::connect(&model, &RadioModel::radioTransmittingChanged, &model,
                      [&edges](bool tx) { edges << tx; });
-    int moxSignals = 0;
-    int moxCommands = 0;
-    QObject::connect(&model.transmitModel(), &TransmitModel::moxChanged, &model,
-                     [&moxSignals](bool) { ++moxSignals; });
-    QObject::connect(&model.transmitModel(), &TransmitModel::moxCommandIssued, &model,
-                     [&moxCommands](bool) { ++moxCommands; });
 
     // An earlier host transmission leaves the model and backend a live operation.
     model.transmitModel().setMox(true);
@@ -469,27 +544,167 @@ void testModelFollowsWithoutIntent()
     check(edges == (QList<bool>{true, false}) && !Access::hostMoxOnWire(*backend),
           "control: a host MOX cycle is one transmission");
     edges.clear();
-    moxSignals = 0;
-    moxCommands = 0;
+
+    // The stream's first frame already has the PTT down: shown, not keyed.
+    Access::radioPtt(*backend, true);
+    check(edges == QList<bool>{true}, "a PTT held at stream start is shown");
+    check(!Access::hostMoxOnWire(*backend), "a PTT held at stream start keys no host");
+    check(!model.transmitModel().isTransmitting(), "nor the model's intent");
+    Access::radioPtt(*backend, false);
+    check(edges == (QList<bool>{true, false}) && !model.isRadioTransmitting(),
+          "its release ends the shown transmission");
+    edges.clear();
 
     Access::radioPtt(*backend, true);
     check(edges == QList<bool>{true}, "radio PTT raises radioTransmittingChanged");
     check(model.isRadioTransmitting(), "isRadioTransmitting() follows the radio");
-    check(!model.transmitModel().isTransmitting(), "the MOX intent state is untouched");
-    check(moxSignals == 0 && moxCommands == 0, "no MOX signal and no MOX command");
-    check(!Access::hostMoxOnWire(*backend), "the model keys nothing");
-
-    model.transmitModel().setMox(true);
-    check(Access::hostMoxOnWire(*backend), "control: host MOX still keys");
-    model.transmitModel().setMox(false);
-    check(!Access::hostMoxOnWire(*backend), "host MOX-off unkeys the host");
-    check(model.isRadioTransmitting(), "host MOX-off does not clear a PTT the radio reports");
-    check(edges == QList<bool>{true}, "the overlap is one transmission");
+    check(Access::hostMoxOnWire(*backend), "radio PTT keys the host modulator");
+    check(model.transmitModel().isTransmitting(), "through the model's own keying path");
 
     Access::radioPtt(*backend, false);
-    check(edges == (QList<bool>{true, false}), "the radio's falling edge ends it");
+    check(!Access::hostMoxOnWire(*backend), "the radio's falling edge unkeys the host");
+    check(!model.transmitModel().isTransmitting(), "and releases the model's intent");
+    check(edges == (QList<bool>{true, false}), "the press is one transmission");
     check(!model.isRadioTransmitting(), "back to receive");
+    edges.clear();
+
+    // A host key held before the radio's PTT owns its own release.
+    model.transmitModel().setMox(true);
+    Access::radioPtt(*backend, true);
+    Access::radioPtt(*backend, false);
+    check(Access::hostMoxOnWire(*backend), "the radio's release leaves a host MOX keyed");
+    check(model.isRadioTransmitting(), "and the transmission running");
+    model.transmitModel().setMox(false);
+    check(!Access::hostMoxOnWire(*backend), "host MOX-off unkeys the host");
+    check(edges == (QList<bool>{true, false}), "the overlap is one transmission");
+    edges.clear();
+
+    // CW: the radio's own keyer raises the same PTT, and the CW path keys itself.
+    SliceDelta cw;
+    cw.mode = QStringLiteral("CW");
+    model.slice(0)->applyChanges(cw);
+    Access::radioPtt(*backend, true);
+    check(!Access::hostMoxOnWire(*backend), "in CW the radio's PTT keys nothing");
+    check(model.isRadioTransmitting(), "in CW the radio's PTT is still shown");
+    Access::radioPtt(*backend, false);
+    check(!model.isRadioTransmitting(), "in CW the falling edge ends it");
     Access::tearDown(*backend);
+}
+
+// A delayed or duplicated EP6 packet is not a press. The loss accounting lets
+// rewinds and duplicates through for their IQ; their ptt_resp must not move the
+// PTT (#7067 review).
+void testStalePacketsAreNoKeyIntent()
+{
+    std::printf("\n  rewound and duplicate EP6 packets\n");
+    {
+        // The review's replay, through the real model: release N, press N+1,
+        // release N+2, then the same press N+1 again.
+        RadioModel model;
+        if (!model.rebuildBackendForTest(QStringLiteral("hl2"))) {
+            qFatal("No HL2 backend in this build");
+        }
+        installTxSlice(model);
+        auto* backend = qobject_cast<Hl2Backend*>(model.backend());
+        if (!backend) {
+            qFatal("The HL2 family did not build an Hl2Backend");
+        }
+        Access::prepare(*backend);
+        Access::setHoldMs(*backend, 0);
+        model.transmitModel().setMox(true);
+        model.transmitModel().setMox(false);
+
+        const std::uint32_t n = Access::nextSeq();
+        Access::nextSeq() += 3;
+        Access::radioPttAt(*backend, false, n);
+        Access::radioPttAt(*backend, true, n + 1);
+        check(Access::hostMoxOnWire(*backend) && model.transmitModel().isTransmitting(),
+              "control: a fresh press keys the host");
+        Access::radioPttAt(*backend, false, n + 2);
+        check(!Access::hostMoxOnWire(*backend), "control: its release unkeys");
+        Access::radioPttAt(*backend, true, n + 1);
+        check(!Access::hostMoxOnWire(*backend), "a replayed press keys no host");
+        check(!model.transmitModel().isTransmitting(), "nor the model's intent");
+        check(!model.isRadioTransmitting() && !Access::clientRadioPtt(*backend),
+              "nor shows transmit");
+        Access::radioPttAt(*backend, true, n + 2);
+        check(!Access::hostMoxOnWire(*backend), "a press on a duplicate number keys nothing");
+        Access::radioPttAt(*backend, true, n + 3);
+        check(Access::hostMoxOnWire(*backend), "the next fresh press keys again");
+        Access::radioPttAt(*backend, false, n + 1);
+        check(Access::hostMoxOnWire(*backend), "a stale release does not unkey it");
+        Access::radioPttAt(*backend, false, n + 4);
+        check(!Access::hostMoxOnWire(*backend), "a fresh release does");
+        Access::nextSeq() = n + 5;
+        Access::tearDown(*backend);
+    }
+    {
+        // A PTT held from the stream's start, then a stale release from before it.
+        // Believed, that release would arm the held input, and the next held
+        // frame would become a key request with no release from the operator.
+        Hl2Backend backend;
+        Access::prepare(backend);
+        Access::setHoldMs(backend, 0);
+        KeyRequests requests(backend);
+        const std::uint32_t m = 1000;
+        Access::radioPttAt(backend, true, m);
+        Access::radioPttAt(backend, false, m - 1);
+        check(Access::clientRadioPtt(backend), "a stale release leaves the held PTT shown");
+        check(requests.seen.isEmpty(), "and offers nothing");
+        Access::radioPttAt(backend, true, m + 1);
+        check(requests.seen.isEmpty(), "the held PTT is still no key request");
+        Access::radioPttAt(backend, false, m + 2);
+        Access::radioPttAt(backend, true, m + 3);
+        check(requests.seen == (QList<bool>{false, true}),
+              "control: a fresh release then press is a key request");
+        Access::tearDown(backend);
+    }
+    {
+        // The counter's wrap is a step forward; a replay across it is not.
+        Hl2Backend backend;
+        Access::prepare(backend);
+        Access::setHoldMs(backend, 0);
+        KeyRequests requests(backend);
+        Access::radioPttAt(backend, false, 0xFFFFFFFEu);
+        Access::radioPttAt(backend, true, 0xFFFFFFFFu);
+        Access::radioPttAt(backend, false, 0u);
+        Access::radioPttAt(backend, true, 1u);
+        check(requests.seen == (QList<bool>{true, false, true}),
+              "across the wrap: press, release, press");
+        Access::radioPttAt(backend, false, 2u);
+        Access::radioPttAt(backend, true, 0xFFFFFFFFu);
+        check(requests.seen == (QList<bool>{true, false, true, false}),
+              "across the wrap: a replayed press is nothing");
+        Access::tearDown(backend);
+    }
+    {
+        // A stream that rewinds and stays behind restarted without a reset: after
+        // a long run of such packets the PTT is dropped and must be re-armed.
+        Hl2Backend backend;
+        Access::prepare(backend);
+        Access::setHoldMs(backend, 0);
+        KeyRequests requests(backend);
+        Access::radioPttAt(backend, false, 50000);
+        Access::radioPttAt(backend, true, 50001);
+        check(requests.seen == QList<bool>{true}, "control: a fresh press");
+        std::uint32_t seq = 0;
+        for (int i = 0; i < 63; ++i) {
+            Access::radioPttAt(backend, false, seq++);
+        }
+        check(requests.seen == QList<bool>{true} && Access::clientRadioPtt(backend),
+              "a short rewound run is ignored");
+        Access::radioPttAt(backend, true, seq++);
+        check(requests.seen == (QList<bool>{true, false}),
+              "a long one is a new stream: the PTT is released");
+        Access::radioPttAt(backend, true, seq++);
+        check(requests.seen == (QList<bool>{true, false}),
+              "and a PTT held across it is no key request");
+        Access::radioPttAt(backend, false, seq++);
+        Access::radioPttAt(backend, true, seq++);
+        check(requests.seen == (QList<bool>{true, false, false, true}),
+              "release then press on the new stream keys");
+        Access::tearDown(backend);
+    }
 }
 
 // A backend that publishes mox and does not declare radioPttObservation.
@@ -543,6 +758,11 @@ void testUndeclaredBackendIsUnchanged()
     model.setTransmit(false, TransmitModel::PttSource::Mox);
     check(!model.isRadioTransmitting(),
           "without the record the command edge still clears the state");
+    TransmitDelta ptt;
+    ptt.radioPtt = true;
+    model.applyBackendTransmitDeltaForTest(ptt);
+    check(!model.transmitModel().isTransmitting(),
+          "a radioPtt from an undeclared backend keys nothing");
 }
 
 }  // namespace
@@ -558,7 +778,9 @@ int main(int argc, char** argv)
     testHostKeyOverlapsRadioPtt();
     testTxMonitorHearsRadioPtt();
     testLinkLossFailsToReceive();
-    testModelFollowsWithoutIntent();
+    testHeldPttIsNotAKeyRequest();
+    testModelKeysForRadioPtt();
+    testStalePacketsAreNoKeyIntent();
     testUndeclaredBackendIsUnchanged();
 
     std::printf("\n%s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,

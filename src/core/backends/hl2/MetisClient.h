@@ -502,7 +502,12 @@ signals:
     // gateware 74), the PTT/key jack or the internal keyer. Host MOX never raises
     // it. An observation, per edge and unthrottled; false is also emitted when the
     // stream ends or goes silent with the bit set.
-    void radioPttChanged(bool keyed);
+    //
+    // keyRequest is true only on a rising edge that follows a released level
+    // seen on the wire since the last start(), stop() or silence. A PTT that is
+    // already held when the stream starts or resumes is shown (keyed) but is not
+    // an operator action, so it must not key the host (#7067 review, Principle VI).
+    void radioPttChanged(bool keyed, bool keyRequest);
     // setTxRoute() refused; `actual` is the route still in force (TxRoute as int).
     void txRouteRefused(int actual);
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
@@ -579,6 +584,9 @@ private:
     void onRadioPttEdge(bool keyed);
     // No stream, no observation: drop a PTT the radio last reported, with its edge.
     void clearRadioPtt();
+    // Whether this EP6 packet's ptt_resp may move the PTT: true only for a packet
+    // ahead of every one already believed (modulo 2^32). Advances the fence.
+    bool acceptPttSequence(std::uint32_t seq);
     void bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                            std::span<const std::uint8_t> bytes);
     // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm
@@ -1086,6 +1094,20 @@ private:
     // 384 kHz this path runs ~10 000 times a second.
     std::vector<std::vector<std::complex<float>>> m_blocks;
     Hl2Telemetry m_telemetry;                   // accumulated across RADDR cycles
+    // A frame with ptt_resp clear has been seen since start(), stop() or
+    // silence. Cleared in clearRadioPtt(), set only by a real frame: a synthetic
+    // release at link loss must not arm the next press (see radioPttChanged).
+    bool m_radioPttArmed = false;
+    // The newest EP6 sequence number whose ptt_resp was believed. A rewound or
+    // duplicate packet behind it keeps its IQ and telemetry but not its PTT level.
+    // Reset with the stream (clearRadioPtt(), a receiver-count restart).
+    std::uint32_t m_pttFenceSeq = 0;
+    bool m_havePttFence = false;
+    // Consecutive packets behind the fence. Reordering on a LAN is a few packets;
+    // this many in a row is a stream that restarted without a reset, ~0.17 s at
+    // the slowest EP6 rate (381 packets/s at 48 kHz, one receiver).
+    int m_pttStaleRun = 0;
+    static constexpr int kPttStaleRunRestart = 64;
     // Telemetry rides the C&C bytes of every EP6 frame, so it parses ~3000x/s at
     // 384 kHz. The meters only need ~10 Hz; rate-limit the cross-thread emit so
     // publishTelemetry() does not flood the GUI thread. (#4449 review)

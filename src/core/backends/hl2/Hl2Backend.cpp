@@ -1560,29 +1560,36 @@ void Hl2Backend::applyRxAudioMute(bool muted)
     }
 }
 
-void Hl2Backend::publishTransmitState()
+void Hl2Backend::publishTransmitState(std::optional<bool> radioPtt)
 {
     const bool transmitting = m_keyed || m_radioPtt;
-    if (transmitting == m_publishedTransmit) {
+    if (transmitting == m_publishedTransmit && !radioPtt) {
         return;
     }
-    m_publishedTransmit = transmitting;
     TransmitDelta delta;
-    delta.mox = transmitting;
+    if (transmitting != m_publishedTransmit) {
+        m_publishedTransmit = transmitting;
+        delta.mox = transmitting;
+    }
+    delta.radioPtt = radioPtt;
     emit transmitChanged(delta);
 }
 
-void Hl2Backend::onRadioPttChanged(bool keyed)
+void Hl2Backend::onRadioPttChanged(bool keyed, bool keyRequest)
 {
     hl2RequireBackendThread(this, "onRadioPttChanged");
     if (m_radioPtt == keyed) {
         return;
     }
     m_radioPtt = keyed;
-    publishTransmitState();
+    // A release is always offered: RadioModel only ever drops the key it took.
+    // A press is offered only when MetisClient saw a release before it, so a
+    // PTT held across a connect or a recovery shows transmit and keys nothing.
+    publishTransmitState(keyed && !keyRequest ? std::nullopt : std::optional<bool>(keyed));
     // While the host is keyed its own key owns the mute and, at its unkey, the
-    // release. Nothing here reaches MetisClient: the radio keyed itself, and the
-    // host follows it for display and receive audio only (#5998).
+    // release. Nothing here reaches MetisClient: the radio keyed itself. The
+    // edge rides transmitChanged as radioPtt, and RadioModel decides whether
+    // the host keys its modulator through the normal gated path (#5998).
     if (m_keyed) {
         return;
     }

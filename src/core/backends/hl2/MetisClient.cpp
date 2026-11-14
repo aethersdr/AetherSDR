@@ -509,6 +509,11 @@ void MetisClient::onWatchdogTick()
         return;
     if (m_sinceLastEp6.isValid() && m_sinceLastEp6.elapsed() > kSilenceTimeoutMs) {
         const qint64 silentMs = m_sinceLastEp6.elapsed();
+        // No stream, no observation, at either stage. Ahead of stage 1 because its
+        // retry returns early, and a PTT still shown (or a release still armed) from
+        // before the gap would let the resumed stream key without a fresh press.
+        // Idempotent on the later ticks of the same silence.
+        clearRadioPtt();
         // Stage 1: re-send the run command before declaring link loss. If the gateware
         // halted because EP2 stopped (dsopenhpsdr1.v's watchdog drops `run`), resuming
         // EP2 does not restart it; only a run command does. A duplicate start is safe:
@@ -587,7 +592,6 @@ void MetisClient::onWatchdogTick()
         // asked reads "Waiting for a frame" for the rest of the session.
         failPendingBandscopeFrame(QStringLiteral("the link went down"));
         m_params.bandscope = false;
-        clearRadioPtt();
         emit linkDown();
     }
 }
@@ -953,6 +957,9 @@ void MetisClient::advanceReceiverCountRestart()
         // packets and the health panel reports a link fault that never happened.
         m_haveRxSeq = false;
         m_expectedRxSeq = 0;
+        // And the PTT freshness fence, which is measured on the same counter.
+        m_havePttFence = false;
+        m_pttStaleRun = 0;
         // Same for the bandscope, and for the same reason: the restart puts 0x00 and
         // then 0x01 on the wire, RUNSTOP clears wide_spectrum along with run, and
         // ep4_seq_no restarts from zero.
@@ -2152,6 +2159,10 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     }
     m_expectedRxSeq = *seq + 1;
     m_haveRxSeq = true;
+    // The loss accounting above lets rewinds and duplicates through, and their IQ
+    // is still delivered. Their ptt_resp is not: a level from before the newest one
+    // already believed is not operator intent (#7067 review, Principle VI).
+    const bool pttFresh = acceptPttSequence(*seq);
 
     // Telemetry rides in the C&C bytes of each EP6 frame. The radio
     // free-runs through the classic response addresses, so this arrives
@@ -2173,8 +2184,18 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
             } else {
                 const bool wasRadioPtt = m_telemetry.ptt;
                 m_telemetry.apply(*resp);
-                if (m_telemetry.ptt != wasRadioPtt)
-                    onRadioPttEdge(m_telemetry.ptt);
+                if (!pttFresh) {
+                    // A stale frame's level is old news: it neither presses,
+                    // releases, nor arms. The rest of its telemetry still applies.
+                    m_telemetry.ptt = wasRadioPtt;
+                } else {
+                    if (m_telemetry.ptt != wasRadioPtt)
+                        onRadioPttEdge(m_telemetry.ptt);
+                    // After the edge, so the frame that releases arms the NEXT
+                    // press, and a level held since the stream began never does.
+                    if (!m_telemetry.ptt)
+                        m_radioPttArmed = true;
+                }
                 telemetryChanged = true;
                 m_fwdWindow.observe(*resp);
                 // Read back from apply() rather than re-decoding DATA[24], so the layout has one
@@ -2245,6 +2266,15 @@ void MetisClient::onReadyRead()
 
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
+        // Only the radio this session started against. EP6 carries the radio's
+        // own PTT, which can key the host (#5998), so a datagram from anywhere
+        // else on the network is dropped before it is parsed. Tolerant: a
+        // dual-stack socket reports an IPv4 sender as ::ffff:a.b.c.d.
+        if (!m_host.isNull()
+            && (!dg.senderAddress().isEqual(m_host, QHostAddress::TolerantConversion)
+                || dg.senderPort() != m_port)) {
+            continue;
+        }
         // The local address the kernel actually delivered on, which a wildcard
         // bind cannot tell us (see start()). Latched once: it is a routing fact
         // about this socket, and re-testing it per datagram would cost a string
@@ -2466,7 +2496,7 @@ bool MetisClient::bandscopeInterlocked() const noexcept
 // ptt_resp rather than by anything this client asked for.
 void MetisClient::onRadioPttEdge(bool keyed)
 {
-    emit radioPttChanged(keyed);
+    emit radioPttChanged(keyed, keyed && m_radioPttArmed);
     if (keyed) {
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
@@ -2480,8 +2510,42 @@ void MetisClient::onRadioPttEdge(bool keyed)
     m_sinceUnkey.restart();
 }
 
+bool MetisClient::acceptPttSequence(std::uint32_t seq)
+{
+    if (!m_havePttFence) {
+        m_havePttFence = true;
+        m_pttFenceSeq = seq;
+        m_pttStaleRun = 0;
+        return true;
+    }
+    // Modulo 2^32, so the counter's wrap is a step forward like any other.
+    const std::uint32_t ahead = seq - m_pttFenceSeq;
+    if (ahead != 0 && ahead < 0x80000000u) {
+        m_pttFenceSeq = seq;
+        m_pttStaleRun = 0;
+        return true;
+    }
+    // A duplicate, or a packet older than one already believed. The fence never
+    // moves back for it, so a late press cannot follow its own release.
+    if (++m_pttStaleRun < kPttStaleRunRestart)
+        return false;
+    // No reordering is this long: the stream restarted on a path that did not
+    // reset the fence. Treat it as a new stream, as start() does: the PTT is
+    // dropped, and only a release seen from here on arms a press.
+    clearRadioPtt();
+    m_havePttFence = true;
+    m_pttFenceSeq = seq;
+    return true;
+}
+
 void MetisClient::clearRadioPtt()
 {
+    // Unconditional: a new stream must see a release before a press can key,
+    // whether or not the bit happened to be set when the old one ended. Its
+    // sequence starts a new fence for the same reason.
+    m_radioPttArmed = false;
+    m_havePttFence = false;
+    m_pttStaleRun = 0;
     if (!m_telemetry.ptt) {
         return;
     }
