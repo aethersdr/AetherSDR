@@ -148,6 +148,15 @@ public:
     QString midiIdForShortcut(const QString& shortcutId) const;
     QString shortcutIdForMidi(const QString& midiId) const;
 
+    // The key an action is bound to right now. The keyboard side owns the
+    // binding (a remap lands there), so the registry asks it through `lookup`
+    // instead of keeping a copy. Empty for an id the registry does not know.
+    void setBindingLookup(std::function<QKeySequence(const QString& shortcutId)> lookup)
+    {
+        m_bindingLookup = std::move(lookup);
+    }
+    QKeySequence boundKey(const QString& shortcutId) const;
+
     const QVector<ControlAction>& actions() const { return m_actions; }
     QStringList errors() const { return m_errors; }
 
@@ -163,6 +172,7 @@ private:
     QVector<KeyingMidi> m_keyingMidi;
     QStringList m_errors;
     std::function<void(const ControlAction&)> m_refused;
+    std::function<QKeySequence(const QString&)> m_bindingLookup;
 };
 
 } // namespace AetherSDR

@@ -35,6 +35,7 @@
 #include "PersistentDialog.h"
 #include "RC28MappingDialog.h"
 #include "ShortcutDialog.h"
+#include "ShortcutTooltips.h"
 #include "RadioHealthDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "SpectrumWidget.h"
@@ -648,6 +649,9 @@ void MainWindow::buildMenuBar()
         m_keyboardShortcutsEnabled = on;
         s_keyboardShortcutsEnabled = on;
         syncOperatingShortcutsEnabled();
+        if (m_shortcutTooltips) {
+            m_shortcutTooltips->setShortcutsEnabled(on);
+        }
         AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
         AppSettings::instance().save();
     });
