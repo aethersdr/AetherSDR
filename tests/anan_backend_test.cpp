@@ -25,7 +25,6 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QSignalSpy>
-#include <QUdpSocket>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -58,19 +57,24 @@ public:
 // would, then hand it the radio's answer.
 class AnanBusyProbeTestAccess {
 public:
-    static quint64 arm(AnanBackend& backend, const RadioConnectRequest& request)
+    static void arm(AnanBackend& backend, const RadioConnectRequest& request)
     {
-        backend.cancelBusyProbe();
+        if (!backend.m_busyProbe)
+            backend.m_busyProbe = new ReconnectBusyProbe(&backend);
         backend.m_busyProbeRequest = request;
-        backend.m_busyProbe = new QUdpSocket(&backend);   // never bound: no socket opens
-        return ++backend.m_busyProbeGeneration;
+        backend.m_busyProbe->armForTest(
+            [&backend](std::optional<bool> streaming) { backend.finishBusyProbe(streaming); });
     }
-    static void answer(AnanBackend& backend, quint64 generation, std::optional<bool> streaming)
+    static void answer(AnanBackend& backend, std::optional<bool> streaming)
     {
-        backend.finishBusyProbe(generation, streaming);
+        backend.m_busyProbe->answerForTest(streaming);
     }
-    static bool probing(const AnanBackend& backend) { return backend.m_busyProbe != nullptr; }
+    static bool probing(const AnanBackend& backend)
+    {
+        return backend.m_busyProbe && backend.m_busyProbe->active();
+    }
 };
+
 class AnanSupplyRailTestAccess {
 public:
     static void defineMeters(AnanBackend& backend) { backend.defineMeters(); }
@@ -359,9 +363,9 @@ int main(int argc, char** argv)
     // it with an error at once, which is how "the connect ran" is observed here
     // without opening a socket.
     {
-        check(AnanBackend::reconnectMayProceed(std::nullopt)
-                  && AnanBackend::reconnectMayProceed(false)
-                  && !AnanBackend::reconnectMayProceed(true),
+        check(ReconnectBusyProbe::mayProceed(std::nullopt)
+                  && ReconnectBusyProbe::mayProceed(false)
+                  && !ReconnectBusyProbe::mayProceed(true),
               "only a reply saying the radio is streaming stops a reconnect; silence never does");
         AnanBackend backend;
         QSignalSpy errors(&backend, &IRadioBackend::connectionError);
@@ -370,27 +374,27 @@ int main(int argc, char** argv)
         retry.host = QStringLiteral("not-an-address");
         retry.automaticReconnect = true;
 
-        quint64 g = AnanBusyProbeTestAccess::arm(backend, retry);
-        AnanBusyProbeTestAccess::answer(backend, g, true);
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, true);
         check(errors.isEmpty() && warnings.count() == 1 && !AnanBusyProbeTestAccess::probing(backend),
               "a busy radio: no connect, and the operator is told once");
-        g = AnanBusyProbeTestAccess::arm(backend, retry);
-        AnanBusyProbeTestAccess::answer(backend, g, true);
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, true);
         check(errors.isEmpty() && warnings.count() == 1,
               "still busy on the next retry: still no connect, and no second warning");
-        AnanBusyProbeTestAccess::answer(backend, g, false);
+        AnanBusyProbeTestAccess::answer(backend, false);
         check(errors.isEmpty(), "a stale answer for a finished probe does nothing");
 
-        g = AnanBusyProbeTestAccess::arm(backend, retry);
-        AnanBusyProbeTestAccess::answer(backend, g, false);
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, false);
         check(errors.count() == 1, "a free radio: the reconnect goes ahead");
-        g = AnanBusyProbeTestAccess::arm(backend, retry);
-        AnanBusyProbeTestAccess::answer(backend, g, std::nullopt);
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, std::nullopt);
         check(errors.count() == 2, "no reply in time: the reconnect goes ahead (fail open)");
 
-        g = AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::arm(backend, retry);
         backend.disconnectRadio();
-        AnanBusyProbeTestAccess::answer(backend, g, false);
+        AnanBusyProbeTestAccess::answer(backend, false);
         check(errors.count() == 2 && !AnanBusyProbeTestAccess::probing(backend),
               "a disconnect during the probe cancels the reconnect");
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/ReconnectBusyProbe.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSliceAudio.h"
 #include "core/Resampler.h"
@@ -10,7 +11,6 @@
 #include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
-#include <QHostAddress>
 #include <QMap>
 #include <QString>
 #include <QThread>
@@ -170,14 +170,7 @@ public:
     // 12 kHz cut, or CW's 6 kHz cut plus its 6 kHz BFO cap), so the shifted edge
     // stays inside the WDSP channel's +-24 kHz at its 48 kHz DSP rate.
     static constexpr int kMaxRitOffsetHz = 9'999;
-    // How long an automatic reconnect waits for the radio's discovery reply.
-    static constexpr int kBusyProbeTimeoutMs = 500;
-    // Whether an automatic reconnect may go ahead: only a reply saying the radio
-    // is already streaming to someone stops it (Zeus's rule too: fail open).
-    [[nodiscard]] static bool reconnectMayProceed(std::optional<bool> streaming) noexcept
-    {
-        return !(streaming && *streaming);
-    }
+
     // WDSP ANR's level before the operator sets one, and when none is restored.
     static constexpr int kDefaultNrLevel = 50;
 
@@ -372,17 +365,11 @@ private:
     void beginDspSetup();
     // The connect itself, after any busy probe.
     void startConnect(const RadioConnectRequest& request);
-    // An automatic reconnect asks the radio first (one unicast discovery):
-    // Protocol 2 obeys whichever controller spoke last, so a retry that took
-    // the radio from another client would leave two controllers sending it
-    // different relay settings, and its band, antenna and T/R relays chatter.
-    // nullopt = no reply in time, which never blocks the connect.
-    void beginBusyProbe(const RadioConnectRequest& request);
-    void finishBusyProbe(quint64 generation, std::optional<bool> streaming);
-    void cancelBusyProbe();
-    QUdpSocket* m_busyProbe = nullptr;
+    // An automatic reconnect asks the radio first (ReconnectBusyProbe.h): a retry
+    // must never take it from another client.
+    void finishBusyProbe(std::optional<bool> streaming);
+    ReconnectBusyProbe* m_busyProbe = nullptr;
     RadioConnectRequest m_busyProbeRequest;
-    quint64 m_busyProbeGeneration = 0;
     bool m_busyWarned = false;   // one warning per busy spell, not one per 5 s retry
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // beginDspSetup() builds one channel per receiver; finishDspSetup() starts

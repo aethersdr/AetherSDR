@@ -2303,6 +2303,54 @@ RadioCapabilities Hl2Backend::capabilities() const
 
 void Hl2Backend::connectRadio(const RadioConnectRequest& request)
 {
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbe->cancel();
+    const QHostAddress probeHost(request.host);
+    if (request.automaticReconnect && !probeHost.isNull()) {
+        m_busyProbeRequest = request;
+        const auto discovery = discoveryRequest();
+        m_busyProbe->start(probeHost, kMetisPort,
+            QByteArray(reinterpret_cast<const char*>(discovery.data()),
+                       static_cast<qsizetype>(discovery.size())),
+            [](std::span<const std::uint8_t> datagram) -> std::optional<bool> {
+                const auto reply = parseDiscoveryReply(datagram);
+                return reply ? std::optional<bool>(reply->streaming) : std::nullopt;
+            },
+            [this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
+        return;
+    }
+    m_busyWarned = false;
+    startConnect(request);
+}
+
+void Hl2Backend::armBusyProbeForTest(const RadioConnectRequest& request)
+{
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbeRequest = request;
+    m_busyProbe->armForTest([this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
+}
+
+void Hl2Backend::finishBusyProbe(std::optional<bool> streaming)
+{
+    if (!ReconnectBusyProbe::mayProceed(streaming)) {
+        qCInfo(lcHl2) << "HL2: not reconnecting to" << m_busyProbeRequest.host
+                      << "- another client has the radio";
+        if (!m_busyWarned) {
+            m_busyWarned = true;
+            emit configurationWarning(QStringLiteral(
+                "HL2: the radio at %1 is in use by another client. AetherSDR will "
+                "reconnect once it is free, without taking it over.").arg(m_busyProbeRequest.host));
+        }
+        return;   // RadioModel's reconnect timer asks again
+    }
+    m_busyWarned = false;
+    startConnect(m_busyProbeRequest);
+}
+
+void Hl2Backend::startConnect(const RadioConnectRequest& request)
+{
     const QHostAddress host(request.host);
     if (host.isNull()) {
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));
@@ -2858,7 +2906,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
         if (m_queuedConnect) {
             const RadioConnectRequest queued = *m_queuedConnect;
             m_queuedConnect.reset();
-            connectRadio(queued);
+            startConnect(queued);   // already past any busy probe
         }
         return;
     }
@@ -3007,6 +3055,8 @@ void Hl2Backend::invalidateTxDspConfiguration()
 
 void Hl2Backend::disconnectRadio()
 {
+    if (m_busyProbe)
+        m_busyProbe->cancel();
     retirePcmStreams();
     invalidateTxDspConfiguration();
     // Invalidate any DSP build still in flight. Without this, a disconnect

@@ -9,7 +9,6 @@
 
 #include <QHostAddress>
 #include <QJsonArray>
-#include <QUdpSocket>
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QMetaObject>
@@ -796,56 +795,30 @@ RestoredRadioState AnanBackend::currentOperatingState() const
 
 void AnanBackend::connectRadio(const RadioConnectRequest& request)
 {
-    cancelBusyProbe();
-    if (request.automaticReconnect && !QHostAddress(request.host).isNull()) {
-        beginBusyProbe(request);
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbe->cancel();
+    const QHostAddress host(request.host);
+    if (request.automaticReconnect && !host.isNull()) {
+        m_busyProbeRequest = request;
+        const auto discovery = buildDiscovery();
+        m_busyProbe->start(host, kRadioPort,
+            QByteArray(reinterpret_cast<const char*>(discovery.data()),
+                       static_cast<qsizetype>(discovery.size())),
+            [](std::span<const std::uint8_t> datagram) -> std::optional<bool> {
+                const auto reply = parseDiscoveryReply(datagram);
+                return reply ? std::optional<bool>(reply->streaming) : std::nullopt;
+            },
+            [this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
         return;
     }
     m_busyWarned = false;
     startConnect(request);
 }
 
-void AnanBackend::beginBusyProbe(const RadioConnectRequest& request)
+void AnanBackend::finishBusyProbe(std::optional<bool> streaming)
 {
-    const QHostAddress host(request.host);
-    m_busyProbeRequest = request;
-    const quint64 generation = ++m_busyProbeGeneration;
-    m_busyProbe = new QUdpSocket(this);
-    if (!m_busyProbe->bind(QHostAddress::AnyIPv4, 0)) {
-        finishBusyProbe(generation, std::nullopt);   // no probe possible: never blocks
-        return;
-    }
-    connect(m_busyProbe, &QUdpSocket::readyRead, this, [this, generation, host] {
-        while (m_busyProbe && m_busyProbe->hasPendingDatagrams()) {
-            QByteArray datagram(static_cast<qsizetype>(m_busyProbe->pendingDatagramSize()), Qt::Uninitialized);
-            QHostAddress sender;
-            m_busyProbe->readDatagram(datagram.data(), datagram.size(), &sender);
-            if (QHostAddress(sender.toIPv4Address()) != QHostAddress(host.toIPv4Address()))
-                continue;
-            const auto reply = parseDiscoveryReply(std::span<const std::uint8_t>(
-                reinterpret_cast<const std::uint8_t*>(datagram.constData()),
-                static_cast<std::size_t>(datagram.size())));
-            if (reply) {
-                finishBusyProbe(generation, reply->streaming);
-                return;
-            }
-        }
-    });
-    const auto request60 = buildDiscovery();
-    m_busyProbe->writeDatagram(reinterpret_cast<const char*>(request60.data()),
-                               static_cast<qint64>(request60.size()), host, kRadioPort);
-    QTimer::singleShot(kBusyProbeTimeoutMs, this, [this, generation] {
-        finishBusyProbe(generation, std::nullopt);
-    });
-}
-
-void AnanBackend::finishBusyProbe(quint64 generation, std::optional<bool> streaming)
-{
-    if (generation != m_busyProbeGeneration || !m_busyProbe)
-        return;   // superseded, cancelled, or already answered
-    m_busyProbe->deleteLater();
-    m_busyProbe = nullptr;
-    if (!reconnectMayProceed(streaming)) {
+    if (!ReconnectBusyProbe::mayProceed(streaming)) {
         qCInfo(lcAnan) << "ANAN: not reconnecting to" << m_busyProbeRequest.host
                        << "- another client has the radio";
         if (!m_busyWarned) {
@@ -858,15 +831,6 @@ void AnanBackend::finishBusyProbe(quint64 generation, std::optional<bool> stream
     }
     m_busyWarned = false;
     startConnect(m_busyProbeRequest);
-}
-
-void AnanBackend::cancelBusyProbe()
-{
-    ++m_busyProbeGeneration;
-    if (m_busyProbe) {
-        m_busyProbe->deleteLater();
-        m_busyProbe = nullptr;
-    }
 }
 
 void AnanBackend::startConnect(const RadioConnectRequest& request)
@@ -1153,7 +1117,8 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
-    cancelBusyProbe();
+    if (m_busyProbe)
+        m_busyProbe->cancel();
     retirePcmStreams();
     m_droopCalibrator.stop(false);
     m_droopCalibrator.setLandedRate(0);
