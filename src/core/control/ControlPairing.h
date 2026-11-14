@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QString>
 
 #include <functional>
@@ -63,6 +64,26 @@ public:
     using Done = std::function<void(std::optional<Issued>)>;
     virtual ~PairingIssuer() = default;
     virtual void issue(const QString& clientName, Done done) = 0;
+};
+
+// Paired clients at run time (aetherd-remote-clients.md §3): the radio's own
+// screen lists them and removes one without stopping the engine. Only remote
+// scopes are listed or removable here; local identities never are.
+class RemoteClientAdmin {
+public:
+    struct Client {
+        QString credentialId;
+        QString name;
+        QString scope;   // "remote-observe" or "remote-control"
+    };
+    enum class RevokeResult { Revoked, NotFound, Failed };
+    using RevokeDone = std::function<void(RevokeResult)>;
+    virtual ~RemoteClientAdmin() = default;
+    [[nodiscard]] virtual QList<Client> clients() const = 0;
+    // Removes it from durable storage first, then ends it live (closing its
+    // sessions), so a failure never shows as gone a client a restart restores.
+    // Completes on the caller's thread, possibly before revoke() returns.
+    virtual void revoke(const QString& credentialId, RevokeDone done) = 0;
 };
 
 } // namespace AetherSDR::control

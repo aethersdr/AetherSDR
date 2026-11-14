@@ -3,12 +3,12 @@ title: "TNF (Tracking Notch Filters)"
 slug: "/tnf-tracking-notch-filters"
 description: "Tracking Notch Filters remove persistent interfering carriers from the audio passband."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "RTL-SDR (experimental)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "RTL-SDR (experimental)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), RTL-SDR (experimental)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, RTL-SDR (experimental)
 
 :::
 

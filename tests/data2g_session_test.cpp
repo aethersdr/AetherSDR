@@ -87,6 +87,8 @@ struct Link {
     Data2gLinkState ourState{Data2gLinkState::Idle};
     int transmissions{0};
     bool transmittingReported{false};
+    std::vector<double> identifiedAt;   // seconds, each ID frame handed back
+    int idsLost{0};
     double transmissionPeak{0.0};
     std::size_t shortestTransmission{SIZE_MAX};
     bool sawAbort{false};
@@ -146,6 +148,10 @@ struct Link {
         Data2gSessionStep ourOut = ours.step(weHear);
         ourState = ourOut.state;
         transmittingReported = transmittingReported || ourOut.transmitting;
+        if (ourOut.identified)
+            identifiedAt.push_back(seconds());
+        if (ourOut.identificationLost)
+            ++idsLost;
         std::move(ourOut.events.begin(), ourOut.events.end(), std::back_inserter(ourEvents));
         ourReceived.insert(ourReceived.end(), ourOut.received.begin(), ourOut.received.end());
         if (ourOut.abortTx) {
@@ -262,6 +268,7 @@ void session()
         return count(link.theirEvents, "ID N0CALL") > idsBefore;
     });
     check(identified, "the other station heard the closing identification");
+    check(!has(link.ourEvents, "IDENTIFICATION not sent"), "which is not reported as missed");
     check(link.ours.suppressedTransmissions() == droppedInSession,
           "nothing of the session's own was dropped");
 
@@ -307,11 +314,28 @@ void closingDeadline()
     check(closed, "disconnected, and the closing window has just opened");
 
     const std::uint64_t droppedBefore = link.ours.suppressedTransmissions();
-    const std::vector<float> eightSeconds(8 * Link::kRate, 0.0f);
-    const Data2gSessionStep late = link.ours.step(eightSeconds);
+    const std::vector<float> pastTheWindow(
+        static_cast<std::size_t>((Data2gSession::kClosingIdSeconds + 1.0) * Link::kRate), 0.0f);
+    const Data2gSessionStep late = link.ours.step(pastTheWindow);
     check(late.transmission.empty(), "an identification past the deadline is not handed back");
     check(!late.transmitting, "nor reported as transmitting");
     check(link.ours.suppressedTransmissions() == droppedBefore + 1, "it is dropped and counted");
+    check(has(late.events, "IDENTIFICATION not sent"), "and reported as not sent");
+}
+
+// The operator's own ID, for when no session can send one.
+void identificationAudio()
+{
+    const std::vector<float> id = Data2gSession::identificationAudio("N0CALL", 24000);
+    check(!id.empty(), "a CW identification is produced");
+    float peak = 0.0f;
+    for (float v : id)
+        peak = std::max(peak, std::fabs(v));
+    check(peak > 0.9f && peak < 1.1f, "it peaks at full scale");
+    const double seconds = static_cast<double>(id.size()) / 24000;
+    check(seconds > 3.0 && seconds < 12.0, "DE N0CALL at 20 WPM lasts a few seconds");
+    check(Data2gSession::identificationAudio("NOT A CALL SIGN!", 24000).empty(), "a bad call produces nothing");
+    check(Data2gSession::identificationAudio("N0CALL", 44100).empty(), "nor does an unsupported rate");
 }
 
 // Abort mid-session: transmit stops at once and nothing follows, the closing
@@ -362,6 +386,61 @@ void refusals()
     check(!badCall.isValid(), "a station call that will not pack leaves the adapter invalid");
 }
 
+// Identification (47 CFR 97.119(a)): an ID frame the engine bundles with a
+// refusal is dropped with it, and the engine then waits a whole interval. One
+// such loss is counted; a second in a row closes the session, and the closing
+// ID goes out. The interval is shortened here so the case fits in a test.
+void lostIdentification()
+{
+    static constexpr double kInterval = 30.0;
+    Link link(true);
+    link.ours.setIdIntervalSeconds(kInterval);
+    link.ours.requestConnect("W1AW", Data2gBandwidth::Hz2400);
+    check(link.runUntil(60.0, [&] { return has(link.ourEvents, "CONNECTED"); }), "connected for the ID case");
+    check(link.runUntil(90.0, [&] { return !link.identifiedAt.empty(); }), "the session identifies");
+    const double lastGood = link.identifiedAt.back();
+
+    // A third station calls as the next ID falls due: the engine sends the ID
+    // with its refusal, and both are dropped.
+    link.runUntil(kInterval, [&] { return link.seconds() >= lastGood + kInterval - 1.0; });
+    link.thirdStationCalls();
+    check(link.runUntil(20.0, [&] { return link.idsLost == 1; }), "an ID dropped with a refusal is reported lost");
+    check(link.ourState == Data2gLinkState::Connected, "one lost ID does not end the session");
+    check(!has(link.ourEvents, "IDENTIFICATION"), "nor is it called overdue yet");
+    const double firstLoss = link.seconds();
+
+    // And again an interval later: two in a row.
+    link.runUntil(kInterval, [&] { return link.seconds() >= firstLoss + kInterval - 2.0; });
+    for (int attempt = 0; attempt < 6 && link.idsLost < 2 && link.identifiedAt.back() == lastGood; ++attempt) {
+        link.thirdStationCalls();
+        link.runUntil(6.0, [&] { return link.idsLost == 2; });
+    }
+    check(link.idsLost == 2, "a second ID in a row is lost");
+    check(has(link.ourEvents, "IDENTIFICATION overdue"), "which is reported as overdue");
+    const bool closed = link.runUntil(120.0, [&] {
+        return has(link.ourEvents, "DISCONNECTED") && link.identifiedAt.back() > lastGood;
+    });
+    check(closed, "the session is closed and its closing ID goes out");
+    check(link.identifiedAt.back() - lastGood < 3.0 * kInterval,
+          "the gap between IDs on the air stays inside two intervals and a turn");
+    check(count(link.theirEvents, "ID N0CALL") >= 1, "the other station heard the closing ID");
+}
+
+// Left alone, the adapter runs the engine at a 4-minute ID interval, not
+// upstream's 10, and the interval can be shortened but never lengthened.
+void idInterval()
+{
+    Data2gSession session("N0CALL", 24000);
+    check(session.idIntervalSeconds() == Data2gSession::kIdIntervalSeconds,
+          "the engine runs at the 4-minute ID interval by default");
+    check(Data2gSession::kIdIntervalSeconds * 2 + 60.0 < 600.0,
+          "one lost ID still leaves the next inside 10 minutes");
+    session.setIdIntervalSeconds(900.0);
+    check(session.idIntervalSeconds() == Data2gSession::kIdIntervalSeconds, "it cannot be lengthened");
+    session.setIdIntervalSeconds(1.0);
+    check(session.idIntervalSeconds() == 30.0, "nor shortened below 30 s");
+}
+
 // The key lead is silence at the head of each transmission.
 void keyLead()
 {
@@ -386,6 +465,9 @@ int main()
     session();
     strangerCalls();
     closingDeadline();
+    identificationAudio();
+    lostIdentification();
+    idInterval();
     abortMidSession();
     refusals();
     keyLead();
