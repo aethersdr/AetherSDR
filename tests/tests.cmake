@@ -5808,6 +5808,27 @@ target_include_directories(modem_host_protocol_test PRIVATE src)
 target_link_libraries(modem_host_protocol_test PRIVATE Qt6::Core)
 add_test(NAME modem_host_protocol_test COMMAND modem_host_protocol_test)
 
+# HF Gateway client logic (RFC #7296): positional reply matching and the
+# transmit permission, with no sockets.
+add_executable(modem_host_session_test
+    tests/modem_host_session_test.cpp
+    src/core/hfgateway/ModemHostSession.cpp
+    src/core/hfgateway/ModemHostProtocol.cpp
+)
+target_include_directories(modem_host_session_test PRIVATE src)
+target_link_libraries(modem_host_session_test PRIVATE Qt6::Core)
+add_test(NAME modem_host_session_test COMMAND modem_host_session_test)
+
+# HF Gateway configuration (RFC #7296): the pure JSON round trip and the
+# validation of stored documents. No AppSettings.
+add_executable(hf_gateway_config_test
+    tests/hf_gateway_config_test.cpp
+    src/core/hfgateway/HfGatewayConfig.cpp
+)
+target_include_directories(hf_gateway_config_test PRIVATE src)
+target_link_libraries(hf_gateway_config_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hf_gateway_config_test COMMAND hf_gateway_config_test)
+
 add_executable(lp100a_protocol_test
     tests/lp100a_protocol_test.cpp
     src/core/LpMeterProtocol.cpp
