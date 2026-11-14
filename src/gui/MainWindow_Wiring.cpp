@@ -2226,6 +2226,16 @@ void MainWindow::onSliceAdded(SliceModel* s)
     connect(s, &SliceModel::filterChanged, this, [this, s](int lo, int hi) {
         auto* sw = spectrumForSlice(s);
         if (!sw) return;
+        // The TX waterfall mask is synced BEFORE the drag guard below, because
+        // the guard does not apply to it. #764's guard protects the overlay's
+        // own filterLow/HighHz — the edge under the mouse — from being snapped
+        // back by the radio's echo. The mask is separate state
+        // (m_txWaterfall*), written on every spectrum rather than this one, and
+        // is never touched by the drag. Leaving the sync below the return
+        // stranded the painted TX block at its pre-drag width, with nothing
+        // re-syncing on release (#5204).
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
         // Skip overlay update while user is dragging a filter edge — the radio's
         // status echo would overwrite the drag position, causing snap-to-zero (#764)
         if (sw->isDraggingFilter()) return;
@@ -2235,8 +2245,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
             s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
             s->diversity(), s->isDiversityParent(),
             s->isDiversityChild(), s->diversityIndex());
-        if (s->isTxSlice())
-            syncTxWaterfallSliceToSpectrums();
     });
     // Each pan renders its own slice's accepted threshold, including updates
     // to background Auto receivers.
