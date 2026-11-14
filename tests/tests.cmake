@@ -7713,13 +7713,12 @@ add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
 # TCI hw_sensors_enable / hw_sensors (TCI 2.1 §HW_SENSORS): a TciClient text
 # sink attached to the production onTextMessage(). Socket-free: nothing is
 # bound, opened or keyed.
-add_executable(tci_hw_sensors_test tests/tci_hw_sensors_test.cpp)
-target_include_directories(tci_hw_sensors_test PRIVATE src tests)
-target_link_libraries(tci_hw_sensors_test PRIVATE aethercore Qt6::Core Qt6::Network)
 if(Qt6WebSockets_FOUND)
-    target_link_libraries(tci_hw_sensors_test PRIVATE Qt6::WebSockets)
+    add_executable(tci_hw_sensors_test tests/tci_hw_sensors_test.cpp)
+    target_include_directories(tci_hw_sensors_test PRIVATE src tests)
+    target_link_libraries(tci_hw_sensors_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_hw_sensors_test COMMAND tci_hw_sensors_test)
 endif()
-add_test(NAME tci_hw_sensors_test COMMAND tci_hw_sensors_test)
 # An HL2 pan centre outside receivePanCenterControl stops at the edge, in the
 # backend and in the pan model. A real, unconnected Hl2Backend behind
 # RadioModel. Socket-free.
