@@ -2402,6 +2402,10 @@ void VfoWidget::buildTabContent()
 
                 static constexpr int MARK_STEP = 25;
                 static constexpr int SHIFT_STEP = 5;
+                // Upper edges of the rtty_mark and rtty_shift range a
+                // FlexRadio accepts; it refuses a step past either one.
+                static constexpr int MARK_MAX = 4000;
+                static constexpr int SHIFT_MAX = 2000;
 
                 // Mark selector: ◀ 2125 ▶
                 auto* markMinus = new TriBtn(TriBtn::Left);
@@ -2414,10 +2418,12 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(markPlus);
 
                 auto markDown = [this] {
-                    if (m_slice) m_slice->setRttyMark(m_slice->rttyMark() - MARK_STEP);
+                    if (m_slice && m_slice->rttyMark() > MARK_STEP)
+                        m_slice->setRttyMark(m_slice->rttyMark() - MARK_STEP);
                 };
                 auto markUp = [this] {
-                    if (m_slice) m_slice->setRttyMark(m_slice->rttyMark() + MARK_STEP);
+                    if (m_slice && m_slice->rttyMark() + MARK_STEP <= MARK_MAX)
+                        m_slice->setRttyMark(m_slice->rttyMark() + MARK_STEP);
                 };
                 connect(markMinus, &QPushButton::clicked, this, markDown);
                 connect(markPlus, &QPushButton::clicked, this, markUp);
@@ -2441,7 +2447,8 @@ void VfoWidget::buildTabContent()
                         m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
                 };
                 auto shiftUp = [this] {
-                    if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() + SHIFT_STEP);
+                    if (m_slice && m_slice->rttyShift() + SHIFT_STEP <= SHIFT_MAX)
+                        m_slice->setRttyShift(m_slice->rttyShift() + SHIFT_STEP);
                 };
                 connect(shiftMinus, &QPushButton::clicked, this, shiftDown);
                 connect(shiftPlus, &QPushButton::clicked, this, shiftUp);
