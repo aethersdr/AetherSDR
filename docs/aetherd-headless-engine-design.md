@@ -468,6 +468,11 @@ backends (§5.5) are reachable either way; only the UI boundary differs.
 
 ## 10. Staged plan
 
+> **Amended 2026-11-13 (maintainer ruling):** receive-only remote clients come
+> ahead of the data plane: a WebSocket listener with scoped credentials and
+> pairing ([`aetherd-remote-clients.md`](aetherd-remote-clients.md)), then a
+> desktop client backend. Transmit over the network still waits for Stage 4.
+
 1. **Extract `libaethercore`.** Split the monolith into an engine library +
    thin gui shell. **Rehearsed 2026-07-04** — the split configures, builds,
    and passes all 56 tests on Linux

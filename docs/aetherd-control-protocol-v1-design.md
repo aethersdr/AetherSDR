@@ -261,7 +261,11 @@ Initial non-TX methods are `capabilities.get`, `resource.get`,
 `resource.subscribe`, `resource.unsubscribe`, `radio.connect`,
 `radio.disconnect`, `slice.setFrequency`, `slice.setMode`, `slice.setFilter`,
 `slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`,
-`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Connect requests use
+`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Remote-client
+pairing adds `pairing.begin` (local socket, `control`) and `pairing.complete`
+(sent instead of `hello` on the TLS network listener, so like `hello` it
+carries no `sessionId`); see [`aetherd-remote-clients.md`](aetherd-remote-clients.md)
+§3.  Connect requests use
 typed family-neutral fields; backend-specific connection data lives in a
 namespaced validated object and never includes a persistent plaintext credential.
 
@@ -338,6 +342,14 @@ loopback, an explicitly selected WireGuard interface, or a TLS endpoint with
 certificate validation.  Wildcard/plain-LAN binding is rejected.  Origin
 headers are not authentication.  Bearer credentials are accepted only over a
 confidential transport or a current-user local endpoint.
+
+Remote clients, slice 1 ([`aetherd-remote-clients.md`](aetherd-remote-clients.md),
+ruled 2026-11-13) implements that listener receive-only: TLS with a pinned
+self-signed certificate, or a WireGuard address. Network sessions start
+unauthenticated and take their grants from the credential's scope
+(`remote-observe`, `remote-control`); they are never attached to the transmit
+service. Its pairing methods are the one wire path that provisions a
+credential, and only a code shown on the radio's own screen opens it.
 
 ## 7. Transmit actor and arbitration contract
 

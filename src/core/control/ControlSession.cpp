@@ -39,6 +39,11 @@ ControlSession::~ControlSession()
 
 bool ControlSession::isAuthenticated() const
 {
+    if (m_authorization == SessionAuthorization::NetworkScoped) {
+        // Only a bound remote-scope credential authenticates a network session.
+        return !m_revoked && m_principalBound && m_principal.valid()
+            && ControlCredentials::isRemote(m_principal.role());
+    }
     return !m_revoked
         && (!m_principalBound || m_principal.valid())
         && (m_principalBound || m_authorization == SessionAuthorization::Observer
@@ -72,6 +77,11 @@ bool ControlSession::bindPrincipal(const ControlCredentials::Principal& principa
         || !principal.valid() || !principal.m_source || principal.m_source->thread() != thread()) {
         return false;
     }
+    // A remote scope belongs on the network and nowhere else; a local identity
+    // never on the network.
+    if (ControlCredentials::isRemote(principal.role()) != isNetwork()) {
+        return false;
+    }
     m_principalBound = true;
     m_principal = principal;
     connect(principal.m_source, &ControlCredentials::changed, this, [this] {
@@ -83,6 +93,9 @@ bool ControlSession::bindPrincipal(const ControlCredentials::Principal& principa
 
 bool ControlSession::canObserve() const
 {
+    if (isNetwork()) {
+        return isAuthenticated() && isNegotiated();   // both remote scopes observe
+    }
     return isAuthenticated() && isNegotiated()
         && (m_authorization == SessionAuthorization::Observer
             || m_authorization == SessionAuthorization::ObserverController);
@@ -90,6 +103,10 @@ bool ControlSession::canObserve() const
 
 bool ControlSession::canControl() const
 {
+    if (isNetwork()) {
+        return isAuthenticated() && isNegotiated()
+            && m_principal.role() == ControlCredentials::Role::RemoteControl;
+    }
     return isAuthenticated() && isNegotiated()
         && (m_authorization == SessionAuthorization::Controller
             || m_authorization == SessionAuthorization::ObserverController);
@@ -186,6 +203,16 @@ bool ControlSession::bindAuthorityLifetime(QObject* context, std::function<void(
     } else {
         m_retireAuthority = std::move(retire);
     }
+    return true;
+}
+
+bool ControlSession::completeDeferred(const QJsonObject& message, bool closeAfterWrite)
+{
+    if (QThread::currentThread() != thread() || !m_deferredSink) {
+        return false;
+    }
+    const DeferredReplySink sink = m_deferredSink;   // the sink may end this session
+    sink(message, closeAfterWrite);
     return true;
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ControlEngine.h"
 #include "ControlService.h"
 
 #include <QJsonObject>
@@ -35,6 +36,10 @@ public:
     LocalControlServer(QObject* parent, Limits limits,
                        RadioConnectionTarget* connectionTarget = nullptr,
                        bool allowLocalControl = false);
+    // Serves sessions of a shared engine (aetherd: the same engine as the
+    // network listener). Targets are bound through bind*() as usual.
+    LocalControlServer(ControlEngine& engine, QObject* parent, Limits limits,
+                       bool allowLocalControl);
     ~LocalControlServer() override;
 
     // ReserveEndpoint claims the private endpoint but closes early arrivals.
@@ -64,6 +69,7 @@ public:
 private:
     struct Client;
 
+    void init();
     void acceptConnections();
     void readClient(QLocalSocket* socket);
     void dropClient(QLocalSocket* socket);
@@ -75,8 +81,9 @@ private:
         const QString& logicalName, QString* endpointName, QString* lockPath);
 
     QLocalServer m_server;
-    ControlResourceStore m_resources;
-    ControlService m_service;
+    std::unique_ptr<ControlEngine> m_ownedEngine;   // null when the engine is shared
+    ControlResourceStore& m_resources;
+    ControlService& m_service;
     Limits m_limits;
     const SessionAuthorization m_localAuthorization;
     std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;

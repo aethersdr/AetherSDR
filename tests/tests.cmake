@@ -390,6 +390,7 @@ add_executable(control_authorization_test
     src/core/control/ControlProtocolCodec.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlCredentialVault.cpp # no HAVE_KEYCHAIN: unavailable path, never opens OS vault
@@ -430,6 +431,7 @@ add_executable(control_transport_lifecycle_test
     src/core/control/ControlProtocolCodec.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlInputPump.cpp
@@ -471,6 +473,7 @@ add_executable(control_transmit_service_test
     src/core/control/TransmitControlTarget.h
     src/core/control/TransmitControlService.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlProtocolCodec.cpp
@@ -481,6 +484,38 @@ target_include_directories(control_transmit_service_test PRIVATE src)
 target_compile_definitions(control_transmit_service_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_transmit_service_test PRIVATE Qt6::Core)
 add_test(NAME control_transmit_service_test COMMAND control_transmit_service_test)
+
+# Remote clients' scoped credentials (aetherd-remote-clients.md): the scope is
+# the grant on a network session, local and remote identities never cross, and
+# a network session never reaches transmit. Socket-free.
+add_executable(control_remote_scope_test
+    tests/control_remote_scope_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/control/TransmitControlTarget.h
+    src/core/control/TransmitControlService.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp)
+target_include_directories(control_remote_scope_test PRIVATE src)
+target_compile_definitions(control_remote_scope_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_remote_scope_test PRIVATE Qt6::Core)
+add_test(NAME control_remote_scope_test COMMAND control_remote_scope_test)
+
+# Remote-client pairing (aetherd-remote-clients.md §3): the code, its check
+# digits, expiry and attempt limit; pairing.begin only locally with control;
+# pairing.complete only before hello on the TLS listener, through a deferred
+# reply; the paired token's scope; v2 vault names; endpoint rules. Binds no
+# socket (the listener's refusals happen before any bind).
+add_executable(control_remote_pairing_test tests/control_remote_pairing_test.cpp)
+target_include_directories(control_remote_pairing_test PRIVATE src)
+target_link_libraries(control_remote_pairing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME control_remote_pairing_test COMMAND control_remote_pairing_test)
 
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
@@ -702,6 +737,7 @@ add_executable(radio_catalogue_test
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
 target_include_directories(radio_catalogue_test PRIVATE src)
@@ -720,6 +756,7 @@ add_executable(control_connection_test
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
 target_include_directories(control_connection_test PRIVATE src)
@@ -7920,6 +7957,19 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
+
+    # Socket-owning test: aetherd's own network listener is the subject. It
+    # binds 127.0.0.1 on an EPHEMERAL port and a local socket in a private
+    # runtime directory, with in-process clients only: the certificate pin,
+    # pairing, the paired token, a change mirrored between a local and a
+    # network client, the session budget and frame rules. Skips (77) without
+    # the openssl tool that makes its throwaway certificate.
+    add_executable(remote_control_loopback_test tests/remote_control_loopback_test.cpp)
+    target_include_directories(remote_control_loopback_test PRIVATE src)
+    target_link_libraries(remote_control_loopback_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME remote_control_loopback_test COMMAND remote_control_loopback_test)
+    set_tests_properties(remote_control_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer

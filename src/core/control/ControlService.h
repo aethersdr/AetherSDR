@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ControlPairing.h"
 #include "ControlProtocolCodec.h"
 #include "ControlResourceStore.h"
 #include "ControlSession.h"
@@ -17,6 +18,10 @@ namespace AetherSDR::control {
 struct ServiceReply {
     QJsonObject message;
     bool closeAfterWrite{false};
+    // The handler answers later, through ControlSession::completeDeferred().
+    // The transport writes nothing now and reads no further input from that
+    // connection until the answer is delivered.
+    bool deferred{false};
 };
 
 // Transport-neutral Stage-3 service kernel. The current surface is strictly
@@ -37,6 +42,15 @@ public:
     // the existing credential-rejecting local endpoint.
     [[nodiscard]] bool bindCredentials(ControlCredentials* credentials);
     [[nodiscard]] bool bindTransmitTarget(TransmitControlTarget* target);
+    // Remote-client pairing (aetherd-remote-clients.md §3). Bound only when a
+    // TLS listener exists, since the code is tied to its certificate. The
+    // issuer and the clock outlive the service; nowMs is monotonic.
+    struct PairingBinding {
+        PairingIssuer* issuer{nullptr};
+        QString certificateSha256;
+        std::function<qint64()> nowMs;
+    };
+    [[nodiscard]] bool bindPairing(PairingBinding binding);
 
     [[nodiscard]] ServiceReply handle(
         const QByteArray& bytes, ControlSession* session) const;
@@ -55,6 +69,10 @@ private:
         const ProtocolRequest& request, const ControlSession& session) const;
     [[nodiscard]] ServiceReply handleReceive(const ProtocolRequest& request,
         const ControlSession& session, ReceiveOperation operation) const;
+    [[nodiscard]] ServiceReply beginPairing(const ProtocolRequest& request,
+        const ControlSession& session) const;
+    [[nodiscard]] ServiceReply completePairing(const ProtocolRequest& request,
+        ControlSession* session) const;
 
     ControlResourceStore* m_resources{nullptr};
     QPointer<RadioConnectionTarget> m_connectionTarget;
@@ -65,6 +83,8 @@ private:
     bool m_receiveTargetBound{false};
     QPointer<ControlCredentials> m_credentials;
     bool m_credentialsBound{false};
+    std::optional<PairingBinding> m_pairingBinding;
+    mutable ControlPairing m_pairing;
     mutable bool m_dispatchStarted{false};
     std::unique_ptr<TransmitControlService> m_transmit;
 };
