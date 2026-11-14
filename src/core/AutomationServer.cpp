@@ -3738,7 +3738,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("radiocert", {},
-            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
+            "radiocert <tune|rx|tx|meters|all|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key)",
             // Rest, not Value: Value keeps one token and drops the rest, which
             // lost `sql=` after a frequency in the line form.
             parseActionRest,
@@ -9271,12 +9271,30 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             "blocked: this phase keys the transmitter — enable TX automation "
             "(or set AETHER_AUTOMATION_ALLOW_TX=1), or run 'radiocert tune' / 'radiocert rx'"));
 
-    // [freqMhz] [sql=<MHz>]: the keyed stages' dial, and the steady carrier
-    // stage-squelch-scale measures the radio's gate on. Both are dial targets,
-    // so both take tune's validation: QString::toDouble() accepts nan and inf.
+    // [freqMhz] [sql=<MHz>] [tone=<dBFS>]: the keyed stages' dial, the steady
+    // carrier stage-squelch-scale measures the radio's gate on, and the level
+    // of the tone the rf and meter-scale stages key with. The two dial targets
+    // take tune's validation: QString::toDouble() accepts nan and inf.
     static const QRegularExpression certArgSep(QStringLiteral("\\s+"));
     for (const QString& token : freqArg.trimmed().split(certArgSep, Qt::SkipEmptyParts)) {
         double mhz = 0.0;
+        if (token.startsWith(QLatin1String("tone="), Qt::CaseInsensitive)) {
+            // A level, not a power: the RF ceiling below still clamps drive, and
+            // the default stays -20 dBFS. Refused outside the range rather than
+            // clamped, so a typo cannot key a louder tone than was asked for.
+            bool ok = false;
+            const double dbfs = token.mid(5).toDouble(&ok);
+            if (!ok || !std::isfinite(dbfs)
+                || dbfs < RadioCertification::kMinRfStimulusDbfs
+                || dbfs > RadioCertification::kMaxRfStimulusDbfs)
+                return err(QStringLiteral(
+                    "radiocert tone=: '%1' is not a level in dBFS between %2 and %3")
+                    .arg(token.mid(5))
+                    .arg(RadioCertification::kMinRfStimulusDbfs)
+                    .arg(RadioCertification::kMaxRfStimulusDbfs));
+            opts.rfStimulusDbfs = dbfs;
+            continue;
+        }
         if (token.startsWith(QLatin1String("sql="), Qt::CaseInsensitive)) {
             if (auto refusal = refuseUntunableMhz(QStringLiteral("radiocert sql="),
                                                   token.mid(4), mhz))
