@@ -45,7 +45,7 @@ require a live eligible slice; zero bounds or unknown authority fail closed.
 | HL2 | engine | 100,000–38,400,000 | TX-enabled sessions need normalized idle readback, currently absent |
 | Sim | engine | 1–1,000,000,000,000 | Explicit simulator API domain, not RF coverage |
 | Icom | radio | Profile `tuningMinHz` / `tuningMaxHz` | Declared band union and confirmed idle; no current daemon catalogue connection |
-| ANAN | engine | 0 / 0 (unknown) | Unavailable pending verified coverage |
+| ANAN | engine | 10,000–61,430,000 | Measured G2 (gateware 27) tuning span, not sensitivity; below `phaseWord()`'s alias at 61.44 MHz; the pan follows every tune (one DDC, centered on the slice); no TX capability |
 | RTL-SDR | engine | 24,000–1,766,000,000 | Backend/build availability; no TX capability |
 
 The default struct declares unknown authority and zero bounds. Every backend
