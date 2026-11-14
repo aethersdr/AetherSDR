@@ -80,6 +80,8 @@ class FakeGpsd:
                     elif line.startswith(b'?POLL'):
                         c.sendall(b'{"class":"POLL","active":1}\r\n')
         except OSError:
+            # The relay under test drops sessions on purpose (refusals, idle
+            # eviction, the ninth client); the stand-in just ends this one.
             pass
         c.close()
 

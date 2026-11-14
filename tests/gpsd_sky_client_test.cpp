@@ -211,6 +211,15 @@ int main(int argc, char** argv)
                   && !gpsdsky::applyDetail(QJsonDocument::fromJson(
                          R"({"class":"PPS","real_sec":1000,"real_nsec":2000000000,"clock_sec":1000,"clock_nsec":0})").object(), d),
               "a clock far off, or nanoseconds out of range, are refused");
+        // Seconds at the ends of qint64 would overflow a plain subtraction.
+        check(!gpsdsky::applyDetail(QJsonDocument::fromJson(
+                  R"({"class":"PPS","real_sec":-9223372036854775808,"real_nsec":0,)"
+                  R"("clock_sec":9223372036854775807,"clock_nsec":0})").object(), d)
+                  && !gpsdsky::applyDetail(QJsonDocument::fromJson(
+                         R"({"class":"PPS","real_sec":9223372036854775807,"real_nsec":0,)"
+                         R"("clock_sec":-9223372036854775808,"clock_nsec":0})").object(), d)
+                  && d.hasPps && d.ppsOffsetNs == 99855,
+              "seconds that would overflow, either way, are refused and the last offset kept");
         check(gpsdsky::applyDetail(QJsonDocument::fromJson(
                   R"({"class":"DEVICES","devices":[{"path":"/dev/ttyGPS","driver":"NMEA0183","bps":38400},)"
                   R"({"path":"/dev/pps0","driver":"PPS"}]})").object(), d)

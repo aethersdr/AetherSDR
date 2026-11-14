@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QTcpSocket>
 #include <QTimer>
+#include <QtCore/qnumeric.h>
 
 namespace AetherSDR {
 
@@ -176,9 +177,10 @@ bool applyDetail(const QJsonObject& o, GpsdDetail& d)
         if (rns < 0 || rns >= 1000000000 || cns < 0 || cns >= 1000000000) {
             return false;
         }
-        const qint64 secs = cs.toInteger() - rs.toInteger();
-        if (secs < -100 || secs > 100) {
-            return false;   // the clock is far off: an offset in ns means nothing
+        // Any qint64 can arrive: subtract without overflowing, then range-check.
+        qint64 secs = 0;
+        if (qSubOverflow(cs.toInteger(), rs.toInteger(), &secs) || secs < -100 || secs > 100) {
+            return false;   // malformed, or the clock is far off: an offset in ns means nothing
         }
         // A pulse marks the start of a second; which second comes from the
         // receiver's NMEA, and gpsd can label it one off (a FLEX-8600 reports
