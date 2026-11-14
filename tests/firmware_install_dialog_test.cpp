@@ -70,13 +70,19 @@ struct Window {
                             [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
         relay.setTransport(Ctr2ProxyModel::Transport::Usb);
         relay.setUsbDevicePath(kKnob.path);
+        // The window builds its firmware model and polls it at once: with
+        // this window's lists from the start, never the system's.
+        FirmwareInstallModel::setDefaultDeviceSourcesForTesting(
+            {[l = loaders] { return *l; }, [d = devices] { return *d; }});
         dialog = std::make_unique<FirmwareInstallDialog>(&relay);
+        Ctr2ProxyTestBackend::installFirmwareSourceTripwire();
         dialog->setAttribute(Qt::WA_DeleteOnClose, false);
         fw = dialog->findChild<FirmwareInstallModel*>();
         tabs = dialog->findChild<QTabWidget*>(QStringLiteral("firmwareInstallTabs"));
         if (!fw || !tabs) {
             return false;
         }
+        // This window's HID list too, in place of the relay's.
         fw->setDeviceSources([l = loaders] { return *l; }, [d = devices] { return *d; });
         dialog->show();
         return QTest::qWaitForWindowExposed(dialog.get());
@@ -372,6 +378,84 @@ void rowsSurviveAPartialRescan()
     w.relay.stop();
 }
 
+// A remembered controller that is not plugged in keeps a dimmed row: its
+// name and identity, "Not connected", and only Forget. Plugged back in, that
+// row becomes its live row, the same widget, at its place in the list, and
+// the other row is kept. Forget on an unplugged row takes it off the saved
+// list and the row goes. Socket-free: nothing is started.
+void anUnpluggedRememberedRow()
+{
+    Ctr2RelaySettings settings;
+    settings.hasSetup = true;
+    settings.usbDevices = {{kKnob.serial, kKnob.vendorId, kKnob.productId, QStringLiteral("AetherKnob")}};
+    settings.save();
+    Window w;
+    check(w.open(), "the window opens");
+    if (!w.fw || !w.tabs) {
+        return;
+    }
+    *w.devices = {kMax};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    auto* list = w.dialog->findChild<QListWidget*>(QStringLiteral("ctr2ProxyUsbDevices"));
+    if (!list || list->count() != 2) {
+        check(false, "a row for the plugged-in controller and one for the unplugged knob");
+        return;
+    }
+    const auto widgetAt = [&](int row) { return list->itemWidget(list->item(row)); };
+    const auto labelsOf = [](QWidget* row) {
+        QStringList texts;
+        for (QLabel* l : row->findChildren<QLabel*>())
+            texts << l->text();
+        return texts;
+    };
+    QWidget* const absentRow = widgetAt(1);
+    QWidget* const maxRow = widgetAt(0);
+    QPushButton* const absentStart = absentRow->findChild<QPushButton*>(QStringLiteral("ctr2ProxyUsbStart"));
+    QPushButton* const absentForget = absentRow->findChild<QPushButton*>(QStringLiteral("ctr2ProxyUsbForget"));
+    check(list->item(0)->data(Qt::UserRole).toString() == kMax.path
+              && list->item(1)->data(Qt::UserRole).toString().isEmpty(),
+          "the unplugged knob's row comes after the device list, with no device path");
+    check(labelsOf(absentRow).contains(QStringLiteral("AetherKnob"))
+              && labelsOf(absentRow).contains(QStringLiteral("303a:1001 #333333333333"))
+              && labelsOf(absentRow).contains(QStringLiteral("Not connected")),
+          "it shows the knob's name, identity and Not connected");
+    check(absentStart && !absentStart->isVisibleTo(w.dialog.get()), "it offers no Start");
+    check(absentForget && absentForget->isVisibleTo(w.dialog.get())
+              && absentForget->accessibleName() == QStringLiteral("Forget AetherKnob"),
+          "only Forget, named for the knob");
+    check(!(list->item(1)->flags() & Qt::ItemIsSelectable), "and it cannot become the focus");
+
+    // Plugged back in, ahead of the CTR2-Max.
+    *w.devices = {kKnob, kMax};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    check(list->count() == 2, "plugged back in, the knob has one row");
+    check(widgetAt(0) == absentRow && list->item(0)->data(Qt::UserRole).toString() == kKnob.path,
+          "the unplugged row becomes its live row, the same widget, at its place");
+    check(widgetAt(1) == maxRow, "and the other row is kept");
+    check(absentStart->isVisibleTo(w.dialog.get()) && absentStart->text() == QStringLiteral("Start")
+              && !labelsOf(absentRow).contains(QStringLiteral("Not connected")),
+          "it offers Start, and is no longer Not connected");
+    check(list->item(0)->flags() & Qt::ItemIsSelectable, "and can be selected again");
+
+    // Unplugged again, then forgotten.
+    *w.devices = {kMax};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    QPushButton* forget = list->count() == 2
+        ? widgetAt(1)->findChild<QPushButton*>(QStringLiteral("ctr2ProxyUsbForget"))
+        : nullptr;
+    check(forget && forget->isVisibleTo(w.dialog.get()), "unplugged again, it offers Forget");
+    if (forget)
+        forget->click();
+    QCoreApplication::processEvents();
+    check(Ctr2RelaySettings::load().usbDevices.isEmpty(), "Forget forgets the unplugged knob, saved");
+    check(list->count() == 1 && widgetAt(0) == maxRow, "and its row goes, the other kept");
+    w.relay.stop();
+    Ctr2RelaySettings{}.save();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -383,6 +467,9 @@ int main(int argc, char** argv)
     // A model built without an injected USB backend would reach hidapi and
     // could open a real CTR2; it gets this counting tripwire instead.
     Ctr2ProxyTestBackend::installUsbTripwire();
+    // Nor does a firmware model built without its own device lists enumerate
+    // the real serial ports or HID devices: it gets a counting tripwire too.
+    Ctr2ProxyTestBackend::installFirmwareSourceTripwire();
 
     // Nothing is fetched and nothing reaches the real firmware or backup folders.
     QTemporaryDir folders;
@@ -397,8 +484,11 @@ int main(int argc, char** argv)
     aRowPerController();
     forgetOnARememberedRow();
     rowsSurviveAPartialRescan();
+    anUnpluggedRememberedRow();
 
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every relay model was built with an injected USB backend, never the default (hidapi)");
+    check(Ctr2ProxyTestBackend::firmwareSourceTripwireCalls() == 0,
+          "every firmware model polled only injected device lists, never the system's");
     return g_failures ? 1 : 0;
 }

@@ -167,6 +167,16 @@ public:
     // device is started by hand. Saved at once.
     bool canForgetUsbDevice(const QString& usbPath) const;
     bool forgetUsbDevice(const QString& usbPath);
+    // The same for a remembered device by its identity, plugged in or not:
+    // an unplugged one can be forgotten too.
+    bool canForgetUsbDevice(const Ctr2RelaySettings::UsbDevice& device) const;
+    bool forgetUsbDevice(const Ctr2RelaySettings::UsbDevice& device);
+    // The remembered devices not plugged in now (none listed with their
+    // serial number and IDs), in the order first started.
+    QList<Ctr2RelaySettings::UsbDevice> absentUsbDevices() const;
+    // A remembered device's name: as listed when last started, else its
+    // CTR2 model by USB IDs, else the IDs.
+    static QString rememberedName(const Ctr2RelaySettings::UsbDevice& device);
 
     // Starts the relay by itself whenever AetherSDR is connected to a radio,
     // with the setup it last started with (Ctr2RelaySettings, saved), and
@@ -280,7 +290,7 @@ public:
 signals:
     void configurationChanged();
     void autoStartChanged();
-    void listenAddressesChanged();   // also covers the USB device list
+    void listenAddressesChanged();   // also covers the USB device list and absentUsbDevices()
     void stateChanged();
     void endpointsChanged();
     void statsChanged();      // coalesced for display

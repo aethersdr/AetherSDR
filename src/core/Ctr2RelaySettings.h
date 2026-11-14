@@ -12,12 +12,19 @@ namespace AetherSDR {
 
 struct Ctr2RelaySettings {
     // A USB device relayed before, matched by serial number and IDs: its
-    // device path can change from one boot or port to the next.
+    // device path can change from one boot or port to the next. Its name, as
+    // listed when it was last started, is for showing it while it is
+    // unplugged only, and is not part of the match; settings from before
+    // have none.
     struct UsbDevice {
         QString serial;
         quint16 vendorId{0};
         quint16 productId{0};
-        bool operator==(const UsbDevice&) const = default;
+        QString name{};
+        bool operator==(const UsbDevice& o) const
+        {
+            return serial == o.serial && vendorId == o.vendorId && productId == o.productId;
+        }
     };
 
     bool autoStart{false};

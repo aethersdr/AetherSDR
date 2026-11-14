@@ -80,8 +80,11 @@ connects to a radio. The choice is saved.
   not relaying. **Forget** removes it from the remembered list, and any
   **Stop** hold with it, so it is no longer started by itself. Once you have
   forgotten every controller, nothing is started by itself, the selected one
-  included, until you press **Start** on one. A controller must be plugged in
-  to be forgotten.
+  included, until you press **Start** on one.
+- A controller it remembers that is not plugged in keeps a dimmed row, after
+  the plugged-in ones: its name, its USB IDs and serial number, **Not
+  connected**, and only **Forget**, so you can forget a controller you no
+  longer have. Plug it back in and the row becomes its normal row again.
 - In USB mode it starts a CTR2-Max (on Lynovation's firmware or AetherCTR2),
   a CTR2-MIDI or an AetherKnob. A CTR2-Max on firmware older than v2.00.00, or
   a CTR2-MIDI on firmware without USB support, never answers; see

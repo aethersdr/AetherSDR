@@ -63,12 +63,15 @@ private:
     void syncStats();
     void onStartClicked();
     void syncUsbRows();
-    // The USB rows follow the device list: a device listed as before keeps
-    // its row (and so its focus and button state), and only the rows of
-    // devices that came, went or changed are added or removed.
+    // The USB rows follow the device list, then the remembered devices not
+    // plugged in: a device listed as before keeps its row (and so its focus
+    // and button state), a remembered one plugged back in takes over its
+    // unplugged row, and only the rows of devices that came, went or changed
+    // are added or removed. Rows move, never made again, to keep that order.
     void syncUsbRowSet();
-    // A row for the model's USB device at index, at that place in the list.
-    void addUsbRow(int index);
+    // An empty row under key, at position in the list; syncUsbRowSet() says
+    // what device it is.
+    void addUsbRow(int position, const QString& key);
     // A USB row's Start/Stop.
     void onUsbRowClicked(const QString& path);
 #ifdef Q_OS_LINUX
@@ -82,16 +85,23 @@ private:
     QPointer<Ctr2ProxyModel> m_model;
     GuardedComboBox* m_modeCombo{nullptr};
     GuardedComboBox* m_listenCombo{nullptr};
-    // USB mode: one row per controller, keyed by HID path.
+    // USB mode: one row per controller, keyed by HID path, and one per
+    // remembered controller not plugged in, keyed by its identity.
     QListWidget* m_usbList{nullptr};
     struct UsbRow {
-        QString identity;   // the device as listed when the row was made
+        QString identity;   // the device as listed, or as remembered
+        QString path;       // its HID path; empty while it is not plugged in
+        // Not plugged in: the remembered device, shown dimmed with only Forget.
+        bool absent{false};
+        QString serial;
+        quint16 vendorId{0};
+        quint16 productId{0};
         QListWidgetItem* item{nullptr};
         QLabel* name{nullptr};
         QLabel* version{nullptr};
         QLabel* state{nullptr};
         QPushButton* button{nullptr};
-        QPushButton* forget{nullptr};   // shown for a remembered, idle device
+        QPushButton* forget{nullptr};   // shown for a remembered device not relaying
     };
     QHash<QString, UsbRow> m_usbRows;
     QLabel* m_listenRowLabel{nullptr};

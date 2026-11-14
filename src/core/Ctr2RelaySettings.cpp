@@ -30,7 +30,7 @@ Ctr2RelaySettings Ctr2RelaySettings::load()
     for (const QJsonValue& v : o.value("usbDevices").toArray()) {
         const QJsonObject d = v.toObject();
         const UsbDevice device{d.value("serial").toString(), usbId(d.value("vendorId")),
-                               usbId(d.value("productId"))};
+                               usbId(d.value("productId")), d.value("name").toString()};
         if (!device.serial.isEmpty() && !s.usbDevices.contains(device))
             s.usbDevices.append(device);
     }
@@ -54,9 +54,12 @@ void Ctr2RelaySettings::save() const
         o["transport"] = usb ? QStringLiteral("usb") : QStringLiteral("wifi");
         QJsonArray devices;
         for (const UsbDevice& d : usbDevices) {
-            devices.append(QJsonObject{{"serial", d.serial},
-                                       {"vendorId", int(d.vendorId)},
-                                       {"productId", int(d.productId)}});
+            QJsonObject device{{"serial", d.serial},
+                               {"vendorId", int(d.vendorId)},
+                               {"productId", int(d.productId)}};
+            if (!d.name.isEmpty())
+                device["name"] = d.name;
+            devices.append(device);
         }
         o["usbDevices"] = devices;
         if (usbForgotten && usbDevices.isEmpty())

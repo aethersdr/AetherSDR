@@ -37,6 +37,10 @@
 namespace AetherSDR {
 
 namespace {
+// A USB row's key in m_usbRows, on its item and its widget.
+constexpr int kRowKeyRole = Qt::UserRole + 1;
+const char kRowKeyProperty[] = "ctr2UsbRowKey";
+
 
 // A row label (the sheet's SectionLabel), or a value in the given tone.
 QLabel* makeLabel(const QString& text, QWidget* parent, const char* tone = nullptr,
@@ -239,7 +243,8 @@ void Ctr2ProxyPanel::buildUi()
         }
     });
     connect(m_usbList, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) {
-        if (m_model && item) {
+        // A controller not plugged in has no path, and never becomes the focus.
+        if (m_model && item && !item->data(Qt::UserRole).toString().isEmpty()) {
             m_model->setUsbDevicePath(item->data(Qt::UserRole).toString());
         }
     });
@@ -607,7 +612,7 @@ void Ctr2ProxyPanel::syncAddresses()
         // sits below it, rather than after everything else as created.
         QWidget* previous = m_usbList;
         for (int i = 0; i < m_usbList->count(); ++i) {
-            const auto it = m_usbRows.constFind(m_usbList->item(i)->data(Qt::UserRole).toString());
+            const auto it = m_usbRows.constFind(m_usbList->item(i)->data(kRowKeyRole).toString());
             if (it == m_usbRows.constEnd())
                 continue;
             setTabOrder(previous, it->forget);
@@ -635,15 +640,68 @@ QString usbIdentity(const Ctr2HidPort::DeviceInfo& d)
                        d.manufacturer, d.product, d.serial}
         .join(QChar(0x1F));
 }
+
+// A remembered device not plugged in: keyed by its identity, which no HID
+// path starts with.
+QString absentKey(const QString& serial, quint16 vendorId, quint16 productId)
+{
+    return QStringList{QStringLiteral("\x1F" "remembered"), QString::number(vendorId),
+                       QString::number(productId), serial}
+        .join(QChar(0x1F));
+}
+
+// "303a:1001 #B81F3FC45888", as the device list's labels show it.
+QString rememberedIds(const Ctr2RelaySettings::UsbDevice& d)
+{
+    return QStringLiteral("%1:%2 #%3")
+        .arg(d.vendorId, 4, 16, QLatin1Char('0'))
+        .arg(d.productId, 4, 16, QLatin1Char('0'))
+        .arg(d.serial);
+}
+
 } // namespace
 
 void Ctr2ProxyPanel::syncUsbRowSet()
 {
     const QList<Ctr2HidPort::DeviceInfo> devices =
         m_model ? m_model->availableUsbDevices() : QList<Ctr2HidPort::DeviceInfo>();
+    const QList<Ctr2RelaySettings::UsbDevice> absent =
+        m_model ? m_model->absentUsbDevices() : QList<Ctr2RelaySettings::UsbDevice>();
+    const auto setKey = [this](UsbRow& row, const QString& key) {
+        row.item->setData(kRowKeyRole, key);
+        m_usbList->itemWidget(row.item)->setProperty(kRowKeyProperty, key);
+    };
+    // A remembered device plugged back in takes over its unplugged row: the
+    // same widgets, now the device's live row.
+    for (const Ctr2HidPort::DeviceInfo& d : devices) {
+        if (d.serial.isEmpty() || m_usbRows.contains(d.path))
+            continue;
+        const QString key = absentKey(d.serial, d.vendorId, d.productId);
+        if (!m_usbRows.contains(key))
+            continue;
+        UsbRow row = m_usbRows.take(key);
+        row.absent = false;
+        row.path = d.path;
+        row.identity = usbIdentity(d);
+        row.item->setFlags(QListWidgetItem().flags());
+        row.item->setData(Qt::UserRole, d.path);
+        row.item->setToolTip(d.label());
+        row.name->setText(d.shortName());
+        setKey(row, d.path);
+        m_usbRows.insert(d.path, row);
+    }
+    // The rows to show, in order: the device list's, then the unplugged ones.
+    QStringList keys;
     QSet<QString> listed;
-    for (const Ctr2HidPort::DeviceInfo& d : devices)
+    for (const Ctr2HidPort::DeviceInfo& d : devices) {
+        keys.append(d.path);
         listed.insert(usbIdentity(d));
+    }
+    for (const Ctr2RelaySettings::UsbDevice& r : absent) {
+        const QString key = absentKey(r.serial, r.vendorId, r.productId);
+        keys.append(key);
+        listed.insert(key);
+    }
     // Rows whose device went, or is listed differently now, go.
     for (auto it = m_usbRows.begin(); it != m_usbRows.end();) {
         if (!listed.contains(it->identity)) {
@@ -653,45 +711,55 @@ void Ctr2ProxyPanel::syncUsbRowSet()
             ++it;
         }
     }
-    // The rows kept must be in the list's order; if the list reordered them,
-    // every row is made again.
-    int next = 0;
-    bool inOrder = true;
-    for (const Ctr2HidPort::DeviceInfo& d : devices) {
-        const auto it = m_usbRows.constFind(d.path);
-        if (it == m_usbRows.constEnd())
+    // Each row at its place: kept rows move there, new ones are made there.
+    for (int i = 0; i < keys.size(); ++i) {
+        const auto it = m_usbRows.find(keys[i]);
+        if (it == m_usbRows.end()) {
+            addUsbRow(i, keys[i]);
+            UsbRow& row = m_usbRows[keys[i]];
+            if (i < devices.size()) {
+                const Ctr2HidPort::DeviceInfo& d = devices[i];
+                row.path = d.path;
+                row.identity = usbIdentity(d);
+                row.item->setData(Qt::UserRole, d.path);
+                row.item->setToolTip(d.label());
+                row.name->setText(d.shortName());   // from the device: never rich text
+            } else {
+                const Ctr2RelaySettings::UsbDevice& r = absent[i - devices.size()];
+                row.absent = true;
+                row.identity = keys[i];
+                row.serial = r.serial;
+                row.vendorId = r.vendorId;
+                row.productId = r.productId;
+                // Not plugged in: shown, and Forget, but never the focus.
+                row.item->setFlags(Qt::ItemIsEnabled);
+                row.item->setData(Qt::UserRole, QString());
+                const QString name = Ctr2ProxyModel::rememberedName(r);
+                row.item->setToolTip(tr("%1 (%2), not connected").arg(name, rememberedIds(r)));
+                row.name->setText(name);
+                row.version->setText(rememberedIds(r));
+            }
             continue;
-        if (m_usbList->row(it->item) != next++) {
-            inOrder = false;
-            break;
         }
-    }
-    if (!inOrder) {
-        m_usbList->clear();
-        m_usbRows.clear();
-    }
-    for (int i = 0; i < devices.size(); ++i) {
-        if (!m_usbRows.contains(devices[i].path))
-            addUsbRow(i);
+        const int from = m_usbList->row(it->item);
+        if (from != i)
+            m_usbList->model()->moveRow(QModelIndex(), from, QModelIndex(), i);
     }
 }
 
-void Ctr2ProxyPanel::addUsbRow(int index)
+void Ctr2ProxyPanel::addUsbRow(int position, const QString& key)
 {
-    const QList<Ctr2HidPort::DeviceInfo> devices = m_model->availableUsbDevices();
-    const Ctr2HidPort::DeviceInfo& d = devices.at(index);
     UsbRow row;
-    row.identity = usbIdentity(d);
     row.item = new QListWidgetItem;
-    m_usbList->insertItem(index, row.item);
-    row.item->setData(Qt::UserRole, d.path);
-    row.item->setToolTip(d.label());
+    m_usbList->insertItem(position, row.item);
+    row.item->setData(kRowKeyRole, key);
     auto* w = new QWidget(m_usbList);
+    w->setProperty(kRowKeyProperty, key);
     auto* h = new QHBoxLayout(w);
     h->setContentsMargins(4, 2, 4, 2);
     h->setSpacing(8);
     // Device strings come from the device: never rich text.
-    row.name = makeLabel(d.shortName(), w);
+    row.name = makeLabel(QString(), w);
     row.name->setTextFormat(Qt::PlainText);
     row.version = makeLabel(QString(), w, "secondary");
     row.version->setTextFormat(Qt::PlainText);
@@ -710,15 +778,25 @@ void Ctr2ProxyPanel::addUsbRow(int index)
     h->addWidget(row.state);
     h->addWidget(row.forget);
     h->addWidget(row.button);
-    const QString path = d.path;
-    connect(row.button, &QPushButton::clicked, this, [this, path] { onUsbRowClicked(path); });
-    connect(row.forget, &QPushButton::clicked, this, [this, path] {
-        if (m_model && !m_installingRule)
-            m_model->forgetUsbDevice(path);
+    // By the row's key when pressed: a row taken over by a device plugged
+    // back in is under that device's path by then.
+    connect(row.button, &QPushButton::clicked, this, [this, w] {
+        const auto it = m_usbRows.constFind(w->property(kRowKeyProperty).toString());
+        if (it != m_usbRows.constEnd() && !it->absent)
+            onUsbRowClicked(it->path);
+    });
+    connect(row.forget, &QPushButton::clicked, this, [this, w] {
+        const auto it = m_usbRows.constFind(w->property(kRowKeyProperty).toString());
+        if (!m_model || m_installingRule || it == m_usbRows.constEnd())
+            return;
+        if (it->absent)
+            m_model->forgetUsbDevice(Ctr2RelaySettings::UsbDevice{it->serial, it->vendorId, it->productId});
+        else
+            m_model->forgetUsbDevice(it->path);
     });
     row.item->setSizeHint(w->sizeHint());
     m_usbList->setItemWidget(row.item, w);
-    m_usbRows.insert(d.path, row);
+    m_usbRows.insert(key, row);
 }
 
 // Each row as tall as its widgets under the window's sheet, which is applied
@@ -764,9 +842,33 @@ void Ctr2ProxyPanel::showEvent(QShowEvent* event)
 
 void Ctr2ProxyPanel::syncUsbRows()
 {
+    const auto setTone = [](QLabel* label, const QString& tone) {
+        if (label->property("tone").toString() == tone)
+            return;
+        label->setProperty("tone", tone);
+        label->style()->unpolish(label);
+        label->style()->polish(label);
+    };
     for (auto it = m_usbRows.constBegin(); it != m_usbRows.constEnd(); ++it) {
-        const QString& path = it.key();
         const UsbRow& row = it.value();
+        const QString name = row.name->text();
+        // Dimmed while not plugged in: its name, identity and state, and
+        // only Forget.
+        setTone(row.name, row.absent ? QStringLiteral("secondary") : QString());
+        row.button->setVisible(!row.absent);
+        if (row.absent) {
+            const QString state = tr("Not connected");
+            row.state->setText(state);
+            setTone(row.state, QStringLiteral("secondary"));
+            const Ctr2RelaySettings::UsbDevice id{row.serial, row.vendorId, row.productId};
+            row.forget->setVisible(m_model && !m_installingRule && m_model->canForgetUsbDevice(id));
+            row.forget->setAccessibleName(tr("Forget %1").arg(name));
+            row.forget->setAccessibleDescription(tr("%1 is no longer started automatically").arg(name));
+            row.item->setData(Qt::AccessibleTextRole,
+                              QStringList{name, row.version->text(), state}.join(QStringLiteral(", ")));
+            continue;
+        }
+        const QString& path = row.path;
         const bool running = m_model && m_model->isRunning(path);
         const QString version = m_model ? m_model->usbFirmwareVersion(path) : QString();
         row.version->setText(version);
@@ -777,14 +879,11 @@ void Ctr2ProxyPanel::syncUsbRows()
                                    : tr("Idle");
         row.state->setText(state);
         // Relaying reads in the normal ink; idle dims, a stop with an error is red.
-        row.state->setProperty("tone", running ? QString() : (error.isEmpty() ? QStringLiteral("secondary")
-                                                                                : QStringLiteral("danger")));
-        row.state->style()->unpolish(row.state);
-        row.state->style()->polish(row.state);
+        setTone(row.state, running ? QString() : (error.isEmpty() ? QStringLiteral("secondary")
+                                                                  : QStringLiteral("danger")));
         const QString problem = m_model && !running ? m_model->configurationProblem(path) : QString();
         row.button->setText(running ? tr("Stop") : tr("Start"));
         row.button->setEnabled(m_model && !m_installingRule && (running || problem.isEmpty()));
-        const QString name = row.name->text();
         row.button->setAccessibleName(running ? tr("Stop relaying %1").arg(name)
                                               : tr("Start relaying %1").arg(name));
         row.button->setAccessibleDescription(m_installingRule ? tr("Waiting for administrator approval")

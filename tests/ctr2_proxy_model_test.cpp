@@ -1418,6 +1418,84 @@ void testForgetARememberedDevice()
     AetherSDR::Ctr2RelaySettings{}.save();
 }
 
+// A remembered device that is not plugged in can be forgotten too: it is
+// listed as absent, Forget takes it off the saved list and drops its Stop
+// hold, and plugged back in it is neither held nor started. Its name, as
+// listed when it was last started, is saved for showing it while it is
+// away. Socket-free: an inert radio socket.
+void testForgetAnUnpluggedDevice()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    using Saved = AetherSDR::Ctr2RelaySettings::UsbDevice;
+    const Info ctr2{QStringLiteral("ctr2"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                    QStringLiteral("B81F3FC45888")};
+    const Info knob{QStringLiteral("knob"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                    QStringLiteral("DC0A69526454")};
+    const Saved knobId{knob.serial, knob.vendorId, knob.productId};
+    AetherSDR::Ctr2RelaySettings settings;
+    settings.autoStart = true;
+    settings.hasSetup = true;
+    settings.usbDevices = {{ctr2.serial, ctr2.vendorId, ctr2.productId}};
+    settings.save();
+    auto listed = std::make_shared<QList<Info>>(QList<Info>{ctr2, knob});
+    auto log = std::make_shared<PortLog>();
+    const QHostAddress radio(QStringLiteral("192.0.2.10"));
+    const int retry = Ctr2ProxyModel::kAutoStartRetryMs + 2000;
+    {
+        Ctr2ProxyModel model(inertUsb());
+        model.setUsbBackend([listed] { return *listed; },
+                            [log](const Info&, QString*) {
+                                return static_cast<AetherSDR::Ctr2HidPort*>(new FakePort(log));
+                            });
+        injectInertRadio(model);
+        model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+        check(waitUntil([&] { return model.isRunning(ctr2.path); }, 1000),
+              "unplugged forget: the remembered CTR2 starts");
+        check(model.absentUsbDevices().isEmpty(), "unplugged forget: nothing is absent yet");
+        check(model.start(knob.path), "unplugged forget: the knob is started by hand");
+        const QList<Saved> saved = AetherSDR::Ctr2RelaySettings::load().usbDevices;
+        check(saved.size() == 2 && saved.last() == knobId
+                  && saved.last().name == QStringLiteral("AetherKnob"),
+              "unplugged forget: and remembered, with its name as listed");
+        model.stopByOperator(knob.path);
+        check(model.usbDeviceHeldByOperator(knob.path), "unplugged forget: the hand Stop holds the knob");
+
+        *listed = {ctr2};
+        model.refreshDevices();
+        const QList<Saved> absent = model.absentUsbDevices();
+        check(absent.size() == 1 && absent.first() == knobId,
+              "unplugged forget: the unplugged knob is listed as absent");
+        check(!absent.isEmpty() && Ctr2ProxyModel::rememberedName(absent.first()) == QStringLiteral("AetherKnob"),
+              "unplugged forget: by its saved name");
+        check(!model.canForgetUsbDevice(Saved{QStringLiteral("000000000000"), 0x303A, 0x1001}),
+              "unplugged forget: refused for a device never remembered");
+        check(!model.canForgetUsbDevice(Saved{ctr2.serial, ctr2.vendorId, ctr2.productId}),
+              "unplugged forget: refused for the CTR2 while it relays");
+        check(model.canForgetUsbDevice(knobId) && model.forgetUsbDevice(knobId),
+              "unplugged forget: offered and done for the unplugged knob");
+        check(AetherSDR::Ctr2RelaySettings::load().usbDevices
+                  == QList<Saved>{{ctr2.serial, ctr2.vendorId, ctr2.productId}},
+              "unplugged forget: the knob leaves the saved list, the CTR2 stays");
+        check(model.absentUsbDevices().isEmpty(), "unplugged forget: and is no longer absent");
+        check(!model.forgetUsbDevice(knobId), "unplugged forget: not twice");
+
+        *listed = {ctr2, knob};
+        model.refreshDevices();
+        check(!model.usbDeviceHeldByOperator(knob.path),
+              "unplugged forget: plugged back in, its Stop hold went with it");
+        check(!model.usbDeviceRemembered(knob.path), "unplugged forget: nor is it remembered");
+        check(!waitUntil([&] { return model.isRunning(knob.path); }, retry),
+              "unplugged forget: so the automatic start leaves it");
+
+        // A saved entry from before names were kept: named by its USB IDs.
+        check(Ctr2ProxyModel::rememberedName(Saved{QStringLiteral("X"), 0x1234, 0xABCD})
+                  == QStringLiteral("USB device 1234:ABCD"),
+              "unplugged forget: an unnamed, unknown device is named by its IDs");
+        model.stop();
+    }
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
 // Each device keeps the firmware version last read from it, whether the idle
 // probe read it while it was the focus or its relay did: an idle row keeps
 // showing it after the focus moves on, after its relay stops, and across a
@@ -1631,6 +1709,7 @@ int main(int argc, char** argv)
     testFirmwareRestartFollowsTheUpdatedDevice(true);
     testSingleDeviceSettingsMigrate();
     testForgetARememberedDevice();
+    testForgetAnUnpluggedDevice();
     testFirmwareVersionKeptPerDevice();
 
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,

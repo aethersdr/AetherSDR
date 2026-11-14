@@ -748,9 +748,10 @@ bool Ctr2ProxyModel::usbDeviceRemembered(const QString& usbPath) const
 
 bool Ctr2ProxyModel::canForgetUsbDevice(const QString& usbPath) const
 {
-    // A firmware update's restart starts, and so remembers, its device again.
-    return m_transport == Transport::Usb && !m_firmware->isRunning()
-        && usbDeviceRemembered(usbPath) && !isRunning(usbPath);
+    const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(usbPath);
+    return device && remembered(*device)
+        && canForgetUsbDevice(
+            Ctr2RelaySettings::UsbDevice{device->serial, device->vendorId, device->productId});
 }
 
 bool Ctr2ProxyModel::forgetUsbDevice(const QString& usbPath)
@@ -758,15 +759,77 @@ bool Ctr2ProxyModel::forgetUsbDevice(const QString& usbPath)
     if (!canForgetUsbDevice(usbPath))
         return false;
     const Ctr2HidPort::DeviceInfo& device = *listedUsbDevice(usbPath);
-    m_settings.usbDevices.removeAll(
+    return forgetUsbDevice(
         Ctr2RelaySettings::UsbDevice{device.serial, device.vendorId, device.productId});
+}
+
+bool Ctr2ProxyModel::canForgetUsbDevice(const Ctr2RelaySettings::UsbDevice& device) const
+{
+    // A firmware update's restart starts, and so remembers, its device again,
+    // even while it is off the bus.
+    if (m_transport != Transport::Usb || m_firmware->isRunning() || m_restartAfterFirmware
+        || device.serial.isEmpty() || !m_settings.usbDevices.contains(device))
+        return false;
+    for (const Ctr2HidPort::DeviceInfo& d : m_usbChoices) {
+        if (d.serial == device.serial && d.vendorId == device.vendorId
+            && d.productId == device.productId && isRunning(d.path))
+            return false;
+    }
+    return true;
+}
+
+bool Ctr2ProxyModel::forgetUsbDevice(const Ctr2RelaySettings::UsbDevice& device)
+{
+    if (!canForgetUsbDevice(device))
+        return false;
+    const qsizetype at = m_settings.usbDevices.indexOf(device);
+    const QString name = rememberedName(m_settings.usbDevices.at(at));
+    m_settings.usbDevices.removeAt(at);
     if (m_settings.usbDevices.isEmpty())
         m_settings.usbForgotten = true;
-    releaseOperatorHold(usbPath);
+    // Its Stop hold, by identity, and by path wherever it is listed.
+    m_heldDevices.removeAll(device);
+    for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
+        if (d.serial == device.serial && d.vendorId == device.vendorId
+            && d.productId == device.productId)
+            m_heldPaths.removeAll(d.path);
+    }
     m_settings.save();   // not saveSetup(), which remembers
-    qCInfo(lcDevices) << "CTR2 relay: forgot" << device.shortName();
+    qCInfo(lcDevices) << "CTR2 relay: forgot" << name;
     emit configurationChanged();
+    emit listenAddressesChanged();   // an unplugged one's row goes
     return true;
+}
+
+QList<Ctr2RelaySettings::UsbDevice> Ctr2ProxyModel::absentUsbDevices() const
+{
+    QList<Ctr2RelaySettings::UsbDevice> out;
+    for (const Ctr2RelaySettings::UsbDevice& r : m_settings.usbDevices) {
+        const bool listed = std::any_of(m_usbChoices.cbegin(), m_usbChoices.cend(),
+                                        [&r](const Ctr2HidPort::DeviceInfo& d) {
+                                            return d.serial == r.serial && d.vendorId == r.vendorId
+                                                && d.productId == r.productId;
+                                        });
+        if (!listed)
+            out.append(r);
+    }
+    return out;
+}
+
+QString Ctr2ProxyModel::rememberedName(const Ctr2RelaySettings::UsbDevice& device)
+{
+    if (!device.name.isEmpty())
+        return device.name;
+    Ctr2HidPort::DeviceInfo info;
+    info.vendorId = device.vendorId;
+    info.productId = device.productId;
+    const QString model = info.ctr2Model();
+    if (!model.isEmpty())
+        return model;
+    const auto hex = [](quint16 id) {
+        return QString::number(id, 16).rightJustified(4, QLatin1Char('0')).toUpper();
+    };
+    return tr("USB device %1:%2").arg(hex(device.vendorId), hex(device.productId));
 }
 
 bool Ctr2ProxyModel::heldByOperator(const Ctr2HidPort::DeviceInfo& device) const
@@ -803,8 +866,14 @@ void Ctr2ProxyModel::saveSetup(const QString& usbPath)
         // Remembered for the automatic start; one with no serial number
         // cannot be told apart from the next, so it is not.
         const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(usbPath);
-        if (device && !device->serial.isEmpty() && !remembered(*device)) {
-            m_settings.usbDevices.append({device->serial, device->vendorId, device->productId});
+        if (device && !device->serial.isEmpty()) {
+            const Ctr2RelaySettings::UsbDevice id{device->serial, device->vendorId,
+                                                  device->productId, device->shortName()};
+            // Its name as listed now, to show it by while it is unplugged.
+            if (const qsizetype at = m_settings.usbDevices.indexOf(id); at >= 0)
+                m_settings.usbDevices[at].name = id.name;
+            else
+                m_settings.usbDevices.append(id);
         }
     } else {
         m_settings.listenAddress = m_listenAddress;
