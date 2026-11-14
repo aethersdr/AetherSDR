@@ -22,6 +22,7 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QJsonArray>
 #include <QProcess>
 #include <QSignalSpy>
 #include <QVariantList>
@@ -114,6 +115,9 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
               "the AGC mode, AGC-T and AGC-off level survive a process boundary");
+        check(backend.ritForTest() == std::make_pair(true, -350)
+                  && backend.noiseReductionForTest() == std::make_pair(true, 70),
+              "RIT and NR survive a process boundary");
         return g_failures == 0 ? 0 : 1;
     }
 
@@ -151,6 +155,24 @@ int main(int argc, char** argv)
         check(!AnanBackend::isKnownModeString("bogus"),
               "a mode modeFromString() does not map is REFUSED, not silently demodulated as SSB");
         check(!AnanBackend::isKnownModeString(""), "an empty mode is not a mode");
+        for (const char* m : {"WBFM", "WFM", "DRM", "bogus", ""})
+            check(!AnanBackend::isOfferedModeString(QString::fromLatin1(m)),
+                  "a known mode no record offers (WBFM, DRM) is not accepted");
+        for (const char* m : {"LSB", "usb", "NFM", "CWU", "RTTY", "DIGL"})
+            check(AnanBackend::isOfferedModeString(QString::fromLatin1(m)),
+                  "an offered mode or its alias is accepted");
+        {
+            AnanBackend live;
+            live.setSliceMode(0, QStringLiteral("LSB"));
+            live.setSliceMode(0, QStringLiteral("WBFM"));
+            check(live.modeForTest() == QStringLiteral("LSB"),
+                  "setSliceMode() refuses WBFM and keeps the receiver's mode");
+            RestoredRadioState wbfm;
+            wbfm.mode = QStringLiteral("WFM");
+            live.applyRestoredState(wbfm);
+            check(live.restoredModeForTest().isEmpty(),
+                  "a saved WBFM session is not restored: the first-connect default stands");
+        }
     }
 
     // ---- restorable frequency: bounded by the DDS encoding, Nyquist ----
@@ -231,12 +253,48 @@ int main(int argc, char** argv)
                   && AnanBackend::isRestorableFrequencyHz(
                       static_cast<double>(c.sliceFrequencyControl.maximumHz)),
               "both headless edges are tunable: inside (0, Nyquist), below phaseWord() aliasing");
+        // The G2 front-panel verbs' declarations.
+        {
+            using Feature = ReceiveDspControl::Feature;
+            const auto& dsp = c.receiveDspControl;
+            bool everyMode = dsp.has_value();
+            for (const QString& mode : AnanBackend::publishedModeStrings()) {
+                for (const Feature f : {Feature::Agc, Feature::Nb, Feature::Nr, Feature::Rit})
+                    everyMode = everyMode && dsp->supports(f, mode);
+            }
+            check(everyMode && dsp->authority == SliceFrequencyControl::Authority::Engine
+                      && dsp->maximumRitOffsetHz == AnanBackend::kMaxRitOffsetHz,
+                  "ANAN declares AGC, NB, NR and RIT in every offered mode, engine authority");
+            check(!dsp->features.contains(Feature::Anf) && !dsp->features.contains(Feature::Apf)
+                      && !dsp->features.contains(Feature::ManualNotch),
+                  "and nothing it does not run: no ANF, APF or manual notch");
+            check(c.receivePanRfGainControl && c.receivePanRfGainControl->minimumDb == -kMaxStepAttenuationDb
+                      && c.receivePanRfGainControl->maximumDb == 0 && c.receivePanRfGainControl->stepDb == 1,
+                  "RF gain is the negated 0-31 dB step attenuator, 1 dB steps");
+            // The widest declared edge plus the BFO it carries (CW) and the
+            // largest RIT must stay inside the 48 kHz DSP rate's +-24 kHz.
+            int widestEdgeHz = 0;
+            for (const auto& f : c.receiveFilterControl->modes) {
+                const int bfo = (f.mode == QLatin1String("CW") || f.mode == QLatin1String("CWL"))
+                    ? c.cwPitchMaxHz : 0;
+                widestEdgeHz = std::max({widestEdgeHz, std::abs(f.minimumLowHz) + bfo,
+                                         std::abs(f.maximumHighHz) + bfo});
+            }
+            check(widestEdgeHz == 12'000 && widestEdgeHz + AnanBackend::kMaxRitOffsetHz < 24'000,
+                  "the RIT bound keeps the shifted passband inside the 48 kHz DSP rate");
+            check(AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, true, 500) == 500.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, false, 500) == 0.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CW"), 600, true, 500) == -100.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CWL"), 600, true, -200) == 400.0,
+                  "the detector shift is RIT (when on) minus the CW BFO");
+        }
         check(c.clientSettingsDomains
                   == (RadioCapabilities::ClientSettingsDomain::RfGain
                       | RadioCapabilities::ClientSettingsDomain::Tuning
                       | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel
-                      | RadioCapabilities::ClientSettingsDomain::Agc),
-              "RF gain, tuning, radio output level AND AGC restore are declared -- "
+                      | RadioCapabilities::ClientSettingsDomain::Agc
+                      | RadioCapabilities::ClientSettingsDomain::Receivers),
+              "RF gain, tuning, radio output level, AGC AND RX1's RIT/NR restore are declared -- "
               "this radio reports none of them, so the client is its only memory");
         bool scaleMatches = c.agcGainScale.has_value();
         for (const int knob : {0, 71, 100}) {
@@ -252,6 +310,34 @@ int main(int argc, char** argv)
               "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
               "VFO's NB button has something to drive");
         check(!backend.isConnected(), "not connected before connectRadio() is ever called");
+    }
+
+    // ---- RIT: one intent, echoed, clamped to the declared bound ----
+    {
+        AnanBackend backend;
+        SliceDelta seen;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { seen = d; });
+        backend.setSliceRit(0, true, -350);
+        check(seen.ritOn == true && seen.ritFreq == -350, "setSliceRit() echoes enable and offset together");
+        backend.setSliceRit(0, true, 50'000);
+        check(seen.ritFreq == AnanBackend::kMaxRitOffsetHz, "an offset past the bound is clamped, not honored");
+        check(backend.requestSliceControl(0, {SliceControlRequest::Field::Rit,
+                                              IncrementalTuning{false, -120}})
+                  == ReceiveDispatch::Dispatched
+                  && seen.ritOn == false && seen.ritFreq == -120,
+              "the typed RIT request (desktop and headless) reaches the same state");
+    }
+
+    // ---- the blanker publishes at once, like every other receive setter ----
+    {
+        AnanBackend backend;
+        std::optional<bool> nb;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { if (d.nb) nb = d.nb; });
+        backend.setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse, 60,
+                                     AetherSDR::NoiseBlankerFill::Zero);
+        check(nb == true, "setSliceNoiseBlanker() echoes the blanker immediately");
     }
 
     // ---- setSliceNoiseBlanker: live state for connect and rate change ----
@@ -661,6 +747,23 @@ int main(int argc, char** argv)
                       && live.agcOffLevels == QList<int>{35},
                   "capture reports the live AGC mode, AGC-T and AGC-off level");
         }
+        // RIT and NR (the Receivers domain), also before the store.
+        {
+            QSignalSpy receiverChanges(&backend, &IRadioBackend::operatingStateChanged);
+            backend.setSliceRit(0, true, -350);
+            backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                                        SliceDspRequest::Field::Level, false, 70});
+            backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                                        SliceDspRequest::Field::Enabled, true, 70});
+            check(receiverChanges.count() == 3, "a RIT or NR change announces itself for capture");
+            backend.setSliceRit(0, true, -350);
+            check(receiverChanges.count() == 3, "the same RIT again announces nothing");
+            const QJsonObject rx = backend.currentOperatingState().extension
+                                       .value(QStringLiteral("receivers")).toArray().at(0).toObject();
+            check(rx.value(QStringLiteral("ritOn")).toBool() && rx.value(QStringLiteral("ritHz")).toInt() == -350
+                      && rx.value(QStringLiteral("nrOn")).toBool() && rx.value(QStringLiteral("nrLevel")).toInt() == 70,
+                  "capture reports RX1's live RIT and NR");
+        }
         // The level and its signal: nothing else tells the engine it moved.
         QSignalSpy levelChanges(&backend, &IRadioBackend::operatingStateChanged);
         backend.setLineoutGain(35);
@@ -692,6 +795,9 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcOffLevel),
               "a radio with no document starts at the default AGC, not at the previous radio's");
+        check(backend.ritForTest() == std::make_pair(false, 0)
+                  && backend.noiseReductionForTest() == std::make_pair(false, AnanBackend::kDefaultNrLevel),
+              "a radio with no document starts with RIT and NR off, not the previous radio's");
         backend.setPanRfGain(QStringLiteral("anan-0"), -5);
         backend.setLineoutGain(20);
         backend.setSliceAgc(0, QStringLiteral("fast"), 60);
@@ -710,6 +816,21 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
               "radio A's AGC comes back after radio B stored its own");
+        check(backend.ritForTest() == std::make_pair(true, -350)
+                  && backend.noiseReductionForTest() == std::make_pair(true, 70),
+              "radio A's RIT and NR come back after radio B stored its own");
+        {
+            // Operator data from disk: a bad value is the default, not clamped.
+            AnanBackend fresh;
+            RestoredRadioState bad;
+            bad.extension = QJsonObject{{QStringLiteral("receivers"), QJsonArray{QJsonObject{
+                {QStringLiteral("ritOn"), true}, {QStringLiteral("ritHz"), 50'000},
+                {QStringLiteral("nrOn"), true}, {QStringLiteral("nrLevel"), 140}}}}};
+            fresh.applyRestoredState(bad);
+            check(fresh.ritForTest() == std::make_pair(false, 0)
+                      && fresh.noiseReductionForTest() == std::make_pair(true, AnanBackend::kDefaultNrLevel),
+                  "an out-of-range saved RIT or NR level is dropped to the default, never clamped");
+        }
         check(!AppSettings::instance().contains(QStringLiteral("Anan")),
               "live attenuation never writes the global connect-options document");
         QProcess child;

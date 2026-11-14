@@ -323,6 +323,13 @@ void applyRxAgc(int channel, int mode, double topDb, int slopeDb, double fixedDb
     }
 }
 
+// WDSP LMS adaptation strength for a 0..100 level; the midpoint is RXA.c's
+// default. Shared by ANR and ANF, recipe and live paths alike.
+double lmsGainForLevel(int level)
+{
+    return 0.00001 * std::pow(100.0, std::clamp(level, 0, 100) / 100.0);
+}
+
 }  // namespace
 
 std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
@@ -1051,6 +1058,24 @@ bool WdspChannel::setMinimumPhase(bool on) noexcept
     return true;
 }
 
+bool WdspChannel::setNoiseReduction(bool enabled, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive || m_config.analogReceiveDsp
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        m_liveNrSet = true;
+        m_liveNrEnabled = enabled;
+        m_liveNrLevel = std::clamp(level, 0, 100);
+        SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+        SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)
@@ -1666,10 +1691,8 @@ bool WdspChannel::open() noexcept
         SetRXASPCWRun(m_channelId, m_config.apfEnabled ? 1 : 0);
         if (m_config.analogReceiveDsp) {
             const auto& receive = *m_config.analogReceiveDsp;
-            // Bounded adaptation strength; the midpoint is RXA.c's default.
-            const auto gain = [](int level) { return 0.00001 * std::pow(100.0, level / 100.0); };
-            SetRXAANRVals(m_channelId, 64, 16, gain(receive.nrLevel), 0.1);
-            SetRXAANFVals(m_channelId, 64, 16, gain(receive.anfLevel), 0.1);
+            SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(receive.nrLevel), 0.1);
+            SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(receive.anfLevel), 0.1);
             SetRXAANRRun(m_channelId, receive.nrEnabled ? 1 : 0);
             SetRXAANFRun(m_channelId, receive.anfEnabled ? 1 : 0);
             RXANBPSetTuneFrequency(m_channelId, 0.0);
@@ -1697,6 +1720,10 @@ bool WdspChannel::open() noexcept
             }
             RXANBPSetNotchesRun(m_channelId,
                 receive.manualNotchEnabled || !receive.trackingNotches.empty() ? 1 : 0);
+        } else if (m_liveNrSet) {
+            // close() frees the ANR stage; restore a live caller's request.
+            SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+            SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
         }
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));

@@ -1427,6 +1427,13 @@ target_link_libraries(anan_noise_blanker_readback_test PRIVATE aethercore Qt6::C
 add_test(NAME anan_noise_blanker_readback_test COMMAND anan_noise_blanker_readback_test)
 set_tests_properties(anan_noise_blanker_readback_test PROPERTIES TIMEOUT 120)
 
+# The desktop's RIT control reaches the ANAN receiver through RadioModel's typed
+# slice-control dispatch (#7255). Socket-free: P2Client is never started.
+add_executable(anan_desktop_rit_test tests/anan_desktop_rit_test.cpp)
+target_include_directories(anan_desktop_rit_test PRIVATE src tests)
+target_link_libraries(anan_desktop_rit_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_desktop_rit_test COMMAND anan_desktop_rit_test)
+
 # ANAN speaker stream (DDC Audio, PC -> radio) -- the SEND PLUMBING: queue,
 # whole-packet boundary, sequence counter, overflow policy and enable gate, read
 # from the datagrams P2Client really sends. Loopback only, no radio.

@@ -138,7 +138,7 @@ const std::array kFamilies{
     Family{"flex", make<FlexBackend>, true, true, "slice sink + independent status decode"},
     Family{"hl2", make<hl2::Hl2Backend>, true, true, "pre-connect receiver configuration (not DSP completion)"},
     Family{"icom", make<icom::IcomCivBackend>, false, false, "scheduled CI-V + independent frame decode"},
-    Family{"anan", make<anan::AnanBackend>, false, false, "pre-connect receiver configuration (not DSP completion)"},
+    Family{"anan", make<anan::AnanBackend>, true, true, "pre-connect receiver configuration (not DSP completion)"},
     Family{"sim", make<SimBackend>, true, false, "production Demo session state (not hardware/filter DSP)"},
 #ifdef AETHER_BACKEND_RTL
     Family{"rtl", make<rtl::RtlSdrBackend>, true, true, "cold refusal only; USB/DDC dispatch not covered"},
@@ -799,12 +799,22 @@ void ananNoiseBlankerDispatch()
           "typed ANAN blanker preserves the enable/level pair for either edited field");
     check(backend.requestSliceDsp(1, {SliceDspRequest::Feature::Nb,
               SliceDspRequest::Field::Enabled, true, 90}) == ReceiveDispatch::Unsupported
-              && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+              && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Anf,
                   SliceDspRequest::Field::Enabled, true, 90}) == ReceiveDispatch::Unsupported
               && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
                   SliceDspRequest::Field::Level, true, 101}) == ReceiveDispatch::Unsupported
               && !backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 35,
           "invalid identities, unsupported DSP and invalid levels cannot alter ANAN NB state");
+    // ANR is the one other DSP intent ANAN runs, and it leaves the blanker alone.
+    QSignalSpy nr(&backend, &IRadioBackend::sliceChanged);
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+              SliceDspRequest::Field::Enabled, true, 40}) == ReceiveDispatch::Dispatched
+              && last(nr).nr == true && last(nr).nrLevel == 50
+              && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                  SliceDspRequest::Field::Level, false, 40}) == ReceiveDispatch::Dispatched
+              && last(nr).nr == true && last(nr).nrLevel == 40
+              && !backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 35,
+          "typed ANAN noise reduction edits one field at a time and is echoed");
 }
 
 void hl2WorkerDispatch()
