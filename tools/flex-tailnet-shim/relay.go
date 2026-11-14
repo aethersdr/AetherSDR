@@ -376,7 +376,7 @@ func (s *Session) sideChannelPort(line []byte) int {
 	return port
 }
 
-// rewriteInfoReply puts the address the client dialled into a successful
+// rewriteInfoReply puts the address the client dialed into a successful
 // reply to its `info` command, in place of the radio's own `ip=`. That is the
 // radio's LAN address, which a tailnet client can't reach, and a client that
 // connects to the address `info` names rather than the one it was given (as
@@ -391,7 +391,7 @@ func (s *Session) rewriteInfoReply(line []byte) []byte {
 		return line
 	}
 	local, ok := addrPortOf(s.client.LocalAddr())
-	// Only an IPv4 address goes into ip=: a client that dialled the shim's
+	// Only an IPv4 address goes into ip=: a client that dialed the shim's
 	// Tailscale IPv6 address (fd7a:…) gets the reply as the radio sent it,
 	// rather than an address form clients may not expect.
 	if !ok || !local.Addr().Is4() {

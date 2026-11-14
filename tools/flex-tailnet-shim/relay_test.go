@@ -593,7 +593,7 @@ func TestFailedTransferReplyClearsItsWait(t *testing.T) {
 	}
 }
 
-// The reply to a client's `info` names the address the client dialled, not
+// The reply to a client's `info` names the address the client dialed, not
 // the radio's LAN address, so a client that reconnects to what `info` says
 // stays on the tailnet. Nothing else that mentions ip= changes: not the
 // radio's static network settings, not a reply to some other command, not a
@@ -602,8 +602,8 @@ func TestFailedTransferReplyClearsItsWait(t *testing.T) {
 // client, reads the greeting, and sends three commands: `info` (answered
 // with the 6500's real reply and an unsolicited status), a lookalike reply
 // to another command, and a failed `info`. It returns the address the client
-// dialled and the reader for the relayed replies.
-func infoRelay(t *testing.T, listen string) (dialled string, rd *bufio.Reader) {
+// dialed and the reader for the relayed replies.
+func infoRelay(t *testing.T, listen string) (dialed string, rd *bufio.Reader) {
 	t.Helper()
 	api, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -668,18 +668,18 @@ func expectLines(t *testing.T, rd *bufio.Reader, want ...string) {
 	}
 }
 
-func TestInfoReplyNamesTheDialledAddress(t *testing.T) {
-	dialled, rd := infoRelay(t, "127.0.0.1:0")
+func TestInfoReplyNamesTheDialedAddress(t *testing.T) {
+	dialed, rd := infoRelay(t, "127.0.0.1:0")
 	expectLines(t, rd,
 		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:00:00:01,"+
-			"ip="+dialled+",netmask=255.255.255.0,gateway=192.168.0.1,region=\"USA\"\r\n",
+			"ip="+dialed+",netmask=255.255.255.0,gateway=192.168.0.1,region=\"USA\"\r\n",
 		"S0|radio static_net_params ip=192.168.0.20 gateway=192.168.0.1 netmask=255.255.255.0\n",
 		"R6|0|ip=192.168.0.20\n",
 		"R7|50000015|ip=192.168.0.20\n",
 	)
 }
 
-// A client that dialled the shim over IPv6 (Tailscale's fd7a:… address) gets
+// A client that dialed the shim over IPv6 (Tailscale's fd7a:… address) gets
 // the info reply as the radio sent it: ip= is only ever rewritten to IPv4.
 func TestInfoReplyUnchangedOverIPv6(t *testing.T) {
 	_, rd := infoRelay(t, "[::1]:0")
