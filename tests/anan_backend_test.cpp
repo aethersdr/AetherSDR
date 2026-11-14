@@ -67,6 +67,10 @@ public:
 
 struct P2ClientTestAccess {
     static void setRunning(P2Client& client, bool running) { client.m_running = running; }
+    static void setLinkUp(P2Client& client, bool up) { client.m_linkUp = up; }
+    static void silence(P2Client& client, qint64 ms) { client.checkStreamSilence(ms); }
+    static quint64 txBytes(const P2Client& client) { return client.m_txBytes; }
+    static constexpr int kSilenceMs = P2Client::kStreamSilenceMs;
 };
 
 // The automatic-reconnect busy probe without a socket: arm it as connectRadio()
@@ -444,6 +448,27 @@ int main(int argc, char** argv)
         backend.connectRadio(manual);
         check(errors.count() == 3 && !AnanBusyProbeTestAccess::probing(backend),
               "an operator's connect is not probed");
+    }
+
+    // ---- a session that went silent ends, without stopping the new owner ----
+    // p2app sends everything to whichever client spoke last, so silence while
+    // our keepalives still go out means another client has the radio.
+    {
+        P2Client client;
+        QSignalSpy down(&client, &P2Client::linkDown);
+        P2ClientTestAccess::setRunning(client, true);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs + 500);
+        check(client.isRunning() && down.isEmpty(),
+              "a session that never came up is the connect timeout's, not the silence watchdog's");
+        P2ClientTestAccess::setLinkUp(client, true);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs - 1);
+        check(client.isRunning() && down.isEmpty(), "a shorter silence leaves a live session alone");
+        const quint64 sent = P2ClientTestAccess::txBytes(client);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs);
+        check(!client.isRunning() && down.count() == 1,
+              "3 s of silence on a live session ends it and reports the link down");
+        check(P2ClientTestAccess::txBytes(client) == sent,
+              "and sends the radio nothing: a stop now would stop the client that has it");
     }
 
     // ---- RadioModel marks its automatic retry, and only that ----

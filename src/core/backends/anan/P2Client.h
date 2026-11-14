@@ -178,7 +178,7 @@ public:
 
 signals:
     void linkUp();       // first valid frame from the session's link DDC
-    void linkDown();     // stop() called, or a link failure once that exists
+    void linkDown();     // stop() called, or the session went silent (checkStreamSilence())
     // No frame from the link DDC arrived within the connect-timeout window --
     // the radio is off, unreachable, or the port never saw a genuine frame
     // from it (only Mic Data / Status traffic, which onReadyRead() rejects and
@@ -212,6 +212,12 @@ signals:
 private slots:
     void onReadyRead();
     void onKeepaliveTick();
+    // Silence for kStreamSilenceMs on a live session ends it without the
+    // clean-stop packet: the radio now serves another client, and run=0 from us
+    // would stop that client's stream. If the network was at fault instead, the
+    // radio's own watchdog stops streaming once our keepalives cease.
+    void checkStreamSilence(qint64 silentMs);
+    void teardown(bool sendStopPacket);
     void onConnectTimeout();
     void onSpeakerDrainTick();
 
@@ -229,6 +235,10 @@ private:
     // radio in RUN drops to standby; buildGeneral() leaves that watchdog enabled.
     // Same cadence as anan/spike/phase1a.py's CC_KEEPALIVE_INTERVAL.
     static constexpr int kKeepaliveMs = 100;
+    // A live session from which nothing at all has arrived for this long has
+    // lost the radio: p2app sends everything to whichever client spoke last, so
+    // silence while our keepalives still go out means another client took it.
+    static constexpr int kStreamSilenceMs = 3000;
     // No genuine frame from the link DDC arrived within this long of
     // start() -- mirrors MetisClient's kConnectTimeoutMs.
     static constexpr int kConnectTimeoutMs = 2000;
@@ -300,6 +310,7 @@ private:
     bool m_randomEnabled = true;
 
     bool m_running = false;
+    QElapsedTimer m_lastRxClock;   // since the last datagram of this session
     bool m_linkUp = false;
 
     // Sequence-gap detection is PER DDC: every DDC runs its own independent
