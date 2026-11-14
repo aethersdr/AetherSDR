@@ -33,6 +33,7 @@
 #include <QStyle>
 #include <QStyleOptionButton>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QString>
 #include <QTableWidget>
 #include <QtTest>
@@ -350,6 +351,11 @@ void ModemChromeTest::canonSelectionIsReadable()
     QFETCH(bool, compact);
     QFETCH(bool, table);
     auto& tm = ThemeManager::instance();
+    // Put the theme back however the row ends: a failed check returns early,
+    // and the tests after this one expect main()'s Default Dark.
+    const auto restoreTheme = qScopeGuard([&tm, before = tm.activeTheme()] {
+        tm.setActiveTheme(before);
+    });
     QVERIFY(tm.setActiveTheme(themeName));
     QWidget surface;
     theme::setContainer(&surface, QStringLiteral("canon/selectionTest"));

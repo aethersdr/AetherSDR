@@ -43,7 +43,7 @@ ProfileRequest::Kind profileKind(const QString& type)
 
 // What the shared canon dialog sheet (ModemChrome::Look::Canon: fields,
 // buttons, lists, the canon check box) leaves out: tabs as MQTT Settings and
-// SpotHub have them; selection ink on the name fields (#6917); the hints and
+// SpotHub have them; a cyan selection on the name fields; the hints and
 // result lines; and the name field's right-click menu, a child of the field
 // that the sheet's transparent rule would otherwise leave with no panel.
 constexpr const char* kProfileManagerRules = R"(
