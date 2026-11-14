@@ -575,6 +575,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             broadcastTxPermissions();
             announceEffectiveIqSampleRate();
             reconcileIqStreams();
+            announceExtensionSet();
         });
 
         // Panadapter recenter → dds: broadcast. The DAX IQ stream a skimmer
@@ -1517,6 +1518,17 @@ void TciServer::onTextMessage(const QString& msg)
                                     .arg(client.txSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: tx_sensors" << (client.txSensorsEnabled ? "enabled" : "disabled");
             emit clientsChanged();
+            continue;
+        }
+        if (trimmed == QLatin1String("aethersdr_ext_enable")
+            || trimmed.startsWith(QLatin1String("aethersdr_ext_enable:"))) {
+            handleExtensionEnable(socket, cmd.trimmed());
+            continue;
+        }
+        // The extension set never reaches TciProtocol: unless this client
+        // enabled it and the command is offered, it is ignored like an unknown one.
+        if (TciExtensionSet::isExtensionCommand(tciCommandName(trimmed))) {
+            handleExtensionCommand(socket, cmd.trimmed());
             continue;
         }
 
@@ -3686,6 +3698,105 @@ void TciServer::broadcast(const QString& msg)
         sendClientText(cs.socket, msg);
     }
     emit tciMessage(QStringLiteral("tx"), msg);
+}
+
+bool TciServer::registerExtensionGroup(TciExtensionSet::Group group)
+{
+    const QString token = group.token;
+    if (!m_extensions.registerGroup(std::move(group))) {
+        qCWarning(lcCat) << "TCI: extension group refused:" << token;
+        return false;
+    }
+    announceExtensionSet();
+    return true;
+}
+
+void TciServer::sendExtensionText(ClientState& client, const QString& msg)
+{
+    if (!client.extensionsEnabled || msg.isEmpty()) {
+        return;
+    }
+    qCDebug(lcCat).noquote() << "TCI tx→ext:" << msg.trimmed();
+    sendClientText(client.socket, msg);
+}
+
+void TciServer::broadcastExtension(const QString& msg)
+{
+    bool sent = false;
+    for (ClientState& client : m_clients) {
+        sent = sent || client.extensionsEnabled;
+        sendExtensionText(client, msg);
+    }
+    if (sent) {
+        emit tciMessage(QStringLiteral("tx"), msg);
+    }
+}
+
+void TciServer::advertiseExtensions(ClientState& client, bool onlyIfChanged)
+{
+    const QString line = m_extensions.advertisement();
+    if (onlyIfChanged && line == client.extensionsAdvertised) {
+        return;
+    }
+    sendExtensionText(client, line);
+    if (!client.extensionsEnabled) {
+        return;
+    }
+    client.extensionsAdvertised = line;
+    for (const QString& state : m_extensions.stateLines()) {
+        sendExtensionText(client, state);
+    }
+}
+
+void TciServer::announceExtensionSet()
+{
+    for (ClientState& client : m_clients) {
+        advertiseExtensions(client, true);
+    }
+}
+
+void TciServer::handleExtensionEnable(TciClient* ws, const QString& cmd)
+{
+    ClientState* client = clientStateFor(ws);
+    const int colon = cmd.indexOf(QLatin1Char(':'));
+    const std::optional<bool> enable = colon < 0 ? std::nullopt
+        : TciExtensionSet::parseBool(cmd.mid(colon + 1).section(QLatin1Char(','), 0, 0));
+    if (!client || !enable) {
+        return;
+    }
+    client->extensionsEnabled = *enable;
+    client->extensionsAdvertised.clear();
+    qCInfo(lcCat) << "TCI: extension set" << (*enable ? "enabled" : "disabled");
+    if (*enable) {
+        advertiseExtensions(*client, false);
+    }
+}
+
+void TciServer::handleExtensionCommand(TciClient* ws, const QString& cmd)
+{
+    const ClientState* client = clientStateFor(ws);
+    const int colon = cmd.indexOf(QLatin1Char(':'));
+    const QString name = (colon < 0 ? cmd : cmd.left(colon)).trimmed().toLower();
+    const TciExtensionSet::Group* group = m_extensions.offeredGroupFor(name);
+    if (!client || !client->extensionsEnabled || !group) {
+        qCDebug(lcCat) << "TCI: extension command ignored:" << name.left(48);
+        return;
+    }
+    QStringList args;
+    if (colon >= 0) {
+        args = cmd.mid(colon + 1).split(QLatin1Char(','), Qt::KeepEmptyParts);
+        for (QString& arg : args) {
+            arg = arg.trimmed();
+        }
+    }
+    const QPointer<TciClient> socket(ws);
+    const TciExtensionSet::Result result = group->handle(name, args);
+    if (ClientState* current = socket ? clientStateFor(socket) : nullptr) {
+        sendExtensionText(*current, result.reply);
+    }
+    if (!result.broadcast.isEmpty()) {
+        broadcastExtension(result.broadcast);
+    }
 }
 
 void TciServer::broadcastBinary(const QByteArray& data)

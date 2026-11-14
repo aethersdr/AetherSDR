@@ -1105,6 +1105,7 @@ set(CORE_SOURCES
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
+    src/core/TciExtensionSet.cpp
     src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
     src/core/MqttClient.cpp
