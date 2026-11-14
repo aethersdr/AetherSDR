@@ -1418,6 +1418,111 @@ void testForgetARememberedDevice()
     AetherSDR::Ctr2RelaySettings{}.save();
 }
 
+// Each device keeps the firmware version last read from it, whether the idle
+// probe read it while it was the focus or its relay did: an idle row keeps
+// showing it after the focus moves on, after its relay stops, and across a
+// rescan that adds another device. A device with no serial number loses it
+// once unplugged, as another may take its path. Socket-free.
+void testFirmwareVersionKeptPerDevice()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info a{QStringLiteral("ver-a"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                 QStringLiteral("AAAAAAAAAAAA")};
+    const Info b{QStringLiteral("ver-b"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                 QStringLiteral("BBBBBBBBBBBB")};
+    const Info c{QStringLiteral("ver-c"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                 QStringLiteral("CCCCCCCCCCCC")};
+    const Info bare{QStringLiteral("ver-bare"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"), {}};
+    AetherSDR::Ctr2RelaySettings{}.save();
+    auto devices = std::make_shared<QList<Info>>(QList<Info>{a, b, bare});
+    auto log = std::make_shared<PortLog>();
+    auto probes = std::make_shared<std::vector<QPointer<ProbePort>>>();
+    auto relayPorts = std::make_shared<std::vector<QPointer<ProbePort>>>();
+    const auto settle = [] {
+        for (int i = 0; i < 5; ++i)
+            QCoreApplication::processEvents();
+    };
+    // Answers the probe now open, if any.
+    const auto answer = [&](int major) {
+        if (!probes->empty() && probes->back())
+            probes->back()->negotiate(major);
+        settle();
+    };
+    Ctr2ProxyModel model(inertUsb());
+    injectInertRadio(model);
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    model.setUsbBackend(
+        [devices] { return *devices; },
+        [log, relayPorts](const Info& d, QString*) -> AetherSDR::Ctr2HidPort* {
+            auto* port = new ProbePort(d.path, log);
+            relayPorts->push_back(port);
+            return port;
+        },
+        [log, probes](const Info& d, quint32, QString*) -> AetherSDR::Ctr2HidPort* {
+            auto* port = new ProbePort(d.path, log);
+            probes->push_back(port);
+            return port;
+        });
+    model.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("FLEX"), {});
+    model.setUsbDevicePath(a.path);
+    settle();
+    answer(1);
+    check(model.usbFirmwareVersion(a.path) == QStringLiteral("1.0.0"), "fw cache: the focus is read");
+
+    model.setUsbDevicePath(b.path);
+    settle();
+    answer(2);
+    check(model.usbFirmwareVersion(b.path) == QStringLiteral("2.0.0"), "fw cache: the new focus is read");
+    check(model.usbFirmwareVersion(a.path) == QStringLiteral("1.0.0"),
+          "fw cache: the idle row the focus left keeps its version");
+
+    *devices = {a, b, c, bare};
+    model.refreshDevices();
+    settle();
+    answer(2);   // the rescan reads the focus again
+    check(model.usbFirmwareVersion(a.path) == QStringLiteral("1.0.0"),
+          "fw cache: and keeps it across a rescan that adds a device");
+    check(model.usbFirmwareVersion(c.path).isEmpty(), "fw cache: a device never read shows none");
+
+    // Read by its relay while it is not the focus, then stopped.
+    check(model.start(c.path) && !relayPorts->empty() && relayPorts->back(),
+          "fw cache: the new knob's relay starts");
+    if (!relayPorts->empty() && relayPorts->back())
+        relayPorts->back()->negotiate(3);
+    settle();
+    check(model.usbFirmwareVersion(c.path) == QStringLiteral("3.0.0"),
+          "fw cache: a relaying row shows what its relay read");
+    model.stop(c.path);
+    settle();
+    check(model.usbFirmwareVersion(c.path) == QStringLiteral("3.0.0"),
+          "fw cache: and keeps it once the relay stops");
+
+    // No serial: known by its path, so gone once unplugged.
+    model.setUsbDevicePath(bare.path);
+    settle();
+    answer(4);
+    check(model.usbFirmwareVersion(bare.path) == QStringLiteral("4.0.0"),
+          "fw cache: a device with no serial is read");
+    model.setUsbDevicePath(a.path);
+    settle();
+    answer(1);
+    *devices = {a, b, c};
+    model.refreshDevices();
+    settle();
+    answer(1);
+    *devices = {a, b, c, bare};
+    model.refreshDevices();
+    settle();
+    answer(1);
+    check(model.usbFirmwareVersion(bare.path).isEmpty(),
+          "fw cache: unplugged, what it read is forgotten (another may take its path)");
+    check(model.usbFirmwareVersion(b.path) == QStringLiteral("2.0.0"),
+          "fw cache: while a device with a serial keeps its own");
+    model.stop();
+    settle();
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
 void testSingleDeviceSettingsMigrate()
 {
     auto& app = AetherSDR::AppSettings::instance();
@@ -1526,6 +1631,7 @@ int main(int argc, char** argv)
     testFirmwareRestartFollowsTheUpdatedDevice(true);
     testSingleDeviceSettingsMigrate();
     testForgetARememberedDevice();
+    testFirmwareVersionKeptPerDevice();
 
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every model was built with an injected USB backend, never the default (hidapi)");

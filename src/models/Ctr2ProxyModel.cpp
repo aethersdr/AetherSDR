@@ -11,6 +11,7 @@
 #include <QHostAddress>
 #include <QNetworkInterface>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -280,6 +281,17 @@ void Ctr2ProxyModel::applyDeviceScan(DeviceScan scan)
     m_listenChoices = std::move(choices);
     m_usbChoices = usb;
     if (usbChanged) {
+        // A device with no serial is known only by its path, which another
+        // device can take once it is unplugged: what it read goes with it.
+        QSet<QString> listed;
+        for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices))
+            listed.insert(firmwareKey(d));
+        for (auto it = m_firmwareReads.begin(); it != m_firmwareReads.end();) {
+            if (it.key().startsWith(QLatin1String("p|")) && !listed.contains(it.key()))
+                it = m_firmwareReads.erase(it);
+            else
+                ++it;
+        }
         for (auto it = m_usbLinks.begin(); it != m_usbLinks.end();) {
             UsbLink* link = it->second.get();
             link->noAnswerHold = QDeadlineTimer();   // replugged, or switched firmware: try it again
@@ -361,16 +373,16 @@ void Ctr2ProxyModel::probeFirmwareVersion()
         return;   // no access yet (Linux rule) or gone; Start reports why
     }
     m_probe = port;
-    const QString path = device->path;
-    const auto finish = [this, port, path](const QString& version, quint32 offers) {
+    const Ctr2HidPort::DeviceInfo probed = *device;
+    // read: the device answered. A probe that failed leaves what was read
+    // from the device before.
+    const auto finish = [this, port, probed](const QString& version, quint32 offers, bool read) {
         disconnect(port, nullptr, this, nullptr);
         port->shutdown({});
         m_probe.clear();
-        m_probedPath = path;
-        m_probedOffers = offers;
-        if (m_probedVersion != version) {
-            m_probedVersion = version;
-        }
+        m_probedPath = probed.path;
+        if (read)
+            rememberFirmware(probed, version, offers);
         emit firmwareVersionChanged();
         // The selection may have changed while this probe ran; probing again
         // does nothing when it is still this device.
@@ -378,9 +390,10 @@ void Ctr2ProxyModel::probeFirmwareVersion()
     };
     connect(port, &Ctr2HidPort::extensionsNegotiated, this, [port, finish](quint32) {
         const std::optional<ctr2hid::deviceinfo::Info>& info = port->firmwareInfo();
-        finish(info ? info->version() : QString(), port->offeredExtensions());
+        finish(info ? info->version() : QString(), port->offeredExtensions(), true);
     });
-    connect(port, &Ctr2HidPort::failed, this, [finish](const QString&) { finish(QString(), 0); });
+    connect(port, &Ctr2HidPort::failed, this,
+            [finish](const QString&) { finish(QString(), 0, false); });
 }
 
 bool Ctr2ProxyModel::setTransport(Transport transport)
@@ -662,6 +675,15 @@ Ctr2ProxyModel::UsbLink* Ctr2ProxyModel::ensureUsbLink(const QString& path)
     });
     connect(link->relay, &Ctr2UsbRelay::endpointsChanged, this, &Ctr2ProxyModel::endpointsChanged);
     connect(link->relay, &Ctr2UsbRelay::lastErrorChanged, this, &Ctr2ProxyModel::lastErrorChanged);
+    // What the device reports as its relay starts, kept once the relay stops.
+    connect(link->relay, &Ctr2UsbRelay::extensionsChanged, this, [this, path] {
+        const UsbLink* l = usbLink(path);
+        const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(path);
+        if (!l || !device)
+            return;
+        const std::optional<ctr2hid::deviceinfo::Info> info = l->relay->firmwareInfo();
+        rememberFirmware(*device, info ? info->version() : QString(), l->relay->offeredExtensions());
+    });
     connect(link->relay, &Ctr2UsbRelay::extensionsChanged, this,
             &Ctr2ProxyModel::extensionsChanged);
     return link;
@@ -1136,7 +1158,33 @@ QString Ctr2ProxyModel::usbFirmwareVersion(const QString& usbPath) const
         const std::optional<ctr2hid::deviceinfo::Info> info = usbLink(usbPath)->relay->firmwareInfo();
         return info ? info->version() : QString();
     }
-    return m_probedPath == usbPath ? m_probedVersion : QString();
+    const FirmwareRead* read = firmwareRead(usbPath);
+    return read ? read->version : QString();
+}
+
+QString Ctr2ProxyModel::firmwareKey(const Ctr2HidPort::DeviceInfo& device)
+{
+    const QString ids = QStringLiteral("%1:%2|%3|")
+                            .arg(device.vendorId, 4, 16, QLatin1Char('0'))
+                            .arg(device.productId, 4, 16, QLatin1Char('0'))
+                            .arg(device.product);
+    return device.serial.isEmpty() ? QStringLiteral("p|") + ids + device.path
+                                   : QStringLiteral("s|") + ids + device.serial;
+}
+
+void Ctr2ProxyModel::rememberFirmware(const Ctr2HidPort::DeviceInfo& device,
+                                      const QString& version, quint32 offers)
+{
+    m_firmwareReads.insert(firmwareKey(device), FirmwareRead{version, offers});
+}
+
+const Ctr2ProxyModel::FirmwareRead* Ctr2ProxyModel::firmwareRead(const QString& path) const
+{
+    const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(path);
+    if (!device)
+        return nullptr;
+    const auto it = m_firmwareReads.constFind(firmwareKey(*device));
+    return it == m_firmwareReads.constEnd() ? nullptr : &it.value();
 }
 
 bool Ctr2ProxyModel::usbFirmwareCommands() const
@@ -1146,7 +1194,8 @@ bool Ctr2ProxyModel::usbFirmwareCommands() const
     const quint32 firmware = ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware);
     if (usbActive() && isRunning(m_usbDevicePath))
         return usbLink(m_usbDevicePath)->relay->offeredExtensions() & firmware;
-    return m_probedPath == m_usbDevicePath && (m_probedOffers & firmware);
+    const FirmwareRead* read = firmwareRead(m_usbDevicePath);
+    return read && (read->offers & firmware);
 }
 
 bool Ctr2ProxyModel::firmwareUpdateRunning() const
@@ -1174,6 +1223,7 @@ bool Ctr2ProxyModel::startFirmwareUpdate(const Ctr2FirmwareUpdater::Image& image
         return false;
     }
     const Ctr2HidPort::DeviceInfo target = *device;
+    m_firmwareReads.remove(firmwareKey(target));   // same serial, new version
     // Only one program may drive the link: its relay lets go first, and
     // comes back afterwards if it was running. Other devices' relays run on.
     m_restartAfterFirmware.reset();
@@ -1198,6 +1248,7 @@ bool Ctr2ProxyModel::restartUsbDevice(Ctr2FirmwareUpdater::Restart target, QStri
         return false;
     }
     const Ctr2HidPort::DeviceInfo d = *device;
+    m_firmwareReads.remove(firmwareKey(d));   // it comes back on other firmware
     m_restartAfterFirmware.reset();   // the device leaves the bus
     m_restartedPath = d.path;
     m_restartedDevice = d;

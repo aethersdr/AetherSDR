@@ -122,6 +122,11 @@ on firmware with USB support, or an AetherKnob.
   the radio. Select a row to see that controller's state, traffic and last
   error below it, and to aim the CTR2-Max firmware part at it; selecting a row
   starts or stops nothing.
+- A row's firmware version is read when you select the row or start its
+  relay, and the row keeps showing it after you select another row or stop
+  the relay. AetherSDR remembers it until it quits, or until a firmware
+  install or **Restart into** on that controller. A controller with no serial
+  number loses it when unplugged.
 - The list refreshes itself every 2 seconds, also while controllers relay, so
   one plugged in later appears, and a CTR2-Max that switches between its stock
   firmware and AetherCTR2 shows up as it is now; **Rescan** refreshes it (and

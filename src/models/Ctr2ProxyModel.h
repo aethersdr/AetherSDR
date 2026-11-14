@@ -7,6 +7,7 @@
 
 #include <QDeadlineTimer>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QHostAddress>
 #include <QList>
 #include <QObject>
@@ -227,11 +228,14 @@ public:
     bool sendCwText(const QString& text, float cost);
 
     // Firmware version of the selected USB device: from the relay while it
-    // runs, otherwise read when the device is selected or rescanned. Empty
-    // for a device that does not report one (any stock CTR2). With a path:
-    // that device's, known while it is relayed, or while it is the focus and
-    // idle once the probe has read it; an idle row that is not the focus
-    // shows none.
+    // runs, otherwise the last one read from it. Empty for a device that does
+    // not report one (any stock CTR2), or one never read. With a path: that
+    // device's. What a device reports is kept per device (by serial number,
+    // USB IDs and product name; by USB IDs, product and path for one with no
+    // serial), in memory only, whether the idle probe read it (when the device
+    // is the focus) or its relay did, so an idle row keeps its version after
+    // the focus moves on or its relay stops. A firmware update or restart
+    // forgets the device's; one with no serial is forgotten once unplugged.
     QString usbFirmwareVersion() const;
     QString usbFirmwareVersion(const QString& usbPath) const;
     bool firmwareUpdateAvailable() const { return static_cast<bool>(m_firmwareOpener); }
@@ -364,9 +368,19 @@ private:
     UsbCapsPortOpener m_firmwareOpener;
     void probeFirmwareVersion();
     QPointer<Ctr2HidPort> m_probe;
-    QString m_probedPath;      // the device m_probedVersion was read from
-    QString m_probedVersion;
-    quint32 m_probedOffers{0};  // the link extensions it offered
+    QString m_probedPath;      // the focus the probe last read; cleared to read it again
+    // What each device's firmware last reported, by firmwareKey(), read by
+    // the idle probe or from its relay's port: the version and the link
+    // extensions it offered. In memory only.
+    struct FirmwareRead {
+        QString version;
+        quint32 offers{0};
+    };
+    QHash<QString, FirmwareRead> m_firmwareReads;
+    static QString firmwareKey(const Ctr2HidPort::DeviceInfo& device);
+    void rememberFirmware(const Ctr2HidPort::DeviceInfo& device, const QString& version,
+                          quint32 offers);
+    const FirmwareRead* firmwareRead(const QString& path) const;
     Ctr2FirmwareUpdater* m_firmware{nullptr};
     // The device being updated, while its relay is to come back afterwards.
     std::optional<Ctr2HidPort::DeviceInfo> m_restartAfterFirmware;
