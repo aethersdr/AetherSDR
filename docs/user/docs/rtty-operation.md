@@ -3,12 +3,12 @@ title: "RTTY Operation"
 slug: "/rtty-operation"
 description: "RTTY (Radio Teletype) is a digital mode that encodes text as two alternating audio tones — a Mark tone and a Space tone."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2
 
 :::
 
