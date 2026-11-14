@@ -19,6 +19,7 @@
 
 #include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
+#include "RttyDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -11943,6 +11944,104 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
             PerfTelemetry::instance().recordSHistorySkipped();
         }
     }
+}
+
+bool MainWindow::hasBandStackEntries() const
+{
+    return !BandStackSettings::instance().entries(m_radioModel.settingsScope()).isEmpty();
+}
+
+// Step through the band-stack bookmarks inside the active slice's band, in
+// frequency order, wrapping at the ends, through the panel's own recall path.
+void MainWindow::stepBandStack(int direction)
+{
+    auto* s = activeSlice();
+    if (!s) return;
+    const double here = s->frequency();
+    const BandDef* band = nullptr;
+    for (const BandDef& b : kBands) {
+        if (here >= b.lowMhz && here <= b.highMhz) { band = &b; break; }
+    }
+    QVector<BandStackEntry> inBand;
+    for (const BandStackEntry& e : BandStackSettings::instance().entries(m_radioModel.settingsScope())) {
+        if (band ? (e.frequencyMhz >= band->lowMhz && e.frequencyMhz <= band->highMhz)
+                 : std::abs(e.frequencyMhz - here) < 1e-9) {
+            inBand.append(e);
+        }
+    }
+    if (inBand.isEmpty()) {
+        refuseControlAction(direction > 0 ? tr("Band Stack Up") : tr("Band Stack Down"));
+        return;
+    }
+    std::sort(inBand.begin(), inBand.end(), [](const BandStackEntry& a, const BandStackEntry& b) {
+        return a.frequencyMhz < b.frequencyMhz;
+    });
+    int pick = -1;
+    if (direction > 0) {
+        for (int i = 0; i < inBand.size() && pick < 0; ++i)
+            if (inBand[i].frequencyMhz > here + 1e-6) pick = i;
+        if (pick < 0) pick = 0;                       // wrap to the lowest
+    } else {
+        for (int i = inBand.size() - 1; i >= 0 && pick < 0; --i)
+            if (inBand[i].frequencyMhz < here - 1e-6) pick = i;
+        if (pick < 0) pick = inBand.size() - 1;       // wrap to the highest
+    }
+    const QPointer<MainWindow> owner(this);
+    m_radioModel.recallBandStack(s, inBand[pick], [owner](SliceModel* slice, double mhz) {
+        if (owner)
+            owner->applyTuneRequest(slice, mhz, TuneIntent::AbsoluteJump, "bandstack-recall");
+    });
+}
+
+QStringList MainWindow::panIdsInScreenOrder() const
+{
+    QStringList ids;
+    if (m_workspaceController && m_workspaceController->isEnabled())
+        ids = m_workspaceController->activeMainPanIdsForLayout();
+    if (m_panStack) {
+        if (ids.isEmpty())
+            ids = m_panStack->dockedPanIdsInLayoutOrder();
+        for (const QString& id : m_panStack->panIds())
+            if (!ids.contains(id)) ids.append(id);
+    }
+    ids.removeAll(PanSliceTitle::kPlaceholderPanId);
+    return ids;
+}
+
+// Band plan strip: Off, or back to the operator's last size (Small if none),
+// through the View ▸ Band Plan entries so the menu's check state follows.
+void MainWindow::toggleBandPlanStrip()
+{
+    const int size = AppSettings::instance().value("BandPlanFontSize", "6").toInt();
+    if (size > 0) m_lastBandPlanFontSize = size;
+    const QString target = size > 0 ? QStringLiteral("Off")
+        : m_lastBandPlanFontSize >= 16 ? QStringLiteral("Huge")
+        : m_lastBandPlanFontSize >= 12 ? QStringLiteral("Large")
+        : m_lastBandPlanFontSize >= 10 ? QStringLiteral("Medium")
+                                       : QStringLiteral("Small");
+    if (QAction* act = findMenuAction({"Band Plan", target})) act->trigger();
+}
+
+bool MainWindow::cwDecodeRxEnabled() const
+{
+    return CwDecodeSettings::rxEnabled();
+}
+
+void MainWindow::setCwDecodeRxEnabled(bool on)
+{
+    CwDecodeSettings::setRxEnabled(on);
+    refreshCwDecodeState();
+}
+
+bool MainWindow::rttyDecodeEnabled() const
+{
+    return RttyDecodeSettings::enabled();
+}
+
+void MainWindow::setRttyDecodeEnabled(bool on)
+{
+    RttyDecodeSettings::setEnabled(on);
+    refreshRttyDecodeState();
 }
 
 } // namespace AetherSDR

@@ -87,6 +87,7 @@
 #include "core/ShuttleRateIntegrator.h"
 #endif
 #include "core/ShortcutManager.h"
+#include "ControlActionRegistry.h"
 #include "core/SpectrogramBuffer.h"
 #include "core/SignalClassifier.h"
 #include "core/TgxlConnection.h"
@@ -970,6 +971,33 @@ private:
     void enableNr2WithWisdom();  // Wisdom-gated NR2 enable (shared by VFO + overlay)
     void updateNr2Availability(); // Disable NR2 when Opus is active (#1597)
     void registerShortcutActions();
+    // Actions declared once and published to keyboard + MIDI
+    // (ControlActionRegistry; MainWindow_ControlActions.cpp).
+    void registerControlActions();
+    void showShortcutNotice(const QString& text, int durationMs);
+    // Logged and announced once while its notice is up.
+    void refuseControlAction(const QString& name, bool transmitSetup = false);
+    QAction* findMenuAction(const QStringList& path) const;
+    void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
+    // F<id> on the voice keyer for an outside input, started under that
+    // input's request; false when the slot cannot play now.
+    bool fireVoiceKeyerSlot(int id, const TxController::Input& input);
+    // Band stack stepping and the band-plan strip toggle (registry actions).
+    bool hasBandStackEntries() const;
+    // Pan ids as the operator sees them: the workspace canvas order when it
+    // is on, else the main window's layout order, then any floating pans.
+    QStringList panIdsInScreenOrder() const;
+    void stepBandStack(int direction);
+    void toggleBandPlanStrip();
+    // CW decoder RX on/off, the Radio Setup "Decode: RX" switch.
+    bool cwDecodeRxEnabled() const;
+    void setCwDecodeRxEnabled(bool on);
+    // RTTY decoder on/off, the Radio Setup RTTY decode switch.
+    bool rttyDecodeEnabled() const;
+    void setRttyDecodeEnabled(bool on);
+    void nudgeActiveSliceSteps(int steps);
+    void cycleBandAction(int direction);
+    void cycleModeAction(int direction);
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
@@ -1546,6 +1574,8 @@ private:
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
     void setPanZoomMode(bool segmentZoom, bool enable);
     void zoomActivePanadapter(double factor);
+    // Absolute span centered on the active slice, clamped to the pan's limits.
+    bool setActivePanSpan(double bandwidthMhz);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -2264,6 +2294,10 @@ private:
     bool m_waitingForFirstPanadapterFrame{false};
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
+    ControlActionRegistry m_controlActions;
+    int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
+    QString m_lastRefusedAction;           // refusal notice de-duplication
+    int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this
     UpdateChecker* m_updateChecker{nullptr};
     // Install update in place (RFC #5304): outlives the Updates window, so
     // a staged release installs on quit (closeEvent).

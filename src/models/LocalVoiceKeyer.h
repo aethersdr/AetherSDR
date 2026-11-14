@@ -43,6 +43,7 @@ public:
     void previewStart(int id) override;
     void previewStop(int id) override;
     void playbackStart(int id) override;
+    void playbackStartFrom(int id, const TxCoordinator::Request& origin) override;
     void playbackStop(int id) override;
     void clear(int id) override;
     void remove(int id) override;
@@ -128,6 +129,7 @@ public slots:
     void reload();
 
 private:
+    void startPlayback(int id, const TxCoordinator::Request* origin);
     void refreshSlot(int id);
     void setStatus(Status status, int id);
     void refuse(const QString& verb, int id, const QString& message);

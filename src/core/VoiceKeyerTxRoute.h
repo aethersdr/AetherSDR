@@ -33,6 +33,7 @@ public:
 
     QString startRefusal() const override;
     bool admitOperation() override;
+    bool admitOperationFrom(const TxCoordinator::Request& origin) override;
 
     bool needsStream() const override;
     bool streamReady() const override;
