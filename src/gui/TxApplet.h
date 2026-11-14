@@ -6,6 +6,8 @@
 #include <QMetaObject>
 #include "models/TxController.h"
 
+#include <QVector>
+
 class QMenu;
 class QPushButton;
 class QLabel;
@@ -18,6 +20,8 @@ namespace AetherSDR {
 class AtuPreTuneDialog;
 class BandPlanManager;
 class RadioModel;
+class SliceModel;
+struct RadioCapabilities;
 class TransmitModel;
 class TunerModel;
 enum class ATUStatus;
@@ -49,6 +53,11 @@ public:
     void openPreTuneDialog();
     void confirmAndClearAtuMemories();
 
+    // False while the TX slice's output is one the backend cannot meter
+    // (IndependentTxAntenna::unmeteredOutputs, the HL2's RF1): both gauges are
+    // then dimmed and say "not measured" with the reason (#4954).
+    [[nodiscard]] bool txOutputMetered() const { return m_txOutputMetered; }
+
 public slots:
     void updateMeters(float fwdPower, float swr, bool swrValid);
     // Capture raw pre-smoothed FWDPWR for PEP peak-hold tick. (#2561)
@@ -66,6 +75,11 @@ private:
     void requestMox(bool on, const TxController::Input& input);
     void requestAtu(const TxController::Input& input);
     void syncFromModel();
+    // Re-derive txOutputMetered() from the TX slice's output and apply it to
+    // the power and SWR gauges. Takes what capabilitiesChanged carried.
+    void refreshTxOutputMetering(bool connected, const RadioCapabilities& caps);
+    void refreshTxOutputMeteringFromModel();
+    void watchSliceTxOutput(SliceModel* slice);
     void syncAtuState();
     void syncAtuIndicators();
     // Combines tuner capabilities, TX-path availability and TGXL Operate;
@@ -165,6 +179,11 @@ private:
     bool m_forwardPowerRequiresSmoothing{true};
     bool m_forwardPowerScaleFollowsBandRating{false};
     QMetaObject::Connection m_capabilitiesConnection;
+    // Slice add/remove and each slice's TX flag and TX antenna, for
+    // refreshTxOutputMetering(). Dropped when the RadioModel changes.
+    QVector<QMetaObject::Connection> m_txOutputConnections;
+    bool m_txOutputMetered{true};
+    QString m_unmeteredTxOutput;
 
     // setPowerScale() no-ops when neither input moved (#4845) — it's called
     // on every RadioModel::infoChanged, most of which carry no scale-relevant

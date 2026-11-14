@@ -306,11 +306,13 @@ void workerOwnedManagerCancelsOnItsThread()
     registerParams(manager);
     manager.moveToThread(&worker);
     worker.start();
-    QSignalSpy cancelled(&manager, &MidiControlManager::learnCancelled);
+    // Recorded before the spy sees the signal: the spy's wait() can wake this
+    // thread as soon as it records the emission.
     std::atomic<QThread*> cancellationThread{nullptr};
     QObject::connect(&manager, &MidiControlManager::learnCancelled, &manager, [&] {
         cancellationThread.store(QThread::currentThread());
     }, Qt::DirectConnection);
+    QSignalSpy cancelled(&manager, &MidiControlManager::learnCancelled);
     QMetaObject::invokeMethod(&manager, [&] {
         manager.startLearn(QStringLiteral("rx.afGain"));
     }, Qt::BlockingQueuedConnection);

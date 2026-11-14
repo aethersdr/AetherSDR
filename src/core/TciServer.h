@@ -250,7 +250,12 @@ private:
     void sendExtensionText(ClientState& client, const QString& msg);
     void broadcastExtension(const QString& msg);
     void advertiseExtensions(ClientState& client, bool onlyIfChanged);
-    void announceExtensionSet();
+    // Sends the list, with every state line, to each enabled client that
+    // holds an older one. A group whose gate moves without capabilitiesChanged
+    // calls this when it moves. True when every enabled client (at least one)
+    // was behind and has now been sent it all, so a notice of the group's own
+    // for the same change would repeat it; the groups' `resent` hooks run then.
+    bool announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
     // Extension group `hl2` (TciHl2Extension.h).

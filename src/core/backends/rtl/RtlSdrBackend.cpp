@@ -275,7 +275,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.txWaterfallClientFlag = std::nullopt;  // receive only; no owner declared
     c.hasAgcThreshold = true;
     c.hasHostNoiseBlanker = true;
-    c.receiveCwPitchControl = ReceiveCwPitchControl{100, 6000, 10};
+    c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine, 100, 6000, 10};
     c.receiveDspControl = ReceiveDspControl{
         {QStringLiteral("AM"), QStringLiteral("SAM"), QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("CW"), QStringLiteral("CWR")},
         {ReceiveDspControl::Feature::Agc, ReceiveDspControl::Feature::Nb,

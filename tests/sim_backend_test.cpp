@@ -168,14 +168,19 @@ void testKeyingIsAlwaysInert()
     report("setKeying is a safe no-op on an RX-only sim", sim.isConnected());
 }
 
-// Pump the event loop briefly so the audio QTimer can fire, and count how many
-// audioFrameReady frames land (and their byte size).
+// Negative checks must keep processing events even when no frame arrives.
 static int pumpFrames(QSignalSpy& spy, int ms)
 {
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
     return spy.count();
+}
+
+bool waitForAudio(QSignalSpy& spy)
+{
+    // Worker startup and its two initial timer ticks have no 40 ms deadline.
+    return !spy.isEmpty() || spy.wait(2000);
 }
 
 void testEmitsAudioWhenConnected()
@@ -187,8 +192,11 @@ void testEmitsAudioWhenConnected()
     report("no audio before connect", audioSpy.count() == 0);
 
     sim.connectRadio({});
-    const int got = pumpFrames(audioSpy, 60);   // ~11 frames at 5.33 ms
-    report("audioFrameReady fires once connected", got > 0);
+    const bool hasAudio = waitForAudio(audioSpy);
+    report("audioFrameReady fires once connected", hasAudio);
+    if (!hasAudio) {
+        return;
+    }
 
     // Format: 24 kHz STEREO float32 => kFrameLen * 2 channels * 4 bytes.
     const int expectBytes =
@@ -204,9 +212,9 @@ void testKeyingMutesAudio()
     sim.connectRadio({});
     QSignalSpy audioSpy(&sim, &SimBackend::audioFrameReady);
     sim.setKeying(true, {});                  // muted while "keyed" (Principle VI)
-    pumpFrames(audioSpy, 60);
+    const bool hasAudio = waitForAudio(audioSpy);
     // Frames still FLOW (stream stays alive) but are all-zero when keyed.
-    bool allSilent = audioSpy.count() > 0;
+    bool allSilent = hasAudio;
     for (const auto& call : audioSpy) {
         const QByteArray pcm = call.at(0).value<AetherSDR::PcmFrame>().legacyStereo24();
         const auto* f = reinterpret_cast<const float*>(pcm.constData());
@@ -223,8 +231,7 @@ void testDisconnectStopsAudio()
     SimBackend sim;
     sim.connectRadio({});
     QSignalSpy audioSpy(&sim, &SimBackend::audioFrameReady);
-    pumpFrames(audioSpy, 40);
-    report("audio flowing while connected", audioSpy.count() > 0);
+    report("audio flowing while connected", waitForAudio(audioSpy));
     sim.disconnectRadio();
     audioSpy.clear();
     pumpFrames(audioSpy, 40);

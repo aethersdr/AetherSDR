@@ -28,6 +28,11 @@ public:
         std::function<bool()> offered;            // the gating capability
         std::function<QStringList()> stateLines;  // sent on enable; may be empty
         std::function<Result(const QString& name, const QStringList& args)> handle;
+        // Optional. Called after the list and every state line went to every
+        // enabled client, so a group with its own change notice can take its
+        // current state as sent. Not called when any enabled client already
+        // held the list, nor when no client is enabled.
+        std::function<void()> resent;
     };
 
     // Refuses an empty or reserved token or name, a missing gate or handler,
@@ -40,6 +45,8 @@ public:
     QStringList stateLines() const;
     // The group answering `name`, while it is offered; nullptr otherwise.
     const Group* offeredGroupFor(const QString& name) const;
+    // Runs every group's `resent` hook. A hook may register a group.
+    void notifyResent() const;
 
     static bool isExtensionCommand(const QString& lowerName);
     // `true`/`1` and `false`/`0`; anything else is malformed.
