@@ -6,6 +6,7 @@
 #include "FlexSetupStatus.h"
 #include "FlexSliceStatus.h"
 #include "FlexRadioStatus.h"
+#include "FlexTransmitServiceStatus.h"
 
 #include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
@@ -149,6 +150,25 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
         // Identity only (SimBackend): a TGXL's handle, which replayed captured
         // status relies on; nothing else.
         if (line.object.startsWith(QLatin1String("amplifier"))) { routeAmplifierStatus(line.object, line.kvs); }
+        return;
+    }
+    // The radio voice keyer and NAVTEX: Flex-only (Demo has neither).
+    if (line.object.startsWith(QLatin1String("dvk"))) {
+        if (auto dvk = decodeFlexDvkStatus(line.object, line.kvs)) {
+            dvk->statusEpoch = m_epoch;
+            emit dvkStatusObserved(*dvk);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected dvk status" << line.object;
+        }
+        return;
+    }
+    if (line.object.startsWith(QLatin1String("navtex"))) {
+        if (auto navtex = decodeFlexNavtexStatus(line.object, line.kvs)) {
+            navtex->statusEpoch = m_epoch;
+            emit navtexStatusObserved(*navtex);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected navtex status" << line.object;
+        }
         return;
     }
     // Raw route: objects whose values carry spaces or '#' separators, read

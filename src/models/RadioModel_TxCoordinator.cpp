@@ -132,6 +132,7 @@ void RadioModel::abortTxProducerInputs(const TxCoordinator::Producer& producer,
             case TxActivity::Atu: (void)requestProducerAtu(request, false); break;
             case TxActivity::Tune: (void)requestProducerTune(request, false); break;
             case TxActivity::Mox: abortProducerPtt(request, source); break;
+            case TxActivity::VoiceKeyer: case TxActivity::Navtex: break;
             }
         }
     }
@@ -234,6 +235,25 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
         return false;
     }
+    const unsigned services = static_cast<unsigned>(TxActivity::VoiceKeyer)
+        | static_cast<unsigned>(TxActivity::Navtex);
+    const bool serviceActivity = static_cast<unsigned>(activity) & services;
+    if (m_txCoordinator.hasOtherIntents(m_txOperation, {}, serviceActivity ? 0 : services)) {
+        emitInterlockNotification(serviceActivity
+                ? tr("The voice keyer or NAVTEX waits for the current transmission to end.")
+                : tr("Transmit is held by the voice keyer or a NAVTEX message."),
+            QStringLiteral("tx-service"));
+        return false;
+    }
+    // The radio's own report decides too: a Stop releases this client's hold
+    // at once, but a playback or NAVTEX transmission the radio still reports
+    // keeps every other transmit out (maintainer ruling).
+    if (!serviceActivity && (m_dvkModel.status() == VoiceKeyer::Playback
+            || m_navtexModel.status() == NavtexStatus::Transmitting)) {
+        emitInterlockNotification(tr("Transmit is held: the radio reports the voice keyer or NAVTEX transmitting."),
+                                  QStringLiteral("tx-service"));
+        return false;
+    }
     if (m_daxTxOwnershipIntent) {
         qCWarning(lcProtocol) << "RadioModel: TX refused — a DAX TX stream selection was pending;"
                               << "the selection is interrupted, key again to transmit";
@@ -285,7 +305,9 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const QString gate = activity == TxActivity::Tune || activity == TxActivity::Atu
         ? QStringLiteral("tune-start")
-        : activity == TxActivity::Mox ? QStringLiteral("xmit") : QStringLiteral("cw-key");
+        : activity == TxActivity::Mox ? QStringLiteral("xmit")
+        : activity == TxActivity::VoiceKeyer ? QStringLiteral("dvk")
+        : activity == TxActivity::Navtex ? QStringLiteral("navtex") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
         return false;
     }
@@ -1045,6 +1067,27 @@ void RadioModel::cancelLocalTransmit()
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // This is explicit operator Stop, unlike automatic operation retirement.
+    // DVK stop is global; automatic cleanup cannot prove another client's
+    // replacement has not acquired that radio operation.
+    const QPointer<RadioModel> alive(this);
+    if (m_dvkModel.status() == VoiceKeyer::Playback
+        || m_dvkModel.pendingOperation() == VoiceKeyer::Playback) {
+        m_dvkModel.playbackStop(m_dvkModel.activeId());
+    }
+    if (!alive) { return; }
+    // Stop also ends the services' hold on the transmitter, so a NAVTEX
+    // submission or voice playback whose answer never came cannot lock out
+    // MOX, TUNE or the next submission until reconnect.
+    if (m_dvkTxRequest) {
+        m_dvkTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_dvkTxIntent, {}));
+    }
+    if (m_navtexTxRequest) {
+        m_navtexTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_navtexTxIntent, {}));
+    }
+    if (!alive) { return; }
     m_txCoordinator.discardCapturedRequests();
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
@@ -1089,6 +1132,14 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    m_transmitServiceSession->store(false, std::memory_order_release);
+    m_transmitServiceSession = std::make_shared<std::atomic_bool>(true);
+    m_dvkTxRequest = 0;
+    m_navtexTxRequest = 0;
+    m_dvkTxIntent = {};
+    m_navtexTxIntent = {};
+    m_dvkModel.reset();
+    m_navtexModel.reset();
     m_cwxSessionValid->store(false, std::memory_order_release);
     m_cwxSessionValid = std::make_shared<std::atomic<bool>>(true);
     if (m_independentTxGrants) {

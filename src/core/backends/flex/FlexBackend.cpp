@@ -105,6 +105,8 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(&m_statusIngress, &FlexStatusIngress::notchRemoved, this, &IRadioBackend::notchRemoved);
     connect(&m_statusIngress, &FlexStatusIngress::displayObserved, this, &IRadioBackend::displayObserved);
     connect(&m_statusIngress, &FlexStatusIngress::sliceObserved, this, &IRadioBackend::sliceObserved);
+    connect(&m_statusIngress, &FlexStatusIngress::dvkStatusObserved, this, &IRadioBackend::dvkStatusObserved);
+    connect(&m_statusIngress, &FlexStatusIngress::navtexStatusObserved, this, &IRadioBackend::navtexStatusObserved);
     connect(&m_statusIngress, &FlexStatusIngress::radioStatusObserved, this, &FlexBackend::acceptRadioStatus);
     connect(&m_statusIngress, &FlexStatusIngress::setupStatusObserved, this, &IRadioBackend::setupStatusObserved);
     connect(&m_statusIngress, &FlexStatusIngress::tuneOutputSuppressionObserved,
