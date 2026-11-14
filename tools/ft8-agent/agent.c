@@ -100,9 +100,48 @@
 
 static volatile pid_t g_decoder;
 
+/* The radio API socket and the slice/stream this agent owns, so that an
+ * exit can hand them back. The radio keeps a slice allocated against the
+ * handle of a client that has gone away: two orphans are enough to fill a
+ * FLEX-6300, and every later "slice create" then fails 500000C8 "Maximum
+ * slice limit reached" -- including the one this agent makes when it comes
+ * back up. */
+static int g_api_fd = -1;
+static int g_api_slice = -1;
+static unsigned g_api_stream = 0;
+
+/* Hand the slice and DAX stream back to the radio before this process goes
+ * away. A slice outlives the client that made it, so an agent that exits
+ * without doing this leaves one allocated against a handle that no longer
+ * exists; `sub client all` then reports no clients while `sub slice all`
+ * still shows them in use. Two such orphans fill a FLEX-6300 and every
+ * later slice create fails 500000C8 "Maximum slice limit reached".
+ *
+ * Written with plain write() rather than api_send(): this runs from a
+ * signal handler as well as from the restart route, so it must not touch
+ * a mutex or the logger. A failed write is ignored -- there is nothing
+ * useful to do about it on the way out, and the radio drops the slice
+ * eventually anyway. */
+static void release_radio_resources(void)
+{
+    if (g_api_fd < 0) return;
+    char buf[96];
+    if (g_api_stream) {
+        int n = snprintf(buf, sizeof buf, "C9998|stream remove 0x%08X\n", g_api_stream);
+        if (n > 0) { ssize_t w = write(g_api_fd, buf, (size_t)n); (void)w; }
+    }
+    if (g_api_slice >= 0) {
+        int n = snprintf(buf, sizeof buf, "C9999|slice remove %d\n", g_api_slice);
+        if (n > 0) { ssize_t w = write(g_api_fd, buf, (size_t)n); (void)w; }
+    }
+    g_api_slice = -1;
+    g_api_stream = 0;
+}
+
 static void on_term(int sig)
 {
     (void)sig;
+    release_radio_resources();
     if (g_decoder > 0) kill(g_decoder, SIGKILL);
     _exit(0);
 }
@@ -1264,6 +1303,16 @@ static void serve(int fd)
         shutdown(fd, SHUT_WR);
         close(fd);
         sleep(1);
+        /* Give the slice and DAX stream back first. execv() keeps the
+         * process id but the radio sees the API connection drop and holds
+         * the slice against the old client handle: restarting without this
+         * leaks a slice every time, and two leaks fill a FLEX-6300 so the
+         * agent that comes back cannot create one at all. Measured doing
+         * exactly that on 2026-11-14 before this call existed. */
+        release_radio_resources();
+        /* Let the removes reach the radio before the socket closes. */
+        usleep(500000);
+        if (g_api_fd >= 0) close(g_api_fd);
         if (g_status_fd >= 0) close(g_status_fd);
         char *argv[] = { g_self, NULL };
         execv(g_self, argv);
@@ -1463,6 +1512,8 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             a->want_slice = 0;
             if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
             a->slice = atoi(msg);
+            g_api_fd = a->fd;        /* so an exit can release these */
+            g_api_slice = a->slice;
             api_send(a, "slice set %d tx=0", a->slice);
             /* First attempt uses the configured channel; dax_try carries a
              * fallback across the retry. */
@@ -1504,6 +1555,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
              * count separately from "audio": true. */
             G.dax_bound = a->dax_try;
             pthread_mutex_unlock(&G.mu);
+            g_api_stream = a->stream;
             logf_("DAX audio stream 0x%08x on channel %d", a->stream, a->dax_try);
         }
         return;
@@ -2407,7 +2459,40 @@ static const char *band_for_cycle(const config_t *c, const char *grid, long long
  * found. That is the control arm. */
 static osd_depth_t g_osd_depth = OSD_DEPTH_2;
 
-osd_depth_t aether_osd_depth(void) { return g_osd_depth; }
+/* Map the agent's four depth names onto OSD search depths.
+ *
+ * The names come from the WSPR agent this one was built from, where they
+ * were stored and reported but wired to nothing. OSD gives them a meaning:
+ *
+ *   fast      OSD off        -- belief propagation only, the pre-OSD decoder
+ *   standard  OSD depth 2    -- the default; measured 77.3% on the corpus
+ *   normal    OSD depth 3    -- +0.9 points for about 2x the time
+ *   deep      OSD depth 4    -- WSJT-X's own FT8 setting
+ *
+ * ⚠ "deep" is very unlikely to fit a FLEX-6300's ~2 s budget: on x86 it is
+ * roughly 16x the cost of depth 2, and this radio already runs depth 2 at
+ * about 1.4 s. It is offered because the ruling asked for WSJT-X's setting
+ * to be measured, not because it is a sensible choice on a 6000.
+ *
+ * AETHER_FT8_OSD still overrides, for a host-side scoring run where there
+ * is no config API in play. */
+static int g_osd_env_set = 0;
+
+osd_depth_t aether_osd_depth(void)
+{
+    if (g_osd_env_set) return g_osd_depth;
+    /* Called from the decoder, which holds no lock of its own, while the
+     * config POST thread can be writing G.cfg. Read it under the mutex. */
+    pthread_mutex_lock(&G.mu);
+    const int d = G.cfg.depth;
+    pthread_mutex_unlock(&G.mu);
+    switch (d) {
+    case 1:  return OSD_DEPTH_OFF; /* fast */
+    case 2:  return OSD_DEPTH_3;   /* normal */
+    case 3:  return OSD_DEPTH_4;   /* deep */
+    default: return OSD_DEPTH_2;   /* standard */
+    }
+}
 
 static void osd_depth_from_env(void)
 {
@@ -2417,6 +2502,7 @@ static void osd_depth_from_env(void)
     if (v < 0) v = 0;
     if (v > 6) v = 6;
     g_osd_depth = (osd_depth_t)v;
+    g_osd_env_set = 1;
 }
 #endif
 
