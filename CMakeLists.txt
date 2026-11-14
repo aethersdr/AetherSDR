@@ -909,12 +909,15 @@ set(CORE_SOURCES
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexDisplayStatus.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexRadioStatus.cpp
     src/core/backends/flex/FlexCwControls.cpp
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
+    src/core/backends/flex/FlexSetupStatus.cpp
     src/core/backends/flex/FlexSessionControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexSliceStatus.cpp
     src/core/backends/flex/FlexTransferControls.cpp
     src/core/backends/flex/FlexCwxControls.cpp
     src/core/backends/flex/FlexWaveformEnvControls.cpp
@@ -961,6 +964,7 @@ set(CORE_SOURCES
     src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
     src/core/backends/anan/AnanDroopDefaults.cpp   # derived per-gateware droop defaults (generated data)
     src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
+    src/core/backends/ReconnectBusyProbe.cpp # automatic reconnect never takes a busy HPSDR radio
     src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
@@ -1277,14 +1281,17 @@ set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RadioModel_DaxTx.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_SetupObservations.cpp
     src/models/RadioModel_SessionControls.cpp
     src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_RadioObservations.cpp
     src/models/RadioModel_TransferControls.cpp
     src/models/RadioModel_WaveformEnv.cpp
     src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
+    src/models/RadioModel_SliceObservations.cpp
     src/models/RadioModel_DisplayObservations.cpp
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_AudioControls.cpp
@@ -2027,6 +2034,7 @@ target_link_libraries(AetherSDR PRIVATE
 add_executable(aetherd
     src/aetherd/main.cpp
     src/aetherd/CredentialStartup.cpp
+    src/aetherd/GracefulStop.cpp
     src/aetherd/GrantAdminClient.cpp
 )
 target_link_libraries(aetherd PRIVATE
@@ -3820,7 +3828,7 @@ include(GNUInstallDirs)
 
 if(LINUX AND NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
     # Keep pinned or non-system Qt loadable after install; explicit builder overrides win.
-    set_property(TARGET AetherSDR PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+    set_property(TARGET AetherSDR aetherd PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
 
 if(APPLE)
@@ -3862,6 +3870,17 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    # The headless engine ships beside the app on Linux, so the AppImage (and
+    # an install made from it) can run it: `AetherSDR --aetherd [options]`.
+    # aetherd is always a target, but a build of the app alone (the x86_64
+    # AppImage builds only named targets) leaves no binary: OPTIONAL then
+    # installs without it.
+    if(LINUX)
+        install(TARGETS aetherd
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            OPTIONAL
+        )
     endif()
     if(LINUX AND HIDAPI_FOUND)
         install(FILES packaging/linux/70-aethersdr-ctr2.rules

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/ReconnectBusyProbe.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSliceAudio.h"
 #include "core/Resampler.h"
@@ -60,7 +61,7 @@ public:
     bool isConnected() const override { return m_connected; }
 
     void setSliceFrequency(int sliceId, double hz) override;
-    void setSliceMode(int sliceId, const QString& mode) override;
+    void setSliceMode(int sliceId, const QString& requested) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     // The AGC-off level, which the base class drops. Mode and threshold edits
@@ -69,6 +70,17 @@ public:
     void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                               int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    // RIT, from the desktop (SliceModel::setRit) and from slice.setRit, reaches
+    // setSliceRit() here; XIT stays unsupported.
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    // The G2's own speaker, live for this session like frontend.set; the Radio Setup
+    // checkbox (AnanSettings) stays the saved default each connect starts from.
+    ReceiveDispatch requestRadioSpeakerAudio(bool on) override;
+    // RIT moves the detector's zero (the WDSP shift) by the offset; the DDC and
+    // panadapter stay on the slice frequency. Enable and offset as one intent,
+    // clamped to kMaxRitOffsetHz; requestSliceControl(Rit) is how both the
+    // desktop and the headless slice.setRit reach it.
+    void setSliceRit(int sliceId, bool on, int hz);
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
 
     // The receiver's own audio stage. Without these three the operator's mute,
@@ -126,6 +138,18 @@ public:
     // it because modeFromString() falls back to USB instead of failing.
     [[nodiscard]] static bool isKnownModeString(const QString& mode) noexcept;
 
+    // The modes the mode menu offers, each once. setSliceMode() and the restore
+    // take only these and their aliases: WBFM (the WDSP channel runs at 48 kHz,
+    // too narrow for broadcast FM) and DRM (no decoder) are refused, since a
+    // slice left in a mode no record offers refuses every headless verb.
+    [[nodiscard]] static const QStringList& publishedModeStrings() noexcept;
+    // A spelling setSliceMode() and the restore accept: an offered mode or its alias.
+    [[nodiscard]] static bool isOfferedModeString(const QString& mode) noexcept;
+
+    // The offered spelling of an accepted one: uppercased, with each alias
+    // collapsed onto its offered twin. Display-only; the DSP mode is unchanged.
+    [[nodiscard]] static QString canonicalOfferedMode(const QString& mode) noexcept;
+
     // Where a session starts when this radio has no remembered state.
     static constexpr double kFirstConnectFrequencyHz = 14'175'000.0;
     static constexpr const char* kFirstConnectMode = "USB";
@@ -134,11 +158,37 @@ public:
     // reported. Refused, never clamped, at or above Nyquist.
     [[nodiscard]] static bool isRestorableFrequencyHz(double hz) noexcept;
 
+    // Headless slice.setFrequency bounds (sliceFrequencyControl): the measured
+    // tuning span, both edges inside isRestorableFrequencyHz(). See capabilities().
+    static constexpr qint64 kHeadlessTuneMinHz = 10'000;
+    static constexpr qint64 kHeadlessTuneMaxHz = 61'430'000;
+    static_assert(0 < kHeadlessTuneMinHz && kHeadlessTuneMinHz <= kHeadlessTuneMaxHz
+                      && kHeadlessTuneMaxHz < static_cast<qint64>(kDspClockHz) / 2,
+                  "headless tuning bounds must sit inside (0, Nyquist)");
+
+    // Largest |RIT offset|. The widest passband edge is 12 kHz in every mode (a
+    // 12 kHz cut, or CW's 6 kHz cut plus its 6 kHz BFO cap), so the shifted edge
+    // stays inside the WDSP channel's +-24 kHz at its 48 kHz DSP rate.
+    static constexpr int kMaxRitOffsetHz = 9'999;
+
+    // WDSP ANR's level before the operator sets one, and when none is restored.
+    static constexpr int kDefaultNrLevel = 50;
+
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero
     // for non-CW is why every mode routes through this rather than only the
     // CW ones (entering/leaving CW must re-push the shift either way).
     [[nodiscard]] static double cwBfoOffsetHz(const QString& mode, int pitchHz) noexcept;
+
+    // The WDSP shift for a receiver: RIT moves the detector's zero up by the
+    // offset, and the CW BFO pushes it down a pitch (a positive shift raises the
+    // receive point; anan_rxdsp_handedness_test pins that direction).
+    [[nodiscard]] static double detectorShiftHz(const QString& mode, int pitchHz,
+                                                bool ritEnabled, int ritOffsetHz) noexcept
+    {
+        return (ritEnabled ? static_cast<double>(ritOffsetHz) : 0.0)
+               - cwBfoOffsetHz(mode, pitchHz);
+    }
 
     // Snaps an operator-requested span to the nearest rate this radio
     // actually offers (capabilities().sampleRatesHz), by RATIO (log
@@ -198,6 +248,14 @@ public:
     }
     // RX1's mode and passband, as the slice setters last stored them.
     [[nodiscard]] QString modeForTest() const { return rx1().mode; }
+    [[nodiscard]] std::pair<bool, int> ritForTest() const noexcept
+    {
+        return {rx1().ritEnabled, rx1().ritOffsetHz};
+    }
+    [[nodiscard]] std::pair<bool, int> noiseReductionForTest() const noexcept
+    {
+        return {rx1().nrEnabled, rx1().nrLevel};
+    }
     [[nodiscard]] std::pair<int, int> filterForTest() const noexcept
     {
         return {rx1().filterLowHz, rx1().filterHighHz};
@@ -222,6 +280,7 @@ public:
     [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
 
 private:
+    friend class AnanBusyProbeTestAccess;
     friend class AnanNoiseBlankerTestAccess;
     friend class AnanLinkStatsTestAccess;
     friend class AnanSupplyRailTestAccess;
@@ -271,6 +330,11 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
+        // WDSP ANR and RIT, each echoed by emitSliceState().
+        bool nrEnabled = false;
+        int nrLevel = kDefaultNrLevel;
+        bool ritEnabled = false;
+        int ritOffsetHz = 0;
         // The receiver's audio stage (AnanSliceAudio.h). 100/50 = unity, centered.
         bool audioMuted = false;
         int audioGainPercent = 100;
@@ -299,6 +363,14 @@ private:
     void connectReceiverOutputs(int index);
 
     void beginDspSetup();
+    // The connect itself, after any busy probe.
+    void startConnect(const RadioConnectRequest& request);
+    // An automatic reconnect asks the radio first (ReconnectBusyProbe.h): a retry
+    // must never take it from another client.
+    void finishBusyProbe(std::optional<bool> streaming);
+    ReconnectBusyProbe* m_busyProbe = nullptr;
+    RadioConnectRequest m_busyProbeRequest;
+    bool m_busyWarned = false;   // one warning per busy spell, not one per 5 s retry
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // beginDspSetup() builds one channel per receiver; finishDspSetup() starts
     // the session once the last of them is in. The first failure is kept.

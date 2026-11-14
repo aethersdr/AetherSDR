@@ -1,7 +1,8 @@
-// Hl2TxDsp fed as capture devices group their deliveries (one, two or three
-// DSP blocks at once) at the correct average rate: no exchange may underrun,
-// and the tone must reach the wire whole and phase-continuous. A wall-clock
-// case whose worker stalls for a block period is load, not the defect: exit 77.
+// Hl2TxDsp fed as capture devices group their deliveries (one to six DSP
+// blocks at once) at the correct average rate: no exchange may underrun, the
+// tone must reach the wire whole and phase-continuous, and no real-time
+// delivery may log the pending-queue warning. A wall-clock case whose worker
+// stalls past the stall window is load, not the defect: exit 77.
 // Mechanism: third_party/wdsp/AETHERSDR-PATCHES.md, patch 15.
 
 #include "core/backends/hl2/Hl2TxDsp.h"
@@ -11,6 +12,8 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QObject>
+#include <QString>
+#include <QtGlobal>
 
 #include <algorithm>
 #include <chrono>
@@ -26,6 +29,14 @@ using namespace AetherSDR::hl2;
 
 static int g_failures = 0;
 static int g_inconclusive = 0;
+static int g_pendingWarnings = 0;   // "blocks waiting for the channel" lines
+
+static void countPendingWarnings(QtMsgType type, const QMessageLogContext&, const QString& msg)
+{
+    if (type == QtWarningMsg && msg.contains(QStringLiteral("blocks waiting for the channel")))
+        ++g_pendingWarnings;
+    std::fprintf(stderr, "%s\n", qPrintable(msg));
+}
 static void check(bool ok, const char* what)
 {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
@@ -53,6 +64,8 @@ struct Result {
     int holes = 0;              // runs >= 1 ms with |iq| below 10 % of median
     double longestHoleMs = 0.0;
     int splices = 0;            // phase discontinuities in the modulated tone
+    int deliveries = 0;
+    int pendingWarnings = 0;    // pending-queue warnings logged during the run
 };
 
 // `chunk` input samples per delivery, one delivery per chunk's real duration.
@@ -70,6 +83,7 @@ static Result run(std::size_t chunk, double seconds)
         return r;
     }
     std::vector<std::complex<float>> out;
+    const int warningsBefore = g_pendingWarnings;
     QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
                      [&](const std::vector<std::complex<float>>& iq,
                          const TxCoordinator::Context&) {
@@ -103,6 +117,8 @@ static Result run(std::size_t chunk, double seconds)
     r.faults = tx.modulatorFaultBlocks();
     r.blocks = tx.modulatorBlocks();
     r.stallDrops = tx.modulatorStallDrops();
+    r.deliveries = delivery;
+    r.pendingWarnings = g_pendingWarnings - warningsBefore;
     r.iqSamples = out.size();
     const std::size_t block = static_cast<std::size_t>(cfg.dspBlockSize);
     r.expectedIq = (total / block) * block
@@ -163,9 +179,10 @@ static void expectClean(const char* name, std::size_t chunk)
     const Result r = run(chunk, 2.0);
     std::fprintf(stderr,
                  "%s: chunk %zu -> blocks %llu, faults %llu (stall drops %llu), "
-                 "iq %zu / %zu expected, holes %d (longest %.1f ms), splices %d\n",
+                 "iq %zu / %zu expected, holes %d (longest %.1f ms), splices %d, "
+                 "pending warnings %d / %d deliveries\n",
                  name, chunk, r.blocks, r.faults, r.stallDrops, r.iqSamples, r.expectedIq,
-                 r.holes, r.longestHoleMs, r.splices);
+                 r.holes, r.longestHoleMs, r.splices, r.pendingWarnings, r.deliveries);
     const std::string p(name);
     // Load-independent: the gate must never let an exchange underrun.
     check(r.faults == r.stallDrops,
@@ -184,6 +201,20 @@ static void expectClean(const char* name, std::size_t chunk)
     check(r.iqSamples == r.expectedIq, (p + ": no IQ block lost").c_str());
     check(r.holes == 0, (p + ": no hole in the modulated envelope").c_str());
     check(r.splices == 0, (p + ": the modulated tone is phase-continuous").c_str());
+    // A real-time producer is not "feeding faster than the channel can drain",
+    // whatever its delivery size: the threshold is in time, not in blocks.
+    check(r.pendingWarnings == 0, (p + ": no pending-queue warning").c_str());
+}
+
+// The positive control for that check: 4096 samples (170.7 ms) in one delivery
+// is a backlog past the 85.33 ms threshold, and must warn.
+static void oversizedDeliveryWarns()
+{
+    const Result r = run(4096, 1.0);
+    std::fprintf(stderr, "oversized delivery: chunk 4096 -> pending warnings %d / %d deliveries\n",
+                 r.pendingWarnings, r.deliveries);
+    check(r.pendingWarnings >= 1,
+          "control: a 4096-sample delivery logs the pending-queue warning");
 }
 
 // The stall path, driven through the seam rather than by load.
@@ -225,13 +256,20 @@ struct StallRig {
         tx.processAudioBlock(audio, TxAudioSource::Microphone, authority.context);
     }
     std::size_t blocksOut() const { return outBlock ? iq / outBlock : 0; }
-    // Called as the stall is lifted. The last block's deadline (one block
-    // period) passed while it was held, so a drop is correct and the "not
+    // The stall window: kExchangeStallSamples, or one block period if longer.
+    double stallWindowMs() const
+    {
+        const double samples = std::max<double>(static_cast<double>(Hl2TxDsp::kExchangeStallSamples),
+                                                static_cast<double>(cfg.dspBlockSize));
+        return 1000.0 * samples / cfg.inputSampleRateHz;
+    }
+    // Called as the stall is lifted. The last block's deadline (the stall
+    // window) passed while it was held, so a drop is correct and the "not
     // dropped" checks cannot judge: load, not the defect.
     bool heldPastDeadline(const char* name) const
     {
         const double heldMs = sinceDelivery.nsecsElapsed() / 1e6;
-        const double deadlineMs = 1000.0 * cfg.dspBlockSize / cfg.inputSampleRateHz;
+        const double deadlineMs = stallWindowMs();
         if (heldMs < deadlineMs)
             return false;
         std::fprintf(stderr, "INCONCLUSIVE: %s: stall held %.1f ms, past the %.1f ms "
@@ -242,7 +280,7 @@ struct StallRig {
     }
 };
 
-// A block arriving after the caller was idle for over a block period still
+// A block arriving after the caller was idle for over the stall window still
 // waits for the worker: the deadline runs from when the block became due, not
 // from the previous exchange. A block whose worker never answers is DROPPED.
 static void stallIsTimedFromDueAndDrops()
@@ -251,7 +289,7 @@ static void stallIsTimedFromDueAndDrops()
     if (!g.open())
         return;
     g.deliverBlock();                  // primed credit: exchanged at once
-    pumpFor(40.0);                     // idle for ~two block periods
+    pumpFor(40.0);                     // idle for longer than the stall window
     check(g.blocksOut() == 1, "stall: first block exchanged");
 
     // Worker not ready on arrival, ready 3 ms later: must wait, not bypass.
@@ -269,7 +307,7 @@ static void stallIsTimedFromDueAndDrops()
     check(g.blocksOut() == 2, "stall: ...and is exchanged once it is");
     check(g.tx.modulatorStallDrops() == 0, "stall: ...without being dropped");
 
-    // Worker never answers: after a block period the block is dropped, and
+    // Worker never answers: after the stall window the block is dropped, and
     // nothing is exchanged into the channel meanwhile.
     pumpFor(40.0);
     g.stalled = true;
@@ -301,7 +339,7 @@ static void newOverStartsAFreshDeadline()
         return;
     }
     g.tx.reset();                      // unkey with it still waiting
-    pumpFor(30.0);                     // > one block period since it became due
+    pumpFor(30.0);                     // > the stall window since it became due
 
     const std::size_t before = g.blocksOut();
     g.deliverBlock();                  // first block of the next over, worker not ready
@@ -321,9 +359,51 @@ static void newOverStartsAFreshDeadline()
     g.tx.reset();
 }
 
+// The stall window is set in time, not in blocks (#6052): at the shipped
+// 256-sample block (10.67 ms) a head block whose worker answers 15 ms late is
+// still exchanged; one whose worker has not answered after 21.33 ms is dropped.
+static void stallWindowIsTimeNotBlocks()
+{
+    StallRig g;
+    if (!g.open())
+        return;
+    check(Hl2TxDsp::kExchangeStallSamples == 512,
+          "stall window: 512 input samples, 21.33 ms at 24 kHz");
+    check(g.stallWindowMs() > 1000.0 * g.cfg.dspBlockSize / g.cfg.inputSampleRateHz,
+          "stall window: longer than one block period at the shipped block");
+    g.deliverBlock();                  // primed credit: exchanged at once
+    pumpFor(40.0);
+    check(g.blocksOut() == 1, "stall window: first block exchanged");
+
+    g.stalled = true;
+    g.deliverBlock();
+    pumpFor(15.0);                     // past the 10.67 ms block, inside 21.33 ms
+    if (g.heldPastDeadline("stall window")) {
+        g.tx.reset();
+        return;
+    }
+    check(g.tx.modulatorStallDrops() == 0,
+          "stall window: a head block 15 ms late is not dropped");
+    g.stalled = false;
+    pumpFor(20.0);
+    check(g.blocksOut() == 2, "stall window: ...and is exchanged once the worker answers");
+
+    pumpFor(40.0);
+    g.stalled = true;
+    g.deliverBlock();
+    pumpFor(30.0);                     // past 21.33 ms
+    check(g.tx.modulatorStallDrops() == 1,
+          "stall window: a head block not answered after 21.33 ms is dropped");
+    check(g.blocksOut() == 2, "stall window: ...and never force-exchanged");
+    g.stalled = false;
+    pumpFor(40.0);
+    g.tx.reset();
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    qInstallMessageHandler(countPendingWarnings);
     // Skip only an explicit phasing build: an undefined macro reads as 0 in #if,
     // so a bare `#if !AETHER_HL2_TX_TXA` would skip silently if the option went.
 #if defined(AETHER_HL2_TX_TXA) && !AETHER_HL2_TX_TXA
@@ -332,19 +412,24 @@ int main(int argc, char** argv)
 #else
     stallIsTimedFromDueAndDrops();
     newOverStartsAFreshDeadline();
+    stallWindowIsTimeNotBlocks();
 
     // The control: a 48 kHz device, 512 frames per 10.7 ms, reaches this stage
-    // as 256 samples per delivery -- never two blocks at once.
+    // as 256 samples per delivery -- one block, never two at once.
     expectClean("48k-capture (256/delivery)", 256);
-    // 44.1 kHz device, 1024 frames per 23.2 ms = ~557 samples at 24 kHz: every
-    // eleventh or so delivery carries two DSP blocks. (#6004)
+    // 44.1 kHz device, 1024 frames per 23.2 ms = ~557 samples at 24 kHz: two
+    // DSP blocks per delivery, three in about one in six. (#6004)
     expectClean("44.1k-capture (557/delivery)", 557);
     // 24 kHz device as Qt 6.8's macOS QAudioSource delivers it: 4096-byte
-    // flushes of 16-bit stereo, 1024 frames = 42.7 ms, two blocks every time.
+    // flushes of 16-bit stereo, 1024 frames = 42.7 ms, four blocks every time.
     expectClean("24k-capture as Qt delivers it (1024/delivery)", 1024);
-    // 16 kHz device, 512 frames per 32 ms = 768 samples at 24 kHz: one delivery
-    // in two carries two DSP blocks, whatever the poll timing.
+    // 16 kHz device, 512 frames per 32 ms = 768 samples at 24 kHz: three DSP
+    // blocks per delivery, whatever the poll timing.
     expectClean("16k-capture (768/delivery)", 768);
+    // 16 kHz device, 1024 frames per 64 ms = 1536 samples at 24 kHz (#6005):
+    // six blocks at once, real time, so no pending-queue warning.
+    expectClean("16k-capture as Qt delivers it (1536/delivery)", 1536);
+    oversizedDeliveryWarns();
 
     if (g_failures) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

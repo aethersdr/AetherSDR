@@ -22,6 +22,7 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QJsonArray>
 #include <QProcess>
 #include <QSignalSpy>
 #include <QVariantList>
@@ -52,6 +53,55 @@ public:
 
 // AnanBackend's friend: the supply rail's meter definition and its averaging
 // window, against an injected clock rather than a status packet every 200 ms.
+// A probe that records its start and opens nothing.
+class RecordingProbe : public ReconnectBusyProbe {
+public:
+    using ReconnectBusyProbe::ReconnectBusyProbe;
+    int starts = 0;
+    void start(const QHostAddress&, quint16, const QByteArray&, Parse, Done done) override
+    {
+        ++starts;
+        armForTest(std::move(done));
+    }
+};
+
+struct P2ClientTestAccess {
+    static void setRunning(P2Client& client, bool running) { client.m_running = running; }
+    static void setLinkUp(P2Client& client, bool up) { client.m_linkUp = up; }
+    static void silence(P2Client& client, qint64 ms) { client.checkStreamSilence(ms); }
+    static quint64 txBytes(const P2Client& client) { return client.m_txBytes; }
+    static constexpr int kSilenceMs = P2Client::kStreamSilenceMs;
+};
+
+// The automatic-reconnect busy probe without a socket: arm it as connectRadio()
+// would, then hand it the radio's answer.
+class AnanBusyProbeTestAccess {
+public:
+    static void arm(AnanBackend& backend, const RadioConnectRequest& request)
+    {
+        if (!backend.m_busyProbe)
+            backend.m_busyProbe = new ReconnectBusyProbe(&backend);
+        backend.m_busyProbeRequest = request;
+        backend.m_busyProbe->armForTest(
+            [&backend](std::optional<bool> streaming) { backend.finishBusyProbe(streaming); });
+    }
+    static void answer(AnanBackend& backend, std::optional<bool> streaming)
+    {
+        backend.m_busyProbe->answerForTest(streaming);
+    }
+    static RecordingProbe* installRecordingProbe(AnanBackend& backend)
+    {
+        delete backend.m_busyProbe;
+        auto* probe = new RecordingProbe(&backend);
+        backend.m_busyProbe = probe;
+        return probe;
+    }
+    static bool probing(const AnanBackend& backend)
+    {
+        return backend.m_busyProbe && backend.m_busyProbe->active();
+    }
+};
+
 class AnanSupplyRailTestAccess {
 public:
     static void defineMeters(AnanBackend& backend) { backend.defineMeters(); }
@@ -81,6 +131,12 @@ namespace {
 class ConnectedAnan : public AnanBackend {
 public:
     bool isConnected() const override { return true; }
+};
+// Records each connect request and opens nothing.
+class RecordingAnan : public AnanBackend {
+public:
+    std::vector<RadioConnectRequest> requests;
+    void connectRadio(const RadioConnectRequest& request) override { requests.push_back(request); }
 };
 }  // namespace
 
@@ -114,6 +170,9 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
               "the AGC mode, AGC-T and AGC-off level survive a process boundary");
+        check(backend.ritForTest() == std::make_pair(true, -350)
+                  && backend.noiseReductionForTest() == std::make_pair(true, 70),
+              "RIT and NR survive a process boundary");
         return g_failures == 0 ? 0 : 1;
     }
 
@@ -151,6 +210,24 @@ int main(int argc, char** argv)
         check(!AnanBackend::isKnownModeString("bogus"),
               "a mode modeFromString() does not map is REFUSED, not silently demodulated as SSB");
         check(!AnanBackend::isKnownModeString(""), "an empty mode is not a mode");
+        for (const char* m : {"WBFM", "WFM", "DRM", "bogus", ""})
+            check(!AnanBackend::isOfferedModeString(QString::fromLatin1(m)),
+                  "a known mode no record offers (WBFM, DRM) is not accepted");
+        for (const char* m : {"LSB", "usb", "NFM", "CWU", "RTTY", "DIGL"})
+            check(AnanBackend::isOfferedModeString(QString::fromLatin1(m)),
+                  "an offered mode or its alias is accepted");
+        {
+            AnanBackend live;
+            live.setSliceMode(0, QStringLiteral("LSB"));
+            live.setSliceMode(0, QStringLiteral("WBFM"));
+            check(live.modeForTest() == QStringLiteral("LSB"),
+                  "setSliceMode() refuses WBFM and keeps the receiver's mode");
+            RestoredRadioState wbfm;
+            wbfm.mode = QStringLiteral("WFM");
+            live.applyRestoredState(wbfm);
+            check(live.restoredModeForTest().isEmpty(),
+                  "a saved WBFM session is not restored: the first-connect default stands");
+        }
     }
 
     // ---- restorable frequency: bounded by the DDS encoding, Nyquist ----
@@ -221,13 +298,58 @@ int main(int argc, char** argv)
                   && c.backendPanAveraging->msPerAverageStep == 10,
               "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,
-              "tuning range not reported -- no verified G2 range yet, not a guess");
+              "desktop tuning range not reported -- sensitivity across the span is unmeasured");
+        check(c.sliceFrequencyControl.authority == SliceFrequencyControl::Authority::Engine
+                  && c.sliceFrequencyControl.minimumHz == 10'000
+                  && c.sliceFrequencyControl.maximumHz == 61'430'000,
+              "headless tuning bounds are the measured 10 kHz - 61.43 MHz span");
+        check(AnanBackend::isRestorableFrequencyHz(
+                  static_cast<double>(c.sliceFrequencyControl.minimumHz))
+                  && AnanBackend::isRestorableFrequencyHz(
+                      static_cast<double>(c.sliceFrequencyControl.maximumHz)),
+              "both headless edges are tunable: inside (0, Nyquist), below phaseWord() aliasing");
+        // The G2 front-panel verbs' declarations.
+        {
+            using Feature = ReceiveDspControl::Feature;
+            const auto& dsp = c.receiveDspControl;
+            bool everyMode = dsp.has_value();
+            for (const QString& mode : AnanBackend::publishedModeStrings()) {
+                for (const Feature f : {Feature::Agc, Feature::Nb, Feature::Nr, Feature::Rit})
+                    everyMode = everyMode && dsp->supports(f, mode);
+            }
+            check(everyMode && dsp->authority == SliceFrequencyControl::Authority::Engine
+                      && dsp->maximumRitOffsetHz == AnanBackend::kMaxRitOffsetHz,
+                  "ANAN declares AGC, NB, NR and RIT in every offered mode, engine authority");
+            check(!dsp->features.contains(Feature::Anf) && !dsp->features.contains(Feature::Apf)
+                      && !dsp->features.contains(Feature::ManualNotch),
+                  "and nothing it does not run: no ANF, APF or manual notch");
+            check(c.receivePanRfGainControl && c.receivePanRfGainControl->minimumDb == -kMaxStepAttenuationDb
+                      && c.receivePanRfGainControl->maximumDb == 0 && c.receivePanRfGainControl->stepDb == 1,
+                  "RF gain is the negated 0-31 dB step attenuator, 1 dB steps");
+            // The widest declared edge plus the BFO it carries (CW) and the
+            // largest RIT must stay inside the 48 kHz DSP rate's +-24 kHz.
+            int widestEdgeHz = 0;
+            for (const auto& f : c.receiveFilterControl->modes) {
+                const int bfo = (f.mode == QLatin1String("CW") || f.mode == QLatin1String("CWL"))
+                    ? c.cwPitchMaxHz : 0;
+                widestEdgeHz = std::max({widestEdgeHz, std::abs(f.minimumLowHz) + bfo,
+                                         std::abs(f.maximumHighHz) + bfo});
+            }
+            check(widestEdgeHz == 12'000 && widestEdgeHz + AnanBackend::kMaxRitOffsetHz < 24'000,
+                  "the RIT bound keeps the shifted passband inside the 48 kHz DSP rate");
+            check(AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, true, 500) == 500.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, false, 500) == 0.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CW"), 600, true, 500) == -100.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CWL"), 600, true, -200) == 400.0,
+                  "the detector shift is RIT (when on) minus the CW BFO");
+        }
         check(c.clientSettingsDomains
                   == (RadioCapabilities::ClientSettingsDomain::RfGain
                       | RadioCapabilities::ClientSettingsDomain::Tuning
                       | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel
-                      | RadioCapabilities::ClientSettingsDomain::Agc),
-              "RF gain, tuning, radio output level AND AGC restore are declared -- "
+                      | RadioCapabilities::ClientSettingsDomain::Agc
+                      | RadioCapabilities::ClientSettingsDomain::Receivers),
+              "RF gain, tuning, radio output level, AGC AND RX1's RIT/NR restore are declared -- "
               "this radio reports none of them, so the client is its only memory");
         bool scaleMatches = c.agcGainScale.has_value();
         for (const int knob : {0, 71, 100}) {
@@ -243,6 +365,175 @@ int main(int argc, char** argv)
               "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
               "VFO's NB button has something to drive");
         check(!backend.isConnected(), "not connected before connectRadio() is ever called");
+    }
+
+    // ---- RIT: one intent, echoed, clamped to the declared bound ----
+    {
+        AnanBackend backend;
+        SliceDelta seen;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { seen = d; });
+        backend.setSliceRit(0, true, -350);
+        check(seen.ritOn == true && seen.ritFreq == -350, "setSliceRit() echoes enable and offset together");
+        backend.setSliceRit(0, true, 50'000);
+        check(seen.ritFreq == AnanBackend::kMaxRitOffsetHz, "an offset past the bound is clamped, not honored");
+        check(backend.requestSliceControl(0, {SliceControlRequest::Field::Rit,
+                                              IncrementalTuning{false, -120}})
+                  == ReceiveDispatch::Dispatched
+                  && seen.ritOn == false && seen.ritFreq == -120,
+              "the typed RIT request (desktop and headless) reaches the same state");
+    }
+
+    // ---- an automatic reconnect never takes the radio from another client ----
+    // Protocol 2 obeys the last controller, so two at once chatter the relays.
+    // An unparseable host stands for the connect itself: startConnect() refuses
+    // it with an error at once, which is how "the connect ran" is observed here
+    // without opening a socket.
+    {
+        check(ReconnectBusyProbe::mayProceed(std::nullopt)
+                  && ReconnectBusyProbe::mayProceed(false)
+                  && !ReconnectBusyProbe::mayProceed(true),
+              "only a reply saying the radio is streaming stops a reconnect; silence never does");
+        check(!ReconnectBusyProbe::mayProceed(std::nullopt, ReconnectBusyProbe::Silence::Wait)
+                  && ReconnectBusyProbe::mayProceed(false, ReconnectBusyProbe::Silence::Wait)
+                  && !ReconnectBusyProbe::mayProceed(true, ReconnectBusyProbe::Silence::Wait),
+              "with Silence::Wait (the HL2's rule) only an idle reply proceeds");
+        AnanBackend backend;
+        QSignalSpy errors(&backend, &IRadioBackend::connectionError);
+        QSignalSpy warnings(&backend, &IRadioBackend::configurationWarning);
+        RadioConnectRequest retry;
+        retry.host = QStringLiteral("not-an-address");
+        retry.automaticReconnect = true;
+
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, true);
+        check(errors.isEmpty() && warnings.count() == 1 && !AnanBusyProbeTestAccess::probing(backend),
+              "a busy radio: no connect, and the operator is told once");
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, true);
+        check(errors.isEmpty() && warnings.count() == 1,
+              "still busy on the next retry: still no connect, and no second warning");
+        AnanBusyProbeTestAccess::answer(backend, false);
+        check(errors.isEmpty(), "a stale answer for a finished probe does nothing");
+
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, false);
+        check(errors.count() == 1, "a free radio: the reconnect goes ahead");
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        AnanBusyProbeTestAccess::answer(backend, std::nullopt);
+        check(errors.count() == 2, "no reply in time: the reconnect goes ahead (fail open)");
+
+        AnanBusyProbeTestAccess::arm(backend, retry);
+        backend.disconnectRadio();
+        AnanBusyProbeTestAccess::answer(backend, false);
+        check(errors.count() == 2 && !AnanBusyProbeTestAccess::probing(backend),
+              "a disconnect during the probe cancels the reconnect");
+
+        // The previous session stops before the probe: a client left running
+        // after a connect timeout would otherwise keep sending this radio its
+        // settings while a busy answer starts nothing new.
+        {
+            AnanBackend stale;
+            RecordingProbe* probe = AnanBusyProbeTestAccess::installRecordingProbe(stale);
+            P2Client* client = AnanSupplyRailTestAccess::client(stale);
+            P2ClientTestAccess::setRunning(*client, true);
+            RadioConnectRequest again;
+            again.host = QStringLiteral("192.0.2.10");   // TEST-NET-1, and the probe opens nothing
+            again.automaticReconnect = true;
+            stale.connectRadio(again);
+            check(probe->starts == 1 && !client->isRunning(),
+                  "an automatic reconnect stops the previous session before it probes");
+            probe->answerForTest(true);
+            check(!client->isRunning(), "and a busy answer leaves it stopped");
+        }
+
+        RadioConnectRequest manual = retry;
+        manual.automaticReconnect = false;
+        backend.connectRadio(manual);
+        check(errors.count() == 3 && !AnanBusyProbeTestAccess::probing(backend),
+              "an operator's connect is not probed");
+    }
+
+    // ---- a session that went silent ends, without stopping the new owner ----
+    // p2app sends everything to whichever client spoke last, so silence while
+    // our keepalives still go out means another client has the radio.
+    {
+        P2Client client;
+        QSignalSpy down(&client, &P2Client::linkDown);
+        P2ClientTestAccess::setRunning(client, true);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs + 500);
+        check(client.isRunning() && down.isEmpty(),
+              "a session that never came up is the connect timeout's, not the silence watchdog's");
+        P2ClientTestAccess::setLinkUp(client, true);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs - 1);
+        check(client.isRunning() && down.isEmpty(), "a shorter silence leaves a live session alone");
+        const quint64 sent = P2ClientTestAccess::txBytes(client);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs);
+        check(!client.isRunning() && down.count() == 1,
+              "3 s of silence on a live session ends it and reports the link down");
+        check(P2ClientTestAccess::txBytes(client) == sent,
+              "and sends the radio nothing: a stop now would stop the client that has it");
+    }
+
+    // ---- RadioModel marks its automatic retry, and only that ----
+    {
+        RadioModel radio;
+        auto owned = std::make_unique<RecordingAnan>();
+        RecordingAnan* backend = owned.get();
+        radio.setBackendForTest(std::move(owned), QStringLiteral("anan"));
+        RadioInfo info;
+        info.family = QStringLiteral("anan");
+        info.serial = QStringLiteral("ANAN-RECONNECT");
+        info.address = QHostAddress(QStringLiteral("192.0.2.10"));   // TEST-NET-1: never contacted
+        info.port = 1024;
+        radio.connectToRadio(info);
+        radio.triggerAutoReconnectForTest();
+        check(backend->requests.size() == 2 && !backend->requests[0].automaticReconnect
+                  && backend->requests[1].automaticReconnect
+                  && backend->requests[1].host == QStringLiteral("192.0.2.10"),
+              "the operator's connect is not marked; RadioModel's automatic retry is");
+    }
+
+    // ---- the G2's own speaker: declared, accepted, reported ----
+    {
+        AnanBackend backend;
+        check(backend.capabilities().radioSpeakerControl
+                  && backend.capabilities().radioSpeakerControl->authority
+                         == SliceFrequencyControl::Authority::Engine,
+              "ANAN declares its own speaker, engine authority");
+        std::optional<bool> reported;
+        QObject::connect(&backend, &IRadioBackend::radioSpeakerAudioReported,
+                         [&](bool on) { reported = on; });
+        check(backend.requestRadioSpeakerAudio(true) == ReceiveDispatch::Dispatched && reported == true,
+              "requestRadioSpeakerAudio(true) is taken and reported");
+        check(backend.requestRadioSpeakerAudio(false) == ReceiveDispatch::Dispatched && reported == false,
+              "and off again");
+    }
+
+    // ---- the speaker report survives a reconnect over a live session ----
+    // connectRadio() reports before the old session's queued linkDown lands, and
+    // RadioModel clears its report on disconnected() (onDisconnected); the next
+    // session's linkUp must report the speaker again.
+    {
+        AnanBackend backend;
+        P2Client* client = AnanSupplyRailTestAccess::client(backend);
+        backend.requestRadioSpeakerAudio(true);
+        QSignalSpy reports(&backend, &IRadioBackend::radioSpeakerAudioReported);
+        emit client->linkDown();   // the old session's, arriving late
+        emit client->linkUp();     // the new session
+        check(!reports.isEmpty() && reports.last().at(0).toBool(),
+              "the new session's linkUp reports the speaker state again");
+    }
+
+    // ---- the blanker publishes at once, like every other receive setter ----
+    {
+        AnanBackend backend;
+        std::optional<bool> nb;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { if (d.nb) nb = d.nb; });
+        backend.setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse, 60,
+                                     AetherSDR::NoiseBlankerFill::Zero);
+        check(nb == true, "setSliceNoiseBlanker() echoes the blanker immediately");
     }
 
     // ---- setSliceNoiseBlanker: live state for connect and rate change ----
@@ -652,6 +943,23 @@ int main(int argc, char** argv)
                       && live.agcOffLevels == QList<int>{35},
                   "capture reports the live AGC mode, AGC-T and AGC-off level");
         }
+        // RIT and NR (the Receivers domain), also before the store.
+        {
+            QSignalSpy receiverChanges(&backend, &IRadioBackend::operatingStateChanged);
+            backend.setSliceRit(0, true, -350);
+            backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                                        SliceDspRequest::Field::Level, false, 70});
+            backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                                        SliceDspRequest::Field::Enabled, true, 70});
+            check(receiverChanges.count() == 3, "a RIT or NR change announces itself for capture");
+            backend.setSliceRit(0, true, -350);
+            check(receiverChanges.count() == 3, "the same RIT again announces nothing");
+            const QJsonObject rx = backend.currentOperatingState().extension
+                                       .value(QStringLiteral("receivers")).toArray().at(0).toObject();
+            check(rx.value(QStringLiteral("ritOn")).toBool() && rx.value(QStringLiteral("ritHz")).toInt() == -350
+                      && rx.value(QStringLiteral("nrOn")).toBool() && rx.value(QStringLiteral("nrLevel")).toInt() == 70,
+                  "capture reports RX1's live RIT and NR");
+        }
         // The level and its signal: nothing else tells the engine it moved.
         QSignalSpy levelChanges(&backend, &IRadioBackend::operatingStateChanged);
         backend.setLineoutGain(35);
@@ -683,6 +991,9 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcThreshold)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(AnanBackend::kDefaultAgcOffLevel),
               "a radio with no document starts at the default AGC, not at the previous radio's");
+        check(backend.ritForTest() == std::make_pair(false, 0)
+                  && backend.noiseReductionForTest() == std::make_pair(false, AnanBackend::kDefaultNrLevel),
+              "a radio with no document starts with RIT and NR off, not the previous radio's");
         backend.setPanRfGain(QStringLiteral("anan-0"), -5);
         backend.setLineoutGain(20);
         backend.setSliceAgc(0, QStringLiteral("fast"), 60);
@@ -701,6 +1012,21 @@ int main(int argc, char** argv)
                   && backend.agcMaxGainDbForTest() == AnanBackend::agcKnobDb(40)
                   && backend.agcFixedGainDbForTest() == AnanBackend::agcKnobDb(35),
               "radio A's AGC comes back after radio B stored its own");
+        check(backend.ritForTest() == std::make_pair(true, -350)
+                  && backend.noiseReductionForTest() == std::make_pair(true, 70),
+              "radio A's RIT and NR come back after radio B stored its own");
+        {
+            // Operator data from disk: a bad value is the default, not clamped.
+            AnanBackend fresh;
+            RestoredRadioState bad;
+            bad.extension = QJsonObject{{QStringLiteral("receivers"), QJsonArray{QJsonObject{
+                {QStringLiteral("ritOn"), true}, {QStringLiteral("ritHz"), 50'000},
+                {QStringLiteral("nrOn"), true}, {QStringLiteral("nrLevel"), 140}}}}};
+            fresh.applyRestoredState(bad);
+            check(fresh.ritForTest() == std::make_pair(false, 0)
+                      && fresh.noiseReductionForTest() == std::make_pair(true, AnanBackend::kDefaultNrLevel),
+                  "an out-of-range saved RIT or NR level is dropped to the default, never clamped");
+        }
         check(!AppSettings::instance().contains(QStringLiteral("Anan")),
               "live attenuation never writes the global connect-options document");
         QProcess child;

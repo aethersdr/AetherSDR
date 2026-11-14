@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SetupStatusObservation.h"
+
 #include "core/backends/SetupTextPolicy.h"
 
 #include <QMetaType>
@@ -21,6 +23,7 @@ struct UsbCableRequest {
     int bit{-1}; // -1 is the cable, 0..7 is one independent bit.
     Field field;
     std::variant<std::monostate, bool, int, double, QString> value;
+    std::shared_ptr<SetupStatusLifetime> expectedLifetime;
     bool valid() const
     {
         if (serial.isEmpty() || serial.size() > 128 || bit < -1 || bit > 7

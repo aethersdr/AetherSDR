@@ -114,6 +114,7 @@ enum class SpectrumRenderMode : int {
 class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_OBJECT
     friend struct SpectrumOffscreenTestAccess;
+    friend struct TxMaskTestAccess;   // #5204 TX waterfall mask vs filter drag
     // Expose the measured FFT noise floor (and the pan index that identifies
     // which spectrum this is) to the automation bridge so a driver can read
     // them generically via QObject::property() in dumpTree — without coupling
@@ -858,7 +859,14 @@ public:
     };
 
     // Add or update a slice overlay (called per-slice on any state change).
-    bool isDraggingFilter() const { return m_draggingFilter != FilterEdge::None; }
+    // True while a filter-edge drag is moving this slice's overlay. The drag
+    // writes activeOverlay(), so other slices on the pan are not held back.
+    bool isDraggingFilterOf(int sliceId) const
+    {
+        if (m_draggingFilter == FilterEdge::None) { return false; }
+        const SliceOverlay* dragged = activeOverlay();
+        return dragged && dragged->sliceId == sliceId;
+    }
     void setSliceOverlay(int sliceId, double freq, int fLow, int fHigh,
                          bool tx, bool active, const QString& mode = {},
                          int rttyMark = 2125, int rttyShift = 170,

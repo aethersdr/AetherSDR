@@ -1244,6 +1244,26 @@ The refusal comes before the TX gate — it is about what the evidence would
 claim, so it applies even when `AETHER_AUTOMATION_ALLOW_TX=1`. Ordinary TUNE
 remains available in supported modes.
 
+### `radiocert tx`: the rf stimulus and the SWR gate
+
+The `rf` and `meter-scale` stages key with a 1 kHz test tone at −20 dBFS;
+`tone=<dBFS>` (−60 to −3) sets that level for both, and every other keyed stage
+keeps −20. The run never raises the level or the drive by itself, and the
+`AETHER_AUTOMATION_TX_MAX_POWER` ceiling still clamps drive; the report's
+`radio.txPowerCeilingPercent` is that ceiling, `rfPowerClampedFromPercent` the
+operator setting it lowered. Where a backend withholds SWR below its own forward
+gate (the health keys `forwardPowerSwrGateCounts` and `forwardPowerSwrGateClears`), `rf`
+reports `swrResult: gate-not-reached` with the gate, the key's forward peak, the
+tone and the drive, instead of "no SWR reading".
+Full drive does not establish adequate stimulus: a quiet tone can still leave
+the forward reading below the gate. Check the selected tone level and
+independently measured forward power before drawing conclusions about the
+detector or its scaling.
+
+The receive-only `rx-sidebands` stage judges each mode's reference tone relative
+to its own background. Silent captures and non-finite measurements do not count
+as recovered carriers, so muted audio cannot produce an `expected` pattern.
+
 ### `radiocert meters`: control readback, interlock and the SQL line
 
 `radiocert meters [freqMhz] [sql=<MHz>]` runs three non-keying stages before its
@@ -5213,7 +5233,7 @@ audio devices require separate hardware validation.
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
-| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
+| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] [tone=<dBFS>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; tone= is the rf and meter-scale stages' test-tone level (default -20, -60 to -3); persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

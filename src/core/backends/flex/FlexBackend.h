@@ -81,6 +81,11 @@ public:
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
         const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    // Transverter and USB cable writes carry the entity they were aimed at, so
+    // the final write can refuse one that was removed or replaced meanwhile.
+    using SetupEntitySink = std::function<bool(const QString&, const RadioSetupCompletion&,
+                                               const std::shared_ptr<SetupStatusLifetime>&)>;
+    void setSetupEntityCommandSink(SetupEntitySink sink) { m_setupEntitySink = std::move(sink); }
     using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&,
                                                     const RadioControlCompletion&)>;
     void setTransferCommandSink(TransferCommandSink sink) { m_transferSink = std::move(sink); }
@@ -227,21 +232,14 @@ public:
                          quint64 requestId, const QVariant& arg = {}) override;
 
     // ---- status decode (aetherd RFC 2.3) ----
-    // Decode a Flex slice-status kv-set into the normalized, canonically-named
-    // slice change map and emit sliceChanged(sliceId, changes). Owns all the
-    // Flex wire knowledge (key names like "RF_frequency"/"filter_lo", "1"→bool,
-    // comma-split lists); SliceModel::applyChanges consumes only canonical keys.
-    // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
-    void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
 
-    // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
-    // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
-    // residual). Present-only, ok-guarded numeric parses.
-    void decodeRadioStatus(const QMap<QString, QString>& kvs);
     // Drop the cached amp/tuner encode handles (#4198). Called on radio
     // disconnect/reset, where RadioModel clears the model-side presence outside
     // the decode path — without this the stale handle could survive a reconnect
     // to a *different* radio and be used to build a bogus relay command.
+    // Relay one ingress radio/client report, then any capability revision a
+    // model-name change causes.
+    void acceptRadioStatus(const RadioStatusObservation& observation);
     void clearExtensionHandles();
 
 signals:
@@ -266,6 +264,8 @@ signals:
     void interlockStatusObserved(const AetherSDR::InterlockStatusDelta& delta);
 
 private:
+    SetupEntitySink m_setupEntitySink;
+    quint64 m_radioModelRevision{0};
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
