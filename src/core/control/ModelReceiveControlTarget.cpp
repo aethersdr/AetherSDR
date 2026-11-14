@@ -445,7 +445,7 @@ private:
         }
         const QString backendId = *m_radio->receiveControlPanId(id);
         if (op == ReceiveOperation::PanCenter) {
-            m_radio->backend()->setPanCenter(backendId, double(hz), IRadioBackend::PanCenterIntent::Range);
+            m_radio->requestBackendPanCenter(backendId, double(hz), IRadioBackend::PanCenterIntent::Range);
         } else {
             m_radio->backend()->setPanBandwidth(backendId, double(hz));
         }

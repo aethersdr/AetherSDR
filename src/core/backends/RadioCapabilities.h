@@ -527,6 +527,11 @@ struct RadioCapabilities {
     // exists.
     QVector<DeclaredBandRange> declaredBandRanges;
 
+    // The radio keeps no transverter list and this backend is qualified for
+    // client-held ones: RadioModel translates RF<->IF at the seam, so the
+    // backend only ever sees its native IF.
+    bool clientTransverters = false;
+
     // Manual notch filters (Flex TNF) the radio can hold. 0 = cannot notch, and the
     // UI omits +TNF and the panadapter's notch menu entries.
     int maxNotchFilters = 0;

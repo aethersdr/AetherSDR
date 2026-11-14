@@ -69,6 +69,8 @@ int main(int argc, char** argv)
            configuredXvtrBandCount(true, 3) == 0
                && !declaredBandMenuIncludesUtility(
                    true, true, 0.0, 144.0, 1300.0));
+    report("a declared menu keeps client-side transverter bands",
+           configuredXvtrBandCount(true, 2, true) == 2);
     report("an IC-9700 declared menu suppresses unreachable utility targets",
            !declaredBandMenuIncludesUtility(
                true, false, 10.0, 144.0, 1300.0));

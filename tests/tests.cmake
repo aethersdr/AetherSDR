@@ -6261,6 +6261,22 @@ add_executable(xvtr_policy_test
 target_include_directories(xvtr_policy_test PRIVATE src)
 target_link_libraries(xvtr_policy_test PRIVATE Qt6::Core)
 
+# Client-side transverter RF<->IF translation for non-Flex backends
+add_executable(client_transverter_test
+    tests/client_transverter_test.cpp
+    src/models/ClientTransverter.cpp
+)
+target_include_directories(client_transverter_test PRIVATE src)
+target_link_libraries(client_transverter_test PRIVATE Qt6::Core)
+add_test(NAME client_transverter_test COMMAND client_transverter_test)
+# The same translation at the RadioModel seam (#6472): an injected backend
+# records the IF it is tuned to and feeds reports back; the receive-only
+# interlock and the tuner lockout are asserted on it. No sockets, never keys.
+add_executable(client_transverter_seam_test tests/client_transverter_seam_test.cpp)
+target_include_directories(client_transverter_seam_test PRIVATE src tests)
+target_link_libraries(client_transverter_seam_test PRIVATE aethercore Qt6::Core)
+add_test(NAME client_transverter_seam_test COMMAND client_transverter_seam_test)
+
 # #3449 — VITA-49 waterfall tile frequency decode (no 1 GHz ceiling)
 add_executable(vita_tile_frequency_test
     tests/vita_tile_frequency_test.cpp
@@ -11722,6 +11738,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_codec_suggestion_dialog_test
     radio_setup_show_tx_waterfall_test
     atu_seam_gate_test
+    client_transverter_seam_test
     transmit_seam_drop_notice_test
     model_control_routing_test
     radio_nickname_test

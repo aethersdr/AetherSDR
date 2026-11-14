@@ -4313,7 +4313,7 @@ void TciServer::broadcastActualTxState(bool transmitting)
     broadcast(QStringLiteral("trx:%1,%2;").arg(trx).arg(transmitting ? "true" : "false"));
     if (transmitting && txSlice) {
         broadcast(
-            QStringLiteral("tx_frequency:%1;").arg(TciProtocol::mhzToHz(txSlice->frequency())));
+            QStringLiteral("tx_frequency:%1;").arg(TciProtocol::mhzToHz(m_model->transmitFrequencyMhz(txSlice))));
     }
 }
 

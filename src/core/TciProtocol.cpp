@@ -2193,7 +2193,7 @@ QString TciProtocol::cmdTxFrequency()
     // Find TX slice frequency
     for (auto* s : m_model->slices()) {
         if (s->isTxSlice()) {
-            long long hz = static_cast<long long>(std::round(s->frequency() * 1e6));
+            long long hz = static_cast<long long>(std::round(m_model->transmitFrequencyMhz(s) * 1e6));
             return QStringLiteral("tx_frequency:%1;").arg(hz);
         }
     }
