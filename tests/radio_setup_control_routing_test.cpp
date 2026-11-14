@@ -1,3 +1,4 @@
+#include "FlexSetupStatusTestSupport.h"
 // FlexLib 4.2.18 Radio.cs, Xvtr.cs, TxBandSettings.cs and Usb*Cable.cs.
 // Wire and independently injected observations; no sockets or RF.
 #include "TestSettingsProfile.h"
@@ -279,7 +280,7 @@ void routingAndReplies()
     check(radio.requestTransverter({2, X::RxOnly, true}) == ReceiveDispatch::Dispatched
         && backend->commands == QStringList{"xvtr set 2 rx_only=1"}
         && !radio.xvtrList().value(2).rxOnly, "transverter intent never invents radio state");
-    radio.usbCableModel().applyStatus(QStringLiteral("FTDI01"),
+    applyCableStatus(radio.usbCableModel(), QStringLiteral("FTDI01"),
         {{QStringLiteral("type"), QStringLiteral("bit")}, {QStringLiteral("name"), QStringLiteral("Original")}});
     QSignalSpy intents(&radio.usbCableModel(), &UsbCableModel::controlRequested);
     backend->commands.clear();
@@ -305,18 +306,21 @@ void routingAndReplies()
     {
         QSignalSpy data(&radio.usbCableModel(), &UsbCableModel::passthroughDataReceived);
         QSignalSpy changed(&radio.usbCableModel(), &UsbCableModel::cableChanged);
-        // Verbatim from a FLEX-8600: the reply to one poll, '=' padding included.
-        RadioSetupControlTestAccess::status(radio, QStringLiteral("usb_cable ABBDMO0I"),
-            {{QStringLiteral("data:base64"),
-              QStringLiteral("OzAwMDAuMDAsMDQ3LjUsMDcxLjYsMCxMUC0xMDAsMiwxLC0yLjMsMS4wMA==")}});
+        // Verbatim from a FLEX-8600: the reply to one poll, '=' padding included,
+        // as a raw line through the parser and the typed setup decoder.
+        RadioSetupControlTestAccess::line(radio, QStringLiteral(
+            "S12345678|usb_cable ABBDMO0I data:base64=OzAwMDAuMDAsMDQ3LjUsMDcxLjYsMCxMUC0xMDAsMiwxLC0yLjMsMS4wMA=="));
         check(data.size() == 1 && data.at(0).at(0).toString() == QStringLiteral("ABBDMO0I")
             && data.at(0).at(1).toByteArray() == QByteArray(";0000.00,047.5,071.6,0,LP-100,2,1,-2.3,1.00")
             && changed.isEmpty(), "passthrough data is delivered decoded and is not a cable setting change");
-        RadioSetupControlTestAccess::status(radio, QStringLiteral("usb_cable ABBDMO0I"),
-            {{QStringLiteral("data:base64"), QStringLiteral("not*base64")}});
-        RadioSetupControlTestAccess::status(radio, QStringLiteral("usb_cable ABBDMO0I"),
-            {{QStringLiteral("data:text"), QStringLiteral(";0000")}});
-        check(data.size() == 1 && changed.isEmpty(), "malformed and text-mode data are dropped without a settings change");
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable ABBDMO0I data:base64=UEE="));
+        check(data.size() == 2 && data.at(1).at(1).toByteArray() == QByteArray("PA") && changed.isEmpty(),
+              "single '=' padding survives the raw parse");
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable ABBDMO0I data:base64=not*base64"));
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable ABBDMO0I data:text=;0000 x"));
+        RadioSetupControlTestAccess::line(radio, QStringLiteral("S12345678|usb_cable OTHERSN data:base64=UA=="));
+        check(data.size() == 2 && changed.isEmpty(),
+              "malformed, text-mode and unknown-cable data are dropped without a settings change");
     }
     backend->commands.clear();
     check(radio.requestUsbCable({QStringLiteral("unknown"), -1, UsbCableRequest::Field::Enabled, true})
@@ -523,7 +527,7 @@ void usbRetirementCompletesBeforePublication()
     RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
     const auto retired = std::make_shared<bool>(false);
     backend->retired = retired;
-    radio.usbCableModel().applyStatus("FTDI01", {{"type", "bit"}});
+    applyCableStatus(radio.usbCableModel(), "FTDI01", {{"type", "bit"}});
     const QMetaObject::Connection teardownObserver = QObject::connect(&radio.usbCableModel(), &UsbCableModel::cableRemoved, &radio, [&](const QString&) {
         check(*retired && !radio.backend(), "USB retirement observers see an already-retired backend");
         RadioSetupControlTestAccess::replaceConnectionGeneration(radio);
@@ -531,7 +535,7 @@ void usbRetirementCompletesBeforePublication()
     RadioSetupControlTestAccess::retireBackend(radio);
     check(*retired && !radio.backend(), "reentrant USB listeners cannot skip backend teardown");
     installRadioSetupBackend(radio);
-    radio.usbCableModel().applyStatus("FTDI02", {{"type", "bit"}});
+    applyCableStatus(radio.usbCableModel(), "FTDI02", {{"type", "bit"}});
     RadioSetupControlTestAccess::pendingDisconnectState(radio);
     QObject::disconnect(teardownObserver);
     QObject::connect(&radio.usbCableModel(), &UsbCableModel::cableRemoved, &radio, [&](const QString&) {

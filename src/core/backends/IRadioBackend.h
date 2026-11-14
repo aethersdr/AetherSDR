@@ -1,5 +1,8 @@
 #pragma once
 
+#include "RadioStatusObservation.h"
+#include "SetupStatusObservation.h"
+
 #include "IndependentTxControl.h"
 #include "CwControlRequest.h"
 
@@ -50,6 +53,7 @@
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/SliceObservation.h"
 #include "core/backends/SpectrumCoverage.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
@@ -72,6 +76,10 @@ struct RadioConnectRequest {
     RadioSerialIdentity serialIdentity;
     // Local IPv4 address that reached the radio; null lets the OS choose.
     QHostAddress localBindAddress;
+    // RadioModel's automatic retry after a lost link, not an operator's connect.
+    // A backend whose radio obeys any controller (ANAN Protocol 2) checks the
+    // radio is free first, so a retry never fights another client for it.
+    bool automaticReconnect = false;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
@@ -447,6 +455,10 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceLock(int, bool)
     { return ReceiveDispatch::LocalOnly; }
+    // Play the receiver's audio on the radio's own speaker (RadioSpeakerControl).
+    // A backend that does reports the state it adopted through radioSpeakerAudioReported().
+    virtual ReceiveDispatch requestRadioSpeakerAudio(bool)
+    { return ReceiveDispatch::Unsupported; }
 
     // Compatibility implementation hooks for backend-internal callers and
     // existing paired AGC users. New receive routing uses the adapters above.
@@ -1213,6 +1225,9 @@ signals:
     // and present-only values. Delivered on the owner thread behind the
     // backend's status fence (Flex: FlexStatusIngress).
     void displayObserved(const AetherSDR::DisplayObservation& observation);
+    // A typed transverter, USB cable, filter sharpness or license report,
+    // stamped with the status epoch it arrived in (Flex: FlexStatusIngress).
+    void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
     void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
@@ -1263,6 +1278,7 @@ signals:
     // the backend populates only the fields the wire reported, the model applies
     // exactly those. Replaces the prior stringly-keyed QVariantMap payload.
     void sliceChanged(int sliceId, const SliceDelta& delta);
+    void sliceObserved(const AetherSDR::SliceObservation& observation);
     // Where a slice IS a receiver, closing the receiver emits BOTH this and
     // panRemoved, or the stale SliceModel keeps counting against maxSlices().
     void sliceRemoved(int sliceId);
@@ -1324,6 +1340,11 @@ signals:
     // residual). Typed + compiler-checked; the backend populates only the fields
     // the wire reported and RadioModel applies them + its own orchestration.
     void radioChanged(const RadioDelta& delta);
+    // A Flex radio-global, client, oscillator or static-network report, stamped
+    // with the status epoch it arrived in (Flex: FlexStatusIngress). Flex
+    // radio-global status arrives here and never also on radioChanged, which
+    // carries native backends and Flex's nickname/info replies.
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
 
     // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
     // backend tokenizes the vendor GPS status line into a present-only GpsDelta;
@@ -1418,6 +1439,8 @@ signals:
     // range/step are family-specific and reported via RadioCapabilities). The
     // backend decodes it from vendor status; RadioModel drives the pan.
     void panRfGainChanged(const QString& panId, int gain);
+    // Whether the radio's own speaker is being fed (RadioSpeakerControl), as adopted.
+    void radioSpeakerAudioReported(bool on);
     // Operating state moved (frequency, mode, passband, rate, gain, drive) —
     // fetch it with currentOperatingState(). Emitted only by backends with a
     // non-empty clientSettingsDomains declaration; rate-limiting is the

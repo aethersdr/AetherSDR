@@ -5,6 +5,7 @@
 #include <QString>
 #include <QVariantMap>
 #include "core/backends/UsbCableRequest.h"
+#include "core/backends/SetupStatusObservation.h"
 
 namespace AetherSDR {
 
@@ -27,6 +28,7 @@ struct UsbCableBit {
 
 // Represents a single USB cable (any type) connected to the radio
 struct UsbCable {
+    std::shared_ptr<SetupStatusLifetime> lifetime;
     QString serialNumber;     // unique ID from status object name
     QString type;             // cat, bcd, vbcd, bcd_vbcd, bit, ldpa, passthrough, invalid
     bool    enabled{false};
@@ -69,22 +71,19 @@ class UsbCableModel : public QObject {
 
 public:
     explicit UsbCableModel(QObject* parent = nullptr);
+    ~UsbCableModel() override;
 
     const QMap<QString, UsbCable>& cables() const { return m_cables; }
 
-    // Status parsing — called from RadioModel::onStatusReceived
-    void applyStatus(const QString& serialNumber, const QMap<QString, QString>& kvs);
+    void applyObservation(const UsbCableStatusValues& observation);
     void handleRemoved(const QString& serialNumber);
     void clear();
 
     // Parse editor text into a typed intent; no protocol property names.
     void requestSetting(const QString& sn, UsbCableRequest::Field field,
-                        const QString& value, int bit = -1);
+                        const QString& value, int bit = -1,
+                        const std::shared_ptr<SetupStatusLifetime>& expectedLifetime = {});
     void requestRemoval(const QString& sn);
-
-    // Bytes a passthrough cable's device sent, from the cable's `data:base64`
-    // status. Kept apart from applyStatus() so replies do not emit cableChanged.
-    void deliverPassthroughData(const QString& serialNumber, const QByteArray& bytes);
 
 signals:
     void cableAdded(const QString& serialNumber);
@@ -94,18 +93,7 @@ signals:
     void passthroughDataReceived(const QString& serialNumber, const QByteArray& bytes);
 
 private:
-    void parseBaseStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
-    void parseCatStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
-    void parseBcdStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
-    void parseBitStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
-    void parsePassthroughStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
-    void parseLdpaStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
-
-    static QString decodeSpaces(const QString& s);
-
-    // Collapses BCD's sub-types (bcd/vbcd/bcd_vbcd) to one family so a
-    // sub-type change isn't mistaken for a type change — matches FlexLib's
-    // StringToUsbCableType, which maps all three to UsbCableType.BCD.
+    quint64 m_changeRevision{0};
     static QString normalizeTypeFamily(const QString& type);
 
     QMap<QString, UsbCable> m_cables;

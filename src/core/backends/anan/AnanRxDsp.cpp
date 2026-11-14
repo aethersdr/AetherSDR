@@ -220,6 +220,10 @@ void AnanRxDsp::installChannel(RebuildResult result)
                                          m_config.noiseBlankerFill)) {
         qCWarning(lcAnanRxDsp) << "noise blanker refused by the rebuilt channel";
     }
+    if (!result.channel->setNoiseReduction(m_config.noiseReduction,
+                                           m_config.noiseReductionLevel)) {
+        qCWarning(lcAnanRxDsp) << "noise reduction refused by the rebuilt channel";
+    }
     // The hold flag belongs to the channel, so a rebuild loses it. A rate
     // change swaps the channel while audio is muted for its settle window.
     result.channel->setNoiseBlankerHold(m_audioMuted);
@@ -414,6 +418,20 @@ const DroopCorrectionTable& AnanRxDsp::droopTableForRate(int rateKsps) const noe
         return kDroopCorrectionZero;
     const auto it = m_droopTables.constFind(rateKsps);
     return it != m_droopTables.constEnd() ? it.value() : kDroopCorrectionZero;
+}
+
+void AnanRxDsp::setNoiseReduction(bool enabled, int level)
+{
+    m_config.noiseReduction = enabled;
+    m_config.noiseReductionLevel = std::clamp(level, 0, 100);
+    if (!m_channel || m_rebuildInFlight)
+        return;
+    // Refused rather than blocked on a racing control call; m_config keeps the
+    // request and the next rebuild applies it.
+    if (!m_channel->setNoiseReduction(m_config.noiseReduction, m_config.noiseReductionLevel)) {
+        qCWarning(lcAnanRxDsp) << "noise reduction" << enabled << "level"
+                               << m_config.noiseReductionLevel << "refused by the channel";
+    }
 }
 
 void AnanRxDsp::setShift(double shiftHz)
