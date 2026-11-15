@@ -19,9 +19,9 @@ Keep the private configuration guard. Production integration needs request
 credentials delivered into process memory through an authenticated channel,
 without including them in the native archive or another public upload artifact.
 The installed shim's authenticated API now implements the upgrade request's
-RAM handoff to the fixed native requester. The carrier's credential receiver
-and initial-install trust setup remain unfinished; this does not yet replace
-the complete live installation workflow.
+RAM handoff to the fixed native requester and carrier credential receivers.
+Public-path upgrade and rollback tests exercise that handoff. Initial-install
+trust and the complete operator installation workflow remain unfinished.
 
 The production entry accepts no command-line arguments or radio commands. It
 requires UID 78666/GID 20 and empty effective, permitted and inheritable
@@ -130,8 +130,9 @@ copy. The image builder includes only the public record at `/pd/request` and
 rejects private request records. Native receiver/broker integration and image
 layout have local test evidence. One FLEX-8600 signed successor upgrade through
 the public carrier committed; an independent bench audit verified the selected
-release and cleanup. Delivery result 0 precedes commit, so the desktop still
-needs durable committed-state verification and bounded readiness polling.
+release and cleanup. Delivery result 0 precedes commit. The core desktop
+`AetherPDInstallationMonitor` separately verifies the exact approved commit or
+rollback with bounded polling, including across the tested shim restart.
 Crash paths and actual FLEX-6000 qualification remain incomplete.
 
 `GET /v1/aetherpd/install-request/<request_id>` reports the owned job's state;
@@ -178,3 +179,29 @@ Cross-builds do not establish Linux 2.6 runtime, resource or actual FLEX-6300
 qualification. Native extraction permissions, the combined live carrier graph,
 automatic outer waveform/image removal, exact-plan approval and the normal
 desktop installation UI remain separate qualification requirements.
+
+## Desktop request client
+
+`src/core/AetherPDInstallRequestClient` owns one already-approved upgrade's
+authenticated HTTP request. The coordinator must verify the distributed
+artifacts, obtain exact-plan consent, and supply the RAM-only `PDXFER01` record
+and approved `PDUPGR01` bytes. The client validates their plan digest and profile
+binding and derives the public request ID locally before sending anything.
+Its public-record helper contains no private request key. Callers must not put
+the private record in a package, settings, logs or command-line arguments.
+
+The client sends one fixed POST, and exposes explicit inspect and receiver-stop
+operations only for that same request ID. It follows no redirects, bypasses HTTP
+caches, bounds replies to 2 KiB, allows 10 seconds per HTTP request and retains
+the credential context for at most 400 seconds. No mutation is automatically
+retried. A lost acknowledgement is `Unknown`; the coordinator may inspect that
+same ID without replaying the POST. A 404 after restart is `Missing`, not proof
+that installation failed. An authorization refusal retires the context.
+
+`StopRequested` acknowledges receiver cancellation only. It does not undo an
+installer already handed off to the carrier. Destruction aborts local HTTP
+observation without sending an additional remote mutation. Neither delivery
+result zero nor any request-client state asserts commit; the separate monitor
+must match the approved transaction. Operator UI, credential/session lifetime
+integration, authenticated input transfer and package upload coordination remain
+required. This class does not solve initial-install trust or the 6000 adapter.

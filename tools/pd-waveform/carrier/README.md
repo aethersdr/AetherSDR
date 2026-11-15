@@ -3,7 +3,7 @@
 This component replaces the bench script's installer-container orchestration.
 It does not provide operator consent or removal of its own outer waveform/image.
 The native waveform and authenticated desktop transfer component live in
-`../request`; the upgrade graph has one successful FLEX-8600 public-upload proof. It is not
+`../request`; the upgrade graph has FLEX-8600 public-upload commit and rollback proofs. It is not
 a supported FLEX-6000 installer. No radio command or RF interface is exposed.
 
 The native waveform launch tests found that the radio retains its uploaded ZIP
@@ -135,6 +135,13 @@ Delivery result 0 precedes durable commit and is not an installation-success
 receipt. The test's immediate post-restart readiness assertion failed; a later
 audit verified the exact committed generation, selected signed payload and new
 primary PID. Preserve that negative result alongside the successful journal
-proof. The ordinary desktop still needs bounded readiness polling and a durable
-committed-state check that does not use the bench helper. Initial installation
-and a FLEX-6000 privilege adapter remain unfinished.
+proof. The core `AetherPDInstallationMonitor` now verifies the exact approved
+transaction through the authenticated shim endpoint, with bounded polling across
+restart. Public-path tests demonstrated commit, rollback, rollback persistence
+across one kernel reboot, and a healthy successor after that reboot. The successor
+was confirmed at 50.600 seconds and its outer carrier removed by 52.556 seconds;
+identity was preserved and no RF or broad root diagnostics bridge was used.
+These later tests do not independently inventory host capabilities or images.
+Connecting the monitor and request transfer to the operator installer remains
+unfinished, as do initial installation, interrupted updates, power-loss recovery
+and the FLEX-6000 privilege adapter and hardware qualification.

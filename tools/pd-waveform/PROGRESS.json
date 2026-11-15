@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T09:17:11.408820+00:00",
+  "updated_utc": "2026-11-15T09:32:54.891084+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Qualify a healthy successor upgrade after the observed rollback and kernel reboot, accounting for retained J management with selected I payload. Then wire the ordinary operator installation coordinator; first-install/6000 provisioning and the full production plan remain open.",
+  "next_action": "Implement desktop-native authenticated input upload and connect request client, public carrier upload and exact-plan monitor in the operator coordinator. Initial trust/6000 provisioning and the complete P1-P10 plan remain open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -134,5 +134,71 @@
       "txPower": 0
     },
     "scope": "One authorized FLEX-8600 kernel reboot after rollback. Not physical power-loss, interrupted-transaction, or FLEX-6300 qualification. Existing diagnostic container read only the boot ID; no host-root job was installed."
+  },
+  "post_rollback_successor_upgrade": {
+    "passed": true,
+    "evidence": "post-rollback-upgrade-development/public-upgrade-01/result.json under evidence_root",
+    "candidate": "K",
+    "release_sha256": "d2387dd37e5c500a60ef495e60eaaf75dbc64a8fcf0054f0ccd624778529e7d8",
+    "source_commit": "166baa2c583fbcba918ba94379f06100281aee41",
+    "ordinary_monitor_terminal": {
+      "elapsed_ms": 50600,
+      "event": "terminal",
+      "plan_digest": "544e53049a4385a2b535afa1adc618999efefb47d72436131bdf90388a5c96ce",
+      "reason": "None",
+      "state": "Committed"
+    },
+    "elapsed_s": 53.085,
+    "identity_preserved": true,
+    "carrier_removed": true,
+    "root_diagnostics_bridge_used": false,
+    "after_radio": {
+      "connected": true,
+      "transmitting": false,
+      "fullDuplex": false,
+      "txPower": 0
+    },
+    "limitations": [
+      "One healthy FLEX-8600 successor after rollback/reboot; no interrupted upgrade or power-loss qualification.",
+      "No independent host process/capability/image inventory for K.",
+      "Operator installation coordinator/UI, first-install trust, FLEX-6000 provisioning and actual 6300 qualification remain incomplete.",
+      "All remaining DSP, PR4770, RF/stock comparison and release gates remain."
+    ]
+  },
+  "desktop_install_request_client": {
+    "evidence": "install-request-client-development/validation.json under evidence_root",
+    "status": "component_validated_not_operator_coordinator",
+    "project_tests": {
+      "passed": true,
+      "names": [
+        "aetherpd_protocol_test",
+        "aetherpd_client_test",
+        "aetherpd_install_request_client_test",
+        "aetherpd_installation_monitor_test"
+      ],
+      "elapsed_s": 1.94
+    },
+    "sanitizers": {
+      "passed": true,
+      "address": true,
+      "undefined": true,
+      "leaks": true,
+      "scope": "socket-free new request client test",
+      "initial_sandbox_attempt": "LeakSanitizer could not inspect threads; same test passed outside sandbox"
+    },
+    "mutation": {
+      "removed": "request ID reply binding",
+      "exit": 1,
+      "detected": true,
+      "log": "mutation.log"
+    },
+    "live_summary": "Existing installed shim: AwaitingInputs14ms, Running122ms, StopRequested124ms, terminal Unavailable277ms after cancellation; input listener refused connection. No upload or RF.",
+    "remaining": [
+      "Not connected to the operator coordinator/UI.",
+      "No desktop-native authenticated input upload or per-request package assembly integration yet.",
+      "Caller remains responsible for artifact authentication, exact-plan consent and original-session/credential lifetime.",
+      "No new installation/upgrade, RF or host process inventory in the request/cancel check.",
+      "Initial trust, FLEX-6000 privilege adapter/hardware and all remaining full production requirements remain open."
+    ]
   }
 }
