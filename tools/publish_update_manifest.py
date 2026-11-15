@@ -64,9 +64,12 @@ RELEASE_CACHE = "public, max-age=300"   # short, so a repaired release is seen
 # (bot protection), so the publication check names itself.
 USER_AGENT = "AetherSDR-update-publisher/1 (+https://github.com/aethersdr/AetherSDR)"
 LATEST_CACHE = "no-cache"
-# A payload under releases/<tag>/ is never rewritten with other bytes: the
-# manifest pins its SHA-256.
-PAYLOAD_CACHE = "public, max-age=31536000, immutable"
+# A payload under releases/<tag>/ is cached briefly, because a repair run
+# can rebuild a bundle with other bytes (zstd output is only as reproducible
+# as the runner's zstd) and overwrite it. The manifest pins the SHA-256, so a
+# client that meets the old bytes in that window fails the check and
+# succeeds on a later try; it never installs them.
+PAYLOAD_CACHE = "public, max-age=600"
 
 
 class PublishError(RuntimeError):
@@ -416,14 +419,11 @@ def upload_payloads(store, tag: str, m: dict, payload_dir: Path | None) -> list[
             raise PublishError(f"{a['asset']}: named on updates.aethersdr.com but not in --dir")
         if file_digest(src) != (a["sha256"], a["size"]):
             raise PublishError(f"{a['asset']}: does not match the manifest")
-        # Payloads are served immutable for a year, so one is never rewritten
-        # with other bytes: a repair run reuses what is stored, or stops.
-        stored = store.digest(key)
-        if stored == (a["sha256"], a["size"]):
+        # The same bytes already stored are reused. New or rebuilt ones are
+        # written over, and the manifest signed below pins what was written.
+        if store.digest(key) == (a["sha256"], a["size"]):
             keys.append(key)
             continue
-        if stored is not None:
-            raise PublishError(f"{key}: already published with other bytes; an immutable payload is never rewritten")
         store.put_file(key, src, "application/x-tar", PAYLOAD_CACHE)
         if store.digest(key) != (a["sha256"], a["size"]):
             raise PublishError(f"{key}: does not read back as the file just uploaded")

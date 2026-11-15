@@ -426,7 +426,7 @@ class TwoManifests(Base):
         pub.publish(self.store, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=self.payload_dir())
         self.assertEqual(self.store.objects[key], self.BUNDLE)
         self.assertEqual(self.store.cache[key], pub.PAYLOAD_CACHE)
-        self.assertIn("immutable", pub.PAYLOAD_CACHE)
+        self.assertNotIn("immutable", pub.PAYLOAD_CACHE, "a repair may rewrite a payload")
         self.assertTrue(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub))
         del self.store.objects[key]
         self.assertFalse(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub),
@@ -447,7 +447,7 @@ class TwoManifests(Base):
             pub.publish(self.store, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=d)
         self.assertFalse([k for k in self.store.objects if "manifest" in k])
 
-    def test_a_repair_never_rewrites_a_published_payload(self) -> None:
+    def test_a_repair_reuses_the_same_bytes_and_rewrites_other_bytes(self) -> None:
         pairs = self.signed("v26.10.4", bundle_base=self.R2)
         key = "releases/v26.10.4/AetherSDR-x.update.tar"
         self.store.objects[key] = self.BUNDLE           # an earlier run's upload, same bytes
@@ -458,11 +458,10 @@ class TwoManifests(Base):
         self.assertNotIn(key, puts, "identical bytes are reused, not uploaded again")
         self.assertTrue(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub))
         other = FakeStore()
-        other.objects[key] = b"a different build of the same bundle"
-        with self.assertRaises(pub.PublishError):
-            pub.publish(other, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=self.payload_dir())
-        self.assertEqual(other.objects[key], b"a different build of the same bundle")
-        self.assertFalse([k for k in other.objects if "manifest" in k])
+        other.objects[key] = b"a different build of the same bundle"   # never wedges the release
+        pub.publish(other, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=self.payload_dir())
+        self.assertEqual(other.objects[key], self.BUNDLE, "rebuilt bytes replace the stored ones")
+        self.assertTrue(pub.is_complete(other, "v26.10.4", "v26.10.4", self.pub))
 
     def test_a_percent_encoded_url_is_refused(self) -> None:
         """No payload URL carries an escape, so the raw prefix tests in
