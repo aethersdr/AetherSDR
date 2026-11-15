@@ -138,6 +138,47 @@ func TestPDCaptureCancellationRetainsSession(t *testing.T) {
 	}
 }
 
+func TestPDStatusCancellationRetainsSession(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	channel, _ := pdSessionTestPair(t, func(ctx context.Context, op byte) pdSessionReply {
+		if op == 'S' && first.CompareAndSwap(false, true) {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return pdSessionReply{err: ctx.Err()}
+			}
+		}
+		return pdCaptureJSON(200, map[string]string{"state": "ok"})
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan pdSessionReply, 1)
+	go func() { done <- channel.Call(ctx, 'S') }()
+	<-entered
+	cancel()
+	if reply := <-done; reply.err == nil {
+		t.Fatal("cancelled status succeeded")
+	}
+	if !channel.alive() {
+		t.Fatal("cancelled status closed correction session")
+	}
+	if reply := channel.Call(context.Background(), 'S'); reply.err != nil || reply.code != 200 {
+		t.Fatal("status failed while cancelled status drained", reply)
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for channel.busy() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if channel.busy() || !channel.alive() {
+		t.Fatal("late status reply did not drain without closing session")
+	}
+	if reply := channel.Call(context.Background(), 'S'); reply.err != nil || reply.code != 200 {
+		t.Fatal("late reply corrupted next status request", reply)
+	}
+}
+
 func TestPDCapturePublicSessionTransfer(t *testing.T) {
 	n := newTestNode(t, "owner")
 	var store pdCaptureStore

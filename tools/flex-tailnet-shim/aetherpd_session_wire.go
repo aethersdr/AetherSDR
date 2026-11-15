@@ -137,12 +137,12 @@ func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSe
 	binary.BigEndian.PutUint32(frame[8:12], id)
 	frame[12] = op
 	// An abandoned calibration/control request retires its owned session so a
-	// delayed arm cannot outlive intent. Capture only observes IQ: retain its
-	// bounded pending slot until readReplies drains the late response. A test
+	// delayed arm cannot outlive intent. Status and capture only observe: retain
+	// their bounded pending slots until readReplies drains late responses. A test
 	// stop is already bound to its run ID; abandoning it must not close a
 	// successor's session before that ID is checked.
 	cancelClose := func() bool { return true }
-	if !pdCaptureOpcode(op) && op != pdTestStatus && op != pdTestStop {
+	if op != 'S' && !pdCaptureOpcode(op) && op != pdTestStatus && op != pdTestStop {
 		cancelClose = context.AfterFunc(ctx, s.Close)
 	}
 	defer cancelClose()
@@ -159,7 +159,7 @@ func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSe
 	case reply := <-ch:
 		return reply
 	case <-ctx.Done():
-		if !pdCaptureOpcode(op) && op != pdTestStatus && op != pdTestStop {
+		if op != 'S' && !pdCaptureOpcode(op) && op != pdTestStatus && op != pdTestStop {
 			s.Close()
 		}
 		return pdSessionReply{err: ctx.Err()}

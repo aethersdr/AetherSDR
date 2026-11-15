@@ -898,5 +898,16 @@
       "Touchpoint manifest was stale from earlier measurement UI integration; existing measurement model tagged and manifest regenerated. No new UI include added in this change.",
       "All original P1-P10 requirements remain."
     ]
+  },
+  "status_cancellation": {
+    "production_ready": false,
+    "status": "reproduced_and_race_tested_not_installed",
+    "evidence": "stop-evidence-development/status-cancel-validation.json under evidence_root",
+    "change": "Canceled read-only session status requests retain their bounded pending slot until the matching late reply drains. Abandoned control/arm requests still close the owner session.",
+    "remaining": [
+      "Native RF08 retirement coincided with cancellation and this defect is reproduced independently; live fix not yet installed.",
+      "Sandbox broad test run failed on restricted Unix socket getsockopt; host tests passed.",
+      "The first diagnostic candidate is superseded before deployment; replacement must include this shim fix."
+    ]
   }
 }
