@@ -335,11 +335,12 @@ Onset onset(const char* what, bool warm)
 // TX channel has no up-delay held at zero) sets the shape. It is the
 // anti-click ramp, so its rise is bounded from both sides. Mid-over: the 2048-tap bandpass sets the shape,
 // so its pre-ringing lead is bounded. Each 50 % point is held within half a
-// 1024-sample DSP block of today's figure: another buffer or more taps fails.
-constexpr double kMaxKeyUpHalfMs = 106.0;
+// 512-sample DSP block (5.33 ms) of today's figure at the 256-sample input
+// block: another buffer or more taps fails, and so does the 512 block.
+constexpr double kMaxKeyUpHalfMs = 51.0;
 constexpr double kMinKeyUpRiseMs = 10.0;
 constexpr double kMaxKeyUpRiseMs = 20.0;
-constexpr double kMaxMidHalfMs = 84.0;
+constexpr double kMaxMidHalfMs = 38.0;
 constexpr double kMaxMidLeadMs = 12.0;
 
 bool keyUpHalfOk(const Onset& o) { return o.halfMs <= kMaxKeyUpHalfMs; }
@@ -352,13 +353,13 @@ bool midLeadOk(const Onset& o) { return o.leadMs <= kMaxMidLeadMs; }
 
 void checkKeyUp(const Onset& o)
 {
-    check(keyUpHalfOk(o), "key-up: the 50 % point is at most 106 ms after the first audio");
+    check(keyUpHalfOk(o), "key-up: the 50 % point is at most 51 ms after the first audio");
     check(keyUpRiseOk(o), "key-up: the 10-90 % rise is the 10..20 ms anti-click ramp");
 }
 
 void checkMidOver(const Onset& o)
 {
-    check(midHalfOk(o), "mid-over: the 50 % point is at most 84 ms after the audio");
+    check(midHalfOk(o), "mid-over: the 50 % point is at most 38 ms after the audio");
     check(midLeadOk(o), "mid-over: -60 dB to the 50 % point is at most 12 ms");
 }
 

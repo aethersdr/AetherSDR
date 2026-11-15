@@ -34,6 +34,10 @@ namespace AetherSDR::anan {
 // side: reach the private drain and the private counters without widening
 // P2Client's own API for a test's benefit.
 struct P2ClientTestAccess {
+    static void setLinkUp(P2Client& c, bool up) { c.m_linkUp = up; }
+    static void silence(P2Client& c, qint64 ms) { c.checkStreamSilence(ms); }
+    static quint64 txBytes(const P2Client& c) { return c.m_txBytes; }
+    static constexpr int kSilenceMs = P2Client::kStreamSilenceMs;
     // Drain with the elapsed time UNDER TEST CONTROL, which is the only way any
     // assertion about burst size can be stable.
     //
@@ -375,6 +379,56 @@ int main(int argc, char** argv)
               "the report is still counted, because it did arrive");
         check(client.lastSpeakerFifoLevel() == 0, "and the level is still recorded");
         client.stop();
+    }
+
+    // ---- a live enable on a running session, and off again (#7256) ----
+    {
+        P2Client client;
+        client.start(loopbackParams(false));
+        std::vector<std::uint8_t> dry(kHighPriorityStatusBytes, 0);
+        dry[30] = 0b0000'1000;
+        dry[3] = 1;
+        dry[37] = 0x02;                             // and a FIFO level of 512
+        P2ClientTestAccess::feedDatagram(client, dry, 1025);
+        check(client.speakerUnderflowReports() == 1 && client.lastSpeakerFifoLevel() == 512,
+              "an idle session counts the radio's underflow and records its level");
+        client.enqueueSpeakerAudio(blockOf(0x2222));
+        check(P2ClientTestAccess::pendingSamples(client) == 0,
+              "a disabled stream queues nothing");
+
+        client.setSpeakerAudioEnabled(true);
+        check(client.speakerUnderflowReports() == 0,
+              "a live enable forgets the idle underflow count");
+        check(client.lastSpeakerFifoLevel() == 0,
+              "and the last stream's FIFO reading");
+        client.enqueueSpeakerAudio(blockOf(0x2222));
+        check(P2ClientTestAccess::pendingSamples(client)
+                  == static_cast<std::size_t>(kSpeakerFramesPerPacket * kSpeakerChannels),
+              "a live enable queues audio on the running session");
+
+        client.setSpeakerAudioEnabled(false);
+        check(P2ClientTestAccess::pendingSamples(client) == 0,
+              "a live disable drops the queue");
+        client.stop();
+    }
+
+    // ---- a silent session ends WITHOUT the clean-stop packet (#7270) ----
+    // On a real socket, where stop() would send run=0: the radio now serves
+    // another client, and that packet would stop it.
+    {
+        P2Client client;
+        client.start(loopbackParams(false));
+        P2ClientTestAccess::setLinkUp(client, true);
+        const quint64 before = P2ClientTestAccess::txBytes(client);
+        P2ClientTestAccess::silence(client, P2ClientTestAccess::kSilenceMs);
+        check(!client.isRunning() && P2ClientTestAccess::txBytes(client) == before,
+              "3 s of silence ends a live session and sends the radio nothing");
+        P2Client stopped;
+        stopped.start(loopbackParams(false));
+        const quint64 beforeStop = P2ClientTestAccess::txBytes(stopped);
+        stopped.stop();
+        check(P2ClientTestAccess::txBytes(stopped) > beforeStop,
+              "while an ordinary stop() still sends its clean-stop packet");
     }
 
     if (g_failures == 0)

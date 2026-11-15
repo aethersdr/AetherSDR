@@ -180,6 +180,7 @@ accessible names. Search and controls are keyboard reachable.
 | Disconnect | Enabled only for this client's connected radio; uses the intentional-disconnect path. |
 | Rename | Client-owned names use the per-radio identity store and a non-modal dialog (built by MainWindow; `ConnectionPanel` decides and applies). Radio-owned names open Radio Setup while connected and are disabled while disconnected. The demo radio's "not on the air" name is a safety label and cannot be renamed. An empty nickname resets it. |
 | Radio setup | Enabled only for this client's connected radio. |
+| Move left / Move right | Keyboard path for drag reordering: swaps the tab with its visible radio neighbor and saves `RadioSwitcher.tabOrder`. Disabled at either end of the strip. |
 | Remove from tabs | Available only while not connected here. Hides the tab; does not erase credentials, operating state, or the radio. |
 | Add to tabs | Restores a hidden tab. Hidden radios stay in the "+" list; selecting one also restores it. |
 | Connect manually | Opens the IP connection page. |
@@ -212,3 +213,17 @@ built-in demo radio. Native items need real hardware and real pointer input:
 macOS traffic-light hover/tiling and pointer hits across the top of the bar
 under the unified toolbar; Windows Snap Layouts, Aero Snap and top-edge drift
 (#4557); Linux compositor behaviour and fractional-scale drag/resize.
+
+## Connection workspace tabs
+
+`ConnectionPanel::connectionTargets()` supplies saved Location membership, grouped radio paths and discovered candidates. The main window projects these into persistent `RadioTabEntry` values; a hardware serial is separate from the saved tab ID. Discovery updates availability without choosing the operating radio. `RadioSwitcher` owns hidden tabs and `tabOrder`; drag completion saves the full order, including hidden entries. The active session does not affect sorting.
+
+A connection request captures its Location, path and operator before confirmation. Explicit choices supersede startup discovery, scheduled IP probes and credential continuations for that launch. The controller waits for source teardown before dispatching a replacement, and moves the active highlight only on a successful connection. Browsed Location and preferred paths are independent of the last successful connection.
+
+SmartLink replacement calls `RadioModel::prepareWanConnection()` after source teardown and before UDP prebinding and `requestConnect`. This retires a previous simulator or host-DSP backend through the existing production family switch, creates the real SmartLink/VITA transport, and performs no network dial. Connected or in-flight sessions refuse preparation. TLS validation and the existing `connectViaWan` handoff then retain their established ordering.
+
+The radio shortcut set is bounded to two entries by `recentRadioShortcuts`.
+Active and pending radio targets take priority, then `RadioSwitcher.recentRadios`;
+saved visual order is retained. Successful connections update the recent IDs.
+Workspace tabs such as AetherLab remain independent. The More radios drawer
+retains every saved/discovered radio and opens the full Locations window.

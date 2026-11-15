@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 // #5594 item 3: the panadapter and slice capacity a Flex declares for itself.
 //
 // A radio states its capacity outright in the discovery packet. Observed on a
@@ -165,7 +166,7 @@ int main(int argc, char** argv)
         // A smaller radio arrives on a path that never calls connectToRadio():
         // its model lands on the status plane instead. The model table must be
         // allowed to answer again.
-        m.handleStatusForTest(QStringLiteral("radio"),
+        observeRadioStatus(m, QStringLiteral("radio"),
                               {{QStringLiteral("model"), QStringLiteral("FLEX-6400")}});
         check(m.maxPanadapters() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,
               "after a disconnect a model= status restores the model-table "
@@ -207,6 +208,33 @@ int main(int argc, char** argv)
               "panadapter capacity rather than the model table's 8");
         check(m.maxSlices() == 3,
               "and its licensed slice capacity");
+    }
+
+    // ---- a LAN auto-reconnect restores the version label too ----
+    //
+    // On an HL2 the label ("Gateware") is half of the supported identity. The
+    // restore runs before the transport is chosen, so a Flex RadioInfo reaches
+    // it without the HL2 backend and its UDP socket.
+    {
+        RadioModel m;
+        RadioInfo labelled;
+        labelled.model = QStringLiteral("FLEX-6700");
+        labelled.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
+        labelled.version = QStringLiteral("74.2");
+        labelled.versionLabel = QStringLiteral("Gateware");
+        m.connectToRadio(labelled);
+        check(m.versionLabel() == QStringLiteral("Gateware"),
+              "the version label is in effect");
+
+        QMetaObject::invokeMethod(&m, "onDisconnected", Qt::DirectConnection);
+        check(m.versionLabel().isEmpty(),
+              "the version label is cleared on the way down");
+
+        m.triggerAutoReconnectForTest();
+        check(m.version() == QStringLiteral("74.2"),
+              "an auto-reconnect restores the version");
+        check(m.versionLabel() == QStringLiteral("Gateware"),
+              "and the version label with it");
     }
 
     if (g_failures == 0)

@@ -468,6 +468,12 @@ backends (§5.5) are reachable either way; only the UI boundary differs.
 
 ## 10. Staged plan
 
+> **Amended 2026-11-13 (maintainer ruling):** receive-only remote clients come
+> ahead of the data plane: a WebSocket listener with scoped credentials and
+> pairing ([`aetherd-remote-clients.md`](aetherd-remote-clients.md)), then a
+> desktop client backend ([`aetherd-remote-backend.md`](aetherd-remote-backend.md)).
+> Transmit over the network still waits for Stage 4.
+
 1. **Extract `libaethercore`.** Split the monolith into an engine library +
    thin gui shell. **Rehearsed 2026-07-04** — the split configures, builds,
    and passes all 56 tests on Linux
@@ -581,6 +587,20 @@ observe-only local handshake/capability service, and a QtWidgets-free
 `resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
 coalescing/session resync, and an independent local-socket hard disconnect cap
 are live over the current-user local transport.
+Ordinary Flex slice reports cross the seam as `SliceObservation`: present-only
+canonical values and owner identity, decoded by `FlexStatusIngress` for LAN and
+WAN alike and stamped with the status epoch. RadioModel applies one only while
+its observation session is open for that epoch, so a queued report from a
+session that has ended or been replaced never applies.
+`RadioModel` applies the report atomically with respect to lifecycle publication:
+a new slice is populated before `sliceAdded`, ownership loss retires its object,
+and removals also clear foreign occupancy. Retained reconnect objects use the
+existing occupancy edge rather than publishing another `sliceAdded`. The
+resource adapter observes the same model graph; this adds no client-control
+method or transmit authority. Waveform-specific slice status retains its
+separate compatibility route. Native backend values remain on `sliceChanged`;
+Demo's synthetic transport contributes lifecycle only.
+
 The headless daemon also owns a bounded, observe-only `radioCatalogue` through
 the normalized `RadioDiscoverySource` seam. Native discovery adapters stay under
 `src/core/backends/`; desktop discovery/autoconnect is unchanged. Discovery is
@@ -675,7 +695,8 @@ or grant keying authority. Native RX and host EQ retain their local routes;
 sample formats, resamplers and DSP scheduling are unchanged. DAX/IQ status
 decoding above the seam and the remaining command-plane sites are still M4 work.
 The desktop adapter has not landed; UI code still consumes models directly, and that
-remains correct. New resource fields belong in the adapter and the versioned
+remains correct. The remote-engine backend ([`aetherd-remote-backend.md`](aetherd-remote-backend.md))
+is not that adapter: it is a radio family whose "radio" is a remote aetherd. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
 

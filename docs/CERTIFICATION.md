@@ -97,8 +97,10 @@ would inherit the blindness it exists to remove.
 
 ### 1.6 Readback proves nothing
 
-The mode map passed for twelve modes while the backend mapped nine. `RTTY` still
-reads back perfectly and is demodulated as USB.
+The mode map passed for twelve modes while the backend mapped nine. `RTTY` read
+back perfectly and was demodulated as USB; the HL2 now refuses it and the slice
+keeps its previous mode, which the mode map re-asks from a known mode to tell
+apart from an alias.
 
 **Consequence.** Controls are certified by **effect**. Halving a linear gain is
 −6.02 dB; that is arithmetic rather than a property of any radio, which is what
@@ -870,6 +872,21 @@ running it:
 * **A fading carrier declines.** Night medium-wave moved 25 dB within one search;
   the bracket failed and the stage said so. Use a groundwave carrier, or the
   attenuator in front of a strong steady one.
+* **Every probe starts from a closed gate.** WDSP's squelch holds an open gate
+  for a tail of up to 1.5 s, longer than the 900 ms settle, so a probe right
+  after an open one heard the tail and the search landed two or three levels
+  high, then failed its own bracket (HL2, steady medium-wave carriers). Each
+  probe now sets level 100 and waits until the audio stops before setting the
+  level under test. Each probe records `fromClosed`; on the probe at level 100
+  itself there is nothing to wait for, so `true` there is the default, not a
+  measured wait.
+* **The error is split at the S-meter, for reading, not judging.**
+  `sLevelMinusCarrierDb` moves when the carrier does not dominate its passband.
+  `lineMinusSLevelDb` is the line less the S-meter, and it includes any gain
+  the pan gives a tone over its power, which the record does not publish: on the
+  HL2 that is 6.02 dB, and two steady medium-wave carriers read +6.7 to +7.7 dB
+  here with the gate where a settled sweep put it. Only
+  `lineMinusCarrierDb` is judged.
 
 Both squelch stages decline while the operator's Auto SQL is engaged. Auto
 rewrites the slice on every pan frame, and its writes land on one level and hold,
@@ -970,8 +987,9 @@ over and speech pauses; only the reverse reading is left out of the count, so a
 window that passed and published nothing stays a defect. The meters phase reads
 the keys with no family test, reports `INCONCLUSIVE` naming the gate when no
 window passed, and leaves the negative verdict standing when one did. Its
-reason says which gate held: the floor (raise drive, or suspect the forward
-detector at full drive) or the key-on and speech-pause gate (key a steady
+reason says which gate held: the floor (check the selected stimulus and drive,
+and independently measured forward power before judging the detector even at
+full drive) or the key-on and speech-pause gate (key a steady
 carrier for longer). The verdict turns on the count rather than the peak
 because a peak above the floor can still be withheld.
 
@@ -1072,7 +1090,7 @@ need:
 | `SliceModel::setRfGain` has no runtime path | LNA gain is connect-parameters only; the preamp control does nothing after connect |
 | ~~`TX:ALC` computed and discarded~~ | **Producer and Phone-panel display implemented (#5506, #5636)** (not yet verified on a real radio) — `Hl2TxDsp::alcGain` now feeds a meter of its own, `TX:ALCGAIN` (dB), through `MeterModel`, radiocert and the automation bridge; the Phone panel renders ALC Gain when the meter is defined, with immediate clearing on invalidation. It was NOT a repoint of `TX:ALC`: that key is a post-ALC LEVEL consumed by `MeterModel::swAlc()`, both ALC gauges, the certification table and the bridge, and changing what a published key means breaks all of them silently. The two are now separate quantities, as they are in WDSP (`TXA_ALC_PK` and `TXA_ALC_GAIN`) |
 | Tune power not separable from RF power | TUNE keys at full drive on a fresh connect |
-| `RTTY` unmapped | silently demodulated as USB; conventionally lower-sideband on HF, so it wants a decision rather than a default |
+| `RTTY` unmapped | refused by `Hl2Backend::setSliceMode` (the slice keeps its previous mode), no longer demodulated as USB; conventionally lower-sideband on HF, so it still wants a decision rather than a default |
 | Sideband stage saturates | even at 5 % drive into a dummy load a few inches away; needs inline attenuation or a second receiver |
 | Wire-convention stimulus harness (§1.4) | inject synthetic IQ at the backend boundary; needs no radio and would have caught the receive inversion |
 | **Reconnect stage** (§1.21) | connect / disconnect / immediately reconnect; nothing in the suite exercises teardown today, and a leaked session is invisible until the second connect |

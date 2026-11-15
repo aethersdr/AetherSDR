@@ -571,6 +571,25 @@ void testDxCallBoxFillsCallPlaceholder()
     report("a DX call set on the model shows in the box", dxCall->text() == QLatin1String("W1AW"));
 }
 
+// A keyboard or MIDI "CWX Macro" follows the panel's F-key rules: refused
+// while the TX slice is not in a CW mode or the keyer cannot send.
+void testFireMacroFollowsFKeyRules()
+{
+    Fixture fixture;
+    QString mode = QStringLiteral("USB");
+    bool sendable = true;
+    fixture.panel.setTxModeProvider([&mode] { return mode; });
+    fixture.model.setSendAvailability([&sendable] { return sendable; });
+    const TxController::Input input;
+    report("macro refused while the TX slice is in USB", !fixture.panel.fireMacro(0, input));
+    mode = QStringLiteral("CW");
+    report("macro accepted while the TX slice is in CW", fixture.panel.fireMacro(0, input));
+    sendable = false;
+    report("macro refused while the keyer cannot send", !fixture.panel.fireMacro(0, input));
+    sendable = true;
+    report("an out-of-range macro index is refused", !fixture.panel.fireMacro(12, input));
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-cwx-panel-test"));
@@ -594,6 +613,7 @@ int main(int argc, char** argv)
     testMacroEditAndFKeyClickStillWorkThroughScrollArea();
     testDxCallBoxFillsCallPlaceholder();
     reproduceIssue4945MinimizedHeight();
+    testFireMacroFollowsFKeyRules();
 
     std::printf("\n%s\n",
                 g_failed == 0
