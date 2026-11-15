@@ -10,6 +10,13 @@
 #include "core/backends/icom/IcomModels.h"       // knownModels() -> the chooser's items
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/aetherd/RemoteEngineStore.h"   // paired remote engines (family "aetherd")
+#ifdef HAVE_WEBSOCKETS
+#include "core/backends/aetherd/RemoteEnginePairing.h"
+#endif
+#include <QInputDialog>
+#include <QSysInfo>
+#include <QUrl>
 #include "core/NetworkPathResolver.h"
 #include "core/RemoteSession.h"
 #include "ComboStyle.h"   // shared themed combo look (painted arrow)
@@ -775,6 +782,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     emptyLayout->addWidget(emptyCallout);
     emptyLayout->addStretch();
     m_localStateStack->addWidget(m_localEmptyState);
+    buildRemoteEngineSection(localPage, localLayout, editStyle, comboExtraRules);
 
     m_modeStack->addWidget(localPage);
 
@@ -1958,6 +1966,20 @@ void ConnectionPanel::saveLowBandwidthPreference(bool enabled)
 
 QString ConnectionPanel::formatLocalRadioLabel(const RadioInfo& radio) const
 {
+    if (radio.family == QLatin1String(kFamilyAetherd)) {
+        // A remote aetherd (docs/aetherd-remote-backend.md §3): never "in use",
+        // and the operator is told there is no spectrum or audio yet.
+        // Until the engine has advertised, the radio behind it is not known.
+        const QString title = radio.model.trimmed().isEmpty()
+            ? tr("Remote engine (%1)").arg(radio.nickname.trimmed())
+            : tr("%1 — remote engine (%2)").arg(radio.model.trimmed(), radio.nickname.trimmed());
+        QString detail = tr("Mirrors the engine at %1 • tuning and receive controls, no spectrum or audio yet")
+                             .arg(radio.address.toString());
+        if (!aetherd::RemoteEngineStore::persistentStoreAvailable()) {
+            detail += tr(" • paired for this session only");
+        }
+        return title + QLatin1Char('\n') + detail;
+    }
     QString title = radio.model.trimmed();
     if (!radio.nickname.trimmed().isEmpty())
         title += QStringLiteral("  %1").arg(radio.nickname.trimmed());
@@ -2219,6 +2241,17 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     if (row < 0 || row >= m_radios.size())
         return;
     const RadioInfo radio = m_radios[row];
+
+    if (radio.family == QLatin1String(kFamilyAetherd)) {
+        QMenu menu(this);
+        QAction* tailnet = menu.addAction(tr("Set Tailnet Address…"));
+        QAction* forget = menu.addAction(tr("Forget This Engine"));
+        QAction* chosen = menu.exec(m_radioList->mapToGlobal(pos));
+        const QString engineId = radio.serial.section(QLatin1Char('/'), 0, 0);
+        if (chosen == tailnet) { editRemoteEngineTailnet(engineId); }
+        else if (chosen == forget) { forgetRemoteEngine(engineId); }
+        return;
+    }
 
     // Flex stores its name on the radio itself (set from Radio Setup while
     // connected); offering a client-side override here would create two sources
@@ -5844,6 +5877,240 @@ void ConnectionPanel::removeWorkspaceProfile(const QString& collection, const QS
         emit smartLinkSignedOut();
         activateWorkspaceAccount(next.value("selectedAccount").toString());
         updateSmartLinkUi();
+    }
+}
+
+// ── Remote engines (family "aetherd", docs/aetherd-remote-backend.md §3) ─────
+
+void ConnectionPanel::buildRemoteEngineSection(QWidget* parent, QVBoxLayout* layout,
+                                               const QString& editStyle, const QString& comboStyle)
+{
+#ifdef HAVE_WEBSOCKETS
+    auto* group = new QGroupBox(tr("Remote engine"), parent);
+    group->setObjectName(QStringLiteral("connectionRemoteEngineGroup"));
+    m_remoteEngineGroup = group;
+    auto* groupLayout = new QVBoxLayout(group);
+    groupLayout->setContentsMargins(12, 14, 12, 12);
+    groupLayout->setSpacing(8);
+    groupLayout->addWidget(makeWrappedLabel(
+        tr("Mirror a radio whose own aetherd holds it, such as an ANAN G2 front panel. "
+           "Start pairing on the radio's screen (Settings, Remote clients, Pair a device), "
+           "then enter the code it shows."), kHintLabelStyle));
+
+    auto* form = new QFormLayout;
+    m_remoteEngineAddress = new QComboBox(group);
+    m_remoteEngineAddress->setObjectName(QStringLiteral("connectionRemoteEngineAddress"));
+    m_remoteEngineAddress->setAccessibleName(tr("Remote engine address"));
+    m_remoteEngineAddress->setAccessibleDescription(
+        tr("An engine advertised on this network, or a wss:// address typed by hand"));
+    m_remoteEngineAddress->setEditable(true);
+    m_remoteEngineAddress->setInsertPolicy(QComboBox::NoInsert);
+    AetherSDR::applyComboStyle(m_remoteEngineAddress, comboStyle);
+    m_remoteEngineAddress->lineEdit()->setPlaceholderText(QStringLiteral("wss://192.168.1.50:8443"));
+    form->addRow(tr("Address:"), m_remoteEngineAddress);
+
+    m_remoteEngineCode = new QLineEdit(group);
+    m_remoteEngineCode->setObjectName(QStringLiteral("connectionRemoteEngineCode"));
+    m_remoteEngineCode->setAccessibleName(tr("Pairing code"));
+    m_remoteEngineCode->setAccessibleDescription(tr("The ten-digit code shown on the radio's screen"));
+    m_remoteEngineCode->setPlaceholderText(QStringLiteral("123 456 7890"));
+    m_remoteEngineCode->setMaxLength(16);
+    applyStyle(m_remoteEngineCode, editStyle);
+    form->addRow(tr("Code:"), m_remoteEngineCode);
+    groupLayout->addLayout(form);
+
+    auto* row = new QHBoxLayout;
+    m_remoteEngineStatus = makeWrappedLabel(QString(), kHintLabelStyle);
+    m_remoteEngineStatus->setObjectName(QStringLiteral("connectionRemoteEngineStatus"));
+    if (!aetherd::RemoteEngineStore::persistentStoreAvailable()) {
+        m_remoteEngineStatus->setText(tr(
+            "This build has no keychain, so a pairing lasts for this session only and each launch "
+            "pairs again. The radio's Remote clients list keeps the earlier pairings until you "
+            "remove them on the radio's screen."));
+    }
+    row->addWidget(m_remoteEngineStatus, 1);
+    m_remoteEnginePairBtn = new QPushButton(tr("Pair"), group);
+    m_remoteEnginePairBtn->setObjectName(QStringLiteral("connectionRemoteEnginePairButton"));
+    m_remoteEnginePairBtn->setAccessibleName(tr("Pair with the remote engine"));
+    row->addWidget(m_remoteEnginePairBtn, 0, Qt::AlignTop);
+    groupLayout->addLayout(row);
+    layout->addWidget(group);
+
+    auto* pairing = new aetherd::RemoteEnginePairing(this);
+    m_remoteEnginePairing = pairing;
+    connect(m_remoteEnginePairBtn, &QPushButton::clicked, this, [this] { startRemoteEnginePairing(); });
+    connect(m_remoteEngineCode, &QLineEdit::returnPressed, this, [this] { startRemoteEnginePairing(); });
+    connect(pairing, &aetherd::RemoteEnginePairing::failed, this, [this](const QString& reason) {
+        m_remoteEnginePairBtn->setEnabled(true);
+        applyStyle(m_remoteEngineStatus, QString::fromLatin1(kErrorLabelStyle));
+        m_remoteEngineStatus->setText(reason);
+    });
+    connect(pairing, &aetherd::RemoteEnginePairing::paired, this,
+            [this](const aetherd::RemoteEngineRecord& paired) {
+        m_remoteEnginePairBtn->setEnabled(true);
+        m_remoteEngineCode->clear();
+        aetherd::RemoteEngineRecord record = paired;
+        if (const auto advert = m_remoteEngineAdverts.constFind(record.engineId);
+            advert != m_remoteEngineAdverts.constEnd() && record.name.isEmpty()) {
+            record.name = advert->name;
+        }
+        aetherd::RemoteEngineStore::save(record);
+        applyStyle(m_remoteEngineStatus, QString::fromLatin1(kInfoLabelStyle));
+        m_remoteEngineStatus->setText(aetherd::RemoteEngineStore::persistentStoreAvailable()
+            ? tr("Paired. Select the engine in the list and connect.")
+            : tr("Paired for this session. Select the engine in the list and connect."));
+        publishRemoteEngine(record);
+    });
+
+    // Advertised engines (UDP 4996), probed with the rest of LAN discovery.
+    m_remoteEngineDiscovery = new aetherd::RemoteEngineDiscovery(this);
+    connect(m_remoteEngineDiscovery, &aetherd::RemoteEngineDiscovery::engineFound,
+            this, &ConnectionPanel::onRemoteEngineAdvert);
+    m_remoteEngineProbeTimer = new QTimer(this);
+    m_remoteEngineProbeTimer->setInterval(5000);
+    connect(m_remoteEngineProbeTimer, &QTimer::timeout, this, [this] {
+        if (isVisible()) { m_remoteEngineDiscovery->probe(); }
+    });
+    connect(this, &ConnectionPanel::retryDiscoveryRequested, this, [this] { m_remoteEngineDiscovery->probe(); });
+    m_remoteEngineProbeTimer->start();
+    QTimer::singleShot(0, this, [this] { m_remoteEngineDiscovery->probe(); });
+
+    // Engines paired earlier: their tokens come out of the keychain into the
+    // session cache before they are listed, so a connect never waits on it.
+    aetherd::RemoteEngineStore::primeSessions(this, [this](int) {
+        for (const aetherd::RemoteEngineRecord& record : aetherd::RemoteEngineStore::records()) {
+            if (const auto session = aetherd::RemoteEngineCredentials::session(record.engineId);
+                session && session->usable()) {
+                publishRemoteEngine(*session);
+            }
+        }
+    });
+#else
+    Q_UNUSED(parent);
+    Q_UNUSED(layout);
+    Q_UNUSED(editStyle);
+    Q_UNUSED(comboStyle);
+#endif
+}
+
+void ConnectionPanel::onRemoteEngineAdvert(const aetherd::RemoteEngineDiscovery::Advert& advert)
+{
+    const bool known = m_remoteEngineAdverts.contains(advert.certificateSha256);
+    m_remoteEngineAdverts.insert(advert.certificateSha256, advert);
+    if (const auto session = aetherd::RemoteEngineCredentials::session(advert.certificateSha256);
+        session && session->usable()) {
+        publishRemoteEngine(*session);   // refreshes the entry's model and name
+        return;
+    }
+    if (known || !m_remoteEngineAddress) { return; }
+    const QString label = tr("%1 — remote engine (%2)")
+        .arg(advert.model.isEmpty() ? tr("Radio") : advert.model, advert.name);
+    m_remoteEngineAddress->addItem(label, advert.wssUrl);
+    if (m_remoteEngineAddress->count() == 1) { m_remoteEngineAddress->setCurrentIndex(0); }
+}
+
+void ConnectionPanel::startRemoteEnginePairing()
+{
+#ifdef HAVE_WEBSOCKETS
+    auto* pairing = qobject_cast<aetherd::RemoteEnginePairing*>(m_remoteEnginePairing);
+    if (!pairing || pairing->running()) { return; }
+    // An advertised entry carries its URL; a typed one is the text itself.
+    const int index = m_remoteEngineAddress->currentIndex();
+    const bool typed = index < 0 || m_remoteEngineAddress->currentText() != m_remoteEngineAddress->itemText(index);
+    const QString url = typed ? m_remoteEngineAddress->currentText().trimmed()
+                              : m_remoteEngineAddress->itemData(index).toString();
+    QString engineName;
+    for (const auto& advert : std::as_const(m_remoteEngineAdverts)) {
+        if (advert.wssUrl == url) { engineName = advert.name; }
+    }
+    m_remoteEnginePairBtn->setEnabled(false);
+    applyStyle(m_remoteEngineStatus, QString::fromLatin1(kHintLabelStyle));
+    m_remoteEngineStatus->setText(tr("Pairing…"));
+    pairing->start(url, m_remoteEngineCode->text(), QSysInfo::machineHostName(), engineName);
+#endif
+}
+
+RadioInfo ConnectionPanel::remoteEngineRadioInfo(const aetherd::RemoteEngineRecord& record) const
+{
+    RadioInfo info;
+    info.family = QString::fromLatin1(kFamilyAetherd);
+    info.serial = record.engineId;
+    const QUrl url(record.lanUrl);
+    info.address = QHostAddress(url.host());
+    info.port = quint16(url.port());
+    info.nickname = record.name.isEmpty() ? url.host() : record.name;
+    if (const auto advert = m_remoteEngineAdverts.constFind(record.engineId);
+        advert != m_remoteEngineAdverts.constEnd() && !advert->model.isEmpty()) {
+        info.model = advert->model;
+    }
+    // Never in use: an engine holding its radio is the normal case
+    // (ConnectionSharingPolicy.h does not grow).
+    info.inUse = false;
+    return info;
+}
+
+void ConnectionPanel::publishRemoteEngine(const aetherd::RemoteEngineRecord& record)
+{
+    onRadioDiscovered(remoteEngineRadioInfo(record));
+    // The tailnet path is its own entry, so the operator picks the route.
+    const QString tailnetSerial = record.engineId + QLatin1String("/tailnet");
+    if (!record.tailnetUrl.isEmpty()) {
+        RadioInfo tailnet = remoteEngineRadioInfo(record);
+        const QUrl url(record.tailnetUrl);
+        tailnet.serial = tailnetSerial;
+        tailnet.address = QHostAddress(url.host());
+        tailnet.port = quint16(url.port());
+        tailnet.nickname += tr(" (tailnet)");
+        onRadioDiscovered(tailnet);
+    } else {
+        removeRemoteEngineEntry(tailnetSerial);
+    }
+}
+
+void ConnectionPanel::removeRemoteEngineEntry(const QString& serial)
+{
+    for (int i = 0; i < m_radios.size(); ++i) {
+        if (m_radios[i].serial == serial && m_radios[i].family == QLatin1String(kFamilyAetherd)) {
+            m_radios.removeAt(i);
+            delete m_radioList->takeItem(i);
+            return;
+        }
+    }
+}
+
+void ConnectionPanel::forgetRemoteEngine(const QString& engineId)
+{
+    aetherd::RemoteEngineStore::forget(engineId);
+    removeRemoteEngineEntry(engineId);
+    removeRemoteEngineEntry(engineId + QLatin1String("/tailnet"));
+    if (m_remoteEngineStatus) {
+        applyStyle(m_remoteEngineStatus, QString::fromLatin1(kHintLabelStyle));
+        m_remoteEngineStatus->setText(tr(
+            "Forgotten on this machine. Remove it from the radio's Remote clients list on the radio's screen."));
+    }
+    updateLocalPageState();
+    emit radioAvailabilityChanged();
+}
+
+void ConnectionPanel::editRemoteEngineTailnet(const QString& engineId)
+{
+    const std::optional<aetherd::RemoteEngineRecord> record = aetherd::RemoteEngineStore::record(engineId);
+    if (!record) { return; }
+    bool ok = false;
+    const QString url = QInputDialog::getText(this, tr("Tailnet Address"),
+        tr("A ws:// address on the engine's tailnet, used only over Tailscale or WireGuard.\n"
+           "Leave empty to remove it."),
+        QLineEdit::Normal, record->tailnetUrl, &ok).trimmed();
+    if (!ok) { return; }
+    if (!aetherd::RemoteEngineStore::setTailnetUrl(engineId, url)) {
+        if (m_remoteEngineStatus) {
+            applyStyle(m_remoteEngineStatus, QString::fromLatin1(kErrorLabelStyle));
+            m_remoteEngineStatus->setText(tr("A tailnet address is ws://<IP address>:<port>."));
+        }
+        return;
+    }
+    if (const auto session = aetherd::RemoteEngineCredentials::session(engineId); session && session->usable()) {
+        publishRemoteEngine(*session);
     }
 }
 

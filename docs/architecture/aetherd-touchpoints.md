@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 289 touchpoint headers (234 core, 55 models) — 289/289 tagged, 0/289 converted.
+**Totals:** 293 touchpoint headers (238 core, 55 models) — 293/293 tagged, 0/293 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -215,6 +215,10 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/RadioCapabilities.h` | 18 | universal — Backend-neutral capability descriptor consumed above the radio seam. Universal by definition; family implementations populate it. | unconverted |
 | `core/backends/SquelchLevelScale.h` | 2 | universal — Where a slice's squelch level sits on the panadapter's vertical axis, as a backend-published record (RadioCapabilities::squelchLevelScale) plus the mode filter and Auto-SQL predicate both the widget and MainWindow read, so the SQL line and Auto SQL share one gate. No family name or wire concept; each backend declares its own map or leaves it absent (#6092). | unconverted |
 | `core/backends/WaveformEnvRequest.h` | 2 | universal — Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it. | unconverted |
+| `core/backends/aetherd/RemoteEngineCredentials.h` | 1 | ui-support — Process-session cache of paired remote-engine records (address, certificate fingerprint, bearer token) that the aetherd family's connect path reads, primed by the connection panel. Credential plumbing shared by connection UI and backend, never a control-protocol field or radio-state resource. | unconverted |
+| `core/backends/aetherd/RemoteEngineDiscovery.h` | 1 | ui-support — Desktop half of aetherd's own LAN advertisement (AETHERD-DISCOVER 1 on UDP 4996), feeding the connection panel's Remote engine section. aetherd's open protocol, not a vendor wire; names engines only and sends nothing to them. | unconverted |
+| `core/backends/aetherd/RemoteEnginePairing.h` | 1 | ui-support — One-shot pairing.complete exchange with a remote aetherd over wss://, pinned by the pairing code's check digits, driven by the connection panel. Credential acquisition plumbing, not a control-protocol client of the radio. | unconverted |
+| `core/backends/aetherd/RemoteEngineStore.h` | 1 | ui-support — Client-side record of paired remote aetherd engines (name, LAN and tailnet addresses, certificate fingerprint) in one settings object, with the token in the OS keychain. Connection plumbing, not live radio state. | unconverted |
 | `core/backends/anan/AnanDiscovery.h` | 2 | vendor(anan) — openHPSDR Protocol 2 discovery and ANAN-G2 identity handling. Family-specific discovery belongs below the ANAN backend seam. | unconverted |
 | `core/backends/anan/AnanSettings.h` | 1 | ui-support — Client-side connection and ADC configuration for the ANAN backend. Persisted setup plumbing, not live radio state. | unconverted |
 | `core/backends/anan/P2Protocol.h` | 1 | vendor(anan) — openHPSDR Ethernet Protocol 2 wire primitives for the ANAN-G2 backend. Family protocol code belongs below the radio seam. | unconverted |

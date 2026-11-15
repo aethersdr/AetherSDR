@@ -1846,5 +1846,29 @@
   "note": "Bounded Flex VITA count/timestamp receive ordering and loss resolution; private to the Flex stream path.",
   "split": "",
   "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEngineCredentials.h": {
+  "tag": "ui-support",
+  "note": "Process-session cache of paired remote-engine records (address, certificate fingerprint, bearer token) that the aetherd family's connect path reads, primed by the connection panel. Credential plumbing shared by connection UI and backend, never a control-protocol field or radio-state resource.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEngineStore.h": {
+  "tag": "ui-support",
+  "note": "Client-side record of paired remote aetherd engines (name, LAN and tailnet addresses, certificate fingerprint) in one settings object, with the token in the OS keychain. Connection plumbing, not live radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEngineDiscovery.h": {
+  "tag": "ui-support",
+  "note": "Desktop half of aetherd's own LAN advertisement (AETHERD-DISCOVER 1 on UDP 4996), feeding the connection panel's Remote engine section. aetherd's open protocol, not a vendor wire; names engines only and sends nothing to them.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/aetherd/RemoteEnginePairing.h": {
+  "tag": "ui-support",
+  "note": "One-shot pairing.complete exchange with a remote aetherd over wss://, pinned by the pairing code's check digits, driven by the connection panel. Credential acquisition plumbing, not a control-protocol client of the radio.",
+  "split": "",
+  "confidence": "high"
  }
 }
