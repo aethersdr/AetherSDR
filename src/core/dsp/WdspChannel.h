@@ -176,6 +176,12 @@ public:
         // Both apply to a transmit channel too (TXASetNC/TXASetMP in open()).
         int filterTaps = 2048;
         bool minimumPhase = false;
+        // TX speech processor: WDSP's COMP (clip drive in dB) and CESSB, off by
+        // default as create_txa() builds them. In Config so reconfigure() keeps
+        // them. Ignored on a receive channel.
+        bool txSpeechProcessor = false;
+        double txSpeechProcessorClipDb = 6.0;
+        bool txCessb = true;
         // FM detector deviation in Hz: the assumed incoming deviation, not a filter.
         // WDSP turns it into audio gain (again = rate / (deviation * TWOPI)); 5000 is
         // RXA.c's default. In Config, not just a setter, because reconfigure() closes
@@ -391,6 +397,11 @@ public:
     // processIq()), idempotent in WDSP.
     bool setFilterTaps(int taps) noexcept;
     bool setMinimumPhase(bool on) noexcept;
+    // TX only: WDSP's COMP at `clipDb` (0..20) and, with `cessb`, its CESSB
+    // overshoot control. Control path; returns false on a receive channel or if
+    // a control operation is in progress. The caller picks the phase mode
+    // (WDSP wants linear phase while these run).
+    bool setTxSpeechProcessor(bool on, double clipDb, bool cessb) noexcept;
 
     // Runtime FM detector deviation (Hz), RX only. Accepted in any mode but
     // audible only in FM (the fmd stage runs only when selected), so call order

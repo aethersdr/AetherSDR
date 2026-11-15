@@ -21,6 +21,7 @@
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "TxTestAuthority.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
+#include "core/dsp/SsbEnvelopeMeter.h"
 
 #include <QCoreApplication>
 #include <QObject>
@@ -2789,6 +2790,108 @@ int main(int argc, char** argv)
                      tx.modulatorStallDrops(), deltas.size(), static_cast<long>(lossy));
         check(tx.modulatorStallDrops() > 0, "stalled filter-tap case: the probe stalls the worker");
         check(lossy == 0, "filter taps: a window with dropped blocks is not published as a filter loss");
+    }
+    // ── Peak control in the modulator (RFC #4836) ─────────────────────────
+    // WDSP's own COMP + CESSB inside the TXA channel: active only in USB/LSB,
+    // the bandpass goes linear phase while it runs and back afterwards, a
+    // reconfigure keeps it, and it cuts the envelope's peak-to-average ratio.
+    {
+        struct PeakRun {
+            unsigned long long faults = 0;
+            double paprDb = 0.0;
+            double peakDb = 0.0;
+            double rmsDb = 0.0;
+            bool linearWhileOn = false;
+        };
+        const auto runPeak = [](bool on, bool cessb) {
+            return retryIfStarved<PeakRun>("modulator peak control", [on, cessb]() {
+                PeakRun out;
+                Hl2TxDsp tx;
+                TxTestAuthority auth;
+                Hl2TxDsp::Config cfg;
+                cfg.mode = WdspChannel::Mode::Usb;
+                cfg.alcEnabled = false;
+                std::string err;
+                if (!tx.configure(cfg, &err)) {
+                    ++g_failures;
+                    return out;
+                }
+                tx.setMicGain(1.0);
+                tx.setPeakControl(on, 20.0, cessb);
+                out.linearWhileOn = tx.channelConfig() && !tx.channelConfig()->minimumPhase;
+                std::vector<std::complex<float>> iq;
+                QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                                 [&iq](const std::vector<std::complex<float>>& b) {
+                    iq.insert(iq.end(), b.begin(), b.end());
+                });
+                // A voiced stand-in: steady 140 Hz harmonics to 2.6 kHz with
+                // scattered phases (no syllable swell, whose unclipped troughs
+                // would dominate the active RMS). Cosine phase would be a poor
+                // stand-in: clipping a pulse train sends most of its energy
+                // out of band, where bp1 throws it away.
+                const int fs = cfg.inputSampleRateHz;
+                constexpr std::size_t kChunk = 240;
+                std::vector<float> chunk(kChunk);
+                for (int off = 0; off < fs * 3; off += static_cast<int>(kChunk)) {
+                    for (std::size_t n = 0; n < kChunk; ++n) {
+                        const double t = (off + static_cast<int>(n)) / static_cast<double>(fs);
+                        double v = 0.0;
+                        for (int h = 1; h * 140.0 < 2600.0; ++h) {
+                            // Fixed scattered phases, as voiced speech has.
+                            v += std::cos(2.0 * M_PI * 140.0 * h * t + 2.4 * h * h)
+                                 / std::sqrt(static_cast<double>(h));
+                        }
+                        chunk[n] = static_cast<float>(0.15 * v);
+                    }
+                    feed(tx, chunk, TxAudioSource::Microphone, auth.context);
+                }
+                out.faults = tx.modulatorFaultBlocks();
+                const std::size_t skip = std::min<std::size_t>(iq.size(), 24000);
+                const auto r = AetherSDR::measureIqEnvelope(iq.data() + skip, iq.size() - skip,
+                                                            cfg.outputSampleRateHz);
+                out.paprDb = r.activePaprDb;
+                out.peakDb = 20.0 * std::log10(std::max(r.envelopePeak, 1e-12));
+                out.rmsDb = 20.0 * std::log10(std::max(r.activeEnvelopeRms, 1e-12));
+                return out;
+            });
+        };
+        const PeakRun off = runPeak(false, true);
+        const PeakRun on = runPeak(true, true);
+        const PeakRun noCessb = runPeak(true, false);
+        std::fprintf(stderr,
+                     "modulator peak control: PAPR %.2f -> %.2f dB (CESSB off %.2f), "
+                     "peak %.2f / %.2f dBFS, active rms %.2f / %.2f dBFS\n",
+                     off.paprDb, on.paprDb, noCessb.paprDb, off.peakDb, on.peakDb, off.rmsDb,
+                     on.rmsDb);
+        check(on.paprDb < off.paprDb - 3.0, "modulator peak control: PAPR falls by more than 3 dB");
+        check(on.peakDb <= 0.05, "modulator peak control: the envelope stays at TXA's ALC ceiling");
+        check(on.paprDb <= noCessb.paprDb, "modulator peak control: CESSB never raises PAPR");
+        check(on.linearWhileOn, "modulator peak control: the bandpass is linear phase while it runs");
+
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = WdspChannel::Mode::Usb;
+        std::string err;
+        check(tx.configure(cfg, &err), "peak-control state case configures");
+        check(tx.channelConfig()->minimumPhase, "USB starts minimum phase");
+        tx.setPeakControl(true, 6.0, true);
+        check(tx.peakControlActive() && !tx.channelConfig()->minimumPhase
+                  && tx.channelConfig()->txSpeechProcessor,
+              "peak control on: COMP running, linear phase");
+        check(tx.configure(tx.config(), &err) && tx.channelConfig()->txSpeechProcessor
+                  && !tx.channelConfig()->minimumPhase,
+              "a reconfigure keeps modulator peak control");
+        tx.setMode(WdspChannel::Mode::Digu);
+        check(!tx.peakControlActive() && !tx.channelConfig()->txSpeechProcessor,
+              "DIGU: modulator peak control does not run");
+        tx.setMode(WdspChannel::Mode::Lsb);
+        check(tx.peakControlActive() && tx.channelConfig()->txSpeechProcessor,
+              "back to LSB: it runs again");
+        tx.setPeakControl(false, 6.0, true);
+        check(!tx.channelConfig()->txSpeechProcessor && tx.channelConfig()->minimumPhase,
+              "peak control off: COMP stopped, minimum phase back");
+        tx.setPeakControl(true, 99.0, true);
+        check(tx.config().peakClipDb == 20.0, "clip drive clamps to 20 dB");
     }
 #endif  // AETHER_HL2_TX_TXA
 

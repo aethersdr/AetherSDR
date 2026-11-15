@@ -69,7 +69,12 @@ WdspChannel::Config Hl2TxDsp::modulatorChannelConfig(const Config& config)
     // The bandpass: create_txa's length, explicit, and minimum phase in the
     // voice modes. See kTxFilterTaps and txMinimumPhaseFor().
     c.filterTaps = kTxFilterTaps;
-    c.minimumPhase = txMinimumPhaseFor(config.mode);
+    // Modulator peak control wants linear phase while it runs (WDSP guide).
+    const bool peak = config.peakControlOn && peakControlAppliesTo(config.mode);
+    c.minimumPhase = txMinimumPhaseFor(config.mode) && !peak;
+    c.txSpeechProcessor = peak;
+    c.txSpeechProcessorClipDb = config.peakClipDb;
+    c.txCessb = config.peakCessb;
     // blockForOutput = false (the default, and what the figures above were
     // measured at). Setting it true would block the audio I/O thread and make
     // fexchange2's underrun report unreachable; fix underruns by pacing.
@@ -140,10 +145,24 @@ void Hl2TxDsp::applyModeAndFilter()
     if (!m_channel->setMode(m_config.mode)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: mode change refused";
     }
-    // The phase mode follows the operating mode (txMinimumPhaseFor); a no-op
-    // when it already matches.
-    if (!m_channel->setMinimumPhase(txMinimumPhaseFor(m_config.mode))) {
+    // The phase mode follows the operating mode (txMinimumPhaseFor), except
+    // that peak control runs linear phase. Linear before COMP comes on, COMP
+    // off before minimum phase returns, so the clipper never runs on a
+    // minimum-phase bandpass. Both calls are no-ops when nothing changes.
+    const bool peak = peakControlActive();
+    const auto applyPeak = [this, peak]() {
+        if (!m_channel->setTxSpeechProcessor(peak, m_config.peakClipDb, m_config.peakCessb)) {
+            qCWarning(lcTxMod) << "HL2 TXA modulator: peak-control change refused";
+        }
+    };
+    if (!peak) {
+        applyPeak();
+    }
+    if (!m_channel->setMinimumPhase(txMinimumPhaseFor(m_config.mode) && !peak)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: phase-mode change refused";
+    }
+    if (peak) {
+        applyPeak();
     }
     if (!m_channel->setFilter(lowHz, highHz)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: passband change refused,"
@@ -567,6 +586,29 @@ void Hl2TxDsp::setMicGain(double linear)
     // Echo what was actually stored, not the argument — the clamp above is
     // exactly the sort of thing a readout needs to see rather than assume.
     emit micGainChanged(m_micGain);
+}
+
+void Hl2TxDsp::setPeakControl(bool on, double clipDb, bool cessb)
+{
+    m_config.peakControlOn = on;
+    m_config.peakClipDb = std::isfinite(clipDb) ? std::clamp(clipDb, 0.0, 20.0) : 6.0;
+    m_config.peakCessb = cessb;
+#if AETHER_HL2_TX_TXA
+    applyModeAndFilter();
+#else
+    if (on) {
+        qCWarning(lcTxMod) << "HL2 phasing modulator: no peak control stage; ignored";
+    }
+#endif
+}
+
+bool Hl2TxDsp::peakControlActive() const noexcept
+{
+#if AETHER_HL2_TX_TXA
+    return m_config.peakControlOn && peakControlAppliesTo(m_config.mode);
+#else
+    return false;
+#endif
 }
 
 double Hl2TxDsp::alcGainDb() const noexcept

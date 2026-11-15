@@ -80,6 +80,15 @@ public:
         // No attack constant: each sample that needs the reduction has it
         // (Hl2TxAlc.h), so nothing overshoots into the hard clamp.
         double alcReleaseSec = 0.500;  // slow enough not to pump between words
+
+        // Peak control in the modulator (RFC #4836): WDSP's own COMP at
+        // peakClipDb and, with peakCessb, CESSB, inside the TXA channel where
+        // they see the final envelope. USB and LSB only; the bandpass runs
+        // linear phase while it is on, as WDSP's guide requires. TXA build
+        // only. The client keeps it exclusive with AetherTX's Peak control.
+        bool peakControlOn = false;
+        double peakClipDb = 6.0;
+        bool peakCessb = true;
     };
 
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
@@ -87,6 +96,16 @@ public:
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     // Linear gain applied to the audio before modulation. 1.0 = unity.
     Q_INVOKABLE void setMicGain(double linear);
+    // Modulator peak control (see Config). The TXA build applies it on the open
+    // channel; the phasing build has no such stage and ignores it.
+    Q_INVOKABLE void setPeakControl(bool on, double clipDb, bool cessb);
+    // True while the modulator's COMP is actually running: requested, TXA
+    // build, and a voice (USB/LSB) mode.
+    [[nodiscard]] bool peakControlActive() const noexcept;
+    [[nodiscard]] static constexpr bool peakControlAppliesTo(WdspChannel::Mode mode) noexcept
+    {
+        return mode == WdspChannel::Mode::Usb || mode == WdspChannel::Mode::Lsb;
+    }
     [[nodiscard]] double micGain() const noexcept { return m_micGain; }
 
     // Last applied configuration; check isConfigured() before publishing it.

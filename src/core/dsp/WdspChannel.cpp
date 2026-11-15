@@ -1031,6 +1031,37 @@ bool WdspChannel::setFilterTaps(int taps) noexcept
     return true;
 }
 
+bool WdspChannel::setTxSpeechProcessor(bool on, double clipDb, bool cessb) noexcept
+{
+    if (m_config.direction != Direction::Transmit || !std::isfinite(clipDb)) {
+        return false;
+    }
+    clipDb = std::clamp(clipDb, 0.0, 20.0);
+    if (!beginControlOperation()) {
+        return false;
+    }
+    {
+        // The Run setters re-run TXASetupBPFilters, which recalculates bp1 and
+        // bp2 under the channel's DSP section; serialise with the other setups.
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetTXACompressorGain(m_channelId, clipDb);
+        // osctrl before COMP on the way on, after it on the way off, so CESSB
+        // never runs without the clipper ahead of it.
+        if (on) {
+            SetTXAosctrlRun(m_channelId, cessb ? 1 : 0);
+            SetTXACompressorRun(m_channelId, 1);
+        } else {
+            SetTXACompressorRun(m_channelId, 0);
+            SetTXAosctrlRun(m_channelId, 0);
+        }
+    }
+    m_config.txSpeechProcessor = on;
+    m_config.txSpeechProcessorClipDb = clipDb;
+    m_config.txCessb = cessb;
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setMinimumPhase(bool on) noexcept
 {
     if (on == m_config.minimumPhase) {
@@ -1740,6 +1771,9 @@ bool WdspChannel::open() noexcept
         // (2048, linear) this changes nothing: create_txa already builds 2048.
         TXASetNC(m_channelId, m_config.filterTaps);
         TXASetMP(m_channelId, m_config.minimumPhase ? 1 : 0);
+        SetTXACompressorGain(m_channelId, m_config.txSpeechProcessorClipDb);
+        SetTXAosctrlRun(m_channelId, m_config.txSpeechProcessor && m_config.txCessb ? 1 : 0);
+        SetTXACompressorRun(m_channelId, m_config.txSpeechProcessor ? 1 : 0);
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.

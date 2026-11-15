@@ -374,6 +374,13 @@ void SetTXACTCSSRun(int channel, int run);
 // power of two >= the DSP size. TXASetMP does not stop it.
 void TXASetNC(int channel, int nc);
 void TXASetMP(int channel, int mp);
+// TXA's speech processor (compress.c) and CESSB overshoot control (osctrl.c).
+// Gain is the clip drive in dB. Each Run setter re-runs TXASetupBPFilters,
+// which brings bp1 (COMP) and bp2 (COMP + CESSB) in and out; WDSP's guide
+// wants the bandpasses linear phase while they run.
+void SetTXACompressorRun(int channel, int run);
+void SetTXACompressorGain(int channel, double gain);
+void SetTXAosctrlRun(int channel, int run);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
 // meters. RXA_ADC_PK / RXA_ADC_AV measure the POST-DDC slice, which is a
 // different question from the HL2's own pre-DDC full-spectrum clip
