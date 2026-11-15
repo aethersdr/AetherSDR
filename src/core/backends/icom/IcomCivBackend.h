@@ -133,7 +133,7 @@ public:
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
-    // One slice, always the transmit slice: the slice id is ignored.
+    // Legacy single-receiver tune offsets; high-end MAIN/SUB routing is deferred.
     void setSliceRitEnabled(int sliceId, bool on) override;
     void setSliceXitEnabled(int sliceId, bool on) override;
     void setSliceRitOffset(int sliceId, int hz) override;
@@ -351,8 +351,9 @@ private:
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
     bool hasDualReceivers() const;
-    void initialiseDualReceivers();
+    void initializeDualReceivers();
     void pollDualReceivers();
+    void warnScopeRejection(const ScopeDecoder& decoder);
     bool handleDualReceiverFrame(const CivFrame& frame);
     void publishDualReceiver(int receiver);
     void syncDualTransmit();
@@ -386,7 +387,7 @@ private:
         std::uint64_t audioFrames = 0;
         double audioRms = 0.0;
         bool visible = false;
-        bool viewInitialised = false;
+        bool viewInitialized = false;
         int edgeSlot = 0;
         int borrowedSlot = 0;
         int originalSlot = 0;
@@ -400,7 +401,7 @@ private:
         std::unique_ptr<Resampler> audio;
     };
     std::array<ReceiverState, 2> m_receivers;
-    bool m_dualInitialised = false;
+    bool m_dualInitialized = false;
     std::optional<bool> m_dualSplit;
     std::optional<int> m_dualRequestedTxReceiver;
     std::optional<std::uint64_t> m_dualTxFrequencyHz;
@@ -424,6 +425,10 @@ private:
     std::array<int, 2> m_dualRestoreSlots{};
     bool m_dualRestoring = false;
     int m_lanOutput = -1;
+    static constexpr qint64 kLanOutputReadTimeoutMs = 5000;
+    std::optional<qint64> m_lanOutputReadStartedAt;
+    bool m_lanOutputUnknownWarned = false;
+    std::optional<qint64> m_lastScopeRejectionWarningAt;
 
     std::unique_ptr<IcomSession> m_session;
     std::uint64_t m_sessionGeneration = 0;

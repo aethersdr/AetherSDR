@@ -37,6 +37,7 @@ constexpr std::size_t firstDivisionHeader(std::size_t freqBytes)
 
 std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
 {
+    m_rejection.reset();
     if (frame.cmd != cmd::kScope || !frame.hasSub || frame.sub != scope::kWaveData)
         return std::nullopt;
     if (frame.data.size() <= kOffDivisionMax)
@@ -71,6 +72,8 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
 
         const std::uint8_t modeByte = frame.data[kOffMode];
         if (modeByte > static_cast<std::uint8_t>(ScopeMode::ScrollF)) {
+            m_rejection = Rejection{Rejection::Kind::Mode,
+                static_cast<std::size_t>(ScopeMode::ScrollF), modeByte};
             return std::nullopt;
         }
         m_partial.mode = static_cast<ScopeMode>(modeByte);
@@ -109,6 +112,11 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
         m_assembling = true;
         m_partial.outOfRange = frame.data[header - 1] != 0x00;
         if (m_partial.outOfRange) {
+            if (frame.data.size() != header) {
+                m_assembling = false;
+                m_rejection = Rejection{Rejection::Kind::Size, 0, frame.data.size() - header};
+                return std::nullopt;
+            }
             // The radio omits the waveform entirely when out of range, so there
             // is nothing to accumulate. Emit a floor-filled sweep immediately:
             // a waterfall that stops scrolling reads as a hung application,
@@ -129,6 +137,8 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
             // below never executes over WiFi.
             m_assembling = false;
             if (m_partial.raw.size() != static_cast<std::size_t>(m_geom.points)) {
+                m_rejection = Rejection{Rejection::Kind::Size,
+                    static_cast<std::size_t>(m_geom.points), m_partial.raw.size()};
                 return std::nullopt;
             }
             return m_partial;
@@ -151,7 +161,10 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
 
     if (m_partial.raw.size() + frame.data.size() - kOffContinuation
         > static_cast<std::size_t>(m_geom.points)) {
+        const std::size_t received = m_partial.raw.size() + frame.data.size() - kOffContinuation;
         reset();
+        m_rejection = Rejection{Rejection::Kind::Size,
+            static_cast<std::size_t>(m_geom.points), received};
         return std::nullopt;
     }
     if (frame.data.size() > kOffContinuation)
@@ -161,6 +174,8 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
     if (division == divisionMax) {
         m_assembling = false;
         if (m_partial.raw.size() != static_cast<std::size_t>(m_geom.points)) {
+            m_rejection = Rejection{Rejection::Kind::Size,
+                static_cast<std::size_t>(m_geom.points), m_partial.raw.size()};
             return std::nullopt;
         }
         return m_partial;
@@ -170,6 +185,7 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
 
 void ScopeDecoder::reset() noexcept
 {
+    m_rejection.reset();
     m_partial = ScopeFrame{};
     m_assembling = false;
     m_expectedDivision = 0;

@@ -5,9 +5,11 @@
 #include "core/Resampler.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/PanadapterModel.h"
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
 #include <QCoreApplication>
+#include <QStringList>
 #include <QThread>
 #include <algorithm>
 #include <array>
@@ -75,7 +77,7 @@ struct IcomCivBackendTestAccess {
             return entry.outbound && entry.hex == expected;
         });
     }
-    static void prepare(IcomCivBackend& backend, std::uint8_t model)
+    static void prepare(IcomCivBackend& backend, std::uint8_t model, bool knownLanOutput = true)
     {
         backend.m_session = std::make_unique<IcomSession>(); // unstarted, no sockets
         backend.m_session->setCivAddress(0x50); // identity != configured bus address
@@ -94,7 +96,7 @@ struct IcomCivBackendTestAccess {
         identity.data = {model};
         backend.onCivFrame(identity,7);
         (void)backend.m_civScheduler.reset();
-        backend.m_lanOutput = 0;
+        if (knownLanOutput) { backend.m_lanOutput = 0; }
     }
     static void inject(IcomCivBackend& backend, std::vector<std::uint8_t> body,
                        std::uint64_t generation = 7, std::uint8_t source = 0x50)
@@ -117,6 +119,30 @@ struct IcomCivBackendTestAccess {
     static std::size_t snapshots(const IcomCivBackend& b) { return b.m_dualSavedPresets.size(); }
     static auto snapshot(const IcomCivBackend& b, int slot) { return b.m_dualSavedPresets.at({6, slot}); }
     static void audio(IcomCivBackend& b, const std::vector<float>& pcm) { b.onDualAudio(pcm); }
+    static void monoAudio(IcomCivBackend& b, const std::vector<float>& pcm) { b.onAudio(pcm); }
+    static void pollLan(IcomCivBackend& b, bool overdue = false)
+    {
+        if (overdue) { b.m_lanOutputReadStartedAt = b.nowMs() - b.kLanOutputReadTimeoutMs; }
+        b.pollDualReceivers();
+    }
+    static void clearSplit(IcomCivBackend& b) { b.m_dualSplit.reset(); }
+    static void receiverKnown(IcomCivBackend& b, bool mode, std::uint64_t frequency)
+    {
+        b.m_receivers[b.m_dualTxReceiver].modeKnown = mode;
+        b.m_receivers[b.m_dualTxReceiver].frequencyHz = frequency;
+    }
+    static bool tuneRefused(IcomCivBackend& b, const TxTestAuthority& authority)
+    {
+        clearCommands(b);
+        const int previousPower = b.m_preTuneTxPowerPercent;
+        b.setTransmitContext(authority.context);
+        b.setTune(true, 3, authority.operation);
+        pump(b);
+        return !b.m_tuning && b.m_preTuneTxPowerPercent == previousPower
+            && std::ranges::none_of(b.m_civTrace, [](const auto& row) { return row.outbound; });
+    }
+    static void expireScopeWarning(IcomCivBackend& b) { b.m_lastScopeRejectionWarningAt.reset(); }
+    static bool tuning(const IcomCivBackend& b) { return b.m_tuning; }
     static int data(const IcomCivBackend& b, int receiver) { return b.m_receivers[receiver].data; }
     static auto confirmation(const IcomCivBackend& b, const std::vector<std::uint8_t>& wire)
     { return b.confirmationFor(wire); }
@@ -150,6 +176,12 @@ struct IcomCivBackendTestAccess {
 }
 
 int failures = 0;
+QStringList scopeWarnings;
+void captureScopeWarning(QtMsgType type, const QMessageLogContext& context, const QString& message)
+{
+    if (type == QtWarningMsg && QString::fromLatin1(context.category) == QLatin1String("aether.icom.pan")
+        && message.startsWith(QLatin1String("scope sweep rejected:"))) { scopeWarnings.append(message); }
+}
 void check(bool value, const char* message)
 {
     std::printf("%s %s\n", value ? "PASS" : "FAIL", message);
@@ -177,6 +209,42 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     TestSettingsProfile settings(QStringLiteral("icom-dual-receiver"));
     if (!settings.isValid()) { return 1; }
+    for (std::uint8_t model : {0x98, 0xb2, 0x8e}) {
+        IcomCivBackend backend;
+        QStringList warnings;
+        int audioFrames = 0;
+        QObject::connect(&backend, &IRadioBackend::configurationWarning,
+                         [&](const QString& warning) { warnings.append(warning); });
+        QObject::connect(&backend, &IRadioBackend::audioFrameReady,
+                         [&](const PcmFrame&) { ++audioFrames; });
+        IcomCivBackendTestAccess::prepare(backend, model, false);
+        warnings.clear();
+        IcomCivBackendTestAccess::pollLan(backend);
+        check(warnings.isEmpty(), "unknown LAN output allows a bounded initial read interval");
+        IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
+        IcomCivBackendTestAccess::monoAudio(backend, std::vector<float>(2048, 0.25f));
+        check(audioFrames == 0, "unknown LAN output withholds both mono and stereo receive audio");
+        IcomCivBackendTestAccess::inject(backend, {0xfa});
+        IcomCivBackendTestAccess::pollLan(backend, true);
+        IcomCivBackendTestAccess::pollLan(backend, true);
+        check(warnings.size() == 1 && warnings.first().contains(QStringLiteral("could not be read")),
+              "unanswered or NAKed AF/IF read warns once after the deadline");
+        const auto setting = [&](int value) {
+            const auto frame = parseFrame(cmdWriteSetting(0x50, profileFor(*modelForId(model)).dualReceiver->lanOutputItem, value));
+            std::vector<std::uint8_t> body{frame->cmd, frame->sub};
+            body.insert(body.end(), frame->data.begin(), frame->data.end());
+            IcomCivBackendTestAccess::inject(backend, body);
+        };
+        setting(1);
+        check(warnings.size() == 2 && warnings.last().contains(QStringLiteral("output is IF")),
+              "confirmed IF has a distinct warning");
+        IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
+        check(audioFrames == 0, "confirmed IF still withholds audio");
+        setting(0);
+        IcomCivBackendTestAccess::pollLan(backend, true);
+        IcomCivBackendTestAccess::audio(backend, std::vector<float>(4096, 0.25f));
+        check(audioFrames > 0 && warnings.size() == 2, "late AF readback resumes audio without another warning");
+    }
     for (const auto [hint,overrideChannels,expected] :
          {std::array<int,3>{0x98,0,16}, {0xb2,0,16}, {0x8e,0,16}, {0xa4,0,4}, {0x50,2,16}, {0x98,1,4}}) {
         std::vector<std::vector<std::uint8_t>> packets;
@@ -248,6 +316,11 @@ int main(int argc, char** argv)
               "MAIN is visible and SUB capacity remains available after identity");
         IcomCivBackendTestAccess::inject(backend, makeScope(0,0,14'100'000,100'000));
         IcomCivBackendTestAccess::inject(backend, makeScope(1,3,7'000'000,7'200'000));
+        const auto* mainPan = radio.panadapter(radio.slice(0)->panId());
+        const auto* subPan = radio.panadapter(radio.slice(1)->panId());
+        check(mainPan && subPan && mainPan->zoomPlacement() == PanZoomPlacement::FitAroundCenter
+              && subPan->zoomPlacement() == PanZoomPlacement::CenterAllocation,
+              "MAIN/SUB publish independent zoom placement for current upstream band/segment controls");
         check(spectra[0].size() == 689 * sizeof(float) && spectra[1].size() == 689 * sizeof(float),
               "both scopes preserve all 689 native bins");
         float centreBin = 0, farBin = 0;
@@ -288,7 +361,18 @@ int main(int argc, char** argv)
         IcomCivBackendTestAccess::inject(backend, makeScope(0,0,18'100'000,100'000),7,0x51);
         check(spectra[0] == beforeMain, "obsolete session and foreign bus device cannot publish spectrum");
         auto shortScope = makeScope(0,0,14'100'000,100'000); shortScope.pop_back();
+        scopeWarnings.clear();
+        const auto previousHandler = qInstallMessageHandler(captureScopeWarning);
         IcomCivBackendTestAccess::inject(backend, shortScope);
+        IcomCivBackendTestAccess::inject(backend, shortScope);
+        check(scopeWarnings.size() == 1 && scopeWarnings.first().contains(QStringLiteral("689"))
+                  && scopeWarnings.first().contains(QStringLiteral("688")),
+              "production scope rejection logs byte counts and rate-limits repeated failures");
+        IcomCivBackendTestAccess::expireScopeWarning(backend);
+        IcomCivBackendTestAccess::inject(backend, makeScope(0,4,14'100'000,100'000));
+        check(scopeWarnings.size() == 2 && scopeWarnings.last().contains(QStringLiteral("mode 4")),
+              "production scope rejection logs unsupported modes");
+        qInstallMessageHandler(previousHandler);
         check(spectra[0] == beforeMain, "truncated waveform cannot become a padded plausible trace");
         for (int receiver : {1,0}) {
             auto freq = encodeFreq(receiver ? 7'150'000 : 14'200'000);
@@ -364,6 +448,37 @@ int main(int argc, char** argv)
         IcomCivBackendTestAccess::inject(backend, {0x0f,0});
         IcomCivBackendTestAccess::inject(backend, {0x0f,1});
         TxTestAuthority authority;
+        check(backend.requestSliceControl(0, {SliceControlRequest::Field::TxSlice, true}) == ReceiveDispatch::Dispatched,
+              "MAIN TX selection is pending");
+        check(!IcomCivBackendTestAccess::queuedPtt(backend, true, authority.operation),
+              "PTT is refused while TX receiver selection is unconfirmed");
+        check(IcomCivBackendTestAccess::tuneRefused(backend, authority),
+              "TUNE refuses pending TX selection before borrowing power or starting audio");
+        check(IcomCivBackendTestAccess::queuedPtt(backend, false, authority.operation),
+              "unkey remains available while TX selection is pending");
+        IcomCivBackendTestAccess::inject(backend, {0x0f,1});
+        check(!IcomCivBackendTestAccess::queuedPtt(backend, true, authority.operation),
+              "contradicting split readback cannot authorize the pending receiver");
+        IcomCivBackendTestAccess::inject(backend, {0x0f,0});
+        check(IcomCivBackendTestAccess::queuedPtt(backend, true, authority.operation)
+              && IcomCivBackendTestAccess::queuedPtt(backend, false, authority.operation),
+              "PTT works after the requested receiver is confirmed");
+        IcomCivBackendTestAccess::clearSplit(backend);
+        check(!IcomCivBackendTestAccess::queuedPtt(backend, true, authority.operation)
+              && IcomCivBackendTestAccess::tuneRefused(backend, authority),
+              "PTT and TUNE refuse unknown split");
+        IcomCivBackendTestAccess::inject(backend, {0x0f,1});
+        for (bool knownMode : {false, true}) {
+            IcomCivBackendTestAccess::receiverKnown(backend, knownMode, knownMode ? 0 : 7'150'000);
+            check(!IcomCivBackendTestAccess::queuedPtt(backend, true, authority.operation)
+                  && IcomCivBackendTestAccess::tuneRefused(backend, authority),
+                  "PTT and TUNE independently refuse missing TX mode or frequency");
+        }
+        IcomCivBackendTestAccess::receiverKnown(backend, true, 7'150'000);
+        backend.setTune(true, 3, authority.operation);
+        check(IcomCivBackendTestAccess::tuning(backend), "confirmed TX receiver permits authorized TUNE");
+        backend.setTune(false, 3, authority.operation);
+        check(!IcomCivBackendTestAccess::tuning(backend), "TUNE stop releases its audio producer");
         IcomCivBackendTestAccess::captureUplink(backend, uplink);
         const auto stereoPcm = [](int frames) {
             std::vector<qint16> samples(static_cast<std::size_t>(frames) * 2);

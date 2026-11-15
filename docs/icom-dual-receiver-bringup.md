@@ -123,10 +123,10 @@ were checked, not that this app was tested on that hardware.
 | Mode | `26 rr` retains base mode, DATA OFF/D1/D2/D3 and FIL1/FIL2/FIL3. Writes carry all fields and use an addressed readback. The existing neutral mode vocabulary collapses the DATA variant in the displayed label; the backend retains the actual enum. |
 | Other receiver controls | Only explicitly supported command families use `29 rr`. Shared PTT, split, modulation menus and scope commands are not wrapped. Generic ACK/NG is serialized by the existing scheduler. MAIN and SUB use separate semantic generations. |
 | Scope | Two independent decoders, 689 amplitudes each, documented 0–200 range. Each normal Ethernet sweep has 704 data bytes after `27 00`, including 15 metadata bytes. Truncated/oversized traces and invalid selectors are rejected. Out-of-range clears only its receiver. |
-| Frequency axes | Center mode is centre ± half-span. Fixed and scroll modes report actual lower/upper edges. Bytes already run from low to high RF; there is no IQ conjugation or FFT half-rotation. RadioModel derives spectrum and waterfall from the same bins and geometry. |
+| Frequency axes | Center mode is center ± half-span. Fixed and scroll modes report actual lower/upper edges. Bytes already run from low to high RF; there is no IQ conjugation or FFT half-rotation. RadioModel derives spectrum and waterfall from the same bins and geometry. |
 | Zoom | Center mode snaps to the eight native spans, 5 kHz–1 MHz total width. Fixed/Scroll-F drag and zoom use kHz-rounded edge windows. Each receiver borrows a slot not selected/reserved by the other scope, saves the range/slot preset before writing, and restores saved presets/selections during normal disconnect. |
 | RX audio | Stereo PCM16 RX and mono PCM16 TX are negotiated independently at 48 kHz. Stereo packet fragments retain complete interleaved frames. The IC-7851 live capture confirms channel 0 MAIN/channel 1 SUB; the other dual profiles use the same documented mapping. Each receiver has its own persistent 48→24 kHz converter and decoder feed. Speakers get a bounded equal mix with local per-slice gain/mute/balance. |
-| LAN AF/IF | Read-only inspection of the model's AF/IF menu. IF is not played as demodulated AF. No connect-time AF/IF menu rewrite. IC-7610 item 86; IC-7760 item 123; IC-7851 item 56. |
+| LAN AF/IF | Read-only inspection of the model's AF/IF menu. IF and unknown output are not played as demodulated AF. An unanswered read warns once after five seconds; a later AF reply resumes audio. No connect-time AF/IF menu rewrite. IC-7610 item 86; IC-7760 item 123; IC-7851 item 56. |
 | TX routing | One global PTT and one mono uplink. Editing focus does not move TX. Radio split readback selects MAIN or SUB; `1C 03` reports actual TX frequency. Key-on waits for receiver frequency/mode and split readback. Existing operation admission, queued-audio cancellation, PTT readback and fail-safe unkey remain in place. |
 | Modulation | IC-7610 LAN=05, DATA OFF item 91, D1/D2/D3 items 92/93/94. IC-7760 LAN=09, DATA OFF item 129, D1/D2/D3 items 130/131/132. Diagnostics follow the actual transmit receiver's DATA variant. IC-7851 LAN=09, DATA OFF item 63, D1/D2/D3 items 64/65/66. PC Audio continues to change DATA OFF only on operator request. |
 
@@ -149,6 +149,13 @@ receiver-qualified confirmations, stereo decoder feeds and the speaker mix.
 counts for loss concealment. Existing Icom tests protect the previous models.
 
 ## Minimum hardware acceptance
+
+IC-7760 transmit is enabled from the CI-V guide on the shared IC-7610 TX path,
+as approved by the maintainer. It is not yet confirmed on hardware. The
+IC-7851 receive and TX-selection evidence below does not qualify RF transmit
+on these models. IC-7610 displacement reports #5714, #5341, #5154, #5096 and
+#5084 still need IC-7610 hardware confirmation. #6920 also requests diversity
+and all four antenna ports, which this implementation does not add.
 
 Before testing, check the radio owner/busy state and the local test lock. Do not
 connect over another operator's session. Record model, firmware, connection
@@ -286,3 +293,49 @@ retained run). Fresh-session preset reads independently matched those originals.
 A final monitor PCM capture had positive RMS on both channels; the operator's
 master mute was preserved. All live actions ran with TX automation disabled
 and PTT observed off. No RF TX result is claimed.
+
+The Add Panadapter dialog also passed repeated close/reopen cycles without a
+capacity warning. Both VFO TX buttons selected the expected split state and
+actual `1C 03` dial frequency, preserving receive tuning with PTT off. Live
+source reads were DATA OFF=MIC, D1=USB, D2=LAN and D3=LAN.
+
+## Review follow-up — 2026-11-15
+
+The Icom commits were rebased onto `main` after #6885 and #6889 merged,
+dropping their stale pre-squash copies. The current connection workspace is
+used for the experimental model choices. Unknown LAN AF/IF output now warns
+once after five seconds while receive audio remains withheld; an AF readback
+resumes playback. Strict scope size/mode rejection logs expected and received
+values at most once every five seconds. These failure paths were exercised
+with injected replies, not by changing the live radio's AF/IF menu.
+
+The macOS app and focused targets built with eight parallel jobs. All 57
+selected CTests passed: 31 Icom/GUI tests and 26 audio-engine cases. Tests
+cover short/oversized 475- and 689-bin sweeps, invalid modes, unknown LAN
+output and recovery, and refusal of both PTT and TUNE while TX selection,
+split, mode or frequency is unconfirmed. Removing either pending-selection
+guard, the LAN warning, or strict LAN sweep-size rejection made its regression
+checks fail; the production guards were restored before the final passing run.
+
+With Icomlab closed and the local radio test lock held, the IC-7851 supplied
+live 689-bin MAIN/SUB scopes and positive pre-monitor audio RMS on both
+receivers. MAIN-only audio was centered. MAIN and SUB TX selection matched
+split and `1C 03` frequency readbacks without changing either receive dial.
+Four scope-range changes preserved both dial frequencies and the other scope.
+Two SUB close/reopen cycles preserved frequency/mode, released app-owned
+Dualwatch on close, and restored centered MAIN audio. A separate two-receiver
+scope-edit cycle confirmed saved preset contents and the pre-edit selectors
+by fresh-session reads after normal disconnect. Dualwatch was confirmed off.
+The radio was disconnected and the local lock released after testing.
+
+The current source readbacks were DATA OFF=LAN, D1=USB and D2/D3=LAN; these
+were inspected without rewriting the menus. PTT stayed off and bridge TX
+permission stayed disabled throughout. This run does not qualify RF
+transmit, IC-7610 or IC-7760 hardware, or saved-password persistence in this
+local build without QtKeychain support.
+
+Native receiver-pane captures from this run:
+
+![IC-7851 MAIN Scroll-F](assets/icom-dual-receiver/ic-7851-main-pane.png)
+
+![IC-7851 SUB Scroll-F](assets/icom-dual-receiver/ic-7851-sub-pane.png)

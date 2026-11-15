@@ -177,7 +177,10 @@ version or distinguish IC-7850 from IC-7851. The connected tab and status bar
 use the identified model after the CI-V reply arrives.
 
 Select **AF** under the radio's **LAN AF/IF Output** menu for PC listening.
-An IF selection is reported and receive audio is withheld. Stereo LAN receive
+An IF selection is reported and receive audio is withheld. If the AF/IF read
+remains unanswered for five seconds, AetherSDR warns that PC receive audio is
+withheld until AF is confirmed. Check the radio menu and CI-V connection; a
+later AF reply resumes audio without reconnecting. Stereo LAN receive
 audio is split into separate decoder feeds and a speaker mix; per-slice gain,
 mute and balance adjust the local monitor. MAIN-left/SUB-right channel identity
 is verified on the lab IC-7851; it is an initial implementation assumption on
@@ -198,9 +201,12 @@ radio. Configure **LAN** as the modulation source for the DATA mode you use;
 DATA1, DATA2 and DATA3 have separate radio settings. **PC Audio** changes DATA
 OFF input only when requested. Radio Health names the active DATA variant;
 the source warning checks that variant, so D1 on USB does not imply D2 is also
-on USB. Basic RX/TX operation remains experimental until
-checked on a physical radio. Receiver-specific DSP, calibrated meters and other
-model differences are deferred.
+on USB. **IC-7760 transmit is enabled from its CI-V guide using the shared
+IC-7610 transmit path; it is not yet confirmed on hardware.** The IC-7851
+receive and TX-selection checks do not establish RF transmit qualification
+for any of these models. Diversity, all four IC-7851 antenna ports,
+receiver-specific DSP, calibrated meters and other model differences are
+outside this initial support.
 
 ### Not available on a networked Icom
 

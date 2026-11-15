@@ -1090,7 +1090,7 @@ void IcomCivBackend::disconnectRadio()
     m_rxResampler.reset();
     m_scope.reset();
     m_receivers = {};
-    m_dualInitialised = false;
+    m_dualInitialized = false;
     m_dualPanOpening = m_dualPanClosing = m_dualWatchOwned = m_dualPanHasOpened = false;
     m_dualMainMonitorPan = 0;
     m_dualPanWatchRequested = false;
@@ -1109,6 +1109,9 @@ void IcomCivBackend::disconnectRadio()
     m_dualTxReceiver = 0;
     m_dualFocus = 0;
     m_lanOutput = -1;
+    m_lanOutputReadStartedAt.reset();
+    m_lanOutputUnknownWarned = false;
+    m_lastScopeRejectionWarningAt.reset();
     m_meters.reset();
     terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                        SchedulerWaiterOutcome::Cancelled);
@@ -1514,7 +1517,7 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
         ? m_model->scopeMaxAmplitude : kScopeMaxAmplitude;
     m_scope = ScopeDecoder(geometry);
     if (hasDualReceivers()) {
-        initialiseDualReceivers();
+        initializeDualReceivers();
     } else {
         sendConnectReadBurst();
     }
@@ -2290,7 +2293,7 @@ void IcomCivBackend::setPanScopeMode(const QString& id, int index)
             || !m_session || !m_connected) { return; }
         const std::array<ScopeMode,3> modes{ScopeMode::Centre, ScopeMode::ScrollF, ScopeMode::Fixed};
         auto& state = m_receivers[receiver];
-        state.viewInitialised = true;
+        state.viewInitialized = true;
         state.windowTarget.reset();
         state.pendingCentreHz.reset();
         state.windowFlushScheduled = false;
@@ -2585,6 +2588,24 @@ void IcomCivBackend::onScopeSelectorChanged(std::uint8_t selector)
 // CI-V decode
 // ---------------------------------------------------------------------------
 
+void IcomCivBackend::warnScopeRejection(const ScopeDecoder& decoder)
+{
+    const auto& rejection = decoder.rejection();
+    if (!rejection) { return; }
+    constexpr qint64 kWarningIntervalMs = 5000;
+    const qint64 now = nowMs();
+    if (m_lastScopeRejectionWarningAt
+        && now - *m_lastScopeRejectionWarningAt < kWarningIntervalMs) { return; }
+    m_lastScopeRejectionWarningAt = now;
+    if (rejection->kind == ScopeDecoder::Rejection::Kind::Size) {
+        qCWarning(lcIcomPan) << "scope sweep rejected: expected" << rejection->expected
+                           << "waveform bytes, received" << rejection->received;
+    } else {
+        qCWarning(lcIcomPan) << "scope sweep rejected: mode" << rejection->received
+                           << "exceeds supported maximum" << rejection->expected;
+    }
+}
+
 void IcomCivBackend::onCivFrame(const CivFrame& incoming,
                                 std::uint64_t sessionGeneration)
 {
@@ -2635,7 +2656,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& incoming,
     }
     // Scope first: it is by far the highest-rate frame, and the decoder already
     // rejects anything that is not waveform data.
-    if (auto sweep = m_scope.feed(frame)) {
+    const auto sweep = m_scope.feed(frame);
+    warnScopeRejection(m_scope);
+    if (sweep) {
         ScopeGeometry geom;
         geom.points = m_model->scopePoints ? m_model->scopePoints : kScopePointsIc705;
         geom.maxAmplitude = m_model->scopeMaxAmplitude ? m_model->scopeMaxAmplitude
@@ -6555,6 +6578,11 @@ void IcomCivBackend::setTransmitFrequencyCheck(bool on)
 
 void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_ritOn = on;
     sendUserCommand(cmdRitEnable(m_session ? m_session->civAddress() : 0xA4, on));
@@ -6562,6 +6590,11 @@ void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 
 void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_xitOn = on;
     sendUserCommand(cmdXitEnable(m_session ? m_session->civAddress() : 0xA4, on));
@@ -6569,6 +6602,11 @@ void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 
 void IcomCivBackend::setSliceRitOffset(int sliceId, int hz)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_ritOffsetHz = hz;
     // ONE offset register serves both RIT and XIT on this radio — 21 00 is the
@@ -6609,7 +6647,7 @@ void IcomCivBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operati
     if (key && hasDualReceivers() && (m_dualRequestedTxReceiver || !m_dualSplit.has_value()
         || !m_receivers[m_dualTxReceiver].modeKnown
         || m_receivers[m_dualTxReceiver].frequencyHz == 0)) {
-        emit configurationWarning(QStringLiteral("PTT refused until MAIN/SUB mode, frequency and split are read back."));
+        emit configurationWarning(QStringLiteral("PTT refused: MAIN/SUB TX selection is pending or mode, frequency or split is unknown. Select a TX receiver again if the radio did not accept the request."));
         return;
     }
     if (key && refuseKeyingInReceiveOnlyMode())

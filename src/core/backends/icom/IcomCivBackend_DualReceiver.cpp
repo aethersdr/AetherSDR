@@ -62,10 +62,10 @@ std::vector<std::uint8_t> IcomCivBackend::receiverCommand(
     return frame;
 }
 
-void IcomCivBackend::initialiseDualReceivers()
+void IcomCivBackend::initializeDualReceivers()
 {
-    if (m_dualInitialised || !m_session) { return; }
-    m_dualInitialised = true;
+    if (m_dualInitialized || !m_session) { return; }
+    m_dualInitialized = true;
     for (int receiver = 0; receiver < 2; ++receiver) {
         ReceiverState& state = m_receivers[receiver];
         ScopeGeometry geometry;
@@ -80,11 +80,11 @@ void IcomCivBackend::initialiseDualReceivers()
     }
     publishDualPan(0);
     sendUserCommand(cmdScopeMode(m_session->civAddress(), 3, 0));
-    m_receivers[0].viewInitialised = true;
+    m_receivers[0].viewInitialized = true;
     if (m_session->rxChannels() != 2) {
         emit configurationWarning(QStringLiteral(
             "Dual-receiver radio connected with mono LAN audio. SUB audio is unavailable; "
-            "reconnect with icom.rxChannels=2 for a non-default CI-V address."));
+            "check the selected Icom model and CI-V address, then reconnect."));
     }
     pollDualReceivers();
 }
@@ -92,6 +92,8 @@ void IcomCivBackend::initialiseDualReceivers()
 void IcomCivBackend::pollDualReceivers()
 {
     if (!m_session || !m_connected || m_dualRestoring) { return; }
+    const qint64 now = nowMs();
+    if (!m_lanOutputReadStartedAt) { m_lanOutputReadStartedAt = now; }
     const std::uint8_t address = m_session->civAddress();
     const auto read = [this](const std::vector<std::uint8_t>& frame) {
         queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Control);
@@ -101,25 +103,34 @@ void IcomCivBackend::pollDualReceivers()
         read(buildFrameSub(address, 0x26, receiver));
         read(cmdReadScopeEdgeNumber(address, receiver));
         read(cmdReadScopeMode(address, receiver));
-        queueRead(buildFrameSub(address, cmd::kScope, scope::kReference,
-                  std::array<std::uint8_t,1>{receiver}),
-                  "scope.reference." + std::to_string(receiver),
+        const auto reference = buildFrameSub(address, cmd::kScope, scope::kReference,
+                  std::array<std::uint8_t,1>{receiver});
+        queueRead(reference, semanticKey(reference),
                   IcomCivScheduler::Priority::Maintenance, 0, {receiver});
     }
     read(buildFrame(address, cmd::kDuplex));
     read(buildFrameSub(address, cmd::kVfoControl, 0xc2));
     read(cmdReadTransmitFrequency(address));
     read(buildFrameSub(address, cmd::kControl, control::kPtt));
-    const auto mod = currentModulationProfile();
-    for (int item : {profileFor(*m_model).dualReceiver->lanOutputItem,
-                     mod->dataOffInputItem, mod->dataInputItem, mod->networkLevelItem}) {
-        read(cmdReadSetting(address, item));
+    read(cmdReadSetting(address, profileFor(*m_model).dualReceiver->lanOutputItem));
+    if (const auto mod = currentModulationProfile()) {
+        for (int item : {mod->dataOffInputItem, mod->dataInputItem, mod->networkLevelItem}) {
+            read(cmdReadSetting(address, item));
+        }
     }
     for (int item : profileFor(*m_model).dualReceiver->dataInputItems) {
         const auto frame = cmdReadSetting(address, item);
         queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Maintenance);
     }
     pumpCiv(nowMs());
+    if (m_connected && m_lanOutputReadStartedAt && m_lanOutput < 0 && !m_lanOutputUnknownWarned
+        && now - *m_lanOutputReadStartedAt >= kLanOutputReadTimeoutMs) {
+        m_lanOutputUnknownWarned = true;
+        const QString warning = QStringLiteral(
+            "LAN AF/IF output could not be read. PC receive audio is withheld until AF is confirmed. "
+            "Check the radio's LAN AF/IF Output menu and CI-V connection.");
+        emit configurationWarning(warning);
+    }
 }
 
 void IcomCivBackend::publishDualReceiver(int receiver)
@@ -195,12 +206,10 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
     const bool waveform = frame.cmd == cmd::kScope && frame.hasSub && frame.sub == 0;
     if (waveform) {
         if (frame.data.empty() || frame.data[0] > 1) { return true; }
-        if (frame.data.size() >= 15 && frame.data[1] == 1 && frame.data[2] == 1
-            && ((frame.data[14] == 0 && frame.data.size() != 15 + static_cast<std::size_t>(m_model->scopePoints))
-                || (frame.data[14] != 0 && frame.data.size() != 15))) { return true; }
         const int receiver = frame.data[0];
         ReceiverState& state = m_receivers[receiver];
         const auto sweep = state.scope.feed(frame);
+        warnScopeRejection(state.scope);
         if (!sweep || sweep->bandwidthHz() <= 0) { return true; }
         ++state.scopeFrames;
         state.lastScopeAtMs = nowMs();
@@ -216,6 +225,8 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         const bool modeChanged = state.scopeFrames == 1 || state.scopeMode != sweep->mode;
         state.scopeMode = sweep->mode;
         if (modeChanged && state.visible) {
+            emit panZoomPlacementChanged(QString::number(receiver), state.scopeMode == ScopeMode::Centre
+                ? PanZoomPlacement::FitAroundCenter : PanZoomPlacement::CenterAllocation);
             emit panScopeModeChanged(QString::number(receiver), sweep->mode == ScopeMode::Centre ? 0
                 : sweep->mode == ScopeMode::ScrollF ? 1 : sweep->mode == ScopeMode::Fixed ? 2 : -1);
         }
@@ -327,6 +338,8 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         auto& state = m_receivers[frame.data[0]];
         state.scopeMode = static_cast<ScopeMode>(frame.data[1]);
         if (state.visible) {
+            emit panZoomPlacementChanged(QString::number(frame.data[0]), state.scopeMode == ScopeMode::Centre
+                ? PanZoomPlacement::FitAroundCenter : PanZoomPlacement::CenterAllocation);
             emit panScopeModeChanged(QString::number(frame.data[0]), frame.data[1] == 0 ? 0 : frame.data[1] == 3 ? 1 : frame.data[1] == 1 ? 2 : -1);
         }
     } else if (dualWatch) {
@@ -354,7 +367,7 @@ void IcomCivBackend::onDualAudio(const std::vector<float>& interleaved)
 {
     if (!m_connected || m_dualRestoring || interleaved.empty() || interleaved.size() % 2 != 0
         || interleaved.size() > static_cast<std::size_t>(PcmFrame::kMaxFrames) * 2
-        || m_lanOutput != 0 || !m_dualInitialised
+        || m_lanOutput != 0 || !m_dualInitialized
         || !std::ranges::all_of(interleaved, [](float v) { return std::isfinite(v); })) { return; }
     const std::size_t frames = interleaved.size() / 2;
     std::array<QByteArray, 2> streams;
@@ -405,6 +418,9 @@ void IcomCivBackend::publishDualPan(int receiver)
     emit panCenterBandwidthChanged(id, state.centreHz / 1e6, state.spanHz * 2.0 / 1e6);
     emit panScopeModesChanged(id, {QStringLiteral("Center"), QStringLiteral("Scroll-F"), QStringLiteral("Fixed")});
     emit panScopeModeChanged(id, state.scopeMode == ScopeMode::Centre ? 0 : state.scopeMode == ScopeMode::ScrollF ? 1 : 2);
+    emit panZoomPlacementChanged(id, state.scopeFrames == 0 ? PanZoomPlacement::Unknown
+        : state.scopeMode == ScopeMode::Centre ? PanZoomPlacement::FitAroundCenter
+                                              : PanZoomPlacement::CenterAllocation);
     emit panRangeChanged(id, state.calibration.floorDbm, state.calibration.floorDbm + state.calibration.spanDb);
     emit panBandwidthLimitsChanged(id, 0.005, 1.0);
     SliceDelta delta;
@@ -421,14 +437,14 @@ void IcomCivBackend::publishDualPan(int receiver)
 
 bool IcomCivBackend::createPanadapter()
 {
-    if (!hasDualReceivers() || !m_session || !m_connected || m_keyed || !m_dualInitialised
+    if (!hasDualReceivers() || !m_session || !m_connected || m_keyed || !m_dualInitialized
         || m_receivers[1].visible || m_dualPanOpening || m_dualPanClosing) { return false; }
     m_dualPanOpening = true;
     m_dualPanWatchRequested = false;
     const auto paneEpoch = ++m_dualPaneEpoch;
     if (!m_dualPanHasOpened) {
         sendUserCommand(cmdScopeMode(m_session->civAddress(), 3, 1));
-        m_receivers[1].viewInitialised = true;
+        m_receivers[1].viewInitialized = true;
     }
     sendUserCommand(buildFrameSub(m_session->civAddress(), cmd::kScope, 0x13,
                                  std::array<std::uint8_t,1>{1}));

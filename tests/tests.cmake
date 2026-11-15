@@ -830,12 +830,13 @@ target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
 
-# #5347: injected Icom model profiles, no session/transport/device.
+# Shared MAIN/SUB backend with injected CI-V and PCM; no sockets or radio.
 add_executable(icom_dual_receiver_test tests/icom_dual_receiver_test.cpp)
 target_include_directories(icom_dual_receiver_test PRIVATE src tests)
 target_link_libraries(icom_dual_receiver_test PRIVATE aethercore Qt6::Core)
 add_test(NAME icom_dual_receiver_test COMMAND icom_dual_receiver_test)
 
+# #5347: injected Icom model profiles, no session/transport/device.
 add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
 target_include_directories(icom_panadapter_capacity_test PRIVATE src tests)
 target_link_libraries(icom_panadapter_capacity_test PRIVATE aethercore Qt6::Core)

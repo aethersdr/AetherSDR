@@ -4487,6 +4487,12 @@ radio-read source values/names. Missing values mean no readback yet. These
 are global menus, selected by the TX receiver's DATA variant, not local focus.
 `txReceiver` and `txFrequencyHz` expose split and actual `1C 03` readback;
 `pendingTxReceiver` is present while a VFO TX selection is unconfirmed.
+`lanOutput` is `-1` until the AF/IF menu answers, `0` for AF and `1` for IF.
+Both unknown and IF withhold PC receive audio. An unknown value lasting five
+seconds produces one configuration warning per connection; a late AF reply
+opens the receive audio path. Scope size/mode rejection logs under
+`aether.icom.pan` are limited to one warning per five seconds and include
+expected/received waveform counts or the unsupported mode.
 
 MAIN/SUB profiles also report radio-read `dualWatch` (null until known).
 `civ dualwatch on` / `civ dualwatch off` explicitly request the documented

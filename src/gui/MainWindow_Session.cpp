@@ -327,6 +327,11 @@ void MainWindow::refreshRadioTabs()
                 || path.value("id") == m_activeRadioTarget.value("path").toObject().value("id")
             : !serial.isEmpty() && entry.serial == serial && path.value("family").toString() == m_radioModel.family();
         if (connected && matchesActive && activeId.isEmpty()) {
+            const QString previousModel = entry.model;
+            entry.model = m_radioModel.model();
+            if (entry.name.isEmpty() || entry.name == previousModel) {
+                entry.name = m_radioModel.nickname().isEmpty() ? entry.model : m_radioModel.nickname();
+            }
             entry.status = m_radioSwitchPhase == QLatin1String("disconnecting") ? RadioTabStatus::Disconnecting : RadioTabStatus::Connected;
             activeId = entry.id;
             entry.canConnect = false;
