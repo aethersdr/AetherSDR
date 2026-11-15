@@ -504,7 +504,9 @@ credential for the connected radio. Opening it reads status only.
 
 - **Start AetherPD** requests a session for the current connection. It does
   not transmit or arm calibration. A start receipt is followed by a status
-  read; it is not confirmation that correction is running.
+  read; it is not confirmation that correction is running. Startup checks the
+  idle state for your connected GUI and refuses to continue if its identity
+  or fresh radio status cannot be confirmed.
 - **Arm calibration** requires fresh, unkeyed status and radio APD off.
   **Cancel calibration** withdraws the calibration request.
 - **Stop AetherPD** can interrupt startup. Closing the window leaves the

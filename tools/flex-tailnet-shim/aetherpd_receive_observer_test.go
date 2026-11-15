@@ -23,11 +23,11 @@ func pdObservationFrames(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return "V1.4.0.0\nH01020304\n" +
-		"S01020304|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=\n" +
 		"S01020304|client 0x11223344 connected local_ptt=1 client_id=11111111-2222-4333-8444-555555555555 program=AetherSDR station=Automation\nR1|0|\n" +
 		"S01020304|display pan 0x40000000 client_handle=0x11223344 center=7.150000 bandwidth=0.075170 rfgain=0 rxant=RX_A\nR2|0|\n" +
 		strings.TrimSpace(string(slice)) + "\n" +
-		"S01020304|slice 1 in_use=1 client_handle=0x55667788 pan=0x40000001 RF_frequency=7.175000 mode=LSB dax=2\nR3|0|\nR4|0|\n"
+		"S01020304|slice 1 in_use=1 client_handle=0x55667788 pan=0x40000001 RF_frequency=7.175000 mode=LSB dax=2\nR3|0|\nR4|0|\n" +
+		"S01020304|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=\nR5|0|0x11223344\n"
 }
 
 func TestPDReceiveObserverSnapshot(t *testing.T) {
@@ -40,7 +40,7 @@ func TestPDReceiveObserverSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wire.writes.String() != pdReceiveSubscriptions {
+	if wire.writes.String() != pdReceiveSubscriptions+"C5|client bind client_id=11111111-2222-4333-8444-555555555555\n" {
 		t.Fatalf("unexpected commands: %q", wire.writes.String())
 	}
 	if observation.view.complete || !observation.original.complete {
@@ -51,6 +51,44 @@ func TestPDReceiveObserverSnapshot(t *testing.T) {
 	}
 	if observation.view.slices[1].owner != 0x55667788 || observation.view.slices[1].daxChannel != 2 || observation.view.panLowHz != 7112415 || observation.view.panHighHz != 7187585 {
 		t.Fatalf("incorrect inventory or coverage: %+v", observation.view)
+	}
+}
+
+func TestPDReceiveObserverRequiresBoundContext(t *testing.T) {
+	// FLEX-8600 4.3.16: unbound RECEIVE/denied is distinct from the
+	// original GUI's READY/allowed status, emitted before the bind reply.
+	idle := "S01020304|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=\n"
+	ack := "R5|0|0x11223344\n"
+	frames := pdObservationFrames(t)
+	frames = strings.Replace(frames, "R1|0|", "S0|interlock tx_client_handle=0x00000000 state=RECEIVE reason= source= tx_allowed=0 amplifier=\nR1|0|", 1)
+	for name, input := range map[string]string{
+		"status before ack": frames,
+		"status after ack":  strings.Replace(frames, idle+ack, ack+idle, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			wire := &pdObservationWire{Reader: strings.NewReader(input)}
+			got, err := readPDReceiveObservation(wire, 0x11223344, 0x40000000, 0, time.Now)
+			if err != nil || !got.view.ready || !got.view.txAllowed || got.view.txOwner != 0 {
+				t.Fatalf("bound receive context not observed: %+v, %v", got.view, err)
+			}
+		})
+	}
+	for name, input := range map[string]string{
+		"missing bind ack":             strings.Replace(frames, ack, "", 1),
+		"foreign bind":                 strings.Replace(frames, ack, "R5|0|0x55667788\n", 1),
+		"failed bind":                  strings.Replace(frames, ack, "R5|50000001|\n", 1),
+		"empty bind":                   strings.Replace(frames, ack, "R5|0|\n", 1),
+		"unbound ready only":           idle + strings.Replace(frames, idle, "", 1),
+		"missing bound permission":     strings.Replace(frames, idle, strings.Replace(idle, "tx_allowed=1", "", 1), 1),
+		"GUI disconnected during bind": strings.Replace(frames, ack, "S0|client 0x11223344 disconnected\n"+ack, 1),
+		"GUI reused during bind":       strings.Replace(frames, ack, "S0|client 0x11223344 connected client_id=99999999-2222-4333-8444-555555555555\n"+ack, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			wire := &pdObservationWire{Reader: strings.NewReader(input)}
+			if _, err := readPDReceiveObservation(wire, 0x11223344, 0x40000000, 0, time.Now); err == nil {
+				t.Fatal("unconfirmed observer context accepted")
+			}
+		})
 	}
 }
 
@@ -143,7 +181,7 @@ func TestPDReceiveObserverCapturedFirmwareFrames(t *testing.T) {
 	if _, err := readPDReceiveObservation(wire, 0x11223344, 0x40000000, 0, time.Now); err == nil {
 		t.Fatal("inventory-only capture incorrectly accepted as full live observation")
 	}
-	frames = append(frames, []byte("S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=\n")...)
+	frames = append(frames, []byte("S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=\nR5|0|0x11223344\n")...)
 	wire = &pdObservationWire{Reader: strings.NewReader(string(frames))}
 	observation, err := readPDReceiveObservation(wire, 0x11223344, 0x40000000, 0, time.Now)
 	if err != nil {

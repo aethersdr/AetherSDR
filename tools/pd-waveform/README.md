@@ -142,6 +142,14 @@ counters once; subsequent inactive packets do not repeat the record. These
 diagnostics distinguish admission, configuration, continuity and deadline
 cancellation without changing any source limit or automatically rearming it.
 
+The receive observer first identifies the session's GUI from subscribed client
+inventory, then binds its own API connection to that exact client ID. It requires
+the bind reply to name the expected handle and a complete interlock observation
+after the bind request. The unbound interlock is discarded: on FLEX-8600 firmware
+4.3.16 it can report `RECEIVE` with TX denied while the GUI reports `READY`.
+Binding does not key, select a receiver or restore settings. Snapshot freshness,
+ownership and idle-state checks still apply.
+
 Recovery is not complete: losing the leased radio API connection removes the
 active PD slice on the tested FLEX-8600, even without PTT. The independent
 unkey connection survives, but the lease guardian cannot restore USB through

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T15:10:33.798818+00:00",
+  "updated_utc": "2026-11-15T15:29:16.402412+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -705,8 +705,13 @@
     "production_ready": false
   },
   "source_cancel_diagnostics": {
-    "status": "three_native_regressions_and_ARMv7_ARM64_builds_passed_not_installed",
-    "evidence": "source-cancel-development/validation.json under evidence_root",
+    "status": "installed_8600_upgrade_and_cleanup_confirmed_startup_refused_before_RF",
+    "evidence": "source-cancel-live/validation.json under evidence_root",
+    "production_ready": false
+  },
+  "receive_observer_gui_context": {
+    "status": "bound_context_fix_component_tests_passed_not_installed",
+    "evidence": "source-cancel-live/validation.json under evidence_root",
     "production_ready": false
   }
 }

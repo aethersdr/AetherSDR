@@ -12,7 +12,7 @@ func TestPDReceiveFullProfileAndCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := &pdObservationWire{Reader: strings.NewReader(strings.TrimSpace(string(data)) + "\nS0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=\n")}
+	wire := &pdObservationWire{Reader: strings.NewReader(strings.TrimSpace(string(data)) + "\nS0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=\nR5|0|0x11223344\n")}
 	o, err := readPDReceiveObservation(wire, 0x11223344, 0x40000000, 0, func() time.Time { return time.Now() })
 	if err != nil {
 		t.Fatal(err)

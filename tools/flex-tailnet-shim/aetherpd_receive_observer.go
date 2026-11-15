@@ -61,7 +61,8 @@ func (attrs pdReceiveAttributes) sliceLine(id int) string {
 }
 
 // The caller gets a fresh connection, never a cached READY from the PD lease.
-// Only fixed read-only subscriptions are sent; this connection never GUI-binds.
+// Subscriptions identify the original GUI before binding this observer to it.
+// Firmware 4.3.16 gives unbound clients a separate, non-ready TX context.
 func observePDReceive(ctx context.Context, guiHandle, panID uint32, sliceID int) (pdReceiveObservation, error) {
 	return observePDReceiveState(ctx, guiHandle, panID, sliceID, true)
 }
@@ -113,6 +114,7 @@ func readPDReceiveState(conn io.ReadWriter, guiHandle, panID uint32, sliceID int
 	}
 	reader := bufio.NewReaderSize(io.LimitReader(conn, 1<<20), 4098)
 	var replies [4]bool
+	bindSent, bound := false, false
 	var slices [16]pdReceiveAttributes
 	pans := make(map[uint32]pdReceiveAttributes)
 	interlock := make(pdReceiveAttributes)
@@ -147,11 +149,37 @@ func readPDReceiveState(conn io.ReadWriter, guiHandle, panID uint32, sliceID int
 			}
 			seq, seqErr := pdReceiveDecimal(fields[0])
 			code, codeErr := strconv.ParseUint(fields[1], 16, 32)
-			if seqErr != nil || codeErr != nil || seq < 1 || seq > 4 || code != 0 || replies[seq-1] {
+			if seqErr != nil || codeErr != nil || seq < 1 || seq > 5 || code != 0 {
 				return out, errors.New("failed or unexpected subscription reply")
 			}
-			replies[seq-1] = true
-			if replies == [4]bool{true, true, true, true} && pdReceiveInterlockComplete(interlock) {
+			if seq == 5 {
+				handle, err := pdReceiveHexHandle(fields[2])
+				if !bindSent || bound || err != nil || handle != guiHandle {
+					return out, errors.New("receive observer GUI bind was not confirmed")
+				}
+				bound = true
+			} else {
+				if replies[seq-1] {
+					return out, errors.New("duplicate subscription reply")
+				}
+				replies[seq-1] = true
+			}
+			if replies == [4]bool{true, true, true, true} && !bindSent {
+				if !connected {
+					return out, errors.New("missing GUI identity before observer bind")
+				}
+				command := "C5|client bind client_id=" + clientID + "\n"
+				if n, err := io.WriteString(conn, command); err != nil {
+					return out, err
+				} else if n != len(command) {
+					return out, io.ErrShortWrite
+				}
+				// Bind emits its status before the acknowledgement. Discard only
+				// the unbound context; keep subsequent status and require both.
+				interlock = make(pdReceiveAttributes)
+				bindSent = true
+			}
+			if bound && pdReceiveInterlockComplete(interlock) {
 				break
 			}
 			continue
@@ -280,11 +308,11 @@ func readPDReceiveState(conn io.ReadWriter, guiHandle, panID uint32, sliceID int
 			continue
 		}
 		target.merge(attributes)
-		if replies == [4]bool{true, true, true, true} && pdReceiveInterlockComplete(interlock) {
+		if bound && pdReceiveInterlockComplete(interlock) {
 			break
 		}
 	}
-	if replies != [4]bool{true, true, true, true} || !connected || firstObservation.IsZero() {
+	if replies != [4]bool{true, true, true, true} || !bound || !connected || firstObservation.IsZero() {
 		return out, errors.New("receive observation barrier incomplete")
 	}
 	if autoSelect {
