@@ -15,7 +15,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import offload_release_assets as o  # noqa: E402
-from release_manual_signing import SIGNABLE_SUFFIXES  # noqa: E402
 
 TAG = "v26.11.4"
 P = f"AetherSDR-{TAG}-"
@@ -29,7 +28,11 @@ KEPT = [
     f"{P}macOS-apple-silicon.app.tar.zst", f"{P}macOS-intel.app.tar.zst",
     f"{P}source.tar.gz", f"AetherSDR-Manual-{TAG}.pdf", "SHA256SUMS.txt", "SHA256SUMS.txt.asc",
 ]
-SIGNED = [n for n in KEPT if n.endswith(SIGNABLE_SUFFIXES) or n.endswith("-source.tar.gz")]
+# What the signing run signs, written out rather than read from the code
+# under test.
+SIGNED = [f"{P}x86_64.AppImage", f"{P}aarch64.AppImage", f"{P}x86_64.tar.zst", f"{P}aarch64.tar.zst",
+          f"{P}Windows-x64-setup.exe", f"{P}Windows-x64-portable.zip",
+          f"{P}macOS-apple-silicon.app.tar.zst", f"{P}macOS-intel.app.tar.zst", f"{P}source.tar.gz"]
 MOVED = sorted([n + ".asc" for n in SIGNED] + [
     f"{P}x86_64-symbols.tar.xz", f"{P}aarch64-symbols.tar.xz", f"{P}Windows-x64-symbols.tar.xz",
     f"{P}macOS-apple-silicon-symbols.tar.xz", f"{P}macOS-intel-symbols.tar.xz",
@@ -85,19 +88,17 @@ class FakeGitHub:
 
 
 class FakeBucket:
-    def __init__(self, fail_on: str | None = None, corrupt: str | None = None,
-                 flip: str | None = None) -> None:
+    def __init__(self, fail_on: str | None = None, tamper=None) -> None:
+        """tamper: (key suffix, bytes -> bytes), what the bucket stores instead."""
         self.objects: dict[str, bytes] = {}
-        self.fail_on, self.corrupt, self.flip = fail_on, corrupt, flip
+        self.fail_on, self.tamper = fail_on, tamper
 
     def put_file(self, key, path, content_type, cache_control):
         if self.fail_on and key.endswith(self.fail_on):
             raise o.PublishError(f"PUT {key}: HTTP 500")
         data = path.read_bytes()
-        if self.corrupt and key.endswith(self.corrupt):
-            data = data[:-1]
-        if self.flip and key.endswith(self.flip):
-            data = data[:-1] + bytes([data[-1] ^ 0x01])
+        if self.tamper and key.endswith(self.tamper[0]):
+            data = self.tamper[1](data)
         self.objects[key] = data
 
     def digest(self, key):
@@ -290,15 +291,21 @@ class Offload(unittest.TestCase):
     def test_a_copy_that_reads_back_wrong_deletes_nothing(self):
         gh = FakeGitHub(KEPT + MOVED)
         with self.assertRaises(o.OffloadError):
-            run(gh, FakeBucket(corrupt="msixupload"))
+            run(gh, FakeBucket(tamper=("msixupload", lambda d: d[:-1])))
         self.assertEqual(gh.deleted, [])
 
     def test_a_copy_of_the_same_length_with_other_bytes_deletes_nothing(self):
         # Only the bucket's SHA-256 tells these apart: size and served size match.
         gh = FakeGitHub(KEPT + MOVED)
+        name = f"{P}Windows-x64-symbols.tar.xz"
+        good = gh.files[name]
+        bad = good[:-1] + bytes([good[-1] ^ 0x01])
+        bucket = FakeBucket(tamper=(name, lambda d: bad))
         with self.assertRaises(o.OffloadError) as e:
-            run(gh, FakeBucket(flip="Windows-x64-symbols.tar.xz"))
-        self.assertIn("the bucket holds", str(e.exception))
+            run(gh, bucket)
+        self.assertEqual(len(bad), len(good))
+        self.assertEqual(str(e.exception), f"releases/{TAG}/{name}: the bucket holds "
+                         f"{(sha(bad), len(bad))}, not {(sha(good), len(good))}")
         self.assertEqual(gh.deleted, [])
 
     def test_a_copy_not_served_publicly_deletes_nothing(self):
