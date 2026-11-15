@@ -11624,6 +11624,7 @@ set(AETHER_SETTINGS_CONSUMERS
     comp_makeup_fader_test
     stage_tab_bar_drag_test
     aether_tx_profiles_test
+    tx_chain_settings_test
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test

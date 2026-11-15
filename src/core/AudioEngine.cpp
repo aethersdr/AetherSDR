@@ -83,6 +83,7 @@
 #include <QtGlobal>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 #include <functional>
 #include <optional>
@@ -107,9 +108,6 @@ static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Enh)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Enh));
 static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Reverb)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Reverb));
-static_assert(static_cast<unsigned>(AudioEngine::TxChainStage::Reverb)
-              <= TxChainLayout::kMaxStageValue,
-              "every TX chain stage value must fit one packed slot");
 static_assert(AudioEngine::kMaxTxChainStages == TxVoiceProcessor::kMaxStages);
 
 static QString wisdomDir();
@@ -6352,18 +6350,29 @@ AudioEngine::TxChainStage stageFromName(const QString& name)
 }
 
 // Canonical default order for a fresh install — stages appear in the
-// order they'll typically be wanted in the signal chain.
+// order they'll typically be wanted in the signal chain. Every chain gains
+// the stages of this list it lacks, so a stage added here that does not fit
+// a packed slot fails to compile rather than being dropped at run time.
+constexpr AudioEngine::TxChainStage kCanonicalTxChain[] = {
+    AudioEngine::TxChainStage::Gate,
+    AudioEngine::TxChainStage::Eq,
+    AudioEngine::TxChainStage::DeEss,
+    AudioEngine::TxChainStage::Comp,
+    AudioEngine::TxChainStage::Tube,
+    AudioEngine::TxChainStage::Enh,
+    AudioEngine::TxChainStage::Reverb,
+};
+static_assert(std::size(kCanonicalTxChain) <= TxChainLayout::kSlots,
+              "the canonical TX chain must fit the packed order");
+static_assert(std::ranges::all_of(kCanonicalTxChain, [](AudioEngine::TxChainStage s) {
+                  const auto v = static_cast<unsigned>(s);
+                  return v >= 1 && v <= TxChainLayout::kMaxStageValue;
+              }),
+              "every canonical TX chain stage must fit one packed slot");
+
 QVector<AudioEngine::TxChainStage> defaultChain()
 {
-    return {
-        AudioEngine::TxChainStage::Gate,
-        AudioEngine::TxChainStage::Eq,
-        AudioEngine::TxChainStage::DeEss,
-        AudioEngine::TxChainStage::Comp,
-        AudioEngine::TxChainStage::Tube,
-        AudioEngine::TxChainStage::Enh,
-        AudioEngine::TxChainStage::Reverb,
-    };
+    return {std::begin(kCanonicalTxChain), std::end(kCanonicalTxChain)};
 }
 
 // ── RX chain helpers — parallel to the TX functions above ───────────────
@@ -6442,9 +6451,11 @@ QVector<AudioEngine::RxChainStage> defaultRxChain()
 
 void AudioEngine::setTxChainStages(const QVector<TxChainStage>& stages)
 {
-    // Persist what was packed, so the settings file and the audio thread
-    // can never disagree about the order.
-    const uint64_t packed = packChain(TxChainLayout::withoutDuplicates(stages));
+    // Every canonical stage stays in the chain, as on load: a preset saved
+    // before a stage existed must not remove it. Persist what was packed, so
+    // the settings file and the audio thread agree about the order.
+    const uint64_t packed = packChain(TxChainLayout::withMissingAppended(
+        TxChainLayout::withoutDuplicates(stages), defaultChain()));
     m_txChainPacked.store(packed, std::memory_order_release);
     QStringList names;
     for (auto s : unpackChain(packed)) {

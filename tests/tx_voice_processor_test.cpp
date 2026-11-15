@@ -730,7 +730,8 @@ void testChannelStripRunsAt48k()
 
 // A stage past the eighth slot still runs: the order is 16 four-bit slots.
 // Eight Gate slots with no gate processor are pass-through; the tube sits in
-// the ninth, which a one-byte-per-slot order could not hold.
+// the ninth, which a one-byte-per-slot order could not hold, and a tenth
+// entry shares its byte so a byte-wide decode cannot find it either.
 void testNinthSlotStageRuns()
 {
     ClientTube tube;
@@ -740,6 +741,9 @@ void testNinthSlotStageRuns()
 
     std::vector<TxVoiceProcessor::Stage> order(8, TxVoiceProcessor::Stage::Gate);
     order.push_back(TxVoiceProcessor::Stage::Tube);
+    // A tenth entry puts the Tube's nibble in the same byte as this Gate's,
+    // so a byte-slot decode reads 0x15 (no stage) and skips the Tube.
+    order.push_back(TxVoiceProcessor::Stage::Gate);
     uint64_t packed = 0;
     const bool fits = AetherSDR::TxChainLayout::pack(order, packed);
 
@@ -753,7 +757,7 @@ void testNinthSlotStageRuns()
     QByteArray transportOutput = makeCanonicalTone(480, 48000, 1000.0f);
     const bool processed = processor.processCapturedInt16(transportOutput);
 
-    report("a nine-slot order packs", fits);
+    report("a ten-slot order packs", fits);
     report("a stage in the ninth slot changes the post-strip audio",
            processed
                && processor.normalizedFloat48Stereo()

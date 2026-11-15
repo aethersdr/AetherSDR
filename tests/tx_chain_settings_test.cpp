@@ -1,7 +1,8 @@
-// The TX chain order between AudioEngine and the settings file: what is
-// persisted is exactly what the audio thread runs, a stored list keeps its
-// order and gains the canonical stages it lacks, and a repeated name in a
-// hand-edited file or an imported preset is dropped rather than packed.
+// The TX chain order between AudioEngine, the audio thread and the settings
+// file: the audio thread gets the 4-bit layout, what is persisted is exactly
+// what it runs, a stored list or a preset keeps its order and gains the
+// canonical stages it lacks, and a repeated name in a hand-edited file or an
+// imported preset is dropped rather than packed.
 // Isolated settings, no audio device, no radio.
 
 #include "TestSettingsProfile.h"
@@ -9,6 +10,7 @@
 #include "core/AudioEngine.h"
 #include "core/ChannelStripPresets.h"
 #include "core/SettingsPaths.h"
+#include "core/TxChainLayout.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -33,6 +35,7 @@ class TxChainSettingsTest : public QObject {
 
 private slots:
     void initTestCase();
+    void theAudioThreadGetsTheNibbleLayout();
     void persistsExactlyWhatRuns();
     void loadKeepsTheSavedOrderAndAppendsTheRest();
     void loadDropsRepeatedNames();
@@ -48,13 +51,28 @@ void TxChainSettingsTest::initTestCase()
     QVERIFY(QStandardPaths::isTestModeEnabled());
 }
 
+// The word the audio thread loads, not the engine's own decode of it: an
+// engine that packed bytes would round-trip through its own unpack and still
+// hand TxVoiceProcessor an order it reads as Gate alone.
+void TxChainSettingsTest::theAudioThreadGetsTheNibbleLayout()
+{
+    AudioEngine engine;
+    const QVector<Stage> order{Stage::Reverb, Stage::Enh, Stage::Tube, Stage::Comp,
+                               Stage::DeEss, Stage::Eq, Stage::Gate};
+    engine.setTxChainStages(order);
+    uint64_t expected = 0;
+    QVERIFY(TxChainLayout::pack(order, expected));
+    QCOMPARE(engine.txChainPackedForTest(), expected);
+}
+
 void TxChainSettingsTest::persistsExactlyWhatRuns()
 {
     AudioEngine engine;
     engine.setTxChainStages({Stage::Comp, Stage::Gate, Stage::Comp, Stage::Eq});
-    const QVector<Stage> expected{Stage::Comp, Stage::Gate, Stage::Eq};
+    const QVector<Stage> expected{Stage::Comp, Stage::Gate, Stage::Eq, Stage::DeEss,
+                                  Stage::Tube, Stage::Enh, Stage::Reverb};
     QCOMPARE(engine.txChainStages(), expected);
-    QCOMPARE(stored(), QStringLiteral("Comp,Gate,Eq"));
+    QCOMPARE(stored(), QStringLiteral("Comp,Gate,Eq,DeEss,Tube,Enh,Reverb"));
 }
 
 void TxChainSettingsTest::loadKeepsTheSavedOrderAndAppendsTheRest()
@@ -91,9 +109,12 @@ void TxChainSettingsTest::aPresetWithRepeatsCannotOverflowTheChain()
     }
     AudioEngine engine;
     ChannelStripPresets::applyTxJson(&engine, QJsonObject{{"chain", chain}});
-    const QVector<Stage> expected{Stage::Tube, Stage::Gate};
+    // A preset saved before a stage existed must not remove it: the repeats
+    // go, and the canonical stages the preset lacks follow its order.
+    const QVector<Stage> expected{Stage::Tube, Stage::Gate, Stage::Eq, Stage::DeEss,
+                                  Stage::Comp, Stage::Enh, Stage::Reverb};
     QCOMPARE(engine.txChainStages(), expected);
-    QCOMPARE(stored(), QStringLiteral("Tube,Gate"));
+    QCOMPARE(stored(), QStringLiteral("Tube,Gate,Eq,DeEss,Comp,Enh,Reverb"));
 }
 
 void TxChainSettingsTest::freshInstallGetsTheCanonicalOrder()

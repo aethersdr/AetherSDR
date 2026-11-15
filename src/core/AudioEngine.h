@@ -525,6 +525,12 @@ public:
     };
     static constexpr int kMaxTxChainStages = TxChainLayout::kSlots;
 
+    // The packed order the audio thread loads each block. Tests only.
+    uint64_t txChainPackedForTest() const noexcept
+    {
+        return m_txChainPacked.load(std::memory_order_acquire);
+    }
+
     // RX chain — same packed-atomic dispatcher pattern as TX, applied
     // to playback audio after the radio's NR has run.  Phase 0 ships
     // the framework with no implemented stages; Phase 1+ slot in the
@@ -559,8 +565,9 @@ public:
 
     // Set the ordered list of stages.  UI thread API; commits an
     // atomic snapshot that the audio thread picks up on its next block.
-    // Order may contain any subset of stages; unlisted stages are
-    // bypassed entirely.  Persists via AppSettings.
+    // Repeats are dropped and every canonical stage the order lacks is
+    // appended, as on load, so a stage is bypassed by its processor's
+    // enable flag, never by leaving it out.  Persists what was packed.
     void setTxChainStages(const QVector<TxChainStage>& stages);
     QVector<TxChainStage> txChainStages() const;
 
