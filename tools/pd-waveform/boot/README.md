@@ -2165,3 +2165,44 @@ no host-root job or persistent query helper was installed. Evidence is
 root. This establishes one kernel-reboot case, not physical power loss,
 interrupted-transaction recovery, a healthy successor after rollback, or 6300
 hardware behavior.
+
+### Desktop installation coordinator (development)
+
+`AetherPDInstallationCoordinator` composes the installed-shim upgrade path.
+`prepare()` accepts caller-authenticated releases, worker and carrier code,
+checks release digest bindings, creates a fresh `PDUPGR02` attempt and private
+RAM request, and builds the public archive. This potentially expensive local
+operation belongs off the UI thread. Its immutable `Prepared` value exposes the
+exact approval plan, public carrier name and archive hash for preview. It does
+not authenticate a publisher or acquire operator consent.
+
+After explicit approval, `begin()` checks the original radio control session,
+firmware, serial, private-network address and upload availability. It holds the
+shared file-transfer reservation through request creation, carrier upload and
+publication, authenticated input transfer, terminal-plan observation and cleanup.
+The Flex backend adapter owns the existing waveform uploader; the coordinator
+uses typed model operations and has no raw radio command emitter. Only the
+public carrier archive is written to a temporary file. Private request keys and
+credentials are never put in that archive.
+
+Delivery acknowledgment is not commitment. A confirmed terminal plan and the
+separate cleanup result are reported together. Cleanup waits for retirement of
+the named receiver request and observed removal of the exact carrier that was
+published in the original session. A missing carrier publication cannot prove
+removal. A changed session, expired deadline or missing transport produces an
+unconfirmed result; no removal is sent through a replacement radio session.
+Cancellation retires the receiver and local transfers, but does not assert that
+an installer already handed off was undone. `Canceled` describes local operator
+intent, not rollback. Keep the coordinator alive until its completion signal;
+destruction cannot complete asynchronous radio cleanup.
+
+Socket-free tests inject HTTP, the input channel and carrier-completion events,
+while exercising the actual RadioModel reservation and typed removal path.
+They cover fresh attempts, wrong identity/session, busy/preexisting resources,
+commit versus delivery, retained reservation through cleanup, lost sessions,
+late POST acknowledgments after cancellation, missing publication, and deletion
+from the completion callback. These are component-ordering proofs. Production
+publisher authentication, credential lookup and operator UI wiring, process-wide
+ownership through window closure, compatible signed packaging, installed-radio
+qualification and cross-platform release checks remain open. This carrier path
+is ARM64; it is not the FLEX-6000 privilege adapter or hardware qualification.

@@ -37,6 +37,8 @@ public:
     bool inspect();
     // Requests only receiver retirement; it cannot undo a handed-off installer.
     bool requestStop();
+    // Stop local observation and discard the token; sends no remote request.
+    void abandon();
     void poll();
     State state() const { return m_state; }
     bool busy() const { return !m_reply.isNull(); }

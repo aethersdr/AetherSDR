@@ -94,6 +94,13 @@ bool AetherPDInstallRequestClient::begin(const QHostAddress& address, const QStr
 }
 bool AetherPDInstallRequestClient::inspect() { return followup(Operation::Inspect); }
 bool AetherPDInstallRequestClient::requestStop() { return followup(Operation::Stop); }
+void AetherPDInstallRequestClient::abandon()
+{
+    m_state = State::Expired;
+    m_timer.stop();
+    m_token.clear();
+    abandonReply();
+}
 bool AetherPDInstallRequestClient::followup(Operation operation)
 {
     if (QThread::currentThread() != thread() || m_state == State::Idle || m_state == State::Expired || m_reply) { return false; }

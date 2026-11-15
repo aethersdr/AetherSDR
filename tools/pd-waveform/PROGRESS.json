@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T10:08:17.190797+00:00",
+  "updated_utc": "2026-11-15T10:23:54.413827+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Implement the original-session desktop installation coordinator using the tested reserved uploader, request client, public carrier, authenticated upload and attempt-bound monitor. Generate/freeze PDUPGR02 before consent; qualify compatible signed worker/boot and full cleanup graph on 8600. Full P1-P10 scope remains open.",
+  "next_action": "Wire original-session credentials and operator/job ownership into the tested coordinator; build compatible signed PDUPGR02 worker/boot packages and qualify the complete coordinator graph on 8600, including unique carrier publication/removal. Full P1-P10 scope remains open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -259,5 +259,29 @@
       "Coordinator must generate and freeze random attempt before operator approval; reconnect/delivery retry must retain it.",
       "Full coordinator, trust distribution, first install, 6000 privilege delivery and hardware, DSP/PR4770/RF and all original production gates remain."
     ]
+  },
+  "desktop_installation_coordinator_development": {
+    "updated_utc": "2026-11-15T10:23:54.413827+00:00",
+    "base_commit": "5e82cc461a97e5ed6393231a5bdf80b1cd7e2f18",
+    "status": "coordinator_component_checks_passed_not_deployed",
+    "checks": [
+      "Registered coordinator, request-client and transfer-control suites passed.",
+      "Coordinator harness: 9 behavior cases plus init/cleanup passed.",
+      "ASAN/UBSAN/leak detection passed for coordinator, request client and test harness linked to existing unsanitized aethercore; not whole-engine sanitizer qualification.",
+      "Engine boundary, command-plane, capability records, touchpoint manifest, test registration and diff whitespace checks passed."
+    ],
+    "negative_evidence": [
+      "coordinator-ctest.log: injected peer 192.0.2.1 refused by private-network policy; fixture corrected to private address, still injected transport.",
+      "coordinator-fixture-ctest.log: removal assertion looked at setup writer instead of transfer writer; corrected to inspect actual typed removal sink.",
+      "coordinator-build.log: fixture Reply lacks Q_OBJECT; enumerate base QNetworkReply instead."
+    ],
+    "remaining": [
+      "Credential/UI integration and process-wide job ownership.",
+      "Caller-authenticated artifact supply and initial trust; prepare() is not signature verification.",
+      "New signed worker/boot package with PDUPGR02 and full coordinator live upgrade/rollback/cancel/reboot qualification.",
+      "New unique carrier names have not yet been firmware-qualified.",
+      "6000 privilege adapter, actual6300 qualification and all other P1-P10 requirements."
+    ],
+    "radio_actions": "none; no RF, network calls to radio or installation"
   }
 }

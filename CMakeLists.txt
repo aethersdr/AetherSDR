@@ -1149,6 +1149,9 @@ set(CORE_SOURCES
     src/core/AetherPDProtocol.cpp
     src/core/AetherPDClient.cpp
     src/core/AetherPDInstallationMonitor.cpp
+    src/core/AetherPDInstallationCoordinator.cpp
+    src/core/backends/AetherPDCarrierUpload.h
+    src/core/backends/flex/FlexAetherPDCarrierUpload.cpp
     src/core/AetherPDInstallRequestClient.cpp
     src/core/AetherPDInstallUpload.cpp
     src/core/AetherPDCarrierImage.cpp

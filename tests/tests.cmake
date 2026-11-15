@@ -4948,6 +4948,16 @@ add_test(NAME aetherpd_carrier_image_test COMMAND aetherpd_carrier_image_test)
 set_tests_properties(aetherpd_carrier_image_test PROPERTIES TIMEOUT 10)
 
 # Authenticated upload: injected byte channel and clock; no sockets.
+# Coordinator event ordering with injected HTTP/channel and recorded radio
+# commands; no radio, peer socket or executable fixture is started.
+add_executable(aetherpd_installation_coordinator_test tests/aetherpd_installation_coordinator_test.cpp)
+target_include_directories(aetherpd_installation_coordinator_test PRIVATE src tests)
+target_compile_definitions(aetherpd_installation_coordinator_test PRIVATE
+    AETHERPD_UPLOAD_TESTDATA="${CMAKE_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/upload.json")
+target_link_libraries(aetherpd_installation_coordinator_test PRIVATE aethercore Qt6::Test)
+add_test(NAME aetherpd_installation_coordinator_test COMMAND aetherpd_installation_coordinator_test)
+set_tests_properties(aetherpd_installation_coordinator_test PROPERTIES TIMEOUT 20)
+
 add_executable(aetherpd_install_upload_test
     tests/aetherpd_install_upload_test.cpp
     src/core/AetherPDInstallUpload.cpp
@@ -11437,6 +11447,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    aetherpd_installation_coordinator_test
     aetherpd_session_test
     aetherpd_dialog_test
     session_control_test

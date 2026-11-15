@@ -33,6 +33,8 @@ public:
     { return radio.transferCommandSink(writer); }
     static void transmitting(RadioModel& radio, bool active) { radio.m_radioTransmitting = active; }
     static void peer(RadioModel& radio, const QHostAddress& address) { radio.m_lastInfo.address = address; }
+    static void identity(RadioModel& radio, const QString& serial, const QString& version)
+    { radio.m_lastInfo.serial = serial; radio.m_version = version; }
     static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
     static void expiring(RadioModel& radio, bool value) { radio.m_expiringPendingCallbacks = value; }
     static void retireBackend(RadioModel& radio) { radio.teardownBackend(); }
