@@ -806,7 +806,7 @@ static void set_keyed(wf_t* w, int keyed, int clean_unkey)
              (!w->correct && w->calibration.purpose==PD_SOURCE_CALIBRATION) || native_apd_blocked(w) || w->active_slice<0 ||
              w->local_iq.last_valid_ns<=0 || cal_now<w->local_iq.last_valid_ns || cal_now-w->local_iq.last_valid_ns>100000000)) {
             w->measurement_tone_sent_ns = 0;
-    pd_calibration_cancel(&w->calibration);
+            pd_calibration_cancel(&w->calibration);
         }
         if (pd_calibration_begin(&w->calibration, cal_now)) {
             w->test_f1 = 710; w->test_f2 = 1900;

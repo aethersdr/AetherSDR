@@ -85,7 +85,7 @@ bool AetherPDMeasurementModel::current() const
         && source->sourcePurpose == aetherpd::SourcePurpose::Measurement
         && (source->calibrationState == aetherpd::CalibrationState::Armed
             || source->calibrationState == aetherpd::CalibrationState::Running)
-        && !m_shuttingDown && QThread::currentThread() == thread() && m_radio && m_slice
+        && m_slice
         && (!m_injectedNetwork || m_network) && m_current && m_current()
         && m_radio->controlSessionCurrent(m_session) && !m_radio->fullDuplexEnabled()
         && m_radio->txSlice() == m_slice && m_slice->isTxSlice() && m_slice->frequency() == m_frequencyMHz

@@ -401,9 +401,12 @@ correction-disabled baseline retains `disabled` with the explicit source
 purpose. An acceptance receipt alone does not establish source readiness.
 
 The desktop protocol/model can request and cancel this source. The operator
-measurement panel and capture timing integration remain unfinished: capture
-must exclude alignment noise and complete before source expiry. This
-component has not yet been installed or RF-qualified on a radio.
+measurement panel remains unfinished. The capture path binds frames to the
+accepted source ID and waits for its guarded tone window, rejecting partial
+frames that cross a source or window boundary. See
+[`IQ-MEASUREMENT.md`](../pd-waveform/IQ-MEASUREMENT.md#measurement-source-fencing)
+for the timing assumptions. These components have not yet been installed or
+RF-qualified on a radio.
 
 ### Bounded calibration control (development)
 

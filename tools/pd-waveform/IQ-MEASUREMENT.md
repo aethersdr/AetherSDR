@@ -2,8 +2,8 @@
 
 This development path supplies raw feedback for the PR 4770 analyzer. It is
 implemented in the DSP, its owning Go process, the authenticated HTTP relay
-and the desktop capture adapter/controller. The production TX lease and GUI
-are not connected yet. It has local C/Go/HTTP and adapter/controller/analyzer
+and the desktop capture adapter/controller. The measurement model composes
+the production TX lease; the operator GUI remains unfinished. It has local C/Go/HTTP and adapter/controller/analyzer
 integration evidence, not live-radio qualification.
 
 The DSP observes its existing guarded local DAX IQ stream before decimation
@@ -19,6 +19,7 @@ repeated or delayed older requests cannot restart it.
 
 A partial snapshot is rejected after a continuity reset, nonfinite sample,
 change of stream/rate/center/acquisition generation/key/correction state,
+measurement source identity or guarded tone-window state,
 backward clock, or receipt gap exceeding 100 ms. Collection expires after
 one second. Complete snapshots remain immutable across subsequent unkey or
 reset for retrieval, and expire five seconds after the request. Metadata
@@ -48,7 +49,7 @@ the following fixed header, followed by zero or 1,024 raw complex samples:
 
 | Body offset | Type | Field |
 |---|---|---|
-| 0 | 8 bytes | `PDIQ0001` |
+| 0 | 8 bytes | `PDIQ0002` |
 | 8 | u64 | Requested capture ID |
 | 16 | u32 | State: 1 pending, 2 ready, 3 invalid, 4 expired, 5 unavailable |
 | 20 | u32 | Requested sample offset, a multiple of 1,024 below 16,384 |
@@ -59,9 +60,12 @@ the following fixed header, followed by zero or 1,024 raw complex samples:
 | 48 | u64 | First packet consumption time, monotonic ns |
 | 56 | u64 | Last packet consumption time, monotonic ns |
 | 64 | u32 | DAX IQ stream ID |
-| 68 | u32 | Bit 0 keyed; bit 1 DSP correction active during collection |
-| 72 | bytes | Unchanged little-endian float32 I,Q pairs |
+| 68 | u32 | Bit 0 keyed; bit 1 DSP correction active; bit 2 guarded measurement tones |
+| 72 | u64 | Accepted measurement source ID, or zero |
+| 80 | bytes | Unchanged little-endian float32 I,Q pairs |
 
+The Go reader also accepts the legacy `PDIQ0001` 72-byte header, which has
+no measurement provenance and cannot satisfy the composed measurement workflow.
 All header integers are big-endian. Timestamps are local process consumption
 times, not FPGA timestamps or calibrated latency measurements. Flags describe
 DSP state during receipt; RF propagation and filter delay still require
@@ -80,7 +84,12 @@ It collects a new snapshot and returns a manifest containing `capture_id`,
 `chunk_samples` (512), `keyed`, `correcting`, and `first_receive_ns` /
 `last_receive_ns`. Nanosecond timestamps are decimal strings to avoid loss of
 integer precision in JSON clients. There are no stream or process identifiers
-in this public metadata.
+in this public metadata. Version-two captures also carry
+`measurement: {"source_id": "000000000000001f", "tones": true}`. The ID is a
+canonical 16-character lowercase hexadecimal string scoped to the original
+owned DSP; zero means no measurement source. The same optional object appears
+in status. A true tone flag requires a nonzero source and keyed capture.
+Legacy absence remains distinguishable from observed provenance.
 
 `GET /v1/aetherpd/capture/{capture_id}/{chunk}` accepts a canonical lowercase
 32-character hex ID and chunk index 0–31. Each JSON response contains the
@@ -249,6 +258,37 @@ calibration remains unqualified, so `clippingKnown` is false and must be
 carried into `measureTwoTone` and subsequent results; a valid relative IMD
 measurement is not proof of absence of ADC overload.
 
+## Measurement source fencing
+
+The measurement model requires an observed armed measurement source before
+Prepare. It binds readiness and keyed captures to that accepted source ID;
+a rejected or busy arm request cannot change the ID. It accepts only the
+fixed 48 kHz capture configuration and 710/1900 Hz tones relative to center,
+and requires an allowed allocation covering the alignment-noise band from
+center minus 4.5 kHz to center plus 7.5 kHz. Changing or canceling the source
+retires the original preparation and prevents later key admission.
+
+After original-owner TX readback, the adapter polls status within the same
+six-second capture deadline until the bound source reports guarded tones.
+It then requires matching provenance on the complete captured frame. Polling
+cannot extend the deadline or arm/key/retry a source. Stop and replacement
+fence delayed polls and responses.
+
+The native tone window begins after an emitted tone packet plus the configured
+maximum alignment search delay (400 ms by default) and a 100 ms settling guard.
+It compares that boundary against IQ kernel-arrival time, and requires fresh,
+aligned, nonfaulted local IQ while the original source is running. Noise,
+the final microphone blend, stale/queued IQ and source expiry are excluded.
+These are local timing guards, not FPGA timestamps or independent analog
+settling/ADC-headroom proof; the guard needs live hardware qualification.
+A partial frame crossing a boundary is rejected; a previously complete valid
+frame remains available for bounded retrieval after unkey.
+
+The composed model budgets 14 seconds for startup, capture and cleanup.
+After the independent helper's startup/cleanup reserves, its cleanup timer
+is at most 9.5 seconds; generated source duration remains eight seconds.
+These provisional margins do not prove RF cessation with an unresponsive API.
+
 ## Verification and remaining integration
 
 `pd_capture_test` is a socket-free CTest using the actual waveform packet
@@ -412,7 +452,8 @@ evidence. They also exercise frequency and power changes, cancellation during
 helper startup, destruction during capture, over-power abort and retained
 cooldown. These are component results, not firmware or RF-cutoff qualification.
 
-The operator measurement UI/export and LP-100A composition remain unfinished;
+The operator measurement UI/export remains unfinished; LP-100A integration
+is deferred by the operator;
 the current model consumes radio telemetry only. No live run of this workflow
 is qualified. Final bench
 tests must measure capture overhead and correction continuity on the 8600;

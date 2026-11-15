@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T12:52:40.385825+00:00",
+  "updated_utc": "2026-11-15T13:57:34.331423+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Qualify the installed final process graph for bounded receive-only desktop/session crash and startup cancellation, with independent cleanup observation, before final RF testing. Preserve the full P1-P10 scope.",
+  "next_action": "Wire the verified source/capture/controller path into operator measurement controls and export, then qualify the installed final DAX IQ workflow with FDX off. Preserve all outstanding P1-P10 requirements.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -596,6 +596,66 @@
       "Current controller default ten-second total budget minus 3.5-second cleanup and one-second startup reserves leaves about 5.5 seconds for keying; reconcile it with the four-second preamble and 48kHz capture transfer/averaging, without weakening independent unkey.",
       "Wire PR4770 operator controls, measurements and export, then install and qualify actual final workflow and matched RF.",
       "Full P1-P10 production scope remains; actual6300 qualification, current-candidate reboot/failures, sustained RF/stockAPD comparison and release gates are incomplete."
+    ],
+    "installed_source_unchanged": "1316e4d80e7b5666e3a7579542086b67367e4f03"
+  },
+  "measurement_capture_provenance": {
+    "status": "component_verified_not_installed",
+    "production_ready": false,
+    "evidence": "measurement-capture-development/validation.json under evidence_root",
+    "completed": [
+      "Stable accepted measurement source identity carried in native capture v2, authenticated shim manifests and desktop status.",
+      "Partial capture invalidated across source identity or guarded tone-window changes.",
+      "Measurement preparation, key admission and captures bound to the observed original source; fixed tone/rate/noise-band checks.",
+      "Bounded preamble wait within the existing capture timeout; independent helper and source deadlines retained."
+    ],
+    "checks": {
+      "focused_ctests": {
+        "passed": 6,
+        "log": "focused-ctest.log"
+      },
+      "go_race": {
+        "passed": true,
+        "log": "go-race.log",
+        "native_public_fixture": true
+      },
+      "native_sanitizers": {
+        "pd_capture_test": 0,
+        "pd_calibration_state_test": 0,
+        "pd_calibration_control_test": 0
+      },
+      "desktop_sanitizers": {
+        "passed": true,
+        "instrumented": "AetherPDProtocol, AetherPDCaptureSource, aetherpd_capture_source_test",
+        "log": "capture-asan.log"
+      },
+      "mutations": {
+        "native-provenance": {
+          "detected": true,
+          "returncode": -6
+        },
+        "desktop-provenance": {
+          "detected": true,
+          "returncode": 1
+        }
+      },
+      "arm_builds": {
+        "armv7": {
+          "bytes": 262012,
+          "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/measurement-capture-development/aether-pd-armv7: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, stripped"
+        },
+        "arm64": {
+          "bytes": 274200,
+          "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/measurement-capture-development/aether-pd-arm64: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped"
+        }
+      }
+    },
+    "remaining": [
+      "No current-candidate radio installation or RF qualification.",
+      "Tone provenance is guarded local source timing, not FPGA timestamps or calibrated ADC/analog proof.",
+      "ARM builds are compile checks, not execution on a 6300.",
+      "Operator measurement controls/export remain unfinished.",
+      "Full P1-P10 scope including first-install/6000, final process faults/reboot, sustained RF/stock APD and release gates remains."
     ],
     "installed_source_unchanged": "1316e4d80e7b5666e3a7579542086b67367e4f03"
   }

@@ -988,10 +988,12 @@ void aetherPDMeasurementWorkflow()
               "measurement requires explicit dummy-load confirmation before capture");
         if (scenario == 0) {
             QJsonObject noSource = sourceStatus; noSource.remove("measurement");
-            f.radio.aetherPDModel().refresh(); controlNetwork.last->complete(200, encode(noSource));
+            check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "original session refresh accepted");
+            controlNetwork.last->complete(200, encode(noSource));
             check(!model->prepare(session, config, request, true) && measurementNetwork.sent.empty(),
                 "source capability without observed arm identity cannot prepare");
-            f.radio.aetherPDModel().refresh(); controlNetwork.last->complete(200, idle);
+            check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "original session refresh accepted");
+            controlNetwork.last->complete(200, idle);
             txlin::RunRequest wrongTones = request; wrongTones.tone1Hz += 100;
             check(!model->prepare(session, config, wrongTones, true), "unmatched generated tones refused");
             txlin::RunRequest narrow = request; narrow.allocations = {{7147000, 7156000}};
@@ -1013,7 +1015,8 @@ void aetherPDMeasurementWorkflow()
             QJsonObject changed = sourceStatus;
             if (scenario == 7) { changed["measurement"] = QJsonObject{{"source_id", "0000000000000002"}, {"tones", false}}; }
             else { changed["calibration_state"] = "canceled"; changed["calibration_samples_left"] = 0; changed["state"] = "idle"; }
-            f.radio.aetherPDModel().refresh(); controlNetwork.last->complete(200, encode(changed));
+            check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "original session refresh accepted");
+            controlNetwork.last->complete(200, encode(changed));
             check(model->state() == State::Idle && !model->start(session) && !f.commands.contains("mox:on"),
                 "replacement or cancellation of source retires key admission");
             continue;

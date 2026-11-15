@@ -527,7 +527,10 @@ If a development measurement client arms the shared source, the window can
 show **Measurement tones armed — waiting for your transmission**.
 **Cancel calibration** also cancels that source. An arm receipt does not
 confirm transmission or correction. The integrated measurement controls are
-still in development.
+still in development. The development measurement client uses raw DAX IQ
+and accepts frames only from its original armed source after the alignment
+noise has ended. This timing check does not establish ADC headroom or
+calibrated output power; the feedback attenuation still needs qualification.
 
 **Status unknown** means there is no fresh observation. The window does not
 retry Start, calibration or Stop automatically after a lost reply. The released
