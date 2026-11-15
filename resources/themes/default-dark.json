@@ -335,7 +335,7 @@
             "accent.foreground.checked":  "{color.blue.500}",
             "accent.border.checked":      "{color.blue.500}",
             "success.background.checked": "#004a33",
-            "success.foreground.checked": "{color.green.500}",
+            "success.foreground.checked": "#146634",
             "success.border.checked":     "{color.green.500}",
             "warning.background.checked": "#5a3a0a",
             "warning.foreground.checked": "{color.amber.500}",
