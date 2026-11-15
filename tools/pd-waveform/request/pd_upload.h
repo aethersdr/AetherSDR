@@ -1,5 +1,8 @@
 #ifndef AETHER_PD_UPLOAD_H
 #define AETHER_PD_UPLOAD_H
+/* Opens a private empty unlinked tmpfs file. The caller closes both returned
+ * descriptors; no content may be written until this function succeeds. */
+int pd_upload_memory_file(int directory,int* readonly);
 /* Receives envelope, plan, candidate, and optional previous release. The caller
  * has authenticated the private request configuration. Returned descriptors are
  * read-only unlinked tmpfs files; no paths or commands are accepted on the wire.

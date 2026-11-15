@@ -117,12 +117,19 @@ Credential revocation cancels the owned job. The job has a 400-second limit.
 
 The public record is `PDPUB001` + the 80-byte receipt +
 BLAKE2b-256(`PDKEY001` + the 120-byte private record). It contains no private
-request key. A one-use abstract Unix broker at `aetherpd-config-<digest hex>`
-accepts only a UID-0 peer and the exact `PDCFG001` + public-record frame. It sends
-`PDSECR01` with one read-only private RAM descriptor. Unexpected incoming
-descriptors are closed and refused. The carrier still needs to consume this
-record, verify the commitment and pass the credential to its fixed child;
-its current image format is not eligible for public radio upload.
+request key. An abstract Unix broker at `aetherpd-config-<digest hex>` accepts
+only UID-0 peers and the exact public record with one of two fixed role headers:
+`PDCFGAC1` for the acceptor or `PDCFGDL1` for the installer child. Each role can
+fetch once. It sends `PDSECR01` with one read-only private RAM descriptor and
+closes after both roles have fetched or the operation is cancelled. Unexpected
+incoming descriptors are closed and refused.
+
+The native receiver verifies the shim peer, descriptor properties, receipt and
+key commitment before creating its own root-owned, read-only, unlinked tmpfs
+copy. The image builder includes only the public record at `/pd/request` and
+rejects private request records. Native receiver/broker integration and image
+layout have local test evidence; the full root/container process graph and
+normal radio upload lifecycle remain unqualified.
 
 `GET /v1/aetherpd/install-request/<request_id>` reports the owned job's state;
 `DELETE` cancels it. Both require the current operator token. Readiness and

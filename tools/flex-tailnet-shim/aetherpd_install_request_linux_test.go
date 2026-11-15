@@ -59,7 +59,7 @@ func TestPDInstallRAMAndCarrierAdmission(t *testing.T) {
 				if scenario == "wrong-uid" {
 					uid++
 				}
-				done <- servePDInstallConfig(conn, uid, public, file)
+				done <- servePDInstallConfig(conn, uid, public, file, 3) != 0
 			}()
 			conn, err := net.DialUnix("unixpacket", nil, listener.Addr().(*net.UnixAddr))
 			if err != nil {
@@ -67,7 +67,7 @@ func TestPDInstallRAMAndCarrierAdmission(t *testing.T) {
 			}
 			defer conn.Close()
 			conn.SetDeadline(time.Now().Add(time.Second))
-			frame := append([]byte("PDCFG001"), public[:]...)
+			frame := append([]byte("PDCFGAC1"), public[:]...)
 			var control []byte
 			switch scenario {
 			case "wrong-receipt":
@@ -140,7 +140,7 @@ func TestPDInstallBrokerCancellationAndRootOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.SetDeadline(time.Now().Add(time.Second))
-	conn.Write(append([]byte("PDCFG001"), public[:]...))
+	conn.Write(append([]byte("PDCFGAC1"), public[:]...))
 	var data [16]byte
 	oob := make([]byte, 64)
 	n, o, _, _, err := conn.ReadMsgUnix(data[:], oob)
@@ -412,6 +412,184 @@ with socket.create_connection(('127.0.0.1',48995),3) as channel:
 			}
 			if binary.BigEndian.Uint32(public[16:20]) != 64 || bytes.Contains(public[:], config[8:40]) {
 				t.Fatal("bad public request record")
+			}
+		})
+	}
+}
+
+func pdRuntimeConfigFixture(t *testing.T) string {
+	t.Helper()
+	path := os.Getenv("AETHERPD_CONFIG_FIXTURE")
+	if path == "" {
+		t.Skip("set AETHERPD_CONFIG_FIXTURE to the native runtime configuration checker")
+	}
+	return path
+}
+func pdRuntimeFetch(t *testing.T, checker, path, role string, expected int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, checker, path, role).CombinedOutput()
+	code := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatal(err)
+		}
+		code = exit.ExitCode()
+	}
+	if ctx.Err() != nil || code != expected || !bytes.Contains(output, []byte(`"no_descriptor_leak":true`)) {
+		t.Fatalf("native fetch: exit=%d wanted=%d error=%v output=%s", code, expected, err, output)
+	}
+	if expected == 0 && !bytes.Contains(output, []byte(`"credential_verified":true`)) {
+		t.Fatal(string(output))
+	}
+}
+func TestPDInstallNativeCredentialRolesAndBinding(t *testing.T) {
+	checker := pdRuntimeConfigFixture(t)
+	for _, first := range []string{"accept", "deliver"} {
+		t.Run(first+"-first", func(t *testing.T) {
+			config := pdInstallFixture()
+			public, _ := pdInstallPublic(config[:])
+			file, err := pdInstallRAM(config[:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			stop, err := pdInstallConfigBrokerForUID(context.Background(), public, file, uint32(os.Getuid()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stop()
+			path := filepath.Join(t.TempDir(), "request")
+			for _, scenario := range []string{"magic", "receipt", "commitment", "zero-commitment", "permissions"} {
+				bad := public
+				mode := os.FileMode(0444)
+				switch scenario {
+				case "magic":
+					bad[0] ^= 1
+				case "receipt":
+					bad[24] ^= 1
+				case "commitment":
+					bad[100] ^= 1
+				case "zero-commitment":
+					clear(bad[88:])
+				case "permissions":
+					mode = 0666
+				}
+				os.Remove(path)
+				if err = os.WriteFile(path, bad[:], 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Chmod(path, mode); err != nil {
+					t.Fatal(err)
+				}
+				pdRuntimeFetch(t, checker, path, first, 3)
+			}
+			os.Remove(path)
+			if err = os.WriteFile(path, public[:], 0444); err != nil {
+				t.Fatal(err)
+			}
+			pdRuntimeFetch(t, checker, path, "arbitrary-role", 3)
+			pdRuntimeFetch(t, checker, path, first, 0)
+			pdRuntimeFetch(t, checker, path, first, 3)
+			second := "deliver"
+			if first == second {
+				second = "accept"
+			}
+			pdRuntimeFetch(t, checker, path, second, 0)
+			pdRuntimeFetch(t, checker, path, second, 3)
+		})
+	}
+}
+func TestPDInstallNativeCredentialRejectsBadDescriptors(t *testing.T) {
+	checker := pdRuntimeConfigFixture(t)
+	for _, scenario := range []string{"wrong-key", "wrong-receipt", "writable", "named", "mode", "extra-fd", "wrong-reply", "truncated-control"} {
+		t.Run(scenario, func(t *testing.T) {
+			config := pdInstallFixture()
+			public, _ := pdInstallPublic(config[:])
+			content := config
+			if scenario == "wrong-key" {
+				content[8] ^= 1
+			}
+			if scenario == "wrong-receipt" {
+				content[56] ^= 1
+			}
+			file, err := pdInstallRAM(content[:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if scenario == "mode" {
+				if err = file.Chmod(0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "named" {
+				named, e := os.CreateTemp("/dev/shm", "pd-credential-negative-")
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer named.Close()
+				defer os.Remove(named.Name())
+				named.Write(content[:])
+				file, e = os.Open(named.Name())
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer file.Close()
+			}
+			if scenario == "writable" {
+				writer, e := os.OpenFile(fmt.Sprintf("/proc/self/fd/%d", file.Fd()), os.O_RDWR, 0)
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer writer.Close()
+				file = writer
+			}
+			path := filepath.Join(t.TempDir(), "request")
+			if err = os.WriteFile(path, public[:], 0444); err != nil {
+				t.Fatal(err)
+			}
+			listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: "@aetherpd-config-" + hex.EncodeToString(public[88:]), Net: "unixpacket"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			done := make(chan error, 1)
+			go func() {
+				listener.SetDeadline(time.Now().Add(5 * time.Second))
+				conn, e := listener.AcceptUnix()
+				if e != nil {
+					done <- e
+					return
+				}
+				defer conn.Close()
+				conn.SetDeadline(time.Now().Add(3 * time.Second))
+				request := make([]byte, 128)
+				n, e := conn.Read(request)
+				if e != nil || n != 128 {
+					done <- fmt.Errorf("config request: n=%d error=%v", n, e)
+					return
+				}
+				fds := []int{int(file.Fd())}
+				reply := "PDSECR01"
+				switch scenario {
+				case "extra-fd":
+					fds = append(fds, fds[0])
+				case "wrong-reply":
+					reply = "WRONG001"
+				case "truncated-control":
+					for len(fds) < 16 {
+						fds = append(fds, fds[0])
+					}
+				}
+				_, _, e = conn.WriteMsgUnix([]byte(reply), syscall.UnixRights(fds...), nil)
+				done <- e
+			}()
+			pdRuntimeFetch(t, checker, path, "accept", 3)
+			if err = <-done; err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

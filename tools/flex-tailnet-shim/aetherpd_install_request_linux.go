@@ -153,24 +153,40 @@ func pdDiscardRights(control []byte) {
 		}
 	}
 }
-func servePDInstallConfig(conn *net.UnixConn, expectedUID uint32, public [120]byte, config *os.File) bool {
+func servePDInstallConfig(conn *net.UnixConn, expectedUID uint32, public [120]byte, config *os.File, allowed uint8) uint8 {
 	if !pdConfigPeer(conn, expectedUID) {
-		return false
+		return 0
 	}
 	if conn.SetDeadline(time.Now().Add(3*time.Second)) != nil {
-		return false
+		return 0
 	}
 	var request [129]byte
 	control := make([]byte, syscall.CmsgSpace(32))
 	n, oob, flags, _, err := conn.ReadMsgUnix(request[:], control)
 	pdDiscardRights(control[:oob])
-	if err != nil || n != 128 || oob != 0 || flags&(syscall.MSG_TRUNC|syscall.MSG_CTRUNC) != 0 || string(request[:8]) != "PDCFG001" || !bytes.Equal(request[8:128], public[:]) {
-		return false
+	if err != nil || n != 128 || oob != 0 || flags&(syscall.MSG_TRUNC|syscall.MSG_CTRUNC) != 0 || !bytes.Equal(request[8:128], public[:]) {
+		return 0
+	}
+	var role uint8
+	switch string(request[:8]) {
+	case "PDCFGAC1":
+		role = 1
+	case "PDCFGDL1":
+		role = 2
+	}
+	if role == 0 || allowed&role == 0 {
+		return 0
 	}
 	n, oob, err = conn.WriteMsgUnix([]byte("PDSECR01"), syscall.UnixRights(int(config.Fd())), nil)
-	return err == nil && n == 8 && oob == len(syscall.UnixRights(int(config.Fd())))
+	if err == nil && n == 8 && oob == len(syscall.UnixRights(int(config.Fd()))) {
+		return role
+	}
+	return 0
 }
 func pdInstallConfigBroker(ctx context.Context, public [120]byte, config *os.File) (func(), error) {
+	return pdInstallConfigBrokerForUID(ctx, public, config, 0)
+}
+func pdInstallConfigBrokerForUID(ctx context.Context, public [120]byte, config *os.File, expectedUID uint32) (func(), error) {
 	address := "@aetherpd-config-" + hex.EncodeToString(public[88:])
 	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: address, Net: "unixpacket"})
 	if err != nil {
@@ -182,16 +198,18 @@ func pdInstallConfigBroker(ctx context.Context, public [120]byte, config *os.Fil
 	go func() {
 		defer close(done)
 		defer listener.Close()
+		remaining := uint8(3)
 		for {
 			conn, err := listener.AcceptUnix()
 			if err != nil {
 				return
 			}
 			stop := context.AfterFunc(brokerCtx, func() { conn.Close() })
-			sent := servePDInstallConfig(conn, 0, public, config)
+			sent := servePDInstallConfig(conn, expectedUID, public, config, remaining)
 			stop()
 			conn.Close()
-			if sent {
+			remaining &^= sent
+			if remaining == 0 {
 				return
 			}
 		}

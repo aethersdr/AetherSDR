@@ -1,7 +1,7 @@
-"""Build a private, per-request ARM64 carrier image. This does not grant consent.
+"""Build a public-record, per-request ARM64 carrier image. This does not grant consent.
 
 The caller must authenticate the distributed executables and obtain approval of
-the exact plan before supplying its request configuration. No shell is included.
+the exact plan before supplying its public request record. No shell is included.
 """
 import hashlib
 import importlib.util
@@ -18,10 +18,10 @@ spec.loader.exec_module(helpers)
 def build(executables, configuration, licenses):
     if set(executables) != {'accept', 'carrier', 'send', 'deliver'}:
         raise ValueError('fixed carrier executable set required')
-    if (len(configuration) != 120 or configuration[:8] != b'PDXFER01'
-            or not any(configuration[8:40]) or configuration[40:48] != b'PDDELIV1'
-            or struct.unpack_from('>II', configuration, 48) not in [(64, 1), (64, 2)]):
-        raise ValueError('invalid ARM64 request configuration')
+    if (len(configuration) != 120 or configuration[:8] != b'PDPUB001'
+            or not any(configuration[88:]) or configuration[8:16] != b'PDDELIV1'
+            or struct.unpack_from('>II', configuration, 16) != (64, 2)):
+        raise ValueError('invalid public ARM64 upgrade request record')
     files = [('pd', None, 0o700)]
     for name in sorted(executables):
         data = executables[name]
@@ -29,7 +29,7 @@ def build(executables, configuration, licenses):
                 or struct.unpack_from('<H', data, 18)[0] != 183):
             raise ValueError('expected ARM64 ELF executable')
         files.append(('pd/' + name, data, 0o500))
-    files += [('pd/config', configuration, 0o600), ('LICENSES', licenses, 0o444)]
+    files += [('pd/request', configuration, 0o444), ('LICENSES', licenses, 0o444)]
     layer_tar = helpers.tar_bytes(files)
     layer = helpers.gz(layer_tar)
     config = {

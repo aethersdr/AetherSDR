@@ -2,6 +2,7 @@
 #include "pd_delivery.h"
 #include "pd_carrier.h"
 #include "pd_transport.h"
+#include "pd_runtime_config.h"
 #include "pd_endpoint.h"
 #include "pd_release_key.h"
 #include "monocypher.h"
@@ -94,7 +95,9 @@ int main(int argc,char** argv)
     int completion=-1;
     if(relay){
         alarm(125);
-        int config=open("/pd/config",O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+        int public_input=open("/pd/request",O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+        int config=public_input>=0?pd_runtime_config_fetch(public_input,PD_CONFIG_DELIVER):-1;
+        if(public_input>=0){close(public_input);}
         unsigned char key[32],receipt[80];
         if(config<0 || !pd_transport_config(config,0,key,receipt)){return 3;}
         crypto_wipe(key,sizeof(key));int channel=pd_endpoint_listen(receipt,1);

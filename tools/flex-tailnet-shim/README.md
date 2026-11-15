@@ -226,8 +226,9 @@ AetherPD startup and expires after 400 seconds. Token revocation cancels it.
 
 Authenticated `GET` and `DELETE` on
 `/v1/aetherpd/install-request/<request_id>` report or cancel the owned request.
-The carrier's RAM credential receiver, ordinary desktop installer and live
-qualification remain unfinished. This path requires an already-installed shim
+The carrier's RAM credential receiver has local integration-test evidence; the
+ordinary desktop installer and live qualification remain unfinished. This path
+requires an already-installed shim
 and cannot establish first-install trust. It uses the existing trusted-LAN HTTP
 transport. See [`request/README.md`](../pd-waveform/request/README.md) for the
 descriptor contract and why request credentials cannot be packaged in native

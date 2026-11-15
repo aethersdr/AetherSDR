@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "pd_endpoint.h"
 #include "pd_transport.h"
+#include "pd_runtime_config.h"
 #include "monocypher.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -29,7 +30,9 @@ int main(int argc,char** argv)
 #endif
     if(argc!=1 || getuid()!=0 || geteuid()!=0 || !drop_caps()){return 2;}
     alarm(75);
-    int config=open("/pd/config",O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+    int public_input=open("/pd/request",O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+    int config=public_input>=0?pd_runtime_config_fetch(public_input,PD_CONFIG_ACCEPT):-1;
+    if(public_input>=0){close(public_input);}
     unsigned char key[32],receipt[80];
     if(config<0 || !pd_transport_config(config,0,key,receipt)){return 3;}
     int channel=pd_endpoint_listen(receipt,0),files[5];

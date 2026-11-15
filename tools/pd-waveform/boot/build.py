@@ -53,7 +53,7 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
     sources = [HERE / entry, HERE / 'pd_bootstrap_artifact.c', HERE / 'pd_bundle.c', HERE / 'pd_store.c', HERE / 'pd_release.c', HERE / 'pd_identity.c', HERE / 'pd_approval.c', HERE / 'pd_install.c', HERE / 'pd_state_transfer.c', crypto / 'monocypher.c', crypto / 'monocypher-ed25519.c']
     sources += [HERE / 'pd_migration.c', HERE / 'pd_transaction.c', HERE / 'pd_recovery.c', HERE / 'pd_capsule.c', HERE / 'pd_capsule_io.c', HERE / 'pd_worker_units.c', HERE / 'pd_unit_files.c', HERE / 'pd_upgrade_units.c', HERE / 'pd_management.c', HERE / 'pd_readiness.c', HERE / 'pd_primary.c', HERE / 'pd_service.c', HERE / 'pd_runtime.c', HERE / 'pd_upgrade.c', HERE / 'pd_upgrade_resume.c']
     sources += [HERE / 'pd_boot_primary.c', HERE / 'pd_boot_session.c', HERE / 'pd_boot_wait.c']
-    sources += [HERE.parent / 'request/pd_request.c', HERE.parent / 'request/pd_upload.c', HERE / 'pd_transport.c']
+    sources += [HERE.parent / 'request/pd_request.c', HERE.parent / 'request/pd_upload.c', HERE / 'pd_transport.c', HERE / 'pd_runtime_config.c']
     sources += [HERE / 'pd_generation.c', HERE / 'pd_retained.c', HERE / 'pd_retire.c', HERE / 'pd_slots_retire.c']
     sources += [HERE / 'pd_upgrade_capsule.c', HERE / 'pd_upgrade_bootstrap.c', HERE / 'pd_upgrade_approval.c', HERE / 'pd_upgrade_state.c', HERE / 'pd_upgrade_origin.c', HERE / 'pd_upgrade_space.c', HERE / 'pd_pair.c', HERE / 'pd_handoff.c']
     if entry != 'migration_check.c':
@@ -68,13 +68,17 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
     if entry in ('transport_check.c','pd_send.c'):
         sources = [HERE / entry, HERE / 'pd_transport.c', crypto / 'monocypher.c']
     if entry == 'pd_accept.c':
-        sources = [HERE / entry, HERE / 'pd_transport.c', HERE / 'pd_endpoint.c', crypto / 'monocypher.c']
+        sources = [HERE / entry, HERE / 'pd_transport.c', HERE / 'pd_endpoint.c', HERE / 'pd_runtime_config.c', HERE.parent / 'request/pd_upload.c', crypto / 'monocypher.c']
+    if entry == 'runtime_config_check.c':
+        sources = [HERE / entry, HERE / 'pd_runtime_config.c', HERE / 'pd_transport.c', HERE.parent / 'request/pd_upload.c', crypto / 'monocypher.c']
     if entry == 'bootstrap_artifact_check.c':
         sources = [HERE / entry, HERE / 'pd_bootstrap_artifact.c',
                    crypto / 'monocypher.c', crypto / 'monocypher-ed25519.c']
     compiler = ['cc'] if sanitize else ['zig', 'cc', *TARGETS[arch]]
     flags = ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer'] if sanitize else ['-O2', '-static', '-s', '-Wl,--build-id=none']
     flags += ['-DPD_REQUEST_LIBRARY']
+    if entry == 'runtime_config_check.c':
+        flags += ['-DPD_RUNTIME_CONFIG_TEST']
     if entry == 'delivery_check.c':
         flags += ['-DPD_DELIVERY_TEST', '-Wl,--wrap=pd_identity_probe']
     if entry == 'boot_dispatch_check.c':
@@ -216,6 +220,7 @@ def main():
     p.add_argument('--recover-predecessor', action='store_true')
     p.add_argument('--delivery-test', action='store_true')
     p.add_argument('--carrier-test', action='store_true')
+    p.add_argument('--runtime-config-test', action='store_true')
     p.add_argument('--transport-test', action='store_true')
     p.add_argument('--send', action='store_true')
     p.add_argument('--accept', action='store_true')
@@ -226,12 +231,15 @@ def main():
     a = p.parse_args()
     if a.sanitize and a.arch != 'host':
         p.error('sanitizers are host-only')
-    if sum([a.accept, a.send, a.transport_test, a.carrier_test, a.deliver, a.delivery_test, a.bootstrap_artifact_test, a.test, a.store_test, a.update, a.upgrade_test, a.upgrade_transaction_test, a.handoff_test, a.release_test, a.stage_release, a.install_release, a.install_test, a.identity_test, a.approval_test, a.state_test, a.predecessor_test, a.inspect_predecessor, a.migration_test, a.transaction_test, a.session_gate_test, a.capsule_test, a.upgrade_capsule_test, a.worker_units_test, a.readiness_test, a.primary_test, a.service_test, a.service_activation_test, a.runtime_test, a.install_worker, a.upgrade_worker, a.restore_test, a.copy_predecessor, a.recover_predecessor]) > 1:
+    if sum([a.runtime_config_test, a.accept, a.send, a.transport_test, a.carrier_test, a.deliver, a.delivery_test, a.bootstrap_artifact_test, a.test, a.store_test, a.update, a.upgrade_test, a.upgrade_transaction_test, a.handoff_test, a.release_test, a.stage_release, a.install_release, a.install_test, a.identity_test, a.approval_test, a.state_test, a.predecessor_test, a.inspect_predecessor, a.migration_test, a.transaction_test, a.session_gate_test, a.capsule_test, a.upgrade_capsule_test, a.worker_units_test, a.readiness_test, a.primary_test, a.service_test, a.service_activation_test, a.runtime_test, a.install_worker, a.upgrade_worker, a.restore_test, a.copy_predecessor, a.recover_predecessor]) > 1:
         p.error('choose one entry point')
-    if not (a.accept or a.send or a.transport_test or a.carrier_test or a.delivery_test or a.bootstrap_artifact_test or a.test or a.store_test or a.upgrade_test or a.upgrade_transaction_test or a.release_test or a.install_test or a.identity_test or a.approval_test or a.state_test or a.predecessor_test or a.inspect_predecessor or a.migration_test or a.transaction_test or a.session_gate_test or a.capsule_test or a.upgrade_capsule_test or a.worker_units_test or a.readiness_test or a.primary_test or a.service_test or a.service_activation_test or a.runtime_test or a.restore_test) and not a.public_key:
+    if not (a.runtime_config_test or a.accept or a.send or a.transport_test or a.carrier_test or a.delivery_test or a.bootstrap_artifact_test or a.test or a.store_test or a.upgrade_test or a.upgrade_transaction_test or a.release_test or a.install_test or a.identity_test or a.approval_test or a.state_test or a.predecessor_test or a.inspect_predecessor or a.migration_test or a.transaction_test or a.session_gate_test or a.capsule_test or a.upgrade_capsule_test or a.worker_units_test or a.readiness_test or a.primary_test or a.service_test or a.service_activation_test or a.runtime_test or a.restore_test) and not a.public_key:
         p.error('boot builds require an explicitly supplied release public key; no default test key')
     entry = 'state_check.c' if a.state_test else 'approval_check.c' if a.approval_test else 'pd_install_release.c' if a.install_release else 'install_check.c' if a.install_test else 'identity_test.c' if a.identity_test else 'pd_stage_release.c' if a.stage_release else 'release_check.c' if a.release_test else 'store_check.c' if a.store_test else 'bundle_check.c' if a.test else 'pd_update.c' if a.update else 'pd_boot.c'
-    if a.accept:
+    if a.runtime_config_test:
+        if a.arch!='host':p.error('runtime config fixture is host-only')
+        entry='runtime_config_check.c'
+    elif a.accept:
         entry = 'pd_accept.c'
     elif a.send:
         entry = 'pd_send.c'

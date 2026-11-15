@@ -69,8 +69,11 @@ static int shape(const unsigned char header[kHeader],const unsigned char receipt
 /* Open both handles and unlink before receiving content. This works on Linux
  * 2.6 without memfd_create or O_TMPFILE. Death before unlink can leave an empty
  * tmpfs file, but no uploaded content is written until the name is gone. */
-static int memory_file(int directory,int* readonly)
+int pd_upload_memory_file(int directory,int* readonly)
 {
+    struct stat directory_stat;struct statfs directory_fs;*readonly=-1;
+    if(fstat(directory,&directory_stat) || !S_ISDIR(directory_stat.st_mode) ||
+       fstatfs(directory,&directory_fs) || (unsigned long)directory_fs.f_type!=0x01021994UL){return -1;}
     unsigned char nonce[16];char name[49]=".aetherpd-upload-";
     if(!random_bytes(nonce,sizeof(nonce))){return -1;}const char hex[]="0123456789abcdef";
     for(unsigned i=0;i<16;++i){name[16+i*2]=hex[nonce[i]>>4];name[17+i*2]=hex[nonce[i]&15];}name[48]=0;
@@ -83,7 +86,7 @@ static int memory_file(int directory,int* readonly)
 }
 static int receive_file(int channel,int directory,uint32_t size,const unsigned char expected[32],int* readonly,int64_t deadline)
 {
-    int writer=memory_file(directory,readonly);if(writer<0){return 0;}
+    int writer=pd_upload_memory_file(directory,readonly);if(writer<0){return 0;}
     unsigned char buffer[kBuffer],digest[32];crypto_blake2b_ctx hash;crypto_blake2b_init(&hash,32);int ok=1;
     for(uint32_t done=0;ok && done<size;){
         size_t amount=size-done;if(amount>sizeof(buffer)){amount=sizeof(buffer);}

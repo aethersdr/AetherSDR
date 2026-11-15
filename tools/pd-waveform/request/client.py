@@ -23,6 +23,13 @@ def configuration(data):
         raise ValueError('unsupported request role')
     return data[8:40],data[40:]
 
+def public_record(data):
+    _,receipt=configuration(data)
+    if struct.unpack_from('>I',receipt,12)[0]!=2:
+        raise ValueError('RAM credential provisioning requires an installed-radio upgrade')
+    return b'PDPUB001'+receipt+digest(b'PDKEY001'+data)
+
+
 def header(receipt,inputs):
     if len(inputs)!=4:raise ValueError('fixed input roles required')
     role=struct.unpack_from('>I',receipt,12)[0]

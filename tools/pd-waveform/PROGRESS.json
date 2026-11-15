@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T07:43:32.301585+00:00",
+  "updated_utc": "2026-11-15T07:57:33.548265+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -15,14 +15,16 @@
     "Temporary test waveforms and exact leftover archives were removed. Installed shim remained running, FDX off, no RF."
   ],
   "current_changes": {
-    "description": "Authenticated installed-shim API and fixed native launcher RAM credential handoff, plus a root-only one-request credential descriptor broker. No new radio deployment.",
-    "builds": "Native host fixtures, ARM64/ARMv7 session helpers and ARM64/ARMv7 updated boot entries built.",
-    "tests": "The two refusal failures were test assertions rejecting recvmsg=-1/ECONNRESET with no payload or descriptors. Corrected tests preserve the production guard. Nine installer test methods now pass with the race detector, including actual native/Python upload, simulated carrier completion, cancellation, and six unsafe-credential cases. The full shim race suite and native ASan/UBSan tests pass.",
+    "description": "Public-record carrier image and two-role RAM credential broker/receiver. Each fixed role fetches once; no request secret is placed in the image. No new radio deployment.",
+    "builds": "ARM64 acceptor and delivery entries and native host fixtures built.",
+    "evidence": "ram-carrier-development under evidence_root; prior ram-request-development evidence remains preserved.",
+    "tests": "Saved logs show the full shim race suite passing (14.156 s), eleven installer test methods passing, two native credential methods passing with C ASan/UBSan and Go race detection, fifteen upload regression tests passing, and three image-layout tests passing.",
     "unfinished": [
-      "Carrier consumption of public receipt/credential commitment and RAM credential, including its child process",
+      "Full root/container process graph and tmpfs behavior on the radio",
+      "Actual compiled-binary public-record image assembly and license bundle verification",
       "Initial-install trust and ordinary desktop integration",
-      "Remaining cross-platform and release gates",
-      "Integration into signed release, live upgrade and automatic outer cleanup"
+      "Integration into a signed release, live upgrade and automatic outer cleanup",
+      "Remaining cross-platform, hardware qualification and release gates"
     ]
   },
   "remaining": [
