@@ -23,6 +23,7 @@ class StripPuduPanel;
 class StripReverbPanel;
 class StripCfcPanel;
 class StripLevelerPanel;
+class StripPeakPanel;
 class StripWaveformPanel;
 class StripFinalOutputPanel;
 
@@ -38,7 +39,7 @@ public:
     // The tabs, in the order they appear and in the order the signal meets
     // them. Used as a stack index, so entries are appended, never inserted.
     // No Gate (RN2 on the Tube page replaces it) and no De-esser: both retired.
-    enum Stage { Tube = 0, Eq, Comp, Enh, Reverb, Cfc, Leveler, Output,
+    enum Stage { Tube = 0, Eq, Comp, Enh, Reverb, Cfc, Leveler, Peak, Output,
                  StageCount };
 
     explicit AetherialAudioStrip(AudioEngine* engine, QWidget* parent = nullptr);
@@ -156,6 +157,7 @@ private:
     StripReverbPanel*  m_reverb{nullptr};
     StripCfcPanel*     m_cfc{nullptr};
     StripLevelerPanel* m_leveler{nullptr};
+    StripPeakPanel*    m_peak{nullptr};
     StripWaveformPanel*    m_waveform{nullptr};
     StripFinalOutputPanel* m_finalOutput{nullptr};
 };

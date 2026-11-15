@@ -7,6 +7,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
+#include "core/ClientCessb.h"
 #include "core/ClientLeveler.h"
 #include "core/ClientComp.h"
 #include "core/ClientGate.h"
@@ -23,6 +24,7 @@
 #include "gui/ClientTubeApplet.h"
 #include "gui/StripCfcPanel.h"
 #include "gui/StripLevelerPanel.h"
+#include "gui/StripPeakPanel.h"
 #include "gui/StripReverbPanel.h"
 
 #include <QApplication>
@@ -180,6 +182,16 @@ private slots:
         QCOMPARE(engine.clientLevelerTx()->maxGainDb(), 9.0f);
     }
 
+    void stripPeakClip()
+    {
+        AudioEngine engine;
+        StripPeakPanel panel(&engine);
+        ClientCompKnob* knob = firstKnob(panel);
+        QVERIFY(knob);
+        emit knob->valueChanged(11.0f);
+        QCOMPARE(engine.clientCessbTx()->clipDb(), 11.0f);
+    }
+
     void knobsWithoutEngineAreNoOps()
     {
         ClientCompApplet comp;
@@ -191,7 +203,8 @@ private slots:
         StripCfcPanel cfcStrip(nullptr);
         ClientLevelerApplet lvlr;
         StripLevelerPanel lvlrStrip(nullptr);
-        for (QWidget* w : {static_cast<QWidget*>(&lvlr), static_cast<QWidget*>(&lvlrStrip),
+        StripPeakPanel peakStrip(nullptr);
+        for (QWidget* w : {static_cast<QWidget*>(&peakStrip), static_cast<QWidget*>(&lvlr), static_cast<QWidget*>(&lvlrStrip),
                            static_cast<QWidget*>(&comp), static_cast<QWidget*>(&gate),
                            static_cast<QWidget*>(&tube),
                            static_cast<QWidget*>(&reverb), static_cast<QWidget*>(&strip),

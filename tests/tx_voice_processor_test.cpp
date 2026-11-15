@@ -2,6 +2,7 @@
 #include "core/RNNoiseFilter.h"
 #include "core/Resampler.h"
 #include "core/ClientCfc.h"
+#include "core/ClientCessb.h"
 #include "core/ClientLeveler.h"
 #include "core/TxChainLayout.h"
 #include "core/ClientFinalLimiter.h"
@@ -19,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+using AetherSDR::ClientCessb;
 using AetherSDR::ClientCfc;
 using AetherSDR::ClientLeveler;
 using AetherSDR::ClientTube;
@@ -837,6 +839,42 @@ void testLevelerStageRunsAndBypasses()
            processor.normalizedFloat48Stereo() == processor.postChannelStripFloat48Stereo());
 }
 
+// The peak control is not a chain stage: with an empty chain it still runs,
+// ahead of the post-strip capture, and its latency joins the total; off, the
+// audio passes.
+void testPeakControlRunsAfterTheChain()
+{
+    ClientCessb cessb;
+    TxVoiceProcessor processor;
+    TxVoiceProcessor::Processors processors;
+    processors.cessb = &cessb;
+    processor.setProcessors(processors);
+    processor.setStageOrder(0);
+    processor.setMeasurementCaptureEnabled(true);
+    processor.prepare(48000, 1024);
+    const int baseLatency = processor.latencyFrames();
+
+    cessb.setEnabled(true);
+    bool changed = false;
+    for (int block = 0; block < 10; ++block) {
+        QByteArray tone = makeCanonicalTone(480, 48000, 1000.0f);
+        processor.processCapturedInt16(tone);
+        changed = changed
+                  || processor.normalizedFloat48Stereo() != processor.postChannelStripFloat48Stereo();
+    }
+    report("an enabled peak control runs with an empty chain", changed);
+    report("its latency joins the reported latency",
+           cessb.latencyFrames() > 0
+               && processor.latencyFrames() == baseLatency + cessb.latencyFrames());
+
+    cessb.setEnabled(false);
+    QByteArray tone = makeCanonicalTone(480, 48000, 1000.0f);
+    processor.processCapturedInt16(tone);
+    report("a disabled peak control leaves the audio alone",
+           processor.normalizedFloat48Stereo() == processor.postChannelStripFloat48Stereo());
+    report("and leaves the latency", processor.latencyFrames() == baseLatency);
+}
+
 void testNonFiniteSamplesCannotPoisonEgressSrc()
 {
     std::vector<float> input(480 * 2, 0.1f);
@@ -1322,6 +1360,7 @@ int main()
     testNinthSlotStageRuns();
     testCfcStageRunsAndBypasses();
     testLevelerStageRunsAndBypasses();
+    testPeakControlRunsAfterTheChain();
     testNonFiniteSamplesCannotPoisonEgressSrc();
     testNonFiniteCapturedFloatCannotPoisonIngressSrc();
     testMeasurementCaptureCanBeDisabled();

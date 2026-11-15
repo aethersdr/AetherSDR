@@ -1,7 +1,7 @@
 #include "StripLevelerPanel.h"
 
 #include "ClientCompKnob.h"
-#include "ClientLevelerHistoryWidget.h"
+#include "ClientDbHistoryWidget.h"
 #include "EditorFramelessTitleBar.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -124,7 +124,9 @@ StripLevelerPanel::StripLevelerPanel(AudioEngine* engine, QWidget* parent)
     titleBar->setTitleText(title);
     root->addWidget(titleBar);
 
-    m_history = new ClientLevelerHistoryWidget;
+    m_history = new ClientDbHistoryWidget;
+    m_history->setAxis(0.0f, ClientLeveler::kMaxGainDb);
+    m_history->setAccessibleName(tr("LVLR gain over the last five seconds"));
     root->addWidget(m_history, 1);
 
     auto* row = new QHBoxLayout;
@@ -199,7 +201,7 @@ void StripLevelerPanel::syncControlsFromEngine()
     m_attack->setValue(lev->attackMs());
     m_decay->setValue(lev->decayMs());
     m_hang->setValue(lev->hangMs());
-    m_history->setMaxGainDb(lev->maxGainDb());
+    m_history->setReference(lev->maxGainDb(), tr("Max gain"));
     m_history->setActive(lev->isEnabled());
 }
 

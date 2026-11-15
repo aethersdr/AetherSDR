@@ -1,7 +1,7 @@
 #include "ClientLevelerApplet.h"
 
 #include "ClientCompKnob.h"
-#include "ClientLevelerHistoryWidget.h"
+#include "ClientDbHistoryWidget.h"
 #include "StripLevelerPanel.h"
 #include "core/AudioEngine.h"
 #include "core/ClientLeveler.h"
@@ -23,7 +23,9 @@ ClientLevelerApplet::ClientLevelerApplet(QWidget* parent)
     outer->setContentsMargins(6, 4, 6, 4);
     outer->setSpacing(4);
 
-    m_history = new ClientLevelerHistoryWidget;
+    m_history = new ClientDbHistoryWidget;
+    m_history->setAxis(0.0f, ClientLeveler::kMaxGainDb);
+    m_history->setAccessibleName(tr("LVLR gain over the last five seconds"));
     m_history->setFixedHeight(70);
     outer->addWidget(m_history);
 
@@ -90,7 +92,7 @@ void ClientLevelerApplet::syncFromEngine()
     const QSignalBlocker b2(m_decay);
     m_maxGain->setValue(lev->maxGainDb());
     m_decay->setValue(lev->decayMs());
-    m_history->setMaxGainDb(lev->maxGainDb());
+    m_history->setReference(lev->maxGainDb(), tr("Max gain"));
     m_history->setActive(lev->isEnabled());
 }
 

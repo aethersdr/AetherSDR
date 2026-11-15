@@ -8,7 +8,7 @@ namespace AetherSDR {
 
 class AudioEngine;
 class ClientCompKnob;
-class ClientLevelerHistoryWidget;
+class ClientDbHistoryWidget;
 
 // Docked tile for the LVLR stage: its gain history, Max gain and Decay.
 // Bypass lives on the CHAIN widget; the AetherTX window has every control.
@@ -28,7 +28,7 @@ private:
     void syncFromEngine();
 
     AudioEngine* m_audio{nullptr};
-    ClientLevelerHistoryWidget* m_history{nullptr};
+    ClientDbHistoryWidget* m_history{nullptr};
     ClientCompKnob* m_maxGain{nullptr};
     ClientCompKnob* m_decay{nullptr};
     QTimer* m_poll{nullptr};

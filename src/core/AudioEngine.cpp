@@ -7531,6 +7531,14 @@ void AudioEngine::loadClientCessbSettings()
     applyClientCessbJson(*m_clientCessbTx, doc.object());
 }
 
+void AudioEngine::setTxFilterPassband(int lowHz, int highHz)
+{
+    if (m_clientCessbTx) {
+        m_clientCessbTx->followRadioFilter(lowHz, highHz);
+        emit clientCessbStateChanged();
+    }
+}
+
 void AudioEngine::saveClientCessbSettings()
 {
     if (!m_clientCessbTx) return;

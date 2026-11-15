@@ -8,7 +8,7 @@ namespace AetherSDR {
 
 class AudioEngine;
 class ClientCompKnob;
-class ClientLevelerHistoryWidget;
+class ClientDbHistoryWidget;
 
 // AetherTX page for the LVLR stage: the leveler's gain over the last five
 // seconds with the Max gain ceiling, over Max gain, Attack, Decay and Hang.
@@ -39,7 +39,7 @@ private:
     void restoreGeometryFromSettings();
 
     AudioEngine* m_audio{nullptr};
-    ClientLevelerHistoryWidget* m_history{nullptr};
+    ClientDbHistoryWidget* m_history{nullptr};
     ClientCompKnob* m_maxGain{nullptr};
     ClientCompKnob* m_attack{nullptr};
     ClientCompKnob* m_decay{nullptr};

@@ -571,6 +571,8 @@ void MainWindow::wireDspApplets()
             m_clientEqEditor->setTxFilterCutoffs(lo, hi);
         if (m_aetherialStrip)
             m_aetherialStrip->setTxFilterCutoffs(lo, hi);
+        if (m_audio)
+            m_audio->setTxFilterPassband(lo, hi);
     };
     {
         const auto& tx = m_radioModel.transmitModel();

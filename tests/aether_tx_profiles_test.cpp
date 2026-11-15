@@ -8,6 +8,7 @@
 #include "core/ChannelStripPresets.h"
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
+#include "core/ClientCessb.h"
 #include "core/ClientLeveler.h"
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
@@ -53,6 +54,7 @@ private slots:
     void aLegacyGateProfileTurnsRn2On();
     void roundTripsTheCfcStage();
     void roundTripsTheLevelerStage();
+    void roundTripsThePeakControl();
     void exportsAndRestoresCompressorDriveAndPhase();
     void legacyCompressorProfilesKeepCurrentDriveAndPhase();
     void importedCompressorValuesAreClamped();
@@ -377,6 +379,30 @@ void AetherTxProfilesTest::roundTripsTheLevelerStage()
     QVERIFY(lev->isEnabled());
     QCOMPARE(lev->maxGainDb(), 15.0f);
     QCOMPARE(lev->decayMs(), 100.0f);
+}
+
+void AetherTxProfilesTest::roundTripsThePeakControl()
+{
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine, nullptr);
+    ClientCessb* peak = engine.clientCessbTx();
+    QVERIFY(peak);
+    peak->setEnabled(true);
+    peak->setClipDb(12.0f);
+    peak->setOvershootControl(false);
+    peak->setOutputDb(-2.0f);
+    QVERIFY(lib.saveFromCurrent("Peak Round Trip"));
+
+    peak->setEnabled(false);
+    peak->setClipDb(6.0f);
+    peak->setOvershootControl(true);
+    peak->setOutputDb(-1.0f);
+    QVERIFY(lib.loadProfile("Peak Round Trip"));
+
+    QVERIFY(peak->isEnabled());
+    QCOMPARE(peak->clipDb(), 12.0f);
+    QVERIFY(!peak->overshootControl());
+    QCOMPARE(peak->outputDb(), -2.0f);
 }
 
 void AetherTxProfilesTest::exportsAndRestoresCompressorDriveAndPhase()

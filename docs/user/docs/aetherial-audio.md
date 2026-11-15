@@ -113,11 +113,13 @@ the one final conversion to 16-bit.
 
 ```
 PC mic → (RN2) → Tube → EQ → LVLR → CFC → Compressor → Exciter → Reverb
-       → Final Output (Quindar, limiter, meters) → radio
+       → Peak control → Final Output (Quindar, limiter, meters) → radio
 ```
 
 The middle seven stages are the reorderable chain; the order above is the
-default. If you saved your own order before LVLR and CFC existed, they are added
+default. **Peak control** is not part of it: it always runs last, after the
+chain, because it bounds the envelope of everything ahead of it. If you saved
+your own order before LVLR and CFC existed, they are added
 at the end of it; drag them ahead of the Compressor to match the default.
 **RN2** is not a chain stage: when it is on it always runs first, ahead of
 every stage, so the tube and everything after it work on denoised audio. Its
@@ -138,6 +140,7 @@ with no threshold to set. To tame sibilance, use a gentle EQ cut around
 | **Compressor** | Compressor with Drive/Phase peak-to-average (PAPR) controls and its own brickwall limiter. |
 | **Exciter** | AetherVoice™ harmonic exciter. |
 | **Reverb** | Freeverb room reverb. Off by default. |
+| **Peak control** | Clipper and CESSB overshoot control that holds the SSB envelope under a ceiling, for more average power at the same peak. Always last; off by default. |
 | **Final Output** | Final limiter (**LIM**), DC block, test tone, Quindar tones, output meters with **HOLD**, and a waveform scope. |
 
 ### REC / PLAY: the transmit monitor
@@ -430,8 +433,8 @@ lower the 2–3 kHz points before touching anything else.
   Pre-comp the output can exceed full scale. Keep the Compressor's
   **Limiter** or the Final Output **LIM** on after it.
 - CFC evens out your voice's spectrum and density; on its own it adds little
-  average power at the same peak. For that, use the Compressor's **Drive** and
-  **Phase**.
+  average power at the same peak (measured, it costs up to 0.7 dB). For more
+  average power, use **Peak control**.
 
 ### Compressor
 
@@ -534,6 +537,45 @@ PreDly 15 ms, Mix 8 %. Keep the reverb last in the chain; a compressor after
 it squashes the tail. Pre-delay adds directly to the delay of the wet signal,
 which you will notice on quick overs.
 
+### Peak control (AetherTX)
+
+WDSP's SSB speech processor: a bandpass, an envelope clipper, a second
+bandpass, CESSB (controlled-envelope SSB) overshoot control and a last
+bandpass. It holds the envelope of the SSB signal your radio builds from this
+audio under a ceiling. That is not the same as limiting the audio's sample
+peaks: band-limited audio can have an envelope several dB above its highest
+sample, which is why a limiter alone cannot cap the peak RF power. With the
+envelope held, you can run more average power at the same peak. Peak control
+always runs after the chain, and it ships **off**; tick its tab to turn it on.
+
+The page traces the envelope peak over the last five seconds against the
+**Ceiling** (dashed).
+
+| Control | Range | What it does |
+|---|---|---|
+| **Clip** | 0 to 20 dB | How hard the envelope is driven into the clipper. More clip, more average power and more distortion. Default 6 dB |
+| **CESSB** | On / off | Removes the overshoot the bandpass after the clipper puts back. Without it the envelope runs about 1 dB over the ceiling at 12 dB of clip. Default on |
+| **Ceiling** | −12 to 0 dBFS | The largest envelope it lets through. Default −1 dBFS |
+
+**Passband.** The stage's bandpass follows your radio's TX filter, 50 Hz inside
+each edge, so the radio's filter does not reshape the envelope after it. The
+readout under the knobs shows the passband in force. Changing the TX filter
+while you talk is seamless.
+
+**Delay.** Peak control adds about 33 ms.
+
+**Example: SSB contest or DX punch.** Clip 6 dB, CESSB on, Ceiling −1 dBFS. On
+a FLEX-8600 at 25 W into a dummy load, with the Contest profile ahead of it,
+this lowered the peak-to-average ratio from about 6.4 dB to about 3 dB and
+raised average power by about 3 dB at the same peak.
+
+**Pitfalls:**
+- Clip is distortion by design. Beyond about 10 dB, voices get rough. Record
+  and listen with **REC / PLAY** before you go on the air.
+- Set the radio's drive so the envelope peaks reach full power, not beyond.
+  Peak control bounds the envelope it sends; the radio's own ALC still sees
+  anything you add after it.
+
 ### Final Output (AetherTX)
 
 The last stage before the radio.
@@ -557,7 +599,7 @@ sending.
 LIM holds its own 48 kHz output samples under the ceiling. The conversion to
 the radio's 24 kHz rate after it can overshoot that slightly between samples,
 and LIM cannot hold the SSB RF envelope, which can rise a few dB above the
-highest audio sample.
+highest audio sample. For that, use **Peak control**.
 
 #### Quindar tones
 

@@ -1603,8 +1603,9 @@ set(GUI_SOURCES
     src/gui/ClientCfcCurveWidget.cpp
     src/gui/StripCfcPanel.cpp
     src/gui/ClientLevelerApplet.cpp
-    src/gui/ClientLevelerHistoryWidget.cpp
+    src/gui/ClientDbHistoryWidget.cpp
     src/gui/StripLevelerPanel.cpp
+    src/gui/StripPeakPanel.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
     src/gui/AetherialAudioStrip.cpp

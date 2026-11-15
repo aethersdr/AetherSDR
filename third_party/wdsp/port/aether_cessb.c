@@ -99,6 +99,11 @@ void aether_cessb_flush(AetherCessb* a)
     flush_bandpass(a->bp0);
     flush_bandpass(a->bp1);
     flush_osctrl(a->osctrl);
+    /* flush_osctrl() clears dl_len (pn / 2) complex samples of a pn-sample
+       delay line and keeps max_env, so the rest of the last run would play
+       out through bp2 after a flush. Clear all of it. */
+    memset(a->osctrl->dl, 0, (size_t)a->osctrl->pn * sizeof(complex));
+    a->osctrl->max_env = 0.0;
     flush_bandpass(a->bp2);
     memset(a->buffer, 0, 2 * (size_t)a->blockSize * sizeof(complex));
 }

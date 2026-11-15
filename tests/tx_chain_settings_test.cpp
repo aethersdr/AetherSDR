@@ -14,6 +14,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
+#include "core/ClientCessb.h"
 #include "core/ClientLeveler.h"
 #include "core/ChannelStripPresets.h"
 #include "core/ClientFinalLimiter.h"
@@ -59,6 +60,8 @@ private slots:
     void cfcSettingsRoundTrip();
     void cfcSettingsRejectMalformedAndClampRanges();
     void levelerSettingsRoundTripAndClamp();
+    void peakSettingsRoundTripAndClamp();
+    void bypassRestoresThePeakControl();
 };
 
 void TxChainSettingsTest::initTestCase()
@@ -438,6 +441,55 @@ void TxChainSettingsTest::levelerSettingsRoundTripAndClamp()
     QCOMPARE(lev->attackMs(), ClientLeveler::kMinAttackMs);
     QCOMPARE(lev->decayMs(), ClientLeveler::kDefaultDecayMs);  // "slow" is not a number
     QCOMPARE(lev->hangMs(), 0.0f);
+}
+
+void TxChainSettingsTest::peakSettingsRoundTripAndClamp()
+{
+    {
+        AudioEngine engine;
+        ClientCessb* peak = engine.clientCessbTx();
+        QVERIFY(peak);
+        QVERIFY(!peak->isEnabled());  // ships off
+        peak->setEnabled(true);
+        peak->setClipDb(10.0f);
+        peak->setOvershootControl(false);
+        peak->setOutputDb(-4.0f);
+        engine.saveClientCessbSettings();
+    }
+    {
+        AudioEngine reloaded;
+        ClientCessb* peak = reloaded.clientCessbTx();
+        QVERIFY(peak->isEnabled());
+        QCOMPARE(peak->clipDb(), 10.0f);
+        QVERIFY(!peak->overshootControl());
+        QCOMPARE(peak->outputDb(), -4.0f);
+    }
+    AppSettings::instance().setValue(
+        "ClientCessbTx",
+        QStringLiteral(R"({"enabled":false,"clipDb":-3,"cessb":"no","outputDb":-60})"));
+    AudioEngine clamped;
+    ClientCessb* peak = clamped.clientCessbTx();
+    QVERIFY(!peak->isEnabled());
+    QCOMPARE(peak->clipDb(), 0.0f);
+    QVERIFY(peak->overshootControl());  // "no" is not a bool
+    QCOMPARE(peak->outputDb(), ClientCessb::kMinOutputDb);
+}
+
+void TxChainSettingsTest::bypassRestoresThePeakControl()
+{
+    AudioEngine engine;
+    ClientCessb* peak = engine.clientCessbTx();
+    peak->setEnabled(true);
+    engine.setTxBypassed(true);
+    QVERIFY(!peak->isEnabled());
+    engine.setTxBypassed(false);
+    QVERIFY(peak->isEnabled());
+
+    // Off before BYPASS stays off after it.
+    peak->setEnabled(false);
+    engine.setTxBypassed(true);
+    engine.setTxBypassed(false);
+    QVERIFY(!peak->isEnabled());
 }
 
 int main(int argc, char** argv)

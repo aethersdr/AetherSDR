@@ -1300,3 +1300,14 @@ stop-and-flush wait". With the patch, all of `wdsp_channel_test` passes.
 
 Drop this if upstream narrows the condition itself, or if `WdspChannel` ever
 clocks a stopping channel's ramp out before handing control to WDSP.
+
+## Not a patch — `port/aether_cessb.c` clears all of osctrl's delay line on flush (RFC #4836)
+
+`upstream/` is unchanged. The standalone peak control
+(`include/aether_wdsp_cessb.h`) runs `compress.c` and `osctrl.c` between three
+`bandpass.c` filters, as `xtxa()` does. Upstream `flush_osctrl()` clears
+`dl_len` (`pn / 2`) complex samples of a delay line that holds `pn`, and keeps
+`max_env`. After a flush the rest of the previous run therefore plays out
+through the last bandpass, about 15 ms at 48 kHz. `aether_cessb_flush()` clears
+the whole line and `max_env` after calling `flush_osctrl()`.
+`client_cessb_test`'s "re-enabling starts clean" case pins it.

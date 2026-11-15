@@ -668,6 +668,8 @@ public:
     // (ClientCessbJson). Save emits clientCessbStateChanged().
     void loadClientCessbSettings();
     void saveClientCessbSettings();
+    // The radio's TX filter, which the peak control's passband stays inside.
+    void setTxFilterPassband(int lowHz, int highHz);
     void loadClientFinalLimiterSettings();
     void saveClientFinalLimiterSettings() const;
     // Aetherial Tube Pre-Amp TX state — nested-JSON shape under one key

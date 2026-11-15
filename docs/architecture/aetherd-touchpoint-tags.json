@@ -293,6 +293,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ClientCessb.h": {
+  "tag": "universal",
+  "note": "Client TX final peak control (WDSP compressor + CESSB osctrl between bandpasses, used standalone; clip, ceiling, passband following the TX filter + envelope peak); radio-agnostic engine DSP feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientCessbJson.h": {
+  "tag": "universal",
+  "note": "ClientCessb's one-object JSON shape shared by its settings key and TX profiles/presets; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ClientCfc.h": {
   "tag": "universal",
   "note": "Client TX-chain CFC multiband compressor (WDSP cfcomp used standalone; curves, pre-comp, post-EQ, FFT size + live compression); radio-agnostic engine DSP feature.",
