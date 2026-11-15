@@ -6839,8 +6839,8 @@ set_tests_properties(native_widget_topology_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Windows Store publication policy: socket-free PowerShell with an injected
-# CLI command. Runs in the full suite wherever PowerShell is installed and in
-# Windows Installer before packaging. The frozen per-PR CTest gate is unchanged.
+# CLI command. Runs in the full suite wherever PowerShell is installed,
+# independently of Windows Installer. The frozen per-PR CTest gate is unchanged.
 # pwsh first: the suite is developed and verified on PowerShell 7, and on a
 # Windows box `powershell` would otherwise silently select 5.1 instead.
 find_program(AETHER_POWERSHELL_EXECUTABLE NAMES pwsh powershell)

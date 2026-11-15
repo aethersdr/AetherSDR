@@ -446,11 +446,12 @@ pwsh -NoProfile -File tests\windows_store_policy_test.ps1
 
 It exercises the actual build-plan script with tag/branch dispatches and the
 publisher with an in-process CLI substitute. It performs no Store requests.
-Windows Installer runs it before packaging; CTest registers
-`windows_store_policy` when PowerShell is installed, for the unfiltered full
-suite. It is not added to the frozen per-PR CTest gate. A passing test does not
-prove Partner Center credentials, flight configuration, or Store certification;
-verify those separately during the first intended flight publication.
+CTest registers `windows_store_policy` when PowerShell is installed, for the
+independent, unfiltered full suite. Windows Installer does not run regression
+tests before, during, or after publishing, and it does not depend on or trigger
+the full suite. The test is not added to the frozen per-PR CTest gate. A passing
+test does not prove Partner Center credentials, flight configuration, or Store
+certification; verify those separately during the first intended flight publication.
 
 Microsoft warns that an API-created flight submission must continue to be
 managed through the API. Do not edit the in-progress submission in Partner
