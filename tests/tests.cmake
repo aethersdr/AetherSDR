@@ -5672,6 +5672,14 @@ add_executable(client_pudu_test
 )
 target_include_directories(client_pudu_test PRIVATE src)
 
+# ClientCfc, the AetherTX stage around WDSP's CFC (RFC #4836): unity, delay
+# equal to the reported latency, per-band gain, post-EQ, range limits, and an
+# FFT-size change with no gap and no leaked block. Socket-free.
+add_executable(client_cfc_test tests/client_cfc_test.cpp)
+target_include_directories(client_cfc_test PRIVATE src)
+target_link_libraries(client_cfc_test PRIVATE aethercore Qt6::Core)
+add_test(NAME client_cfc_test COMMAND client_cfc_test)
+
 add_executable(client_reverb_test
     tests/client_reverb_test.cpp
     src/core/ClientReverb.cpp
