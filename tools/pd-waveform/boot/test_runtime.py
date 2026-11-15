@@ -89,6 +89,15 @@ class RuntimeTest(unittest.TestCase):
   total=len(self.snapshot())
   for point in range(1,total+1):
    self.invoke(-signal.SIGKILL,point);self.invoke();self.assertFalse(self.runtime.exists());self.populate()
+ def test_installation_status_and_partial_are_removable(self):
+  self.write_status('installation',204,0o444)
+  self.write_status('.installation.new',73,0o600)
+  self.invoke();self.assertFalse(self.runtime.exists())
+ def write_status(self,name,size,mode):
+  p=self.runtime/name;p.write_bytes(bytes(size));p.chmod(mode)
+ def test_invalid_installation_status_preserves_runtime(self):
+  for name,size,mode in [('installation',203,0o444),('installation',204,0o644),('.installation.new',205,0o600),('.installation.new',1,0o644)]:
+   self.write_status(name,size,mode);self.refused();(self.runtime/name).unlink()
  def test_partial_stage_is_removable(self):
   p=self.runtime/'.stage/aether-pd';p.write_bytes(b'partial');p.chmod(0o600);self.invoke()
 

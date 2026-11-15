@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T08:23:39.727598+00:00",
+  "updated_utc": "2026-11-15T08:41:38.183887+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,5 +48,23 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Implement ordinary-client committed-state verification across shim restart, then complete public-path interruption/cleanup qualification and first-install/6000 provisioning. Preserve the successful8600 upgrade and original readiness failure separately."
+  "next_action": "Implement desktop exact-approved-plan matching and bounded read-only installation polling across shim restart; qualify current endpoint on a signed installed candidate, including rollback compatibility. Preserve prior live candidate and original readiness failure.",
+  "installation_status_development": {
+    "evidence": "installation-status-development/validation.json under evidence_root",
+    "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
+    "checks": [
+      "12 native tests including native-to-Go interoperability passed",
+      "11 sanitizer cases passed; Go interoperability checked separately",
+      "42 runtime retirement tests passed",
+      "Go parser/API/protected-reader race tests passed",
+      "ARM64 and Cortex-A8 ARMv7 boot and shim builds succeeded"
+    ],
+    "remaining": [
+      "Desktop exact-plan matching and bounded read-only polling across shim restart",
+      "First-install status and trust path",
+      "Older-shim rollback observability and runtime cleanup compatibility",
+      "Live installed candidate upgrade, rollback and reboot qualification",
+      "Full production plan including 6000 provisioning/hardware, DSP, PR4770, RF/stock APD and release gates"
+    ]
+  }
 }

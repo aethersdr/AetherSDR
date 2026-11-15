@@ -77,6 +77,10 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
     compiler = ['cc'] if sanitize else ['zig', 'cc', *TARGETS[arch]]
     flags = ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer'] if sanitize else ['-O2', '-static', '-s', '-Wl,--build-id=none']
     flags += ['-DPD_REQUEST_LIBRARY']
+    if entry == 'installation_check.c':
+        if arch != 'host':
+            raise ValueError('installation status fixture is host-only')
+        flags += ['-DPD_INSTALLATION_TEST', '-DPD_TRANSACTION_TEST', '-DPD_UPGRADE_TEST']
     if entry == 'runtime_config_check.c':
         flags += ['-DPD_RUNTIME_CONFIG_TEST']
     if entry == 'delivery_check.c':
@@ -210,6 +214,7 @@ def main():
     p.add_argument('--primary-test', action='store_true')
     p.add_argument('--service-test', action='store_true')
     p.add_argument('--service-activation-test', action='store_true')
+    p.add_argument('--installation-test', action='store_true')
     p.add_argument('--runtime-test', action='store_true')
     p.add_argument('--install-worker', action='store_true')
     p.add_argument('--upgrade-worker', action='store_true')
@@ -231,12 +236,14 @@ def main():
     a = p.parse_args()
     if a.sanitize and a.arch != 'host':
         p.error('sanitizers are host-only')
-    if sum([a.runtime_config_test, a.accept, a.send, a.transport_test, a.carrier_test, a.deliver, a.delivery_test, a.bootstrap_artifact_test, a.test, a.store_test, a.update, a.upgrade_test, a.upgrade_transaction_test, a.handoff_test, a.release_test, a.stage_release, a.install_release, a.install_test, a.identity_test, a.approval_test, a.state_test, a.predecessor_test, a.inspect_predecessor, a.migration_test, a.transaction_test, a.session_gate_test, a.capsule_test, a.upgrade_capsule_test, a.worker_units_test, a.readiness_test, a.primary_test, a.service_test, a.service_activation_test, a.runtime_test, a.install_worker, a.upgrade_worker, a.restore_test, a.copy_predecessor, a.recover_predecessor]) > 1:
+    if sum([a.installation_test, a.runtime_config_test, a.accept, a.send, a.transport_test, a.carrier_test, a.deliver, a.delivery_test, a.bootstrap_artifact_test, a.test, a.store_test, a.update, a.upgrade_test, a.upgrade_transaction_test, a.handoff_test, a.release_test, a.stage_release, a.install_release, a.install_test, a.identity_test, a.approval_test, a.state_test, a.predecessor_test, a.inspect_predecessor, a.migration_test, a.transaction_test, a.session_gate_test, a.capsule_test, a.upgrade_capsule_test, a.worker_units_test, a.readiness_test, a.primary_test, a.service_test, a.service_activation_test, a.runtime_test, a.install_worker, a.upgrade_worker, a.restore_test, a.copy_predecessor, a.recover_predecessor]) > 1:
         p.error('choose one entry point')
-    if not (a.runtime_config_test or a.accept or a.send or a.transport_test or a.carrier_test or a.delivery_test or a.bootstrap_artifact_test or a.test or a.store_test or a.upgrade_test or a.upgrade_transaction_test or a.release_test or a.install_test or a.identity_test or a.approval_test or a.state_test or a.predecessor_test or a.inspect_predecessor or a.migration_test or a.transaction_test or a.session_gate_test or a.capsule_test or a.upgrade_capsule_test or a.worker_units_test or a.readiness_test or a.primary_test or a.service_test or a.service_activation_test or a.runtime_test or a.restore_test) and not a.public_key:
+    if not (a.installation_test or a.runtime_config_test or a.accept or a.send or a.transport_test or a.carrier_test or a.delivery_test or a.bootstrap_artifact_test or a.test or a.store_test or a.upgrade_test or a.upgrade_transaction_test or a.release_test or a.install_test or a.identity_test or a.approval_test or a.state_test or a.predecessor_test or a.inspect_predecessor or a.migration_test or a.transaction_test or a.session_gate_test or a.capsule_test or a.upgrade_capsule_test or a.worker_units_test or a.readiness_test or a.primary_test or a.service_test or a.service_activation_test or a.runtime_test or a.restore_test) and not a.public_key:
         p.error('boot builds require an explicitly supplied release public key; no default test key')
     entry = 'state_check.c' if a.state_test else 'approval_check.c' if a.approval_test else 'pd_install_release.c' if a.install_release else 'install_check.c' if a.install_test else 'identity_test.c' if a.identity_test else 'pd_stage_release.c' if a.stage_release else 'release_check.c' if a.release_test else 'store_check.c' if a.store_test else 'bundle_check.c' if a.test else 'pd_update.c' if a.update else 'pd_boot.c'
-    if a.runtime_config_test:
+    if a.installation_test:
+        entry = 'installation_check.c'
+    elif a.runtime_config_test:
         if a.arch!='host':p.error('runtime config fixture is host-only')
         entry='runtime_config_check.c'
     elif a.accept:

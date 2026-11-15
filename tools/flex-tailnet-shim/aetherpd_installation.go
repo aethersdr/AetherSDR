@@ -68,6 +68,7 @@ func parsePDInstallation(data []byte) (pdInstallation, error) {
 
 func aetherPDInstallationHandler(n *Node, read func() (pdInstallation, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if !n.checkToken(bearer(r)) {
 			writeJSON(w, http.StatusUnauthorized, apiError{errUnauthorized.Error()})
 			return
@@ -83,7 +84,6 @@ func aetherPDInstallationHandler(n *Node, read func() (pdInstallation, error)) h
 			})
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, status)
 	}
 }

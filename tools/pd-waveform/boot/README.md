@@ -1998,3 +1998,70 @@ under the restricted worker capability set and removed temporary installation
 authority. The bench still loaded/removed the outer image and supplied the
 native sender fixture. First installation, interruption recovery through this
 carrier and the complete ordinary-user bootstrap workflow remain unqualified.
+
+## Terminal installation status mirror (development)
+
+The fixed upgrade worker and boot helper can publish a read-only summary at
+`/run/aetherpd/installation`. The unprivileged shim exposes it through authenticated
+`GET /v1/aetherpd/installation`, with no parameters or request body. This adds no
+privileged query daemon and gives the shim no descriptor into the protected store.
+The response is a terminal transaction observation, not a claim that correction
+is running or that the primary is healthy.
+
+Publication requires the shared terminal transaction lease, a committed original
+installation, no temporary install/upgrade authority, a terminal upgrade journal,
+and an exact match between that journal and the selected generation/control
+record. The boot call follows authenticated payload preparation; the worker call
+follows successful transaction cleanup. Publication failure is logged without
+changing a committed transaction into failure or initiating rollback. During
+activation the journal is not terminal, so no success is published. First installs
+without an upgrade journal have no mirror yet.
+
+The 204-byte record is atomic on tmpfs and contains no credentials:
+
+| Offset | Length | Value |
+|---|---|---|
+| 0 | 8 | `PDVIEW01` |
+| 8 | 4 | Big-endian phase: 4 committed, 7 rolled back |
+| 12 | 4 | Big-endian radio profile |
+| 16 | 32 | BLAKE2b-256 of the exact 352-byte approved upgrade plan |
+| 48 | 32 | Selected whole-release BLAKE2b-256 |
+| 80 | 32 | Selected Ed25519 publisher public key |
+| 112 | 28 | NUL-padded firmware identifier |
+| 140 | 64 | NUL-padded radio serial |
+
+The writer publishes mode 0444 with one link beneath protected root-owned runtime
+directories. It writes and syncs `.installation.new`, renames, then syncs the
+runtime directory. Only a matching partial write can be resumed. Runtime retirement
+recognizes these two fixed names with bounded sizes and modes; foreign entries
+still prevent deletion. The shim validates protected parents, no symlinks, file
+ownership, mode, link count, exact size, tmpfs, format and bounded fields on each
+read. Missing or invalid observations return HTTP 503 with
+`state: unavailable` and `installation_committed: false`. All responses disable
+caching. A committed response includes `state: committed`,
+`installation_committed: true`, `upgrade_plan_blake2b_256`,
+`selected_release_blake2b_256`, `selected_release_key`, `profile`, `firmware`, and
+`serial`. Rollback uses `state: rolled_back` and false with the selected previous
+release/key.
+
+A desktop must match every identity and digest against its exact approved plan.
+A previous transaction's valid mirror must not complete a new upgrade. Delivery
+result 0, a healthy shim, HTTP 200 alone, or a record for another plan are
+insufficient. A transport failure during shim restart is an unknown outcome;
+only bounded read-only polling may retry automatically. An older shim without
+this endpoint cannot confirm a rollback through this interface. Such a rollback
+must remain unconfirmed in the client until supported evidence is available.
+Older boot/runtime builds also do not understand the new runtime filenames;
+backward upgrade/rollback compatibility must be qualified before shipping.
+
+Host checks build with `build.py --arch host --installation-test --output DIR`.
+Run `test_installation.py --checker DIR/installation-check --disk-directory DISK
+--go-shim ../flex-tailnet-shim` from this directory, using a real disk directory
+for the non-tmpfs refusal. The fixture changes only owner checks to the invoking
+UID and exposes crash checkpoints; it does not bypass journal or selector gates.
+Its native-to-Go test reads the actual C publisher's commit and rollback files
+through the production Go reader. The same native tests support `--sanitize`.
+`test_runtime.py` covers retirement of complete/partial mirrors and preservation
+of invalid files. These are host component checks, not installed upgrade,
+reboot, physical power-loss or FLEX-6300 qualification. Desktop polling and its
+operator workflow remain unfinished.
