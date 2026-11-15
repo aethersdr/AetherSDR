@@ -31,6 +31,8 @@
 // CFC:         --cfc-fft 1024 --cfc-precomp 0 --cfc-posteq 0|1 --cfc-postgain 0
 //              --cfc-band<N>-hz / -comp / -eq (N = 1..10) override the
 //              first-enable profile's band N; --cfc-flat 1 zeroes every band
+// Peak ctrl:   --cessb-clip 3 --cessb-os 1|0 --cessb-out -1 --cessb-low 150 --cessb-high 2850
+//              (the final peak control, after the chain, ahead of Final Output)
 // Final:       --lim-ceiling -0.5 (Final Output LIM) --lim-lookahead 1.5 (ms)
 //              --trim 0
 //
@@ -46,6 +48,7 @@
 
 #include "core/ClientCfc.h"
 #include "core/ClientComp.h"
+#include "core/ClientCessb.h"
 #include "core/ClientLeveler.h"
 #include "core/ClientEq.h"
 #include "core/ClientFinalLimiter.h"
@@ -291,6 +294,11 @@ const char* const kKnownKeys[] = {
     "cfc-band10-hz",
     "cfc-band10-comp",
     "cfc-band10-eq",
+    "cessb-clip",
+    "cessb-os",
+    "cessb-out",
+    "cessb-low",
+    "cessb-high",
     "lim-ceiling",
     "lim-lookahead",
     "trim",
@@ -324,6 +332,7 @@ struct Chain {
     ClientTube tube;
     ClientPudu pudu;
     ClientFinalLimiter limiter;
+    ClientCessb cessb;
 
     void configure(const Settings& s, bool processed)
     {
@@ -431,6 +440,14 @@ struct Chain {
             cfc.setBands(bands);
             cfc.setEnabled(true);
         }
+        if (s.any("cessb-")) {
+            cessb.setClipDb(s.get("cessb-clip", 3));
+            cessb.setOvershootControl(s.get("cessb-os", 1) > 0.5);
+            cessb.setOutputDb(s.get("cessb-out", -1));
+            cessb.setPassband(s.get("cessb-low", ClientCessb::kDefaultLowHz),
+                              s.get("cessb-high", ClientCessb::kDefaultHighHz));
+            cessb.setEnabled(true);
+        }
         limiter.setEnabled(s.has("lim-ceiling") || s.has("lim-lookahead"));
         limiter.setCeilingDb(s.get("lim-ceiling", ClientFinalLimiter::kDefaultCeilingDb));
         limiter.setLookaheadMs(s.get("lim-lookahead", ClientFinalLimiter::kDefaultLookaheadMs));
@@ -461,6 +478,7 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     processors.pudu = &chain->pudu;
     processors.cfc = &chain->cfc;
     processors.leveler = &chain->leveler;
+    processors.cessb = &chain->cessb;
     processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
     using Stage = TxVoiceProcessor::Stage;

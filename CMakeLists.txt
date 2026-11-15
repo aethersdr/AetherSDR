@@ -1037,6 +1037,8 @@ set(CORE_SOURCES
     src/core/ClientCfcJson.cpp
     src/core/ClientLeveler.cpp  # WDSP TX leveler stage (RFC #4836)
     src/core/ClientLevelerJson.cpp
+    src/core/ClientCessb.cpp  # WDSP COMP + CESSB final peak control (RFC #4836)
+    src/core/ClientCessbJson.cpp
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp

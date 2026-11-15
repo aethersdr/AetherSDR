@@ -23,6 +23,8 @@
 #include "ClientCfcJson.h"
 #include "ClientLeveler.h"
 #include "ClientLevelerJson.h"
+#include "ClientCessb.h"
+#include "ClientCessbJson.h"
 #include "ClientFinalLimiter.h"
 #include "ClientTxTestTone.h"
 #include "ClientQuindarTone.h"
@@ -1891,6 +1893,7 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_clientReverbTx(std::make_unique<ClientReverb>())
     , m_clientCfcTx(std::make_unique<ClientCfc>())
     , m_clientLevelerTx(std::make_unique<ClientLeveler>())
+    , m_clientCessbTx(std::make_unique<ClientCessb>())
     , m_clientFinalLimiterTx(std::make_unique<ClientFinalLimiter>())
     , m_clientTxTestTone(std::make_unique<ClientTxTestTone>())
     , m_wsprBeacon(std::make_unique<WsprBeacon>())
@@ -1976,6 +1979,7 @@ AudioEngine::AudioEngine(QObject* parent)
     txProcessors.reverb = m_clientReverbTx.get();
     txProcessors.cfc = m_clientCfcTx.get();
     txProcessors.leveler = m_clientLevelerTx.get();
+    txProcessors.cessb = m_clientCessbTx.get();
     txProcessors.finalLimiter = m_clientFinalLimiterTx.get();
     txProcessors.testTone = m_clientTxTestTone.get();
     txProcessors.quindar = m_clientQuindarTone.get();
@@ -2002,6 +2006,7 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientReverbSettings();  // restore persisted reverb params
     loadClientCfcSettings();
     loadClientLevelerSettings();
+    loadClientCessbSettings();
     loadClientFinalLimiterSettings();  // restore persisted final-limiter params
     loadClientQuindarSettings();       // restore persisted Quindar tone params
     loadClientRxChainOrder();    // restore persisted RX chain order (Phase 0+)
@@ -6674,11 +6679,21 @@ void AudioEngine::setTxBypassed(bool on)
         // is suppressed.  See #3054.
         m_txBypassSnapshotRn2 = m_rn2TxEnabled.load();
         if (m_txBypassSnapshotRn2) setRn2TxEnabled(false);
+        m_txBypassSnapshotCessb = m_clientCessbTx && m_clientCessbTx->isEnabled();
+        if (m_txBypassSnapshotCessb) {
+            m_clientCessbTx->setEnabled(false);
+            saveClientCessbSettings();
+        }
     } else {
         for (auto s : m_txBypassSnapshot) setStageEnabled(s, true);
         m_txBypassSnapshot.clear();
         if (m_txBypassSnapshotRn2) setRn2TxEnabled(true);
         m_txBypassSnapshotRn2 = false;
+        if (m_txBypassSnapshotCessb && m_clientCessbTx) {
+            m_clientCessbTx->setEnabled(true);
+            saveClientCessbSettings();
+        }
+        m_txBypassSnapshotCessb = false;
     }
 
     m_txBypassActive = on;
@@ -7502,6 +7517,26 @@ void AudioEngine::saveClientCfcSettings()
         QJsonDocument(clientCfcToJson(*m_clientCfcTx)).toJson(QJsonDocument::Compact)));
     m_clientCfcTx->collectRetiredBlocks();
     emit clientCfcStateChanged();
+}
+
+void AudioEngine::loadClientCessbSettings()
+{
+    if (!m_clientCessbTx) return;
+    const QString raw = AppSettings::instance().value("ClientCessbTx", "{}").toString();
+    QJsonParseError err;
+    const auto doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        return;  // absent or unreadable: the stage keeps its defaults
+    }
+    applyClientCessbJson(*m_clientCessbTx, doc.object());
+}
+
+void AudioEngine::saveClientCessbSettings()
+{
+    if (!m_clientCessbTx) return;
+    AppSettings::instance().setValue("ClientCessbTx", QString::fromUtf8(
+        QJsonDocument(clientCessbToJson(*m_clientCessbTx)).toJson(QJsonDocument::Compact)));
+    emit clientCessbStateChanged();
 }
 
 void AudioEngine::loadClientLevelerSettings()

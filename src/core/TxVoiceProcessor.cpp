@@ -8,6 +8,7 @@
 #include "ClientReverb.h"
 #include "ClientCfc.h"
 #include "ClientLeveler.h"
+#include "ClientCessb.h"
 #include "ClientTube.h"
 #include "ClientTxTestTone.h"
 #include "RNNoiseFilter.h"
@@ -99,6 +100,9 @@ void TxVoiceProcessor::prepareProcessors()
     if (m_processors.leveler) {
         m_processors.leveler->prepare(kDspRate);
     }
+    if (m_processors.cessb) {
+        m_processors.cessb->prepare(kDspRate);
+    }
     if (m_processors.reverb) {
         m_processors.reverb->prepare(kDspRate);
     }
@@ -144,6 +148,9 @@ void TxVoiceProcessor::reset()
     }
     if (m_processors.leveler) {
         m_processors.leveler->reset();
+    }
+    if (m_processors.cessb) {
+        m_processors.cessb->reset();
     }
     if (m_processors.reverb) {
         m_processors.reverb->reset();
@@ -322,6 +329,9 @@ bool TxVoiceProcessor::processWorkBuffer(int frames48,
         m_processors.testTone->process(work, frames48, kChannels);
     }
     processChannelStrip(m_work48);
+    if (m_processors.cessb && m_processors.cessb->isEnabled()) {
+        m_processors.cessb->process(reinterpret_cast<float*>(m_work48.data()), frames48, kChannels);
+    }
     if (m_captureMeasurements) {
         m_postStrip48 = m_work48;
     }
@@ -562,6 +572,9 @@ int TxVoiceProcessor::latencyFrames() const noexcept
         : 0;
     if (m_processors.finalLimiter) {
         frames += m_processors.finalLimiter->latencyFrames();
+    }
+    if (m_processors.cessb && m_processors.cessb->isEnabled()) {
+        frames += m_processors.cessb->latencyFrames();
     }
     for (int index = 0; index < kMaxStages; ++index) {
         const Stage stage = TxChainLayout::slot<Stage>(m_packedStages, index);

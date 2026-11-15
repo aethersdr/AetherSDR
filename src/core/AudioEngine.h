@@ -70,6 +70,7 @@ class ClientPuduMonitor;
 class ClientReverb;
 class ClientCfc;
 class ClientLeveler;
+class ClientCessb;
 class ClientFinalLimiter;
 class ClientTxTestTone;
 class RxClientEffects;
@@ -473,6 +474,7 @@ public:
     ClientReverb* clientReverbTx() { return m_clientReverbTx.get(); }
     ClientCfc* clientCfcTx() { return m_clientCfcTx.get(); }
     ClientLeveler* clientLevelerTx() { return m_clientLevelerTx.get(); }
+    ClientCessb* clientCessbTx() { return m_clientCessbTx.get(); }
 
     // Final brickwall limiter — sits at the very tail of the TX audio
     // path, after every user-configurable chain stage AND after PC mic
@@ -662,6 +664,10 @@ public:
     // emits clientLevelerStateChanged().
     void loadClientLevelerSettings();
     void saveClientLevelerSettings();
+    // Final peak control (COMP + CESSB), one nested-JSON key
+    // (ClientCessbJson). Save emits clientCessbStateChanged().
+    void loadClientCessbSettings();
+    void saveClientCessbSettings();
     void loadClientFinalLimiterSettings();
     void saveClientFinalLimiterSettings() const;
     // Aetherial Tube Pre-Amp TX state — nested-JSON shape under one key
@@ -922,6 +928,8 @@ signals:
     void clientCfcStateChanged();
     // Fired by saveClientLevelerSettings(): the LVLR page and tile refresh.
     void clientLevelerStateChanged();
+    // Fired by saveClientCessbSettings().
+    void clientCessbStateChanged();
 
 private slots:
     void onTxAudioReady();
@@ -1479,6 +1487,7 @@ private:
     std::unique_ptr<ClientReverb> m_clientReverbTx;
     std::unique_ptr<ClientCfc> m_clientCfcTx;
     std::unique_ptr<ClientLeveler> m_clientLevelerTx;
+    std::unique_ptr<ClientCessb> m_clientCessbTx;
     std::unique_ptr<ClientFinalLimiter> m_clientFinalLimiterTx;
     std::unique_ptr<ClientTxTestTone>   m_clientTxTestTone;
     std::unique_ptr<WsprBeacon>         m_wsprBeacon;
@@ -1512,6 +1521,9 @@ private:
     // alongside the stages or RN2 keeps processing while every visible
     // stage is bypassed (#3054).
     bool m_txBypassSnapshotRn2{false};
+    // The final peak control runs after the chain, outside TxChainStage, so
+    // BYPASS snapshots it beside RN2.
+    bool m_txBypassSnapshotCessb{false};
     bool m_txBypassActive{false};
     // RX chain — same packing convention.  RxChainStage::None terminates
     // the list.  Phase 0 dispatcher iterates this but every stage is a
