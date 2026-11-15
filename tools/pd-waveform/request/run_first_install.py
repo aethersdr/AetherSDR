@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from first_install_package import verify_uploads
 
 
 class Radio:
@@ -102,6 +103,9 @@ def main():
             raise ValueError('artifact differs from approved build')
         payloads[leaf] = data
     token_path = args.attempt/'admin-token'
+    bound_names = verify_uploads(*payloads.values(), plan)
+    if list(bound_names) != names:
+        raise ValueError('archive names differ from approved attempt')
     st = token_path.lstat()
     if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_nlink != 1:
         raise ValueError('new admin token must be a private regular file')

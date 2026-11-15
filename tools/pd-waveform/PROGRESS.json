@@ -1071,8 +1071,9 @@
       "installation_cases_passed": 14,
       "installation_cases_skipped": 2,
       "go_shim_full_suite": "passed; 23.196 seconds",
-      "arm64_signed_candidate": "Built and independently verified before the final selector-parser hardening; rebuild latest before live use.",
-      "standalone_radio_probe": "Shell launcher observed UID78666/GID20, no capabilities, NNP1; old private configuration unreadable with errno13, requester exit3."
+      "arm64_signed_candidate": "Current native source at 7c87bc223 rebuilt and independently verified in candidate-final; release SHA256 06473495180114154d284c6d920bf8793687ff44ca4d3fcfb684c4d049bb1289. Not uploaded.",
+      "standalone_radio_probe": "Shell launcher observed UID78666/GID20, no capabilities, NNP1; old private configuration unreadable with errno13, requester exit3.",
+      "package_consent_binding_cases": 3
     },
     "radio_state": {
       "new_candidate_uploaded": false,
@@ -1084,7 +1085,7 @@
     },
     "hold": "Operator confirmed another agent/tool is using the radio and requested holding radio changes. Clean-state bench setup failed before job execution because another receiver held the diagnostics bridge socket.",
     "remaining": [
-      "Rebuild final candidate; preserve and verify recoverable old-install backup after exclusive access returns.",
+      "After exclusive access returns, prepare a new attempt for candidate-final and preserve/verify the recoverable old-install backup.",
       "Perform clean first installation through public upload only and audit temporary authority/cached artifacts.",
       "Qualify reboot identity persistence, automatic startup, unprivileged runtime and FDX-off local DAX IQ.",
       "Production desktop consent/credential-vault integration, independent publisher catalogue and actual FLEX-6000 adapter/hardware qualification remain separate work."
