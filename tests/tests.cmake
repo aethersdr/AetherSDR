@@ -3814,6 +3814,23 @@ target_include_directories(tx_mic_channel_normalizer_test PRIVATE
 target_link_libraries(tx_mic_channel_normalizer_test PRIVATE Qt6::Core)
 add_test(NAME tx_mic_channel_normalizer_test COMMAND tx_mic_channel_normalizer_test)
 
+# The packed TX chain order: 16 four-bit slots round-trip, an order that does
+# not fit is reported instead of truncated, and the load-time migration keeps
+# the saved order and appends stages an upgrade adds (RFC #4836 precursor).
+add_executable(tx_chain_layout_test tests/tx_chain_layout_test.cpp)
+target_include_directories(tx_chain_layout_test PRIVATE src)
+target_link_libraries(tx_chain_layout_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_chain_layout_test COMMAND tx_chain_layout_test)
+
+# The chain order between AudioEngine and the settings file: persisted equals
+# running, a saved list keeps its order and gains missing stages, and repeated
+# names from a hand-edited file or an imported preset are dropped, not packed.
+# Isolated settings (TestSettingsProfile); no audio device, no radio.
+add_executable(tx_chain_settings_test tests/tx_chain_settings_test.cpp)
+target_include_directories(tx_chain_settings_test PRIVATE src tests)
+target_link_libraries(tx_chain_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME tx_chain_settings_test COMMAND tx_chain_settings_test)
+
 add_executable(tx_voice_processor_test
     tests/tx_voice_processor_test.cpp
 )
@@ -11637,6 +11654,7 @@ set(AETHER_SETTINGS_CONSUMERS
     comp_makeup_fader_test
     stage_tab_bar_drag_test
     aether_tx_profiles_test
+    tx_chain_settings_test
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test
