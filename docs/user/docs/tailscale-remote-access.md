@@ -533,7 +533,9 @@ controls. This workflow remains under qualification; it does not establish
 ADC headroom or calibrated output power.
 
 1. Connect the dummy load and attenuated feedback path, select your TX slice,
-   frequency, mode and power, and leave FDX off. Confirm **Dummy load connected;
+   frequency and power, and leave FDX off. In the feedback panadapter's **DAX**
+   panel, assign **IQ Ch 1**. Start AetherPD, then select **PD** mode on your TX
+   slice. Confirm **Dummy load connected;
    feedback attenuation checked**.
 2. Choose **Measured forward-power abort limit (W)**. This is a measured-power
    cutoff, not a command to change radio drive. The nominal radio power setting
@@ -563,6 +565,12 @@ frequency, power, session, band-plan selection or revoked original automation
 input cancels the preparation or run. A new receive check is needed after
 readiness expires. Changing correction state requires a separately prepared
 run; compare exported runs made with matching station settings.
+
+If the source request is refused, check **PD** mode, feedback panadapter
+**IQ Ch 1**, fresh DAX IQ and the transmit interlock before trying again.
+The failure notice remains visible across status refreshes. If an arm or
+cancellation is unconfirmed, check the service status; **Cancel source**
+withdraws an arm and **Stop AetherPD** ends the owned source.
 
 **Status unknown** means there is no fresh observation. The window does not
 retry Start, calibration or Stop automatically after a lost reply. The released

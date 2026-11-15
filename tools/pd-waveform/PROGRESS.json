@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T14:19:56.325229+00:00",
+  "updated_utc": "2026-11-15T14:53:52.779915+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -690,5 +690,13 @@
       "Full P1-P10: first-install trust, 6000 adapter and actual6300, final process faults/reboot, DSP/cold-start, sustained RF/stockAPD comparison, platform/release gates."
     ],
     "installed_source_unchanged": "1316e4d80e7b5666e3a7579542086b67367e4f03"
+  },
+  "measurement_installed_workflow": {
+    "status": "installed_8600_receive_only_workflow_passed_RF_pending",
+    "evidence": "measurement-installed-live/validation.json under evidence_root",
+    "production_ready": false,
+    "source_commit": "bd9aaa940ce03e76afff239c7f5aa6e328fdca06",
+    "receive_ready": true,
+    "unkeyed_four_frame_total_ms": 1785
   }
 }

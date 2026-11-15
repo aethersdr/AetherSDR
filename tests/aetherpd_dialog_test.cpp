@@ -132,14 +132,38 @@ int main(int argc, char** argv)
     measurement->findChild<QCheckBox*>(QStringLiteral("pdMeasureDummyLoad"))->setChecked(true);
     measurement->findChild<QDoubleSpinBox*>(QStringLiteral("pdMeasurePowerLimit"))->setValue(10);
     ok &= check(!mb("pdMeasurePrepare")->isEnabled(), "source capability without identity cannot prepare from UI");
-    measurementStatus["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}};
+    QJsonObject unarmedStatus = QJsonDocument::fromJson(idleBody).object();
+    unarmedStatus["measurement_control"] = true;
+    unarmedStatus["source_purpose"] = QStringLiteral("calibration");
     button(*dialog, "pdRefresh")->click();
+    network.last->complete(200, QJsonDocument(unarmedStatus).toJson());
+    const auto measurementText = [measurement] {
+        return measurement->findChild<QLabel*>(QStringLiteral("pdMeasureState"))->text();
+    };
+    mb("pdMeasureArm")->click();
+    ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/measurement/arm"),
+        "explicit measurement arm uses the bounded source endpoint");
+    network.last->complete(409, "{\"state\":\"calibration_blocked\"}");
+    ok &= check(measurementText().contains("request refused"), "refused arm is visible in measurement window");
+    const size_t afterRefusal = network.sent.size();
+    button(*dialog, "pdRefresh")->click();
+    network.last->complete(200, QJsonDocument(unarmedStatus).toJson());
+    ok &= check(measurementText().contains("request refused") && network.sent.size() == afterRefusal + 1
+        && network.sent.back().method == QNetworkAccessManager::GetOperation,
+        "successful status poll preserves arm refusal without retrying the source");
+    mb("pdMeasureArm")->click();
+    ok &= check(!measurementText().contains("request refused") && network.sent.size() == afterRefusal + 2
+        && network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/measurement/arm"),
+        "only a new explicit arm clears the refusal and submits another source request");
+    network.last->complete(200, "{\"state\":\"measurement_arm_accepted\"}");
+    measurementStatus["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}};
     network.last->complete(200, QJsonDocument(measurementStatus).toJson());
     ok &= check(mb("pdMeasurePrepare")->isEnabled(), "observed original source enables explicit receive preparation");
     mb("pdMeasurePrepare")->click();
     ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::CheckingReceive
         && captureNetwork.sent.size() == 1 && !mb("pdMeasureTransmit")->isEnabled(),
         "UI preparation uses real station configuration and receive-only capture");
+    if (!captureNetwork.last) { return 1; }
     const QString id = QStringLiteral("0123456789abcdef0123456789abcdef");
     const auto encode = [](const QJsonObject& o) { return QJsonDocument(o).toJson(QJsonDocument::Compact); };
     captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"},
