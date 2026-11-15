@@ -511,7 +511,11 @@ credential for the connected radio. Opening it reads status only.
   session running; use Stop when you want it stopped. **Stopped — session
   cleanup confirmed** appears only after the service confirms the DSP and its
   cleanup workers exited cleanly. **Session ended — cleanup unconfirmed**
-  means a worker failed or cleanup timed out. A Stop receipt alone confirms
+  means cleanup failed or timed out. **Stopped — receive recovery unconfirmed**
+  means DSP and worker retirement completed, but the receive helper exited
+  without confirming restored receive settings. It can refuse recovery to
+  protect another slice's DAX assignment; check your receive settings. This
+  status does not automatically retry restoration. A Stop receipt alone confirms
   neither shutdown nor unkey. These completion messages describe the owned
   session; check the radio's transmit indicator for its current RF state.
 - **Restore receive** explicitly requests the checked receive recovery

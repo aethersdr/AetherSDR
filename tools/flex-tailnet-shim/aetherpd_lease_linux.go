@@ -21,13 +21,22 @@ type aetherPDLeaseGuard struct {
 	receive *aetherPDLeaseGuard
 }
 
-func (g *aetherPDLeaseGuard) wait(ctx context.Context) error {
+type pdGuardianResult struct {
+	retired bool // cmd.Wait joined the helper; its operation can still have failed.
+	err     error
+}
+
+func (g *aetherPDLeaseGuard) waitResult(ctx context.Context) pdGuardianResult {
 	select {
 	case <-g.done:
-		return g.err
+		return pdGuardianResult{retired: true, err: g.err}
 	case <-ctx.Done():
-		return ctx.Err()
+		return pdGuardianResult{err: ctx.Err()}
 	}
+}
+
+func (g *aetherPDLeaseGuard) wait(ctx context.Context) error {
+	return g.waitResult(ctx).err
 }
 
 func inheritedPDLeaseOwnership(value string) (bool, error) {

@@ -12,7 +12,8 @@ namespace AetherSDR::aetherpd {
 enum class Operation { Status, ArmCalibration, CancelCalibration, Stop, RestoreReceive, Start };
 enum class State {
     Unavailable, Starting, Disabled, BlockedByRadioApd, CalibrationArmed,
-    RecalibrationRequired, Idle, Correcting, Calibrating, Stopped, CleanupUnconfirmed
+    RecalibrationRequired, Idle, Correcting, Calibrating, Stopped, CleanupUnconfirmed,
+    StoppedReceiveUnconfirmed
 };
 enum class CalibrationState { Unavailable, Idle, Completed, Canceled, Expired, Armed, Running };
 enum class Acknowledgment { ArmAccepted, CancelAccepted, StopRequested, ReceiveRestored, StartRequested };

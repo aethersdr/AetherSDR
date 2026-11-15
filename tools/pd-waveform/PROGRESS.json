@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T12:35:01.568578+00:00",
+  "updated_utc": "2026-11-15T12:41:12.933104+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Separate successful DSP/unkey/setup retirement from receive-restoration refusal with typed observed outcomes; preserve ownership guard and real errors. Do not classify by blanket suppression or UI ACK.",
+  "next_action": "Signed candidate and ordinary GUI live Start/Stop; verify stopped_receive_unconfirmed without forcing receive restoration.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -454,5 +454,46 @@
       "All original P1-P10 first-install, actual6000, DSP alignment/cold-start, PR4770, repeated RF/stock APD, reproducibility/resource and release gates remain."
     ],
     "live_evidence": "session-hardening-live/validation.json under evidence_root"
+  },
+  "receive_completion": {
+    "status": "component_validated_not_deployed",
+    "evidence": "receive-completion-development/validation.json under evidence_root",
+    "checks": {
+      "go_race_passed": true,
+      "supervisor_cases": [
+        "clean",
+        "DSP failure",
+        "unkey failure",
+        "lease failure",
+        "receive failure",
+        "setup failure",
+        "setup deadline",
+        "receive deadline",
+        "receive plus DSP/unkey/lease/setup failure"
+      ],
+      "mutations_detected": [
+        "ignore-other-cleanup",
+        "fabricate-retirement",
+        "discard-receive-error"
+      ],
+      "desktop_tests_passed": [
+        "aetherpd_protocol_test",
+        "aetherpd_client_test",
+        "aetherpd_model_test",
+        "aetherpd_dialog_test"
+      ],
+      "sanitizers": "AetherPDProtocol, AetherPDDialog and dialog-test objects under ASan/UBSan/LSan; rest of engine uninstrumented; passed",
+      "shim_cross_builds": [
+        "ARM64",
+        "ARMv7"
+      ],
+      "docs_build": true,
+      "a11y_findings": 0,
+      "test_registration": true
+    },
+    "remaining": [
+      "Signed candidate and ordinary GUI live Start/Stop; verify stopped_receive_unconfirmed without forcing receive restoration.",
+      "Original P1-P10 production gates remain open, including actual6300, DSP fault attribution, PR4770, final RF comparisons and release qualification."
+    ]
   }
 }

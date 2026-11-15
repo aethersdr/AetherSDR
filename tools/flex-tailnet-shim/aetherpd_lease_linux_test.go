@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -186,11 +187,31 @@ func TestPDReadyCommandRetainsBoundedFailureAndDrainsStderr(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	err = guardian.wait(ctx)
+	result := guardian.waitResult(ctx)
+	err = result.err
+	if !result.retired {
+		t.Fatal("exited receive helper was not observed reaped")
+	}
 	if err == nil || !strings.Contains(err.Error(), "receive guardian refused restoration: original DAX channel is occupied") || len(err.Error()) > 1400 {
 		t.Fatalf("missing or unbounded guardian failure: %v", err)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("stderr backpressure blocked guardian retirement")
+	}
+}
+
+func TestPDGuardianWaitResultRequiresRetirement(t *testing.T) {
+	guardian := &aetherPDLeaseGuard{done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := guardian.waitResult(ctx)
+	if result.retired || !errors.Is(result.err, context.Canceled) {
+		t.Fatal("canceled wait fabricated worker retirement", result)
+	}
+	guardian.err = errors.New("receive recovery refused")
+	close(guardian.done)
+	result = guardian.waitResult(context.Background())
+	if !result.retired || result.err != guardian.err {
+		t.Fatal("worker exit discarded recovery error", result)
 	}
 }

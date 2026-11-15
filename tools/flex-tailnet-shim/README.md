@@ -149,7 +149,12 @@ native service returns HTTP 503 with `available=false` and `state=unavailable`.
 After an owned session ends, its supervisor reports HTTP 200 with exactly
 `available=false` and `state=stopped` only when the DSP and owned cleanup workers
 have completed successfully. An exit error or cleanup deadline instead reports
-`state=cleanup_unconfirmed`. These terminal summaries carry no current RF state
+`state=cleanup_unconfirmed`. If the receive helper was reaped with a recovery
+error while DSP, unkey, lease and setup cleanup all completed successfully,
+the result is `state=stopped_receive_unconfirmed`. The receive error remains
+in the supervisor's aggregate wait result and journal; it is not suppressed.
+A receive-helper timeout or any other cleanup failure cannot take this path.
+These terminal summaries carry no current RF state
 or DSP counters. A closed native socket alone still means unavailable. The
 summary belongs to the retained session and is retired when that session is
 replaced or its private channel is lost; it is not a persistent radio-wide state.

@@ -10,17 +10,21 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
 func TestAetherPDCompletionWaitsForCleanup(t *testing.T) {
-	for _, failure := range []string{"none", "dsp", "unkey", "lease", "receive", "setup", "deadline"} {
+	for _, failure := range []string{"none", "dsp", "unkey", "lease", "receive", "setup", "deadline", "receive_deadline",
+		"receive+dsp", "receive+unkey", "receive+lease", "receive+setup"} {
 		t.Run(failure, func(t *testing.T) {
 			injected := func(role string) error {
-				if failure == role {
-					return errors.New("injected " + role + " failure")
+				for _, part := range strings.Split(failure, "+") {
+					if part == role {
+						return errors.New("injected " + role + " failure")
+					}
 				}
 				return nil
 			}
@@ -63,7 +67,11 @@ func TestAetherPDCompletionWaitsForCleanup(t *testing.T) {
 			}
 			close(guard.done)
 			close(lease.done)
-			close(receive.done)
+			if failure != "receive_deadline" {
+				close(receive.done)
+			} else {
+				defer close(receive.done)
+			}
 			if failure != "deadline" {
 				close(setup.done)
 			} else {
@@ -78,6 +86,9 @@ func TestAetherPDCompletionWaitsForCleanup(t *testing.T) {
 			want := "stopped"
 			if failure != "none" {
 				want = "cleanup_unconfirmed"
+			}
+			if failure == "receive" {
+				want = "stopped_receive_unconfirmed"
 			}
 			if got.code != 200 || json.Unmarshal(got.body, &body) != nil || len(body) != 2 ||
 				body["available"] != false || body["state"] != want {

@@ -24,6 +24,7 @@ QString stateText(aetherpd::State state)
     case State::Unavailable: return QObject::tr("Unavailable");
     case State::Stopped: return QObject::tr("Stopped — session cleanup confirmed");
     case State::CleanupUnconfirmed: return QObject::tr("Session ended — cleanup unconfirmed");
+    case State::StoppedReceiveUnconfirmed: return QObject::tr("Stopped — receive recovery unconfirmed");
     case State::Starting: return QObject::tr("Starting");
     case State::Disabled: return QObject::tr("Correction disabled");
     case State::BlockedByRadioApd: return QObject::tr("Blocked by radio APD");
@@ -298,9 +299,13 @@ void AetherPDDialog::render()
         case Acknowledgment::ArmAccepted: receipt = tr("Arm request accepted; waiting for observed status."); break;
         case Acknowledgment::CancelAccepted: receipt = tr("Cancel request accepted; waiting for observed status."); break;
         case Acknowledgment::StopRequested:
-            receipt = status && status->state == aetherpd::State::Stopped
-                ? tr("Stop requested; the session supervisor confirms cleanup completed.")
-                : tr("Stop requested; shutdown and unkey are not yet confirmed here.");
+            if (status && status->state == aetherpd::State::StoppedReceiveUnconfirmed) {
+                receipt = tr("Stop requested; the supervisor confirms DSP and worker retirement. Receive recovery remains unconfirmed.");
+            } else {
+                receipt = status && status->state == aetherpd::State::Stopped
+                    ? tr("Stop requested; the session supervisor confirms cleanup completed.")
+                    : tr("Stop requested; shutdown and unkey are not yet confirmed here.");
+            }
             break;
         case Acknowledgment::ReceiveRestored: receipt = tr("Service reports receive restoration completed."); break;
         }
@@ -345,6 +350,8 @@ void AetherPDDialog::render()
         detail = tr("The owned DSP and session cleanup workers exited cleanly. This reports that session's completion, not the radio's current transmit state.");
     } else if (status && status->state == aetherpd::State::CleanupUnconfirmed) {
         detail = tr("The session supervisor reported an error or cleanup deadline. Shutdown and unkey are not confirmed.");
+    } else if (status && status->state == aetherpd::State::StoppedReceiveUnconfirmed) {
+        detail = tr("The DSP, unkey and setup workers completed, and the receive helper exited with a recovery error. Check receive settings; they were not confirmed restored. Current RF state remains available on the radio's transmit indicator.");
     }
     setText(m_detail, detail);
     if (!alive) { return; }

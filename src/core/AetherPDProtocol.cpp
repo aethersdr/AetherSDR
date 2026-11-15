@@ -151,6 +151,7 @@ std::optional<State> state(const QJsonValue& value)
     if (text == QLatin1String("unavailable")) { return State::Unavailable; }
     if (text == QLatin1String("stopped")) { return State::Stopped; }
     if (text == QLatin1String("cleanup_unconfirmed")) { return State::CleanupUnconfirmed; }
+    if (text == QLatin1String("stopped_receive_unconfirmed")) { return State::StoppedReceiveUnconfirmed; }
     if (text == QLatin1String("starting")) { return State::Starting; }
     if (text == QLatin1String("disabled")) { return State::Disabled; }
     if (text == QLatin1String("blocked_by_radio_apd")) { return State::BlockedByRadioApd; }
@@ -251,7 +252,8 @@ std::optional<Status> parseStatus(const QByteArray& json)
     if (!parsedState || !boolean(o, "available", s.available)) { return std::nullopt; }
     s.state = *parsedState;
     if (!s.available) {
-        const bool terminal = s.state == State::Stopped || s.state == State::CleanupUnconfirmed;
+        const bool terminal = s.state == State::Stopped || s.state == State::CleanupUnconfirmed
+            || s.state == State::StoppedReceiveUnconfirmed;
         return o.size() == 2 && (terminal || s.state == State::Unavailable)
             ? std::optional<Status>(s) : std::nullopt;
     }

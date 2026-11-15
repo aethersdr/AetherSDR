@@ -151,8 +151,9 @@ int main(int argc, char** argv)
           "unavailable status rejected");
     check(!parseStatus(R"({"available":false,"state":"unavailable","correcting":true})"),
           "unavailable status carried contradictory data");
-    for (const auto& [wire, expected] : std::array<std::pair<const char*, State>, 2>{{
-             {"stopped", State::Stopped}, {"cleanup_unconfirmed", State::CleanupUnconfirmed}}}) {
+    for (const auto& [wire, expected] : std::array<std::pair<const char*, State>, 3>{{
+             {"stopped", State::Stopped}, {"cleanup_unconfirmed", State::CleanupUnconfirmed},
+             {"stopped_receive_unconfirmed", State::StoppedReceiveUnconfirmed}}}) {
         QJsonObject terminal{{"available", false}, {"state", QLatin1String(wire)}};
         const auto completion = parseStatus(encode(terminal));
         check(completion && completion->state == expected && !completion->available,

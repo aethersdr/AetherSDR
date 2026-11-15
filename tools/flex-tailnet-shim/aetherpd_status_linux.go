@@ -23,6 +23,9 @@ func (p *aetherPDProcess) queryStatus(ctx context.Context) (aetherPDStatus, erro
 			state := "stopped"
 			if p.err != nil {
 				state = "cleanup_unconfirmed"
+				if p.receiveRecoveryIncomplete {
+					state = "stopped_receive_unconfirmed"
+				}
 			}
 			return aetherPDStatus{State: state}, nil
 		default:

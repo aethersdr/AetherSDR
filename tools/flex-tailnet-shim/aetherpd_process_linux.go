@@ -24,24 +24,25 @@ import (
 // The guardian must be armed before this handoff and retain its API lease
 // independently until the DSP exits and the radio can safely return to USB.
 type aetherPDProcess struct {
-	testUnkeys         pdTestUnkeys
-	captures           pdCaptureStore
-	calibrationIntents pdCalibrationIntents
-	receiveJournal     *pdReceiveJournal
-	owner              *os.File
-	setupOwner         *os.File
-	done               chan struct{}
-	once               sync.Once
-	err                error
-	pid                int
-	status             *net.UnixConn
-	statusReads        chan struct{}
-	statusNonce        uint64
-	unkey              *aetherPDUnkey
-	lease              *aetherPDLeaseGuard
-	calibration        *net.UnixConn
-	calibrationReads   chan struct{}
-	calibrationNonce   uint64
+	testUnkeys                pdTestUnkeys
+	captures                  pdCaptureStore
+	calibrationIntents        pdCalibrationIntents
+	receiveJournal            *pdReceiveJournal
+	owner                     *os.File
+	setupOwner                *os.File
+	done                      chan struct{}
+	once                      sync.Once
+	err                       error
+	receiveRecoveryIncomplete bool // Published with err by closing done.
+	pid                       int
+	status                    *net.UnixConn
+	statusReads               chan struct{}
+	statusNonce               uint64
+	unkey                     *aetherPDUnkey
+	lease                     *aetherPDLeaseGuard
+	calibration               *net.UnixConn
+	calibrationReads          chan struct{}
+	calibrationNonce          uint64
 }
 
 func (p *aetherPDProcess) Stop() {
@@ -468,10 +469,12 @@ func monitorAetherPDProcessWithSetup(pid int, wait func() error, write *os.File,
 		guardErr := guard.wait(ctx)
 		testUnkeyErr := p.testUnkeys.wait(ctx)
 		var leaseErr, receiveErr error
+		var receiveRetired bool
 		if lease != nil {
 			leaseErr = lease.wait(ctx)
 			if lease.receive != nil {
-				receiveErr = lease.receive.wait(ctx)
+				result := lease.receive.waitResult(ctx)
+				receiveRetired, receiveErr = result.retired, result.err
 			}
 		}
 		setupErr := setupChildren.wait(ctx)
@@ -482,7 +485,11 @@ func monitorAetherPDProcessWithSetup(pid int, wait func() error, write *os.File,
 		if receiveErr != nil {
 			log.Printf("AetherPD: owned receive guardian exited: %v", receiveErr)
 		}
-		p.err = errors.Join(dspErr, guardErr, testUnkeyErr, leaseErr, receiveErr, setupErr)
+		cleanupErr := errors.Join(dspErr, guardErr, testUnkeyErr, leaseErr, setupErr)
+		// A reaped receive helper can refuse recovery without preventing DSP,
+		// unkey and resource retirement. A timeout never proves it was reaped.
+		p.receiveRecoveryIncomplete = receiveRetired && receiveErr != nil && cleanupErr == nil
+		p.err = errors.Join(cleanupErr, receiveErr)
 		close(p.done)
 	}()
 	return p

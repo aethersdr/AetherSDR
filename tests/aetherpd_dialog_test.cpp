@@ -75,6 +75,15 @@ int main(int argc, char** argv)
         && !label("pdDetail").contains(QStringLiteral("Dispatch faults"))
         && !button(*dialog, "pdArm")->isEnabled(), "cleanup failure remains explicitly unconfirmed");
     button(*dialog, "pdRefresh")->click();
+    const size_t beforeRecoveryStatus = network.sent.size();
+    network.last->complete(200, R"({"available":false,"state":"stopped_receive_unconfirmed"})");
+    ok &= check(label("pdState") == QStringLiteral("Stopped — receive recovery unconfirmed")
+        && label("pdReceipt").contains(QStringLiteral("DSP and worker retirement"))
+        && label("pdDetail").contains(QStringLiteral("not confirmed restored"))
+        && !label("pdDetail").contains(QStringLiteral("Dispatch faults"))
+        && !button(*dialog, "pdArm")->isEnabled() && network.sent.size() == beforeRecoveryStatus,
+        "receive recovery error is distinct and triggers no automatic restoration or rearm");
+    button(*dialog, "pdRefresh")->click();
     network.last->complete(503, "{}");
     ok &= check(label("pdState") == QStringLiteral("Status unknown"),
                 "lost status cannot retain completion as current observation");
