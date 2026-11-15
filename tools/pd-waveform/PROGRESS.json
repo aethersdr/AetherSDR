@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T12:41:12.933104+00:00",
+  "updated_utc": "2026-11-15T12:52:40.385825+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Signed candidate and ordinary GUI live Start/Stop; verify stopped_receive_unconfirmed without forcing receive restoration.",
+  "next_action": "Qualify the installed final process graph for bounded receive-only desktop/session crash and startup cancellation, with independent cleanup observation, before final RF testing. Preserve the full P1-P10 scope.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -388,10 +388,10 @@
     "open_findings": [
       {
         "id": "local-stop-completion-observation",
-        "status": "terminal_status_live_verified_receive_refusal_still_conflated_with_cleanup",
+        "status": "fixed_and_live_verified_on8600",
         "evidence": "session-stopped.json, stop-status-gap.png, host-stopped-state.json",
         "cause": "queryStatus calls readNativeQuery; once p.done closes the query returns owned AetherPD exited and maps to503. Completion is not exposed despite supervisor cleanup evidence.",
-        "next": "Separate successful DSP/unkey/setup retirement from receive-restoration refusal with typed observed outcomes; preserve ownership guard and real errors. Do not classify by blanket suppression or UI ACK."
+        "next": "Keep receive-restoration failure visible; complete final installed failure matrix."
       },
       {
         "id": "local-session-no-new-privileges",
@@ -456,7 +456,7 @@
     "live_evidence": "session-hardening-live/validation.json under evidence_root"
   },
   "receive_completion": {
-    "status": "component_validated_not_deployed",
+    "status": "installed_8600_two_cycles_verified",
     "evidence": "receive-completion-development/validation.json under evidence_root",
     "checks": {
       "go_race_passed": true,
@@ -492,8 +492,10 @@
       "test_registration": true
     },
     "remaining": [
-      "Signed candidate and ordinary GUI live Start/Stop; verify stopped_receive_unconfirmed without forcing receive restoration.",
-      "Original P1-P10 production gates remain open, including actual6300, DSP fault attribution, PR4770, final RF comparisons and release qualification."
-    ]
+      "Final installed process-graph crash/cancel/unkey/reboot qualification; this proves two receive-only normal stops and one replacement, not all failures.",
+      "Receive settings remain deliberately unconfirmed after occupancy refusal; never force foreign-slice restoration.",
+      "Full P1-P10 first-install trust, actual6000 provisioning/hardware, DSP alignment/cold-start, PR4770, repeated final RF/stock comparison, reproducibility/resource budgets and independent release gates."
+    ],
+    "live_evidence": "receive-completion-live/validation.json under evidence_root"
   }
 }
