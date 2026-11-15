@@ -445,11 +445,41 @@ int main(int argc, char** argv)
 #else
         check(!c.peakControlOn, "the phasing build has no modulator peak control");
 #endif
+#if AETHER_HL2_TX_TXA
+        {
+            backend.settleDspChainsForTest();
+            QVariantMap tx;
+            for (const QVariant& v : backend.dspChains()) {
+                if (v.toMap().value(QStringLiteral("chain")) == QStringLiteral("hl2-tx")) {
+                    tx = v.toMap();
+                }
+            }
+            check(tx.value(QStringLiteral("peakControl")).toBool()
+                      && !tx.value(QStringLiteral("minimumPhase")).toBool()
+                      && near(tx.value(QStringLiteral("peakClipDb")).toDouble(), 8.0)
+                      && !tx.value(QStringLiteral("peakCessb")).toBool(),
+                  "the DSP read-back reports peak control on, linear phase, as the channel runs it");
+        }
+#endif
         backend.setModulatorPeakControl(true, 50.0, true);
         c = Access::txConfig(backend);
         check(near(c.peakClipDb, 20.0), "clip drive clamps to 20 dB on the way in");
         backend.setModulatorPeakControl(false, 6.0, true);
         check(!Access::txConfig(backend).peakControlOn, "and off reaches it too");
+#if AETHER_HL2_TX_TXA
+        {
+            backend.settleDspChainsForTest();
+            QVariantMap tx;
+            for (const QVariant& v : backend.dspChains()) {
+                if (v.toMap().value(QStringLiteral("chain")) == QStringLiteral("hl2-tx")) {
+                    tx = v.toMap();
+                }
+            }
+            check(!tx.value(QStringLiteral("peakControl")).toBool()
+                      && tx.value(QStringLiteral("minimumPhase")).toBool(),
+                  "and the read-back shows it off, minimum phase back (USB)");
+        }
+#endif
         const auto caps = backend.capabilities();
         check(caps.modulatorPeakControl.has_value() == (AETHER_HL2_TX_TXA && caps.canTransmit),
               "HL2 offers modulator peak control only in the TXA build and when it may transmit");

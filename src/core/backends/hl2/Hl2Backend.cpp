@@ -6176,6 +6176,13 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("alcTargetPeak")] = t.alcTargetPeak;
         e[QStringLiteral("alcReleaseSec")] = t.alcReleaseSec;
         e[QStringLiteral("micGainLinear")] = txDsp->micGain();
+        // Peak control in the modulator, as the channel runs it (RFC #4836).
+        if (channel) {
+            e[QStringLiteral("minimumPhase")] = channel->minimumPhase;
+            e[QStringLiteral("peakControl")] = channel->txSpeechProcessor;
+            e[QStringLiteral("peakClipDb")] = channel->txSpeechProcessorClipDb;
+            e[QStringLiteral("peakCessb")] = channel->txCessb;
+        }
         chains.append(e);
     }
     return chains;

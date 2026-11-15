@@ -240,11 +240,9 @@ void StripPeakPanel::syncControlsFromEngine()
     m_routeRow->setVisible(offered);
     m_routeChain->setChecked(!inModulator);
     m_routeModulator->setChecked(inModulator);
-    m_ceiling->setEnabled(!inModulator);
-    m_ceiling->setToolTip(inModulator
-                              ? tr("In the radio's modulator the radio's ALC and drive set the peak")
-                              : tr("The largest SSB envelope this stage lets through, in dBFS"));
-    m_ceiling->setAccessibleDescription(m_ceiling->toolTip());
+    // Hidden rather than greyed: the knob does not paint a disabled state, and
+    // in the modulator there is no ceiling to set.
+    m_ceiling->setVisible(!inModulator);
     m_history->setReference(peak->outputDb(), inModulator ? QString() : tr("Ceiling"));
     m_history->setActive(peak->isEnabled() && !inModulator);
     m_passband->setText(
