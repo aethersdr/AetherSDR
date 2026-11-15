@@ -29,6 +29,7 @@ public:
     bool isConnected() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
     void setSliceFrequency(int, double) override {}
     void setSliceMode(int, const QString&) override {}
     void setSliceFilter(int, int, int) override {}
