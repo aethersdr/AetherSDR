@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T08:04:50.381727+00:00",
+  "updated_utc": "2026-11-15T08:23:39.727598+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -15,16 +15,21 @@
     "Temporary test waveforms and exact leftover archives were removed. Installed shim remained running, FDX off, no RF."
   ],
   "current_changes": {
-    "description": "Public-record carrier image and two-role RAM credential broker/receiver. Each fixed role fetches once; no request secret is placed in the image. No new radio deployment.",
-    "builds": "Full signed ARM64 and ARMv7 shim/DSP/helper candidates built. Native release and worker verifiers accept both candidates and refuse wrong keys. Actual compiled ARM64 carrier image assembled twice identically; layer inspection finds no request secret.",
-    "evidence": "ram-carrier-development/image-validation.json and ram-installed-candidate-development/validation.json under evidence_root; earlier component-test evidence remains preserved.",
-    "tests": "Saved logs show the full shim race suite passing (14.156 s), eleven installer test methods passing, two native credential methods passing with C ASan/UBSan and Go race detection, fifteen upload regression tests passing, and three image-layout tests passing.",
+    "description": "Updated shim installed on the8600, followed by an ordinary RAM-request/public-upload signed successor upgrade. The public path used the existing QtKeychain credential and no diagnostics bridge to execute the installation.",
+    "evidence": "ram-installed-candidate-development/upgrade-validation.json, request-cancel-validation.json, public-carrier-refusal-01/result.json; ram-public-upgrade-development/public-upgrade-01/result.json and audit-validation.json under evidence_root.",
+    "builds": "Signed ARM64/ARMv7 baseline candidates and separately signed ARM64 successor built and verified. Public carrier archives contain no private request key.",
+    "live_results": [
+      "Baseline upgrade committed in44.981s, identity preserved, zero-capability primary and temporary authority removed.",
+      "Two installed-shim request/cancel probes passed, including native challenge authentication and listener removal.",
+      "Invalid-signature public carrier returned authenticated refusal3 and normal radio removal completed in5.887s.",
+      "Valid public-path delivery returned0; the immediate readiness assertion failed. A later independent audit proved the exact successor committed, new primary PID6818 with all caps0/NNP1, preserved identity, no carrier/container/images/listeners/brokers or temporary installer authority.",
+      "Radio remained connected, FDX off, transmittingfalse and txPower0; helper and carrier absent from installed list."
+    ],
     "unfinished": [
-      "Full root/container process graph and tmpfs behavior on the radio",
-      "Initial-install trust and ordinary desktop integration",
-      "Integration into a signed release, live upgrade and automatic outer cleanup",
-      "Remaining cross-platform, hardware qualification and release gates",
-      "Desktop reconnect must verify durable committed state after the shim upgrade stops its owned request process; transport disconnect is indeterminate."
+      "Ordinary desktop durable commit detection and bounded readiness polling; delivery0 is not commit.",
+      "First-install trust and FLEX-6000 privilege adapter.",
+      "Full cancellation/crash/reboot qualification of the final public process graph.",
+      "GUI/PR4770 integration, final RF/stock APD comparison, actual6300 qualification and release gates."
     ]
   },
   "remaining": [
@@ -43,5 +48,5 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Revalidate installed generation, prepare a bounded receive-only bench bootstrap upgrade to the new shim, then qualify the RAM request/public carrier process graph and committed-state detection. No new candidate has been deployed."
+  "next_action": "Implement ordinary-client committed-state verification across shim restart, then complete public-path interruption/cleanup qualification and first-install/6000 provisioning. Preserve the successful8600 upgrade and original readiness failure separately."
 }

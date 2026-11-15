@@ -3,7 +3,7 @@
 This component replaces the bench script's installer-container orchestration.
 It does not provide operator consent or removal of its own outer waveform/image.
 The native waveform and authenticated desktop transfer component live in
-`../request`; the combined process graph remains to be qualified live. It is not
+`../request`; the upgrade graph has one successful FLEX-8600 public-upload proof. It is not
 a supported FLEX-6000 installer. No radio command or RF interface is exposed.
 
 The native waveform launch tests found that the radio retains its uploaded ZIP
@@ -24,8 +24,9 @@ public record. The native receiver authenticates the shim UID, verifies the
 read-only unlinked tmpfs descriptor, receipt and commitment, then makes its own
 root-owned RAM copy. The broker closes after both roles fetch or the job ends.
 Local integration tests exercise both role orders, replay, mismatched records
-and malformed descriptors. The actual root/container graph, writable tmpfs
-availability and normal radio upload lifecycle remain to be qualified. This
+and malformed descriptors. One FLEX-8600 run exercised both native consumers,
+the container graph and radio upload/removal with a valid signed successor;
+crash paths and actual FLEX-6000 qualification remain incomplete. This
 upgrade path depends on an already-installed shim; first-install trust remains
 unresolved. See [`request/README.md`](../request/README.md) for the wire contract.
 
@@ -75,9 +76,9 @@ descriptor 7. The supervisor verifies its Unix seqpacket type and UID 78666 peer
 then sends `PDDONE01` back after child cleanup. Failed delivery or cleanup cannot
 be reported as success; a disconnected original sender makes completion fail.
 The native requester authenticates the resulting desktop acknowledgement.
-This return path postdates the successful bench upgrade below and has only
-local component coverage so far. The older fire-and-forget bench sender cannot
-qualify it.
+This return path postdates the earlier private-image bench upgrade. It has
+local component coverage and the public-upload proof described below; the
+older fire-and-forget bench sender does not qualify it.
 
 The supervisor has a 120-second context, bounded HTTP responses and child logs,
 and a separate eight-second cleanup budget. Cleanup verifies the per-run random
@@ -119,3 +120,21 @@ capsule, delivery staging, temporary services and installer child were removed;
 the bench harness removed the outer image/container and sender fixture. This is
 one successful bench upgrade, not full deployment or crash-path qualification.
 The earlier failed deliveries and namespace probes remain in the local evidence.
+
+The RAM-request/public-upload proof on FLEX-8600 firmware 4.3.16.42034 used the
+existing operator credential through QtKeychain. A deliberately invalid worker
+returned authenticated refusal 3. A separately signed successor then returned
+delivery result 0 and committed. The radio's normal remove-container command
+removed the outer carrier and image; its child cleaned itself up. A subsequent
+bench audit found both tested images absent, no matching cached upload at the
+checked `/tmp` and `/var/tmp` paths, no request listener/brokers, and no temporary
+installation authority. The new primary had UID 78666, GID 20, empty capability
+sets and NoNewPrivs, with the same public identity. No RF was used.
+
+Delivery result 0 precedes durable commit and is not an installation-success
+receipt. The test's immediate post-restart readiness assertion failed; a later
+audit verified the exact committed generation, selected signed payload and new
+primary PID. Preserve that negative result alongside the successful journal
+proof. The ordinary desktop still needs bounded readiness polling and a durable
+committed-state check that does not use the bench helper. Initial installation
+and a FLEX-6000 privilege adapter remain unfinished.

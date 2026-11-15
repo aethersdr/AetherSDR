@@ -128,8 +128,11 @@ The native receiver verifies the shim peer, descriptor properties, receipt and
 key commitment before creating its own root-owned, read-only, unlinked tmpfs
 copy. The image builder includes only the public record at `/pd/request` and
 rejects private request records. Native receiver/broker integration and image
-layout have local test evidence; the full root/container process graph and
-normal radio upload lifecycle remain unqualified.
+layout have local test evidence. One FLEX-8600 signed successor upgrade through
+the public carrier committed; an independent bench audit verified the selected
+release and cleanup. Delivery result 0 precedes commit, so the desktop still
+needs durable committed-state verification and bounded readiness polling.
+Crash paths and actual FLEX-6000 qualification remain incomplete.
 
 `GET /v1/aetherpd/install-request/<request_id>` reports the owned job's state;
 `DELETE` cancels it. Both require the current operator token. Readiness and
