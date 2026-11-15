@@ -2065,3 +2065,31 @@ through the production Go reader. The same native tests support `--sanitize`.
 of invalid files. These are host component checks, not installed upgrade,
 reboot, physical power-loss or FLEX-6300 qualification. Desktop polling and its
 operator workflow remain unfinished.
+
+### Desktop observation component
+
+`AetherPDInstallationMonitor` is a core-only, read-only monitor for one approved
+upgrade. It derives identity, both selected-release alternatives, publisher keys
+and the BLAKE2b-256 plan digest from the exact 352-byte `PDUPGR01` record. Parsing
+that record does not authenticate release bytes or establish operator consent;
+the installation coordinator must supply the already-approved record.
+
+The monitor polls only the fixed installation-status GET with the existing admin
+token. It disables caching and redirects, restricts the target to the existing
+LAN address policy, caps replies at 2 KiB, bounds each request to 2.5 seconds,
+and waits at least 500 ms before retrying. Observation defaults to 180 seconds
+and is capped at 400 seconds. These are local monotonic deadlines. A missing
+endpoint, unavailable mirror, disconnect, or valid older-plan observation remains
+pending within that bound. Invalid replies, wrong target/release/key, refused
+credentials, transport destruction, or expiry produce **Unconfirmed**, never a
+claim that installation failed or rolled back. Only exact matching terminal
+observations produce **Committed** or **RolledBack**. The monitor does not verify
+current primary health or correction performance.
+
+Cancellation or destruction abandons local observation and clears its retained
+token; neither sends remote cancellation nor resubmits installation. One instance
+cannot be retargeted or reused for another plan. The socket-free CTest injects
+HTTP and monotonic time, including synchronous destruction callbacks. Its native
+fixtures come through the C publisher and Go reader/JSON encoder. The component
+is registered in the core build but not yet wired to the operator installation
+coordinator or dialog. Live installed monitoring remains unqualified.

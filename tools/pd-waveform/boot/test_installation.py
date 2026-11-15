@@ -17,6 +17,7 @@ import upgrade
 CHECKER = None
 DISK_DIRECTORY = None
 GO_SHIM = None
+EXPORT_FIXTURES = None
 
 class InstallationTest(unittest.TestCase):
     def setUp(self):
@@ -93,6 +94,10 @@ class InstallationTest(unittest.TestCase):
             env = dict(os.environ, AETHERPD_INSTALLATION_TEST_ROOT=str(self.root),
                        AETHERPD_INSTALLATION_TEST_PLAN=self.digest.hex(),
                        AETHERPD_INSTALLATION_TEST_PHASE=str(phase))
+            if EXPORT_FIXTURES is not None:
+                EXPORT_FIXTURES.mkdir(parents=True, exist_ok=True)
+                (EXPORT_FIXTURES/'approved.hex').write_text(self.plan.hex()+'\n')
+                env['AETHERPD_INSTALLATION_EXPORT'] = str(EXPORT_FIXTURES)
             result = subprocess.run(['go', 'test', '-race', '-count=1', '-run',
                                      '^TestPDInstallationNativePublisher$', '.'], cwd=GO_SHIM,
                                     env=env, capture_output=True, text=True, timeout=120)
@@ -192,7 +197,9 @@ if __name__ == '__main__':
     p.add_argument('--checker', type=Path, required=True)
     p.add_argument('--disk-directory', type=Path)
     p.add_argument('--go-shim', type=Path)
+    p.add_argument('--export-fixtures', type=Path)
     args, rest = p.parse_known_args()
+    EXPORT_FIXTURES = args.export_fixtures.resolve() if args.export_fixtures else None
     GO_SHIM = args.go_shim.resolve() if args.go_shim else None
     DISK_DIRECTORY = args.disk_directory
     CHECKER = args.checker.resolve()

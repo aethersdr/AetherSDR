@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T08:41:38.183887+00:00",
+  "updated_utc": "2026-11-15T08:54:24.565173+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Implement desktop exact-approved-plan matching and bounded read-only installation polling across shim restart; qualify current endpoint on a signed installed candidate, including rollback compatibility. Preserve prior live candidate and original readiness failure.",
+  "next_action": "Build a fresh signed candidate carrying the installation-status endpoint, then use the desktop monitor for a bounded public-path upgrade across shim restart. Preserve current installed candidateH and qualify rollback compatibility before claiming the installer complete; operator workflow and full production gates remain.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -65,6 +65,23 @@
       "Older-shim rollback observability and runtime cleanup compatibility",
       "Live installed candidate upgrade, rollback and reboot qualification",
       "Full production plan including 6000 provisioning/hardware, DSP, PR4770, RF/stock APD and release gates"
+    ]
+  },
+  "installation_monitor_development": {
+    "evidence": "installation-monitor-development/validation.json under evidence_root",
+    "status": "desktop_component_host_validated_not_connected_to_install_coordinator",
+    "checks": [
+      "3 registered tests passed in the project pinned Qt build",
+      "2 standalone tests passed under address/undefined/leak sanitizers",
+      "Native C -> Go -> Qt commit and rollback fixtures passed",
+      "Mutation accepting another plan as committed was caught"
+    ],
+    "remaining": [
+      "Operator installation coordinator/dialog integration",
+      "Signed candidate installation and live monitoring across shim restart",
+      "Backward-shim rollback observability and cleanup compatibility",
+      "First-install trust and FLEX-6000 adapter/hardware qualification",
+      "Remaining full production plan: DSP alignment/cold-start, PR4770, final RF/stock comparison and release gates"
     ]
   }
 }

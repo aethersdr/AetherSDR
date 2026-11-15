@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,15 @@ func TestPDInstallationNativePublisher(t *testing.T) {
 	st, err := readPDInstallationAt(fd, uint32(os.Getuid()))
 	if err != nil || st.PlanDigest != os.Getenv("AETHERPD_INSTALLATION_TEST_PLAN") || st.Profile != 1 || st.Serial != "fixture-8600" || st.Firmware != "4.3.16.42034" {
 		t.Fatalf("native publication mismatch: %+v %v", st, err)
+	}
+	if directory := os.Getenv("AETHERPD_INSTALLATION_EXPORT"); directory != "" {
+		data, err := json.Marshal(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, st.State+".json"), append(data, '\n'), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	wantCommitted := os.Getenv("AETHERPD_INSTALLATION_TEST_PHASE") == "4"
 	wantDigest, wantKey := "", ""

@@ -4934,6 +4934,18 @@ target_link_libraries(aetherpd_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME aetherpd_client_test COMMAND aetherpd_client_test)
 set_tests_properties(aetherpd_client_test PROPERTIES TIMEOUT 10)
 
+# Installation observation retries only fixed GETs; injected transport and clock.
+add_executable(aetherpd_installation_monitor_test
+    tests/aetherpd_installation_monitor_test.cpp
+    src/core/AetherPDInstallationMonitor.cpp
+    src/core/AetherPDProtocol.cpp)
+target_include_directories(aetherpd_installation_monitor_test PRIVATE src tests)
+target_compile_definitions(aetherpd_installation_monitor_test PRIVATE
+    AETHERPD_INSTALLATION_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/installation")
+target_link_libraries(aetherpd_installation_monitor_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME aetherpd_installation_monitor_test COMMAND aetherpd_installation_monitor_test)
+set_tests_properties(aetherpd_installation_monitor_test PROPERTIES TIMEOUT 10)
+
 # Bounded helper client: inject HTTP and time; no sockets or radio simulator.
 add_executable(aetherpd_test_client_test
     tests/aetherpd_test_client_test.cpp

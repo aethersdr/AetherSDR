@@ -82,6 +82,32 @@ std::optional<Request> testRequest(TestOperation operation, const QString& testI
 std::optional<QByteArray> testBeginBody(int cleanupAfterMs);
 std::optional<TestObservation> parseTestObservation(const QByteArray& json);
 
+// Derived from the exact operator-approved PDUPGR01 bytes. This parser grants
+// no installation authority and does not authenticate a release or consent.
+struct InstallationPlan {
+    QString planDigest;
+    QString previousDigest;
+    QString candidateDigest;
+    QString previousKey;
+    QString candidateKey;
+    quint32 profile{0};
+    QString firmware;
+    QString serial;
+};
+struct InstallationObservation {
+    bool committed{false};
+    QString planDigest;
+    QString selectedDigest;
+    QString selectedKey;
+    quint32 profile{0};
+    QString firmware;
+    QString serial;
+};
+enum class InstallationMatch { Committed, RolledBack, OtherPlan, Mismatch };
+std::optional<InstallationPlan> parseInstallationPlan(const QByteArray& approved);
+std::optional<InstallationObservation> parseInstallationObservation(const QByteArray& json);
+InstallationMatch matchInstallation(const InstallationPlan& plan, const InstallationObservation& observed);
+
 // Start carries only the current GUI identity; all other requests are empty.
 // Acknowledgments never establish observed registration or correction state.
 std::optional<Request> request(Operation operation);

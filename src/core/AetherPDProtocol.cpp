@@ -1,5 +1,7 @@
 #include "AetherPDProtocol.h"
 
+#include <QCryptographicHash>
+#include <QRegularExpression>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -410,4 +412,93 @@ std::optional<TestObservation> parseTestObservation(const QByteArray& json)
     result.remainingMs = static_cast<int>(remaining);
     return result;
 }
+namespace {
+bool installationHex(const QString& value)
+{
+    if (value.size() != 64 || value == QString(64, u'0')) { return false; }
+    for (const QChar c : value) {
+        if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return false; }
+    }
+    return true;
+}
+bool installationText(const QString& value, bool firmware)
+{
+    static const QRegularExpression firmwarePattern(QStringLiteral("\\A[0-9]+(?:\\.[0-9]+){3}\\z"));
+    static const QRegularExpression serialPattern(QStringLiteral("\\A[A-Za-z0-9.-]{1,63}\\z"));
+    return firmware ? value.size() < 28 && firmwarePattern.match(value).hasMatch()
+                    : serialPattern.match(value).hasMatch();
+}
+std::optional<QString> installationField(const QByteArray& bytes, bool firmware)
+{
+    const qsizetype end = bytes.indexOf('\0');
+    if (end < 1 || bytes.mid(end) != QByteArray(bytes.size() - end, '\0')) { return std::nullopt; }
+    const QString text = QString::fromLatin1(bytes.first(end));
+    return installationText(text, firmware) ? std::optional<QString>(text) : std::nullopt;
+}
+} // namespace
+
+std::optional<InstallationPlan> parseInstallationPlan(const QByteArray& approved)
+{
+    if (approved.size() != 352 || !approved.startsWith("PDUPGR01")) { return std::nullopt; }
+    InstallationPlan plan;
+    for (const qsizetype offset : {qsizetype(8), qsizetype(148)}) {
+        const QByteArray record = approved.mid(offset, 140);
+        const quint32 profile = qFromBigEndian<quint32>(record.constData() + 8);
+        const std::optional<QString> firmware = installationField(record.mid(48, 28), true);
+        const std::optional<QString> serial = installationField(record.mid(76, 64), false);
+        const QString digest = QString::fromLatin1(record.mid(16, 32).toHex());
+        if (!record.startsWith("PDAPRV02") || (profile != 1 && profile != 2)
+            || record.mid(12, 4) != QByteArray(4, '\0') || !firmware || !serial || !installationHex(digest)) {
+            return std::nullopt;
+        }
+        if (offset == 8) {
+            plan.profile = profile; plan.firmware = *firmware; plan.serial = *serial; plan.previousDigest = digest;
+        } else {
+            if (plan.profile != profile || plan.firmware != *firmware || plan.serial != *serial
+                || plan.previousDigest == digest) { return std::nullopt; }
+            plan.candidateDigest = digest;
+        }
+    }
+    plan.previousKey = QString::fromLatin1(approved.mid(288, 32).toHex());
+    plan.candidateKey = QString::fromLatin1(approved.mid(320, 32).toHex());
+    if (!installationHex(plan.previousKey) || !installationHex(plan.candidateKey)) { return std::nullopt; }
+    plan.planDigest = QString::fromLatin1(QCryptographicHash::hash(approved, QCryptographicHash::Blake2b_256).toHex());
+    return plan;
+}
+
+std::optional<InstallationObservation> parseInstallationObservation(const QByteArray& json)
+{
+    const std::optional<QJsonObject> parsed = object(json);
+    if (!parsed || parsed->size() != 8) { return std::nullopt; }
+    const QJsonObject& o = *parsed;
+    InstallationObservation result;
+    quint64 profile = 0;
+    if (!boolean(o, "installation_committed", result.committed) || !counter(o, "profile", profile)
+        || (profile != 1 && profile != 2)) { return std::nullopt; }
+    result.profile = static_cast<quint32>(profile);
+    const QString state = o.value(QStringLiteral("state")).toString();
+    if (state != (result.committed ? QLatin1String("committed") : QLatin1String("rolled_back"))) { return std::nullopt; }
+    result.planDigest = o.value(QStringLiteral("upgrade_plan_blake2b_256")).toString();
+    result.selectedDigest = o.value(QStringLiteral("selected_release_blake2b_256")).toString();
+    result.selectedKey = o.value(QStringLiteral("selected_release_key")).toString();
+    result.firmware = o.value(QStringLiteral("firmware")).toString();
+    result.serial = o.value(QStringLiteral("serial")).toString();
+    if (!installationHex(result.planDigest) || !installationHex(result.selectedDigest) || !installationHex(result.selectedKey)
+        || !installationText(result.firmware, true) || !installationText(result.serial, false)) { return std::nullopt; }
+    return result;
+}
+
+InstallationMatch matchInstallation(const InstallationPlan& plan, const InstallationObservation& observed)
+{
+    if (plan.profile != observed.profile || plan.serial != observed.serial || plan.firmware != observed.firmware) {
+        return InstallationMatch::Mismatch;
+    }
+    if (plan.planDigest != observed.planDigest) { return InstallationMatch::OtherPlan; }
+    if (observed.selectedDigest != (observed.committed ? plan.candidateDigest : plan.previousDigest)
+        || observed.selectedKey != (observed.committed ? plan.candidateKey : plan.previousKey)) {
+        return InstallationMatch::Mismatch;
+    }
+    return observed.committed ? InstallationMatch::Committed : InstallationMatch::RolledBack;
+}
+
 } // namespace AetherSDR::aetherpd
