@@ -378,7 +378,7 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
     }
 
     qCInfo(lcGui).noquote() << "Keyboard shortcuts are off:" << refused->displayName
-                            << "(" + refused->currentKey.toString() + ") not run;"
+                            << "(" + shortcutKeyText(refused->currentKey) + ") not run;"
                             << "Settings > Keyboard Shortcuts turns them on";
     showShortcutNotice(tr("Keyboard shortcuts are off"), 10000);
 }
@@ -573,7 +573,19 @@ bool MainWindow::keyEventMatchesActionBaseKey(const char* actionId,
     // currentKey[0] is the (modifiers | key) combination; compare the key half
     // only, so a combo binding matches on release regardless of which
     // modifiers are still down.
-    return static_cast<int>(a->currentKey[0].key()) == ev->key();
+    const int bound = static_cast<int>(a->currentKey[0].key());
+    if (bound == ev->key())
+        return true;
+    // A sided modifier binding (#7354) matches its own side; a release whose
+    // side cannot be read still matches the generic key, so it fails safe to
+    // RX rather than leaving the paddle keyed.
+    if (isShortcutSidedKey(bound)) {
+        const Qt::Key side = shortcutSidedKeyFromEvent(ev);
+        if (side != Qt::Key_unknown)
+            return side == bound;
+        return ev->key() == shortcutSidedKeyGeneric(bound);
+    }
+    return false;
 }
 
 
@@ -1977,7 +1989,7 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
         // unbound): say so, rather than "not a known action id".
         return KeyInjectUnbound;
     } else {
-        seq = QKeySequence::fromString(spec, QKeySequence::PortableText);
+        seq = shortcutKeyFromText(spec, QKeySequence::PortableText);
         // fromString() parses unrecognised text into a non-empty sequence whose
         // key is Qt::Key_unknown, so isEmpty() alone would let garbage through.
         if (seq.isEmpty() || seq[0].key() == Qt::Key_unknown)

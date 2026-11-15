@@ -439,8 +439,8 @@ void ShortcutDialog::populateTable(const QString& filter, const QString& categor
         nameItem->setData(Qt::UserRole, a.id);
         m_table->setItem(row, 0, nameItem);
         m_table->setItem(row, 1, new QTableWidgetItem(a.category));
-        m_table->setItem(row, 2, new QTableWidgetItem(a.currentKey.toString()));
-        m_table->setItem(row, 3, new QTableWidgetItem(a.defaultKey.toString()));
+        m_table->setItem(row, 2, new QTableWidgetItem(shortcutKeyText(a.currentKey)));
+        m_table->setItem(row, 3, new QTableWidgetItem(shortcutKeyText(a.defaultKey)));
     }
 }
 
@@ -482,7 +482,7 @@ void ShortcutDialog::assignAction(const QString& actionId)
         if (!conflict.isEmpty()) {
             if (!confirm(this, QStringLiteral("Key Conflict"),
                          QString("Key [%1] is currently bound to '%2'.\nReassign it?")
-                             .arg(seq.toString(), conflict),
+                             .arg(shortcutKeyText(seq), conflict),
                          QStringLiteral("Reassign"), CanonMessageBox::Role::Accept)) {
                 updateSelectedKeyInfo();   // the combo goes back to the key's own action
                 return;
@@ -530,7 +530,7 @@ void ShortcutDialog::updateSelectedKeyInfo()
     }
 
     QKeySequence seq(key);
-    m_selectedKeyLabel->setText(seq.toString());
+    m_selectedKeyLabel->setText(shortcutKeyText(seq));
 
     const auto* act = m_mgr->actionForKey(seq);
     if (act) {

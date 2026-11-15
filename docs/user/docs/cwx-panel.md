@@ -69,6 +69,8 @@ Beyond text entry, AetherSDR has a local iambic / straight-key keyer that respec
 
 Bind keys under **Settings → Configure Shortcuts...** and turn on **Settings → Keyboard Shortcuts** (off by default), or map a MIDI control in [MIDI Controller Mapping](./midi-controller-mapping.md). Further CW actions include speed up/down, sidetone, iambic on/off, iambic mode A/B, swap paddles and break-in.
 
+The keyboard map binds the left and right **CTRL**, **SHIFT** and **ALT** keys separately, so a USB Morse adapter that types left/right Ctrl for its two paddles can drive dit and dah. An existing binding to plain Ctrl still answers either side. While a paddle is held, Ctrl is down for the whole app, so Ctrl+wheel and Ctrl+click on the panadapter behave as Ctrl-modified during keying.
+
 - With **break-in** on, a paddle or straight-key press keys the radio directly. With break-in off, MOX must be on for the CW to go out.
 - Element timing is scheduled against an exact clock with a sample-accurate sidetone, and iambic Mode B behaves correctly when both paddles are released together.
 - The break-in delay holds when you change speed.
