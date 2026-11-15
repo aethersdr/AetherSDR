@@ -245,9 +245,12 @@ AetherSDR starts: MOX and PTT from any source (buttons, shortcuts,
 controllers, serial PTT, CAT, TCI, WSPR, the automation bridge), TUNE and
 two-tone, ATU, CW key, paddle and CW PTT, CWX, the voice keyer, NAVTEX,
 switching **VOX** on, and a Tuner Genius XL autotune. It is never asked when
-you unkey, and never while AetherSDR is already transmitting. A CW message is
-asked about once, at its first element: a guard that starts to object in the
-middle of a message lets it finish and refuses the next one.
+you unkey, and never while AetherSDR is already transmitting, except for
+switching VOX on, which stays armed after the over. A CW message is asked
+about once, at its first element: a guard that starts to object in the middle
+of a message lets it finish and refuses the next one. While a hardware PTT or
+the radio's own VOX holds the radio keyed, the message stays open and its
+later elements are not asked.
 
 A key guard cannot stop:
 
