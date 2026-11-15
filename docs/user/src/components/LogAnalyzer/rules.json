@@ -354,12 +354,12 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4294,
+          "line": 4327,
           "text": "AudioEngine: failed to open RX audio sink on any negotiated format"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4330,
+          "line": 4363,
           "text": "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
         }
       ]
@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9039,
+          "line": 9038,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9270,
+          "line": 9269,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9322,
+          "line": 9321,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -713,7 +713,7 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 7871,
+          "line": 7870,
           "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 3039,
+          "line": 3040,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -978,12 +978,12 @@
       "source": [
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
-          "line": 184,
+          "line": 193,
           "text": "session failed:"
         },
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
-          "line": 262,
+          "line": 271,
           "text": "the radio rejected the username or password"
         }
       ]
@@ -1000,7 +1000,7 @@
       "source": [
         {
           "file": "src/core/backends/icom/IcomSession.cpp",
-          "line": 401,
+          "line": 410,
           "text": "the radio released the serial and audio streams; "
         }
       ]
