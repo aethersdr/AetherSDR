@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T15:58:04.903287+00:00",
+  "updated_utc": "2026-11-15T16:02:05.894514+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Qualify the desktop slow-vital freshness correction with one bounded5W GUI measurement, recording per-meter ages. Complete real four-frame tone capture, correction A/B and all remaining P1-P10 gates; no automatic source rearm or RF retry.",
+  "next_action": "Measure per-phase and per-chunk desktop capture timing without RF, distinguish tone wait from retrieval, and remove the actual bottleneck while retaining source/capture provenance and bounded keying. Then finish four-frame RF captures, ordinary correction A/B and all P1-P10 requirements.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -795,5 +795,44 @@
     "remaining": [
       "Live qualification of updated desktop; no new RF yet"
     ]
+  },
+  "telemetry_cadence_installed": {
+    "production_ready": false,
+    "desktop_commit": "c6fe9000f21f5ec49248430964baf8a2f53b3b9b",
+    "radio_source_commit": "79b07006ef9e3d47aa3336077f1a88e4e68b8b5a",
+    "release_sha256": "c30a94fc841ed660e12f2647d47fd44c2bc1f96beacec7b4215969c4995ca7c9",
+    "one_positive_GUI_key": true,
+    "nominal_watts": 5,
+    "frequency_mhz": 7.15,
+    "FDX": false,
+    "gui_key_command_to_unkey_command_s": 6.472,
+    "outcome": "IQ capture timed out; no completed IMD result. Telemetry guard did not abort.",
+    "native_evidence": {
+      "loop_delay_samples": 1761.97,
+      "loop_delay_ms": 73.42,
+      "envelope_correlation": 1.0,
+      "phase_correlation": 0.999,
+      "linear_path_taps": 31,
+      "linear_path_residual_db": -29.6,
+      "key_seconds_at_log": 6.004,
+      "aligned": true,
+      "fits": 1,
+      "correcting": true,
+      "iq_stale": 0,
+      "iq_invalid": 0,
+      "dispatch_deadlines": 0,
+      "source_end": "interlock_ineligible following GUI unkey",
+      "generated_samples": 155136
+    },
+    "receive_prepare_click_to_ready_s": 5.186,
+    "cleanup": "GUI stopped confirmed; fixed ARP, DSP, capture, source and lease guardian absent. Only primary plus capability-free relay/private controls retained. Audit removed its own temporary job and directory.",
+    "limitations": [
+      "Correction was observed in one native status interval; this is not sustained RF improvement or completed IMD qualification.",
+      "Loop delay is full TX/feedback alignment, not FPGA-to-process packet delivery latency.",
+      "Periodic meter polling is not a calibrated power peak measurement.",
+      "Capture timeout phase/chunk timing still needs direct evidence; do not extend RF deadlines or reduce required captures merely to pass.",
+      "Older-generation proofs do not qualify this final candidate, reboot/failure matrix or real6300."
+    ],
+    "next": "Measure per-phase and per-chunk desktop capture timing without RF, distinguish tone wait from retrieval, and remove the actual bottleneck while retaining source/capture provenance and bounded keying."
   }
 }
