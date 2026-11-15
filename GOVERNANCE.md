@@ -76,7 +76,8 @@ titled `[Governance] Reviewer request` to start the conversation.
 A member of the `@aethersdr/infrastructure` team, which is drawn from the
 reviewers and is a strict subset of them. Has every reviewer permission plus
 approval over the Tier 2 paths: build configuration, the routine CI
-workflows, the top-level markdown, and the AI-instruction files. These
+workflows, markdown matched by the Tier 2 rules at any depth, and the
+AI-instruction files. These
 changes need deeper repository context than routine source review, so the
 team is deliberately smaller. Infrastructure owners join by invitation from
 the Project Maintainer.
