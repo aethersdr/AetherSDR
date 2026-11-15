@@ -216,6 +216,10 @@ int main(int argc, char** argv)
     ok &= check(captureNetwork.sent.size() == beforeOldPreparation
         && radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::Ready,
         "queued authorization for an older preparation cannot start its replacement");
+    mb("pdMeasureTransmit")->click();
+    ok &= check(measurementText().contains("Radio telemetry stopped updating")
+        && captureNetwork.sent.size() == beforeOldPreparation,
+        "transmit refusal exposes the missing telemetry reason and sends no helper request");
     measurement->reject();
     ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::Idle,
         "closing measurement cancels preparation without stopping correction");

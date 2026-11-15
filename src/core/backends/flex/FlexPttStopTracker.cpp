@@ -347,8 +347,13 @@ void FlexPttStopTracker::observe(Stamp stamp, QStringView rawLine, qint64 nowMs)
             return;
         }
         quint32 envelopeHandle = 0;
+        // SmartSDR's envelope identifies the client that triggered an update,
+        // not the TX owner. Before arming, helper subscriptions can report
+        // global idle; the payload must still pass the complete idle check.
+        // An active attempt retains its stricter transition-origin fence.
+        const bool beforeArming = m_phase == Phase::AwaitIdle || m_phase == Phase::Idle;
         if (!number(rawLine.mid(1, pipe - 1), 16, envelopeHandle)
-            || (envelopeHandle != 0 && envelopeHandle != m_clientHandle)) {
+            || (!beforeArming && envelopeHandle != 0 && envelopeHandle != m_clientHandle)) {
             fail(Failure::Ownership);
             return;
         }

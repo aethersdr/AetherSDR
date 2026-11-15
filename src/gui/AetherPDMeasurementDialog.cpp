@@ -188,7 +188,10 @@ void AetherPDMeasurementDialog::transmit(const std::shared_ptr<TxController>& co
         return controller->valid() && input.valid();
     });
     if (!alive) { return; }
-    if (!accepted) { m_notice = tr("Transmission refused. Prepare a fresh receive check before trying again."); }
+    if (!accepted) {
+        m_notice = tr("Transmission refused: %1\nPrepare a fresh receive check before trying again.")
+            .arg(m_radio->aetherPDMeasurementModel().status());
+    }
     render();
 }
 void AetherPDMeasurementDialog::stop()

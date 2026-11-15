@@ -571,6 +571,8 @@ If the source request is refused, check **PD** mode, feedback panadapter
 The failure notice remains visible across status refreshes. If an arm or
 cancellation is unconfirmed, check the service status; **Cancel source**
 withdraws an arm and **Stop AetherPD** ends the owned source.
+If transmission is refused, the window shows the admission or telemetry
+reason. Resolve it and prepare a fresh receive check before another attempt.
 
 **Status unknown** means there is no fresh observation. The window does not
 retry Start, calibration or Stop automatically after a lost reply. The released

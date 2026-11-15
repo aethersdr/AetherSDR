@@ -121,6 +121,15 @@ readiness until a later complete eligible idle observation; it does not poison
 the connection. Fields are never carried forward across partial messages to
 manufacture an idle sample.
 
+Before arming, the status envelope may identify another client that triggered
+the update. The API defines this as the triggering client, independently of
+the payload's `tx_client_handle`. FLEX-8600 firmware 4.3.16.42034 broadcasts
+complete idle samples with AetherPD helper handles when their subscriptions
+open. Such a sample undergoes the same complete idle validation; a nonzero
+payload owner or incomplete fields cannot qualify readiness. The active
+attempt's transition-origin restriction remains unchanged and still needs
+qualification with these helpers present during transmission.
+
 During an armed lifecycle, relevant interlock observations must still contain
 state, source, client handle, TX-allowed and reason together. Partial evidence,
 malformed numbers, duplicate fields, foreign ownership, physical keying,

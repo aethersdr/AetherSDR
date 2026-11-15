@@ -280,6 +280,38 @@ void partialInterlockBeforeArming()
     }
 }
 
+void otherClientTriggeredIdle()
+{
+    // FLEX-8600 4.3.16.42034: opening AetherPD helper subscriptions broadcasts
+    // this complete idle shape on the desktop connection with a helper origin.
+    constexpr QStringView helperIdle = u"S522C3F51|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= ";
+    Harness h;
+    h.feed(helperIdle);
+    check(h.tracker.phase() == Phase::Idle && h.tracker.failure() == Failure::None,
+          "another client's global idle update does not poison key readiness");
+    h.feed(u"S522C3F51|interlock tx_allowed=0");
+    check(h.tracker.phase() == Phase::AwaitIdle && !h.tracker.begin(h.operation, 101, h.now),
+          "another client's partial update withdraws readiness without accumulating fields");
+    h.feed(u"S522C3F51|interlock tx_client_handle=0x522c3f51 state=TRANSMITTING reason= source=SW tx_allowed=1");
+    check(h.tracker.phase() == Phase::AwaitIdle && !h.tracker.begin(h.operation, 101, h.now),
+          "foreign payload TX ownership cannot qualify idle");
+    h.feed(helperIdle);
+    h.start();
+    h.complete();
+    check(h.tracker.evidence(h.now).valid(), "helper-triggered preflight retains the full own-operation stop sequence");
+
+    Harness active;
+    active.start();
+    active.feed(helperIdle);
+    check(active.tracker.phase() == Phase::Failed && !active.tracker.evidence(active.now).valid(),
+          "foreign-triggered idle cannot substitute for the active operation's stop sequence");
+
+    Harness malformed;
+    malformed.feed(u"S522C3F51|interlock tx_client_handle=garbage state=READY reason= source= tx_allowed=1");
+    check(malformed.tracker.failure() == Failure::InvalidInput,
+          "foreign-triggered idle still validates payload ownership syntax");
+}
+
 void attemptIdentityAndReconnect()
 {
     Harness h;
@@ -385,6 +417,7 @@ int main(int argc, char** argv)
     missingAndReorderedTransitions();
     strictFramesAndOwnership();
     partialInterlockBeforeArming();
+    otherClientTriggeredIdle();
     attemptIdentityAndReconnect();
     failedWritesDeadlinesAndLateEvents();
     return failures == 0 ? 0 : 1;
