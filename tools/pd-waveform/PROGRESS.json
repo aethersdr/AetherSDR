@@ -519,5 +519,38 @@
       "Final candidate reboot and repeatability; prior-generation reboot evidence is preserved but is not this candidate.",
       "Full P1-P10 first-install trust, FLEX6000 provisioning and actual6300 qualification, DSP alignment/cold-start, PR4770 operator integration, sustained RF/stock comparison, complete reproducibility/resource budgets and independent release gates."
     ]
+  },
+  "installed_process_failure_qualification": {
+    "status": "four_receive_only_installed_graph_process_failures_and_subsequent_normal_restart_verified_on8600",
+    "evidence": "installed-process-failure-live/validation.json under evidence_root",
+    "source_commit": "1316e4d80e7b5666e3a7579542086b67367e4f03",
+    "release_sha256": "b4f98724284073ce9e598a14ac979c27a7bc624b688d66ed141e1e1c73c192bc",
+    "production_ready": false,
+    "cases": [
+      "private-shim",
+      "iq-source",
+      "capture-owner",
+      "arp-owner"
+    ],
+    "checks": [
+      "Each live13-process graph matched signed payload hashes and fixed privilege profiles.",
+      "Main shim survived all four cases; private-supervisor death retired every session process. Individual source/capture/ARP owner deaths retired workers and retained only capability-free control processes.",
+      "Fixed ARP absent and temporary diagnostics removed in all four host audits.",
+      "Ordinary GUI restarted registered idle between failures and after the final failure; normal Stop retained the receive-recovery warning."
+    ],
+    "limitations": [
+      "The three individual helper deaths correctly retain cleanup_unconfirmed rather than concealing abnormal exits.",
+      "Receive guardian refuses recovery when original DAX channel is occupied; no forced restoration.",
+      "Capture and ARP helper paths retain their previously verified native privilege profiles, including NNP0. Only retained ordinary control processes are asserted NNP1.",
+      "Last host monotonic sample showing workers absent, including observer overhead and repeated executable hashing; not precise exit latency, FPGA latency, correction latency or RF unkey timing.",
+      "Receive-only; no keyed failure or sustained RF qualification."
+    ],
+    "next_action": "Wire existing AetherPDMeasurementModel/controller into the ordinary operator panel and qualify the bounded DAX-IQ measurement/TX-lease workflow. src/gui currently has no AetherPDMeasurementModel reference.",
+    "remaining": [
+      "Final graph API/credential loss, DSP and remaining guardian failure cases, simultaneous cleanup-owner loss, scheduling stalls and bounded keyed unkey tests.",
+      "No independent all-stream inventory in this pass; cleanup evidence is processes, fixed ARP, journals and successful successive starts.",
+      "Final candidate reboot and full rebuild reproducibility/resource qualification; older-version evidence remains scoped.",
+      "Full P1-P10: first-install trust, FLEX6000 adapter and real6300 hardware, alignment/cold-start diagnosis, PR4770 operator measurement integration, repeated sustained RF/stockAPD comparison, documentation and independent release gates."
+    ]
   }
 }
