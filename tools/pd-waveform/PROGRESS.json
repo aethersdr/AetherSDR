@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T12:24:14.554407+00:00",
+  "updated_utc": "2026-11-15T12:35:01.568578+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Build a signed successor containing the new Go shim and common native privilege-drop path, compile its exact desktop selection, then run receive-only GUI Start/Stop and independent process audit. Keep all original P1-P10 requirements open.",
+  "next_action": "Separate successful DSP/unkey/setup retirement from receive-restoration refusal with typed observed outcomes; preserve ownership guard and real errors. Do not classify by blanket suppression or UI ACK.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -388,17 +388,17 @@
     "open_findings": [
       {
         "id": "local-stop-completion-observation",
-        "status": "component_fix_validated_live_retest_pending",
+        "status": "terminal_status_live_verified_receive_refusal_still_conflated_with_cleanup",
         "evidence": "session-stopped.json, stop-status-gap.png, host-stopped-state.json",
         "cause": "queryStatus calls readNativeQuery; once p.done closes the query returns owned AetherPD exited and maps to503. Completion is not exposed despite supervisor cleanup evidence.",
-        "next": "Package the signed successor and qualify through the ordinary GUI; independently inspect terminal status and retained relay privileges."
+        "next": "Separate successful DSP/unkey/setup retirement from receive-restoration refusal with typed observed outcomes; preserve ownership guard and real errors. Do not classify by blanket suppression or UI ACK."
       },
       {
         "id": "local-session-no-new-privileges",
-        "status": "component_fix_validated_live_retest_pending",
+        "status": "fixed_and_live_verified_on8600",
         "evidence": "host-stopped-state.json",
         "cause": "Remaining unprivileged service relay and private shim have zero capabilities but NoNewPrivs=0; service_launch/drop_root path omits the optional Linux3.5+ hardening already used by primary_launch.",
-        "next": "Package the signed successor and qualify through the ordinary GUI; independently inspect terminal status and retained relay privileges."
+        "next": "Retain actual6300 kernel fallback qualification in the handoff."
       }
     ],
     "remaining": [
@@ -410,7 +410,7 @@
     ]
   },
   "session_completion_hardening": {
-    "status": "component_validated_not_deployed",
+    "status": "installed_8600_nnp_verified_stop_reports_preexisting_receive_refusal",
     "evidence": "session-hardening-development/validation.json under evidence_root",
     "checks": {
       "native_host_tests": 15,
@@ -449,9 +449,10 @@
       ]
     },
     "remaining": [
-      "New signed package including changed Go shim and native common launcher; compiled desktop selection must target that package.",
-      "Receive-only installed-radio Start/Stop and independent process-capability audit; new code not deployed.",
-      "Crash/cancel/restart qualification with final process graph, first-install trust, actual 6000 provisioning/hardware, remaining DSP/PR4770/RF comparison and all production plan gates."
-    ]
+      "Separate successful DSP/unkey/setup retirement from receive-restoration refusal with typed observed outcomes; preserve ownership guard and real errors. Do not classify by blanket suppression or UI ACK.",
+      "Live clean-stop branch and crash/cancel/restart qualification remain; NNP verified only on8600.",
+      "All original P1-P10 first-install, actual6000, DSP alignment/cold-start, PR4770, repeated RF/stock APD, reproducibility/resource and release gates remain."
+    ],
+    "live_evidence": "session-hardening-live/validation.json under evidence_root"
   }
 }
