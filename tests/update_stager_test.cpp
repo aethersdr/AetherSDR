@@ -561,9 +561,11 @@ private slots:
         QCOMPARE(UpdateStager::choose(m, request(QStringLiteral("26.10.2.0")), {}, &p, &q), D::Patch);
     }
 
-    // The legacy latest/manifest.json that copies without the bridge read:
+    // The shape of the legacy latest/manifest.json once patches are on R2:
     // full downloads only, published for every release so its tag stays
-    // GitHub's latest.
+    // GitHub's latest. This runs today's parser. v26.11.1 and v26.11.2 read
+    // it with their own, whose choose() and fallBack() match this code (and
+    // which accept only GitHub URLs, which the publisher enforces).
     void legacyFullOnlyManifestStagesAFullDownload()
     {
         QJsonObject o = fixtureManifest();
@@ -736,6 +738,54 @@ private slots:
                                           m.payloads[0].files, tmp.filePath(QStringLiteral("s")), &problem));
         QVERIFY(problem.contains(QLatin1String("executable")));
 #endif
+    }
+
+    void aPatchNamedOnUpdatesAethersdrComIsStagedThroughManifestV2()
+    {
+        // The bridge route end to end: a manifest-v2.json whose patch bundle
+        // is signed with an updates.aethersdr.com URL, fetched beside its
+        // .sig, parsed and staged. The download is served from a local copy
+        // under that tag, the way every staging test serves its files.
+        QTemporaryDir tmp;
+        const QString install = copyInstall(tmp);
+        QJsonObject o = fixtureManifest();
+        QJsonArray payloads = o[QStringLiteral("payloads")].toArray();
+        QJsonObject p = payloads[0].toObject();
+        QJsonArray qs = p[QStringLiteral("patches")].toArray();
+        QJsonObject q = qs[0].toObject();
+        QJsonObject b = q[QStringLiteral("bundle")].toObject();
+        b[QStringLiteral("url")] =
+            QStringLiteral("https://updates.aethersdr.com/releases/v26.10.3/") + b[QStringLiteral("asset")].toString();
+        q[QStringLiteral("bundle")] = b;
+        qs[0] = q;
+        p[QStringLiteral("patches")] = qs;
+        payloads[0] = p;
+        o[QStringLiteral("payloads")] = payloads;
+        const QByteArray manifest = bytes(o);
+        const QString site = tmp.filePath(QStringLiteral("site"));
+        writeFile(site + QStringLiteral("/latest/manifest-v2.json"), manifest);
+        writeFile(site + QStringLiteral("/latest/manifest-v2.json.sig"), m_key.sign(manifest));
+        QDir().mkpath(tmp.filePath(QStringLiteral("dl/v26.10.3")));
+        QFile::copy(kFixture + QStringLiteral("/release/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar"),
+                    tmp.filePath(QStringLiteral("dl/v26.10.3/AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar")));
+        UpdateStager::setDownloadBaseForTesting(QUrl::fromLocalFile(tmp.filePath(QStringLiteral("dl"))));
+        UpdateSettings::setAcceptedManifestUtc({});
+        UpdateStager::Request r = request();
+        r.installRoot = install;
+        r.stagingRoot = tmp.filePath(QStringLiteral("staging"));
+        r.manifestUrl = QUrl::fromLocalFile(site + QStringLiteral("/latest/manifest-v2.json"));
+        UpdateStager stager;
+        QSignalSpy staged(&stager, &UpdateStager::staged);
+        QSignalSpy failed(&stager, &UpdateStager::failed);
+        QSignalSpy full(&stager, &UpdateStager::fullDownloadNeeded);
+        stager.stage(r);
+        QTRY_COMPARE_WITH_TIMEOUT(staged.size() + failed.size() + full.size(), 1, 20000);
+        QCOMPARE(failed.size(), 0);
+        QCOMPARE(full.size(), 0);
+        QCOMPARE(staged.size(), 1);
+        const QHash<QString, QByteArray> tree = releaseTree(tmp);
+        QCOMPARE(readFile(staged.first().at(0).toString() + QStringLiteral("/AetherSDR.exe")),
+                 tree.value(QStringLiteral("AetherSDR.exe")));
     }
 
     void aMissingBundleOffersTheFullDownload()

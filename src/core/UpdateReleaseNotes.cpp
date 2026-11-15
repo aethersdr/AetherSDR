@@ -115,9 +115,7 @@ ReleaseInfo UpdateChecker::parseRelease(const QByteArray& json)
 
 bool UpdateChecker::isTrustedDownloadUrl(const QUrl& url)
 {
-    if (!url.isValid() || url.scheme() != QLatin1String("https")
-        || url.host() != QLatin1String("github.com") || url.port() != -1
-        || !url.userInfo().isEmpty() || url.hasQuery() || url.hasFragment()) {
+    if (!plainHttps(url) || url.host() != QLatin1String("github.com")) {
         return false;
     }
     const QString path = url.path(QUrl::FullyDecoded);

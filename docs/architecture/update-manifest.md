@@ -53,8 +53,10 @@ Every URL a manifest names is one file of the release it describes, under
 `https://github.com/aethersdr/AetherSDR/releases/download/<tag>/` or
 `https://updates.aethersdr.com/releases/<tag>/`, with no query, fragment or
 further path segment. `UpdateChecker::isTrustedPayloadUrl` enforces this in the
-app, and one URL outside it rejects the whole manifest. `manifest.json` names
-GitHub files only. The publish job refuses to sign a manifest that names
+app, for any payload, full or patch, and one URL outside it rejects the whole
+manifest. Where each payload actually lives is the publisher's choice: it
+keeps full payloads on GitHub, puts patch bundles on R2 only with
+`UPDATE_PAYLOAD_BASE=r2`, and names GitHub files only in `manifest.json`. The publish job refuses to sign a manifest that names
 anything else, or another release.
 
 **Telemetry boundary.** RFC #5304 asked that no project-owned endpoint see
