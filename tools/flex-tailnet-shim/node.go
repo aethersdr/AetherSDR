@@ -34,6 +34,7 @@ const (
 	stateUnprovisioned = "unprovisioned" // no key has ever been accepted
 	stateStarting      = "starting"      // joining the tailnet
 	stateRunning       = "running"       // on the tailnet, relaying
+	stateLocal         = "local"         // first-install local control; no tailnet join requested
 	stateError         = "error"         // last attempt failed; see LastError
 	// stateNeedsLogin and stateNeedsApproval (login.go): waiting on a person.
 )
@@ -42,9 +43,11 @@ const (
 // Tailscale auth key: tsnet spends the key on first login and keeps its own
 // node credentials. Only a hash of the admin token is stored.
 type provisionConfig struct {
-	TokenSHA256 string   `json:"token_sha256"`
-	Hostname    string   `json:"hostname"`
-	Allow       []string `json:"allow"`
+	TokenSHA256    string   `json:"token_sha256"`
+	Hostname       string   `json:"hostname"`
+	LocalOnly      bool     `json:"local_only,omitempty"`
+	InstallationID string   `json:"installation_id,omitempty"`
+	Allow          []string `json:"allow"`
 	// LAN prefixes advertised as Tailscale subnet routes, e.g. the station's
 	// Antenna Genius and Tuner Genius XL. tsnet's netstack forwards routed
 	// flows out through the radio's own network.
@@ -201,6 +204,20 @@ func (n *Node) load() error {
 	if err := json.Unmarshal(b, &n.cfg); err != nil {
 		return fmt.Errorf("corrupt %s: %w", n.cfgPath(), err)
 	}
+	if n.cfg.LocalOnly {
+		id, idErr := hex.DecodeString(n.cfg.InstallationID)
+		token, tokenErr := hex.DecodeString(n.cfg.TokenSHA256)
+		if idErr != nil || tokenErr != nil || len(id) != 32 || len(token) != 32 ||
+			n.cfg.InstallationID != strings.ToLower(n.cfg.InstallationID) ||
+			n.cfg.TokenSHA256 != strings.ToLower(n.cfg.TokenSHA256) ||
+			n.cfg.PendingSignIn || n.cfg.Hostname == "" ||
+			!slices.ContainsFunc(id, func(b byte) bool { return b != 0 }) ||
+			!slices.ContainsFunc(token, func(b byte) bool { return b != 0 }) {
+			return errors.New("invalid local first-install identity")
+		}
+		n.state = stateLocal
+		return nil
+	}
 	// Access is the tailnet's own rules from 0.5.0: a list an older version
 	// kept is dropped, and said so.
 	if len(n.cfg.Allow) > 0 {
@@ -251,6 +268,11 @@ func (n *Node) setState(state, lastErr string) {
 func (n *Node) Boot() {
 	n.mu.Lock()
 	provisioned := n.provisioned()
+	if n.cfg.LocalOnly {
+		n.state = stateLocal
+		n.mu.Unlock()
+		return
+	}
 	if !provisioned || n.bootCancel != nil {
 		n.mu.Unlock()
 		if !provisioned {
@@ -958,15 +980,16 @@ var errAccessListRetired = errors.New("the remote-access container no longer kee
 
 // Status is what GET /v1/status returns. It never contains a secret.
 type Status struct {
-	Version     string   `json:"version"`
-	Provisioned bool     `json:"provisioned"`
-	State       string   `json:"state"`
-	Hostname    string   `json:"hostname"`
-	TailnetIP   string   `json:"tailnet_ip"`
-	DNSName     string   `json:"dns_name"`
-	Allow       []string `json:"allow"`
-	Sessions    int      `json:"sessions"`
-	Routes      []string `json:"routes"` // extra LAN devices the operator listed
+	Version        string   `json:"version"`
+	Provisioned    bool     `json:"provisioned"`
+	State          string   `json:"state"`
+	Hostname       string   `json:"hostname"`
+	InstallationID string   `json:"installation_id,omitempty"`
+	TailnetIP      string   `json:"tailnet_ip"`
+	DNSName        string   `json:"dns_name"`
+	Allow          []string `json:"allow"`
+	Sessions       int      `json:"sessions"`
+	Routes         []string `json:"routes"` // extra LAN devices the operator listed
 	// ShareDiscovered: share every discovered station device automatically.
 	ShareDiscovered bool     `json:"share_discovered"`
 	Discovered      []Device `json:"discovered_devices"`
@@ -1061,8 +1084,9 @@ func (n *Node) statusLocked() Status {
 	st := Status{
 		Version: version(), Provisioned: n.provisioned(), State: n.state,
 		Hostname: n.cfg.Hostname, DNSName: n.dnsName, Allow: n.cfg.Allow,
-		LastError: n.lastError,
-		Claimable: !n.provisioned() || n.cfg.PendingSignIn,
+		InstallationID: n.cfg.InstallationID,
+		LastError:      n.lastError,
+		Claimable:      !n.provisioned() || n.cfg.PendingSignIn,
 	}
 	if n.keyExpiry != nil {
 		st.KeyExpiry = n.keyExpiry.UTC().Format(time.RFC3339)

@@ -74,6 +74,10 @@ int __wrap_pd_predecessor_probe(struct pd_predecessor* observed)
     strcpy(observed->radio_address,"172.30.2.1");strcpy(observed->hostname,"fixture");observed->pid=42;
     return point("predecessor:probe");
 }
+int __wrap_pd_predecessor_absent(void)
+{
+    struct model model;return load(&model) && !model.old_present && point("predecessor:absent");
+}
 int __wrap_pd_predecessor_image_verify(const struct pd_predecessor* p){(void)p;return point("predecessor:image");}
 int __wrap_pd_predecessor_pin(const struct pd_predecessor* p,int* root,int* state,int* ts)
 {
@@ -140,6 +144,10 @@ int __wrap_pd_service_activate(int store,const unsigned char* plan,int executabl
     (void)executable;(void)address;(void)expected;(void)primary;struct model model;
     if(!pd_transaction_at_phase(store,plan,PD_TRANSACTION_ACTIVATING) || !load(&model) || model.old_present || model.old_running || !point("activate:before")){return 0;}
     model.new_running=1;
+    struct pd_migration parsed;
+    if(pd_migration_parse(plan,PD_MIGRATION_SIZE,&parsed) && parsed.fresh){
+        return save(&model) && point("activate:after");
+    }
     int fd=openat(store,"state/tsnet/tailscaled.state",O_WRONLY|O_TRUNC|O_CLOEXEC);
     int changed=fd>=0 && write(fd,"rotated-identity",16)==16 && !fsync(fd);if(fd>=0){close(fd);}
     return changed && save(&model) && point("activate:after");

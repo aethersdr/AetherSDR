@@ -52,7 +52,7 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
     env = dict(os.environ, ZIG_GLOBAL_CACHE_DIR=str(output / 'cache'), ZIG_LOCAL_CACHE_DIR=str(output / 'cache'))
     sources = [HERE / entry, HERE / 'pd_bootstrap_artifact.c', HERE / 'pd_bundle.c', HERE / 'pd_store.c', HERE / 'pd_release.c', HERE / 'pd_identity.c', HERE / 'pd_approval.c', HERE / 'pd_install.c', HERE / 'pd_state_transfer.c', crypto / 'monocypher.c', crypto / 'monocypher-ed25519.c']
     sources += [HERE / 'pd_migration.c', HERE / 'pd_transaction.c', HERE / 'pd_recovery.c', HERE / 'pd_capsule.c', HERE / 'pd_capsule_io.c', HERE / 'pd_worker_units.c', HERE / 'pd_unit_files.c', HERE / 'pd_upgrade_units.c', HERE / 'pd_management.c', HERE / 'pd_readiness.c', HERE / 'pd_primary.c', HERE / 'pd_service.c', HERE / 'pd_runtime.c', HERE / 'pd_installation.c', HERE / 'pd_upgrade.c', HERE / 'pd_upgrade_resume.c']
-    sources += [HERE / 'pd_boot_primary.c', HERE / 'pd_boot_session.c', HERE / 'pd_boot_wait.c']
+    sources += [HERE / 'pd_boot_primary.c', HERE / 'pd_boot_session.c', HERE / 'pd_boot_wait.c', HERE / 'pd_first.c']
     sources += [HERE.parent / 'request/pd_request.c', HERE.parent / 'request/pd_upload.c', HERE / 'pd_transport.c', HERE / 'pd_runtime_config.c']
     sources += [HERE / 'pd_generation.c', HERE / 'pd_retained.c', HERE / 'pd_retire.c', HERE / 'pd_slots_retire.c']
     sources += [HERE / 'pd_upgrade_capsule.c', HERE / 'pd_upgrade_bootstrap.c', HERE / 'pd_upgrade_approval.c', HERE / 'pd_upgrade_state.c', HERE / 'pd_upgrade_origin.c', HERE / 'pd_upgrade_space.c', HERE / 'pd_pair.c', HERE / 'pd_handoff.c']
@@ -80,7 +80,7 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
     if entry == 'installation_check.c':
         if arch != 'host':
             raise ValueError('installation status fixture is host-only')
-        flags += ['-DPD_INSTALLATION_TEST', '-DPD_TRANSACTION_TEST', '-DPD_UPGRADE_TEST']
+        flags += ['-DPD_INSTALLATION_TEST', '-DPD_TRANSACTION_TEST', '-DPD_UPGRADE_TEST', '-DPD_STORE_TEST']
     if entry == 'runtime_config_check.c':
         flags += ['-DPD_RUNTIME_CONFIG_TEST']
     if entry == 'delivery_check.c':
@@ -156,7 +156,7 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
         sources += [HERE / 'worker_fixture.c']
         flags += ['-DPD_WORKER_TEST', '-DPD_INSTALL_TEST', '-DPD_STORE_TEST', '-DPD_STATE_TEST',
                   '-DPD_RUNTIME_TEST', '-DPD_TRANSACTION_TEST', '-DPD_CAPSULE_FAULTS']
-        wrapped = ['pd_identity_probe', 'pd_predecessor_probe', 'pd_predecessor_image_verify',
+        wrapped = ['pd_identity_probe', 'pd_predecessor_probe', 'pd_predecessor_absent', 'pd_predecessor_image_verify',
                    'pd_predecessor_pin', 'pd_predecessor_stop', 'pd_predecessor_stopped',
                    'pd_predecessor_recover', 'pd_predecessor_recover_fresh', 'pd_predecessor_retire',
                    'pd_predecessor_restore', 'pd_readiness_probe', 'pd_readiness_wait',
@@ -229,6 +229,7 @@ def main():
     p.add_argument('--transport-test', action='store_true')
     p.add_argument('--send', action='store_true')
     p.add_argument('--accept', action='store_true')
+    p.add_argument('--first-request', action='store_true')
     p.add_argument('--deliver', action='store_true')
     p.add_argument('--bootstrap-artifact-test', action='store_true')
     p.add_argument('--public-key', type=Path)
@@ -236,7 +237,7 @@ def main():
     a = p.parse_args()
     if a.sanitize and a.arch != 'host':
         p.error('sanitizers are host-only')
-    if sum([a.installation_test, a.runtime_config_test, a.accept, a.send, a.transport_test, a.carrier_test, a.deliver, a.delivery_test, a.bootstrap_artifact_test, a.test, a.store_test, a.update, a.upgrade_test, a.upgrade_transaction_test, a.handoff_test, a.release_test, a.stage_release, a.install_release, a.install_test, a.identity_test, a.approval_test, a.state_test, a.predecessor_test, a.inspect_predecessor, a.migration_test, a.transaction_test, a.session_gate_test, a.capsule_test, a.upgrade_capsule_test, a.worker_units_test, a.readiness_test, a.primary_test, a.service_test, a.service_activation_test, a.runtime_test, a.install_worker, a.upgrade_worker, a.restore_test, a.copy_predecessor, a.recover_predecessor]) > 1:
+    if sum([a.first_request, a.installation_test, a.runtime_config_test, a.accept, a.send, a.transport_test, a.carrier_test, a.deliver, a.delivery_test, a.bootstrap_artifact_test, a.test, a.store_test, a.update, a.upgrade_test, a.upgrade_transaction_test, a.handoff_test, a.release_test, a.stage_release, a.install_release, a.install_test, a.identity_test, a.approval_test, a.state_test, a.predecessor_test, a.inspect_predecessor, a.migration_test, a.transaction_test, a.session_gate_test, a.capsule_test, a.upgrade_capsule_test, a.worker_units_test, a.readiness_test, a.primary_test, a.service_test, a.service_activation_test, a.runtime_test, a.install_worker, a.upgrade_worker, a.restore_test, a.copy_predecessor, a.recover_predecessor]) > 1:
         p.error('choose one entry point')
     if not (a.installation_test or a.runtime_config_test or a.accept or a.send or a.transport_test or a.carrier_test or a.delivery_test or a.bootstrap_artifact_test or a.test or a.store_test or a.upgrade_test or a.upgrade_transaction_test or a.release_test or a.install_test or a.identity_test or a.approval_test or a.state_test or a.predecessor_test or a.inspect_predecessor or a.migration_test or a.transaction_test or a.session_gate_test or a.capsule_test or a.upgrade_capsule_test or a.worker_units_test or a.readiness_test or a.primary_test or a.service_test or a.service_activation_test or a.runtime_test or a.restore_test) and not a.public_key:
         p.error('boot builds require an explicitly supplied release public key; no default test key')
@@ -246,6 +247,9 @@ def main():
     elif a.runtime_config_test:
         if a.arch!='host':p.error('runtime config fixture is host-only')
         entry='runtime_config_check.c'
+    elif a.first_request:
+        if a.arch!='arm64':p.error('first request is currently ARM64-only')
+        entry = 'pd_first_request.c'
     elif a.accept:
         entry = 'pd_accept.c'
     elif a.send:

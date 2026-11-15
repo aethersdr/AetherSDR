@@ -243,6 +243,9 @@ int PD_BOOT_MAIN(int argc,char** argv)
     int runtime=admitted?boot_runtime(root):-1;close(root);
     if(store<0 || runtime<0){if(store>=0){close(store);}if(lock>=0){close(lock);}if(lease>=0){close(lease);}if(inherited_payload>=0){close(inherited_payload);}return 3;}
     int ok=admitted && (socket_owner?boot_socket_owner(runtime):boot_prepare(store,runtime,inherited_payload));
+    if(ok && !socket_owner && !pd_installation_publish(store,runtime)){
+        fputs("AetherPD boot: terminal status publication unavailable\n",stderr);
+    }
     if(inherited_payload>=0){close(inherited_payload);}
     if(lock>=0){close(lock);}if(lease>=0){close(lease);}close(store);close(runtime);return ok?0:4;
 }

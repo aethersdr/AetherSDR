@@ -13,6 +13,8 @@
 #include "monocypher.h"
 #include <sys/file.h>
 #include "pd_delivery_lease.h"
+#include "pd_first.h"
+#include "pd_installation.h"
 
 #if defined(__aarch64__) || defined(PD_WORKER_TEST)
 struct worker {
@@ -21,6 +23,38 @@ struct worker {
     struct pd_identity identity;
     unsigned char plan[PD_MIGRATION_SIZE];
 };
+static int worker_intent(int directory,const unsigned char plan[PD_MIGRATION_SIZE])
+{
+    unsigned char hash[32],observed[32];struct stat st;
+    crypto_blake2b(hash,32,plan,PD_MIGRATION_SIZE);
+    int fd=openat(directory,"intent",O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+    int ok=fd>=0 && !fstat(fd,&st) && S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 &&
+        (st.st_mode&07777)==0600 && st.st_size==32 && pread(fd,observed,32,0)==32 && !crypto_verify32(hash,observed);
+    if(fd>=0){close(fd);}return ok;
+}
+static int worker_fresh_admit(int parent,const unsigned char plan[PD_MIGRATION_SIZE])
+{
+    if(!pd_predecessor_absent()){return 0;}
+    const char* names[]={"aetherpd",".aetherpd-prepare"};
+    for(unsigned i=0;i<2;++i){
+        int directory=openat(parent,names[i],O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        if(directory<0){if(errno!=ENOENT){return 0;}continue;}
+        struct stat st;int intent=worker_intent(directory,plan);
+        /* Preparation authenticates an interrupted intent.new prefix itself.
+         * Only the unpublished directory may lack its final intent record. */
+        if(!intent && i==1){
+            intent=fstatat(directory,"intent",&st,AT_SYMLINK_NOFOLLOW)<0 && errno==ENOENT;
+        }
+        int ok=!fstat(directory,&st) && protected_directory(&st) && intent;
+        close(directory);if(!ok){return 0;}
+    }
+    return 1;
+}
+static void worker_preparation_digest(const unsigned char plan[PD_MIGRATION_SIZE],const struct pd_migration* parsed,
+                                       const unsigned char release[32],unsigned char digest[32])
+{
+    if(parsed->fresh){crypto_blake2b(digest,32,plan,PD_MIGRATION_SIZE);}else{memcpy(digest,release,32);}
+}
 static int worker_target(struct worker* worker)
 {
     return pd_identity_probe(&worker->identity) && pd_identity_matches(&worker->identity,
@@ -39,20 +73,23 @@ static int worker_prepare(void* context)
     int root=open("/",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     const char* const parts[]={"run","aetherpd-install"};
     int stage=root>=0?install_path(root,parts,2):-1;if(root>=0){close(root);}
-    struct pd_predecessor observed;
-    int ok=stage>=0 && worker_stage_approval(stage,worker->capsule.migration.approval) && worker_target(worker) && pd_predecessor_probe(&observed) &&
-        pd_migration_matches(&worker->capsule.migration,&observed) && pd_predecessor_image_verify(&observed) &&
-        pd_install_prepare(worker->parent,worker->units,stage,pd_release_key,&worker->capsule.artifact,worker->capsule.approval.digest) &&
+    struct pd_predecessor observed;unsigned char digest[32];
+    worker_preparation_digest(worker->plan,&worker->capsule.migration,worker->capsule.approval.digest,digest);
+    int predecessor=worker->capsule.migration.fresh?worker_fresh_admit(worker->parent,worker->plan):
+        (pd_predecessor_probe(&observed) && pd_migration_matches(&worker->capsule.migration,&observed) && pd_predecessor_image_verify(&observed));
+    int ok=stage>=0 && worker_stage_approval(stage,worker->capsule.migration.approval) && worker_target(worker) && predecessor &&
+        pd_install_prepare(worker->parent,worker->units,stage,pd_release_key,&worker->capsule.artifact,digest) &&
         pd_service_reload();
     if(stage>=0){close(stage);}return ok;
 }
 static int worker_copy(void* context)
 {
-    struct worker* worker=context;return worker_target(worker) && pd_migration_copy(worker->store,worker->plan)==1;
+    struct worker* worker=context;return worker_target(worker) && (worker->capsule.migration.fresh?
+        pd_first_initialize(worker->store,&worker->capsule.migration):pd_migration_copy(worker->store,worker->plan)==1);
 }
 static int worker_retire(void* context)
 {
-    struct worker* worker=context;return worker_target(worker) && pd_predecessor_retire(worker->store,worker->plan);
+    struct worker* worker=context;return worker_target(worker) && (worker->capsule.migration.fresh || pd_predecessor_retire(worker->store,worker->plan));
 }
 static int worker_activate(void* context)
 {
@@ -69,17 +106,20 @@ static int worker_activate(void* context)
         !crypto_verify32(digest,selection.current_hash) &&
         !crypto_verify32(digest,worker->capsule.artifact.manifest+PD_RELEASE_HEADER+2*PD_RELEASE_RECORD+4) &&
         pd_bundle_read(payload,pd_release_key,64,&bundle) && pd_bundle_matches(runtime,&bundle) &&
-        pd_readiness_read(worker->store,worker->plan,&expected);
+        (worker->capsule.migration.fresh?pd_first_readiness(&worker->capsule.migration,&expected):pd_readiness_read(worker->store,worker->plan,&expected));
     int executable=ok?openat(runtime,"flex-tailnet-shim",O_RDONLY|O_NOFOLLOW|O_CLOEXEC):-1;
     struct pd_primary primary={.process=-1,.executable=-1};
     ok=ok && executable>=0 && pd_service_activate(worker->store,worker->plan,executable,worker->identity.address,&expected,&primary);
     pd_primary_close(&primary);if(executable>=0){close(executable);}if(runtime>=0){close(runtime);}
-    if(payload>=0){close(payload);}return ok && pd_service_primary_autostart(worker->units,1);
+    if(payload>=0){close(payload);}
+    return ok && pd_service_primary_autostart(worker->units,1) &&
+        (!worker->capsule.migration.fresh || pd_first_select(worker->store,worker->plan));
 }
 static int worker_rollback(void* context)
 {
     struct worker* worker=context;
     if(!worker_target(worker) || !pd_service_primary_autostart(worker->units,0) || !pd_runtime_retire(worker->store,worker->plan)){return 0;}
+    if(worker->capsule.migration.fresh){return pd_predecessor_absent();}
     /* Before the first stop, no recovery recipe may exist. Accept only the
      * still-running approved predecessor in that case; never create one. */
     struct pd_predecessor observed;struct pd_readiness expected;struct stat st;
@@ -130,14 +170,16 @@ static int worker_bootstrap_locked(int root,int parent,int units,int run,int sel
         close(store);
     }else if(errno!=ENOENT){return 4;}
     struct pd_predecessor observed;
-    if(!pd_predecessor_probe(&observed) || !pd_migration_matches(migration,&observed) || !pd_predecessor_image_verify(&observed)){return 3;}
+    if(migration->fresh){if(!worker_fresh_admit(parent,plan)){return 3;}}
+    else if(!pd_predecessor_probe(&observed) || !pd_migration_matches(migration,&observed) || !pd_predecessor_image_verify(&observed)){return 3;}
     char* stage_args[]={"aetherpd-stage",NULL};
     if(fstatat(run,"aetherpd-install",&st,AT_SYMLINK_NOFOLLOW)){
         if(errno!=ENOENT || inherited_stage_main(1,stage_args)){return 4;}
     }else if(!protected_directory(&st)){return 3;}
     const char* const stage_parts[]={"run","aetherpd-install"};
     int stage=install_path(root,stage_parts,2);
-    int ok=stage>=0 && worker_stage_approval(stage,target) && pd_install_prepare(parent,units,stage,pd_release_key,release,approval->digest);
+    unsigned char digest[32];worker_preparation_digest(plan,migration,approval->digest,digest);
+    int ok=stage>=0 && worker_stage_approval(stage,target) && pd_install_prepare(parent,units,stage,pd_release_key,release,digest);
     if(stage>=0){close(stage);}
     store=ok?openat(parent,"aetherpd",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC):-1;
     ok=ok && store>=0 && pd_migration_bind(store,plan) && pd_capsule_publish(parent,self,0,pd_release_key,plan);
@@ -198,9 +240,13 @@ int main(int argc,char** argv)
             worker.capsule.approval.firmware,worker.capsule.approval.serial) && pd_service_worker_ready(worker.units,recovery);
         if(self>=0){close(self);}memcpy(worker.plan,worker.capsule.intent+72,sizeof(worker.plan));
         if(admitted){
+            int fresh=worker.capsule.migration.fresh;
             struct pd_transaction_ops ops={&worker,worker_prepare,worker_copy,worker_retire,worker_activate,worker_rollback,worker_cleanup};
             int transaction=recovery?pd_transaction_recover(worker.store,worker.plan,&ops):pd_transaction_run(worker.store,worker.plan,&ops);
             result=transaction>=0?0:4;
+            if(transaction==1 && fresh && !pd_installation_publish_runtime(worker.store)){
+                fputs("AetherPD first install: terminal status publication unavailable\n",stderr);
+            }
         }
         pd_capsule_close(&worker.capsule);
     }

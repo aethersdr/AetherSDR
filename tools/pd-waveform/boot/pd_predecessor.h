@@ -14,6 +14,8 @@ struct pd_predecessor {
  * revalidate it before mutation and preserve identity/recovery first. */
 int pd_predecessor_parse(const unsigned char* bytes,size_t size,struct pd_predecessor* result);
 int pd_predecessor_probe(struct pd_predecessor* result);
+/* Absence is distinct from a failed inventory/identity check. */
+int pd_predecessor_absent(void);
 int pd_predecessor_parse_status(const unsigned char* bytes,size_t size,struct pd_predecessor* result);
 struct pd_recovery;
 /* Metadata-only admission for the fixed single-bind rollback layout.

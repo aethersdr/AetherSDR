@@ -39,6 +39,12 @@ class ImageTest(unittest.TestCase):
         for bad in [self.private,self.public[:-1],self.public+bytes(1),b'x'+self.public[1:],self.public[:88]+bytes(32),self.public[:16]+struct.pack('>II',7,2)+self.public[24:],self.public[:20]+struct.pack('>I',1)+self.public[24:]]:
             with self.subTest(kind=bad[:8]):
                 with self.assertRaises(ValueError):image.build(self.executables,bad,b'licenses')
+    def test_first_install_uses_public_record_and_distinct_attempt_name(self):
+        public=b'PDFPUB01PDDELIV1'+struct.pack('>II',64,1)+b'e'*32+b'p'*32+b'n'*32
+        artifact,info=image.build(self.executables,public,b'licenses')
+        self.assertEqual(info['name'],'aetherpd-first-'+(b'n'*8).hex())
+        with tarfile.open(fileobj=io.BytesIO(self.layers(artifact))) as archive:
+            self.assertEqual(archive.extractfile('pd/request').read(),public)
     def test_public_commitment_binds_private_key_and_receipt(self):
         expected=b'PDPUB001'+self.private[40:]+client.digest(b'PDKEY001'+self.private)
         self.assertEqual(self.public,expected)

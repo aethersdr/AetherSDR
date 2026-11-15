@@ -2,6 +2,8 @@
 #define AETHER_PD_READINESS_H
 #include "pd_migration.h"
 enum { PD_READINESS_SIZE=652, PD_READINESS_HTTP_MAX=69632 };
+/* A local-only first installation uses empty address and the internal
+ * local:<installation-id> tag in dns. The public API still reports no DNS name. */
 struct pd_readiness { char hostname[64],address[16],dns[256]; };
 /* Canonical zero-padded public identity, suitable for a durable worker record. */
 int pd_readiness_valid(const struct pd_readiness* value);

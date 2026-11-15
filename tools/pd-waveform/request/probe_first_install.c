@@ -22,7 +22,7 @@ int main(int argc, char** argv)
 {
     (void)argv;
     alarm(90);
-    if (argc != 1 || getuid() != 78666 || geteuid() != 78666 || getgid() != 20) { return 2; }
+    if (argc != 1 || !getuid() || getuid() != geteuid() || getgid() != getegid()) { return 2; }
     struct __user_cap_header_struct header = {_LINUX_CAPABILITY_VERSION_3, 0};
     struct __user_cap_data_struct caps[2];
     if (syscall(SYS_capget, &header, caps)) { return 2; }

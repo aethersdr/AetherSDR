@@ -15,6 +15,16 @@ CHECKER = None
 
 
 class ReadinessTest(unittest.TestCase):
+    def test_local_identity_requires_exact_unclaimable_local_state(self):
+        status = dict(hostname='aetherpd-fixture', tailnet_ip='', dns_name='', provisioned=True,
+                      state='local', sessions=0, claimable=False, installation_id='ab'*32)
+        self.expected = b'aetherpd-fixture\n\nlocal:' + b'ab'*32 + b'\n'
+        self.invoke(data=json.dumps(status).encode())
+        for field, value in [('installation_id',''),('installation_id','0'*64),('installation_id','AB'*32),
+                             ('claimable',True),('sessions',1),('state','running'),('tailnet_ip','100.64.1.2'),
+                             ('dns_name','example.ts.net')]:
+            with self.subTest(field=field,value=value):
+                self.invoke(data=json.dumps(dict(status,**{field:value})).encode(),expected=1)
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='pd-readiness-')
         self.addCleanup(self.temp.cleanup)

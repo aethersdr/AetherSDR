@@ -108,3 +108,16 @@ func TestPDInstallationAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstInstallTerminalRecord(t *testing.T) {
+	data := installationRecord(4)
+	copy(data, "PDVIEWF1")
+	st, err := parsePDInstallation(data)
+	if err != nil || !st.Committed || st.FirstPlanDigest == "" || st.PlanDigest != "" {
+		t.Fatalf("first terminal record: %+v %v", st, err)
+	}
+	data[11] = 7
+	if _, err := parsePDInstallation(data); err == nil {
+		t.Fatal("fresh rollback cannot advertise a selected running predecessor")
+	}
+}

@@ -18,10 +18,12 @@ spec.loader.exec_module(helpers)
 def build(executables, configuration, licenses):
     if set(executables) != {'accept', 'carrier', 'send', 'deliver'}:
         raise ValueError('fixed carrier executable set required')
-    if (len(configuration) != 120 or configuration[:8] != b'PDPUB001'
-            or not any(configuration[88:]) or configuration[8:16] != b'PDDELIV1'
-            or struct.unpack_from('>II', configuration, 16) != (64, 2)):
-        raise ValueError('invalid public ARM64 upgrade request record')
+    if (len(configuration) != 120 or not any(configuration[88:]) or configuration[8:16] != b'PDDELIV1'
+            or (configuration[:8], struct.unpack_from('>II', configuration, 16))
+               not in [(b'PDPUB001', (64, 2)), (b'PDFPUB01', (64, 1))]):
+        raise ValueError('invalid public ARM64 request record')
+    waveform_name = ('aetherpd-first-' + configuration[88:96].hex()
+            if configuration[:8] == b'PDFPUB01' else 'aetherpd-carrier')
     files = [('pd', None, 0o700)]
     for name in sorted(executables):
         data = executables[name]
@@ -36,7 +38,7 @@ def build(executables, configuration, licenses):
         'architecture': 'arm64', 'os': 'linux',
         'config': {'Entrypoint': ['/pd/accept'], 'User': '0:0',
                    'Labels': {'aetherpd.carrier': 'v1',
-                              'com.flexradio.waveform.name': 'aetherpd-carrier',
+                              'com.flexradio.waveform.name': waveform_name,
                               'com.flexradio.waveform.version': '0.1.0'}},
         'rootfs': {'type': 'layers', 'diff_ids': [helpers.sha(layer_tar)]},
         'history': [{'created_by': 'tools/pd-waveform/carrier/image.py'}],
@@ -51,13 +53,13 @@ def build(executables, configuration, licenses):
     manifest_bytes = encode(manifest)
     index = {'schemaVersion': 2, 'manifests': [{'mediaType': manifest['mediaType'],
              'digest': helpers.sha(manifest_bytes), 'size': len(manifest_bytes),
-             'annotations': {'org.opencontainers.image.ref.name': 'aetherpd-carrier:0.1.0'},
+             'annotations': {'org.opencontainers.image.ref.name': waveform_name + ':0.1.0'},
              'platform': {'architecture': 'arm64', 'os': 'linux'}}]}
     blobs = {helpers.sha(data): data for data in [config_bytes, manifest_bytes, layer]}
     entries = [('blobs', None, 0o755), ('blobs/sha256', None, 0o755)]
     entries += [('blobs/sha256/' + digest[7:], data, 0o644) for digest, data in sorted(blobs.items())]
     entries += [('index.json', encode(index), 0o644), ('oci-layout', b'{"imageLayoutVersion":"1.0.0"}', 0o644)]
     result = helpers.gz(helpers.tar_bytes(entries))
-    return result, {'image_id': hashlib.sha256(config_bytes).hexdigest(),
+    return result, {'name': waveform_name, 'image_id': hashlib.sha256(config_bytes).hexdigest(),
                     'sha256': hashlib.sha256(result).hexdigest(), 'bytes': len(result),
                     'uncompressed_layer_bytes': len(layer_tar)}

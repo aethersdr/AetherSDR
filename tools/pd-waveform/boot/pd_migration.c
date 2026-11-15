@@ -58,9 +58,22 @@ static int migration_id(const unsigned char* p)
 int pd_migration_parse(const unsigned char* bytes,size_t size,struct pd_migration* result)
 {
     memset(result,0,sizeof(*result));struct pd_approval context;
-    if(size!=PD_MIGRATION_SIZE || memcmp(bytes,"PDMIG001",8) ||
-        !pd_approval_parse(bytes+8,PD_APPROVAL_SIZE,&context) || context.profile!=1 ||
-        !migration_id(bytes+148) || !migration_id(bytes+212)){return 0;}
+    if(size!=PD_MIGRATION_SIZE ||
+        !pd_approval_parse(bytes+8,PD_APPROVAL_SIZE,&context) || context.profile!=1){return 0;}
+    if(!memcmp(bytes,"PDFST001",8)){
+        unsigned token=0,nonce=0;size_t length=strnlen((const char*)bytes+180,64);
+        if(!length || length>=64 || bytes[180]=='-' || bytes[180+length-1]=='-'){return 0;}
+        for(size_t i=0;i<64;++i){
+            unsigned char c=bytes[180+i];
+            if(i<length? !((c>='a' && c<='z') || (c>='0' && c<='9') || c=='-'):c!=0){return 0;}
+        }
+        for(unsigned i=0;i<32;++i){token|=bytes[148+i];nonce|=bytes[244+i];if(bytes[276+i]){return 0;}}
+        if(!token || !nonce){return 0;}
+        memcpy(result->approval,bytes+8,PD_APPROVAL_SIZE);result->fresh=1;
+        memcpy(result->token_hash,bytes+148,32);memcpy(result->hostname,bytes+180,64);memcpy(result->nonce,bytes+244,32);
+        return 1;
+    }
+    if(memcmp(bytes,"PDMIG001",8) || !migration_id(bytes+148) || !migration_id(bytes+212)){return 0;}
     unsigned nonzero=0;for(unsigned i=276;i<308;++i){nonzero|=bytes[i];}if(!nonzero){return 0;}
     memcpy(result->approval,bytes+8,PD_APPROVAL_SIZE);
     memcpy(result->predecessor.container,bytes+148,64);memcpy(result->predecessor.image,bytes+212,64);
@@ -90,7 +103,7 @@ int pd_migration_read(int fd,unsigned char bytes[PD_MIGRATION_SIZE],struct pd_mi
 }
 int pd_migration_matches(const struct pd_migration* approved,const struct pd_predecessor* observed)
 {
-    return !strcmp(approved->predecessor.container,observed->container) &&
+    return !approved->fresh && !strcmp(approved->predecessor.container,observed->container) &&
         !strcmp(approved->predecessor.image,observed->image) &&
         !crypto_verify32(approved->predecessor.executable,observed->executable);
 }

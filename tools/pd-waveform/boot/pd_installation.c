@@ -3,6 +3,7 @@
 #include "pd_generation.h"
 #include "pd_pair.h"
 #include "pd_transaction.h"
+#include "pd_store.h"
 #include "monocypher.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -40,7 +41,8 @@ static int read_record(int directory,const char* name,unsigned char* bytes,size_
 static int canonical(const unsigned char bytes[PD_INSTALLATION_SIZE])
 {
     unsigned phase=bytes[11],profile=bytes[15];
-    return !memcmp(bytes,"PDVIEW01",8) && !bytes[8] && !bytes[9] && !bytes[10] &&
+    int first=!memcmp(bytes,"PDVIEWF1",8) && phase==PD_UPGRADE_COMMITTED && profile==1;
+    return (first || !memcmp(bytes,"PDVIEW01",8)) && !bytes[8] && !bytes[9] && !bytes[10] &&
         (phase==PD_UPGRADE_COMMITTED || phase==PD_UPGRADE_ROLLED_BACK) &&
         !bytes[12] && !bytes[13] && !bytes[14] && (profile==1 || profile==2) &&
         memchr(bytes+112,0,28) && memchr(bytes+140,0,64);
@@ -67,6 +69,29 @@ static int publish(int runtime,const unsigned char bytes[PD_INSTALLATION_SIZE])
     pd_installation_checkpoint(4);
     return ok && !fsync(runtime);
 }
+static int publish_first(int store,int runtime)
+{
+    unsigned char plan[PD_MIGRATION_SIZE]={0},bound[128],selected[PD_SELECTOR_SIZE],installed[48],intent[32];
+    struct pd_migration parsed;struct pd_approval target;
+    struct pd_selection selection;
+    int ok=read_record(store,"migration-approved",plan,sizeof(plan),0600,0)==PD_MIGRATION_SIZE+1 &&
+        pd_migration_parse(plan,sizeof(plan),&parsed) && parsed.fresh &&
+        pd_approval_parse(parsed.approval,PD_APPROVAL_SIZE,&target) &&
+        pd_transaction_at_phase(store,plan,PD_TRANSACTION_COMMITTED) &&
+        read_record(store,"first-selection",bound,sizeof(bound),0600,0)==129 && !memcmp(bound,"PDFSEL01",8) &&
+        pd_selection_read(store,&selection)==1 &&
+        read_record(store,"active",selected,sizeof(selected),0600,0)==PD_SELECTOR_SIZE+1 && !memcmp(bound+40,selected,sizeof(selected)) &&
+        read_record(store,"installed",installed,sizeof(installed),0600,0)==49 && !memcmp(installed,"PDINST01\0\0\0\100\0\0\0\1",16) &&
+        read_record(store,"intent",intent,sizeof(intent),0600,0)==33;
+    unsigned char bytes[PD_INSTALLATION_SIZE]={0};
+    memcpy(bytes,"PDVIEWF1",8);bytes[11]=PD_UPGRADE_COMMITTED;bytes[15]=1;
+    crypto_blake2b(bytes+16,32,plan,sizeof(plan));
+    ok=ok && !crypto_verify32(bytes+16,bound+8) && !crypto_verify32(bytes+16,intent);
+    if(!ok){return 0;}
+    memcpy(bytes+48,target.digest,32);memcpy(bytes+80,installed+16,32);
+    memcpy(bytes+112,target.firmware,strlen(target.firmware));memcpy(bytes+140,target.serial,strlen(target.serial));
+    return publish(runtime,bytes);
+}
 int pd_installation_publish(int store,int runtime)
 {
     struct statfs fs;
@@ -75,7 +100,13 @@ int pd_installation_publish(int store,int runtime)
     if(lease<0){return 0;}
     struct pd_upgrade_state state;struct pd_generation generation={.directory=-1,.stage=-1,.control=-1};
     int locked=!flock(runtime,LOCK_EX|LOCK_NB);
-    int ok=locked && pd_upgrade_state_read(store,&state)==1 &&
+    int upgrade=locked?pd_upgrade_state_read(store,&state):-1;
+    if(upgrade==0){
+        int first=pd_generation_active(store,&generation)==0 && publish_first(store,runtime);
+        pd_generation_close(&generation);
+        if(locked){flock(runtime,LOCK_UN);}close(lease);return first;
+    }
+    int ok=locked && upgrade==1 &&
         (state.phase==PD_UPGRADE_COMMITTED || state.phase==PD_UPGRADE_ROLLED_BACK) && pd_generation_active(store,&generation)==1;
     unsigned char bytes[PD_INSTALLATION_SIZE]={0},selected[PD_PAIR_RECORD_SIZE],expected[PD_PAIR_RECORD_SIZE]={0};
     if(ok){

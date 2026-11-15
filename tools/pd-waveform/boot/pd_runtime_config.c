@@ -23,8 +23,10 @@ static int public_record(int input,unsigned char bytes[120])
     struct stat st;int flags=fcntl(input,F_GETFL);
     if(flags<0 || (flags&O_ACCMODE)!=O_RDONLY || fstat(input,&st) || !S_ISREG(st.st_mode) ||
        st.st_uid!=geteuid() || st.st_nlink!=1 || (st.st_mode&07022) || st.st_size!=120 ||
-       pread(input,bytes,120,0)!=120 || memcmp(bytes,"PDPUB001PDDELIV1",16) ||
-       number(bytes+16)!=64 || number(bytes+20)!=2){return 0;}
+       pread(input,bytes,120,0)!=120 || memcmp(bytes+8,"PDDELIV1",8) || number(bytes+16)!=64){return 0;}
+    int upgrade=!memcmp(bytes,"PDPUB001",8) && number(bytes+20)==2;
+    int first=!memcmp(bytes,"PDFPUB01",8) && number(bytes+20)==1;
+    if(!upgrade && !first){return 0;}
     unsigned nonzero=0;for(unsigned i=88;i<120;++i){nonzero|=bytes[i];}return nonzero!=0;
 }
 static int receive_file(int channel)
@@ -57,7 +59,11 @@ static int copy_config(int incoming,uid_t owner,const unsigned char public_bytes
         !memcmp(receipt,public_bytes+8,80) && pread(incoming,bytes,120,0)==120;
     crypto_blake2b_ctx hash;crypto_blake2b_init(&hash,32);
     crypto_blake2b_update(&hash,(const unsigned char*)"PDKEY001",8);crypto_blake2b_update(&hash,bytes,120);
-    crypto_blake2b_final(&hash,digest);ok=ok && !crypto_verify32(digest,public_bytes+88);
+    crypto_blake2b_final(&hash,digest);
+    /* A fresh bootstrap generates its transport secret in RAM. The public
+     * upload pins one exact worker/plan and nonce; same-UID peers can only
+     * invoke that already approved transaction. Upgrades retain key binding. */
+    ok=ok && (!memcmp(public_bytes,"PDFPUB01",8) || !crypto_verify32(digest,public_bytes+88));
     int directory=ok?open("/dev/shm",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC):-1,readonly=-1;
     int writer=directory>=0?pd_upload_memory_file(directory,&readonly):-1;if(directory>=0){close(directory);}
     ok=writer>=0;

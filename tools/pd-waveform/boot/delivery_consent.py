@@ -8,6 +8,7 @@ import approval
 import bootstrap_artifact
 import bundle
 import migration
+import first_install
 import upgrade
 
 
@@ -30,10 +31,15 @@ def encode(envelope, plan):
             or len(envelope)!=bootstrap_artifact.PREFIX+size):
         raise ValueError('invalid envelope shape')
     if role==1:
-        if arch!=64 or len(plan)!=308 or plan[:8]!=b'PDMIG001':
+        if arch!=64 or len(plan)!=308 or plan[:8] not in (b'PDMIG001', b'PDFST001'):
             raise ValueError('unsupported installation plan')
         candidate=target(plan[8:148])
-        if plan!=migration.encode(plan[8:148],plan[148:212].decode('ascii'),plan[212:276].decode('ascii'),plan[276:]):
+        if plan[:8] == b'PDFST001':
+            canonical = first_install.encode(plan[8:148], plan[148:180],
+                plan[180:244].rstrip(b'\0').decode('ascii'), plan[244:276])
+        else:
+            canonical = migration.encode(plan[8:148],plan[148:212].decode('ascii'),plan[212:276].decode('ascii'),plan[276:])
+        if plan != canonical:
             raise ValueError('invalid installation plan')
     else:
         if len(plan)!=352 or plan[:8] not in (b'PDUPGR01', b'PDUPGR02'):

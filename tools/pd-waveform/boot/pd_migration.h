@@ -6,6 +6,9 @@ enum { PD_MIGRATION_SIZE=308 };
 struct pd_migration {
     unsigned char approval[PD_APPROVAL_SIZE];
     struct pd_predecessor predecessor;
+    int fresh;
+    unsigned char token_hash[32],nonce[32];
+    char hostname[64];
 };
 int pd_migration_parse(const unsigned char* bytes,size_t size,struct pd_migration* result);
 int pd_migration_read(int fd,unsigned char bytes[PD_MIGRATION_SIZE],struct pd_migration* result);

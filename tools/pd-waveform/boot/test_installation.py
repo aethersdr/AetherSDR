@@ -13,6 +13,8 @@ import unittest
 import approval
 import migration
 import upgrade
+import first_install
+import shutil
 
 CHECKER = None
 DISK_DIRECTORY = None
@@ -84,6 +86,38 @@ class InstallationTest(unittest.TestCase):
             self.assertEqual(p.read_bytes(), self.expected(phase))
             self.assertEqual(p.stat().st_mode & 0o7777, 0o444)
             self.assertFalse((self.runtime/'.installation.new').exists())
+
+    def fresh(self):
+        shutil.rmtree(self.store/'upgrade-generations')
+        (self.store/'upgrade-generation').unlink()
+        (self.store/'upgrade-transaction').unlink()
+        plan = first_install.encode(approval.encode(1, '4.3.16.42034', 'fixture-8600', b'r'*32),
+                                    b't'*32, 'new-local-radio', b'n'*32)
+        self.write(self.store/'migration-approved', plan)
+        self.write(self.store/'transaction', b'PDTXN001'+plan+struct.pack('>I', 5))
+        digest = hashlib.blake2b(plan, digest_size=32).digest()
+        active = b'PDSEL002A'+bytes(7)+b'p'*32+bytes(40)
+        self.write(self.store/'active', active)
+        self.write(self.store/'first-selection', b'PDFSEL01'+digest+active)
+        self.write(self.store/'intent', digest)
+        self.write(self.store/'installed', b'PDINST01'+struct.pack('>II', 64, 1)+b'k'*32)
+        return b'PDVIEWF1'+struct.pack('>II', 4, 1)+digest+b'r'*32+b'k'*32+b'4.3.16.42034'.ljust(28,b'\0')+b'fixture-8600'.ljust(64,b'\0')
+
+    def test_first_install_committed_record(self):
+        expected = self.fresh()
+        self.invoke()
+        self.assertEqual((self.runtime/'installation').read_bytes(), expected)
+
+    def test_first_install_selection_must_still_match(self):
+        self.fresh()
+        self.write(self.store/'active', b'x'*88)
+        self.refused()
+
+    def test_first_install_readiness_is_not_commitment(self):
+        self.fresh()
+        plan = (self.store/'migration-approved').read_bytes()
+        self.write(self.store/'transaction', b'PDTXN001'+plan+struct.pack('>I', 4))
+        self.refused()
 
     def test_attempt_nonce_reaches_public_mirror(self):
         self.invoke()

@@ -32,7 +32,8 @@ void pd_delivery_test_exec(const char* path,char* const* args,char* const* env)
     require(!strncmp(path,"/proc/self/fd/",14) && !fstat(executable,&st) && (st.st_mode&07777)==0700 && st.st_nlink==1);
     char magic[8];require(pread(3,magic,8,0)==8);int upgrade=!memcmp(magic,"PDUPGR01",8) || !memcmp(magic,"PDUPGR02",8);
     require(upgrade || !memcmp(magic,"PDAPRV02",8));
-    require(pread(4,magic,8,0)==8 && !memcmp(magic,upgrade?"AEPDR001":"PDMIG001",8));
+    require(pread(4,magic,8,0)==8 && (upgrade?!memcmp(magic,"AEPDR001",8):
+        (!memcmp(magic,"PDMIG001",8) || !memcmp(magic,"PDFST001",8))));
     int payload=upgrade?5:0;require(pread(payload,magic,8,0)==8 && !memcmp(magic,"AEPDR001",8));
     for(int fd=3;fd<=4;++fd){require((fcntl(fd,F_GETFL)&O_ACCMODE)==O_RDONLY);}
     require((fcntl(payload,F_GETFL)&O_ACCMODE)==O_RDONLY);

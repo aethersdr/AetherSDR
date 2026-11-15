@@ -13,14 +13,15 @@ const pdInstallationSize = 204
 var errPDInstallationUnavailable = errors.New("installed transaction status unavailable")
 
 type pdInstallation struct {
-	State          string `json:"state"`
-	Committed      bool   `json:"installation_committed"`
-	PlanDigest     string `json:"upgrade_plan_blake2b_256"`
-	SelectedDigest string `json:"selected_release_blake2b_256"`
-	SelectedKey    string `json:"selected_release_key"`
-	Profile        uint32 `json:"profile"`
-	Firmware       string `json:"firmware"`
-	Serial         string `json:"serial"`
+	State           string `json:"state"`
+	Committed       bool   `json:"installation_committed"`
+	PlanDigest      string `json:"upgrade_plan_blake2b_256,omitempty"`
+	FirstPlanDigest string `json:"first_install_plan_blake2b_256,omitempty"`
+	SelectedDigest  string `json:"selected_release_blake2b_256"`
+	SelectedKey     string `json:"selected_release_key"`
+	Profile         uint32 `json:"profile"`
+	Firmware        string `json:"firmware"`
+	Serial          string `json:"serial"`
 }
 
 func pdInstallationText(data []byte) (string, bool) {
@@ -38,10 +39,14 @@ func pdInstallationText(data []byte) (string, bool) {
 
 func parsePDInstallation(data []byte) (pdInstallation, error) {
 	var status pdInstallation
-	if len(data) != pdInstallationSize || string(data[:8]) != "PDVIEW01" {
+	if len(data) != pdInstallationSize || (string(data[:8]) != "PDVIEW01" && string(data[:8]) != "PDVIEWF1") {
 		return status, errPDInstallationUnavailable
 	}
 	phase, profile := binary.BigEndian.Uint32(data[8:12]), binary.BigEndian.Uint32(data[12:16])
+	first := string(data[:8]) == "PDVIEWF1"
+	if first && (phase != 4 || profile != 1) {
+		return status, errPDInstallationUnavailable
+	}
 	if (phase != 4 && phase != 7) || (profile != 1 && profile != 2) {
 		return status, errPDInstallationUnavailable
 	}
@@ -62,6 +67,9 @@ func parsePDInstallation(data []byte) (pdInstallation, error) {
 	}
 	if status.Committed {
 		status.State = "committed"
+	}
+	if first {
+		status.FirstPlanDigest, status.PlanDigest = status.PlanDigest, ""
 	}
 	return status, nil
 }

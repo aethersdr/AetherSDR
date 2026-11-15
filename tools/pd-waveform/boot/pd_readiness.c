@@ -104,8 +104,15 @@ static int ready_text(const char* value,size_t capacity,int dns)
 int pd_readiness_valid(const struct pd_readiness* value)
 {
     struct in_addr address;char text[16];const char* end=memchr(value->address,0,sizeof(value->address));
-    if(!ready_text(value->hostname,sizeof(value->hostname),0) || !ready_text(value->dns,sizeof(value->dns),1) || !end){return 0;}
+    if(!ready_text(value->hostname,sizeof(value->hostname),0) || !end){return 0;}
     for(const char* p=end;p<value->address+sizeof(value->address);++p){if(*p){return 0;}}
+    if(!value->address[0] && !memcmp(value->dns,"local:",6)){
+        unsigned nonzero=0;
+        for(unsigned i=6;i<70;++i){unsigned char c=(unsigned char)value->dns[i];
+            if(!((c>='0' && c<='9') || (c>='a' && c<='f'))){return 0;}nonzero|=c!='0';}
+        for(unsigned i=70;i<sizeof(value->dns);++i){if(value->dns[i]){return 0;}}return nonzero!=0;
+    }
+    if(!ready_text(value->dns,sizeof(value->dns),1)){return 0;}
     return inet_pton(AF_INET,value->address,&address)==1 &&
         (ntohl(address.s_addr)&0xffc00000u)==0x64400000u &&
         inet_ntop(AF_INET,&address,text,sizeof(text)) && !strcmp(text,value->address);
@@ -114,6 +121,7 @@ int pd_readiness_parse(const unsigned char* bytes,size_t size,struct pd_readines
 {
     memset(result,0,sizeof(*result));if(!size || size>65536){return 0;}
     struct json_cursor c={bytes,bytes+size,0};struct pd_readiness parsed={0};unsigned seen=0;
+    char state[16]={0},installation[65]={0};
     if(!json_take(&c,'{')){return 0;}
     do{
         char key[64];if(!json_string(&c,key,sizeof(key)) || !json_take(&c,':')){return 0;}
@@ -122,12 +130,20 @@ int pd_readiness_parse(const unsigned char* bytes,size_t size,struct pd_readines
         else if(!strcmp(key,"tailnet_ip")){bit=2;ok=json_string(&c,parsed.address,sizeof(parsed.address));}
         else if(!strcmp(key,"dns_name")){bit=4;ok=json_string(&c,parsed.dns,sizeof(parsed.dns));}
         else if(!strcmp(key,"provisioned")){bit=8;ok=json_literal(&c,"true");}
-        else if(!strcmp(key,"state")){char state[16];bit=16;ok=json_string(&c,state,sizeof(state)) && !strcmp(state,"running");}
+        else if(!strcmp(key,"state")){bit=16;ok=json_string(&c,state,sizeof(state)) && (!strcmp(state,"running") || !strcmp(state,"local"));}
+        else if(!strcmp(key,"installation_id")){bit=128;ok=json_string(&c,installation,sizeof(installation));}
         else if(!strcmp(key,"sessions")){bit=32;ok=json_literal(&c,"0");}
         else if(!strcmp(key,"claimable")){bit=64;ok=json_literal(&c,"false");}
         else{ok=json_skip(&c,0);}
         if(!ok || (seen&bit)){return 0;}seen|=bit;
-        if(json_take(&c,'}')){json_space(&c);if(c.p!=c.end || seen!=127 || !pd_readiness_valid(&parsed)){return 0;}*result=parsed;return 1;}
+        if(json_take(&c,'}')){
+            json_space(&c);if(c.p!=c.end || (seen&127)!=127){return 0;}
+            if(!strcmp(state,"local")){
+                if(seen!=255 || parsed.address[0] || parsed.dns[0] || strlen(installation)!=64){return 0;}
+                memcpy(parsed.dns,"local:",6);memcpy(parsed.dns+6,installation,65);
+            }else if(!parsed.address[0]){return 0;}
+            if(!pd_readiness_valid(&parsed)){return 0;}*result=parsed;return 1;
+        }
     }while(json_take(&c,','));return 0;
 }
 int pd_readiness_equal(const struct pd_readiness* a,const struct pd_readiness* b)

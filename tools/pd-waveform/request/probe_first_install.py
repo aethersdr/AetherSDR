@@ -75,7 +75,7 @@ def main():
     if hashlib.sha256(payload).hexdigest() != args.sha256:
         raise ValueError('Package differs from reviewed SHA256')
     with zipfile.ZipFile(args.package) as archive:
-        expected = {NAME + '/' + x for x in [NAME + '.cfg', 'pd-first-install-probe', 'pd-request', 'config', 'LICENSE']}
+        expected = {NAME + '/' + x for x in [NAME + '.cfg', 'probe.sh', 'pd-first-install-probe', 'pd-request', 'config', 'LICENSE']}
         if len(archive.infolist()) != len(expected) or set(archive.namelist()) != expected:
             raise ValueError('Unexpected package entries')
         config = archive.read(NAME + '/' + NAME + '.cfg').decode('ascii')

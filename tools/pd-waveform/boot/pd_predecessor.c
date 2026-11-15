@@ -429,6 +429,10 @@ static int predecessor_exists(const char* id)
     unsigned char bytes[kInventoryMax];size_t size=0;int code=predecessor_command_status(args,bytes,&size,8000);
     return size==0 && (code==0 || code==1)?code:-1;
 }
+int pd_predecessor_absent(void)
+{
+    return predecessor_privileged() && predecessor_exists("flex-tailnet-shim")==1;
+}
 static int predecessor_transaction(int store,const unsigned char* approval,unsigned phase,struct pd_recovery* recipe)
 {
     if(!predecessor_privileged() || !predecessor_quiet()){return -1;}

@@ -20,6 +20,8 @@ import bundle
 import migration
 import release
 import units
+import first_install
+import json
 CHECKER=None
 SEED=hashlib.sha256(b'AetherPD whole-worker fixture, never a shipping trust anchor').digest()
 
@@ -100,8 +102,8 @@ class WorkerTest(unittest.TestCase):
  def test_bootstrap_returns_without_stopping_predecessor(self):
   self.invoke('bootstrap');self.assertEqual(self.state()['old_running'],1);self.assertNotIn('stop:before',self.events())
   self.assertTrue(self.capsule.exists());self.assertTrue((self.root/'etc/systemd/system/multi-user.target.wants/aetherpd-recover.service').is_symlink())
- def test_fresh_install_without_predecessor_is_unsupported(self):
-  # The current worker implements migration. A valid signed release and
+ def test_migration_without_predecessor_is_refused(self):
+  # A legacy migration intent, valid signed release and
   # approval must not turn a missing predecessor into a fresh installation.
   shutil.rmtree(self.fixture/'old')
   (self.fixture/'model').write_bytes(struct.pack('=5i',0,0,0,0,0))
@@ -111,6 +113,51 @@ class WorkerTest(unittest.TestCase):
   self.assertFalse(self.store.exists());self.clean()
   self.assertEqual(list((self.root/'etc/systemd/system').iterdir()),[])
   self.assertEqual(list((self.root/'var/lib/smartsdr').iterdir()),[])
+ def fresh(self):
+  shutil.rmtree(self.fixture/'old')
+  (self.fixture/'model').write_bytes(struct.pack('=5i',0,0,0,0,0))
+  self.plan=first_install.encode(self.approval,hashlib.sha256(b'private fixture token').digest(),'aetherpd-fixture',bytes(range(32)))
+  (self.fixture/'plan').write_bytes(self.plan)
+ def test_explicit_fresh_install_initializes_local_identity(self):
+  self.fresh();self.invoke('bootstrap');self.invoke();self.clean()
+  self.assertEqual(list(self.state().values()),[0,0,1,1,1])
+  config=json.loads((self.store/'state/provision.json').read_text())
+  self.assertEqual(config['token_sha256'],hashlib.sha256(b'private fixture token').hexdigest())
+  self.assertEqual(config['installation_id'],bytes(range(32)).hex());self.assertTrue(config['local_only'])
+  self.assertFalse((self.store/'state/tsnet').exists())
+  self.assertFalse(any(x.startswith(('stop:','retire:','restore:','recover:')) for x in self.events()))
+ def test_fresh_install_refuses_existing_predecessor(self):
+  self.fresh();(self.fixture/'model').write_bytes(struct.pack('=5i',1,1,0,0,0))
+  self.invoke('bootstrap',expected=3);self.assertFalse(self.store.exists())
+ def test_fresh_install_preserves_foreign_identity(self):
+  self.fresh();self.invoke('bootstrap')
+  config=self.store/'state/provision.json';config.write_bytes(b'foreign identity');config.chmod(0o600)
+  self.invoke();self.clean();self.assertEqual(config.read_bytes(),b'foreign identity')
+  self.assertEqual(self.state()['enabled'],0);self.assertEqual(self.state()['new_running'],0)
+ def test_fresh_recovery_never_reconstructs_predecessor(self):
+  self.fresh();self.invoke('bootstrap');self.invoke(fault='kill:activate:after',expected=137)
+  identity=(self.store/'state/provision.json').read_bytes()
+  self.invoke('recover');self.clean()
+  self.assertEqual(self.state()['new_running'],0);self.assertEqual(self.state()['enabled'],0)
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+  self.assertFalse(any(x.startswith(('restore:','recover:')) for x in self.events()))
+ def test_fresh_attempt_cannot_adopt_other_prepared_store(self):
+  self.fresh();self.invoke('bootstrap',fault='kill:install:store-published',expected=137)
+  prior=(self.store/'intent').read_bytes()
+  self.plan=first_install.encode(self.approval,hashlib.sha256(b'other token').digest(),'other',b'n'*32)
+  (self.fixture/'plan').write_bytes(self.plan)
+  self.invoke('bootstrap',expected=3);self.assertEqual((self.store/'intent').read_bytes(),prior)
+ def test_fresh_preparation_retries_same_attempt(self):
+  self.fresh();self.invoke('bootstrap',fault='kill:install:store-published',expected=137)
+  self.invoke('bootstrap');self.invoke();self.clean();self.assertEqual(self.state()['enabled'],1)
+ def test_fresh_preparation_recovers_unpublished_intent_prefix(self):
+  self.fresh();pending=self.store.parent/'.aetherpd-prepare';pending.mkdir(mode=0o700)
+  marker=pending/'intent.new';marker.write_bytes(bundle.blake(self.plan)[:13]);marker.chmod(0o600)
+  self.invoke('bootstrap');self.invoke();self.clean();self.assertEqual(self.state()['enabled'],1)
+ def test_fresh_partial_identity_publication_restarts_safely(self):
+  self.fresh();self.invoke('bootstrap')
+  partial=self.store/'state/.first-provision';partial.write_bytes(b'');partial.chmod(0o600)
+  self.invoke();self.clean();self.assertTrue(json.loads((self.store/'state/provision.json').read_text())['local_only'])
  def test_forward_commit_removes_temporary_authority(self):
   self.invoke('bootstrap');self.invoke();state=self.state();self.assertEqual([state[k] for k in ['old_present','old_running','new_running','enabled']],[0,0,1,1]);self.clean()
   self.assertEqual((self.store/'transaction').read_bytes(),b'PDTXN001'+self.plan+struct.pack('>I',5))

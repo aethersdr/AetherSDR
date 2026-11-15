@@ -21,6 +21,7 @@ import bootstrap_artifact
 import bundle
 import delivery_consent
 import migration
+import first_install
 import release
 import units
 import upgrade
@@ -73,6 +74,29 @@ class DeliveryTest(unittest.TestCase):
 
     def test_upgrade_executes_only_verified_bytes_and_fixed_descriptor_interface(self):
         self.check()
+
+    def test_first_install_executes_without_predecessor(self):
+        self.plan=first_install.encode(approval.encode(1,'4.3.16.42034','fixture-8600',bundle.blake(self.candidate)),
+                                      b't'*32,'fresh-radio',b'n'*32)
+        self.envelope=bootstrap_artifact.assemble(bytes(self.worker),64,1,self.source,bundle.blake(self.candidate),self.seed)
+        self.prepare()
+        self.check()
+
+    def test_first_install_rejects_noncanonical_identity_with_rebound_receipt(self):
+        initial=first_install.encode(approval.encode(1,'4.3.16.42034','fixture-8600',bundle.blake(self.candidate)),
+                                    b't'*32,'fresh-radio',b'n'*32)
+        self.envelope=bootstrap_artifact.assemble(bytes(self.worker),64,1,self.source,bundle.blake(self.candidate),self.seed)
+        for field in ['token','hostname','reserved']:
+            with self.subTest(field=field):
+                plan=bytearray(initial)
+                if field=='token':plan[148:180]=bytes(32)
+                elif field=='hostname':plan[180]=ord('A')
+                else:plan[307]=1
+                self.plan=initial;self.prepare()
+                self.plan=bytes(plan)
+                (self.root/'plan').write_bytes(self.plan)
+                (self.root/'consent').write_bytes(b'PDDELIV1'+struct.pack('>II',64,1)+bundle.blake(self.envelope)+bundle.blake(self.plan))
+                self.check(expected=3)
 
     def test_attempt_plan_is_bound_to_delivery_consent(self):
         self.plan=upgrade.encode(1,'4.3.16.42034','fixture-8600',bundle.blake(self.previous),

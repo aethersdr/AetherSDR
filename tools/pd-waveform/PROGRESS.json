@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T18:41:13.142160+00:00",
+  "updated_utc": "2026-11-15T19:21:07.099144+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -47,7 +47,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Implement and qualify first-install bootstrap authorization and a no-predecessor installation transaction; resolve standalone native launch before changing the existing installation. Preserve prior upgrade/RF evidence and full P1-P10 scope.",
+  "next_action": "Radio changes on explicit operator hold while another agent uses the bench. After release, qualify the independent first-install candidate through public uploads, then reboot persistence and receive-only DAX IQ with FDX off. Preserve the old installation before any clean-state mutation.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1021,7 +1021,7 @@
     ]
   },
   "fresh_install_admission": {
-    "status": "fresh_install_not_supported; live_standalone_startup_unconfirmed",
+    "status": "historical_first_probe; superseded_by_fresh_install_implementation",
     "evidence": "fresh-install-admission-20261115/result.json under evidence_root",
     "local_checks": {
       "worker": {
@@ -1047,6 +1047,47 @@
       "Implement explicit fresh-install transaction with initial identity provisioning and failure recovery that does not require a predecessor.",
       "Determine why the standalone public native probe did not become observable; do not infer its exit code from timeout.",
       "Then perform clean-state installation and reboot/IQ qualification with recoverable backups."
+    ]
+  },
+  "fresh_install_implementation": {
+    "status": "implemented_locally; radio_qualification_on_operator_hold",
+    "contract": "tools/pd-waveform/request/FIRST-INSTALL.md",
+    "evidence": "fresh-install-implementation under evidence_root",
+    "completed": [
+      "Explicit PDFST001 plan, no automatic conversion of missing migration predecessor.",
+      "Unprivileged standalone ARM64 requester verifies public signed inputs and generates its handoff secret in unlinked RAM.",
+      "PDFPUB01 public carrier record binds the exact worker, plan and per-attempt nonce; separate one-shot accept/deliver roles.",
+      "Fresh atomic local identity: new admin-token hash, hostname and installation ID; no copied predecessor or automatic tailnet join.",
+      "First-install transaction, matching-attempt preparation recovery, rollback without predecessor reconstruction.",
+      "Authenticated PDVIEWF1 commitment status bound to the committed plan and selected payload record.",
+      "Public upload/removal qualification client requires the exact approved plan digest and uses no old shim or diagnostics authorization."
+    ],
+    "validation": {
+      "worker_cases": 35,
+      "delivery_cases": 30,
+      "readiness_cases": 19,
+      "authorization_cases": 2,
+      "carrier_image_cases": 4,
+      "installation_cases_passed": 14,
+      "installation_cases_skipped": 2,
+      "go_shim_full_suite": "passed; 23.196 seconds",
+      "arm64_signed_candidate": "Built and independently verified before the final selector-parser hardening; rebuild latest before live use.",
+      "standalone_radio_probe": "Shell launcher observed UID78666/GID20, no capabilities, NNP1; old private configuration unreadable with errno13, requester exit3."
+    },
+    "radio_state": {
+      "new_candidate_uploaded": false,
+      "old_shim_stopped": false,
+      "old_identity_moved": false,
+      "rebooted": false,
+      "iq_qualified_with_new_path": false,
+      "rf_commands": []
+    },
+    "hold": "Operator confirmed another agent/tool is using the radio and requested holding radio changes. Clean-state bench setup failed before job execution because another receiver held the diagnostics bridge socket.",
+    "remaining": [
+      "Rebuild final candidate; preserve and verify recoverable old-install backup after exclusive access returns.",
+      "Perform clean first installation through public upload only and audit temporary authority/cached artifacts.",
+      "Qualify reboot identity persistence, automatic startup, unprivileged runtime and FDX-off local DAX IQ.",
+      "Production desktop consent/credential-vault integration, independent publisher catalogue and actual FLEX-6000 adapter/hardware qualification remain separate work."
     ]
   }
 }

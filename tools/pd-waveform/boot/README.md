@@ -1,5 +1,11 @@
 # Authenticated AetherPD boot payload (development)
 
+Independent ARM64 first installation is implemented for local qualification.
+It uses an explicit fresh plan and creates a new local identity without copying
+predecessor state. Hardware installation/reboot/IQ qualification is still on
+operator hold. See [the first-install contract](../request/FIRST-INSTALL.md).
+
+
 This component verifies and expands a fixed compressed payload into radio RAM.
 The payload transaction supports atomic activation and explicit rollback. It
 is not a complete production installer or release trust configuration. The build requires an explicit Ed25519 public key. Bench keys
