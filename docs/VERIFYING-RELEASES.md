@@ -10,9 +10,21 @@
 | Source archive | GPG detached signature (`.asc`) |
 | macOS DMG | Apple codesign + notarization |
 | macOS .pkg | Apple codesign + notarization |
+| PDF manual | Listed in `SHA256SUMS.txt`, whose signature `SHA256SUMS.txt.asc` covers it |
 
-Each release also includes a GPG-signed `SHA256SUMS.txt` covering all
-Linux and source artifacts.
+Each release also includes a GPG-signed `SHA256SUMS.txt` covering the Linux,
+Windows and source artifacts, the macOS app tarballs and the PDF manual.
+Releases through v26.11.2 instead sign the manual with its own
+`AetherSDR-Manual-vX.Y.Z.pdf.asc`.
+
+## Verify the PDF Manual
+
+```bash
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c --ignore-missing SHA256SUMS.txt
+```
+
+The `AetherSDR-Manual-vX.Y.Z.pdf` line must read `OK`.
 
 ## GPG Key Fingerprint
 
