@@ -956,7 +956,7 @@
   "repeat_measurement_live": {
     "production_ready": false,
     "evidence": "repeat-readiness-live/validation.json under evidence_root",
-    "completed": "Repeated bounded keying after confirmedstop succeeds in one GUI after deadlinefix. Correctionactiveinfinitecoldruns; cleanupconfirmed.",
+    "completed": "Repeated bounded keying after confirmed stop succeeds in one GUI after the deadline fix. Correction is active in finite cold runs; cleanup is confirmed.",
     "remaining": "Retainedmodelmeasurement notyetkeyed: firstattemptcooldownrefusal, secondattemptPreparepollrace. Four-frameIMD incomplete."
   },
   "receive_prepare_poll": {
@@ -969,6 +969,56 @@
       "Desktopbuild anduserdocsbuildpass",
       "Accessibilitycheck nofindings",
       "gitdiffcheckpasses"
+    ]
+  },
+  "prepare_poll_installed_rf": {
+    "production_ready": false,
+    "status": "repeat_admission_and_prepare_fixes_live_verified_warm_capture_aborted_by_SWR",
+    "evidence": "prepare-poll-live/validation.json under evidence_root",
+    "desktop_commit": "793253572d12535a31f9a34d82fe08cf5df0e475",
+    "radio_release_sha256": "2725467fa6a8ec3b9e1d4b3ad93338265140a4e92af7cd350e99964df8aba0a4",
+    "measurement_17": {
+      "one_explicit_key": true,
+      "key_to_unkey_command_ms": 8104,
+      "result": "Incomplete four-frame capture; IQ capture request failed as source ended.",
+      "native_fits_at_unkey": 2,
+      "cached_model_at_unkey": true,
+      "correcting_logged_at_key_seconds": [
+        6.003,
+        8.003
+      ],
+      "loop_delay_ms": 72.94,
+      "iq_stale": 0,
+      "iq_invalid": 0,
+      "dispatch_deadlines": 0
+    },
+    "measurement_18": {
+      "one_explicit_key": true,
+      "cooldown_observed": true,
+      "same_GUI_and_DSP_session": true,
+      "key_to_unkey_command_ms": 582,
+      "result": "Aborted by SWR guard before alignment/capture completed. No IMD result.",
+      "cached_model_retained": true,
+      "periodic_meter_sample_before_abort": {
+        "SWR": 1,
+        "forward_instant_watts": 0.8960736989974976,
+        "reflected_watts": 0.006470495369285345
+      },
+      "limitation": "Periodic bridge sampling missed the actual SWR value that triggered the controller; these samples cannot establish whether that spike was real or erroneous."
+    },
+    "cleanup": {
+      "GUI_stop": "stopped",
+      "radio_unkeyed_zero_power": true,
+      "fixed_ARP_absent": true,
+      "remaining_process_count": 3,
+      "remaining_processes_UID78666_caps_zero_NNP1": true,
+      "audit_removed": true
+    },
+    "remaining": [
+      "Capture the exact telemetry sample and ages at the controller SWR abort; retain the existing guard while diagnosing. User previously measured 1.08 SWR independently; do not repeat connection questions already answered.",
+      "Complete retained-model four-frame measurement after full cooldown, then matched correction-off/on comparisons.",
+      "Cold-start correction currently takes most of the eight-second source; do not lower frame requirements or silently extend RF deadlines.",
+      "All remaining P1-P10 final-candidate, stock-APD, packaging and actual FLEX-6300 gates remain open. LP-100A integration stays deferred."
     ]
   }
 }
