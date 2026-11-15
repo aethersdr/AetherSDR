@@ -36,6 +36,11 @@
 // the stage's own defaults. An unknown flag is an error, so a typo cannot
 // switch a stage on with defaults behind the operator's back. Stage order is the shipped default: Gate, EQ,
 // De-esser, Compressor, Tube, Exciter.
+//
+// -DTX_PAPR_HARNESS_NO_HL2 builds it without the HL2 modulator (and so
+// without WDSP or the rest of aethercore): TxVoiceProcessor, the Client*
+// stages, r8brain and RNNoise are all it needs. That is how the Pi-class CPU
+// gate is measured on a board that cannot build the whole tree.
 
 #include "core/ClientComp.h"
 #include "core/ClientDeEss.h"
@@ -45,10 +50,12 @@
 #include "core/ClientPudu.h"
 #include "core/ClientTube.h"
 #include "core/TxVoiceProcessor.h"
+#include "core/dsp/SsbEnvelopeMeter.h"
+#ifndef TX_PAPR_HARNESS_NO_HL2
 #include "core/backends/TxAudioSource.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
-#include "core/dsp/SsbEnvelopeMeter.h"
 #include "TxTestAuthority.h"
+#endif
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -387,6 +394,7 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     return run;
 }
 
+#ifndef TX_PAPR_HARNESS_NO_HL2
 // The transport audio through the real HL2 modulator, as Hl2Backend hands it
 // over: int16 at 24 kHz, as mono float. The modulator is paced in real time
 // (its channel is non-blocking; feeding it faster starves it), so this takes
@@ -431,6 +439,7 @@ std::vector<std::complex<float>> runHl2(const std::vector<float>& transport,
     if (iq.size() <= kPriming) return {};
     return {iq.begin() + static_cast<std::ptrdiff_t>(kPriming), iq.end()};
 }
+#endif
 
 double dbfs(double linear) { return 20.0 * std::log10(std::max(linear, 1e-9)); }
 
@@ -501,6 +510,12 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "%s has no value\n", argv[argc - 1]);
         return 2;
     }
+#ifdef TX_PAPR_HARNESS_NO_HL2
+    if (settings.get("hl2", 0) > 0.5) {
+        std::fprintf(stderr, "--hl2: this build has no HL2 modulator (TX_PAPR_HARNESS_NO_HL2)\n");
+        return 2;
+    }
+#endif
 
     std::vector<float> input;
     std::string error;
@@ -560,6 +575,7 @@ int main(int argc, char** argv)
         printGain(base, proc, false);
     }
 
+#ifndef TX_PAPR_HARNESS_NO_HL2
     if (settings.get("hl2", 0) > 0.5) {
         unsigned long long baseFaults = 0, procFaults = 0;
         std::printf("HL2 modulator (real time, %.0f s per run, ALC %s)...\n",
@@ -584,5 +600,6 @@ int main(int argc, char** argv)
                         "rerun on an idle machine\n", baseFaults, procFaults);
         }
     }
+#endif
     return 0;
 }
