@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "pd_runtime.h"
+#include "pd_installation.h"
 #include "pd_transaction.h"
 #include "pd_upgrade_state.h"
 #include "pd_service.h"
@@ -44,6 +45,7 @@ static int expected_kind(enum layout layout,const char* name,enum layout* child,
         if(!strcmp(name,"bin")){*child=BIN;return 1;}
         if(!strcmp(name,".stage")){*child=STAGE;return 1;}
         if(!strcmp(name,"primary")){*child=DATA;*data=1;return 1;}
+        if(!strcmp(name,"installation") || !strcmp(name,".installation.new")){return 4;}
         return !strcmp(name,"start.sock")?3:0;
     }
     if(layout==BIN || layout==STAGE){
@@ -89,6 +91,11 @@ static int collect(struct inventory* inventory,int parent,enum layout layout)
             ok=S_ISREG(st.st_mode) && st.st_nlink==1 && st.st_uid==runtime_owner(data) && st.st_size>=0 &&
                 st.st_size<=(data?kLeafMax:PD_BUNDLE_EXPANDED_MAX) && !(st.st_mode&07022) &&
                 (!data || (st.st_gid==runtime_group() && !(st.st_mode&0177)));
+        }
+        if(ok && kind==4){
+            int partial=!strcmp(next->d_name,".installation.new");
+            ok=st.st_size<=PD_INSTALLATION_SIZE && (partial || st.st_size==PD_INSTALLATION_SIZE) &&
+                ((st.st_mode&07777)==0444 || (partial && (st.st_mode&07777)==0600));
         }
         if(!ok){break;}
         struct entry* entry=&inventory->entries[inventory->count++];

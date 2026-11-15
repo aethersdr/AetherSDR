@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "pd_upgrade_capsule.h"
 #include "pd_upgrade_state.h"
+#include "pd_installation.h"
 #include "pd_upgrade_units.h"
 #include "pd_upgrade_bootstrap.h"
 #include "pd_delivery_lease.h"
@@ -182,6 +183,9 @@ static int execute(struct upgrade_worker* worker,int recovery)
     }
     struct pd_upgrade_ops ops={worker,quiesce,select_candidate,activate,rollback,restore,cleanup};
     int result=pd_upgrade_transaction(worker->store,worker->capsule.approval.record,&ops,recovery);
+    if(result>=0 && !pd_installation_publish_runtime(worker->store)){
+        fputs("AetherPD upgrade: terminal status publication unavailable\n",stderr);
+    }
     return result>=0?0:4;
 }
 int main(int argc,char** argv)

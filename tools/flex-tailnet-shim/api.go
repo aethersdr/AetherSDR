@@ -147,6 +147,7 @@ func newAPIWithAetherPDReader(n *Node, read func(context.Context) (aetherPDStatu
 		writeJSON(w, http.StatusOK, n.Status())
 	})
 
+	mux.HandleFunc("GET /v1/aetherpd/installation", aetherPDInstallationHandler(n, readPDInstallation))
 	mux.HandleFunc("POST /v1/aetherpd/install-request", aetherPDInstallRequestHandler(n))
 	mux.HandleFunc("GET /v1/aetherpd/install-request/{requestID}", aetherPDInstallStateHandler(n, false))
 	mux.HandleFunc("DELETE /v1/aetherpd/install-request/{requestID}", aetherPDInstallStateHandler(n, true))

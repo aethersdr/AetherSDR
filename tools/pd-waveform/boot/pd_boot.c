@@ -9,6 +9,7 @@
 #include "pd_handoff.h"
 #include "pd_generation.h"
 #include "pd_boot_wait.h"
+#include "pd_installation.h"
 #include "pd_release_key.h"
 #include "monocypher.h"
 #include <sys/file.h>
@@ -188,6 +189,9 @@ static int boot_dispatch(int root,int store,int socket_owner)
     ok=ok && pd_transaction_runtime_gate(store,&final_lease);
     int runtime=ok?boot_runtime(root):-1;
     ok=runtime>=0 && (socket_owner?boot_socket_owner(runtime):boot_prepare_key(store,runtime,pair.payload,pair.payload_key));
+    if(ok && !socket_owner && !pd_installation_publish(store,runtime)){
+        fputs("AetherPD boot: terminal status publication unavailable\n",stderr);
+    }
     if(runtime>=0){close(runtime);}pd_pair_close(&pair);
     if(final_lease>=0){close(final_lease);}
     pd_generation_close(&generation);

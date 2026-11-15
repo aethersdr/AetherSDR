@@ -51,7 +51,7 @@ def build(output, arch, entry, public_key=None, sanitize=False, worker_test=Fals
         raise ValueError('management bytes are only accepted for the upgrade worker')
     env = dict(os.environ, ZIG_GLOBAL_CACHE_DIR=str(output / 'cache'), ZIG_LOCAL_CACHE_DIR=str(output / 'cache'))
     sources = [HERE / entry, HERE / 'pd_bootstrap_artifact.c', HERE / 'pd_bundle.c', HERE / 'pd_store.c', HERE / 'pd_release.c', HERE / 'pd_identity.c', HERE / 'pd_approval.c', HERE / 'pd_install.c', HERE / 'pd_state_transfer.c', crypto / 'monocypher.c', crypto / 'monocypher-ed25519.c']
-    sources += [HERE / 'pd_migration.c', HERE / 'pd_transaction.c', HERE / 'pd_recovery.c', HERE / 'pd_capsule.c', HERE / 'pd_capsule_io.c', HERE / 'pd_worker_units.c', HERE / 'pd_unit_files.c', HERE / 'pd_upgrade_units.c', HERE / 'pd_management.c', HERE / 'pd_readiness.c', HERE / 'pd_primary.c', HERE / 'pd_service.c', HERE / 'pd_runtime.c', HERE / 'pd_upgrade.c', HERE / 'pd_upgrade_resume.c']
+    sources += [HERE / 'pd_migration.c', HERE / 'pd_transaction.c', HERE / 'pd_recovery.c', HERE / 'pd_capsule.c', HERE / 'pd_capsule_io.c', HERE / 'pd_worker_units.c', HERE / 'pd_unit_files.c', HERE / 'pd_upgrade_units.c', HERE / 'pd_management.c', HERE / 'pd_readiness.c', HERE / 'pd_primary.c', HERE / 'pd_service.c', HERE / 'pd_runtime.c', HERE / 'pd_installation.c', HERE / 'pd_upgrade.c', HERE / 'pd_upgrade_resume.c']
     sources += [HERE / 'pd_boot_primary.c', HERE / 'pd_boot_session.c', HERE / 'pd_boot_wait.c']
     sources += [HERE.parent / 'request/pd_request.c', HERE.parent / 'request/pd_upload.c', HERE / 'pd_transport.c', HERE / 'pd_runtime_config.c']
     sources += [HERE / 'pd_generation.c', HERE / 'pd_retained.c', HERE / 'pd_retire.c', HERE / 'pd_slots_retire.c']
