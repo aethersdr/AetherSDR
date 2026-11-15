@@ -69,6 +69,7 @@ class ClientPudu;
 class ClientPuduMonitor;
 class ClientReverb;
 class ClientCfc;
+class ClientLeveler;
 class ClientFinalLimiter;
 class ClientTxTestTone;
 class RxClientEffects;
@@ -471,6 +472,7 @@ public:
     // optional stage in the PooDoo™ chain.
     ClientReverb* clientReverbTx() { return m_clientReverbTx.get(); }
     ClientCfc* clientCfcTx() { return m_clientCfcTx.get(); }
+    ClientLeveler* clientLevelerTx() { return m_clientLevelerTx.get(); }
 
     // Final brickwall limiter — sits at the very tail of the TX audio
     // path, after every user-configurable chain stage AND after PC mic
@@ -525,6 +527,7 @@ public:
         Enh    = 6,   // PUDU slot
         Reverb = 7,
         Cfc    = 8,   // WDSP CFC multiband compressor (RFC #4836)
+        Leveler = 9,  // WDSP TX leveler, LVLR (RFC #4836)
     };
     static constexpr int kMaxTxChainStages = TxChainLayout::kSlots;
 
@@ -655,6 +658,10 @@ public:
     // clientCfcStateChanged().
     void loadClientCfcSettings();
     void saveClientCfcSettings();
+    // Client-side TX leveler, one nested-JSON key (ClientLevelerJson). Save
+    // emits clientLevelerStateChanged().
+    void loadClientLevelerSettings();
+    void saveClientLevelerSettings();
     void loadClientFinalLimiterSettings();
     void saveClientFinalLimiterSettings() const;
     // Aetherial Tube Pre-Amp TX state — nested-JSON shape under one key
@@ -913,6 +920,8 @@ signals:
     void clientReverbStateChanged();
     // Fired by saveClientCfcSettings(): the CFC panel and applet refresh.
     void clientCfcStateChanged();
+    // Fired by saveClientLevelerSettings(): the LVLR page and tile refresh.
+    void clientLevelerStateChanged();
 
 private slots:
     void onTxAudioReady();
@@ -1469,6 +1478,7 @@ private:
     // Client-side TX reverb.
     std::unique_ptr<ClientReverb> m_clientReverbTx;
     std::unique_ptr<ClientCfc> m_clientCfcTx;
+    std::unique_ptr<ClientLeveler> m_clientLevelerTx;
     std::unique_ptr<ClientFinalLimiter> m_clientFinalLimiterTx;
     std::unique_ptr<ClientTxTestTone>   m_clientTxTestTone;
     std::unique_ptr<WsprBeacon>         m_wsprBeacon;

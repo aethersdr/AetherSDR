@@ -6,6 +6,7 @@
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
 #include "core/ClientCfc.h"
+#include "core/ClientLeveler.h"
 
 #include <QAction>
 #include <QApplication>
@@ -93,6 +94,7 @@ QString stageLabel(AudioEngine::TxChainStage s)
         case AudioEngine::TxChainStage::Enh:    return "EVO";
         case AudioEngine::TxChainStage::Reverb: return "VERB";
         case AudioEngine::TxChainStage::Cfc:    return "CFC";
+        case AudioEngine::TxChainStage::Leveler: return "LVLR";
         case AudioEngine::TxChainStage::None:   return "";
     }
     return "";
@@ -170,6 +172,7 @@ bool StripChainWidget::isStageImplemented(AudioEngine::TxChainStage s) const
         case AudioEngine::TxChainStage::Enh:
         case AudioEngine::TxChainStage::Reverb:
         case AudioEngine::TxChainStage::Cfc:
+        case AudioEngine::TxChainStage::Leveler:
             return true;
         case AudioEngine::TxChainStage::Gate:   // retired: RN2 replaces it
         case AudioEngine::TxChainStage::DeEss:  // retired
@@ -200,6 +203,8 @@ bool StripChainWidget::isStageBypassed(AudioEngine::TxChainStage s) const
             return !(m_audio->clientReverbTx() && m_audio->clientReverbTx()->isEnabled());
         case AudioEngine::TxChainStage::Cfc:
             return !(m_audio->clientCfcTx() && m_audio->clientCfcTx()->isEnabled());
+        case AudioEngine::TxChainStage::Leveler:
+            return !(m_audio->clientLevelerTx() && m_audio->clientLevelerTx()->isEnabled());
         case AudioEngine::TxChainStage::None:
             return true;
     }
@@ -680,6 +685,12 @@ void StripChainWidget::toggleStageBypass(int boxIdx)
                 m_audio->saveClientCfcSettings();
             }
             break;
+        case AudioEngine::TxChainStage::Leveler:
+            if (m_audio->clientLevelerTx()) {
+                m_audio->clientLevelerTx()->setEnabled(newEnabled);
+                m_audio->saveClientLevelerSettings();
+            }
+            break;
         case AudioEngine::TxChainStage::None:
             break;
     }
@@ -737,6 +748,9 @@ void StripChainWidget::contextMenuEvent(QContextMenuEvent* ev)
         } else if (stage == AudioEngine::TxChainStage::Cfc && m_audio->clientCfcTx()) {
             m_audio->clientCfcTx()->setEnabled(newEnabled);
             m_audio->saveClientCfcSettings();
+        } else if (stage == AudioEngine::TxChainStage::Leveler && m_audio->clientLevelerTx()) {
+            m_audio->clientLevelerTx()->setEnabled(newEnabled);
+            m_audio->saveClientLevelerSettings();
         }
         emit stageEnabledChanged(stage, newEnabled);
         update();

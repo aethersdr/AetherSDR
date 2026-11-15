@@ -8,8 +8,8 @@ Aetherial Audio is AetherSDR's client-side audio processing. It runs on your
 computer, independent of the radio's own DSP, and comes as two windows:
 
 - **AetherTX** — the transmit voice chain: RN2 noise reduction, tube preamp,
-  EQ, CFC multiband compressor, compressor, AetherVoice exciter, reverb and a
-  brickwall limiter.
+  EQ, leveler, CFC multiband compressor, compressor, AetherVoice exciter, reverb
+  and a brickwall limiter.
   Open it from **Tools → AetherTX...**
 - **AetherRX** — the receive chain: noise reduction, gate, EQ, compressor,
   tube, AetherVoice and an output meter. Open it from
@@ -112,16 +112,16 @@ conversion takes it to the radio's 24 kHz transport rate, with dither, before
 the one final conversion to 16-bit.
 
 ```
-PC mic → (RN2) → Tube → EQ → CFC → Compressor → Exciter → Reverb
+PC mic → (RN2) → Tube → EQ → LVLR → CFC → Compressor → Exciter → Reverb
        → Final Output (Quindar, limiter, meters) → radio
 ```
 
-The middle six stages are the reorderable chain; the order above is the
-default. If you saved your own order before CFC existed, CFC is added at the end
-of it; drag it ahead of the Compressor to match the default. **RN2** is not a
-chain stage: when it is on it always runs first, ahead of every stage, so the
-tube and everything after it work on denoised audio. Its switch is on the
-**Tube** page.
+The middle seven stages are the reorderable chain; the order above is the
+default. If you saved your own order before LVLR and CFC existed, they are added
+at the end of it; drag them ahead of the Compressor to match the default.
+**RN2** is not a chain stage: when it is on it always runs first, ahead of
+every stage, so the tube and everything after it work on denoised audio. Its
+switch is on the **Tube** page.
 
 AetherTX has no gate or de-esser. RN2 keeps room noise out of your pauses,
 with no threshold to set. To tame sibilance, use a gentle EQ cut around
@@ -133,6 +133,7 @@ with no threshold to set. To tame sibilance, use a gentle EQ cut around
 |---|---|
 | **Tube** | Dynamic tube preamp/saturator. Also holds the **RN2** microphone noise reducer, which runs before it. |
 | **EQ** | Parametric EQ with an optional reference target curve. |
+| **LVLR** | Leveler: a slow gain rider that brings a quiet or distant voice up to a steady level. Off by default. |
 | **CFC** | Continuous Frequency Compressor: a multiband compressor whose compression and post-EQ are curves over frequency. Off by default. |
 | **Compressor** | Compressor with Drive/Phase peak-to-average (PAPR) controls and its own brickwall limiter. |
 | **Exciter** | AetherVoice™ harmonic exciter. |
@@ -330,6 +331,36 @@ noise; −3 dB around 200 Hz to cut mud; −2 dB around 500 Hz to scoop
 boxiness; +3 dB at 2 kHz and +2 dB at 3.5 kHz for presence; low-pass at your
 SSB filter width (about 3 kHz). For a bright condenser mic, do the opposite:
 a little low-mid warmth, pull back 2–4 kHz, roll off above 4 kHz.
+
+### LVLR (AetherTX)
+
+The transmit leveler from WDSP. It rides your level slowly, the way you would
+on a fader: when you lean back from the mic or speak softly it brings you up,
+by at most **Max gain**, so the fast stages after it see a steady level. Loud
+speech is brought toward full scale rather than raised further. LVLR ships
+**off**.
+
+The page traces the gain LVLR applied over the last five seconds, against the
+**Max gain** ceiling (dashed).
+
+| Knob | Range | What it does |
+|---|---|---|
+| **Max gain** | 0 to 20 dB | The most LVLR will raise you. Default 5 dB |
+| **Attack** | 1 to 10 ms | How quickly it pulls the gain back on a louder sound. It is also a look-ahead, so it adds delay (below). Default 1 ms |
+| **Decay** | 1 to 5000 ms | How quickly the gain climbs back after you get louder and then softer. Default 500 ms |
+| **Hang** | Off, or 10 to 5000 ms | Holds the gain steady this long before it starts to climb, so pauses between words don't pump. Default Off |
+
+**Delay.** LVLR adds about 7 ms at 1 ms attack, rising to about 61 ms at 10 ms.
+
+**Example: a distant or soft talker.** Max gain 12 dB, Attack 1 ms, Decay 500 ms,
+Hang 300 ms. Record a phrase leaning back from the mic and again close in; the
+two should come out at nearly the same level.
+
+**Pitfalls:**
+- LVLR raises room noise in your pauses as well as your voice. Use the Gate
+  ahead of it, and Hang to stop the gain climbing between words.
+- LVLR's target sits just above full scale, so keep the Compressor's
+  **Limiter** or the Final Output **LIM** on after it.
 
 ### CFC (AetherTX)
 

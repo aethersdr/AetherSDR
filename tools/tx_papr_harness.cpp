@@ -27,6 +27,7 @@
 //              --tube-drywet 0.4 --tube-output 0
 // Exciter:     --exciter-air 6 --exciter-mix 0.2 --exciter-low-mix 0
 //              --exciter-mode 0|1      0 = Even (Aphex), 1 = Odd (Behringer)
+// LVLR:        --lvlr-max 5 --lvlr-attack 1 --lvlr-decay 500 --lvlr-hang 0
 // CFC:         --cfc-fft 1024 --cfc-precomp 0 --cfc-posteq 0|1 --cfc-postgain 0
 //              --cfc-band<N>-hz / -comp / -eq (N = 1..10) override the
 //              first-enable profile's band N; --cfc-flat 1 zeroes every band
@@ -36,7 +37,7 @@
 // Any flag of a stage turns that stage on in the processed run; the rest keep
 // the stage's own defaults. An unknown flag is an error, so a typo cannot
 // switch a stage on with defaults behind the operator's back. Stage order is the shipped default: Tube, EQ,
-// CFC, Compressor, Exciter.
+// LVLR, CFC, Compressor, Exciter.
 //
 // -DTX_PAPR_HARNESS_NO_HL2 builds it without the HL2 modulator (and so
 // without WDSP or the rest of aethercore): TxVoiceProcessor, the Client*
@@ -45,6 +46,7 @@
 
 #include "core/ClientCfc.h"
 #include "core/ClientComp.h"
+#include "core/ClientLeveler.h"
 #include "core/ClientEq.h"
 #include "core/ClientFinalLimiter.h"
 #include "core/ClientPudu.h"
@@ -250,6 +252,10 @@ const char* const kKnownKeys[] = {
     "exciter-mix",
     "exciter-low-mix",
     "exciter-mode",
+    "lvlr-max",
+    "lvlr-attack",
+    "lvlr-decay",
+    "lvlr-hang",
     "cfc-fft",
     "cfc-precomp",
     "cfc-posteq",
@@ -312,6 +318,7 @@ struct Settings {
 
 struct Chain {
     ClientEq eq;
+    ClientLeveler leveler;
     ClientCfc cfc;
     ClientComp comp;
     ClientTube tube;
@@ -321,6 +328,7 @@ struct Chain {
     void configure(const Settings& s, bool processed)
     {
         eq.setEnabled(false);
+        leveler.setEnabled(false);
         cfc.setEnabled(false);
         comp.setEnabled(false);
         tube.setEnabled(false);
@@ -388,6 +396,13 @@ struct Chain {
             pudu.setPooMix(s.get("exciter-low-mix", 0));
             pudu.setEnabled(true);
         }
+        if (s.any("lvlr-")) {
+            leveler.setMaxGainDb(s.get("lvlr-max", ClientLeveler::kDefaultMaxGainDb));
+            leveler.setAttackMs(s.get("lvlr-attack", ClientLeveler::kDefaultAttackMs));
+            leveler.setDecayMs(s.get("lvlr-decay", ClientLeveler::kDefaultDecayMs));
+            leveler.setHangMs(s.get("lvlr-hang", 0));
+            leveler.setEnabled(true);
+        }
         if (s.any("cfc-")) {
             cfc.setFftSize(static_cast<int>(s.get("cfc-fft", ClientCfc::kDefaultFftSize)));
             cfc.setPrecompDb(s.get("cfc-precomp", 0));
@@ -445,10 +460,11 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     processors.tube = &chain->tube;
     processors.pudu = &chain->pudu;
     processors.cfc = &chain->cfc;
+    processors.leveler = &chain->leveler;
     processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
     using Stage = TxVoiceProcessor::Stage;
-    const std::vector<Stage> stages{Stage::Tube, Stage::Eq, Stage::Cfc, Stage::Comp, Stage::Enh};
+    const std::vector<Stage> stages{Stage::Tube, Stage::Eq, Stage::Leveler, Stage::Cfc, Stage::Comp, Stage::Enh};
     uint64_t order = 0;
     if (!TxChainLayout::pack(stages, order)) {
         std::fprintf(stderr, "the stage order does not fit the packed chain\n");

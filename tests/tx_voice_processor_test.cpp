@@ -2,6 +2,7 @@
 #include "core/RNNoiseFilter.h"
 #include "core/Resampler.h"
 #include "core/ClientCfc.h"
+#include "core/ClientLeveler.h"
 #include "core/TxChainLayout.h"
 #include "core/ClientFinalLimiter.h"
 #include "core/TxVoiceProcessor.h"
@@ -19,6 +20,7 @@
 #include <vector>
 
 using AetherSDR::ClientCfc;
+using AetherSDR::ClientLeveler;
 using AetherSDR::ClientTube;
 using AetherSDR::RNNoiseFilter;
 using AetherSDR::Resampler;
@@ -801,6 +803,40 @@ void testCfcStageRunsAndBypasses()
     report("and leaves the latency", processor.latencyFrames() == baseLatency);
 }
 
+// LVLR in its chain slot: on, it raises a quiet tone and its FIFO and
+// look-ahead join the reported latency; off, the strip passes the audio.
+void testLevelerStageRunsAndBypasses()
+{
+    ClientLeveler lev;
+    lev.setMaxGainDb(12.0f);
+    TxVoiceProcessor processor;
+    TxVoiceProcessor::Processors processors;
+    processors.leveler = &lev;
+    processor.setProcessors(processors);
+    processor.setStageOrder(packedSingleStage(TxVoiceProcessor::Stage::Leveler));
+    processor.setMeasurementCaptureEnabled(true);
+    processor.prepare(48000, 1024);
+    const int baseLatency = processor.latencyFrames();
+
+    lev.setEnabled(true);
+    bool changed = false;
+    for (int block = 0; block < 10; ++block) {
+        QByteArray tone = makeCanonicalTone(480, 48000, 1000.0f);
+        processor.processCapturedInt16(tone);
+        changed = changed
+                  || processor.normalizedFloat48Stereo() != processor.postChannelStripFloat48Stereo();
+    }
+    report("an enabled LVLR changes the post-strip audio", changed);
+    report("its FIFO and look-ahead join the reported latency",
+           processor.latencyFrames() == baseLatency + lev.latencyFrames());
+
+    lev.setEnabled(false);
+    QByteArray tone = makeCanonicalTone(480, 48000, 1000.0f);
+    processor.processCapturedInt16(tone);
+    report("a bypassed LVLR leaves the post-strip audio alone",
+           processor.normalizedFloat48Stereo() == processor.postChannelStripFloat48Stereo());
+}
+
 void testNonFiniteSamplesCannotPoisonEgressSrc()
 {
     std::vector<float> input(480 * 2, 0.1f);
@@ -1285,6 +1321,7 @@ int main()
     testChannelStripRunsAt48k();
     testNinthSlotStageRuns();
     testCfcStageRunsAndBypasses();
+    testLevelerStageRunsAndBypasses();
     testNonFiniteSamplesCannotPoisonEgressSrc();
     testNonFiniteCapturedFloatCannotPoisonIngressSrc();
     testMeasurementCaptureCanBeDisabled();

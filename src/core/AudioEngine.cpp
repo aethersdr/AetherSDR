@@ -21,6 +21,8 @@
 #include "ClientReverb.h"
 #include "ClientCfc.h"
 #include "ClientCfcJson.h"
+#include "ClientLeveler.h"
+#include "ClientLevelerJson.h"
 #include "ClientFinalLimiter.h"
 #include "ClientTxTestTone.h"
 #include "ClientQuindarTone.h"
@@ -111,7 +113,9 @@ static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Reverb)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Reverb));
 static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Cfc)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Cfc));
-static_assert(static_cast<unsigned>(AudioEngine::TxChainStage::Cfc)
+static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Leveler)
+              == static_cast<uint8_t>(TxVoiceProcessor::Stage::Leveler));
+static_assert(static_cast<unsigned>(AudioEngine::TxChainStage::Leveler)
               <= TxChainLayout::kMaxStageValue,
               "every TX chain stage value must fit one packed slot");
 static_assert(AudioEngine::kMaxTxChainStages == TxVoiceProcessor::kMaxStages);
@@ -1886,6 +1890,7 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_clientPuduRx(std::make_unique<ClientPudu>())
     , m_clientReverbTx(std::make_unique<ClientReverb>())
     , m_clientCfcTx(std::make_unique<ClientCfc>())
+    , m_clientLevelerTx(std::make_unique<ClientLeveler>())
     , m_clientFinalLimiterTx(std::make_unique<ClientFinalLimiter>())
     , m_clientTxTestTone(std::make_unique<ClientTxTestTone>())
     , m_wsprBeacon(std::make_unique<WsprBeacon>())
@@ -1970,6 +1975,7 @@ AudioEngine::AudioEngine(QObject* parent)
     txProcessors.pudu = m_clientPuduTx.get();
     txProcessors.reverb = m_clientReverbTx.get();
     txProcessors.cfc = m_clientCfcTx.get();
+    txProcessors.leveler = m_clientLevelerTx.get();
     txProcessors.finalLimiter = m_clientFinalLimiterTx.get();
     txProcessors.testTone = m_clientTxTestTone.get();
     txProcessors.quindar = m_clientQuindarTone.get();
@@ -1995,6 +2001,7 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientPuduSettings();    // restore persisted PUDU params
     loadClientReverbSettings();  // restore persisted reverb params
     loadClientCfcSettings();
+    loadClientLevelerSettings();
     loadClientFinalLimiterSettings();  // restore persisted final-limiter params
     loadClientQuindarSettings();       // restore persisted Quindar tone params
     loadClientRxChainOrder();    // restore persisted RX chain order (Phase 0+)
@@ -6378,6 +6385,7 @@ QString stageName(AudioEngine::TxChainStage s)
         case AudioEngine::TxChainStage::Enh:    return "Enh";
         case AudioEngine::TxChainStage::Reverb: return "Reverb";
         case AudioEngine::TxChainStage::Cfc:    return "Cfc";
+        case AudioEngine::TxChainStage::Leveler: return "Leveler";
         case AudioEngine::TxChainStage::None:   return "";
     }
     return "";
@@ -6393,6 +6401,7 @@ AudioEngine::TxChainStage stageFromName(const QString& name)
     if (name == "Enh")    return AudioEngine::TxChainStage::Enh;
     if (name == "Reverb") return AudioEngine::TxChainStage::Reverb;
     if (name == "Cfc")    return AudioEngine::TxChainStage::Cfc;
+    if (name == "Leveler") return AudioEngine::TxChainStage::Leveler;
     return AudioEngine::TxChainStage::None;
 }
 
@@ -6405,7 +6414,9 @@ AudioEngine::TxChainStage stageFromName(const QString& name)
 constexpr AudioEngine::TxChainStage kCanonicalTxChain[] = {
     AudioEngine::TxChainStage::Tube,
     AudioEngine::TxChainStage::Eq,
-    AudioEngine::TxChainStage::Cfc,   // ahead of Comp, as WDSP's xtxa() runs CFC before COMP
+    // WDSP's xtxa() order: leveler, then CFC, then COMP.
+    AudioEngine::TxChainStage::Leveler,
+    AudioEngine::TxChainStage::Cfc,
     AudioEngine::TxChainStage::Comp,
     AudioEngine::TxChainStage::Enh,
     AudioEngine::TxChainStage::Reverb,
@@ -6609,6 +6620,12 @@ void AudioEngine::setTxBypassed(bool on)
                     saveClientCfcSettings();
                 }
                 break;
+            case TxChainStage::Leveler:
+                if (m_clientLevelerTx) {
+                    m_clientLevelerTx->setEnabled(enabled);
+                    saveClientLevelerSettings();
+                }
+                break;
             case TxChainStage::None:
                 break;
         }
@@ -6624,6 +6641,7 @@ void AudioEngine::setTxBypassed(bool on)
             case TxChainStage::Enh:    return m_clientPuduTx   && m_clientPuduTx->isEnabled();
             case TxChainStage::Reverb: return m_clientReverbTx && m_clientReverbTx->isEnabled();
             case TxChainStage::Cfc:    return m_clientCfcTx    && m_clientCfcTx->isEnabled();
+            case TxChainStage::Leveler: return m_clientLevelerTx && m_clientLevelerTx->isEnabled();
             case TxChainStage::None:   return false;
         }
         return false;
@@ -6636,6 +6654,7 @@ void AudioEngine::setTxBypassed(bool on)
         TxChainStage::Enh,
         TxChainStage::Reverb,
         TxChainStage::Cfc,
+        TxChainStage::Leveler,
     };
 
     if (on) {
@@ -7483,6 +7502,26 @@ void AudioEngine::saveClientCfcSettings()
         QJsonDocument(clientCfcToJson(*m_clientCfcTx)).toJson(QJsonDocument::Compact)));
     m_clientCfcTx->collectRetiredBlocks();
     emit clientCfcStateChanged();
+}
+
+void AudioEngine::loadClientLevelerSettings()
+{
+    if (!m_clientLevelerTx) return;
+    const QString raw = AppSettings::instance().value("ClientLevelerTx", "{}").toString();
+    QJsonParseError err;
+    const auto doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        return;  // absent or unreadable: the stage keeps its defaults
+    }
+    applyClientLevelerJson(*m_clientLevelerTx, doc.object());
+}
+
+void AudioEngine::saveClientLevelerSettings()
+{
+    if (!m_clientLevelerTx) return;
+    AppSettings::instance().setValue("ClientLevelerTx", QString::fromUtf8(
+        QJsonDocument(clientLevelerToJson(*m_clientLevelerTx)).toJson(QJsonDocument::Compact)));
+    emit clientLevelerStateChanged();
 }
 
 void AudioEngine::loadClientFinalLimiterSettings()

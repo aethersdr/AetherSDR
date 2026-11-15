@@ -305,6 +305,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ClientLeveler.h": {
+  "tag": "universal",
+  "note": "Client TX-chain leveler (WDSP wcpAGC used standalone; max gain, attack, decay, hang + applied gain); radio-agnostic engine DSP feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientLevelerJson.h": {
+  "tag": "universal",
+  "note": "ClientLeveler's one-object JSON shape shared by its settings key and TX profiles/presets; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ClientTube.h": {
   "tag": "universal",
   "note": "Client TX-chain tube saturator DSP (drive/tone/env follower); radio-agnostic engine DSP, no vendor ties.",

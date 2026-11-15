@@ -3,6 +3,8 @@
 #include "AudioEngine.h"
 #include "ClientCfc.h"
 #include "ClientCfcJson.h"
+#include "ClientLeveler.h"
+#include "ClientLevelerJson.h"
 #include "ClientComp.h"
 #include "ClientEq.h"
 #include "ClientFinalLimiter.h"
@@ -42,6 +44,7 @@ QString stageEnumToName(AudioEngine::TxChainStage s)
         case AudioEngine::TxChainStage::Enh:    return "Enh";
         case AudioEngine::TxChainStage::Reverb: return "Reverb";
         case AudioEngine::TxChainStage::Cfc:    return "Cfc";
+        case AudioEngine::TxChainStage::Leveler: return "Leveler";
         case AudioEngine::TxChainStage::None:   return "";
     }
     return "";
@@ -770,6 +773,11 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
         preset["cfc"] = clientCfcToJson(*c);
     }
 
+    // LVLR.
+    if (auto* l = engine->clientLevelerTx()) {
+        preset["leveler"] = clientLevelerToJson(*l);
+    }
+
     // RN2 mic pre-amp (#3054).  Sibling of the per-stage objects so a
     // future NR-cluster addition can extend `rn2` into an object —
     // today we only persist the enable bit because that is the entire
@@ -917,6 +925,12 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
         applyClientCfcJson(*c, preset.value("cfc").toObject());
     }
 
+    // LVLR.
+    if (auto* l = engine->clientLevelerTx();
+        l && preset.contains("leveler") && preset.value("leveler").isObject()) {
+        applyClientLevelerJson(*l, preset.value("leveler").toObject());
+    }
+
     // Final brickwall limiter.
     if (auto* lim = engine->clientFinalLimiterTx();
         lim && preset.contains("finalLimiter")
@@ -948,6 +962,7 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
     engine->saveClientPuduSettings();
     engine->saveClientReverbSettings();
     engine->saveClientCfcSettings();
+    engine->saveClientLevelerSettings();
     engine->saveClientFinalLimiterSettings();
 }
 

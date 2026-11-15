@@ -8,6 +8,7 @@
 #include "core/ChannelStripPresets.h"
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
+#include "core/ClientLeveler.h"
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
 #include "core/SettingsPaths.h"
@@ -51,6 +52,7 @@ private slots:
     void roundTripsTheLiveTransmitChain();
     void aLegacyGateProfileTurnsRn2On();
     void roundTripsTheCfcStage();
+    void roundTripsTheLevelerStage();
     void exportsAndRestoresCompressorDriveAndPhase();
     void legacyCompressorProfilesKeepCurrentDriveAndPhase();
     void importedCompressorValuesAreClamped();
@@ -354,6 +356,27 @@ void AetherTxProfilesTest::roundTripsTheCfcStage()
     QCOMPARE(cfc->fftSize(), 2048);
     QCOMPARE(cfc->precompDb(), 5.0f);
     QVERIFY(cfc->bands() == saved);
+}
+
+void AetherTxProfilesTest::roundTripsTheLevelerStage()
+{
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine, nullptr);
+    ClientLeveler* lev = engine.clientLevelerTx();
+    QVERIFY(lev);
+    lev->setEnabled(true);
+    lev->setMaxGainDb(15.0f);
+    lev->setDecayMs(100.0f);
+    QVERIFY(lib.saveFromCurrent("LVLR Round Trip"));
+
+    lev->setEnabled(false);
+    lev->setMaxGainDb(5.0f);
+    lev->setDecayMs(500.0f);
+    QVERIFY(lib.loadProfile("LVLR Round Trip"));
+
+    QVERIFY(lev->isEnabled());
+    QCOMPARE(lev->maxGainDb(), 15.0f);
+    QCOMPARE(lev->decayMs(), 100.0f);
 }
 
 void AetherTxProfilesTest::exportsAndRestoresCompressorDriveAndPhase()

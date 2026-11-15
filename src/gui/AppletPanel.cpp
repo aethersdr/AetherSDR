@@ -37,6 +37,7 @@
 #include "ClientPuduApplet.h"
 #include "ClientReverbApplet.h"
 #include "ClientCfcApplet.h"
+#include "ClientLevelerApplet.h"
 #include "ClientRxDspApplet.h"
 #include "ClientChainApplet.h"
 #include "CatControlApplet.h"
@@ -1040,6 +1041,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_clientPuduRxApplet = new ClientPuduApplet(ClientPuduApplet::Side::Rx);
     m_clientReverbApplet = new ClientReverbApplet;
     m_clientCfcApplet    = new ClientCfcApplet;
+    m_clientLevelerApplet = new ClientLevelerApplet;
     m_clientRxDspApplet  = new ClientRxDspApplet;
     m_clientChainApplet = new ClientChainApplet;
 
@@ -1076,6 +1078,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     makeChildContainer("pudu-rx", QString::fromUtf8("Aetherial RX Poodoo\xe2\x84\xa2"), m_clientPuduRxApplet, -1);
     makeChildContainer("reverb",  "Aetherial FreeVerb",       m_clientReverbApplet, -1);
     makeChildContainer("cfc",     "Aetherial CFC",            m_clientCfcApplet,    -1);
+    makeChildContainer("lvlr",    "Aetherial LVLR",           m_clientLevelerApplet, -1);
     makeChildContainer("dsp-rx",  "Aetherial Noise Reduction", m_clientRxDspApplet, -1);
 
     // One-shot settings migration (#1713 Phase 4b): carry over the
@@ -1645,6 +1648,7 @@ void AppletPanel::setPooDooActiveSide(PooDooSide side)
         QStringLiteral("pudu"),
         QStringLiteral("reverb"),
         QStringLiteral("cfc"),
+        QStringLiteral("lvlr"),
     };
     static const QStringList kRxOnly{
         QStringLiteral("ceq-rx"),
@@ -2101,6 +2105,7 @@ void AppletPanel::setTxDspChainOrder(
             case AudioEngine::TxChainStage::Enh:    return "pudu";
             case AudioEngine::TxChainStage::Reverb: return "reverb";
             case AudioEngine::TxChainStage::Cfc:    return "cfc";
+            case AudioEngine::TxChainStage::Leveler: return "lvlr";
             case AudioEngine::TxChainStage::None:   return {};
         }
         return {};

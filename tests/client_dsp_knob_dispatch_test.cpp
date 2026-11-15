@@ -7,12 +7,14 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
+#include "core/ClientLeveler.h"
 #include "core/ClientComp.h"
 #include "core/ClientGate.h"
 #include "core/ClientReverb.h"
 #include "core/ClientTube.h"
 #include "gui/ClientCfcApplet.h"
 #include "gui/ClientCfcCurveWidget.h"
+#include "gui/ClientLevelerApplet.h"
 #include "gui/ClientCompApplet.h"
 #include "gui/ClientCompKnob.h"
 #include "gui/ClientGateApplet.h"
@@ -20,6 +22,7 @@
 #include "gui/ClientReverbApplet.h"
 #include "gui/ClientTubeApplet.h"
 #include "gui/StripCfcPanel.h"
+#include "gui/StripLevelerPanel.h"
 #include "gui/StripReverbPanel.h"
 
 #include <QApplication>
@@ -156,6 +159,27 @@ private slots:
         QCOMPARE(engine.clientCfcTx()->bands().size(), before + 1);
     }
 
+    void levelerAppletMaxGain()
+    {
+        AudioEngine engine;
+        ClientLevelerApplet applet;
+        applet.setAudioEngine(&engine);
+        ClientCompKnob* knob = firstKnob(applet);
+        QVERIFY(knob);
+        emit knob->valueChanged(13.0f);
+        QCOMPARE(engine.clientLevelerTx()->maxGainDb(), 13.0f);
+    }
+
+    void stripLevelerMaxGain()
+    {
+        AudioEngine engine;
+        StripLevelerPanel panel(&engine);
+        ClientCompKnob* knob = firstKnob(panel);
+        QVERIFY(knob);
+        emit knob->valueChanged(9.0f);
+        QCOMPARE(engine.clientLevelerTx()->maxGainDb(), 9.0f);
+    }
+
     void knobsWithoutEngineAreNoOps()
     {
         ClientCompApplet comp;
@@ -165,7 +189,10 @@ private slots:
         StripReverbPanel strip(nullptr);
         ClientCfcApplet cfc;
         StripCfcPanel cfcStrip(nullptr);
-        for (QWidget* w : {static_cast<QWidget*>(&comp), static_cast<QWidget*>(&gate),
+        ClientLevelerApplet lvlr;
+        StripLevelerPanel lvlrStrip(nullptr);
+        for (QWidget* w : {static_cast<QWidget*>(&lvlr), static_cast<QWidget*>(&lvlrStrip),
+                           static_cast<QWidget*>(&comp), static_cast<QWidget*>(&gate),
                            static_cast<QWidget*>(&tube),
                            static_cast<QWidget*>(&reverb), static_cast<QWidget*>(&strip),
                            static_cast<QWidget*>(&cfc), static_cast<QWidget*>(&cfcStrip)}) {

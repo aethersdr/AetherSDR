@@ -2088,7 +2088,7 @@ void VfoWidget::buildTabContent()
         m_aetherVoiceBtn->setFixedHeight(26);
         m_aetherVoiceBtn->setStyleSheet(kDspToggle);
         m_aetherVoiceBtn->setAccessibleName("AetherTX");
-        m_aetherVoiceBtn->setToolTip("Open AetherTX — the transmit chain: RN2, tube, EQ, CFC, compressor, exciter, reverb, output");
+        m_aetherVoiceBtn->setToolTip("Open AetherTX — the transmit chain: RN2, tube, EQ, leveler, CFC, compressor, exciter, reverb, output");
         connect(m_aetherVoiceBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherVoiceRequested);
 

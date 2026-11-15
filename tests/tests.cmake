@@ -11029,6 +11029,9 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientCfcApplet.cpp
     src/gui/ClientCfcCurveWidget.cpp
     src/gui/StripCfcPanel.cpp
+    src/gui/ClientLevelerApplet.cpp
+    src/gui/ClientLevelerHistoryWidget.cpp
+    src/gui/StripLevelerPanel.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
 target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)

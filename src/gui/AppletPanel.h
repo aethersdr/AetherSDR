@@ -60,6 +60,7 @@ class ClientTubeApplet;
 class ClientPuduApplet;
 class ClientReverbApplet;
 class ClientCfcApplet;
+class ClientLevelerApplet;
 class ClientRxDspApplet;
 class ClientChainApplet;
 class CatControlApplet;
@@ -162,6 +163,7 @@ public:
     ClientPuduApplet* clientPuduRxApplet() { return m_clientPuduRxApplet; }
     ClientReverbApplet* clientReverbApplet() { return m_clientReverbApplet; }
     ClientCfcApplet* clientCfcApplet() { return m_clientCfcApplet; }
+    ClientLevelerApplet* clientLevelerApplet() { return m_clientLevelerApplet; }
     ClientRxDspApplet*  clientRxDspApplet() { return m_clientRxDspApplet; }
     ClientChainApplet* clientChainApplet() { return m_clientChainApplet; }
     CatControlApplet* catControlApplet() { return m_catControlApplet; }
@@ -469,6 +471,7 @@ private:
     ClientPuduApplet* m_clientPuduRxApplet{nullptr};
     ClientReverbApplet* m_clientReverbApplet{nullptr};
     ClientCfcApplet*    m_clientCfcApplet{nullptr};
+    ClientLevelerApplet* m_clientLevelerApplet{nullptr};
     ClientRxDspApplet*  m_clientRxDspApplet{nullptr};
     ClientChainApplet* m_clientChainApplet{nullptr};
     bool m_txAudioPathBlocked{false};

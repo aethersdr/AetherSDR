@@ -7,6 +7,7 @@
 #include "ClientQuindarTone.h"
 #include "ClientReverb.h"
 #include "ClientCfc.h"
+#include "ClientLeveler.h"
 #include "ClientTube.h"
 #include "ClientTxTestTone.h"
 #include "RNNoiseFilter.h"
@@ -95,6 +96,9 @@ void TxVoiceProcessor::prepareProcessors()
     if (m_processors.cfc) {
         m_processors.cfc->prepare(kDspRate);
     }
+    if (m_processors.leveler) {
+        m_processors.leveler->prepare(kDspRate);
+    }
     if (m_processors.reverb) {
         m_processors.reverb->prepare(kDspRate);
     }
@@ -137,6 +141,9 @@ void TxVoiceProcessor::reset()
     }
     if (m_processors.cfc) {
         m_processors.cfc->reset();
+    }
+    if (m_processors.leveler) {
+        m_processors.leveler->reset();
     }
     if (m_processors.reverb) {
         m_processors.reverb->reset();
@@ -510,6 +517,11 @@ void TxVoiceProcessor::processChannelStrip(QByteArray& float48Stereo) noexcept
                     m_processors.cfc->process(samples, frames, kChannels);
                 }
                 break;
+            case Stage::Leveler:
+                if (m_processors.leveler && m_processors.leveler->isEnabled()) {
+                    m_processors.leveler->process(samples, frames, kChannels);
+                }
+                break;
         }
     }
 }
@@ -558,6 +570,10 @@ int TxVoiceProcessor::latencyFrames() const noexcept
         }
         if (stage == Stage::Cfc && m_processors.cfc && m_processors.cfc->isEnabled()) {
             frames += m_processors.cfc->latencyFrames();
+        }
+        if (stage == Stage::Leveler && m_processors.leveler
+            && m_processors.leveler->isEnabled()) {
+            frames += m_processors.leveler->latencyFrames();
         }
     }
     return frames;

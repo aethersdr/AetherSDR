@@ -1036,6 +1036,7 @@ set(CORE_SOURCES
     src/core/ClientCfc.cpp  # WDSP CFC multiband compressor stage (RFC #4836)
     src/core/ClientCfcJson.cpp
     src/core/ClientLeveler.cpp  # WDSP TX leveler stage (RFC #4836)
+    src/core/ClientLevelerJson.cpp
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp
@@ -1599,6 +1600,9 @@ set(GUI_SOURCES
     src/gui/ClientCfcApplet.cpp
     src/gui/ClientCfcCurveWidget.cpp
     src/gui/StripCfcPanel.cpp
+    src/gui/ClientLevelerApplet.cpp
+    src/gui/ClientLevelerHistoryWidget.cpp
+    src/gui/StripLevelerPanel.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
     src/gui/AetherialAudioStrip.cpp
