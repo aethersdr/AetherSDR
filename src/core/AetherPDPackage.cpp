@@ -88,19 +88,44 @@ std::array<QString, 8> AetherPDPackage::fileNames()
     return {QStringLiteral("worker.envelope"), QStringLiteral("candidate.release"), QStringLiteral("previous.release"),
         QStringLiteral("pd-accept"), QStringLiteral("pd-carrier"), QStringLiteral("pd-send"), QStringLiteral("pd-deliver"), QStringLiteral("LICENSES")};
 }
+std::array<qint64, 8> AetherPDPackage::fileSizeLimits()
+{
+    return {184 + 512 * 1024, 18 * 1024 * 1024, 18 * 1024 * 1024,
+        8 * 1024 * 1024, 8 * 1024 * 1024, 8 * 1024 * 1024, 8 * 1024 * 1024, 512 * 1024};
+}
+bool AetherPDPackage::validTrust(const Trust& trust)
+{
+    if (trust.candidateKey.size() != 32 || trust.previousKey.size() != 32) { return false; }
+    const auto limits = fileSizeLimits();
+    qint64 codeBytes = 0;
+    for (std::size_t i = 0; i < trust.files.size(); ++i) {
+        const Pin& pin = trust.files[i];
+        if (pin.size <= 0 || pin.size > limits[i] || pin.sha256.size() != 32) { return false; }
+        if (i >= 3 && i < 7) { codeBytes += pin.size; }
+    }
+    return codeBytes <= 16 * 1024 * 1024;
+}
 std::optional<AetherPDPackage> AetherPDPackage::load(const QString& directory, const Trust& trust)
 {
-    if (trust.candidateKey.size() != 32 || trust.previousKey.size() != 32) { return std::nullopt; }
+    if (!validTrust(trust)) { return std::nullopt; }
     const QDir root(directory);
     if (!root.exists()) { return std::nullopt; }
     const auto names = fileNames();
-    constexpr std::array<qint64, 8> limits{184 + 512 * 1024, 18 * 1024 * 1024, 18 * 1024 * 1024,
-        8 * 1024 * 1024, 8 * 1024 * 1024, 8 * 1024 * 1024, 8 * 1024 * 1024, 512 * 1024};
-    std::array<QByteArray, 8> files;
+    const auto limits = fileSizeLimits();
+    Files files;
     for (std::size_t i = 0; i < files.size(); ++i) {
         const auto bytes = snapshot(root.filePath(names[i]), trust.files[i], limits[i]);
         if (!bytes) { return std::nullopt; }
         files[i] = *bytes;
+    }
+    return verify(files, trust);
+}
+std::optional<AetherPDPackage> AetherPDPackage::verify(const Files& files, const Trust& trust)
+{
+    if (!validTrust(trust)) { return std::nullopt; }
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        if (files[i].size() != trust.files[i].size
+            || QCryptographicHash::hash(files[i], QCryptographicHash::Sha256) != trust.files[i].sha256) { return std::nullopt; }
     }
     const auto candidate = release(files[1], trust.candidateKey), previous = release(files[2], trust.previousKey);
     if (!candidate || !previous || candidate->arch != previous->arch || candidate->profile != previous->profile

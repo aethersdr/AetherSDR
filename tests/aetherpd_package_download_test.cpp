@@ -1,0 +1,176 @@
+#include "AetherPDPackageFixture.h"
+#include "AetherPDTestTransport.h"
+#include "core/AetherPDPackageDownload.h"
+#include <QtTest>
+#include <memory>
+
+using namespace AetherSDR;
+namespace {
+AetherPDRelease release(const AetherPDTest::PackageFixture& fixture, int arch = 64)
+{
+    AetherPDRelease result;
+    result.version = "0.1.0-test"; result.firmware = "4.3.16.42034"; result.profile = arch == 64 ? 1 : 2;
+    result.trust = fixture.trust;
+    const auto names = AetherPDPackage::fileNames();
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        result.urls[i] = QUrl(QStringLiteral("https://example.invalid/aetherpd/") + names[i]);
+    }
+    return result;
+}
+}
+class DownloadTest : public QObject {
+    Q_OBJECT
+private slots:
+    void completePinnedRelease_data()
+    {
+        QTest::addColumn<int>("arch");
+        QTest::newRow("arm64") << 64; QTest::newRow("armv7") << 7;
+    }
+    void completePinnedRelease()
+    {
+        QFETCH(int, arch);
+        AetherPDTest::PackageFixture fixture(arch);
+        AetherPDTest::Network network;
+        AetherPDPackageDownload job(network);
+        QSignalSpy ready(&job, &AetherPDPackageDownload::ready);
+        QSignalSpy progress(&job, &AetherPDPackageDownload::progress);
+        QSignalSpy failed(&job, &AetherPDPackageDownload::failed);
+        const auto selection = release(fixture, arch);
+        QVERIFY(job.start(selection)); QVERIFY(!job.start(selection));
+        for (std::size_t i = 0; i < 8; ++i) {
+            QCOMPARE(network.sent.size(), i + 1);
+            QCOMPARE(network.sent.back().method, QNetworkAccessManager::GetOperation);
+            const auto& request = network.sent.back().request;
+            QCOMPARE(request.url(), selection.urls[i]);
+            QVERIFY(!request.hasRawHeader("Authorization"));
+            QCOMPARE(request.attribute(QNetworkRequest::CookieLoadControlAttribute).toInt(), int(QNetworkRequest::Manual));
+            QCOMPARE(request.attribute(QNetworkRequest::AuthenticationReuseAttribute).toInt(), int(QNetworkRequest::Manual));
+            QCOMPARE(request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(), int(QNetworkRequest::NoLessSafeRedirectPolicy));
+            QCOMPARE(request.maximumRedirectsAllowed(), 5);
+            network.last->complete(200, fixture.bytes(i));
+        }
+        QCOMPARE(ready.size(), 1); QVERIFY(failed.isEmpty()); QVERIFY(!job.active());
+        QVERIFY(job.package()); QCOMPARE(job.package()->profile(), selection.profile);
+        QCOMPARE(progress.last()[0], progress.last()[1]);
+        const auto retained = job.package();
+        job.cancel(); QVERIFY(!job.package()); QVERIFY(retained->plan("fixture-8600").size() == 352);
+    }
+    void invalidCatalogueRefusedBeforeNetwork()
+    {
+        AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network network; AetherPDPackageDownload job(network);
+        const auto selection = release(fixture);
+        for (const QString& url : {QStringLiteral("http://example.invalid/file"), QStringLiteral("file:///tmp/file"),
+                                  QStringLiteral("https://user:secret@example.invalid/file"), QStringLiteral("https://example.invalid/file?key=x"),
+                                  QStringLiteral("https://example.invalid/file#fragment")}) {
+            auto bad = selection; bad.urls[0] = QUrl(url); QVERIFY(!job.start(bad));
+        }
+        auto bad = selection; bad.trust.files[1].size = 100 * 1024 * 1024; QVERIFY(!job.start(bad));
+        bad = selection; bad.trust.previousKey.clear(); QVERIFY(!job.start(bad));
+        bad = selection; bad.profile = 0; QVERIFY(!job.start(bad));
+        bad = selection; bad.firmware = "unknown"; QVERIFY(!job.start(bad));
+        bad = selection; bad.version.clear(); QVERIFY(!job.start(bad));
+        QVERIFY(network.sent.empty());
+    }
+    void corruptFileStopsBeforeNextRequest_data()
+    {
+        QTest::addColumn<int>("index");
+        for (int i = 0; i < 8; ++i) { QTest::newRow(qPrintable(QString::number(i))) << i; }
+    }
+    void corruptFileStopsBeforeNextRequest()
+    {
+        QFETCH(int, index);
+        AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network network; AetherPDPackageDownload job(network);
+        QSignalSpy failed(&job, &AetherPDPackageDownload::failed);
+        QVERIFY(job.start(release(fixture)));
+        for (int i = 0; i < index; ++i) { network.last->complete(200, fixture.bytes(i)); }
+        QByteArray bytes = fixture.bytes(index); bytes[0] ^= 1;
+        network.last->complete(200, bytes);
+        QCOMPARE(failed.size(), 1); QCOMPARE(failed[0][0].value<AetherPDPackageDownload::Failure>(), AetherPDPackageDownload::Failure::Integrity);
+        QVERIFY(!job.active()); QVERIFY(!job.package()); QCOMPARE(network.sent.size(), std::size_t(index + 1));
+    }
+    void announcedAndUnannouncedOversize()
+    {
+        for (bool announced : {true, false}) {
+            AetherPDTest::PackageFixture fixture;
+            AetherPDTest::Network network; AetherPDPackageDownload job(network);
+            QSignalSpy failed(&job, &AetherPDPackageDownload::failed);
+            QVERIFY(job.start(release(fixture)));
+            if (announced) { network.last->announceLength(fixture.bytes(0).size() + 1); }
+            else { network.last->complete(200, fixture.bytes(0) + 'x'); }
+            QCOMPARE(failed.size(), 1); QCOMPARE(failed[0][0].value<AetherPDPackageDownload::Failure>(), AetherPDPackageDownload::Failure::Oversize);
+            QVERIFY(network.last->aborted); QVERIFY(!job.package()); QCOMPARE(network.sent.size(), std::size_t(1));
+        }
+    }
+    void truncatedAndNetworkFailures()
+    {
+        AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network network; AetherPDPackageDownload job(network);
+        QSignalSpy failed(&job, &AetherPDPackageDownload::failed);
+        QVERIFY(job.start(release(fixture))); network.last->complete(200, fixture.bytes(0).first(5));
+        QCOMPARE(failed.last()[0].value<AetherPDPackageDownload::Failure>(), AetherPDPackageDownload::Failure::Integrity);
+        QVERIFY(job.start(release(fixture))); network.last->complete(404, {});
+        QCOMPARE(failed.last()[0].value<AetherPDPackageDownload::Failure>(), AetherPDPackageDownload::Failure::Network);
+        QVERIFY(job.start(release(fixture))); network.last->complete(200, {}, QNetworkReply::SslHandshakeFailedError);
+        QCOMPARE(failed.last()[0].value<AetherPDPackageDownload::Failure>(), AetherPDPackageDownload::Failure::Network);
+    }
+    void signedMetadataMustMatchSelection()
+    {
+        AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network network; AetherPDPackageDownload job(network);
+        QSignalSpy failed(&job, &AetherPDPackageDownload::failed);
+        auto selection = release(fixture); selection.firmware = "4.0.0.0";
+        QVERIFY(job.start(selection));
+        for (int i = 0; i < 8; ++i) { network.last->complete(200, fixture.bytes(i)); }
+        QCOMPARE(failed.size(), 1); QVERIFY(!job.package());
+    }
+    void cancelAndRestartFromProgressIgnoresOldCompletion()
+    {
+        AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network network; AetherPDPackageDownload job(network);
+        QSignalSpy ready(&job, &AetherPDPackageDownload::ready);
+        QSignalSpy failed(&job, &AetherPDPackageDownload::failed);
+        bool restarted = false;
+        connect(&job, &AetherPDPackageDownload::progress, &job, [&] {
+            if (!restarted) { restarted = true; job.cancel(); QVERIFY(job.start(release(fixture))); }
+        });
+        QVERIFY(job.start(release(fixture)));
+        const QPointer<AetherPDTest::Reply> old = network.last;
+        old->complete(200, fixture.bytes(0)); QVERIFY(restarted); QVERIFY(old->aborted);
+        QVERIFY(network.last != old); QVERIFY(job.active()); QVERIFY(ready.isEmpty()); QVERIFY(failed.isEmpty());
+        QCOMPARE(network.sent.size(), std::size_t(2));
+        for (int i = 0; i < 8; ++i) { network.last->complete(200, fixture.bytes(i)); }
+        QCOMPARE(ready.size(), 1); QVERIFY(failed.isEmpty());
+    }
+    void deadlineAndManagerLoss()
+    {
+        AetherPDTest::PackageFixture fixture;
+        auto network = std::make_unique<AetherPDTest::Network>();
+        AetherPDPackageDownload job(*network);
+        QSignalSpy failed(&job, &AetherPDPackageDownload::failed);
+        QVERIFY(job.start(release(fixture)));
+        QTimer* deadline = job.findChild<QTimer*>(); QVERIFY(deadline);
+        QVERIFY(QMetaObject::invokeMethod(deadline, "timeout", Qt::DirectConnection));
+        QCOMPARE(failed.last()[0].value<AetherPDPackageDownload::Failure>(), AetherPDPackageDownload::Failure::Timeout);
+        QVERIFY(job.start(release(fixture))); network.reset();
+        QCOMPARE(failed.last()[0].value<AetherPDPackageDownload::Failure>(), AetherPDPackageDownload::Failure::Network);
+        QVERIFY(!job.active()); QVERIFY(!job.start(release(fixture)));
+    }
+    void deletionFromSignals()
+    {
+        for (int phase = 0; phase < 3; ++phase) {
+            AetherPDTest::PackageFixture fixture;
+            AetherPDTest::Network network;
+            auto job = std::make_unique<AetherPDPackageDownload>(network);
+            if (phase == 0) { connect(job.get(), &AetherPDPackageDownload::progress, &network, [&] { job.reset(); }); }
+            if (phase == 1) { connect(job.get(), &AetherPDPackageDownload::ready, &network, [&] { job.reset(); }); }
+            if (phase == 2) { connect(job.get(), &AetherPDPackageDownload::failed, &network, [&] { job.reset(); }); }
+            QVERIFY(job->start(release(fixture)));
+            for (int i = 0; i < 8 && job; ++i) { network.last->complete(phase == 2 ? 404 : 200, fixture.bytes(i)); }
+            QVERIFY(!job);
+        }
+    }
+};
+QTEST_GUILESS_MAIN(DownloadTest)
+#include "aetherpd_package_download_test.moc"

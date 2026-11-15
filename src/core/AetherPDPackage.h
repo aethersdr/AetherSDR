@@ -16,7 +16,11 @@ public:
         std::array<Pin, 8> files;
         QByteArray candidateKey, previousKey; // Independently trusted Ed25519 keys.
     };
+    using Files = std::array<QByteArray, 8>;
     static std::array<QString, 8> fileNames();
+    static std::array<qint64, 8> fileSizeLimits();
+    static bool validTrust(const Trust& trust);
+    static std::optional<AetherPDPackage> verify(const Files& files, const Trust& trust);
     static std::optional<AetherPDPackage> load(const QString& directory, const Trust& trust);
     quint32 profile() const { return m_profile; }
     QString firmware() const { return m_firmware; }

@@ -4947,6 +4947,15 @@ endif()
 add_test(NAME aetherpd_carrier_image_test COMMAND aetherpd_carrier_image_test)
 set_tests_properties(aetherpd_carrier_image_test PROPERTIES TIMEOUT 10)
 
+# Pinned package download: injected replies only; no sockets or credentials.
+add_executable(aetherpd_package_download_test tests/aetherpd_package_download_test.cpp)
+target_include_directories(aetherpd_package_download_test PRIVATE src tests)
+target_compile_definitions(aetherpd_package_download_test PRIVATE
+    AETHERPD_PACKAGE_TESTDATA="${CMAKE_SOURCE_DIR}/tools/pd-waveform/boot/testdata")
+target_link_libraries(aetherpd_package_download_test PRIVATE aethercore Qt6::Test)
+add_test(NAME aetherpd_package_download_test COMMAND aetherpd_package_download_test)
+set_tests_properties(aetherpd_package_download_test PROPERTIES TIMEOUT 20)
+
 # Native publisher fixtures; local files only, no executable is run.
 add_executable(aetherpd_package_test tests/aetherpd_package_test.cpp)
 target_include_directories(aetherpd_package_test PRIVATE src tests)

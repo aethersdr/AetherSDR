@@ -1,5 +1,7 @@
 #pragma once
 #include "core/AetherPDInstallationCoordinator.h"
+#include "core/AetherPDPackageDownload.h"
+#include <QFutureWatcher>
 #include <QHostAddress>
 #include <QObject>
 #include <QPointer>
@@ -19,12 +21,14 @@ public:
     using Coordinator = AetherPDInstallationCoordinator;
     using TokenLoader = std::function<void(const QString&, QObject*, std::function<void(const QString&)>)>;
     using Factory = std::function<std::unique_ptr<Coordinator>(RadioModel&)>;
-    enum class State { Idle, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable };
+    using DownloadFactory = std::function<std::unique_ptr<AetherPDPackageDownload>()>;
+    enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable };
     Q_ENUM(State)
-    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused };
+    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected };
     Q_ENUM(Failure)
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
-    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr);
+    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {});
+    bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
     ~AetherPDInstallationModel() override;
     bool offer(const Coordinator::Prepared& package, const RadioControlSession& session);
     bool approve();
@@ -39,12 +43,16 @@ public:
     QByteArray approvedPlan() const { return m_plan; }
     std::optional<Coordinator::Outcome> outcome() const { return m_outcome; }
     bool cleanupConfirmed() const { return m_cleanup; }
+    qint64 downloadReceived() const { return m_received; }
+    qint64 downloadTotal() const { return m_total; }
     Coordinator::State phase() const { return m_job ? m_job->state() : Coordinator::State::Idle; }
 signals:
     void changed();
 private:
     bool current() const;
     void unavailable(Failure reason);
+    void retirePreparation();
+    void downloaded(quint64 generation);
     void credential(const QString& token, quint64 generation);
     QPointer<RadioModel> m_radio;
     RadioControlSession m_session{};
@@ -53,6 +61,10 @@ private:
     QByteArray m_plan;
     TokenLoader m_load;
     Factory m_factory;
+    DownloadFactory m_downloadFactory;
+    std::unique_ptr<AetherPDPackageDownload> m_download;
+    QPointer<QFutureWatcher<std::optional<Coordinator::Prepared>>> m_preparation;
+    qint64 m_received{0}, m_total{0};
     QTimer m_timeout;
     quint64 m_generation{0};
     State m_state{State::Idle};

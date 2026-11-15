@@ -2260,3 +2260,33 @@ Unix input handling rejects final-component symlinks and nonregular files withou
 blocking on FIFOs. These fixtures contain public test keys and must never serve
 as release trust anchors. ARMv7 verification does not enable ARMv7 carrier delivery;
 the current coordinator refuses that unsupported profile.
+
+### Package download and preparation (development)
+
+`AetherPDPackageDownload` accepts a release selection supplied by trusted
+application code: version, exact firmware/profile, eight HTTPS URLs and the
+independent file/key pins. It fetches only the fixed files, checks each byte count
+and SHA-256 before requesting the next file, then runs package verification and
+checks the signed target against the selection. It keeps bounded bytes in RAM;
+it writes no cache, reads no credential and starts no executable or radio job.
+HTTP errors, missing/truncated data, oversize bodies and a 120-second overall
+deadline retire the attempt. HTTPS redirects cannot downgrade transport; request
+cookies, authentication reuse and cache use are disabled. Retired replies cannot
+complete a replacement attempt.
+
+`AetherPDInstallationModel::prepareRelease()` captures the original radio session
+and identity before downloading. It prepares the public carrier and fresh attempt
+on the existing Qt thread pool using value snapshots, then offers the exact
+result for explicit approval. Downloading and preparation are separate observable
+states; progress reports pinned total bytes. Cancellation or a changed radio
+identity retires the download and discards late preparation results. The worker
+never accesses a radio, model or credential. Existing approval-before-credential
+and single-use installation rules still apply.
+
+Injected-transport tests cover both package architectures, request policy, all
+eight corrupt files, size/deadline/network refusals, cancel/restart, deletion from
+callbacks, and original-session preparation/approval ordering. This is not a
+release publication or installed-radio proof: qualified shipping catalogue entries,
+operator-panel wiring, first-install trust, ARMv7 delivery and full live process
+graph qualification remain open. Only the ARM64 carrier profile can currently
+reach the model's preparation path.

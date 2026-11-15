@@ -15,6 +15,7 @@
 #include <QJsonObject>
 #include <QtEndian>
 #include <QtTest>
+#include <QThreadPool>
 
 using namespace AetherSDR;
 using Coordinator = AetherPDInstallationCoordinator;
@@ -88,6 +89,56 @@ struct Fixture {
 class CoordinatorTest : public QObject {
     Q_OBJECT
 private slots:
+    void downloadedPackagePreparesPreviewWithoutCredentialOrRadioEffects()
+    {
+        Fixture f; AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network downloads;
+        AetherPDRelease release;
+        release.version = "0.1.0-test"; release.firmware = "4.3.16.42034"; release.profile = 1; release.trust = fixture.trust;
+        const auto names = AetherPDPackage::fileNames();
+        for (std::size_t i = 0; i < 8; ++i) { release.urls[i] = QUrl(QStringLiteral("https://example.invalid/") + names[i]); }
+        int loads = 0;
+        AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; },
+            [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); },
+            nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); });
+        QVERIFY(model.prepareRelease(release, f.model.controlSession()));
+        QVERIFY(!model.approve()); QVERIFY(!model.prepareRelease(release, f.model.controlSession()));
+        for (int i = 0; i < 8; ++i) { downloads.last->complete(200, fixture.bytes(i)); }
+        QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QVERIFY(model.approvedPlan().startsWith("PDUPGR02"));
+        QCOMPARE(model.downloadReceived(), model.downloadTotal());
+        QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+        QVERIFY(model.approve()); QCOMPARE(loads, 1); model.cancel();
+    }
+    void changedSessionAndCancellationRetirePackagePreparation()
+    {
+        Fixture f; AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network downloads;
+        AetherPDRelease release;
+        release.version = "0.1.0-test"; release.firmware = "4.3.16.42034"; release.profile = 1; release.trust = fixture.trust;
+        const auto names = AetherPDPackage::fileNames();
+        for (std::size_t i = 0; i < 8; ++i) { release.urls[i] = QUrl(QStringLiteral("https://example.invalid/") + names[i]); }
+        int loads = 0;
+        AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; }, {},
+            nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); });
+        QVERIFY(model.prepareRelease(release, f.model.controlSession()));
+        const QPointer<AetherPDTest::Reply> old = downloads.last;
+        model.cancel(); QVERIFY(old->aborted);
+        old->complete(200, fixture.bytes(0));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
+        QVERIFY(model.prepareRelease(release, f.model.controlSession()));
+        RadioSetupControlTestAccess::replaceConnectionGeneration(f.model);
+        downloads.last->complete(200, fixture.bytes(0));
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
+        QVERIFY(model.prepareRelease(release, f.model.controlSession()));
+        for (int i = 0; i < 8; ++i) { downloads.last->complete(200, fixture.bytes(i)); }
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Preparing);
+        model.cancel();
+        QVERIFY(QThreadPool::globalInstance()->waitForDone(5000));
+        QCoreApplication::processEvents();
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
+        QVERIFY(model.approvedPlan().isEmpty()); QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty());
+    }
     void modelOwnsApprovalAndIgnoresLateCredentialAfterCancel()
     {
         Fixture f; const auto package = prepare(); QVERIFY(package);

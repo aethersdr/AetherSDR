@@ -46,6 +46,11 @@ public:
             emit finished();
         }
     }
+    void announceLength(qint64 length)
+    {
+        setHeader(QNetworkRequest::ContentLengthHeader, length);
+        emit metaDataChanged();
+    }
     qint64 bytesAvailable() const override { return payload.size() - position; }
     bool aborted{false};
 protected:
