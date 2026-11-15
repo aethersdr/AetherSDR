@@ -74,6 +74,20 @@ template <typename Container>
     return out;
 }
 
+// Without `retired`: a stage that no longer exists in this chain but whose
+// value a saved order may still carry.
+template <typename Container, typename Stage>
+[[nodiscard]] Container withoutRetired(const Container& stages, Stage retired)
+{
+    Container out;
+    for (const auto& stage : stages) {
+        if (stage != retired) {
+            out.push_back(stage);
+        }
+    }
+    return out;
+}
+
 // The stored order first, then every canonical stage it lacks, in canonical
 // order: an upgrade that adds a stage shows it without reordering the rest.
 template <typename Container>

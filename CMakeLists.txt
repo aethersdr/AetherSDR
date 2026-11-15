@@ -1027,7 +1027,6 @@ set(CORE_SOURCES
     src/core/ClientEq.cpp
     src/core/ClientComp.cpp
     src/core/ClientGate.cpp
-    src/core/ClientDeEss.cpp
     src/core/ClientTube.cpp
     src/core/ClientPudu.cpp
     src/core/ClientPuduMonitor.cpp
@@ -1583,9 +1582,6 @@ set(GUI_SOURCES
     src/gui/ClientGateEditor.cpp
     src/gui/StripGatePanel.cpp
     src/gui/ClientGateLevelView.cpp
-    src/gui/ClientDeEssApplet.cpp
-    src/gui/ClientDeEssCurveWidget.cpp
-    src/gui/StripDeEssPanel.cpp
     src/gui/ClientTubeApplet.cpp
     src/gui/ClientTubeCurveWidget.cpp
     src/gui/ClientTubeEditor.cpp

@@ -56,7 +56,6 @@ class MiniPanApplet;
 class ClientEqApplet;
 class ClientCompApplet;
 class ClientGateApplet;
-class ClientDeEssApplet;
 class ClientTubeApplet;
 class ClientPuduApplet;
 class ClientReverbApplet;
@@ -147,12 +146,9 @@ public:
     ClientCompApplet* clientCompApplet()   { return m_clientCompApplet; }
     ClientCompApplet* clientCompTxApplet() { return m_clientCompApplet; }
     ClientCompApplet* clientCompRxApplet() { return m_clientCompRxApplet; }
-    // Phase 7.2: GATE-TX retains the legacy accessor name; GATE-RX is
-    // the new sibling tile bound to AudioEngine::clientGateRx().
-    ClientGateApplet* clientGateApplet()   { return m_clientGateApplet; }
-    ClientGateApplet* clientGateTxApplet() { return m_clientGateApplet; }
+    // AetherRX's gate tile, bound to AudioEngine::clientGateRx(). AetherTX
+    // has no gate tile (RN2 replaces the TX gate).
     ClientGateApplet* clientGateRxApplet() { return m_clientGateRxApplet; }
-    ClientDeEssApplet* clientDeEssApplet() { return m_clientDeEssApplet; }
     // Phase 7.4: TUBE-TX retains the legacy accessor; TUBE-RX is the new
     // sibling tile bound to AudioEngine::clientTubeRx().
     ClientTubeApplet* clientTubeApplet()   { return m_clientTubeApplet; }
@@ -464,9 +460,7 @@ private:
     ClientEqApplet* m_clientEqRxApplet{nullptr};
     ClientCompApplet* m_clientCompApplet{nullptr};
     ClientCompApplet* m_clientCompRxApplet{nullptr};
-    ClientGateApplet* m_clientGateApplet{nullptr};
     ClientGateApplet* m_clientGateRxApplet{nullptr};
-    ClientDeEssApplet* m_clientDeEssApplet{nullptr};
     ClientTubeApplet* m_clientTubeApplet{nullptr};
     ClientTubeApplet* m_clientTubeRxApplet{nullptr};
     ClientPuduApplet* m_clientPuduApplet{nullptr};
