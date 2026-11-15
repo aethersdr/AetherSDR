@@ -497,5 +497,27 @@
       "Full P1-P10 first-install trust, actual6000 provisioning/hardware, DSP alignment/cold-start, PR4770, repeated final RF/stock comparison, reproducibility/resource budgets and independent release gates."
     ],
     "live_evidence": "receive-completion-live/validation.json under evidence_root"
+  },
+  "installed_session_failure_qualification": {
+    "status": "receive_only_GUI_crash_cleanup_fresh_GUI_restart_and_startup_cancel_verified_on8600",
+    "evidence": "installed-session-failure-live/validation.json under evidence_root",
+    "source_commit": "1316e4d80e7b5666e3a7579542086b67367e4f03",
+    "release_sha256": "b4f98724284073ce9e598a14ac979c27a7bc624b688d66ed141e1e1c73c192bc",
+    "production_ready": false,
+    "checks": [
+      "SIGKILL exact TX-disabled testGUI; DSP stopped automatically. Independent host audit found only capability-free NNP primary and no fixed ARP.",
+      "Fresh same-identity GUI started registered idle service without privileged setup, then stopped with receive recovery refusal preserved.",
+      "GUI Stop during observed startup canceled request; radio briefly allocated workers and DSP, then retired before registration. Independent host audit found no session workers or fixed ARP."
+    ],
+    "limitations": [
+      "Receive-only, no RF or unkey timing qualification.",
+      "Crash produced early IQ-source exit and receive-wait deadline; cleanup warnings retained, not relabeled clean.",
+      "30-second fallback requests found sessions already unavailable/unowned; no successful fallback Stop ACK claimed."
+    ],
+    "remaining": [
+      "Installed final-graph individual helper/private-shim failures, API/credential loss, scheduling and keyed unkey tests; crash/recovery warnings remain explicit.",
+      "Final candidate reboot and repeatability; prior-generation reboot evidence is preserved but is not this candidate.",
+      "Full P1-P10 first-install trust, FLEX6000 provisioning and actual6300 qualification, DSP alignment/cold-start, PR4770 operator integration, sustained RF/stock comparison, complete reproducibility/resource budgets and independent release gates."
+    ]
   }
 }
