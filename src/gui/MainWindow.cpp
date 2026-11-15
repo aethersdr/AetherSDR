@@ -3943,6 +3943,10 @@ void MainWindow::applyNonClientBandInsets()
     }
 #endif
     if (contentsMargins() == insets) {
+        // The margins are already right, but the grip may not be: showing it
+        // from setFramelessWindow() changes no size and so sends no
+        // resizeEvent. Placing it is cheap and idempotent.
+        positionSizeGrip();
         return;
     }
     // QMainWindow's layout honours the window's own margins, so this insets
@@ -4215,10 +4219,8 @@ void MainWindow::positionSizeGrip()
     // Windows 11 non-client band (applyNonClientBandInsets()) and are 0
     // everywhere else.
     if (m_sizeGrip) {
-        const int s = m_sizeGrip->width();
-        const QMargins margins = contentsMargins();
-        m_sizeGrip->move(width() - margins.right() - s - 1,
-                         height() - margins.bottom() - s - 1);
+        m_sizeGrip->move(WindowChrome::sizeGripOrigin(size(), m_sizeGrip->width(),
+                                                      contentsMargins()));
         m_sizeGrip->raise();
     }
 }

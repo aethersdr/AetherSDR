@@ -6,6 +6,7 @@
 #include <QOperatingSystemVersion>
 #include <QPoint>
 #include <QRect>
+#include <QSize>
 #include <QString>
 #include <QWidget>
 #include <QWindow>
@@ -257,6 +258,18 @@ inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
     }
     const int band = qCeil(bandDevicePx / dpr);
     return QMargins(band, 0, band, band);
+}
+
+// The frameless size grip is pinned to the bottom-right corner, which under
+// the band inset (nonClientBandInsets()) is the corner of the contents rect,
+// not of the window. Pure in its inputs for the same reason: the Windows-only
+// path is the only one where the margins are non-zero, and this way a host
+// without that chrome can still prove the arithmetic. The 1 px keeps the
+// grip's own edge off the boundary, as it was before the inset existed.
+inline QPoint sizeGripOrigin(const QSize& windowSize, int gripSize, const QMargins& margins)
+{
+    return QPoint(windowSize.width() - margins.right() - gripSize - 1,
+                  windowSize.height() - margins.bottom() - gripSize - 1);
 }
 
 inline QMargins contentInsets(const QWidget* window)
