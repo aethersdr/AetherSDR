@@ -100,8 +100,12 @@ bool DiscoveryResponder::acceptsSource(const QHostAddress& source, const QString
     if (mapped) { address = QHostAddress(v4); }
     if (address.isNull()) { return false; }
     if (address.isLoopback()) { return acceptLoopback; }
-    // Shared (carrier-grade NAT) space, which Tailscale numbers its IPv4 from.
-    if (address.isInSubnet(QHostAddress(QStringLiteral("100.64.0.0")), 10)) { return false; }
+    // Shared (carrier-grade NAT) space, which Tailscale numbers its IPv4 from,
+    // and Tailscale's IPv6 prefix, which is inside the ULA range accepted below.
+    if (address.isInSubnet(QHostAddress(QStringLiteral("100.64.0.0")), 10)
+        || address.isInSubnet(QHostAddress(QStringLiteral("fd7a:115c:a1e0::")), 48)) {
+        return false;
+    }
     return address.isPrivateUse() || address.isLinkLocal();
 }
 
@@ -145,6 +149,8 @@ void DiscoveryResponder::readPending()
         if (arrival.isEmpty() && !datagram.destinationAddress().isNull()) {
             arrival = interfaceHolding(datagram.destinationAddress());
         }
+        // Without the arrival interface, a tailnet probe cannot be told apart.
+        if (arrival.isEmpty()) { continue; }
         if (!acceptsSource(datagram.senderAddress(), arrival, m_config.acceptLoopback)) { continue; }
         if (!takeReplySlot(m_config.clock())) { continue; }
         const QByteArray reply = buildReply(
