@@ -1191,7 +1191,7 @@ void PanadapterApplet::setRttyMarkHz(int hz)
 
 void PanadapterApplet::setRttyShiftHz(int hz)
 {
-    if (hz <= 0) { return; }
+    if (hz < 0) { return; }
     showSliceValue(m_rttyShiftCombo, kRttyShiftPresetsHz, hz);
 }
 
