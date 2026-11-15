@@ -2,6 +2,7 @@
 
 #include "core/backends/AutoRfGainControl.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/ReconnectBusyProbe.h"
 #include "core/dsp/WdspChannel.h"
 #include "core/dsp/WdspSMeter.h"
 
@@ -78,6 +79,10 @@ public:
     bool ownsRxAudio() const override { return true; }
 
     void connectRadio(const RadioConnectRequest& request) override;
+    // Tests: arm the automatic-reconnect busy probe without a socket, then
+    // answer it through busyProbeForTest()->answerForTest().
+    void armBusyProbeForTest(const RadioConnectRequest& request);
+    ReconnectBusyProbe* busyProbeForTest() const { return m_busyProbe; }
     // RFC #4603: the client is this radio's memory. Restored state is validated and
     // stashed here pre-connect, applied during connect/pushInitialState; capture
     // reports through currentOperatingState() + operatingStateChanged().
@@ -131,6 +136,15 @@ public:
     void setAutoRfGain(bool on);
 
 private:
+    // The connect itself, after any busy probe (connectRadio()).
+    void startConnect(const RadioConnectRequest& request);
+    // An automatic reconnect asks the radio first (ReconnectBusyProbe.h): the
+    // gateware decodes commands from any host, so a retry must never fight
+    // another client for the radio.
+    void finishBusyProbe(std::optional<bool> streaming);
+    ReconnectBusyProbe* m_busyProbe = nullptr;
+    RadioConnectRequest m_busyProbeRequest;
+    bool m_busyWarned = false;   // one warning per busy spell, not one per 5 s retry
     // The span change after the throttle settles. The DDC rate is radio-wide
     // (0x00[25:24]), so every panadapter shares one span.
     void applyPanBandwidth(double hz);
@@ -253,11 +267,14 @@ public:
     // control refuses rather than clamps (#5395): it never moves the operator's number.
     static constexpr int kAutoRfGainMaxBaselineDb = hl2::kLnaGainMaxDb;
 
-    // dspChains()' gather. Static so it cannot reach m_rx: this runs on the I/O
-    // thread and m_rx is GUI-thread-owned (push_back/erase reallocate under a
-    // reader, #5401). Public as the read-back test seam.
+    // The gather behind dspChains()' cache. Static so it cannot reach m_rx: it
+    // runs on the I/O thread and m_rx is GUI-thread-owned (push_back/erase
+    // reallocate under a reader, #5401). Public as the read-back test seam.
     static QVariantList gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
                                         Hl2TxDsp* txDsp);
+    // Test seam: blocks until every DSP change queued to the I/O thread before
+    // the call is in the cache dspChains() reads. Production never waits on it.
+    void settleDspChainsForTest();
     LinkStats linkStats() const override;
 
     // Point the stream-free telemetry poller at a radio, independent of
@@ -334,7 +351,8 @@ private:
     // Forces m_connected, publishes a window and fires linkDown, so
     // control_front_end_overload_test follows a reconnect without a socket.
     friend struct Hl2FrontEndOverloadTestAccess;
-    // Runs loadHardwareOptions() without a socket (hl2_hardware_document_test).
+    // Runs loadHardwareOptions() / loadBoardIdentity() without a socket
+    // (hl2_hardware_document_test).
     friend struct Hl2BoardIdentityTestAccess;
     // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
     // take their age from it and read no clock, so the age row and the pairing
@@ -343,6 +361,18 @@ private:
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
+    // dspChains() is a read of m_dspChains, which the I/O thread fills by queued
+    // hop. request*() coalesces to one gather per event-loop turn, posted behind
+    // every DSP change already queued; post*() gathers now. Each publish carries
+    // m_connectGeneration and m_dspChainsEpoch, and a stale one is dropped.
+    void requestDspChainsPublish();
+    void postDspChainsGather();
+    void acceptDspChains(const QVariantList& chains, quint64 connectGeneration,
+                         quint64 epoch);
+    // The GUI-side half of invalidateTxDspConfiguration(): the cached TX chain
+    // reads not-configured at once, and publishes already in flight are stale.
+    void withdrawCachedTxChain();
+    friend struct Hl2DspChainsCacheTestAccess;
     // Publish linkStats() on the seam's fixed cadence. Timer-driven so the tick
     // survives the radio going silent, which the heartbeat must detect.
     void publishLinkStats();
@@ -421,6 +451,16 @@ private:
     // rather than served inline — see the guard at the top of connectRadio().
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;
     quint64 m_connectGeneration = 0;
+    // The last gatherDspChains() result the I/O thread published (rule 3).
+    QVariantList m_dspChains;
+    // Bumped by withdrawCachedTxChain(); paths that withdraw without a new
+    // connect (receiver teardown, connect failure) do not move m_connectGeneration.
+    quint64 m_dspChainsEpoch = 0;
+    QTimer* m_dspChainsPublishTimer = nullptr;   // zero-interval, single-shot
+    // Re-gathers on a cadence for the readings that move with no verb behind
+    // them: WDSP's notch count, the applied blanker, the modulator's counters.
+    QTimer* m_dspChainsRefreshTimer = nullptr;
+    static constexpr int kDspChainsRefreshIntervalMs = 1000;
 
     void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
@@ -531,8 +571,16 @@ private:
     // m_hw.filterBoard are the suggestion for it rather than a stored choice.
     // A suggested field is not persisted until a hw.set names it (#6806).
     hl2::GatewareBoard m_gatewareBoard = hl2::GatewareBoard::Unknown;
+    // The gateware major from the same connect's version text; published with
+    // the board as RadioCapabilities::boardIdentity (#7311). Held in the
+    // record's type; the parser's 8-bit result (the wire width) widens on
+    // assignment in loadBoardIdentity().
+    std::optional<int> m_gatewareMajor;
     bool m_hwCodecSuggested = false;
     bool m_hwFilterBoardSuggested = false;
+    // The connect-time identity from RadioConnectRequest::version: sets
+    // m_gatewareMajor and runs loadHardwareOptions() with the minor.
+    void loadBoardIdentity(const QString& gatewareVersion);
     // Load m_hw for m_radioSerial at connect, applying sessionCodec().
     void loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor);
     // Adopt a new set: persist (or not), push every field that changed to the
@@ -993,8 +1041,8 @@ private:
     QObject* m_dspBuildContext = nullptr;
 
     // Process-wide TX availability, decided at construction: interactive runs may
-    // transmit; automation defers to AETHER_AUTOMATION_ALLOW_TX. Mirrored into
-    // MetisClient, which refuses independently at the wire.
+    // transmit; automation defers to AutomationBridgeSettings::launchTxAllowed().
+    // Mirrored into MetisClient, which refuses independently at the wire.
     bool m_txAllowed = false;
     Hl2Telemetry m_telemetry;
     // Cumulative EP6 sequence gaps, mirrored here from MetisClient::dropsUpdated

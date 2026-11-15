@@ -43,7 +43,7 @@ ProfileRequest::Kind profileKind(const QString& type)
 
 // What the shared canon dialog sheet (ModemChrome::Look::Canon: fields,
 // buttons, lists, the canon check box) leaves out: tabs as MQTT Settings and
-// SpotHub have them; selection ink on the name fields (#6917); the hints and
+// SpotHub have them; a cyan selection on the name fields; the hints and
 // result lines; and the name field's right-click menu, a child of the field
 // that the sheet's transparent rule would otherwise leave with no panel.
 constexpr const char* kProfileManagerRules = R"(
@@ -254,7 +254,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         btnRow->insertWidget(2, resetBtn);
 
         // The radio flags edits to the active CW profile that are not yet saved.
-        m_cwUnsavedLabel = new QLabel("The active CW profile has unsaved changes.");
+        m_cwUnsavedLabel = new QLabel("The active CW profile has unsaved changes.", page);
         m_cwUnsavedLabel->setObjectName(QStringLiteral("profileUnsaved_cw"));
         m_cwUnsavedLabel->setVisible(m_model->transmitModel().cwProfileUnsaved());
         vbox->addWidget(m_cwUnsavedLabel);

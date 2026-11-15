@@ -35,7 +35,7 @@
 #         Deliberately narrow: a path belongs here only if a wrong
 #         change to it alters who decides things or what gets signed.
 # Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat,
-#         @rfoust).
+#         @rfoust, @NF0T).
 #         Project infrastructure: CI/CD configuration — the ROUTINE
 #         workflow definitions (.github/workflows/ except the sensitive
 #         ones carved to Tier 1), dependabot, docker, issue templates —
@@ -61,7 +61,7 @@
 #         Narrower owner set than Tier 3 because infrastructure changes
 #         need deeper repo context than routine source review.
 # Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T,
-#         @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton).
+#         @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton, @w5jwp).
 #         AetherSDR source code and anything else not enumerated
 #         above (src/ — including the whole of MainWindow —
 #         third_party/, hal-plugin/, resources/, packaging/,

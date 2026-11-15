@@ -116,7 +116,7 @@ keys the transmitter.
 - The bridge refuses to operate any control that keys the transmitter (MOX/PTT, TUNE, ATU, CWX send, packet/APRS send) through its generic "click this control" path, whoever is asking.
 - The dedicated transmit verbs (`key`, `cwx`, `txtest`, `atu`, `transmit`, …) work only when you have allowed TX: tick **Allow TX via MCP**, or launch with `AETHER_AUTOMATION_ALLOW_TX=1`.
 - A force-unkey watchdog drops a bridge-started transmission that runs too long (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s). It does not affect your own, DAX or TCI transmissions.
-- `AETHER_AUTOMATION_NO_TX=1` pins TX off for that process even if you allowed it before.
+- `AETHER_AUTOMATION_NO_TX=1` pins TX off for that process even if you allowed it before. On a Hermes-Lite 2 in an automation run (`AETHER_AUTOMATION=1`) it also closes the radio's own transmit gate, so nothing in that process can key it.
 
 You remain responsible for every emission the bridge makes on your behalf. See [Before You Transmit](./before-you-transmit.md).
 

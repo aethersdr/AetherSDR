@@ -49,10 +49,10 @@ def signables(tarballs: bool, app_tarballs: bool = True) -> tuple[str, ...]:
     them, the macOS app tarballs only once its macOS DMG build made them."""
     return tuple(s for s in SIGNABLE
                  if (tarballs or s not in LINUX_TARBALLS) and (app_tarballs or s not in APP_TARBALLS))
-# Started by publishing the release, not by the tag push: it typesets, signs
-# and attaches the PDF manual.
+# Started by publishing the release, not by the tag push: it typesets and
+# attaches the PDF manual (and, on releases before RFC #6964, signs it).
 DOCS_WORKFLOW = "Docs"
-STORE_STEP = "Stage Microsoft Store submission (draft)"
+STORE_STEP = "Publish Microsoft Store package"
 
 results: list[tuple[str, str, str]] = []
 
@@ -278,7 +278,34 @@ def release_makes_app_tarballs(repo: str, v: str) -> bool:
     return "--app-tarball" in proc.stdout
 
 
-def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: bool = True) -> list[str]:
+def _tag_file(repo: str, v: str, path: str) -> tuple[bool, str | None]:
+    """(read ok, text) of one file at the tag. A 404 is a successful read of
+    an absent file: (True, None)."""
+    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/{path}?ref={v}",
+                "-H", "Accept: application/vnd.github.raw"], check=False)
+    if proc.returncode == 0:
+        return True, proc.stdout
+    return ("Not Found" in (proc.stderr + proc.stdout) or "404" in proc.stderr), None
+
+
+def release_sums_manual(repo: str, v: str) -> bool:
+    """Whether the manual is listed in SHA256SUMS.txt with no .asc of its own
+    (RFC #6964), or signed apart as before. The rule is
+    tools/release_manual_signing.py's, applied to the tag's own files, the
+    same call sign-release.yml makes, so the two always agree."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools"))
+    import release_manual_signing  # noqa: PLC0415
+    reads = {path: _tag_file(repo, v, path)
+             for path in (".github/workflows/docs.yml", "tools/docs/build_pdf.py", "docs/user/sidebars.js")}
+    if not all(ok for ok, _ in reads.values()):
+        report("FAIL", "the tag's manual shape", "could not read the tag's docs files; the expected set below may be wrong")
+        return True
+    has_site = reads["tools/docs/build_pdf.py"][1] is not None and reads["docs/user/sidebars.js"][1] is not None
+    return release_manual_signing.shape_of(reads[".github/workflows/docs.yml"][1], has_site) == "sums"
+
+
+def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: bool = True,
+                    manual_in_sums: bool = True) -> list[str]:
     bare = ".".join(v.lstrip("v").split(".")[:3])  # 26.9.5 and 26.9.5.0 both package as 26.9.5.0
     names = [f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-aarch64.AppImage",
              *([f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-aarch64.tar.zst"] if tarballs else []),
@@ -286,7 +313,8 @@ def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: b
              f"AetherSDR-{v}-macOS-apple-silicon.dmg", f"AetherSDR-{v}-macOS-intel.dmg",
              f"AetherSDR-{v}-Windows-x64-setup.exe", f"AetherSDR-{v}-Windows-x64-portable.zip",
              f"AetherSDR-{v}-source.tar.gz", "SHA256SUMS.txt", f"AetherSDR-Manual-{v}.pdf"]
-    signed = [n + ".asc" for n in names if not n.endswith(".dmg")]
+    manual = f"AetherSDR-Manual-{v}.pdf"
+    signed = [n + ".asc" for n in names if not n.endswith(".dmg") and not (manual_in_sums and n == manual)]
     out = names + signed
     if not hotfix:
         out.append(f"AetherSDR-{bare}.0-Windows-x64.msixupload")
@@ -303,9 +331,9 @@ def expected_symbol_assets(v: str) -> list[str]:
 
 
 def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
-                 app_tarballs: bool = True) -> dict[str, dict[str, Any]]:
+                 app_tarballs: bool = True, manual_in_sums: bool = True) -> dict[str, dict[str, Any]]:
     assets = {a["name"]: a for a in rel.get("assets", [])}
-    want = expected_assets(v, hotfix, tarballs, app_tarballs)
+    want = expected_assets(v, hotfix, tarballs, app_tarballs, manual_in_sums)
     missing = [n for n in want if n not in assets]
     n_want = len(want)
     if missing:
@@ -325,10 +353,11 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
         report("FAIL" if bad else "WARN", "no unexpected assets", ", ".join(extra))
     # The six CI-built binaries are attached by other workflows before the
     # signing job runs, so their .asc must be strictly newer. The source tarball and
-    # SHA256SUMS.txt (the signing job) and the manual PDF (the Docs workflow)
-    # are uploaded in the same `gh release upload` as their signatures, so
-    # their timestamps tie (either order, within a few seconds); only a real
-    # gap there means a re-sign clobbered one file and not the other.
+    # SHA256SUMS.txt (the signing job), and the manual PDF on releases that
+    # sign it apart (the Docs workflow), are uploaded in the same
+    # `gh release upload` as their signatures, so their timestamps tie (either
+    # order, within a few seconds); only a real gap there means a re-sign
+    # clobbered one file and not the other.
     built = [f"AetherSDR-{v}-{s}" for s in signables(tarballs, app_tarballs)]
     late, gaps = [], []
     for n in want:
@@ -375,7 +404,7 @@ def sha256(path: Path) -> str:
 
 
 def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Namespace, tarballs: bool,
-                    app_tarballs: bool = True) -> None:
+                    app_tarballs: bool = True, manual_in_sums: bool = True) -> None:
     if args.skip_download:
         report("SKIP", "download and verify signatures and checksums", "--skip-download")
         return
@@ -383,7 +412,7 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
     ddir.mkdir(parents=True, exist_ok=True)
     patterns = ["SHA256SUMS.txt", "SHA256SUMS.txt.asc", f"AetherSDR-{v}-source.tar.gz", f"AetherSDR-{v}-source.tar.gz.asc",
                 f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-x86_64.AppImage.asc",
-                f"AetherSDR-Manual-{v}.pdf", f"AetherSDR-Manual-{v}.pdf.asc"]
+                f"AetherSDR-Manual-{v}.pdf", *([] if manual_in_sums else [f"AetherSDR-Manual-{v}.pdf.asc"])]
     if tarballs:
         # The in-app full download for Linux: its bytes and signature too.
         patterns += [f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-x86_64.tar.zst.asc"]
@@ -412,10 +441,13 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
             if m:
                 entries[m.group(2)] = m.group(1)
         want = [f"AetherSDR-{v}-{s}" for s in signables(tarballs, app_tarballs)] + [f"AetherSDR-{v}-source.tar.gz"]
+        if manual_in_sums:
+            want.append(f"AetherSDR-Manual-{v}.pdf")
+        covers = f"SHA256SUMS.txt covers exactly the {len(want)} {'files (signables, source, manual)' if manual_in_sums else 'signable files'}"
         if sorted(entries) == sorted(want):
-            report("PASS", f"SHA256SUMS.txt covers exactly the {len(want)} signable files")
+            report("PASS", covers)
         else:
-            report("FAIL", f"SHA256SUMS.txt covers exactly the {len(want)} signable files",
+            report("FAIL", covers,
                    f"listed: {', '.join(sorted(entries)) or '(none)'}\nexpected: {', '.join(want)}")
         bad, checked = [], []
         for name, digest in entries.items():
@@ -450,7 +482,9 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
         for name in ["SHA256SUMS.txt", f"AetherSDR-{v}-source.tar.gz", f"AetherSDR-{v}-x86_64.AppImage",
                      *([f"AetherSDR-{v}-x86_64.tar.zst"] if tarballs else []),
                      *([f"AetherSDR-{v}-macOS-apple-silicon.app.tar.zst"] if app_tarballs else []),
-                     f"AetherSDR-Manual-{v}.pdf"]:
+                     # With the manual in SHA256SUMS.txt, the sha256 check above
+                     # plus SHA256SUMS.txt.asc is its verification.
+                     *([] if manual_in_sums else [f"AetherSDR-Manual-{v}.pdf"])]:
             sig = ddir / (name + ".asc")
             if not sig.exists() or not (ddir / name).exists():
                 report("SKIP", f"gpg --verify {name}.asc", "not downloaded")
@@ -498,15 +532,15 @@ def _find_key() -> Path | None:
 
 def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> None:
     if hotfix:
-        report("INFO", "Microsoft Store", "hotfix: no .msixupload, nothing staged by design")
+        report("INFO", "Microsoft Store", "hotfix: no .msixupload, nothing submitted by design")
         return
     if not windows_run:
-        report("SKIP", "Microsoft Store staging step", "no Windows Installer run")
+        report("SKIP", "Microsoft Store publish step", "no Windows Installer run")
         return
     view = gh_json("run", "view", "--repo", repo, str(windows_run["databaseId"]), "--json", "jobs") or {}
-    # The MSIX is built in package-windows and attached and staged in
-    # release-windows (#6288), so collect steps across the run's jobs and
-    # remember which job owns each.
+    # The MSIX is built in package-windows, attached in release-windows
+    # (#6288) and submitted in publish-store-production, so collect steps
+    # across the run's jobs and remember which job owns each.
     jobs = view.get("jobs", [])
     if not any(j["name"] == "release-windows" for j in jobs):
         report("FAIL", "Windows release-windows job found")
@@ -522,9 +556,6 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
         report("PASS" if c == "success" else "FAIL", f"Windows step: {name}", c or "not found")
     s = steps.get(STORE_STEP)
     c = s["conclusion"] if s else None
-    if c == "success":
-        report("PASS", f"Windows step: {STORE_STEP}", "draft staged — Submit to Store is the maintainer's click in Partner Center")
-        return
     if c == "skipped" or s is None:
         report("WARN", f"Windows step: {STORE_STEP}", f"{c or 'not present'} — AETHERSDR_STORE_PRODUCT_ID unset, or the plan marked the version Store-ineligible (check the run's warning annotation)")
         return
@@ -532,6 +563,17 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
     log = run([_tool("gh"), "run", "view", "--repo", repo, "--job", str(job["databaseId"]), "--log"], check=False).stdout
     lines = [re.sub(r"^[^\t]*\t[^\t]*\t", "", ln) for ln in log.splitlines()]
     lines = [re.sub(r"\x1b\[[0-9;]*m", "", ln) for ln in lines]
+    if c == "success":
+        # AETHERSDR_STORE_AUTO_PUBLISH is a write-only secret, so the
+        # publisher's closing line is the only readback of which mode ran.
+        if any("Microsoft Store submission committed successfully" in ln for ln in lines):
+            detail = "production submission committed to certification (AETHERSDR_STORE_AUTO_PUBLISH armed); nothing to click"
+        elif any("Microsoft Store submission staged successfully" in ln for ln in lines):
+            detail = "draft staged — AETHERSDR_STORE_AUTO_PUBLISH not armed; Submit to Store is the maintainer's click in Partner Center"
+        else:
+            detail = "succeeded, but the log has neither the committed nor the staged line; read the job log"
+        report("PASS", f"Windows step: {STORE_STEP}", detail)
+        return
     start = next((i for i, ln in enumerate(lines) if "Running: msstore publish" in ln and "msixupload" in ln and "aether-store-test" not in ln), None)
     excerpt = ""
     if start is not None:
@@ -539,7 +581,7 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
         keep = [t for t in tail if t.strip() and not t.startswith(("Retrieving", "This seems", "AppId", "✅"))]
         excerpt = "\n".join(keep[:12])
     recovery = ("recovery: a maintainer deletes or submits the in-progress submission in Partner Center, then uploads the "
-                "attached .msixupload by hand; a re-run or a dispatch will NOT stage production")
+                "attached .msixupload by hand; a re-run or a dispatch will NOT submit production")
     if "Ingestion API can only update" in excerpt:
         why = "Partner Center holds a portal-created in-progress submission"
     elif "Azure blob" in excerpt and "0%" in excerpt:
@@ -576,8 +618,9 @@ def main(argv: list[str] | None = None) -> int:
     if rel:
         tarballs = release_makes_tarballs(args.repo, v)
         app_tarballs = release_makes_app_tarballs(args.repo, v)
-        assets = check_assets(rel, v, hotfix, tarballs, app_tarballs)
-        check_downloads(args.repo, v, assets, args, tarballs, app_tarballs)
+        manual_in_sums = release_sums_manual(args.repo, v)
+        assets = check_assets(rel, v, hotfix, tarballs, app_tarballs, manual_in_sums)
+        check_downloads(args.repo, v, assets, args, tarballs, app_tarballs, manual_in_sums)
     check_store(args.repo, windows_run, hotfix)
 
     fails = [r for r in results if r[0] == "FAIL"]

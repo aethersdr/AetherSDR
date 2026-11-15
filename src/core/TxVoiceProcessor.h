@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TxChainLayout.h"
+
 #include <QByteArray>
 
 #include <atomic>
@@ -10,10 +12,8 @@
 namespace AetherSDR {
 
 class ClientComp;
-class ClientDeEss;
 class ClientEq;
 class ClientFinalLimiter;
-class ClientGate;
 class ClientPudu;
 class ClientQuindarTone;
 class ClientReverb;
@@ -34,16 +34,19 @@ public:
     static constexpr int kDspRate = 48000;
     static constexpr int kTransportRate = 24000;
     static constexpr int kChannels = 2;
-    static constexpr int kMaxStages = 8;
+    static constexpr int kMaxStages = TxChainLayout::kSlots;
     // Voice only: preserve the supported 10 kHz modulation passband while
     // avoiding the delay of r8brain's general-purpose 2% transition profile.
     static constexpr double kVoiceSrcTransitionBandPercent = 12.0;
 
     enum class Stage : uint8_t {
         None = 0,
+        // Retired: AetherTX has no gate (RN2 replaces it). The value stays so
+        // packed orders saved before keep their numbering; a Gate slot is
+        // skipped.
         Gate = 1,
         Eq = 2,
-        DeEss = 3,
+        DeEss = 3,  // retired, as Gate: AetherTX has no de-esser
         Comp = 4,
         Tube = 5,
         Enh = 6,
@@ -55,8 +58,6 @@ public:
 
         ClientEq* eq{nullptr};
         ClientComp* comp{nullptr};
-        ClientGate* gate{nullptr};
-        ClientDeEss* deEss{nullptr};
         ClientTube* tube{nullptr};
         ClientPudu* pudu{nullptr};
         ClientReverb* reverb{nullptr};

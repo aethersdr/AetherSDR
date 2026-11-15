@@ -7,9 +7,8 @@ namespace AetherSDR {
 
 // Circular ring buffer of the last N FFT frames for one panadapter.
 // Used by the CNN signal classifier to extract per-signal spectrogram patches.
-// PanadapterStream::spectrumReady is emitted on the network thread and delivered
-// to MainWindow via Qt::AutoConnection (queued), so push() and extractPatch()
-// run on the GUI thread — no locking needed.
+// Frames reach MainWindow through RadioModel::panFeedSpectrumReady on the GUI
+// thread, so push() and extractPatch() run there — no locking needed.
 class SpectrogramBuffer {
 public:
     static constexpr int kMaxFrames    = 32;  // time axis of the patch

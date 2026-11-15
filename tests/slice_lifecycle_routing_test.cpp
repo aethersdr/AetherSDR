@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // Socket-free model, backend encoding and protocol routing. Observations and
 // replies are injected independently; no peer, radio, TX or listening server.
 #include "TestSettingsProfile.h"
@@ -370,7 +371,7 @@ void boundedRetirementHistory()
         uncertain = result.created;
     });
     for (int id = 1000; id != 2024; ++id) {
-        f.radio.handleSliceStatusForTest(id, {}, true);
+        applyFlexSliceStatus(f.radio, id, {}, true);
     }
     settle();
     check(RadioModelSliceLifecycleTestAccess::retirementCount(f.radio) <= 64,
@@ -409,14 +410,14 @@ void foreignRetirementBeforePublication()
         });
         const QMap<QString, QString> foreign{{QStringLiteral("client_handle"), QStringLiteral("99")},
                                             {QStringLiteral("in_use"), QStringLiteral("1")}};
-        if (alreadyForeign) { f.radio.handleSliceStatusForTest(2, foreign); }
+        if (alreadyForeign) { applyFlexSliceStatus(f.radio, 2, foreign); }
         QObject owner;
         const quint64 ticket = f.create(&owner, {});
         f.radio.cancelSliceCreation(ticket);
-        f.radio.handleSliceStatusForTest(2, foreign);
-        f.radio.handleSliceStatusForTest(2, {{QStringLiteral("client_handle"), QStringLiteral("99")},
+        applyFlexSliceStatus(f.radio, 2, foreign);
+        applyFlexSliceStatus(f.radio, 2, {{QStringLiteral("client_handle"), QStringLiteral("99")},
                                            {QStringLiteral("in_use"), QStringLiteral("0")}}, true);
-        f.radio.handleSliceStatusForTest(2, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+        applyFlexSliceStatus(f.radio, 2, {{QStringLiteral("client_handle"), QStringLiteral("1")},
                                            {QStringLiteral("in_use"), QStringLiteral("1")}});
         f.publish(2);
         SliceDelta pan;
@@ -457,8 +458,8 @@ void reservedSliceForOnRadioProgram()
 
     // Reserved before its status arrives: never adopted.
     f.radio.reserveSlice(3, QStringLiteral("WSPR receiver"));
-    f.radio.handleSliceStatusForTest(3, ours("14.095600"));
-    f.radio.handleSliceStatusForTest(3, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+    applyFlexSliceStatus(f.radio, 3, ours("14.095600"));
+    applyFlexSliceStatus(f.radio, 3, {{QStringLiteral("client_handle"), QStringLiteral("1")},
                                          {QStringLiteral("dax"), QStringLiteral("2")}});
     check(!f.radio.slice(3) && f.radio.isSlotForeign(3) && !f.radio.sliceMayBelongToUs(3)
               && f.radio.foreignSliceOwnerStation(3) == QStringLiteral("WSPR receiver"),
@@ -467,7 +468,7 @@ void reservedSliceForOnRadioProgram()
           "a reserved slot's DAX channel follows the radio's statuses for it");
 
     // Adopted first, reserved after: the SliceModel goes.
-    f.radio.handleSliceStatusForTest(2, ours("18.104600"));
+    applyFlexSliceStatus(f.radio, 2, ours("18.104600"));
     SliceDelta onDax;   // the backend's typed status carries the DAX channel
     onDax.daxChannel = 4;
     emit f.backend->sliceChanged(2, onDax);
@@ -478,10 +479,10 @@ void reservedSliceForOnRadioProgram()
     check(f.radio.daxChannelReserved(4), "a slice adopted before its reservation keeps its DAX channel reserved");
 
     // The radio removes it: the reservation ends and the index is free.
-    f.radio.handleSliceStatusForTest(3, {{QStringLiteral("in_use"), QStringLiteral("0")}}, true);
+    applyFlexSliceStatus(f.radio, 3, {{QStringLiteral("in_use"), QStringLiteral("0")}}, true);
     check(!f.radio.isSliceReserved(3) && !f.radio.isSlotForeign(3),
           "removing a reserved slice ends the reservation");
-    f.radio.handleSliceStatusForTest(3, ours("14.200000"));
+    applyFlexSliceStatus(f.radio, 3, ours("14.200000"));
     check(f.radio.slice(3) != nullptr, "a later slice at a released index is ours again");
 
     f.radio.releaseReservedSlice(2);
@@ -494,7 +495,7 @@ void reservedSliceForOnRadioProgram()
 #ifdef HAVE_WEBSOCKETS
     // TCI's DAX auto-assign skips a reserved slot's channel as well as ours.
     f.radio.reserveSlice(5, QStringLiteral("WSPR receiver"));
-    f.radio.handleSliceStatusForTest(5, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+    applyFlexSliceStatus(f.radio, 5, {{QStringLiteral("client_handle"), QStringLiteral("1")},
                                          {QStringLiteral("dax"), QStringLiteral("1")}});
     SliceDelta ourDax;
     ourDax.daxChannel = 2;

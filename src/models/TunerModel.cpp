@@ -37,7 +37,7 @@ void TunerModel::applyChanges(const TunerDelta& d)
 {
     // Apply only the present fields, change-gated — faithful to the prior
     // applyStatus (which iterated the wire kv-set). The SmartSDR key names and
-    // "1"/toInt parsing now live in FlexBackend::decodeTunerStatus; informational
+    // "1"/toInt parsing now live in FlexStatusIngress::decodeTunerStatus; informational
     // fields (nickname/version/dhcp/netmask/gateway) are dropped there.
     // Edge-signal emit order matches the old QMap key-sorted iteration:
     // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").
@@ -211,10 +211,23 @@ void TunerModel::abortTune()
     emit autotuneRequested();
 }
 
+bool TunerModel::hasAntennaSwitch() const
+{
+    if (hasDirectConnection()) {
+        return m_directConn->isThreeWay().value_or(m_oneByThree);
+    }
+    // Relay-only identification is informational; antenna commands require a direct link.
+    return m_oneByThree;
+}
+
 void TunerModel::setAntennaA(int ant)
 {
     if (!m_directConn || !m_directConn->isConnected()) {
         qCDebug(lcTuner) << "TunerModel::setAntennaA: no direct connection";
+        return;
+    }
+    if (!hasAntennaSwitch()) {
+        qCDebug(lcTuner) << "TunerModel::setAntennaA: no confirmed 3-way switch";
         return;
     }
     if (ant < 1 || ant > 3) return;
@@ -229,6 +242,11 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
     if (m_directConn == conn) return;
     if (m_directConn) {
         disconnect(m_directConn, nullptr, this, nullptr);
+        emit antennaNamesChanged(QString(), QString(), QString());
+        if (m_directConn->isConnected() && m_antennaA != -1) {
+            m_antennaA = -1;
+            emit antennaAChanged(m_antennaA);
+        }
     }
     m_directConn = conn;
     if (m_directConn) {
@@ -243,6 +261,10 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         connect(m_directConn, &TgxlConnection::disconnected, this, [this]() {
             qCDebug(lcTuner) << "TunerModel: direct TGXL connection lost";
             m_directPresence = false;
+            if (m_antennaA != -1) {
+                m_antennaA = -1;
+                emit antennaAChanged(m_antennaA);
+            }
             if (!isPresent())
                 emit presenceChanged(false);
             emit directConnectionChanged(false);
@@ -257,6 +279,9 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         });
         connect(m_directConn, &TgxlConnection::antennaNamesChanged,
                 this, &TunerModel::antennaNamesChanged);
+        connect(m_directConn, &TgxlConnection::variantChanged, this, [this](bool) {
+            emit stateChanged();
+        });
         // Clear a stale alert on disconnect — it describes a tuner we can no
         // longer see, and the tuner's own clear can never reach us now.
         connect(m_directConn, &TgxlConnection::disconnected, this, [this]() {
@@ -403,6 +428,11 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
             if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak);
         });
     }
+    if (m_directConn && m_directConn->isConnected()) {
+        // An already-handshaken replacement sent its names before we subscribed.
+        m_directConn->sendCommand(QStringLiteral("antenna read"));
+    }
+    emit stateChanged();
 }
 
 bool TunerModel::hasDirectConnection() const

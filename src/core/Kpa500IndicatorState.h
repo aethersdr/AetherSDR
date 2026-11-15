@@ -1,11 +1,4 @@
-// Kpa500IndicatorState.h — pure state-mapping for the KPA500 main-window indicator.
-//
-// Extracted from MainWindow_Wiring so the priority logic can be tested without
-// instantiating any GUI objects (RFC #7092, maintainer ruling 2026-11-14).
-//
-// Usage:
-//   const bool live = m_kpa500Conn.isConnected() && m_kpa500Conn.isResponding();
-//   auto [label, token] = kpa500IndicatorState(m_kpa500Conn.lastStatus(), live);
+// KPA500 status indicator labels and theme tokens (RFC #7092).
 
 #pragma once
 #include "core/Kpa500Protocol.h"
@@ -31,8 +24,9 @@ struct Kpa500IndicatorState {
 inline Kpa500IndicatorState kpa500IndicatorState(
     const Kpa500::Status& s, bool live, bool liveTxMeters)
 {
-    if (!live)
+    if (!live) {
         return {QStringLiteral("–"), QStringLiteral("color.text.secondary")};
+    }
 
     const bool fault = s.faultCode.value_or(0) > 0;
     const bool txing = liveTxMeters && s.forwardPowerW.value_or(0.0f) >= 5.0f;
@@ -40,11 +34,21 @@ inline Kpa500IndicatorState kpa500IndicatorState(
     const bool stby  = s.powerOn == true && s.operate == false;
     const bool off   = s.powerOn == false;
 
-    if (fault) return {QStringLiteral("FAULT"),   QStringLiteral("color.accent.danger")};
-    if (txing) return {QStringLiteral("TX"),      QStringLiteral("color.accent.danger")};
-    if (oper)  return {QStringLiteral("OPERATE"), QStringLiteral("color.accessory.indicator.operate.foreground")};
-    if (stby)  return {QStringLiteral("STANDBY"), QStringLiteral("color.accessory.key.standby.foreground")};
-    if (off)   return {QStringLiteral("OFF"),     QStringLiteral("color.text.secondary")};
+    if (fault) {
+        return {QStringLiteral("FAULT"), QStringLiteral("color.accent.danger")};
+    }
+    if (txing) {
+        return {QStringLiteral("TX"), QStringLiteral("color.accent.danger")};
+    }
+    if (oper) {
+        return {QStringLiteral("OPERATE"), QStringLiteral("color.accessory.indicator.operate.foreground")};
+    }
+    if (stby) {
+        return {QStringLiteral("STANDBY"), QStringLiteral("color.accessory.key.standby.foreground")};
+    }
+    if (off) {
+        return {QStringLiteral("OFF"), QStringLiteral("color.text.secondary")};
+    }
     return            {QStringLiteral("–"),       QStringLiteral("color.text.secondary")};
 }
 

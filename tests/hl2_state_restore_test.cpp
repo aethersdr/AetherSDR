@@ -23,6 +23,7 @@
 #include <QJsonValue>
 #include <QEventLoop>
 #include <QObject>
+#include <QSignalSpy>
 #include <QTimer>
 #include <QVariantMap>
 
@@ -159,9 +160,10 @@ SliceAgcRequest offLevelRequest(int level)
 }
 
 // The fixed gain the receiver's WDSP channel accepted, in dB; NaN if the
-// chain is absent. dspChains() answers behind the queued pushes.
-double chainFixedGainDb(const hl2::Hl2Backend& backend, int receiver)
+// chain is absent. Settled first, so the cache is behind the queued pushes.
+double chainFixedGainDb(hl2::Hl2Backend& backend, int receiver)
 {
+    backend.settleDspChainsForTest();
     for (const QVariant& v : backend.dspChains()) {
         const QVariantMap m = v.toMap();
         if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")
@@ -1204,6 +1206,32 @@ int main(int argc, char** argv)
                   "an out-of-range AGC-off level falls to the default; its neighbour holds");
             backend.disconnectRadio();
         }
+    }
+
+    // ---- an automatic reconnect never takes the HL2 from another client ----
+    // The gateware decodes commands from any host. An unparseable host stands
+    // for the connect itself (startConnect() refuses it at once), so no socket.
+    {
+        hl2::Hl2Backend backend;
+        QSignalSpy errors(&backend, &IRadioBackend::connectionError);
+        QSignalSpy warnings(&backend, &IRadioBackend::configurationWarning);
+        RadioConnectRequest retry;
+        retry.host = QStringLiteral("not-an-address");
+        retry.automaticReconnect = true;
+        backend.armBusyProbeForTest(retry);
+        backend.busyProbeForTest()->answerForTest(true);
+        check(errors.isEmpty() && warnings.count() == 1,
+              "a busy HL2: no reconnect, and the operator is told once");
+        backend.armBusyProbeForTest(retry);
+        backend.busyProbeForTest()->answerForTest(false);
+        check(errors.count() == 1, "a free HL2: the reconnect goes ahead");
+        backend.armBusyProbeForTest(retry);
+        backend.busyProbeForTest()->answerForTest(std::nullopt);
+        check(errors.count() == 1, "no reply: the HL2 waits (one streaming to another host does not answer)");
+        backend.armBusyProbeForTest(retry);
+        backend.disconnectRadio();
+        backend.busyProbeForTest()->answerForTest(false);
+        check(errors.count() == 1, "a disconnect during the probe cancels the reconnect");
     }
 
     return g_failures == 0 ? 0 : 1;

@@ -17,6 +17,7 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -48,6 +49,15 @@ struct RadioModelWakeTestAccess
     {
         radio.onConnectionError(QStringLiteral("injected connect failure"));
     }
+    // An unexpected drop leaves a retry armed for the last radio.
+    static void armRetry(RadioModel& radio)
+    {
+        radio.m_lastInfo.address = QHostAddress(QStringLiteral("192.0.2.5"));
+        radio.m_intentionalDisconnect = false;
+        radio.m_reconnectTimer.start();
+    }
+    static bool retryArmed(const RadioModel& radio) { return radio.m_reconnectTimer.isActive(); }
+    static void clearRetryTarget(RadioModel& radio) { radio.m_lastInfo.address = QHostAddress(); }
     static bool hasTransportOrRetry(const RadioModel& radio)
     {
         return radio.m_backend || radio.m_connection || radio.m_wanConn
@@ -121,6 +131,17 @@ int main(int argc, char** argv)
     RadioModelWakeTestAccess::beginAttempt(radio);
     expectState("connecting", true);
     RadioModelWakeTestAccess::failAttempt(radio);
+    expectState("idle", false);
+
+    // An explicit choice of another radio supersedes the previous radio's
+    // armed retry: the timer stops, and a tick already queued does nothing.
+    RadioModelWakeTestAccess::armRetry(radio);
+    check(RadioModelWakeTestAccess::retryArmed(radio), "an unexpected drop leaves a retry armed");
+    radio.cancelAutomaticReconnect();
+    check(!RadioModelWakeTestAccess::retryArmed(radio), "an explicit choice stops the armed retry");
+    radio.triggerAutoReconnectForTest();
+    check(!radio.isConnectAttemptInFlight(), "a late retry tick does not reconnect the previous radio");
+    RadioModelWakeTestAccess::clearRetryTarget(radio);
     expectState("idle", false);
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASS" : "FAILURES PRESENT");

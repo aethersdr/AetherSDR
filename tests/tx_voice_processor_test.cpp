@@ -1,7 +1,7 @@
 #include "core/ClientTube.h"
-#include "core/ClientGate.h"
 #include "core/RNNoiseFilter.h"
 #include "core/Resampler.h"
+#include "core/TxChainLayout.h"
 #include "core/TxVoiceProcessor.h"
 
 #include <QByteArray>
@@ -17,7 +17,6 @@
 #include <vector>
 
 using AetherSDR::ClientTube;
-using AetherSDR::ClientGate;
 using AetherSDR::RNNoiseFilter;
 using AetherSDR::Resampler;
 using AetherSDR::TxVoiceProcessor;
@@ -727,6 +726,42 @@ void testChannelStripRunsAt48k()
                != processor.postChannelStripFloat48Stereo());
 }
 
+// A stage past the eighth slot still runs: the order is 16 four-bit slots.
+// Eight retired Gate slots are pass-through; the tube sits in
+// the ninth, which a one-byte-per-slot order could not hold, and a tenth
+// entry shares its byte so a byte-wide decode cannot find it either.
+void testNinthSlotStageRuns()
+{
+    ClientTube tube;
+    tube.setEnabled(true);
+    tube.setDriveDb(12.0f);
+    tube.setDryWet(1.0f);
+
+    std::vector<TxVoiceProcessor::Stage> order(8, TxVoiceProcessor::Stage::Gate);
+    order.push_back(TxVoiceProcessor::Stage::Tube);
+    // A tenth entry puts the Tube's nibble in the same byte as this Gate's,
+    // so a byte-slot decode reads 0x15 (no stage) and skips the Tube.
+    order.push_back(TxVoiceProcessor::Stage::Gate);
+    uint64_t packed = 0;
+    const bool fits = AetherSDR::TxChainLayout::pack(order, packed);
+
+    TxVoiceProcessor processor;
+    TxVoiceProcessor::Processors processors;
+    processors.tube = &tube;
+    processor.setProcessors(processors);
+    processor.setStageOrder(packed);
+    processor.setMeasurementCaptureEnabled(true);
+    processor.prepare(48000, 1024);
+    QByteArray transportOutput = makeCanonicalTone(480, 48000, 1000.0f);
+    const bool processed = processor.processCapturedInt16(transportOutput);
+
+    report("a ten-slot order packs", fits);
+    report("a stage in the ninth slot changes the post-strip audio",
+           processed
+               && processor.normalizedFloat48Stereo()
+                      != processor.postChannelStripFloat48Stereo());
+}
+
 void testNonFiniteSamplesCannotPoisonEgressSrc()
 {
     std::vector<float> input(480 * 2, 0.1f);
@@ -1064,26 +1099,24 @@ void testDisabledRnnoiseIsNotDereferencedDuringPrepare()
            prepared && processed);
 }
 
+// The latency report: RNNoise's frame, and nothing for the retired gate even
+// when a saved order still carries its slot.
 void testLatencyAccounting()
 {
-    ClientGate gate;
-    gate.setEnabled(true);
-    gate.setLookaheadMs(2.0f);
     RNNoiseFilter rnnoise(
         RNNoiseFilter::OutputMode::ProcessedMono,
         RNNoiseFilter::RateDomain::Native48k);
 
     TxVoiceProcessor processor;
     TxVoiceProcessor::Processors processors;
-    processors.gate = &gate;
     processor.setProcessors(processors);
     processor.setRnnoise(&rnnoise);
     processor.setStageOrder(packedSingleStage(TxVoiceProcessor::Stage::Gate));
     processor.setRnnoiseEnabled(true);
     processor.prepare(48000, 480);
 
-    report("latency report includes RNNoise frame plus gate lookahead",
-           processor.latencyFrames() == 394 + 480 + 96,
+    report("latency report includes the RNNoise frame and no gate term",
+           processor.latencyFrames() == 394 + 480,
            "frames=" + std::to_string(processor.latencyFrames()));
 }
 
@@ -1189,6 +1222,7 @@ int main()
     testCapturedFloat32EntryAvoidsInputQuantization();
     testCapturedFloat32MatchesInt16ForRepresentableAudio();
     testChannelStripRunsAt48k();
+    testNinthSlotStageRuns();
     testNonFiniteSamplesCannotPoisonEgressSrc();
     testNonFiniteCapturedFloatCannotPoisonIngressSrc();
     testMeasurementCaptureCanBeDisabled();
