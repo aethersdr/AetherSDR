@@ -1111,6 +1111,8 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     Receiver seed = requested;
     seed.publishedTxAntenna.clear();
     seed.antennasPublished = false;
+    // A new slice's blanker is announced once, like its antennas.
+    seed.nbEchoPending = true;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
