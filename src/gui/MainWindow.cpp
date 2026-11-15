@@ -74,8 +74,10 @@
 #include "VfoWidget.h"
 #include "AppletPanel.h"
 #include "DemoApplet.h"
+#include "LpMeterApplet.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
+#include "BandApplet.h"
 #include "SMeterWidget.h"
 #include "TunerApplet.h"
 #include "TxApplet.h"
@@ -3709,6 +3711,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
     // and HID-encoder edits. The Ulanzi/HID branches below run regardless of
     // HAVE_SERIALPORT because those backends exist on all platforms (#3257).
+    connect(dlg, &RadioSetupDialog::lpMeterPollIntervalChanged, this, [this](int ms) {
+        m_appletPanel->lpMeterApplet()->setPollIntervalMs(ms);
+    });
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
 #ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
@@ -3916,6 +3921,60 @@ void MainWindow::restoreNativeClientRect(const QString& role)
     }
 }
 
+void MainWindow::applyNonClientBandInsets()
+{
+    // The band is only lost under the expanded client area: with native chrome
+    // the frame is outside the window rect entirely, and on Windows 10
+    // nativeEvent's WM_NCCALCSIZE branch already claims it back.
+    //
+    // Maximized is excluded: Windows pushes the band off-screen, so the client
+    // rect already covers the work area and an inset would leave a dead strip.
+    QMargins insets;
+#ifdef Q_OS_WIN
+    if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
+        && !isMaximized()
+        && !WindowChrome::claimsWholeWindowAsClient(windowFlags(),
+                                                    QOperatingSystemVersion::current())) {
+        if (const HWND hwnd = reinterpret_cast<HWND>(winId())) {
+            const UINT dpi = GetDpiForWindow(hwnd);
+            const int band = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                           + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            insets = WindowChrome::nonClientBandInsets(band, devicePixelRatioF());
+        }
+    }
+#endif
+    if (contentsMargins() == insets) {
+        // The margins are already right, but the grip may not be: showing it
+        // from setFramelessWindow() changes no size and so sends no
+        // resizeEvent. Placing it is cheap and idempotent.
+        positionSizeGrip();
+        return;
+    }
+    // QMainWindow's layout honours the window's own margins, so this insets
+    // the central widget — the title bar included, since it sits in the
+    // central widget's vbox — and the status bar. Only the top is left alone,
+    // for the caption's own row. The title bar's side bands are lost the same
+    // way, and nothing doubles: TitleBar::updateChromeLayout() adds
+    // contentInsets(), which is safeAreaMargins() and 0 on those edges here.
+    setContentsMargins(insets);
+    // The window's size has not changed, so no resizeEvent re-places the grip,
+    // and the minimum width has to make room for the new side insets.
+    positionSizeGrip();
+    updateStatusBarMinimumWidth();
+}
+
+bool MainWindow::event(QEvent* event)
+{
+    const bool handled = QMainWindow::event(event);
+    // Changing the current monitor's scale sends WM_DPICHANGED with no
+    // screenChanged. Qt delivers the result here and never to changeEvent(),
+    // which QWidget::event() does not forward this type to.
+    if (event && event->type() == QEvent::DevicePixelRatioChange) {
+        applyNonClientBandInsets();
+    }
+    return handled;
+}
+
 void MainWindow::applyWindowsFrameColor()
 {
     // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000). Windows 10 has
@@ -4027,6 +4086,18 @@ void MainWindow::showEvent(QShowEvent* event)
     // native window with Qt's own style set.
     applyWindowsCaptionStyles();
     applyWindowsFrameColor();
+    applyNonClientBandInsets();
+    // The band is per-monitor device pixels, so moving to a screen with
+    // different scaling changes it. windowHandle() only exists once shown,
+    // and setWindowFlags() re-creates it, so re-check the handle every show.
+    if (QWindow* handle = windowHandle(); handle && handle != m_bandInsetWindow) {
+        if (m_bandInsetWindow) {
+            disconnect(m_bandInsetWindow, nullptr, this, nullptr);
+        }
+        m_bandInsetWindow = handle;
+        connect(handle, &QWindow::screenChanged,
+                this, [this]() { applyNonClientBandInsets(); });
+    }
 #endif
 
     // AetherTX left open last session. toggleAetherialStrip() lazy-creates and
@@ -4137,13 +4208,20 @@ void MainWindow::reapplyStartupGeometryAfterShow()
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
+    positionSizeGrip();
+}
+
+void MainWindow::positionSizeGrip()
+{
     // Anchor the frameless-mode size grip to the bottom-right corner,
     // overlaying the status bar.  Direct child of MainWindow so the
     // grip's native dotted-texture paint isn't suppressed by the
-    // status-bar stylesheet.
+    // status-bar stylesheet.  Inside the contents margins, which hold the
+    // Windows 11 non-client band (applyNonClientBandInsets()) and are 0
+    // everywhere else.
     if (m_sizeGrip) {
-        const int s = m_sizeGrip->width();
-        m_sizeGrip->move(width() - s - 1, height() - s - 1);
+        m_sizeGrip->move(WindowChrome::sizeGripOrigin(size(), m_sizeGrip->width(),
+                                                      contentsMargins()));
         m_sizeGrip->raise();
     }
 }
@@ -4157,6 +4235,14 @@ void MainWindow::updateStatusBarMinimumWidth()
 void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
+
+#ifdef Q_OS_WIN
+    // The inset applies only while restored, so maximizing and restoring have
+    // to re-run it. A DPI change arrives at event(), not here.
+    if (event && event->type() == QEvent::WindowStateChange) {
+        applyNonClientBandInsets();
+    }
+#endif
 
     // Principle VI fail-safe (#3888): if a momentary keying key (PTT-hold, CW
     // straight key / paddles) is held when the window is deactivated, its
@@ -6953,6 +7039,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 applyNotchCapabilities(applet->spectrumWidget());
                 applyRadioSideDspToPanDisplay(applet->spectrumWidget());
             }
+            if (m_appletPanel && m_appletPanel->bandApplet()) {
+                auto* bandApplet = m_appletPanel->bandApplet();
+                bandApplet->setRadioCapabilities(caps);
+                bandApplet->setDeclaredBands(declaredBands, declaredBandRanges);
+                QVector<BandApplet::XvtrBand> appletXvtrBands;
+                for (const auto& x : xvtrBands) {
+                    appletXvtrBands.append({x.name, x.rfFreqMhz, x.stackKey});
+                }
+                bandApplet->setXvtrBands(appletXvtrBands);
+                applyTuningRangeToBandApplet();
+            }
         };
         QTimer::singleShot(2000, this, refreshXvtr);
         connect(&m_radioModel, &RadioModel::infoChanged, this, refreshXvtr);
@@ -7929,6 +8026,14 @@ void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
     menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
 }
 
+void MainWindow::applyTuningRangeToBandApplet() const
+{
+    if (!m_appletPanel || !m_appletPanel->bandApplet())
+        return;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    m_appletPanel->bandApplet()->setTuningRange(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
+}
+
 void MainWindow::applyNotchCapabilities(SpectrumWidget* sw) const
 {
     if (!sw)
@@ -8005,6 +8110,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
             proc.label, proc.levelMaximum);
+        if (auto* band = m_appletPanel->bandApplet()) {
+            band->setRadioCapabilities(m_radioModel.capabilities());
+            applyTuningRangeToBandApplet();
+        }
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
