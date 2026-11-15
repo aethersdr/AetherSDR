@@ -11,6 +11,7 @@
 #include <QCoreApplication>
 #include <QStringList>
 #include <QThread>
+#include <QTimer>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -126,6 +127,28 @@ struct IcomCivBackendTestAccess {
         b.pollDualReceivers();
     }
     static void clearSplit(IcomCivBackend& b) { b.m_dualSplit.reset(); }
+    // Borrow Dualwatch so restoration has a readback to wait for, then lose the
+    // transport while the bounded wait is running.
+    static bool restoreAcrossSessionLoss(IcomCivBackend& b)
+    {
+        b.m_dualWatchOwned = true;
+        b.m_dualWatch = true;
+        QTimer::singleShot(40, &b, [&b] { b.onSessionDisconnected(QStringLiteral("transport lost")); });
+        return b.restoreDualScopePresetsConfirmed();
+    }
+    static bool restoring(const IcomCivBackend& b) { return b.m_dualRestoring; }
+    static bool sessionOpen(const IcomCivBackend& b) { return b.m_session != nullptr; }
+    static std::string inFlightReadKey(IcomCivBackend& b, const std::vector<std::uint8_t>& frame)
+    {
+        (void)b.m_civScheduler.reset();
+        b.queueRead(frame, b.semanticKey(frame), IcomCivScheduler::Priority::Control);
+        b.pumpCiv(b.nowMs() + 30);
+        return b.m_civScheduler.stats().inFlightKey;
+    }
+    static std::string writeKey(const IcomCivBackend& b, const std::vector<std::uint8_t>& frame)
+    {
+        return b.semanticKey(b.receiverCommand(frame));
+    }
     static void receiverKnown(IcomCivBackend& b, bool mode, std::uint64_t frequency)
     {
         b.m_receivers[b.m_dualTxReceiver].modeKnown = mode;
@@ -198,7 +221,7 @@ std::vector<std::uint8_t> makeScope(int receiver, int mode, std::uint64_t a,
     body.push_back(outOfRange ? 1 : 0);
     if (!outOfRange) {
         body.resize(body.size() + 689, 0);
-        body[17 + 344] = 200; // centre bin
+        body[17 + 344] = 200; // center bin
         body[17 + 600] = 100; // would have been truncated at 475
     }
     return body;
@@ -286,13 +309,13 @@ int main(int argc, char** argv)
                 if (receiver < 2) { renderWaterfall[receiver] = bins; waterfallLow[receiver] = low; waterfallHigh[receiver] = high; }
             });
         std::array<QByteArray,2> spectra;
-        std::array<double,2> centres{}, widths{}, frequencies{};
+        std::array<double,2> centers{}, widths{}, frequencies{};
         std::array<int,2> slices{}, sliceAudio{};
         int speakerFrames = 0;
         float speakerLeft = 0, speakerSample = 0;
         std::array<float,2> receiverSample{};
         QObject::connect(&backend, &IRadioBackend::panCenterBandwidthChanged,
-            [&](const QString& id, double centre, double width) { centres[id.toInt()] = centre; widths[id.toInt()] = width; });
+            [&](const QString& id, double center, double width) { centers[id.toInt()] = center; widths[id.toInt()] = width; });
         QObject::connect(&backend, &IRadioBackend::sliceChanged,
             [&](int id, const SliceDelta& delta) { ++slices[id]; if (delta.frequency) { frequencies[id] = *delta.frequency; } });
         QObject::connect(&backend, &IRadioBackend::spectrumFrameReady,
@@ -323,16 +346,16 @@ int main(int argc, char** argv)
               "MAIN/SUB publish independent zoom placement for current upstream band/segment controls");
         check(spectra[0].size() == 689 * sizeof(float) && spectra[1].size() == 689 * sizeof(float),
               "both scopes preserve all 689 native bins");
-        float centreBin = 0, farBin = 0;
+        float centerBin = 0, farBin = 0;
         if (spectra[0].size() == 689 * sizeof(float)) {
-            std::memcpy(&centreBin, spectra[0].constData() + 344 * sizeof(float), sizeof(float));
+            std::memcpy(&centerBin, spectra[0].constData() + 344 * sizeof(float), sizeof(float));
             std::memcpy(&farBin, spectra[0].constData() + 600 * sizeof(float), sizeof(float));
         }
         const double spanDb = profileFor(*modelForId(model)).dualReceiver->scopeSpanDb;
-        check(std::abs(centreBin - (-140.0 + spanDb)) < 0.001
+        check(std::abs(centerBin - (-140.0 + spanDb)) < 0.001
               && std::abs(farBin - (-140.0 + spanDb / 2)) < 0.001,
               "native bin positions and profile-relative 0..200 amplitude scale survive");
-        check(centres[0] == 14.1 && widths[0] == 0.2 && centres[1] == 7.1 && widths[1] == 0.2,
+        check(centers[0] == 14.1 && widths[0] == 0.2 && centers[1] == 7.1 && widths[1] == 0.2,
               "Center half-span and Scroll-F edges remain receiver-specific");
         check(radio.slices().size() == 2 && radio.panadapters().size() == 2
               && radio.slice(0)->panId() != radio.slice(1)->panId(),
@@ -346,7 +369,7 @@ int main(int argc, char** argv)
         for (int i = 0; i < 4; ++i) {
             IcomCivBackendTestAccess::inject(backend, makeScope(1,1,7'050'000,7'250'000));
         }
-        check(spectra[0] == mainTrace && centres[0] == 14.1 && centres[1] == 7.15
+        check(spectra[0] == mainTrace && centers[0] == 14.1 && centers[1] == 7.15
               && IcomCivBackendTestAccess::scopeFrames(backend,0) == 1
               && IcomCivBackendTestAccess::scopeFrames(backend,1) == 5,
               "SUB sweeps cannot replace MAIN's trace, axis, waterfall or freshness counter");
@@ -689,6 +712,24 @@ int main(int argc, char** argv)
         check(radio.panadapters().size()==1 && IcomCivBackendTestAccess::dualWatch(backend)==false,
               "explicit Dualwatch off cancels a pending pane open instead of fighting the operator");
 
+    }
+    for (std::uint8_t model : {0x98, 0xb2, 0x8e}) {
+        IcomCivBackend backend;
+        IcomCivBackendTestAccess::prepare(backend, model);
+        const bool confirmed = IcomCivBackendTestAccess::restoreAcrossSessionLoss(backend);
+        check(!confirmed && !IcomCivBackendTestAccess::restoring(backend),
+              "a transport loss during scope restoration ends the restoration");
+        backend.disconnectRadio();
+        check(!IcomCivBackendTestAccess::sessionOpen(backend),
+              "disconnect after a lost restoration still tears the session down");
+
+        IcomCivBackend levels;
+        IcomCivBackendTestAccess::prepare(levels, model);
+        const auto read = buildFrameSub(0x50, 0x14, 0x02);
+        const auto write = buildFrameSub(0x50, 0x14, 0x02, std::array<std::uint8_t,2>{0x01, 0x28});
+        check(IcomCivBackendTestAccess::inFlightReadKey(levels, read)
+                  == IcomCivBackendTestAccess::writeKey(levels, write),
+              "a receiver-addressed MAIN read shares its write's generation key");
     }
     return failures ? 1 : 0;
 }

@@ -351,6 +351,8 @@ private:
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
     bool hasDualReceivers() const;
+    // SUB-addressed setters not yet supported on MAIN/SUB radios: warn and refuse.
+    bool refuseDeferredSubControl(int receiver);
     void initializeDualReceivers();
     void pollDualReceivers();
     void warnScopeRejection(const ScopeDecoder& decoder);
@@ -363,7 +365,7 @@ private:
     void onDualAudio(const std::vector<float>& interleaved);
     void publishDualPan(int receiver);
     void settleDualPanLifecycle();
-    void requestDualScopeWindow(int receiver, double centreHz, double widthHz);
+    void requestDualScopeWindow(int receiver, double centerHz, double widthHz);
     void flushDualScopeWindow(int receiver);
     bool restoreDualScopePresetsConfirmed();
     bool handleDualScopePreset(const CivFrame& frame);
@@ -379,7 +381,7 @@ private:
         bool monitorMute = false;
         ScopeDecoder scope{ScopeGeometry{}};
         ScopeCalibration calibration;
-        std::int64_t centreHz = 0;
+        std::int64_t centerHz = 0;
         std::int64_t spanHz = 0;
         ScopeMode scopeMode = ScopeMode::Centre;
         std::uint64_t scopeFrames = 0;
@@ -393,7 +395,7 @@ private:
         int originalSlot = 0;
         std::optional<ScopeEdgeWindow> windowTarget;
         int windowRange = 0;
-        std::optional<double> pendingCentreHz;
+        std::optional<double> pendingCenterHz;
         qint64 lastWindowWriteMs = -200;
         bool windowFlushScheduled = false;
         std::uint64_t windowEpoch = 0;

@@ -387,9 +387,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.receiveFilterControl = std::nullopt;
     c.receiveAudioControl = std::nullopt;
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
-    if (m_session && m_session->rxChannels() == 2) {
-        c.receiveAudioPlayout = ReceiveAudioPlayout{200, 400};
-    }
+    c.receiveAudioPlayout = m_session && m_session->rxChannels() == 2
+        ? std::optional{ReceiveAudioPlayout{200, 400}} : std::nullopt;
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
@@ -1027,13 +1026,13 @@ void IcomCivBackend::disconnectRadio()
 {
     if (m_dualRestoring) { return; }
     const QPointer<IcomCivBackend> alive(this);
-    const auto generation = m_sessionGeneration;
     if (hasDualReceivers() && m_session && m_session->isConnected() && m_connected && !m_keyed
         && (!m_dualWrittenPresets.empty() || m_dualWatchOwned)) {
         if (!restoreDualScopePresetsConfirmed() && alive) {
             qCWarning(lcIcomPan) << "scope preset restoration did not confirm before disconnect";
         }
-        if (!alive || generation != m_sessionGeneration) { return; }
+        // A session lost during restoration still needs the teardown below.
+        if (!alive) { return; }
     }
     retirePcmStreams();
     finishAx25PostResampleCapture();
@@ -2295,7 +2294,7 @@ void IcomCivBackend::setPanScopeMode(const QString& id, int index)
         auto& state = m_receivers[receiver];
         state.viewInitialized = true;
         state.windowTarget.reset();
-        state.pendingCentreHz.reset();
+        state.pendingCenterHz.reset();
         state.windowFlushScheduled = false;
         ++state.windowEpoch;
         sendUserCommand(cmdScopeMode(m_session->civAddress(),
@@ -4600,7 +4599,10 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
     }
     IcomCivScheduler::Request request;
     request.frame = wire;
-    request.key = key.empty() ? semanticKey(frame) : key;
+    // A receiver-addressed (29-wrapped) read shares the generation of the
+    // wrapped write sendUserCommand queues, so a newer write stales it.
+    request.key = key.empty() || (wire != frame && key == semanticKey(frame))
+        ? semanticKey(wire) : key;
     request.priority = priority;
     request.expectsReply = true;
     request.replyCmd = parsed->cmd;
@@ -5146,7 +5148,7 @@ void IcomCivBackend::requestSliceTune(int sliceId, const SliceTuneRequest& reque
         if (sliceId >= 0 && sliceId < 2 && request.panIntent == SliceTuneRequest::PanIntent::AllowRecenter) {
             const auto& state = m_receivers[sliceId];
             if (state.scopeMode != ScopeMode::Centre && state.spanHz > 0
-                && std::abs(request.frequencyHz - state.centreHz) > state.spanHz) {
+                && std::abs(request.frequencyHz - state.centerHz) > state.spanHz) {
                 requestDualScopeWindow(sliceId, request.frequencyHz, state.spanHz * 2.0);
             }
         }
@@ -5401,10 +5403,7 @@ void IcomCivBackend::setTxFilter(int lowHz, int highHz)
 
 void IcomCivBackend::setSliceAgc(int receiver, const QString& mode, int)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     if (!capabilities().agcModes.contains(mode.toLower())) {
         // OFF is 1A 04 time-constant editing, not a 16 12 selector value.
@@ -5438,13 +5437,13 @@ void IcomCivBackend::setPanCenter(const QString& id, double hz, PanCenterIntent 
         if (intent == PanCenterIntent::Drag && state.scopeMode == ScopeMode::Centre) {
             setSliceFrequency(receiver, hz);
         } else if (state.spanHz > 0 && state.scopeMode != ScopeMode::Centre) {
-            state.pendingCentreHz = hz;
+            state.pendingCenterHz = hz;
             const auto generation = m_sessionGeneration;
             QTimer::singleShot(0, this, [this, receiver, generation] {
                 if (generation != m_sessionGeneration) { return; }
                 auto& current = m_receivers[receiver];
-                const auto centre = std::exchange(current.pendingCentreHz, std::nullopt);
-                if (centre) { requestDualScopeWindow(receiver, *centre, current.spanHz * 2.0); }
+                const auto center = std::exchange(current.pendingCenterHz, std::nullopt);
+                if (center) { requestDualScopeWindow(receiver, *center, current.spanHz * 2.0); }
             });
         }
         return;
@@ -5568,9 +5567,9 @@ void IcomCivBackend::setPanBandwidth(const QString& id, double hz)
         ReceiverState& state = m_receivers[receiver];
         if (!state.visible) { return; }
         if (state.scopeMode != ScopeMode::Centre) {
-            const double centre = state.pendingCentreHz.value_or(state.centreHz);
-            state.pendingCentreHz.reset();
-            requestDualScopeWindow(receiver, centre, hz);
+            const double center = state.pendingCenterHz.value_or(state.centerHz);
+            state.pendingCenterHz.reset();
+            requestDualScopeWindow(receiver, center, hz);
             return;
         }
         int span = spanForBandwidthHz(static_cast<int>(std::llround(hz)));
@@ -5994,10 +5993,7 @@ ReceiveDispatch IcomCivBackend::requestSliceLock(int sliceId, bool locked)
 
 void IcomCivBackend::setSliceRxAntenna(int receiver, const QString& antenna)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     if (!m_model || !profileFor(*m_model).rxAntenna
         || !profileFor(*m_model).rxAntenna->selectable)
@@ -6106,10 +6102,7 @@ void IcomCivBackend::setTxMonitor(bool on, int levelPercent)
 
 void IcomCivBackend::setSliceNoiseReduction(int receiver, bool on, int level)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     m_nrLevelPercent = level;
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
@@ -6127,10 +6120,7 @@ void IcomCivBackend::setSliceNoiseReduction(int receiver, bool on, int level)
 void IcomCivBackend::setSliceNoiseBlanker(int receiver, AetherSDR::NoiseBlankerKind kind,
                                           int level, AetherSDR::NoiseBlankerFill fill)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     // The radio has ONE blanker, so anything but Off is on and the fill is not a
     // thing this radio has an opinion about. Not a downgrade of the operator's
@@ -6150,10 +6140,7 @@ void IcomCivBackend::setSliceNoiseBlanker(int receiver, AetherSDR::NoiseBlankerK
 
 void IcomCivBackend::setSliceAutoNotch(int receiver, bool on)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     if (m_anfEnableSent == (on ? 1 : 0))
         return;
@@ -6164,10 +6151,7 @@ void IcomCivBackend::setSliceAutoNotch(int receiver, bool on)
 
 void IcomCivBackend::setSliceManualNotch(int receiver, bool on, int position)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     m_notchPosPercent = position;
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
@@ -6280,10 +6264,7 @@ bool IcomCivBackend::queueTunerReadIfSupported(
 
 void IcomCivBackend::setSliceSquelch(int receiver, bool on, int level)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     // sendUserCommand drops a write outside a connected session; record no
     // on-at-0 intent for a write that never reaches the radio.
@@ -6301,10 +6282,7 @@ void IcomCivBackend::setSliceSquelch(int receiver, bool on, int level)
 
 void IcomCivBackend::setSliceFmToneMode(int receiver, const QString& mode)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasTxCtcss) {
@@ -6336,10 +6314,7 @@ void IcomCivBackend::setSliceFmToneMode(int receiver, const QString& mode)
 
 void IcomCivBackend::setSliceFmToneRxValue(int receiver, double hz)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     if (!ctcssRxProfileFor(m_model) || !isCanonicalCtcssTone(hz)) {
         qCWarning(lcIcomCiv) << "refusing invalid receive CTCSS frequency" << hz;
@@ -6352,10 +6327,7 @@ void IcomCivBackend::setSliceFmToneRxValue(int receiver, double hz)
 void IcomCivBackend::setSliceFmDtcs(int receiver, int code, bool txReverse,
                                     bool rxReverse)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
     if (!fm || !fm->hasDtcs || !isCanonicalDtcsCode(code)) {
@@ -6369,10 +6341,7 @@ void IcomCivBackend::setSliceFmDtcs(int receiver, int code, bool txReverse,
 
 void IcomCivBackend::setSliceFmToneValue(int receiver, double hz)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasTxCtcss) {
@@ -6392,10 +6361,7 @@ void IcomCivBackend::setSliceFmToneValue(int receiver, double hz)
 
 void IcomCivBackend::setSliceRepeaterOffsetDir(int receiver, const QString& direction)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasDuplex) {
@@ -6418,10 +6384,7 @@ void IcomCivBackend::setSliceRepeaterOffsetDir(int receiver, const QString& dire
 
 void IcomCivBackend::setSliceFmRepeaterOffset(int receiver, double hz)
 {
-    if (hasDualReceivers() && receiver != 0) {
-        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
-        return;
-    }
+    if (refuseDeferredSubControl(receiver)) { return; }
 
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasDuplex) {
@@ -7139,7 +7102,7 @@ QVariantMap IcomCivBackend::profileMap() const
                 {QStringLiteral("scopeAgeMs"), state.scopeFrames ? nowMs() - state.lastScopeAtMs : -1},
                 {QStringLiteral("audioFrames"), QVariant::fromValue<qulonglong>(state.audioFrames)},
                 {QStringLiteral("audioRms"), state.audioRms},
-                {QStringLiteral("centreHz"), static_cast<qlonglong>(state.centreHz)},
+                {QStringLiteral("centerHz"), static_cast<qlonglong>(state.centerHz)},
                 {QStringLiteral("halfSpanHz"), static_cast<qlonglong>(state.spanHz)}});
         }
         out.insert(QStringLiteral("receivers"), receivers);

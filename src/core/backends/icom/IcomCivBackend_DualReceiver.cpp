@@ -20,6 +20,13 @@ bool IcomCivBackend::hasDualReceivers() const
     return m_model && profileFor(*m_model).dualReceiver.has_value();
 }
 
+bool IcomCivBackend::refuseDeferredSubControl(int receiver)
+{
+    if (!hasDualReceivers() || receiver == 0) { return false; }
+    emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+    return true;
+}
+
 std::optional<ModulationProfile> IcomCivBackend::currentModulationProfile() const
 {
     auto profile = modulationProfileFor(*m_model);
@@ -157,14 +164,10 @@ void IcomCivBackend::publishDualReceiver(int receiver)
 void IcomCivBackend::syncDualTransmit()
 {
     const ReceiverState& tx = m_receivers[m_dualTxReceiver];
-    const bool changed = m_mode != tx.mode || m_dataMode != (tx.data != 0);
     m_frequencyHz = tx.frequencyHz;
     m_mode = tx.mode;
     m_dataMode = tx.data != 0;
     m_filter = tx.filter;
-    if (changed) {
-        m_dataModInput = -1;
-    }
     m_dataOffModInput = m_dualModInputs[0];
     m_dataModInput = tx.data > 0 ? m_dualModInputs[tx.data] : -1;
     for (int receiver = 0; receiver < 2; ++receiver) {
@@ -220,7 +223,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
             if (!matched && nowMs() < state.windowHoldUntilMs) { return true; }
             if (matched || nowMs() >= state.windowHoldUntilMs) { state.windowTarget.reset(); }
         }
-        state.centreHz = sweep->centreHz();
+        state.centerHz = sweep->centreHz();
         state.spanHz = sweep->bandwidthHz() / 2;
         const bool modeChanged = state.scopeFrames == 1 || state.scopeMode != sweep->mode;
         state.scopeMode = sweep->mode;
@@ -295,7 +298,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         const bool expectedTune = state.commandedFrequencyHz && *state.commandedFrequencyHz == reported;
         if (state.windowTarget && reported != state.frequencyHz && !expectedTune) {
             state.windowTarget.reset();
-            state.pendingCentreHz.reset();
+            state.pendingCenterHz.reset();
         }
         state.frequencyHz = reported;
         state.commandedFrequencyHz.reset();
@@ -306,7 +309,6 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         publishDualReceiver(frame.sub);
     } else if (mode) {
         ReceiverState& state = m_receivers[frame.sub];
-        if (frame.sub == m_dualTxReceiver && state.data != frame.data[1]) { m_dataModInput = -1; }
         state.mode = static_cast<CivMode>(frame.data[0]);
         state.data = frame.data[1];
         state.filter = frame.data[2];
@@ -347,7 +349,6 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         m_dualWatch = frame.data[0] != 0;
     } else if (split) {
         const int receiver = frame.data[0];
-        if (receiver != m_dualTxReceiver) { m_dataModInput = -1; }
         m_dualSplit = receiver != 0;
         m_dualTxReceiver = receiver;
         if (m_dualRequestedTxReceiver == receiver) { m_dualRequestedTxReceiver.reset(); }
@@ -415,7 +416,7 @@ void IcomCivBackend::publishDualPan(int receiver)
     const auto& state = m_receivers[receiver];
     if (!state.visible) { return; }
     const QString id = QString::number(receiver);
-    emit panCenterBandwidthChanged(id, state.centreHz / 1e6, state.spanHz * 2.0 / 1e6);
+    emit panCenterBandwidthChanged(id, state.centerHz / 1e6, state.spanHz * 2.0 / 1e6);
     emit panScopeModesChanged(id, {QStringLiteral("Center"), QStringLiteral("Scroll-F"), QStringLiteral("Fixed")});
     emit panScopeModeChanged(id, state.scopeMode == ScopeMode::Centre ? 0 : state.scopeMode == ScopeMode::ScrollF ? 1 : 2);
     emit panZoomPlacementChanged(id, state.scopeFrames == 0 ? PanZoomPlacement::Unknown
@@ -509,7 +510,7 @@ bool IcomCivBackend::removePanadapter(const QString& id)
     const auto paneEpoch = ++m_dualPaneEpoch;
     auto& sub = m_receivers[1];
     sub.windowTarget.reset();
-    sub.pendingCentreHz.reset();
+    sub.pendingCenterHz.reset();
     sub.windowFlushScheduled = false;
     ++sub.windowEpoch;
     if (m_dualWatchOwned && m_dualWatch == true) {
@@ -542,10 +543,10 @@ bool IcomCivBackend::removeSlice(int receiver)
     return receiver == 1 && removePanadapter(QStringLiteral("1"));
 }
 
-void IcomCivBackend::requestDualScopeWindow(int receiver, double centreHz, double widthHz)
+void IcomCivBackend::requestDualScopeWindow(int receiver, double centerHz, double widthHz)
 {
     if (!m_session || !m_connected || m_dualRestoring || m_keyed || receiver < 0 || receiver > 1
-        || !std::isfinite(centreHz) || !std::isfinite(widthHz) || widthHz <= 0) { return; }
+        || !std::isfinite(centerHz) || !std::isfinite(widthHz) || widthHz <= 0) { return; }
     auto& state = m_receivers[receiver];
     if (!state.visible || (receiver == 1 && m_dualPanClosing)
         || !state.frequencyHz || state.scopeMode == ScopeMode::Centre) { return; }
@@ -554,10 +555,10 @@ void IcomCivBackend::requestDualScopeWindow(int receiver, double centreHz, doubl
     if (!range || range->number > 12) { return; }
     const double width = std::clamp(widthHz, 5000.0, 1e6);
     if (state.scopeMode == ScopeMode::ScrollF) {
-        centreHz = scopeCentreHoldingVfo(centreHz, width, vfoHz,
+        centerHz = scopeCentreHoldingVfo(centerHz, width, vfoHz,
             std::max(width * kScopeDragVfoMarginFraction, kScopeDragVfoMarginMinHz));
     }
-    state.windowTarget = clampScopeEdgeWindow(*range, centreHz, width);
+    state.windowTarget = clampScopeEdgeWindow(*range, centerHz, width);
     state.windowRange = range->number;
     state.windowHoldUntilMs = nowMs() + 5000;
     if (!state.windowFlushScheduled) {
@@ -686,7 +687,7 @@ bool IcomCivBackend::restoreDualScopePresetsConfirmed()
     ++m_dualPaneEpoch;
     for (auto& state : m_receivers) {
         state.windowTarget.reset();
-        state.pendingCentreHz.reset();
+        state.pendingCenterHz.reset();
         state.windowFlushScheduled = false;
         ++state.windowEpoch;
     }
@@ -737,9 +738,11 @@ bool IcomCivBackend::restoreDualScopePresetsConfirmed()
     });
     timer.start(10);
     loop.exec(QEventLoop::ExcludeUserInputEvents);
-    if (!alive || m_sessionGeneration != generation) { return false; }
+    if (!alive) { return false; }
+    // A transport loss during the wait ends the restoration too; leaving the
+    // flag set would refuse every later connect and disconnect.
     m_dualRestoring = false;
-    return confirmed;
+    return confirmed && m_sessionGeneration == generation;
 }
 
 }  // namespace AetherSDR::icom

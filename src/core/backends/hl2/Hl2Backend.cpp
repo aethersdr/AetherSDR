@@ -2055,6 +2055,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
         c.cwPitchMinHz, c.cwPitchMaxHz, c.cwPitchStepHz};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
         static_cast<qint64>(kTuningMinHz), static_cast<qint64>(kTuningMaxHz)};
