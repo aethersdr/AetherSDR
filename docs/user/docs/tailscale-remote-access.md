@@ -367,6 +367,43 @@ computer running Tailscale also work through it:
 
 A device that can't run Tailscale itself can't reach the tailnet.
 
+### The discovery helper
+
+SmartSDR for Windows lists the radio without help when it is the only Smart
+program running. When SmartSDR DAX or SmartSDR CAT runs as well, only one of
+them gets each announcement. The discovery helper receives the announcement
+from the radio and broadcasts it on the computer, where every program gets it.
+
+1. Download `discovery-helper-<version>.zip` from the AetherSDR GitHub
+   release tagged `flex-tailnet-shim-v<version>`, the same release as the
+   container, and unzip it anywhere.
+2. Install Python 3.8 or newer from [python.org](https://www.python.org/downloads/).
+   Not the Microsoft Store's Python: under it the helper connects, but DAX and
+   CAT never hear its broadcast.
+3. The helper looks for the radio by its tailnet name, `flex-radio` unless
+   you tell it otherwise. If yours differs, run `setx TAILNET_SHIM <name>` once
+   in a Command Prompt.
+4. Run `run-discovery-helper.bat` and leave its window open. Close the window
+   to stop it.
+
+On macOS or Linux, run `./run-discovery-helper.sh` instead, with
+`export TAILNET_SHIM=<name>` if the name differs.
+
+The helper connects to the radio over the tailnet, on TCP 48996, and only to a
+tailnet address. The radio serves it only when the **Radio announcement**
+setting includes that computer. It refuses the helper when the setting is
+**Off**, when the computer isn't ticked under **Only the devices ticked
+below**, or when the computer is at the station, and the helper's window
+shows why. The helper tries again every 30 seconds, so it starts working by
+itself once the setting includes the computer. While it is served, the
+computer shows **Via its discovery helper** in the card.
+
+On Windows the helper broadcasts on the computer's loopback network, so the
+announcement stays on that computer. On macOS and Linux it broadcasts to
+255.255.255.255, which also goes out on that computer's local network: other
+devices there see the announcement, though they can't reach the tailnet
+address it names.
+
 ## Network Diagnostics
 
 While you're connected over the tailnet, **Network Diagnostics** adds the
@@ -452,7 +489,15 @@ container.
 - The announcement carries what the radio broadcasts on its own network:
   model, serial number, nickname, callsign, firmware version, and the names
   and LAN addresses of connected clients. It goes only to the devices chosen
-  under **Radio announcement**.
+  under **Radio announcement**, and a discovery helper's broadcast on macOS
+  and Linux also reaches that computer's local network (see
+  [The discovery helper](#the-discovery-helper)).
+- The **Radio announcement** card lists your tailnet's devices only on the
+  computer that holds the admin token. The container leaves the device names
+  out of the status it gives any other computer on the station network.
+- A discovery helper connects only to a tailnet address, where the radio
+  checks which device is connecting, and is served only when the
+  announcement setting includes that device.
 - Containers before 0.5.0 kept their own **Who may connect** list. Version
   0.5.0 drops it when it starts, so after updating, set any restriction with
   your tailnet's access rules instead.
@@ -512,9 +557,9 @@ about a fifth of one core and around 34 MB of memory.
 - **"Could not join the tailnet"**: the key is used up, expired or
   revoked. Generate a new one. If your tailnet requires device approval,
   approve the radio on **Machines**, or use a **Pre-approved** key.
-- **Disconnect is missing and the sharing and announcement settings are
-  grayed out**: this
-  computer doesn't hold the admin token. Use the computer that set the radio
+- **Disconnect is missing, the sharing and announcement settings are grayed
+  out, and the announcement card lists no devices**: this computer doesn't
+  hold the admin token. Use the computer that set the radio
   up, or **Reset** (Part 7).
 - **Can't connect remotely**:
   - check that Tailscale is running on the remote computer, that the radio
@@ -528,10 +573,27 @@ about a fifth of one core and around 34 MB of memory.
   - if your access rules limit who may reach the radio, add the rule under
     [Security](#security);
   - meanwhile, use **Connect by IP**.
-- **SmartSDR doesn't list the radio while AetherSDR is connected to it on the
-  same computer**: only one program on a computer receives each
-  announcement, and AetherSDR keeps receiving it while connected to a radio
-  it listed. Start SmartSDR first, or connect AetherSDR by IP.
+- **SmartSDR doesn't list the radio while AetherSDR is open on the same
+  computer**: only one program on a computer receives each copy of the
+  announcement. AetherSDR gives it up once it is connected to the radio over
+  the tailnet; until then, start SmartSDR first, or run the
+  [discovery helper](#the-discovery-helper), whose broadcast every program
+  receives.
+- **A computer at the station lists the radio twice**, at its LAN address and
+  at its tailnet address: the container takes a device to be at the station
+  when Tailscale's direct connection to it runs over the radio's network. A
+  computer that is idle on the tailnet, or reached through a relay, has no
+  direct connection, so it counts as away and is sent the announcement. It
+  corrects itself once Tailscale connects directly. Meanwhile, untick it
+  under **Only the devices ticked below**, or pick the LAN entry.
+- **The discovery helper says it was refused**: its window gives the reason.
+  - **The radio's announcement is off** or **this device isn't ticked**:
+    change the **Radio announcement** setting, and the helper connects within
+    30 seconds.
+  - **This device is at the station**: the computer is on the radio's own
+    network and already hears the radio's broadcast, so it needs no helper.
+  - **Not a tailnet address**: `TAILNET_SHIM` or `--shim` names something
+    outside the tailnet. Use the radio's tailnet name.
 - **Spectrum or audio stutters**:
   - check **Network Diagnostics → Remote Link** for a relayed path;
   - keep Opus on, and see [Low Bandwidth Connections](./low-bandwidth-connections.md).
