@@ -217,7 +217,7 @@ void FlexPttStopTracker::response(QStringView body)
     }
 }
 
-void FlexPttStopTracker::interlock(QStringView body)
+void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
 {
     QStringView state;
     QStringView source;
@@ -281,6 +281,14 @@ void FlexPttStopTracker::interlock(QStringView body)
     }
     if (present != 31) {
         fail(Failure::InvalidInput);
+        return;
+    }
+    if (envelopeHandle != 0 && envelopeHandle != m_clientHandle) {
+        // Helper subscriptions broadcast global idle (FLEX-8600 4.3.16).
+        // Ignore that snapshot; only the original transition sequence can
+        // confirm release. Other foreign-origin state still fails closed.
+        if (idle) { return; }
+        fail(Failure::Ownership);
         return;
     }
     if ((handle != 0 && handle != m_clientHandle) || (!source.isEmpty() && source != u"SW")) {
@@ -347,17 +355,11 @@ void FlexPttStopTracker::observe(Stamp stamp, QStringView rawLine, qint64 nowMs)
             return;
         }
         quint32 envelopeHandle = 0;
-        // SmartSDR's envelope identifies the client that triggered an update,
-        // not the TX owner. Before arming, helper subscriptions can report
-        // global idle; the payload must still pass the complete idle check.
-        // An active attempt retains its stricter transition-origin fence.
-        const bool beforeArming = m_phase == Phase::AwaitIdle || m_phase == Phase::Idle;
-        if (!number(rawLine.mid(1, pipe - 1), 16, envelopeHandle)
-            || (!beforeArming && envelopeHandle != 0 && envelopeHandle != m_clientHandle)) {
+        if (!number(rawLine.mid(1, pipe - 1), 16, envelopeHandle)) {
             fail(Failure::Ownership);
             return;
         }
-        interlock(body.mid(10));
+        interlock(body.mid(10), envelopeHandle);
     }
 }
 

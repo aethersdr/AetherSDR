@@ -65,7 +65,7 @@ private:
     [[nodiscard]] bool accept(Stamp stamp, qint64 nowMs);
     [[nodiscard]] bool advanceClock(qint64 nowMs);
     void fail(Failure failure);
-    void interlock(QStringView body);
+    void interlock(QStringView body, quint32 envelopeHandle);
     void response(QStringView body);
 
     QThread* const m_thread{QThread::currentThread()};

@@ -126,9 +126,14 @@ the update. The API defines this as the triggering client, independently of
 the payload's `tx_client_handle`. FLEX-8600 firmware 4.3.16.42034 broadcasts
 complete idle samples with AetherPD helper handles when their subscriptions
 open. Such a sample undergoes the same complete idle validation; a nonzero
-payload owner or incomplete fields cannot qualify readiness. The active
-attempt's transition-origin restriction remains unchanged and still needs
-qualification with these helpers present during transmission.
+payload owner or incomplete fields cannot qualify readiness. During an active
+attempt, a complete eligible idle snapshot triggered by another client is
+ignored: it neither advances nor invalidates the original stop sequence, and
+does not extend its deadline. Configuration-only updates are also inert.
+Other foreign-origin state still rejects the attempt. Only the original
+connection's full ordered sequence can certify release. A captured 8600 trace
+covers these interleaved helper broadcasts; replay tests exercise the fix,
+while live qualification of the changed tracker remains outstanding.
 
 During an armed lifecycle, relevant interlock observations must still contain
 state, source, client handle, TX-allowed and reason together. Partial evidence,

@@ -596,10 +596,13 @@ static void log_alignment_evidence(const struct alignment_evidence* evidence)
     if (evidence->line[0]) { logf_("%s", evidence->line); }
 }
 
+static void log_measurement_window(const wf_t* w, const char* event);
+
 static void log_bounded_source_end(const wf_t* w, const char* reason)
 {
     if (w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING ||
         (w->test_f1 > 0 && w->test_duration_samples)) {
+        log_measurement_window(w, reason);
         // One bounded retirement record captures the source and stream state.
         // This does not log packets or change cancellation policy.
         logf_("bounded source ended: reason=%s source=%016llx phase=%s keyed=%d tx_on=%d "
@@ -665,6 +668,24 @@ static int measurement_tones_ready(const wf_t* w, int64_t now)
     int64_t arrived=w->local_iq.last_valid_ns-w->local_iq.last_age_ns;
     return arrived>=w->measurement_tone_sent_ns &&
         arrived-w->measurement_tone_sent_ns>=w->measurement_guard_ns;
+}
+
+static void log_measurement_window(const wf_t* w, const char* event)
+{
+    if (!measurement_source_id(w) || (w->calibration.phase != PD_CAL_ARMED &&
+        w->calibration.phase != PD_CAL_RUNNING)) { return; }
+    int64_t now = pd_iq_monotonic_ns();
+    logf_("measurement window: event=%s ready=%d now_ns=%lld phase=%s keyed=%d "
+          "local=%d fault=%d aligned=%d feedback=%d noise_left=%d test_left=%d "
+          "tone1=%.0f tone2=%.0f tone_sent_ns=%lld guard_ns=%lld iq_valid_ns=%lld "
+          "iq_age_ns=%lld deadline_ns=%lld fits=%d solution=%d",
+          event, measurement_tones_ready(w, now), (long long)now, pd_calibration_name(&w->calibration),
+          w->keyed, w->local_iq_mode, w->local_iq_fault, w->aligned, w->feedback_ok,
+          w->test_noise_left, w->test_left, w->test_f1, w->test_f2,
+          (long long)w->measurement_tone_sent_ns, (long long)w->measurement_guard_ns,
+          (long long)w->local_iq.last_valid_ns, (long long)w->local_iq.last_age_ns,
+          (long long)w->calibration.deadline_ns, w->core ? pd_core_fits(w->core) : -1,
+          w->core ? pd_core_current_solution(w->core) : -1);
 }
 
 static struct pd_capture_meta capture_meta(const wf_t* w)
@@ -2841,6 +2862,7 @@ int main(int argc, char** argv)
         }
         if (w.keyed && mono() - w.last_report > 2) {
             w.last_report = mono();
+            log_measurement_window(&w, "periodic");
             logf_("tx: aligned %d, fits %d, correcting %d, state %d, offset %.3f Hz",
                   w.aligned, pd_core_fits(w.core), w.correct && correction_ready(&w),
                   pd_core_state(w.core), pd_align_offset_hz(w.align, RATE));

@@ -303,8 +303,8 @@ void otherClientTriggeredIdle()
     Harness active;
     active.start();
     active.feed(helperIdle);
-    check(active.tracker.phase() == Phase::Failed && !active.tracker.evidence(active.now).valid(),
-          "foreign-triggered idle cannot substitute for the active operation's stop sequence");
+    check(active.tracker.phase() == Phase::Transmitting && !active.tracker.evidence(active.now).valid(),
+          "foreign-triggered idle neither substitutes for nor poisons the active stop sequence");
 
     Harness malformed;
     malformed.feed(u"S522C3F51|interlock tx_client_handle=garbage state=READY reason= source= tx_allowed=1");

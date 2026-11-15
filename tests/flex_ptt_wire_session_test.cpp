@@ -119,6 +119,41 @@ void rapidReleaseAndHandoff()
     check(!h.evidence.valid(h.now), "old queued certificate cannot survive the next operation");
 }
 
+void helperSubscriptionsDuringRelease()
+{
+    // FLEX-8600 4.3.16 stop trace: helper subscriptions interleave configuration
+    // and idle snapshots with the original connection's transition sequence.
+    constexpr QStringView timing = u"SBBA5FE5|interlock acc_txreq_enable=0 rca_txreq_enable=0 acc_tx_enabled=0 tx1_enabled=0 tx2_enabled=0 tx3_enabled=0 tx_delay=0 acc_tx_delay=0 tx1_delay=0 tx2_delay=0 tx3_delay=0 acc_txreq_polarity=0 rca_txreq_polarity=0 timeout=20000 tune_tx_suppress=0";
+    constexpr QStringView helperIdle = u"S5C51784B|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= ";
+    Harness h;
+    h.key(); h.keyReadback(); h.cancel(); h.stopWire();
+    h.feed(timing);
+    h.feed(u"R102|0|");
+    h.feed(kUnkey);
+    h.feed(kReadyOwned);
+    h.feed(helperIdle);
+    check(!h.evidence.valid(h.now) && h.coordinator.recovering(),
+          "helper-triggered idle does not certify the original stop");
+    h.now += 431;
+    h.feed(kIdle);
+    check(h.evidence.valid(h.now), "original owner-clear completes stop despite helper subscription broadcasts");
+    h.feed(timing);
+    h.feed(helperIdle);
+    check(h.evidence.valid(h.now) && h.coordinator.confirmStopped(h.evidence.request),
+          "unrelated broadcasts cannot revoke complete original stop evidence");
+    check(h.commands == QStringList{"xmit 1", "xmit 0"} && h.operation.hasConfirmedStop(),
+          "release completes without extra keying or fabricated confirmation");
+
+    Harness missing;
+    missing.key(); missing.keyReadback(); missing.cancel(); missing.stopWire();
+    missing.feed(u"R102|0|"); missing.feed(kUnkey); missing.feed(kReadyOwned);
+    missing.feed(helperIdle);
+    missing.now += FlexPttStopTracker::kTransitionTimeoutMs;
+    missing.wire.poll(missing.now);
+    check(!missing.evidence.valid(missing.now) && missing.coordinator.recovering(),
+          "helper idle never replaces missing owner-clear or extends the deadline");
+}
+
 void partialAndStale()
 {
     Harness partial;
@@ -156,6 +191,7 @@ int main(int argc, char** argv)
     protocolLossRetainsStop();
     noDispatch();
     rapidReleaseAndHandoff();
+    helperSubscriptionsDuringRelease();
     partialAndStale();
     return failures ? 1 : 0;
 }

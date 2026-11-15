@@ -556,6 +556,8 @@ ADC headroom or calibrated output power.
    release remains visible on reopening. An unused source arm expires after
    30 seconds, or **Cancel source** withdraws it immediately.
 6. Results appear only after confirmed release of the original transmission.
+   Background helper connections do not complete that confirmation; AetherSDR
+   waits for the original transmission's stop sequence from the radio.
    **Export result…** saves JSON with the station settings, source and capture
    identities, timestamps, correction state, spectrum, noise limitations and
    reference conventions. IMD is labeled both per tone and relative to

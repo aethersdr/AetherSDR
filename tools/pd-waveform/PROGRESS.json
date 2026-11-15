@@ -884,5 +884,19 @@
       "Full-loop alignment delay is not FPGA-to-process packet latency.",
       "All original production exit criteria remain."
     ]
+  },
+  "stop_evidence_helper_broadcasts": {
+    "production_ready": false,
+    "status": "captured_trace_reproduced_and_component_fix_verified_live_pending",
+    "evidence": "stop-evidence-development/validation.json under evidence_root",
+    "completed": "Ignore valid interlock configuration and complete helper-origin idle snapshots during the original stop sequence; retain original transition ordering, ownership and timeout requirements. Add bounded native tone-window diagnostic records without changing readiness or RF deadlines.",
+    "remaining": [
+      "Live changed-tracker stop qualification pending; RF08 remains a failed GUI completion.",
+      "Tone readiness failure not yet resolved; diagnostic native build not installed.",
+      "Initial native capture test exposed a null core in diagnostic logging; logging now handles a partially initialized waveform, all three native tests pass on the final source.",
+      "Initial sandbox LeakSanitizer failed due to ptrace; host sanitizer run passed.",
+      "Touchpoint manifest was stale from earlier measurement UI integration; existing measurement model tagged and manifest regenerated. No new UI include added in this change.",
+      "All original P1-P10 requirements remain."
+    ]
   }
 }
