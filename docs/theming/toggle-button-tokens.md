@@ -18,13 +18,13 @@ enum class ToggleTribe { Accent, Success, Warning };
 | Tribe | Semantic | Root-scope checked-bg | Per-applet override? |
 |---|---|---|---|
 | **Accent**  | Generic on / off, mode selectors | `color.accent.dim`         | yes — TX red / RX green / comp amber |
-| **Success** | Enable, activate, connect        | `color.background.success` | no  — semantic colour is the point |
+| **Success** | Enable, activate, connect        | theme-specific success surface | no  — semantic colour is the point |
 | **Warning** | Caution, armed, high-stakes      | `color.background.warning` | no  — semantic colour is the point |
 
 Pick a tribe by what the toggled state *means*, not by what colour it
 should be in any particular applet.  The Accent tribe surface-tints
 by applet automatically through the scope tree; the Success and
-Warning tribes look identical wherever they live.
+Warning tribes look identical wherever they live. The dark Success checked surface is deliberately darker than the general success background to meet text contrast requirements; this also darkens other controls that reuse that token.
 
 ## Namespaces
 
@@ -40,8 +40,8 @@ color.toggle.accent.background.checked    ← color.accent.dim
 color.toggle.accent.foreground.checked    ← color.accent
 color.toggle.accent.border.checked        ← color.accent
 
-color.toggle.success.background.checked   ← color.background.success
-color.toggle.success.foreground.checked   ← color.accent.success
+color.toggle.success.background.checked   ← dark: #004a33; light: #c8e8d0
+color.toggle.success.foreground.checked   ← dark: color.green.500; light: #146634
 color.toggle.success.border.checked       ← color.accent.success
 
 color.toggle.warning.background.checked   ← color.background.warning

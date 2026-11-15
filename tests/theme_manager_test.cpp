@@ -409,9 +409,32 @@ int main(int argc, char** argv)
         EXPECT_EQ(tm.color("color.toggle.accent.background.checked").name().toLower(),
                   QString("#0070c0"));   // {color.blue.700}
         EXPECT_EQ(tm.color("color.toggle.success.background.checked").name().toLower(),
-                  QString("#006040"));   // color.background.success
+                  QString("#004a33"));   // darkened for WCAG AA (#7322)
         EXPECT_EQ(tm.color("color.toggle.warning.background.checked").name().toLower(),
                   QString("#5a3a0a"));   // color.background.warning (new primitive)
+    }
+
+    // #7322: checked Success-toggle text must meet WCAG AA in both themes.
+    {
+        auto& tm = ThemeManager::instance();
+        const auto luminance = [](const QColor& color) {
+            const auto linear = [](double value) {
+                return value <= 0.04045 ? value / 12.92
+                    : std::pow((value + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF())
+                + 0.0722 * linear(color.blueF());
+        };
+        for (const QString& themeName : {QStringLiteral("Default Dark"),
+                                         QStringLiteral("Default Light")}) {
+            EXPECT_TRUE(tm.setActiveTheme(themeName));
+            const double foreground = luminance(
+                tm.color("color.toggle.success.foreground.checked"));
+            const double background = luminance(
+                tm.color("color.toggle.success.background.checked"));
+            EXPECT_TRUE((std::max(foreground, background) + 0.05)
+                        / (std::min(foreground, background) + 0.05) >= 4.5);
+        }
     }
 
     // ── Toggle button — Accent tribe per-applet cascade ──
@@ -438,7 +461,7 @@ int main(int argc, char** argv)
         EXPECT_TRUE(tm.isOverriddenAt("applet/comp", "color.toggle.accent.background.checked"));
         // Success + Warning tribes — semantic, no per-applet shift.
         EXPECT_EQ(tm.colorAt("applet/tx",  "color.toggle.success.background.checked").name().toLower(),
-                  QString("#006040"));
+                  QString("#004a33"));
         EXPECT_EQ(tm.colorAt("applet/tx",  "color.toggle.warning.background.checked").name().toLower(),
                   QString("#5a3a0a"));
         EXPECT_TRUE(!tm.isOverriddenAt("applet/tx", "color.toggle.success.background.checked"));
