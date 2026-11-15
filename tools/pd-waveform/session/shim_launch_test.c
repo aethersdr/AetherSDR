@@ -1,13 +1,55 @@
+#define _GNU_SOURCE
+#include <sys/prctl.h>
+static int launch_test_prctl(int option,...);
+#define prctl launch_test_prctl
 #define main shim_launch_program_main
 #include "pd_shim_launch.c"
 #undef main
+#undef prctl
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <assert.h>
+#include <sys/wait.h>
 
-int main(void)
+static int nnp_error=-1;
+static int launch_test_prctl(int option,...)
 {
+    assert(option==PR_SET_NO_NEW_PRIVS);
+    if(nnp_error<0){return prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0);}
+    errno=nnp_error;
+    return nnp_error?-1:0;
+}
+static void check_no_new_privileges(void)
+{
+    nnp_error=0;assert(no_new_privileges());
+    nnp_error=EINVAL;assert(no_new_privileges());
+    const int failures[]={EPERM,EACCES,EIO,ENOSYS};
+    for(unsigned i=0;i<sizeof(failures)/sizeof(failures[0]);++i){
+        nnp_error=failures[i];assert(!no_new_privileges());
+    }
+    nnp_error=-1;
+    int before=prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0);
+    pid_t child=fork();assert(child>=0);
+    if(!child){
+        alarm(5);
+        assert(no_new_privileges());
+        assert(prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0)==1);
+        execl("/proc/self/exe","shim-launch-test","--check-nnp",(char*)NULL);
+        _exit(95);
+    }
+    int status=0;assert(waitpid(child,&status,0)==child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status)==0);
+    assert(prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0)==before);
+}
+
+int main(int argc,char** argv)
+{
+    if(argc==2 && !strcmp(argv[1],"--check-nnp")){
+        return prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0)==1?0:1;
+    }
+    assert(argc==1);
+    check_no_new_privileges();
     assert(launch_fd("3")==3 && launch_fd("1023")==1023);
     const char* bad[]={NULL,"","2","1024","-3","+3","3 "," 3","3x","00003","/tmp/x"};
     for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);++i){assert(launch_fd(bad[i])==-1);}
@@ -35,6 +77,6 @@ int main(void)
     s.st_mode=S_IFDIR|0755;assert(!data_directory(&s));
     s.st_mode=S_IFDIR|0700;s.st_uid=0;assert(!data_directory(&s));
     int repeated[6]={3,3,5,6,7,8};assert(!handoff_roles(repeated));
-    puts("fixed shim launcher: descriptor/handle grammar, protected parent/program and private data-directory policy; socket-free, no root or network mutation");
+    puts("fixed shim launcher: descriptor/handle grammar, protected paths, NNP kernel inheritance and old-kernel/error policy; socket-free, no root or network mutation");
     return 0;
 }

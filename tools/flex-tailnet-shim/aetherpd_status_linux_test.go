@@ -5,12 +5,94 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestAetherPDCompletionWaitsForCleanup(t *testing.T) {
+	for _, failure := range []string{"none", "dsp", "unkey", "lease", "receive", "setup", "deadline"} {
+		t.Run(failure, func(t *testing.T) {
+			injected := func(role string) error {
+				if failure == role {
+					return errors.New("injected " + role + " failure")
+				}
+				return nil
+			}
+			ownerRead, ownerWrite, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ownerRead.Close()
+			defer ownerWrite.Close()
+			setupRead, setupWrite, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer setupRead.Close()
+			defer setupWrite.Close()
+			status, _ := privateStatusFixture(t)
+			calibration, _ := privateStatusFixture(t)
+			guard := &aetherPDUnkey{done: make(chan struct{}), err: injected("unkey")}
+			receive := &aetherPDLeaseGuard{done: make(chan struct{}), err: injected("receive")}
+			lease := &aetherPDLeaseGuard{done: make(chan struct{}), err: injected("lease"), receive: receive}
+			setup := &pdSetupChildren{done: make(chan struct{}), failed: make(chan struct{}), errs: []error{injected("setup")}}
+			wait := func() error {
+				_, err := io.Copy(io.Discard, ownerRead)
+				return errors.Join(err, injected("dsp"))
+			}
+			p := monitorAetherPDProcessWithSetup(0, wait, ownerWrite, status.status, calibration.status,
+				setupWrite, guard, pdReceiveOriginal{}, lease, setup)
+			defer p.Stop()
+			operation := pdSessionOperations(&Node{pdProcess: p})
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			ack := operation(ctx, 'T')
+			if ack.code != 202 {
+				t.Fatal("Stop not acknowledged", ack)
+			}
+			// Socket closure and a Stop receipt do not establish worker cleanup.
+			p.status.Close()
+			if got := operation(ctx, 'S'); got.code != 503 {
+				t.Fatal("premature completion while guardians are outstanding", got)
+			}
+			close(guard.done)
+			close(lease.done)
+			close(receive.done)
+			if failure != "deadline" {
+				close(setup.done)
+			} else {
+				defer close(setup.done)
+			}
+			err = p.Wait(ctx)
+			if ctx.Err() != nil || (err == nil) != (failure == "none") {
+				t.Fatal("unexpected supervisor completion", err, ctx.Err())
+			}
+			got := operation(ctx, 'S')
+			var body map[string]any
+			want := "stopped"
+			if failure != "none" {
+				want = "cleanup_unconfirmed"
+			}
+			if got.code != 200 || json.Unmarshal(got.body, &body) != nil || len(body) != 2 ||
+				body["available"] != false || body["state"] != want {
+				t.Fatalf("wrong supervisor status: %d %s", got.code, got.body)
+			}
+			if _, err := p.readNativeStatus(ctx); err == nil {
+				t.Fatal("terminal summary fabricated native DSP data")
+			}
+			cancel()
+			if _, err := p.queryStatus(ctx); err == nil {
+				t.Fatal("canceled query succeeded")
+			}
+		})
+	}
+}
 
 func privateStatusFixture(t *testing.T) (*aetherPDProcess, *net.UnixConn) {
 	t.Helper()

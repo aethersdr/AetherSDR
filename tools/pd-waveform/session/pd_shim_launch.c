@@ -150,6 +150,12 @@ static int close_unrelated(const int fds[6],int program)
     }
     return !closedir(d);
 }
+static int no_new_privileges(void)
+{
+    /* Linux 2.6 lacks this operation. UID and capability removal remain
+     * mandatory there; other failures must not silently weaken the launch. */
+    return !prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0) || errno==EINVAL;
+}
 static int drop_root(void)
 {
     for(int cap=0;cap<64;++cap){if(prctl(PR_CAPBSET_DROP,cap,0,0,0) && errno!=EINVAL){return 0;}}
@@ -157,7 +163,7 @@ static int drop_root(void)
     struct __user_cap_header_struct header={_LINUX_CAPABILITY_VERSION_3,0};struct __user_cap_data_struct caps[2]={{0}};
     if(syscall(SYS_capset,&header,caps) || syscall(SYS_capget,&header,caps) || prctl(PR_SET_DUMPABLE,0,0,0,0)){return 0;}
     for(unsigned i=0;i<2;++i){if(caps[i].effective || caps[i].permitted || caps[i].inheritable){return 0;}}
-    return getuid()==78666 && geteuid()==78666 && getgid()==20 && getegid()==20;
+    return getuid()==78666 && geteuid()==78666 && getgid()==20 && getegid()==20 && no_new_privileges();
 }
 int main(int argc,char** argv)
 {

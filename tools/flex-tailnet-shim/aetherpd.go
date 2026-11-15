@@ -234,6 +234,14 @@ func aetherPDStatusHandler(n *Node, read func(context.Context) (aetherPDStatus, 
 			}{false, "unavailable"})
 			return
 		}
+		if !result.Available && (result.State == "stopped" || result.State == "cleanup_unconfirmed") {
+			// Supervisor completion carries no current RF state or DSP counters.
+			writeJSON(w, http.StatusOK, struct {
+				Available bool   `json:"available"`
+				State     string `json:"state"`
+			}{false, result.State})
+			return
+		}
 		writeJSON(w, http.StatusOK, result)
 	}
 }

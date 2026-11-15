@@ -508,7 +508,12 @@ credential for the connected radio. Opening it reads status only.
 - **Arm calibration** requires fresh, unkeyed status and radio APD off.
   **Cancel calibration** withdraws the calibration request.
 - **Stop AetherPD** can interrupt startup. Closing the window leaves the
-  session running; use Stop when you want it stopped.
+  session running; use Stop when you want it stopped. **Stopped — session
+  cleanup confirmed** appears only after the service confirms the DSP and its
+  cleanup workers exited cleanly. **Session ended — cleanup unconfirmed**
+  means a worker failed or cleanup timed out. A Stop receipt alone confirms
+  neither shutdown nor unkey. These completion messages describe the owned
+  session; check the radio's transmit indicator for its current RF state.
 - **Restore receive** explicitly requests the checked receive recovery
   described below. It is never triggered by opening or closing the window.
 - **Refresh** reads status or reloads a missing/rejected credential. After a

@@ -57,6 +57,28 @@ int main(int argc, char** argv)
                 "Stop interrupts startup through the production model");
     start->complete(202, R"({"state":"start_requested"})");
     network.last->complete(202, R"({"state":"stop_requested"})");
+    const auto label = [&](const char* name) {
+        return dialog->findChild<QLabel*>(QString::fromLatin1(name))->text();
+    };
+    ok &= check(label("pdReceipt").contains(QStringLiteral("not yet confirmed")),
+                "Stop receipt cannot imply cleanup completion");
+    network.last->complete(200, R"({"available":false,"state":"stopped"})");
+    ok &= check(label("pdState").contains(QStringLiteral("cleanup confirmed"))
+        && !label("pdReceipt").contains(QStringLiteral("not yet confirmed"))
+        && !label("pdDetail").contains(QStringLiteral("Dispatch faults"))
+        && button(*dialog, "pdStart")->isEnabled() && !button(*dialog, "pdArm")->isEnabled(),
+        "supervisor completion visible without live DSP counters or calibration");
+    button(*dialog, "pdRefresh")->click();
+    network.last->complete(200, R"({"available":false,"state":"cleanup_unconfirmed"})");
+    ok &= check(label("pdState").contains(QStringLiteral("cleanup unconfirmed"))
+        && label("pdReceipt").contains(QStringLiteral("not yet confirmed"))
+        && !label("pdDetail").contains(QStringLiteral("Dispatch faults"))
+        && !button(*dialog, "pdArm")->isEnabled(), "cleanup failure remains explicitly unconfirmed");
+    button(*dialog, "pdRefresh")->click();
+    network.last->complete(503, "{}");
+    ok &= check(label("pdState") == QStringLiteral("Status unknown"),
+                "lost status cannot retain completion as current observation");
+    button(*dialog, "pdRefresh")->click();
     QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
     if (!fixture.open(QIODevice::ReadOnly)) { return 1; }
     network.last->complete(200, fixture.readAll());

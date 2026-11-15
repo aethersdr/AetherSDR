@@ -146,6 +146,14 @@ successful fits earlier. `calibration_required=false` alone does not establish
 that a usable correction model exists. A missing, malformed or unresponsive
 native service returns HTTP 503 with `available=false` and `state=unavailable`.
 
+After an owned session ends, its supervisor reports HTTP 200 with exactly
+`available=false` and `state=stopped` only when the DSP and owned cleanup workers
+have completed successfully. An exit error or cleanup deadline instead reports
+`state=cleanup_unconfirmed`. These terminal summaries carry no current RF state
+or DSP counters. A closed native socket alone still means unavailable. The
+summary belongs to the retained session and is retired when that session is
+replaced or its private channel is lost; it is not a persistent radio-wide state.
+
 This is status integration for an experimental waveform.
 The status report grants no capture or transmitter authority. A trusted launcher
 can supply a prepared session for managed startup as described below. IQ
@@ -351,6 +359,10 @@ an owned session, it returns 409. Separately started processes are left alone;
 repeated stop requests for an owned session are idempotent. The shim never
 restarts the DSP automatically. Ordinary startup without descriptor handoff
 is unchanged.
+
+Use a subsequent authenticated status read to observe supervisor completion.
+The retained unprivileged relay keeps the receive journal for an explicit
+restore request; reporting completion does not apply receive settings.
 
 Successful sign-out or an admin-token rotation also stops the owned session
 and permanently closes that session's calibration gate. The old token cannot

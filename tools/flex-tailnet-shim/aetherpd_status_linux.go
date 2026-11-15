@@ -12,6 +12,22 @@ import (
 )
 
 func (p *aetherPDProcess) queryStatus(ctx context.Context) (aetherPDStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return aetherPDStatus{}, err
+	}
+	if p != nil {
+		select {
+		case <-p.done:
+			// done publishes the DSP exit and cleanup wait results, including
+			// deadlines. A Stop receipt or a closed status socket is insufficient.
+			state := "stopped"
+			if p.err != nil {
+				state = "cleanup_unconfirmed"
+			}
+			return aetherPDStatus{State: state}, nil
+		default:
+		}
+	}
 	data, err := p.readNativeStatus(ctx)
 	if err != nil {
 		return aetherPDStatus{}, err

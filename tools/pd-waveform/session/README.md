@@ -257,7 +257,10 @@ mode0700. Standard input must be `/dev/null`; output and error are write-only
 pipes. Unrelated descriptors are closed before execution.
 
 The launcher drops supplementary groups, all capability bounding bits, root
-UID/GID and all effective/permitted/inheritable capabilities. It executes only
+UID/GID and all effective/permitted/inheritable capabilities. The shared drop
+also enables `no_new_privs` for the primary shim, private session shim and
+ordinary session relays. Only `EINVAL` (unsupported on Linux 2.6) is tolerated;
+other failures refuse launch. It executes only
 its fixed sibling `flex-tailnet-shim`, using a whitelist of inherited session
 variables and fixed arguments. The managed DSP selects **local DAX IQ**.
 Caller environment cannot select DAX audio or inject loader/configuration
@@ -275,6 +278,9 @@ trusted bench fixture. Building it installs no privileges and does not supply
 the complete session provider. ARMv7 compilation does not qualify execution
 on a FLEX-6000. `shim-launch-test-host` checks descriptor/handle grammar,
 protected ownership/modes and data-directory policy without sockets or root.
+It injects unsupported/error responses and checks `no_new_privs` across exec
+in a separate child on the modern Linux test host. This does not qualify the
+Linux 2.6 fallback on actual FLEX-6000 hardware.
 
 Receive recovery preserves the captured slice's DAX assignment only while that
 channel remains available. A second GUI assigning the same channel makes

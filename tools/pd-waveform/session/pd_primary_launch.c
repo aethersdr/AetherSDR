@@ -63,9 +63,6 @@ int PD_PRIMARY_MAIN(int argc,char** argv)
     if(chdir("/") || !close_unrelated(kept,program) || !primary_other() || !drop_root()){
         close(program);return 5;
     }
-    /* Linux2.6 lacks NO_NEW_PRIVS. The bounding set and UID drop are required
-     * on both generations; NNP is additional protection where available. */
-    if(prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0) && errno!=EINVAL){close(program);return 5;}
     char* args[]={"flex-tailnet-shim","-state",state,
         "-run-dir","/run/aetherpd/primary","-radio","127.0.0.1","-api",":48992",NULL};
     char* env[]={"PATH=/usr/bin:/bin","TS_NO_LOGS_NO_SUPPORT=true",NULL};

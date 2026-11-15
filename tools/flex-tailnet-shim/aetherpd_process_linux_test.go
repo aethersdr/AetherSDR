@@ -197,8 +197,8 @@ func TestAetherPDLiveProcess(t *testing.T) {
 	if err := process.Wait(ctx); err != nil {
 		t.Fatal("DSP did not exit cleanly", err)
 	}
-	if got := call(t, NewAPI(n), "GET", "/v1/aetherpd/status", "192.168.50.20:4000", "local-one-run-probe", ""); got.Code != http.StatusServiceUnavailable {
-		t.Fatal("dead session redirected status", got.Code)
+	if got := call(t, NewAPI(n), "GET", "/v1/aetherpd/status", "192.168.50.20:4000", "local-one-run-probe", ""); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"state":"stopped"`) {
+		t.Fatal("clean session completion not reported", got.Code, got.Body.String())
 	}
 	t.Log("authenticated stop ended the real native DSP through its lifetime pipe")
 }

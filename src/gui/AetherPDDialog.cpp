@@ -22,6 +22,8 @@ QString stateText(aetherpd::State state)
     using aetherpd::State;
     switch (state) {
     case State::Unavailable: return QObject::tr("Unavailable");
+    case State::Stopped: return QObject::tr("Stopped — session cleanup confirmed");
+    case State::CleanupUnconfirmed: return QObject::tr("Session ended — cleanup unconfirmed");
     case State::Starting: return QObject::tr("Starting");
     case State::Disabled: return QObject::tr("Correction disabled");
     case State::BlockedByRadioApd: return QObject::tr("Blocked by radio APD");
@@ -295,7 +297,11 @@ void AetherPDDialog::render()
         case Acknowledgment::StartRequested: receipt = tr("Start requested; waiting for observed status."); break;
         case Acknowledgment::ArmAccepted: receipt = tr("Arm request accepted; waiting for observed status."); break;
         case Acknowledgment::CancelAccepted: receipt = tr("Cancel request accepted; waiting for observed status."); break;
-        case Acknowledgment::StopRequested: receipt = tr("Stop requested; shutdown and unkey are not yet confirmed here."); break;
+        case Acknowledgment::StopRequested:
+            receipt = status && status->state == aetherpd::State::Stopped
+                ? tr("Stop requested; the session supervisor confirms cleanup completed.")
+                : tr("Stop requested; shutdown and unkey are not yet confirmed here.");
+            break;
         case Acknowledgment::ReceiveRestored: receipt = tr("Service reports receive restoration completed."); break;
         }
     }
@@ -330,9 +336,17 @@ void AetherPDDialog::render()
     setText(m_state, !valid ? tr("Connection ended — reopen AetherPD for the current radio")
         : m_loading ? tr("Loading radio credential…") : status ? stateText(status->state) : tr("Status unknown"));
     if (!alive) { return; }
-    setText(m_detail, status ? tr("Dispatch faults: %1 · Send errors: %2 · Rejected input: %3 · Stale IQ: %4\nInput-limited samples: %5")
-        .arg(status->faults.dispatchDeadlines).arg(status->faults.sendErrors)
-        .arg(status->faults.rejectedInput).arg(status->faults.staleIq).arg(status->inputLimitedSamples) : QString{});
+    QString detail;
+    if (status && status->available) {
+        detail = tr("Dispatch faults: %1 · Send errors: %2 · Rejected input: %3 · Stale IQ: %4\nInput-limited samples: %5")
+            .arg(status->faults.dispatchDeadlines).arg(status->faults.sendErrors)
+            .arg(status->faults.rejectedInput).arg(status->faults.staleIq).arg(status->inputLimitedSamples);
+    } else if (status && status->state == aetherpd::State::Stopped) {
+        detail = tr("The owned DSP and session cleanup workers exited cleanly. This reports that session's completion, not the radio's current transmit state.");
+    } else if (status && status->state == aetherpd::State::CleanupUnconfirmed) {
+        detail = tr("The session supervisor reported an error or cleanup deadline. Shutdown and unkey are not confirmed.");
+    }
+    setText(m_detail, detail);
     if (!alive) { return; }
     setText(m_receipt, receipt);
     if (!alive) { return; }

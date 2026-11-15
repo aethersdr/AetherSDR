@@ -151,6 +151,20 @@ int main(int argc, char** argv)
           "unavailable status rejected");
     check(!parseStatus(R"({"available":false,"state":"unavailable","correcting":true})"),
           "unavailable status carried contradictory data");
+    for (const auto& [wire, expected] : std::array<std::pair<const char*, State>, 2>{{
+             {"stopped", State::Stopped}, {"cleanup_unconfirmed", State::CleanupUnconfirmed}}}) {
+        QJsonObject terminal{{"available", false}, {"state", QLatin1String(wire)}};
+        const auto completion = parseStatus(encode(terminal));
+        check(completion && completion->state == expected && !completion->available,
+              "supervisor completion rejected");
+        terminal[QStringLiteral("keyed")] = false;
+        rejects(terminal, "supervisor completion carried fabricated RF telemetry");
+        terminal.remove(QStringLiteral("keyed"));
+        terminal[QStringLiteral("available")] = true;
+        rejects(terminal, "terminal session marked available");
+        QJsonObject mixed = idle(); mixed[QStringLiteral("state")] = QLatin1String(wire);
+        rejects(mixed, "live DSP state mixed with supervisor completion");
+    }
     for (const QString& key : idle().keys()) {
         QJsonObject missing = idle();
         missing.remove(key);

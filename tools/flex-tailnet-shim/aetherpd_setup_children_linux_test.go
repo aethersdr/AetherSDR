@@ -144,6 +144,9 @@ func TestPDSetupChildExitStopsDSPAndReapsOthers(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), pdSetupChildRoles[failedRole]) || ctx.Err() != nil {
 				t.Fatal("helper loss did not stop/reap the session", err)
 			}
+			if got, err := p.queryStatus(ctx); err != nil || got.State != "cleanup_unconfirmed" || got.Available {
+				t.Fatal("failed helper reported clean session completion", got, err)
+			}
 			for _, pid := range spec.pids {
 				if _, err := syscall.Wait4(pid, nil, syscall.WNOHANG, nil); !errors.Is(err, syscall.ECHILD) {
 					t.Fatal("helper not reaped", pid, err)

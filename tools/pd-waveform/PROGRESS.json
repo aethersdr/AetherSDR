@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T12:08:22.323233+00:00",
+  "updated_utc": "2026-11-15T12:24:14.554407+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Prepare a compatible signed PDUPGR02 development candidate and independently pinned application selection, then qualify the complete operator/coordinator upgrade on8600. Shipping catalogue, initial trust, app-crash cleanup, actual6300 and all original production requirements remain open.",
+  "next_action": "Build a signed successor containing the new Go shim and common native privilege-drop path, compile its exact desktop selection, then run receive-only GUI Start/Stop and independent process audit. Keep all original P1-P10 requirements open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -388,17 +388,17 @@
     "open_findings": [
       {
         "id": "local-stop-completion-observation",
-        "status": "open",
+        "status": "component_fix_validated_live_retest_pending",
         "evidence": "session-stopped.json, stop-status-gap.png, host-stopped-state.json",
         "cause": "queryStatus calls readNativeQuery; once p.done closes the query returns owned AetherPD exited and maps to503. Completion is not exposed despite supervisor cleanup evidence.",
-        "next": "Expose authenticated final session completion from supervisor wait/guardian results, with explicit unconfirmed/error states; test cancellation, crash, stale sessions and UI behavior."
+        "next": "Package the signed successor and qualify through the ordinary GUI; independently inspect terminal status and retained relay privileges."
       },
       {
         "id": "local-session-no-new-privileges",
-        "status": "open",
+        "status": "component_fix_validated_live_retest_pending",
         "evidence": "host-stopped-state.json",
         "cause": "Remaining unprivileged service relay and private shim have zero capabilities but NoNewPrivs=0; service_launch/drop_root path omits the optional Linux3.5+ hardening already used by primary_launch.",
-        "next": "Apply supported-kernel no-new-privileges after authority drop, keep explicit Linux2.6 EINVAL fallback and verify real process graph."
+        "next": "Package the signed successor and qualify through the ordinary GUI; independently inspect terminal status and retained relay privileges."
       }
     ],
     "remaining": [
@@ -407,6 +407,51 @@
       "Initial-install trust, production catalogue and ARMv7/6000 provisioning.",
       "Natural alignment-slip/cold-start bypass, PR4770 integration, repeated final-candidate RF and stock APD comparison.",
       "Actual6300 teammate hardware qualification, resource/reproducibility budgets and independent release gates."
+    ]
+  },
+  "session_completion_hardening": {
+    "status": "component_validated_not_deployed",
+    "evidence": "session-hardening-development/validation.json under evidence_root",
+    "checks": {
+      "native_host_tests": 15,
+      "native_host_tests_passed": true,
+      "native_sandbox_failure": "iq-source socket role assertion; all 15 passed with host Unix socket access. Original log retained.",
+      "native_mutations_detected": [
+        "skip NNP",
+        "reject EINVAL fallback",
+        "ignore EPERM"
+      ],
+      "native_sanitizers": "NNP policy and fork/exec test: address, undefined behavior and leaks passed",
+      "go_race": "AetherPD, private status, session and setup-child tests passed; includes real supervisor waits and 5-second cleanup deadline. Live tests remain opt-in, not enabled.",
+      "go_mutations_detected": [
+        "publish completion before supervisor done",
+        "ignore cleanup failure"
+      ],
+      "desktop_tests": [
+        "aetherpd_protocol_test",
+        "aetherpd_client_test",
+        "aetherpd_model_test",
+        "aetherpd_dialog_test"
+      ],
+      "desktop_tests_passed": true,
+      "desktop_sanitizers": "Changed AetherPDProtocol, AetherPDDialog and dialog-test objects instrumented; rest of engine uninstrumented. ASan/UBSan/LSan passed.",
+      "desktop_build": true,
+      "docs_build": true,
+      "test_registration": true,
+      "gui_accessibility_findings": 0,
+      "cross_builds": [
+        "session helpers ARM64",
+        "session helpers Cortex-A8 ARMv7",
+        "pd-boot ARM64",
+        "pd-boot Cortex-A8 ARMv7",
+        "Go shim ARM64",
+        "Go shim ARMv7"
+      ]
+    },
+    "remaining": [
+      "New signed package including changed Go shim and native common launcher; compiled desktop selection must target that package.",
+      "Receive-only installed-radio Start/Stop and independent process-capability audit; new code not deployed.",
+      "Crash/cancel/restart qualification with final process graph, first-install trust, actual 6000 provisioning/hardware, remaining DSP/PR4770/RF comparison and all production plan gates."
     ]
   }
 }
