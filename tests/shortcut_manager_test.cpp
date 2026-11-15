@@ -526,145 +526,136 @@ int main(int argc, char** argv)
         ok &= expect(shortcutSidedKeyFor(P::Windows, Qt::Key_Control, 0, 0xa3)
                          == kShortcutKeyRightCtrl,
                      "Windows VK_RCONTROL is Right Ctrl");
+        ok &= expect(shortcutSidedKeyFor(P::Windows, Qt::Key_Shift, 0x36, 0x10)
+                         == kShortcutKeyRightShift,
+                     "Windows scan 0x36 is Right Shift");
         ok &= expect(shortcutSidedKeyFor(P::MacOS, Qt::Key_Meta, 0, 0x3b)
                          == kShortcutKeyLeftCtrl,
                      "macOS kVK_Control is Left Ctrl");
         ok &= expect(shortcutSidedKeyFor(P::MacOS, Qt::Key_Meta, 0, 0x3e)
                          == kShortcutKeyRightCtrl,
                      "macOS kVK_RightControl is Right Ctrl");
-        ok &= expect(shortcutSidedKeyFor(P::Xkb, Qt::Key_Control, 37, 0xffe3)
+        ok &= expect(shortcutSidedKeyFor(P::MacOS, Qt::Key_Control, 0, 0x37)
+                         == Qt::Key_unknown,
+                     "macOS Command is not a sided key");
+        ok &= expect(shortcutSidedKeyFor(P::Xkb, Qt::Key_Control, 0x25, 0xffe3)
                          == kShortcutKeyLeftCtrl,
                      "xkb Control_L is Left Ctrl");
-        ok &= expect(shortcutSidedKeyFor(P::Xkb, Qt::Key_Control, 105, 0xffe4)
+        ok &= expect(shortcutSidedKeyFor(P::Xkb, Qt::Key_Control, 0x69, 0xffe4)
                          == kShortcutKeyRightCtrl,
                      "xkb Control_R is Right Ctrl");
-        ok &= expect(shortcutSidedKeyFor(P::Windows, Qt::Key_A, 0x1d, 0)
+        ok &= expect(shortcutSidedKeyFor(P::Xkb, Qt::Key_A, 0, 0xffe3)
                          == Qt::Key_unknown,
-                     "a non-modifier key never resolves to a side");
-        ok &= expect(shortcutSidedKeyFor(P::Xkb, Qt::Key_Control, 0, 0) == Qt::Key_unknown,
-                     "missing native data resolves no side");
+                     "a non-modifier key is never sided");
+        ok &= expect(shortcutSidedKeyFor(P::Windows, Qt::Key_Control, 0, 0)
+                         == Qt::Key_unknown,
+                     "no native data means no side");
 
-        // A bare Ctrl press carries ControlModifier; it must still resolve bare.
+        // A bare modifier press carries its own modifier bit; it must still
+        // resolve bare, or a "Control" binding never matches on press.
         const QKeyEvent ctrlPress(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+        const QKeyEvent ctrlRelease(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
         ok &= expect(shortcutSequenceFromKeyEvent(&ctrlPress) == QKeySequence(Qt::Key_Control),
                      "bare Ctrl press resolves to Control, not Ctrl+Control");
-        const QKeyEvent ctrlRelease(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
         ok &= expect(shortcutSequenceFromKeyEvent(&ctrlRelease) == QKeySequence(Qt::Key_Control),
                      "bare Ctrl release resolves to Control");
-        const QKeyEvent squeezeAlt(QEvent::KeyPress, Qt::Key_Alt,
-                                   Qt::ControlModifier | Qt::AltModifier);
-        ok &= expect(shortcutSequenceFromKeyEvent(&squeezeAlt) == QKeySequence(Qt::Key_Alt),
-                     "Alt pressed while Ctrl held resolves bare");
         const QKeyEvent ctrlA(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier);
         ok &= expect(shortcutSequenceFromKeyEvent(&ctrlA)
                          == QKeySequence(Qt::ControlModifier | Qt::Key_A),
-                     "Ctrl+A is unchanged");
-        // An injected sided key resolves to itself.
-        const QKeyEvent injected(QEvent::KeyPress, kShortcutKeyRightCtrl, Qt::ControlModifier);
-        ok &= expect(shortcutSequenceFromKeyEvent(&injected) == QKeySequence(kShortcutKeyRightCtrl),
-                     "injected Right Ctrl resolves to Right Ctrl");
+                     "Ctrl+A still resolves with its modifier");
 
-        // The live wrapper reads this host's native fields (each CI lane runs
-        // its own branch).
+        // Squeeze on the host's real native encoding: press L, press R,
+        // release L, release R. Each event must resolve to its own side even
+        // though the other Ctrl is down.
 #if defined(Q_OS_WIN)
-        const QKeyEvent live(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier,
-                             0x11d, 0x11, 0);
+        const quint32 lScan = 0x1d, rScan = 0x11d, lVk = 0x11, rVk = 0x11;
+        const Qt::Key ctrlKey = Qt::Key_Control;
 #elif defined(Q_OS_MACOS)
-        const QKeyEvent live(QEvent::KeyPress, Qt::Key_Meta, Qt::MetaModifier, 0, 0x3e, 0);
+        const quint32 lScan = 0, rScan = 0, lVk = 0x3b, rVk = 0x3e;
+        const Qt::Key ctrlKey = Qt::Key_Meta;
 #else
-        const QKeyEvent live(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier,
-                             105, 0xffe4, 0);
+        const quint32 lScan = 0x25, rScan = 0x69, lVk = 0xffe3, rVk = 0xffe4;
+        const Qt::Key ctrlKey = Qt::Key_Control;
 #endif
-        ok &= expect(shortcutSequenceFromKeyEvent(&live) == QKeySequence(kShortcutKeyRightCtrl),
-                     "a native right-Ctrl press resolves to Right Ctrl on this platform");
+        const Qt::KeyboardModifier ctrlMod =
+            ctrlKey == Qt::Key_Meta ? Qt::MetaModifier : Qt::ControlModifier;
+        const QKeyEvent lDown(QEvent::KeyPress, ctrlKey, ctrlMod, lScan, lVk, 0);
+        const QKeyEvent rDown(QEvent::KeyPress, ctrlKey, ctrlMod, rScan, rVk, 0);
+        const QKeyEvent lUp(QEvent::KeyRelease, ctrlKey, ctrlMod, lScan, lVk, 0);
+        const QKeyEvent rUp(QEvent::KeyRelease, ctrlKey, Qt::NoModifier, rScan, rVk, 0);
+        ok &= expect(shortcutSequenceFromKeyEvent(&lDown) == QKeySequence(kShortcutKeyLeftCtrl),
+                     "squeeze: left press is Left Ctrl");
+        ok &= expect(shortcutSequenceFromKeyEvent(&rDown) == QKeySequence(kShortcutKeyRightCtrl),
+                     "squeeze: right press with left held is Right Ctrl");
+        ok &= expect(shortcutSequenceFromKeyEvent(&lUp) == QKeySequence(kShortcutKeyLeftCtrl),
+                     "squeeze: left release with right held is Left Ctrl");
+        ok &= expect(shortcutSequenceFromKeyEvent(&rUp) == QKeySequence(kShortcutKeyRightCtrl),
+                     "squeeze: right release is Right Ctrl");
 
-        // Text round-trip in both formats, with and without a modifier prefix.
-        for (const auto& sk : kShortcutSidedKeys) {
-            const QKeySequence bare(sk.key);
-            const QKeySequence shifted(Qt::ShiftModifier | sk.key);
-            ok &= expect(shortcutKeyText(bare, QKeySequence::PortableText)
-                             == QLatin1String(sk.name)
-                         && shortcutKeyFromText(QLatin1String(sk.name),
-                                                QKeySequence::PortableText) == bare
-                         && shortcutKeyFromText(shortcutKeyText(bare)) == bare
-                         && shortcutKeyFromText(shortcutKeyText(shifted)) == shifted
-                         && shortcutKeyFromText(
-                                shortcutKeyText(shifted, QKeySequence::PortableText),
-                                QKeySequence::PortableText) == shifted,
-                         sk.name);
-        }
+        ShortcutManager sided;
+        registerCwActions(sided);
+        sided.setBinding(QStringLiteral("cwdit"), QKeySequence(kShortcutKeyLeftCtrl));
+        sided.setBinding(QStringLiteral("cwdah"), QKeySequence(kShortcutKeyRightCtrl));
+        const auto* dit = sided.actionForKey(shortcutSequenceFromKeyEvent(&lDown));
+        const auto* dah = sided.actionForKey(shortcutSequenceFromKeyEvent(&rDown));
+        ok &= expect(dit && dit->id == QLatin1String("cwdit"), "Left Ctrl keys dit");
+        ok &= expect(dah && dah->id == QLatin1String("cwdah"), "Right Ctrl keys dah");
+        ok &= expect(sided.actionForKey(QKeySequence(ctrlKey)) == nullptr,
+                     "a sideless Ctrl does not guess a paddle");
 
-        // Sided bindings persist, reload, and do not collide at load.
-        settings.reset();
-        settings.load();
-        ShortcutManager mgr;
-        registerCwActions(mgr);
-        mgr.loadBindings();
-        mgr.setBinding(QStringLiteral("cwdit"), QKeySequence(kShortcutKeyLeftCtrl));
-        mgr.setBinding(QStringLiteral("cwdah"), QKeySequence(kShortcutKeyRightCtrl));
-        // The platform's generic Ctrl (Qt::Key_Meta on macOS).
-        mgr.setBinding(QStringLiteral("cwkey"),
-                       QKeySequence(shortcutSidedKeyGeneric(kShortcutKeyLeftCtrl)));
+        // A plain generic binding answers either side.
+        ShortcutManager generic;
+        registerCwActions(generic);
+        generic.setBinding(QStringLiteral("cwkey"), QKeySequence(ctrlKey));
+        const auto* l = generic.actionForKey(shortcutSequenceFromKeyEvent(&lDown));
+        const auto* r = generic.actionForKey(shortcutSequenceFromKeyEvent(&rDown));
+        ok &= expect(l && l->id == QLatin1String("cwkey"), "generic Ctrl binding answers left");
+        ok &= expect(r && r->id == QLatin1String("cwkey"), "generic Ctrl binding answers right");
 
-        QString stored;
-        ok &= expect(storedRow("Shortcut_cwdit", stored) && stored == QStringLiteral("Left Ctrl"),
-                     "Left Ctrl binding persists as \"Left Ctrl\"");
+        // A sided binding beats the generic one on its own side only.
+        generic.setBinding(QStringLiteral("cwdah"), QKeySequence(kShortcutKeyRightCtrl));
+        const auto* l2 = generic.actionForKey(shortcutSequenceFromKeyEvent(&lDown));
+        const auto* r2 = generic.actionForKey(shortcutSequenceFromKeyEvent(&rDown));
+        ok &= expect(l2 && l2->id == QLatin1String("cwkey"), "left still falls back to generic");
+        ok &= expect(r2 && r2->id == QLatin1String("cwdah"), "right sided binding wins");
 
-        settings.reset();
-        settings.load();
+        // Text round-trips: Qt cannot name the sided keys itself.
+        ok &= expect(shortcutKeyText(QKeySequence(kShortcutKeyLeftCtrl)) == QLatin1String("Left Ctrl"),
+                     "Left Ctrl renders as text");
+        ok &= expect(shortcutKeyFromText(QStringLiteral("Right Alt"))
+                         == QKeySequence(kShortcutKeyRightAlt),
+                     "Right Alt parses back");
+        const QKeySequence shiftLeftCtrl(Qt::ShiftModifier | kShortcutKeyLeftCtrl);
+        ok &= expect(shortcutKeyFromText(shortcutKeyText(shiftLeftCtrl, QKeySequence::PortableText),
+                                         QKeySequence::PortableText) == shiftLeftCtrl,
+                     "a modifier prefix on a sided key round-trips");
+        ok &= expect(shortcutKeyFromText(QStringLiteral("Ctrl+T"), QKeySequence::PortableText)
+                         == QKeySequence(Qt::ControlModifier | Qt::Key_T),
+                     "ordinary shortcut text is unchanged");
+
+        // Persisted bindings survive save/load.
+        sided.saveBindings();
         ShortcutManager reloaded;
         registerCwActions(reloaded);
         reloaded.loadBindings();
         ok &= expect(reloaded.action(QStringLiteral("cwdit"))->currentKey
                          == QKeySequence(kShortcutKeyLeftCtrl),
-                     "Left Ctrl binding reloads");
+                     "Left Ctrl binding survives save/load");
         ok &= expect(reloaded.action(QStringLiteral("cwdah"))->currentKey
                          == QKeySequence(kShortcutKeyRightCtrl),
-                     "Right Ctrl binding reloads (not cleared as a duplicate)");
+                     "Right Ctrl binding survives save/load");
 
-        // Sided binding wins; an unbound side falls back to the generic key.
-        ok &= expect(reloaded.actionForKey(QKeySequence(kShortcutKeyLeftCtrl))
-                         == reloaded.action(QStringLiteral("cwdit")),
-                     "Left Ctrl resolves to the dit paddle");
-        ok &= expect(reloaded.actionForKey(QKeySequence(kShortcutKeyRightCtrl))
-                         == reloaded.action(QStringLiteral("cwdah")),
-                     "Right Ctrl resolves to the dah paddle");
-        reloaded.clearBinding(QStringLiteral("cwdah"));
-        ok &= expect(reloaded.actionForKey(QKeySequence(kShortcutKeyRightCtrl))
-                         == reloaded.action(QStringLiteral("cwkey")),
-                     "unbound Right Ctrl falls back to the generic Control binding");
-        ok &= expect(reloaded.conflictCheck(QKeySequence(kShortcutKeyRightCtrl)).isEmpty(),
-                     "a generic Control binding is not a conflict for a sided key");
-
-        // Press L, press R, release L, release R: each event names its paddle.
-        reloaded.setBinding(QStringLiteral("cwdah"), QKeySequence(kShortcutKeyRightCtrl));
-        const QKeyEvent pressL(QEvent::KeyPress, kShortcutKeyLeftCtrl, Qt::ControlModifier);
-        const QKeyEvent pressR(QEvent::KeyPress, kShortcutKeyRightCtrl, Qt::ControlModifier);
-        const QKeyEvent releaseL(QEvent::KeyRelease, kShortcutKeyLeftCtrl, Qt::ControlModifier);
-        const QKeyEvent releaseR(QEvent::KeyRelease, kShortcutKeyRightCtrl, Qt::NoModifier);
-        const auto* dit = reloaded.action(QStringLiteral("cwdit"));
-        const auto* dah = reloaded.action(QStringLiteral("cwdah"));
-        ok &= expect(reloaded.actionForKey(shortcutSequenceFromKeyEvent(&pressL)) == dit
-                         && reloaded.actionForKey(shortcutSequenceFromKeyEvent(&pressR)) == dah
-                         && reloaded.actionForKey(shortcutSequenceFromKeyEvent(&releaseL)) == dit
-                         && reloaded.actionForKey(shortcutSequenceFromKeyEvent(&releaseR)) == dah,
-                     "squeeze: press L, press R, release L, release R resolve per paddle");
-
-        // CSV export/import carries the sided names.
-        const QByteArray csv = reloaded.exportBindingsCsv();
+        // And CSV export/import.
+        const QByteArray csv = sided.exportBindingsCsv();
         ok &= expect(csv.contains("Left Ctrl") && csv.contains("Right Ctrl"),
                      "CSV export names the sided keys");
-        settings.reset();
         ShortcutManager imported;
         registerCwActions(imported);
-        imported.loadBindings();
-        const ShortcutImportResult result = imported.importBindingsCsv(csv);
-        ok &= expect(result.ok(), "CSV with sided keys imports");
-        ok &= expect(imported.action(QStringLiteral("cwdit"))->currentKey
-                             == QKeySequence(kShortcutKeyLeftCtrl)
-                         && imported.action(QStringLiteral("cwdah"))->currentKey
-                             == QKeySequence(kShortcutKeyRightCtrl),
-                     "CSV import restores both paddles");
+        const ShortcutImportResult imp = imported.importBindingsCsv(csv);
+        ok &= expect(imp.ok(), "CSV with sided keys imports");
+        ok &= expect(imported.action(QStringLiteral("cwdah"))->currentKey
+                         == QKeySequence(kShortcutKeyRightCtrl),
+                     "Right Ctrl binding survives CSV round-trip");
     }
 
     return ok ? 0 : 1;

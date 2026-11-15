@@ -167,6 +167,17 @@ bool MainWindow::handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eve
     const QKeySequence seq = shortcutSequenceFromKeyEvent(keyEvent);
     const auto* action = m_shortcutManager.actionForKey(seq);
 
+    // Which side a modifier key read as, from what native data (#7354): the
+    // Windows extended-scan-code bit is the field a tester has to confirm.
+    if (isShortcutModifierKey(keyEvent->key())) {
+        qCDebug(lcCw).noquote().nospace()
+            << "Modifier key " << (eventType == QEvent::KeyPress ? "press" : "release")
+            << " key=0x" << QString::number(keyEvent->key(), 16)
+            << " scan=0x" << QString::number(keyEvent->nativeScanCode(), 16)
+            << " vk=0x" << QString::number(keyEvent->nativeVirtualKey(), 16)
+            << " -> " << shortcutKeyText(seq);
+    }
+
     CwAction cwAction = CwAction::None;
     if (action) {
         if (action->id == QLatin1String(kCwStraightKeyActionId))
