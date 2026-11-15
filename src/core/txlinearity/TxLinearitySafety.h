@@ -44,6 +44,9 @@ struct SafetyLimits {
     // stopped reporting SWR during a high-power test is not a radio to keep
     // transmitting on.
     int telemetryMaxAgeMs = 2000;
+    // PA temperature and supply voltage can have a slower publication cadence
+    // than directional power. Their deadline never refreshes on a cached read.
+    int vitalsMaxAgeMs = 2000;
 };
 
 // The band the test is allowed to occupy, in absolute Hz. Fed from

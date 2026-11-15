@@ -274,6 +274,52 @@ int main()
         check(!safety.preflight(0, badRequest).ok(), "unbounded IMD orders fail preflight");
     }
 
+    {
+        TxLinearitySafety safety;
+        SafetyLimits limits = safety.limits();
+        limits.vitalsMaxAgeMs = 3000;
+        check(!safety.setLimits(limits), "slower vital expiry requires an explicit override");
+        check(safety.setLimits(limits, true), "independent slow-vital limit accepted");
+        safety.noteRunStarted(10000);
+        TxTelemetry telemetry = samples(12060);
+        telemetry.paTempC.observedAtMs = 10000;
+        telemetry.supplyVolts.observedAtMs = 10000;
+        check(safety.evaluate(12060, telemetry) == AbortReason::None,
+              "healthy 2.06-second vital cadence does not expire between packets");
+        for (const auto member : {&TxTelemetry::forwardWatts, &TxTelemetry::swr}) {
+            TxTelemetry stale = telemetry;
+            (stale.*member).observedAtMs = 10000;
+            check(safety.evaluate(12060, stale) == AbortReason::TelemetryStale,
+                  "slow vital cadence cannot extend power or SWR lifetime");
+        }
+        check(safety.evaluate(13000, telemetry) == AbortReason::None,
+              "vitals remain valid at the exact configured deadline");
+        for (std::int64_t now = 13001; now < 14000; now += 100) {
+            telemetry.forwardWatts.observedAtMs = now;
+            telemetry.swr.observedAtMs = now;
+            check(safety.evaluate(now, telemetry) == AbortReason::TelemetryStale,
+                  "fresh power and repeated reads cannot prolong missing vitals");
+        }
+        for (const auto member : {&TxTelemetry::paTempC, &TxTelemetry::supplyVolts}) {
+            TxTelemetry stale = samples(14000);
+            (stale.*member).observedAtMs = 10000;
+            check(safety.evaluate(14000, stale) == AbortReason::TelemetryStale,
+                  "either missing vital independently expires");
+        }
+        check(safety.evaluate(12060, samples(10000, 1.2, 95.0, 13.8, 0.1))
+                  == AbortReason::TelemetryStale, "slow vitals never conceal expired forward power");
+        telemetry = samples(12060);
+        telemetry.paTempC = {95.0, 10000};
+        check(safety.evaluate(12060, telemetry) == AbortReason::PaOverTemp,
+              "a valid slower over-temperature sample still trips immediately");
+        telemetry.paTempC = {40.0, 10000};
+        telemetry.supplyVolts = {9.0, 10000};
+        check(safety.evaluate(12060, telemetry) == AbortReason::LowSupplyVoltage,
+              "a valid slower undervoltage sample still trips immediately");
+        limits.vitalsMaxAgeMs = 0;
+        check(!safety.setLimits(limits, true), "vital freshness cannot be disabled");
+    }
+
     if (g_failures == 0) {
         std::printf("tx_linearity_safety_test: all checks passed\n");
     }

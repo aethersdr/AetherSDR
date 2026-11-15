@@ -48,6 +48,9 @@ void AetherPDMeasurementModel::initialize(QNetworkAccessManager* network)
     // 4.5 s startup/cleanup reserves. The RF helper expires after at most 9.5 s.
     txlin::SafetyLimits limits;
     limits.maxTransmitMs = 14000;
+    // FLEX-8600 firmware 4.3.16 publishes these vitals about every 2.06 s
+    // (its meter declarations report fps=0). Leave power/SWR at 2 s.
+    limits.vitalsMaxAgeMs = 3000;
     m_controller->setSafetyLimits(limits, true);
     m_controller->setCallbacks([this] { publish(); }, [this](const txlin::LinearityRunResult& measured) {
         m_result = Result{measured, m_config, m_request, m_serial, m_mode, m_antenna,

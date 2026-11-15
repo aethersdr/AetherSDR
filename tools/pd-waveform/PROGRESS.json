@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T15:44:43.458513+00:00",
+  "updated_utc": "2026-11-15T15:58:04.903287+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Install the signed DSP GUI binding candidate and repeat the receive-only source arm check; diagnose any refusal using the new native gate diagnostic. Resolve the unbound lease-guardian observer and receive completion, then perform bounded keyed four-frame capture and explicit correction A/B. Preserve all P1-P10 gates.",
+  "next_action": "Qualify the desktop slow-vital freshness correction with one bounded5W GUI measurement, recording per-meter ages. Complete real four-frame tone capture, correction A/B and all remaining P1-P10 gates; no automatic source rearm or RF retry.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -738,5 +738,62 @@
       "No RF or new correction/IMD evidence."
     ],
     "evidence": "dsp-binding-development/validation.json under evidence_root"
+  },
+  "dsp_gui_binding_installed": {
+    "production_ready": false,
+    "source_commit": "79b07006ef9e3d47aa3336077f1a88e4e68b8b5a",
+    "release_sha256": "c30a94fc841ed660e12f2647d47fd44c2bc1f96beacec7b4215969c4995ca7c9",
+    "installation_committed": true,
+    "ordinary_GUI_installation_cleanup_confirmed": true,
+    "receive_only": {
+      "measurement_arm_observed_s": 7.22,
+      "ready_observed_s": 11.602,
+      "stop_confirmed": true,
+      "host_audit": "IQ/capture/ARP and lease guardian absent; fixed ARP absent; three capability-free primary/relay/private controls retained. Temporary installer containers/images/listener absent; audit removed itself."
+    },
+    "RF": {
+      "one_positive_GUI_key": true,
+      "nominal_watts": 5,
+      "frequency_mhz": 7.15,
+      "FDX": false,
+      "radio_transmitting_to_ready_seconds": 1.257,
+      "outcome": "Desktop telemetry stale stop before tone window; no IMD result.",
+      "native_source_end_reason": "interlock_ineligible after desktop xmit 0",
+      "source_generated_samples": 29824,
+      "native_iq_age_ns_at_source_end": 1087899,
+      "native_iq_stale": 0,
+      "native_iq_invalid": 0,
+      "native_dispatch_deadlines": 0,
+      "stop_confirmed": true
+    },
+    "probe_limitations": [
+      "measurement-05 stopped on hidden DAX panel before session/source/RF; measurement-06 fixed visibility and keyed once.",
+      "measurement-06 script exited1 when optional Stop click raced the completed automatic unkey; finally Stop AetherPD succeeded.",
+      "One successful stop does not close all lease-guardian unbound observer/foreign GUI cases.",
+      "No sustained correction, final candidate reboot, actual6300 or production release qualification."
+    ]
+  },
+  "telemetry_cadence": {
+    "production_ready": false,
+    "radio_tested": false,
+    "evidence": "dsp-binding-live/idle-telemetry.json and receive-completion-live/profile/logs/aethersdr-20261115-074740.log",
+    "observed_idle_samples": 88,
+    "max_vital_age_ms": 2061,
+    "observed_vital_period_s": [
+      1.949,
+      2.062
+    ],
+    "wire_declared_fps": 0,
+    "change": "AetherPD alone selects 3000ms temperature/supply freshness; directional power/SWR remain2000ms. Sample timestamps, numeric limits and independent unkey deadlines unchanged.",
+    "validation": [
+      "Four focused CTests passed",
+      "Old vital-age guard mutation detected",
+      "ASan/UBSan/LSan safety test passed on host; sandbox LSan ptrace limitation preserved",
+      "Full desktop build passed",
+      "User documentation build passed"
+    ],
+    "remaining": [
+      "Live qualification of updated desktop; no new RF yet"
+    ]
   }
 }

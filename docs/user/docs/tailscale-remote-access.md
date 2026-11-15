@@ -568,6 +568,11 @@ input cancels the preparation or run. A new receive check is needed after
 readiness expires. Changing correction state requires a separately prepared
 run; compare exported runs made with matching station settings.
 
+During a measurement, PA temperature and supply voltage samples expire after
+three seconds, accommodating the radio's slower updates. Forward-power and
+SWR samples retain a two-second limit. Missing or expired required telemetry
+stops the measurement; rereading a cached value does not extend its lifetime.
+
 If the source request is refused, check **PD** mode, feedback panadapter
 **IQ Ch 1**, fresh DAX IQ and the transmit interlock before trying again.
 The failure notice remains visible across status refreshes. If an arm or

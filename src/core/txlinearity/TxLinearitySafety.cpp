@@ -43,14 +43,15 @@ std::string abortReasonText(AbortReason reason)
 bool TxLinearitySafety::setLimits(const SafetyLimits& limits, bool allowOverride)
 {
     if (limits.maxTransmitMs < 0 || limits.minCooldownMs < 0
-        || limits.telemetryMaxAgeMs <= 0 || !std::isfinite(limits.maxSwr)
+        || limits.telemetryMaxAgeMs <= 0 || limits.vitalsMaxAgeMs <= 0 || !std::isfinite(limits.maxSwr)
         || limits.maxSwr < 1.0 || !std::isfinite(limits.maxPaTempC)
         || !std::isfinite(limits.minSupplyVolts) || limits.minSupplyVolts <= 0.0) {
         return false;
     }
     if (!allowOverride) {
         if (limits.maxTransmitMs > m_limits.maxTransmitMs
-            || limits.telemetryMaxAgeMs > m_limits.telemetryMaxAgeMs) {
+            || limits.telemetryMaxAgeMs > m_limits.telemetryMaxAgeMs
+            || limits.vitalsMaxAgeMs > m_limits.vitalsMaxAgeMs) {
             return false;
         }
         if (limits.minCooldownMs < m_limits.minCooldownMs) {
@@ -212,19 +213,20 @@ AbortReason TxLinearitySafety::evaluateTelemetry(std::int64_t nowMs,
                                                  const TxTelemetry& telemetry) const
 {
 
-    const auto fresh = [this, nowMs](const TelemetrySample& sample) {
+    const auto fresh = [nowMs](const TelemetrySample& sample, int maxAgeMs) {
         return sample.value.has_value() && std::isfinite(*sample.value)
             && sample.observedAtMs.has_value() && *sample.observedAtMs >= 0
             && *sample.observedAtMs <= nowMs
-            && nowMs - *sample.observedAtMs <= m_limits.telemetryMaxAgeMs;
+            && nowMs - *sample.observedAtMs <= maxAgeMs;
     };
-    if (!fresh(telemetry.paTempC) || !fresh(telemetry.supplyVolts)
-        || !fresh(telemetry.forwardWatts) || *telemetry.forwardWatts.value < 0.0) {
+    if (!fresh(telemetry.paTempC, m_limits.vitalsMaxAgeMs)
+        || !fresh(telemetry.supplyVolts, m_limits.vitalsMaxAgeMs)
+        || !fresh(telemetry.forwardWatts, m_limits.telemetryMaxAgeMs) || *telemetry.forwardWatts.value < 0.0) {
         return AbortReason::TelemetryStale;
     }
     // SWR is meaningful only with forward power above the noise floor.
     if (*telemetry.forwardWatts.value > 0.5) {
-        if (!fresh(telemetry.swr) || *telemetry.swr.value < 1.0) {
+        if (!fresh(telemetry.swr, m_limits.telemetryMaxAgeMs) || *telemetry.swr.value < 1.0) {
             return AbortReason::TelemetryStale;
         }
         if (*telemetry.swr.value > m_limits.maxSwr) {
