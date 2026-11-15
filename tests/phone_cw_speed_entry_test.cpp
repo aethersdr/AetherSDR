@@ -29,10 +29,14 @@ int main(int argc, char** argv)
     QTest::qWait(10);
 
     QLineEdit* edit = nullptr;
+    QLineEdit* pitchEdit = nullptr;
     QSlider* slider = nullptr;
     for (QLineEdit* candidate : applet.findChildren<QLineEdit*>()) {
         if (candidate->accessibleName() == QStringLiteral("CW speed value")) {
             edit = candidate;
+        } else if (candidate->accessibleName()
+                   == QStringLiteral("CW pitch frequency")) {
+            pitchEdit = candidate;
         }
     }
     for (QSlider* candidate : applet.findChildren<QSlider*>()) {
@@ -40,7 +44,7 @@ int main(int argc, char** argv)
             slider = candidate;
         }
     }
-    if (!edit || !slider) {
+    if (!edit || !pitchEdit || !slider) {
         return 1;
     }
 
@@ -116,6 +120,27 @@ int main(int argc, char** argv)
     applet.setCwControlLimits(40, 60, 100, 6000, 10);
     check(slider->value() == 40 && edit->text() == QStringLiteral("40"),
           "unfocused readout follows a genuine range clamp");
+
+    // Pitch shares the refresh and the rule: its 100 Hz minimum makes the
+    // first digit of 650 Intermediate, exactly as 2 is for 25 WPM.
+    QSignalSpy pitchCommands(&model, &TransmitModel::cwPitchCommandIssued);
+    pitchEdit->setFocus();
+    pitchEdit->selectAll();
+    QTest::keyClicks(pitchEdit, QStringLiteral("6"));
+    check(pitchEdit->hasFocus() && !pitchEdit->hasAcceptableInput(),
+          "the first pitch digit is an incomplete Hz value");
+    applet.setCwControlLimits(40, 60, 100, 6000, 10);
+    check(pitchEdit->text() == QStringLiteral("6") && pitchCommands.isEmpty(),
+          "unchanged limits preserve the first pitch digit");
+    QTest::keyClicks(pitchEdit, QStringLiteral("50"));
+    QTest::keyClick(pitchEdit, Qt::Key_Return);
+    check(model.cwPitch() == 650 && pitchEdit->text() == QStringLiteral("650"),
+          "Return commits typed pitch");
+    pitchEdit->selectAll();
+    QTest::keyClicks(pitchEdit, QStringLiteral("5"));
+    applet.setCwControlLimits(40, 60, 200, 6000, 10);
+    check(pitchEdit->text() == QStringLiteral("650"),
+          "a changed pitch range reconciles an unacceptable edit");
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;
 }

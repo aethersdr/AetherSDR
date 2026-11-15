@@ -658,6 +658,8 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     m_pitchMaxHz = maxPitchHz;
     m_pitchStepHz = pitchStepHz;
     const QSignalBlocker pitchBlocker(m_pitchSlider);
+    const bool pitchRangeChanged = m_pitchSlider->minimum() != minPitchHz
+                                   || m_pitchSlider->maximum() != maxPitchHz;
     m_pitchSlider->setRange(minPitchHz, maxPitchHz);
     if (m_model) {
         m_pitchSlider->setValue(m_model->cwPitch());
@@ -667,7 +669,10 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     auto* pitchValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_pitchEdit->validator()));
     pitchValidator->setRange(minPitchHz, maxPitchHz);
-    if (!m_pitchEdit->hasFocus() || !m_pitchEdit->hasAcceptableInput()) {
+    // Same rule as speed: a refresh with an unchanged range leaves the
+    // active pitch edit alone, even while its first digits are Intermediate.
+    if (!m_pitchEdit->hasFocus()
+        || (pitchRangeChanged && !m_pitchEdit->hasAcceptableInput())) {
         m_pitchEdit->setText(QString::number(
             m_model ? m_model->cwPitch() : m_pitchSlider->value()));
     }
