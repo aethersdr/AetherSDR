@@ -4,10 +4,13 @@
 
 #include "core/dsp/SsbEnvelopeMeter.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <complex>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 using AetherSDR::SsbEnvelopeReport;
@@ -172,6 +175,29 @@ int main()
         report("active ratio ignores silence",
                std::fabs(r.activePaprDb - 3.0103) < 0.3 && r.paprDb > 5.5,
                fmt("active %.3f dB, whole %.3f dB", r.activePaprDb, r.paprDb));
+    }
+
+    // A shared mask: scoring a processed run over the bypassed run's blocks.
+    // Here the "processed" signal adds a quiet 30 ms noise-like bed in the
+    // pause; with its own gate the bed's blocks would count, with the
+    // baseline's mask they do not.
+    {
+        auto burst = tones({{700.0, 0.25}, {1900.0, 0.25}}, 2.0);
+        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n) burst[n] = 0.0f;
+        std::vector<std::uint8_t> mask;
+        const auto base = measureSsbEnvelope(burst.data(), burst.size(), kRate, {},
+                                             SsbFilterPhase::Linear, 1023, nullptr, &mask);
+        auto lifted = burst;
+        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n)
+            lifted[n] = static_cast<float>(0.02 * std::cos(2.0 * kPi * 1100.0 * static_cast<double>(n) / kRate));
+        const auto own = measureSsbEnvelope(lifted.data(), lifted.size(), kRate, {},
+                                            SsbFilterPhase::Linear);
+        const auto shared = measureSsbEnvelope(lifted.data(), lifted.size(), kRate, {},
+                                               SsbFilterPhase::Linear, 1023, &mask);
+        report("shared mask keeps lifted pauses out of the active RMS",
+               std::fabs(shared.activePaprDb - base.activePaprDb) < 0.05
+                   && own.activePaprDb > shared.activePaprDb + 2.0,
+               fmt("shared %.2f dB, own gate %.2f dB", shared.activePaprDb, own.activePaprDb));
     }
 
     // Too short to fill the filter: nothing is analysed, nothing is invented.

@@ -9,14 +9,19 @@
 //       [--comp-threshold -20] [--comp-ratio 4] [--comp-attack 20]
 //       [--comp-release 150] [--comp-knee 6] [--comp-makeup 5]
 //       [--comp-drive 0] [--comp-phase 0] [--comp-ceiling -1]
-//       [--lim-ceiling -1] [--trim 0] [--gain 0]
+//       [--lim-ceiling -1] [--trim 0] [--gain 0] [--eq-hpf 200]
 //
 // --comp-* turns the Compressor stage on, --comp-ceiling its own limiter,
-// --lim-ceiling the Final Output LIM. --gain is applied to the recording
+// --lim-ceiling the Final Output LIM, --eq-hpf a 24 dB/oct EQ high-pass ahead
+// of the compressor (processed run only). --gain is applied to the recording
 // before both runs, to place a quiet recording at a realistic mic level.
-// The input must be 48 kHz PCM16 or float32 WAV, mono or stereo (left used).
+// The input must be 48 kHz PCM16 or float32 WAV, mono or stereo (left used),
+// or the word `synthetic` for a deterministic 12 s voiced-speech stand-in
+// (jittered glottal pulses through three formant resonators, with pauses), so
+// a run is reproducible without a recording.
 
 #include "core/ClientComp.h"
+#include "core/ClientEq.h"
 #include "core/ClientFinalLimiter.h"
 #include "core/TxVoiceProcessor.h"
 #include "core/dsp/SsbEnvelopeMeter.h"
@@ -30,6 +35,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -94,6 +100,53 @@ bool readWav48(const char* path, std::vector<float>& mono, std::string& error)
     return true;
 }
 
+std::vector<float> synthesizeVoice(double seconds)
+{
+    constexpr double kFs = 48000.0;
+    constexpr double kPi = 3.14159265358979323846;
+    const double formants[5][3] = {{730, 1090, 2440}, {270, 2290, 3010}, {530, 1840, 2480},
+                                   {300, 870, 2240}, {660, 1720, 2410}};
+    const double bandwidths[3] = {80, 100, 140};
+    const double weights[3] = {1.0, 0.6, 0.35};
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<double> uniform(-0.5, 0.5);
+
+    const std::size_t total = static_cast<std::size_t>(seconds * kFs);
+    const std::size_t syllable = static_cast<std::size_t>(0.22 * kFs);
+    std::vector<double> out(total);
+    double state[3][2] = {};
+    double phase = 0.0, envelope = 0.0, peak = 0.0;
+    for (std::size_t n = 0; n < total; ++n) {
+        const std::size_t s = n / syllable;
+        const double* vowel = formants[(s * 3) % 5];
+        const bool talking = (s % 7) != 5 && (s % 7) != 6;  // two pauses per seven
+        const double pos = static_cast<double>(n % syllable) / static_cast<double>(syllable);
+        const double target = talking ? std::pow(std::sin(kPi * pos), 0.6) : 0.0;
+        envelope += (target - envelope) * 0.002;
+        const double f0 = 115.0 * (1.0 + 0.08 * std::sin(2.0 * kPi * 0.7 * n / kFs))
+                        * (1.0 + 0.01 * uniform(rng));
+        phase += f0 / kFs;
+        double excitation = 0.0;
+        if (phase >= 1.0) { phase -= 1.0; excitation = 1.0; }
+        const double x = excitation * envelope + 0.002 * uniform(rng);
+        double acc = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            const double r = std::exp(-kPi * bandwidths[i] / kFs);
+            const double a1 = 2.0 * r * std::cos(2.0 * kPi * vowel[i] / kFs);
+            const double y = x + a1 * state[i][0] - r * r * state[i][1];
+            state[i][1] = state[i][0];
+            state[i][0] = y;
+            acc += y * weights[i];
+        }
+        out[n] = acc;
+        peak = std::max(peak, std::fabs(acc));
+    }
+    std::vector<float> result(total);
+    for (std::size_t n = 0; n < total; ++n)
+        result[n] = static_cast<float>(0.5 * out[n] / std::max(peak, 1e-12));  // -6 dBFS peak
+    return result;
+}
+
 struct Settings {
     std::map<std::string, double> values;
     bool has(const char* key) const { return values.count(key) != 0; }
@@ -105,14 +158,19 @@ struct Settings {
 };
 
 struct Run {
-    std::vector<float> transport;  // left channel at 24 kHz
+    std::vector<float> transport;  // left channel at 24 kHz, before int16
     int latencyFrames48{0};
+    double postChainPeak{0.0};     // 48 kHz, after the chain, before Final Output
+    double postLimiterPeakDb{-200.0};  // 48 kHz, after Final Output
+    std::size_t int16Clips{0};     // transport samples at or over full scale
 };
 
 Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
 {
+    ClientEq eq;
     ClientComp comp;
     ClientFinalLimiter limiter;
+    eq.setEnabled(false);
     comp.setEnabled(false);
     limiter.setEnabled(false);
     limiter.setDcBlockEnabled(false);
@@ -131,6 +189,15 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
         comp.setPhaseRotatorStages(static_cast<int>(s.get("comp-phase", 0.0)));
         comp.setLimiterEnabled(s.has("comp-ceiling"));
         comp.setLimiterCeilingDb(static_cast<float>(s.get("comp-ceiling", -1.0)));
+        if (s.has("eq-hpf")) {
+            ClientEq::BandParams hpf;
+            hpf.type = ClientEq::FilterType::HighPass;
+            hpf.freqHz = static_cast<float>(s.get("eq-hpf", 200.0));
+            hpf.slopeDbPerOct = 24;
+            eq.setBand(0, hpf);
+            eq.setActiveBandCount(1);
+            eq.setEnabled(true);
+        }
         limiter.setEnabled(s.has("lim-ceiling"));
         limiter.setCeilingDb(static_cast<float>(s.get("lim-ceiling", -1.0)));
         limiter.setOutputTrimDb(static_cast<float>(s.get("trim", 0.0)));
@@ -138,13 +205,17 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
 
     TxVoiceProcessor processor;
     TxVoiceProcessor::Processors processors;
+    processors.eq = &eq;
     processors.comp = &comp;
     processors.finalLimiter = &limiter;
     processor.setProcessors(processors);
-    processor.setStageOrder(static_cast<uint64_t>(TxVoiceProcessor::Stage::Comp));
+    // EQ in slot 0, Compressor in slot 1: the shipped default order.
+    processor.setStageOrder(static_cast<uint64_t>(TxVoiceProcessor::Stage::Eq)
+                            | static_cast<uint64_t>(TxVoiceProcessor::Stage::Comp) << 8);
     constexpr int kBlock = 480;  // 10 ms at 48 kHz
     Run run;
     if (!processor.prepare(TxVoiceProcessor::kDspRate, kBlock)) return run;
+    processor.setMeasurementCaptureEnabled(true);
     run.latencyFrames48 = processor.latencyFrames();
 
     std::vector<float> stereo(kBlock * 2);
@@ -154,10 +225,20 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
             stereo[i * 2] = stereo[i * 2 + 1] = input[at + static_cast<std::size_t>(i)];
         }
         if (!processor.processFloat48(stereo.data(), kBlock, transport)) continue;
-        const auto* samples = reinterpret_cast<const int16_t*>(transport.constData());
-        const int frames = static_cast<int>(transport.size() / (2 * sizeof(int16_t)));
-        for (int i = 0; i < frames; ++i)
-            run.transport.push_back(static_cast<float>(samples[i * 2]) / 32768.0f);
+        const QByteArray& strip = processor.postChannelStripFloat48Stereo();
+        const auto* chain = reinterpret_cast<const float*>(strip.constData());
+        for (qsizetype i = 0; i < strip.size() / static_cast<qsizetype>(sizeof(float)); ++i)
+            run.postChainPeak = std::max(run.postChainPeak, static_cast<double>(std::fabs(chain[i])));
+        run.postLimiterPeakDb = std::max(run.postLimiterPeakDb,
+                                         static_cast<double>(limiter.outputPeakDb()));
+        const QByteArray& floats = processor.transportFloat32Stereo();
+        const auto* samples = reinterpret_cast<const float*>(floats.constData());
+        const int frames = static_cast<int>(floats.size() / (2 * sizeof(float)));
+        for (int i = 0; i < frames; ++i) {
+            const float v = samples[i * 2];
+            if (std::fabs(v) >= 32767.0f / 32768.0f) ++run.int16Clips;
+            run.transport.push_back(v);
+        }
     }
     return run;
 }
@@ -183,7 +264,9 @@ int main(int argc, char** argv)
 
     std::vector<float> input;
     std::string error;
-    if (!readWav48(argv[1], input, error)) {
+    if (std::strcmp(argv[1], "synthetic") == 0) {
+        input = synthesizeVoice(12.0);
+    } else if (!readWav48(argv[1], input, error)) {
         std::fprintf(stderr, "%s: %s\n", argv[1], error.c_str());
         return 2;
     }
@@ -200,8 +283,17 @@ int main(int argc, char** argv)
 
     std::printf("input %.2f s, passband %.0f..%.0f Hz, transport 24 kHz int16\n",
                 static_cast<double>(input.size()) / 48000.0, band.lowHz, band.highHz);
-    std::printf("added latency: baseline %.1f ms, processed %.1f ms\n\n",
+    std::printf("added latency: baseline %.1f ms, processed %.1f ms\n",
                 baseline.latencyFrames48 / 48.0, processed.latencyFrames48 / 48.0);
+    for (const Run* r : {&baseline, &processed}) {
+        double transportPeak = 0.0;
+        for (float v : r->transport) transportPeak = std::max(transportPeak, static_cast<double>(std::fabs(v)));
+        std::printf("%-9s peaks: after chain %6.2f dBFS, after Final Output %6.2f dBFS, "
+                    "transport %6.2f dBFS, int16 clips %zu\n",
+                    r == &baseline ? "baseline" : "processed", dbfs(r->postChainPeak),
+                    r->postLimiterPeakDb, dbfs(transportPeak), r->int16Clips);
+    }
+    std::printf("\n");
     std::printf("%-22s %8s %8s %8s %8s %8s %8s %8s\n", "run / radio filter", "audio", "env pk",
                 "act rms", "PAPR", "p99.9", "env/aud", "OOB");
     std::printf("%-22s %8s %8s %8s %8s %8s %8s %8s\n", "", "dBFS", "dBFS", "dBFS", "dB", "dB",
@@ -212,9 +304,24 @@ int main(int argc, char** argv)
         SsbEnvelopeReport reports[2];
         const Run* runs[2] = {&baseline, &processed};
         const char* names[2] = {"baseline", "processed"};
+        // Both runs are scored over the bypassed run's active blocks, shifted
+        // by any latency the processing adds (20 ms blocks at 24 kHz).
+        std::vector<std::uint8_t> baseMask, shiftedMask;
+        const long shiftBlocks = std::lround(
+            (processed.latencyFrames48 - baseline.latencyFrames48) / 2.0 / 480.0);
         for (int r = 0; r < 2; ++r) {
+            if (r == 1) {
+                shiftedMask.assign(baseMask.size(), 0);
+                for (std::size_t b = 0; b < baseMask.size(); ++b) {
+                    const long to = static_cast<long>(b) + shiftBlocks;
+                    if (to >= 0 && to < static_cast<long>(shiftedMask.size()))
+                        shiftedMask[static_cast<std::size_t>(to)] = baseMask[b];
+                }
+            }
             reports[r] = measureSsbEnvelope(runs[r]->transport.data(), runs[r]->transport.size(),
-                                            24000.0, band, phase);
+                                            24000.0, band, phase, 1023,
+                                            r == 0 ? nullptr : &shiftedMask,
+                                            r == 0 ? &baseMask : nullptr);
             const auto& rep = reports[r];
             const std::string label = std::string(names[r]) + " / " + phaseName;
             std::printf("%-22s %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.1f\n", label.c_str(),
@@ -227,9 +334,11 @@ int main(int argc, char** argv)
         // OOB is reported as a change: the raw figure mostly measures what the
         // recording already carries below and above the passband (a voice's
         // fundamental sits under 300 Hz), not what the processing added.
-        std::printf("%-22s talk-power gain %+.2f dB (p99.9 basis %+.2f dB), OOB change %+.1f dB\n\n",
+        std::printf("%-22s talk-power gain %+.2f dB active, %+.2f dB p99.9, %+.2f dB whole signal;"
+                    " OOB change %+.1f dB\n\n",
                     "", reports[0].activePaprDb - reports[1].activePaprDb,
                     reports[0].activeP999PaprDb - reports[1].activeP999PaprDb,
+                    reports[0].paprDb - reports[1].paprDb,
                     reports[1].outOfBandDbc - reports[0].outOfBandDbc);
     }
     return 0;

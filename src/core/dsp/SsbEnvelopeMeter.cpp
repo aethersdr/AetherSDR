@@ -1,7 +1,11 @@
 #include "core/dsp/SsbEnvelopeMeter.h"
 
 #include <algorithm>
+#include <utility>
 #include <cmath>
+#include <complex>
+#include <cstdint>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -115,7 +119,9 @@ SsbEnvelopeReport measureSsbEnvelope(const float* audio,
                                      double sampleRate,
                                      SsbPassband passband,
                                      SsbFilterPhase phase,
-                                     int taps)
+                                     int taps,
+                                     const std::vector<std::uint8_t>* activeBlocksIn,
+                                     std::vector<std::uint8_t>* activeBlocksOut)
 {
     SsbEnvelopeReport report;
     const auto linear = designSsbFilter(sampleRate, passband, taps, SsbFilterPhase::Linear);
@@ -186,9 +192,17 @@ SsbEnvelopeReport measureSsbEnvelope(const float* audio,
     const double floor = loudest * 1e-3;  // -30 dB
     double activeEnergy = 0.0;
     std::size_t activeBlocks = 0;
-    for (double e : blockEnergy) {
-        if (e >= floor) { activeEnergy += e; ++activeBlocks; }
+    std::vector<std::uint8_t> mask(blockEnergy.size(), 0);
+    for (std::size_t b = 0; b < blockEnergy.size(); ++b) {
+        const bool active = activeBlocksIn
+            ? b < activeBlocksIn->size() && (*activeBlocksIn)[b] != 0
+            : blockEnergy[b] >= floor;
+        if (!active) continue;
+        mask[b] = 1;
+        activeEnergy += blockEnergy[b];
+        ++activeBlocks;
     }
+    if (activeBlocksOut) *activeBlocksOut = std::move(mask);
     const std::size_t activeSamples = activeBlocks * std::min(block, count);
     report.activeEnvelopeRms = activeSamples
         ? std::sqrt(activeEnergy / static_cast<double>(activeSamples)) : report.envelopeRms;

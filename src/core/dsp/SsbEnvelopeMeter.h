@@ -13,6 +13,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace AetherSDR {
@@ -56,6 +57,15 @@ SsbEnvelopeReport measureSsbEnvelope(const float* audio,
                                      double sampleRate,
                                      SsbPassband passband,
                                      SsbFilterPhase phase,
-                                     int taps = 1023);
+                                     int taps = 1023,
+                                     const std::vector<std::uint8_t>* activeBlocksIn = nullptr,
+                                     std::vector<std::uint8_t>* activeBlocksOut = nullptr);
+
+// The active-speech mask is one byte per 20 ms block of analysed output.
+// `activeBlocksOut` receives the mask a measurement chose; `activeBlocksIn`
+// scores the active RMS over a mask chosen elsewhere. Comparing a processed
+// run against a bypassed one must use the bypassed run's mask: compression
+// lifts breaths and room tone over a per-run gate, and those quiet blocks
+// would then drag the processed RMS down and hide the gain being measured.
 
 }  // namespace AetherSDR
