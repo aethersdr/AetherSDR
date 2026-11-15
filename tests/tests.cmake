@@ -4934,6 +4934,19 @@ target_link_libraries(aetherpd_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME aetherpd_client_test COMMAND aetherpd_client_test)
 set_tests_properties(aetherpd_client_test PROPERTIES TIMEOUT 10)
 
+# Carrier archive construction and bounds; no sockets or radio access.
+add_executable(aetherpd_carrier_image_test
+    tests/aetherpd_carrier_image_test.cpp src/core/AetherPDCarrierImage.cpp)
+target_include_directories(aetherpd_carrier_image_test PRIVATE src)
+target_link_libraries(aetherpd_carrier_image_test PRIVATE Qt6::Core)
+if(USE_SYSTEM_ZLIB)
+    target_link_libraries(aetherpd_carrier_image_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(aetherpd_carrier_image_test PRIVATE zlibstatic)
+endif()
+add_test(NAME aetherpd_carrier_image_test COMMAND aetherpd_carrier_image_test)
+set_tests_properties(aetherpd_carrier_image_test PROPERTIES TIMEOUT 10)
+
 # Authenticated upload: injected byte channel and clock; no sockets.
 add_executable(aetherpd_install_upload_test
     tests/aetherpd_install_upload_test.cpp

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T09:42:31.555207+00:00",
+  "updated_utc": "2026-11-15T09:53:41.302684+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Connect desktop request client, authenticated upload, per-request public carrier assembly/upload/removal and exact-plan monitor in the operator coordinator. Preserve complete P1-P10 plan and initial-install/6000 blockers.",
+  "next_action": "Implement the operator coordinator using the now-tested desktop components; retain the shared file-transfer reservation through cleanup and distinguish prior same-plan terminal state from the current attempt before live qualification. Full P1-P10 scope remains open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -216,6 +216,18 @@
       "Windows/macOS half-close and socket behavior unqualified.",
       "Coordinator still must authenticate artifacts, obtain consent, assemble/upload/remove the public carrier and match installed commit.",
       "First-install trust, 6000 privilege adapter, actual 6300 and all other P1-P10 requirements remain."
+    ]
+  },
+  "desktop_carrier_image": {
+    "status": "component_validated_not_uploaded",
+    "evidence": "carrier-image-development/validation.json under evidence_root",
+    "result": "C++ image builder passed registered test, sanitizers, independent OCI/tar inspection and two-build reproducibility with actual ARM64 inputs. No radio upload.",
+    "remaining": [
+      "Ordinary operator coordinator, authenticated artifact distribution, consent and original-session credentials.",
+      "Reserve the shared file-transfer service for the complete installation/cleanup graph, not just the carrier upload. WaveformInstaller currently releases its reservation at upload completion with a 3-second settle.",
+      "Prevent a prior terminal observation for the same approved plan from being attributed to a new attempt. Existing monitor matches installed plan/release, not an attempt nonce; previous proofs used distinct plans.",
+      "Live qualification of new per-request carrier name and final desktop graph.",
+      "First-install trust, 6000 privilege delivery, actual 6300 and all other P1-P10 requirements remain."
     ]
   }
 }

@@ -145,3 +145,33 @@ These later tests do not independently inventory host capabilities or images.
 Connecting the monitor and request transfer to the operator installer remains
 unfinished, as do initial installation, interrupted updates, power-loss recovery
 and the FLEX-6000 privilege adapter and hardware qualification.
+
+## Desktop package construction
+
+`src/core/AetherPDCarrierImage` constructs the public ARM64 carrier archive in
+the desktop process, using Qt and the existing bundled zlib. No Python, shell,
+container daemon or downloaded base image is required. The caller authenticates
+the four executable inputs before building; ELF shape and archive hashing do
+not establish publisher trust.
+
+The fixed layer contains `pd/accept`, `pd/carrier`, `pd/deliver`, `pd/send`,
+`pd/request` and `LICENSES`. Private `PDXFER01` records are refused. The builder
+bounds individual executables to 8 MiB, their sum to 16 MiB, licenses to 512 KiB
+and each compression operation to 24 MiB. These are input bounds, not the final
+radio's install/update peak-disk budget. Headers have fixed permissions,
+ownership and timestamps; identical inputs produce identical bytes with the
+same compression implementation.
+
+The desktop container name is `aetherpd-carrier-` followed by the first 32 hex
+characters of the public request commitment. The OCI reference and waveform
+label carry that same name. This avoids the shared name used by older bench
+scripts; cleanup must use the returned name and original radio session, and
+must refuse a pre-existing name. The supervisor identifies itself by host PID
+and image label, so it does not depend on the old waveform name.
+
+The registered archive test and sanitizer checks passed. An independent Python
+reader verified the complete OCI digest chain, canonical tar layer, original
+ARM64 executable bytes, public request and fixed permissions. Two builds of
+that development package matched at 2,716,205 compressed bytes and a 6,604,800-byte
+layer. The new name and C++ archive have not yet been uploaded to the radio;
+normal operator coordination and its cleanup proof remain required.
