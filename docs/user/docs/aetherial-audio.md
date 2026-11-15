@@ -27,8 +27,10 @@ compact view of both chains (see [Using the docked applet](#using-the-docked-app
 >   profile, so nothing is lost.
 > - The **LIM** final limiter on the transmit Final Output stage is now a true
 >   brickwall with look-ahead, and it is **on by default** at a −0.5 dB ceiling
->   with 1.5 ms of look-ahead. An existing installation keeps the LIM
->   setting it has saved; turn LIM on in Final Output to get the new limiter.
+>   with 1.5 ms of look-ahead. An installation that has saved a LIM setting
+>   (by changing anything in Final Output or applying a TX profile) keeps it;
+>   one that never did gets the new default. To get the new limiter on an
+>   installation saved with LIM off, turn LIM on in Final Output.
 > - **BYPASS** is remembered across restarts.
 > - AetherTX's **Gate** and **De-esser** are gone. If you had the TX gate on,
 >   **RN2** was switched on for you. An old profile that does not set RN2
