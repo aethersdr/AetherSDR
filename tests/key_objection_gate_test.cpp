@@ -686,6 +686,32 @@ void testCwOncePerMessage()
     }
 
     {
+        // Another client's TX is not this client's break-in: it must not hold
+        // our message open, or every later element would go out unasked.
+        Fixture f;
+        f.addObjection();
+        f.radio.transmitModel().setCwDelay(2000);
+        f.radio.sendCwKey(true);
+        radioReportsKeyed(f, true);
+        f.radio.sendCwKey(false);
+        f.radio.handleStatusForTest(
+            QStringLiteral("interlock"),
+            {{QStringLiteral("state"), QStringLiteral("TRANSMITTING")},
+             {QStringLiteral("tx_client_handle"), QStringLiteral("0x7F000001")},
+             {QStringLiteral("source"), QStringLiteral("SW")}});
+        report("fixture: the radio stays keyed, now for another client",
+               f.radio.isRadioTransmitting() && !f.radio.txOwnedByUs());
+        f.objection = kObjection;
+        f.asked = 0;
+        f.commands.clear();
+        f.radio.sendCwKey(true);
+        report("another client holding TX does not continue our message: asked and refused",
+               f.asked > 0 && f.commands.isEmpty() && f.interlockMessages.contains(kObjection),
+               joined(f.commands));
+        f.radio.sendCwKey(false);
+    }
+
+    {
         // A host-keyed backend's own keyed report (the HL2's break-in key,
         // TransmitDelta::mox) ends a message the same way.
         Fixture f;
@@ -769,9 +795,41 @@ void testPreflightRoute()
         f.objection = kObjection;
         f.asked = 0;
         f.radio.transmitModel().startTune();
-        f.radio.transmitModel().setVoxEnable(true);
-        report("TUNE or VOX on during a MOX over is not asked about",
+        report("TUNE during a MOX over is not asked about",
                f.asked == 0 && !f.interlockMessages.contains(kObjection), joined(f.interlockMessages));
+    }
+    {
+        // VOX on outlives the over it is switched on in, so it is asked even
+        // then; the refusal leaves the MOX on the air as it was.
+        Fixture f;
+        f.addObjection();
+        TransmitModel& tx = f.radio.transmitModel();
+        tx.setMox(true);
+        report("fixture: MOX keyed with nothing objecting",
+               tx.isMox() && f.commands.contains(QStringLiteral("mox:on")), joined(f.commands));
+        f.objection = kObjection;
+        f.asked = 0;
+        f.commands.clear();
+        tx.setVoxEnable(true);
+        report("VOX on during a MOX over is asked and refused, under vox-enable",
+               f.asked > 0 && !tx.voxEnable() && f.interlockMessages.contains(kObjection)
+                   && !f.interlockKeys.filter(QStringLiteral(":vox-enable")).isEmpty(),
+               joined(f.interlockKeys));
+        report("the VOX refusal during the over leaves the MOX keyed and unkeys nothing",
+               tx.isMox() && f.commands.filter(QStringLiteral(":off")).isEmpty(),
+               joined(f.commands));
+        f.asked = 0;
+        report("a VOX restore with a ticket during the over is refused too",
+               tx.requestVoxEnable(true) == 0 && f.asked > 0 && !tx.voxEnable());
+    }
+    {
+        Fixture f;
+        f.addObjection();
+        TransmitModel& tx = f.radio.transmitModel();
+        tx.setMox(true);
+        tx.setVoxEnable(true);
+        report("VOX on during a MOX over, positive control: with no objection it goes on",
+               f.asked > 0 && tx.voxEnable() && tx.isMox());
     }
 }
 

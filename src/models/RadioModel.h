@@ -1013,7 +1013,8 @@ public:
     // A station condition outside the radio that objects to a key-on from this
     // application: empty is no objection, anything else is the sentence shown
     // to the operator. Asked on the main thread at every key-on gate, never for
-    // an un-key, and not while this client already transmits; the first
+    // an un-key, and not while this client already transmits (VOX on is asked
+    // even then, since VOX stays armed after the over); the first
     // non-empty answer refuses. It goes when `owner` is destroyed (#6237).
     using KeyObjection = std::function<QString()>;
     void addKeyObjection(QObject* owner, KeyObjection objection);
@@ -2606,7 +2607,9 @@ private:
     // One CW message, for the key objection: opened by a key-down admitted
     // while none runs; ended by the radio reporting un-keyed after it reported
     // keyed, or, with no keyed report, by the break-in delay after the last
-    // key-up. The objection is asked at its first element only.
+    // key-up. The radio's keyed state holds a message open only while TX is
+    // this client's (txOwnedByUs()). The objection is asked at its first
+    // element only.
     bool        m_cwMessageOpen{false};
     bool        m_cwMessageSawKeyed{false};
     qint64      m_cwMessageLastUpMs{-1};
@@ -2787,6 +2790,9 @@ private:
     // The first registered objection with something to say, trimmed; empty
     // when none objects or while this client already transmits.
     QString keyObjectionMessage() const;
+    // The same question without the "already transmitting" exemption, for a
+    // key-on that outlives the current over (VOX on).
+    QString firstKeyObjection() const;
     // The refusal: the notice under key-objection:<pan>:<gate> and the pan
     // inhibit's rollback.
     bool transmitStartBlockedByKeyObjection(const QString& gate);

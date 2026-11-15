@@ -2870,8 +2870,10 @@ RadioModel::RadioModel(QObject* parent)
         }
         return objection;
     });
-    // VOX on hands the key to the radio, so switching it on is a key-on.
-    m_transmitModel.setVoxAdmission([this]() { return keyObjectionMessage(); });
+    // VOX on hands the key to the radio, so switching it on is a key-on. It is
+    // asked even during an over: refusing it rolls back nothing on the air,
+    // and an admitted VOX would key on audio after the un-key.
+    m_transmitModel.setVoxAdmission([this]() { return firstKeyObjection(); });
     connect(&m_transmitModel, &TransmitModel::voxEnableRefused, this, [this](const QString& message) {
         emitKeyObjectionNotice(message, QStringLiteral("vox-enable"));
     });
@@ -5938,7 +5940,9 @@ bool RadioModel::cwMessageRunning()
     if (!m_cwMessageOpen) {
         return false;
     }
-    if (m_cwKeyActive || m_radioTransmitting) {
+    // The radio's keyed state continues a message only while it is this
+    // client's; another client holding TX must not keep the message open.
+    if (m_cwKeyActive || (m_radioTransmitting && m_txOwnedByUs)) {
         return true;
     }
     // The radio never reported keyed: the message ends with the break-in delay.

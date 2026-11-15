@@ -1147,6 +1147,11 @@ QString RadioModel::keyObjectionMessage() const
     if (activeTxActivities() != 0) {
         return QString();
     }
+    return firstKeyObjection();
+}
+
+QString RadioModel::firstKeyObjection() const
+{
     for (const KeyObjectionEntry& entry : m_keyObjections) {
         if (entry.owner.isNull()) {
             continue;
