@@ -441,8 +441,9 @@ range).
 `FWDPWR` and `REFPWR` are labelled uncalibrated in their definitions: the value
 comes from an uncalibrated reference curve, not a calibrated power reading.
 `SC_FILT_1` and `SC_FILT_2` are the two levels the desktop's TX filter-loss
-check compares. In FM the IQ envelope is constant, so the pair cannot show a
-loss; no pair is emitted for a window in which the modulator dropped a block.
+check compares. In FM and AM the pair cannot show a loss: the FM IQ envelope is
+constant, and the AM carrier holds the output within about 6 dB of the input.
+No pair is emitted for a window in which the modulator dropped a block.
 
 ### Not offered
 
