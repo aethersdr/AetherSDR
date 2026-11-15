@@ -266,3 +266,8 @@ to test unreleased changes, check out `main` (or the branch you were sent)
 instead. It needs Go 1.27.1 (a newer Go fetches it by itself) and Python 3. All
 dependencies are vendored. Without `--log-url` the package is reproducible
 byte for byte.
+
+The build also writes `discovery-helper-<version>.zip` beside the package:
+the discovery helper and its launchers, which a release publishes as an
+asset beside the waveform. `python3 -I ../package_helper.py --output DIR`
+writes it alone, for the container's release.

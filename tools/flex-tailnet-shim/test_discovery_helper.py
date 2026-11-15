@@ -333,6 +333,34 @@ def test_tailnet_only():
         h.log.removeHandler(captured)
 
 
+def test_release_zip():
+    """The helper's release ZIP: named for the shim's version, the helper,
+    its launchers and a README in one directory, the .sh executable and the
+    .bat with CRLF, and the same bytes every time."""
+    import tempfile
+    import zipfile
+    import package_helper
+    with tempfile.TemporaryDirectory() as d:
+        first = package_helper.package(__import__("pathlib").Path(d, "a"))
+        second = package_helper.package(__import__("pathlib").Path(d, "b"))
+        check(first.read_bytes() == second.read_bytes(), "the ZIP isn't reproducible")
+        version = package_helper.shim_version()
+        check(first.name == f"discovery-helper-{version}.zip", f"named {first.name}")
+        with zipfile.ZipFile(first) as z:
+            names = z.namelist()
+            check(names == ["discovery-helper/discovery_helper.py", "discovery-helper/run-discovery-helper.bat",
+                            "discovery-helper/run-discovery-helper.ps1", "discovery-helper/run-discovery-helper.sh",
+                            "discovery-helper/README.txt"], f"entries {names}")
+            mode = {i.filename: (i.external_attr >> 16) & 0o777 for i in z.infolist()}
+            check(mode["discovery-helper/run-discovery-helper.sh"] == 0o755, "the .sh launcher isn't executable")
+            check(mode["discovery-helper/discovery_helper.py"] == 0o644, "the helper's mode")
+            check(b"\r\n" in z.read("discovery-helper/run-discovery-helper.bat"), "the .bat lost its CRLF")
+            check(version in z.read("discovery-helper/README.txt").decode(), "the README doesn't name the version")
+            here = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(here, "discovery_helper.py"), "rb") as f:
+                check(z.read("discovery-helper/discovery_helper.py") == f.read(), "the helper isn't the repository's")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
