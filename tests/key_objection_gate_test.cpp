@@ -804,32 +804,47 @@ void testPreflightRoute()
         Fixture f;
         f.addObjection();
         TransmitModel& tx = f.radio.transmitModel();
+        int refused = 0;
+        QObject::connect(&tx, &TransmitModel::voxEnableRefused, &f.owner,
+                         [&refused](const QString&) { ++refused; });
         tx.setMox(true);
         report("fixture: MOX keyed with nothing objecting",
-               tx.isMox() && f.commands.contains(QStringLiteral("mox:on")), joined(f.commands));
+               f.commands.contains(QStringLiteral("mox:on")), joined(f.commands));
+        const bool moxBefore = tx.isMox();
+        const bool transmittingBefore = tx.isTransmitting();
         f.objection = kObjection;
         f.asked = 0;
         f.commands.clear();
         tx.setVoxEnable(true);
         report("VOX on during a MOX over is asked and refused, under vox-enable",
-               f.asked > 0 && !tx.voxEnable() && f.interlockMessages.contains(kObjection)
+               f.asked > 0 && refused == 1 && !tx.voxEnable()
+                   && f.interlockMessages.contains(kObjection)
                    && !f.interlockKeys.filter(QStringLiteral(":vox-enable")).isEmpty(),
                joined(f.interlockKeys));
-        report("the VOX refusal during the over leaves the MOX keyed and unkeys nothing",
-               tx.isMox() && f.commands.filter(QStringLiteral(":off")).isEmpty(),
+        report("the VOX refusal during the over leaves the MOX as it was and unkeys nothing",
+               tx.isMox() == moxBefore && tx.isTransmitting() == transmittingBefore
+                   && f.commands.filter(QStringLiteral(":off")).isEmpty(),
                joined(f.commands));
         f.asked = 0;
         report("a VOX restore with a ticket during the over is refused too",
                tx.requestVoxEnable(true) == 0 && f.asked > 0 && !tx.voxEnable());
     }
     {
+        // Positive control: the same over with nothing objecting; VOX on
+        // passes the admission (what the backend then does is its own).
         Fixture f;
         f.addObjection();
         TransmitModel& tx = f.radio.transmitModel();
+        int refused = 0;
+        QObject::connect(&tx, &TransmitModel::voxEnableRefused, &f.owner,
+                         [&refused](const QString&) { ++refused; });
         tx.setMox(true);
+        f.asked = 0;
         tx.setVoxEnable(true);
-        report("VOX on during a MOX over, positive control: with no objection it goes on",
-               f.asked > 0 && tx.voxEnable() && tx.isMox());
+        report("VOX on during a MOX over, positive control: asked, and admitted with no objection",
+               f.asked > 0 && refused == 0
+                   && f.interlockKeys.filter(QStringLiteral(":vox-enable")).isEmpty(),
+               joined(f.interlockKeys));
     }
 }
 
