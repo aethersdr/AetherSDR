@@ -919,7 +919,7 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     // Switching back from TX → RX inserts a separator space so the [TX]
     // burst and the following RX text don't run together (#2417).
     if (m_lastCwTextSource == CwTextSource::Tx)
-        m_cwText->insertHtml(QStringLiteral(" "));
+        m_cwText->insertPlainText(QStringLiteral(" "));
     m_lastCwTextSource = CwTextSource::Rx;
     m_cwText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
         .arg(color, clean.toHtmlEscaped()));
@@ -1057,7 +1057,7 @@ void PanadapterApplet::appendCwTextTx(const QString& text, float cost)
     // Separator space on Rx→Tx boundary so the two colored runs don't
     // visually merge.  None→Tx (panel empty) gets no leading space.
     if (m_lastCwTextSource == CwTextSource::Rx)
-        m_cwText->insertHtml(QStringLiteral(" "));
+        m_cwText->insertPlainText(QStringLiteral(" "));
     m_lastCwTextSource = CwTextSource::Tx;
     m_cwText->insertHtml(
         QString("<span style=\"color:%1\">%2</span>")
