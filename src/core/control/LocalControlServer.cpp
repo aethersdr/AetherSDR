@@ -59,10 +59,25 @@ LocalControlServer::LocalControlServer(QObject* parent, Limits limits,
                                      bool allowLocalControl)
     // Mirror bindConnectionTarget(): a target is only installed when local
     // control is granted, so an observer-only server never carries one.
-    : QObject(parent), m_resources(),
-      m_service(&m_resources, allowLocalControl ? connectionTarget : nullptr), m_limits(limits),
+    : QObject(parent),
+      m_ownedEngine(std::make_unique<ControlEngine>(allowLocalControl ? connectionTarget : nullptr)),
+      m_resources(m_ownedEngine->resources), m_service(m_ownedEngine->service), m_limits(limits),
       m_localAuthorization(allowLocalControl ? SessionAuthorization::ObserverController
                                             : SessionAuthorization::Observer)
+{
+    init();
+}
+
+LocalControlServer::LocalControlServer(ControlEngine& engine, QObject* parent, Limits limits,
+                                     bool allowLocalControl)
+    : QObject(parent), m_resources(engine.resources), m_service(engine.service), m_limits(limits),
+      m_localAuthorization(allowLocalControl ? SessionAuthorization::ObserverController
+                                            : SessionAuthorization::Observer)
+{
+    init();
+}
+
+void LocalControlServer::init()
 {
     m_resources.upsert(
         {QStringLiteral("server"), {}, {}},

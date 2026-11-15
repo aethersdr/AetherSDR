@@ -37,7 +37,7 @@ void TunerModel::applyChanges(const TunerDelta& d)
 {
     // Apply only the present fields, change-gated — faithful to the prior
     // applyStatus (which iterated the wire kv-set). The SmartSDR key names and
-    // "1"/toInt parsing now live in FlexBackend::decodeTunerStatus; informational
+    // "1"/toInt parsing now live in FlexStatusIngress::decodeTunerStatus; informational
     // fields (nickname/version/dhcp/netmask/gateway) are dropped there.
     // Edge-signal emit order matches the old QMap key-sorted iteration:
     // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").

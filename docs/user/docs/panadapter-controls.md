@@ -156,6 +156,7 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
 - **Right-click → ↗ Pop out**, or the header's **⬈** button, moves a pan into its own window; **↩ Dock** puts it back.
 - Pan layouts, including floating pans, are restored when you reconnect.
+- On Flex radios, restored display settings come from the radio. The panadapter and its waterfall can return at different times. If another client takes ownership of a display, AetherSDR keeps the existing pane quiet and stops sending it display changes.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 
 Opening a pan waits for the connected backend to publish its actual display.
@@ -172,6 +173,13 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 ### Status bar
 
 The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
+
+Temporary status messages appear as a small text notice just above the bar and
+clear automatically. The station name, controls and telemetry stay visible in
+their usual positions. Messages do not take keyboard focus or block clicks.
+Long messages shorten with an ellipsis to fit between the panadapter controls,
+without covering the zoom buttons or applet panel. Screen readers receive the
+complete message once rapid updates settle.
 
 Click a bookmark in the band-stack panel to recall its saved receive settings
 on the active slice. The recall stays with that slice and its panadapter even

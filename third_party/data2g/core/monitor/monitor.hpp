@@ -58,11 +58,17 @@ std::string render(const Dump& d, Format f);
 
 class Monitor {
 public:
-    // A burst the engine heard (BurstHeard::heard set unless lost). `when`
-    // starts the first line: the caller's clock.
+    // A burst the engine heard (BurstHeard::heard set unless lost), decoded
+    // here. `when` starts the first line: the caller's clock.
     Dump burst(const arq::BurstHeard& b, const std::string& when);
-    // A burst we transmitted (Engine::set_on_send), as it goes out.
+    // A burst as its session read it (Engine::set_on_read), the session's
+    // reads reused: nothing it decoded is decoded again. rx nullptr: lost.
+    Dump burst(const arq::BurstHeard& b, arq::ModemRx* rx, const std::string& when);
+    // A burst we transmitted (Engine::set_on_send), as it goes out. A nod is shown as the control-only burst
+    // it stands for, marked as a nod.
     Dump sent(const arq::TxBurst& b, const std::string& when);
+    // A nod heard (Engine::set_on_nod): the control-only burst it stands for, marked as a nod.
+    Dump nod_heard(const arq::TxBurst& b, const std::string& when);
 
     // Its own receiver, for the CLI: audio at FS -> the bursts it completes,
     // as (engine time s, dump). when(t) stamps each.

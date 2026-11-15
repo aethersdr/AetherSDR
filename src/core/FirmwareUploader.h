@@ -79,9 +79,7 @@ private:
     void onDisconnected(Generation generation, QTcpSocket* socket);
     void handleDisconnected(Generation generation);
     void onError(Generation generation, QTcpSocket* socket);
-    void onRadioStatus(Generation generation,
-                       const QString& object,
-                       const QMap<QString, QString>& kvs);
+    void onUpdateStatus(Generation generation, const FirmwareUpdateStatus& status);
     void handleModelDisconnected(Generation generation);
     void handleConnectionStateChanged(bool connected);
     void markUploadDispatched();

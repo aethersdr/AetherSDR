@@ -106,6 +106,18 @@ int main(int argc, char** argv)
         while (radio.hasPendingDatagrams()) {
             const QNetworkDatagram dg = radio.receiveDatagram();
             const QByteArray& d = dg.data();
+            // EF FE 02: discovery. Answered to the sender like a real HL2 (it
+            // answers only its stream host while running): status 0x03 while
+            // streaming, 0x02 when halted. Silence recovery asks this first.
+            if (d.size() >= 3 && static_cast<std::uint8_t>(d[0]) == 0xEF
+                && static_cast<std::uint8_t>(d[1]) == 0xFE && static_cast<std::uint8_t>(d[2]) == 0x02) {
+                QByteArray reply(60, '\0');
+                reply[0] = char(0xEF); reply[1] = char(0xFE);
+                reply[2] = char(streaming ? 0x03 : 0x02);
+                reply[10] = char(0x06);   // board id: Hermes-Lite
+                radio.writeDatagram(reply, dg.senderAddress(), dg.senderPort());
+                continue;
+            }
             // EF FE 04 <run>: bit 0 is start/stop (bit 7 is the watchdog-disable
             // flag, which MetisClient leaves clear).
             if (d.size() >= 4 && static_cast<std::uint8_t>(d[2]) == 0x04) {

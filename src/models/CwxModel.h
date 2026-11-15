@@ -9,6 +9,7 @@
 #include <memory>
 #include "core/backends/CwTextRequest.h"
 #include "core/backends/ReceiveCommand.h"
+#include "core/backends/CwxStatusDelta.h"
 
 namespace AetherSDR {
 
@@ -109,8 +110,8 @@ public:
     void setQsk(bool on);
     void setLive(bool on);
 
-    // Status parsing (from radio)
-    void applyStatus(const QMap<QString, QString>& kvs);
+    // The radio's CWX status, decoded by the Flex status ingress.
+    void applyStatusDelta(const CwxStatusDelta& delta);
     // A queued reply names the first character, not the last. An old batch's
     // response cannot re-arm a replacement watch; handoff is not radio idle.
     void handleSendReply(const CwTextReply& reply, int epoch, int nChars);

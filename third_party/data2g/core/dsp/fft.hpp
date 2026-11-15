@@ -88,6 +88,29 @@ inline void fft_rows_into(const cdouble* in, cdouble* out, std::size_t rows, std
     pocketfft::c2c(shape, stride, stride, pocketfft::shape_t{1}, forward, in, out, scale);
 }
 
+// A rectangle of same-length transforms over a strided view of one buffer:
+// row (a,b) starts at `in` + a*sa + b*sb, for a < na and b < nb, n samples
+// each and contiguous within a row; they go out contiguously, na*nb rows.
+// Used where the rows are a sliding window (the a axis) stepping over a fixed
+// symbol pattern (the b axis) -- a spectrogram of a known grid. One call per
+// rectangle rather than one per window keeps pocketfft's per-call setup off
+// the hot path, and the source is read where it lies rather than gathered.
+// The views may overlap each other (sa < n is normal); they never overlap the
+// output. The transform math is the same single-length one fft_rows_into does.
+inline void fft_block_into(const cdouble* in, cdouble* out, std::size_t na, std::size_t nb, std::size_t n,
+                           std::ptrdiff_t sa, std::ptrdiff_t sb, bool forward, std::size_t nthreads = 1) {
+    if (n == 0 || na == 0 || nb == 0) return;
+    const pocketfft::shape_t shape{na, nb, n};
+    const pocketfft::stride_t istr{sa * static_cast<std::ptrdiff_t>(sizeof(cdouble)),
+                                   sb * static_cast<std::ptrdiff_t>(sizeof(cdouble)),
+                                   static_cast<std::ptrdiff_t>(sizeof(cdouble))};
+    const pocketfft::stride_t ostr{static_cast<std::ptrdiff_t>(nb * n * sizeof(cdouble)),
+                                   static_cast<std::ptrdiff_t>(n * sizeof(cdouble)),
+                                   static_cast<std::ptrdiff_t>(sizeof(cdouble))};
+    const double scale = forward ? 1.0 : 1.0 / static_cast<double>(n);
+    pocketfft::c2c(shape, istr, ostr, pocketfft::shape_t{2}, forward, in, out, scale, nthreads);
+}
+
 // In-place-free complex FFT. `forward` selects the sign convention;
 // the inverse is scaled by 1/n so that ifft(fft(x)) == x, matching
 // numpy and scipy. A lone transform, so single-threaded by construction
