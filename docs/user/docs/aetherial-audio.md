@@ -28,6 +28,11 @@ compact view of both chains (see [Using the docked applet](#using-the-docked-app
 > - The **LIM** final limiter on the transmit Final Output stage is **off by
 >   default**, so drive level matches SmartSDR. Turn it on if you relied on it.
 > - **BYPASS** is remembered across restarts.
+> - AetherTX's **Gate** and **De-esser** are gone. If you had the TX gate on,
+>   **RN2** was switched on for you, and a profile saved with the gate on
+>   turns RN2 on when you load it, unless the profile sets RN2 itself. A
+>   saved chain order keeps its order without either stage, and a profile's
+>   old gate and de-esser settings are ignored.
 > - The compressor's **Drive** and **Phase** are saved in AetherTX profiles.
 
 <img src="/img/screens/aethertx.png" width="720" alt="AetherTX window. The left column lists the transmit chain stages Gate (selected), EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with MIC and TX indicators, REC, PLAY, a settings gear and BYPASS at the bottom. The right side shows the gate's level graph with View (Level, Curve), Mode (Gate, Expander), RN2 and Peek controls, and six knobs: Thresh, Return, Hold, Release, Floor and Ratio." />
@@ -110,15 +115,9 @@ default. **RN2** is not a chain stage: when it is on it always runs first,
 ahead of every stage, so the tube and everything after it work on denoised
 audio. Its switch is on the **Tube** page.
 
-**AetherTX no longer has a gate or a de-esser.** RN2 does the gate's job of
-keeping room noise out of your pauses, without a threshold to set. If you had
-the TX gate on, RN2 was switched on for you when you upgraded, and a profile
-saved with the gate on turns RN2 on when you load it (unless the profile sets
-RN2 itself). The de-esser was easy to set so that it cost transmit power, and
-has no replacement: tame sibilance with a gentle EQ cut around 5–7 kHz
-instead. A saved chain order keeps its order without either stage, and a
-profile's old gate and de-esser settings are ignored. AetherRX still has its
-gate.
+AetherTX has no gate or de-esser. RN2 keeps room noise out of your pauses,
+with no threshold to set. To tame sibilance, use a gentle EQ cut around
+5–7 kHz. AetherRX has its own gate.
 
 ### Stages
 

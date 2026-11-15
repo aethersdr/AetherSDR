@@ -136,6 +136,9 @@ void TxChainSettingsTest::freshInstallGetsTheCanonicalOrder()
     QCOMPARE(engine.txChainStages(), expected);
 }
 
+// Across the store boundary: the seeded keys are committed first, and every
+// check after the migration reloads the database, so a migration that only
+// changed the in-memory cache would fail here.
 void TxChainSettingsTest::aGateThatWasOnBecomesRn2Once()
 {
     auto& s = AppSettings::instance();
@@ -144,22 +147,27 @@ void TxChainSettingsTest::aGateThatWasOnBecomesRn2Once()
     s.setValue("ClientGateTxThresholdDb", "-38");
     s.setValue("ClientDeEssTxEnabled", "True");
     s.setValue("ClientDeEssTxAmountDb", "-9");
+    s.save();
     {
         AudioEngine engine;
         QVERIFY(engine.rn2TxEnabled());
     }
+    s.load();  // what is on disk, not the cache
     QVERIFY(!s.contains("ClientGateTxEnabled"));
     QVERIFY(!s.contains("ClientGateTxThresholdDb"));
     // The de-esser has no replacement; its keys just go.
     QVERIFY(!s.contains("ClientDeEssTxEnabled"));
     QVERIFY(!s.contains("ClientDeEssTxAmountDb"));
-    // RN2 was persisted; and with the keys gone the migration cannot run
-    // again, so switching RN2 off sticks.
+    QVERIFY(s.value("AetherialTubePreampTx").toString().contains(QStringLiteral("\"rn2\":true")));
+    // RN2 was persisted, and with the keys gone the migration cannot run
+    // again, so switching RN2 off sticks across a reload too.
     {
         AudioEngine engine;
         QVERIFY(engine.rn2TxEnabled());
         engine.setRn2TxEnabled(false);
     }
+    s.save();
+    s.load();
     AudioEngine engine;
     QVERIFY(!engine.rn2TxEnabled());
 }
@@ -170,10 +178,15 @@ void TxChainSettingsTest::aGateThatWasOffLeavesRn2Alone()
     s.setValue("AetherialTubePreampTx", "{}");
     s.setValue("ClientGateTxEnabled", "False");
     s.setValue("ClientGateTxRatio", "3");
-    AudioEngine engine;
-    QVERIFY(!engine.rn2TxEnabled());
+    s.save();
+    {
+        AudioEngine engine;
+        QVERIFY(!engine.rn2TxEnabled());
+    }
+    s.load();
     QVERIFY(!s.contains("ClientGateTxEnabled"));
     QVERIFY(!s.contains("ClientGateTxRatio"));
+    QVERIFY(!s.value("AetherialTubePreampTx").toString().contains(QStringLiteral("\"rn2\":true")));
 }
 
 int main(int argc, char** argv)
@@ -183,6 +196,8 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
+    // Open the isolated store, so save() commits and load() re-reads it.
+    AppSettings::instance().load();
     TxChainSettingsTest test;
     return QTest::qExec(&test, argc, argv);
 }
