@@ -552,5 +552,21 @@
       "Final candidate reboot and full rebuild reproducibility/resource qualification; older-version evidence remains scoped.",
       "Full P1-P10: first-install trust, FLEX6000 adapter and real6300 hardware, alignment/cold-start diagnosis, PR4770 operator measurement integration, repeated sustained RF/stockAPD comparison, documentation and independent release gates."
     ]
+  },
+  "measurement_source_checkpoint": {
+    "status": "native_component_tests_passed_not_installed_or_exposed",
+    "production_ready": false,
+    "change": "Separate one-shot M measurement-tone arm preserves acquisition generation and correction reset count at arm admission; A calibration still resets the model. Neither arm keys the radio.",
+    "validation": [
+      "Focused Debug build succeeded: pd_calibration_state_test, pd_calibration_control_test, pd_calibration_dispatch_test, pd_warm_core_test, pd_dispatch_deadline_test.",
+      "All five focused CTests passed on 2026-11-15; injected native tests use no radio or RF."
+    ],
+    "remaining": [
+      "Private session and public endpoint/status capability integration.",
+      "Desktop source-purpose fencing and PR4770 operator measurement workflow.",
+      "Sanitizer, mutation and ARM build checks for this component.",
+      "Installed qualification and bounded RF measurements; this checkpoint does not change the installed source 1316e4d80e7b5666e3a7579542086b67367e4f03.",
+      "All outstanding P1-P10 production and hardware qualification requirements remain."
+    ]
   }
 }

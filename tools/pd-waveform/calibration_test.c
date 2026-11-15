@@ -47,6 +47,25 @@ int main(void)
     assert(command(&s, 'A', 9, INT64_MAX, 1).result == PD_CAL_BLOCKED);
     assert(command(&s, 'A', 10, 0, 1).result == PD_CAL_BLOCKED);
     assert(!strcmp(pd_calibration_name(&s), "canceled"));
+    assert(command(&s, 'M', 11, 11000, 1).applied);
+    assert(s.purpose == PD_SOURCE_MEASUREMENT && s.phase == PD_CAL_ARMED);
+    deadline = s.deadline_ns;
+    assert(!command(&s, 'M', 11, 12000, 1).applied && s.deadline_ns == deadline);
+    assert(command(&s, 'A', 12, 12000, 1).result == PD_CAL_BUSY);
+    assert(s.purpose == PD_SOURCE_MEASUREMENT && s.deadline_ns == deadline);
+    assert(pd_calibration_begin(&s, 13000));
+    assert(s.deadline_ns == INT64_C(8000013000));
+    pd_calibration_consume(&s, PD_CAL_SAMPLES);
+    assert(s.phase == PD_CAL_COMPLETED && !pd_calibration_begin(&s, 14000));
+    assert(!command(&s, 'M', 11, 14000, 1).applied && s.phase == PD_CAL_COMPLETED);
+    assert(command(&s, 'M', 13, 15000, 0).result == PD_CAL_BLOCKED);
+    assert(command(&s, 'M', 14, 15000, 1).applied);
+    assert(!pd_calibration_tick(&s, s.deadline_ns) && s.phase == PD_CAL_EXPIRED);
+    assert(command(&s, 'M', 15, 16000, 1).applied);
+    assert(command(&s, 'X', 16, 17000, 1).applied && s.phase == PD_CAL_CANCELED);
+    assert(command(&s, 'A', 17, 18000, 1).applied && s.purpose == PD_SOURCE_CALIBRATION);
+    assert(command(&s, 'M', 18, 19000, 1).result == PD_CAL_BUSY);
+    assert(s.purpose == PD_SOURCE_CALIBRATION);
     puts("bounded calibration timing/replay tests passed");
     return 0;
 }

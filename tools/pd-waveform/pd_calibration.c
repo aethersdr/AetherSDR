@@ -24,7 +24,7 @@ struct pd_calibration_reply pd_calibration_command(struct pd_calibration* s,
     const unsigned char* bytes, size_t size, int64_t now, int eligible)
 {
     struct pd_calibration_reply reply = {PD_CAL_INVALID, 0};
-    if (!bytes || size != 9 || (bytes[0] != 'A' && bytes[0] != 'X')) { return reply; }
+    if (!bytes || size != 9 || (bytes[0] != 'A' && bytes[0] != 'M' && bytes[0] != 'X')) { return reply; }
     uint64_t nonce = 0;
     for (unsigned i = 1; i < 9; ++i) { nonce = (nonce << 8) | bytes[i]; }
     if (!nonce) { return reply; }
@@ -39,6 +39,7 @@ struct pd_calibration_reply pd_calibration_command(struct pd_calibration* s,
     else if (!eligible || now <= 0 || now > INT64_MAX - kArmNs) { reply.result = PD_CAL_BLOCKED; }
     else {
         s->phase = PD_CAL_ARMED; s->samples_left = PD_CAL_SAMPLES;
+        s->purpose = bytes[0] == 'M' ? PD_SOURCE_MEASUREMENT : PD_SOURCE_CALIBRATION;
         s->last_clock_ns = now; s->deadline_ns = now + kArmNs; reply.applied = 1;
     }
     s->nonce = nonce; s->opcode = bytes[0]; s->result = (unsigned char)reply.result;

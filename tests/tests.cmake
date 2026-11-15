@@ -421,9 +421,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(pd_calibration_dispatch_test tools/pd-waveform/calibration_dispatch_test.c)
     target_link_libraries(pd_calibration_dispatch_test PRIVATE aether_pd_test_core)
     add_test(NAME pd_calibration_dispatch_test COMMAND pd_calibration_dispatch_test)
-    set_target_properties(pd_capture_test pd_recovery_collection_test pd_eq_phase_startup_test pd_warm_core_test pd_eq_worker_test pd_dispatch_deadline_test pd_calibration_dispatch_test
+    # Fixed source-control timing and real native admission; injected status,
+    # no network sockets or radio commands.
+    add_executable(pd_calibration_state_test tools/pd-waveform/calibration_test.c)
+    target_link_libraries(pd_calibration_state_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_calibration_state_test COMMAND pd_calibration_state_test)
+    add_executable(pd_calibration_control_test tools/pd-waveform/calibration_control_test.c)
+    target_link_libraries(pd_calibration_control_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_calibration_control_test COMMAND pd_calibration_control_test)
+    set_target_properties(pd_capture_test pd_recovery_collection_test pd_eq_phase_startup_test pd_warm_core_test pd_eq_worker_test pd_dispatch_deadline_test pd_calibration_dispatch_test pd_calibration_state_test pd_calibration_control_test
         PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
-    set_tests_properties(pd_capture_test pd_recovery_collection_test pd_eq_phase_startup_test pd_warm_core_test pd_eq_worker_test pd_dispatch_deadline_test pd_calibration_dispatch_test
+    set_tests_properties(pd_capture_test pd_recovery_collection_test pd_eq_phase_startup_test pd_warm_core_test pd_eq_worker_test pd_dispatch_deadline_test pd_calibration_dispatch_test pd_calibration_state_test pd_calibration_control_test
         PROPERTIES TIMEOUT 70)
 
     # Actual port boundary with injected pthread failures; no sockets or radio.

@@ -7,16 +7,19 @@ enum pd_calibration_phase {
     PD_CAL_CANCELED, PD_CAL_EXPIRED
 };
 enum pd_calibration_result { PD_CAL_OK, PD_CAL_BUSY, PD_CAL_BLOCKED, PD_CAL_REPLAY, PD_CAL_INVALID };
+enum pd_source_purpose { PD_SOURCE_CALIBRATION, PD_SOURCE_MEASUREMENT };
 enum { PD_CAL_SAMPLES = 8 * 24000 };
 struct pd_calibration {
     enum pd_calibration_phase phase;
+    enum pd_source_purpose purpose;
     int samples_left;
     int64_t deadline_ns, last_clock_ns;
     uint64_t nonce;
     unsigned char opcode, result;
 };
 struct pd_calibration_reply { enum pd_calibration_result result; int applied; };
-// Fixed private commands: 'A' arm or 'X' cancel, followed by nonzero BE64 nonce.
+// Fixed private commands: 'A' calibrate, 'M' measure, or 'X' cancel, then BE64 nonce.
+// Measurement selects the same bounded tones without invalidating the PA model.
 // Duplicate requests return their original result without extending an arm.
 struct pd_calibration_reply pd_calibration_command(struct pd_calibration* state,
     const unsigned char* bytes, size_t size, int64_t now_ns, int eligible);

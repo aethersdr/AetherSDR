@@ -775,7 +775,8 @@ static void set_keyed(wf_t* w, int keyed, int clean_unkey)
     if (keyed) {
         int64_t cal_now=pd_iq_monotonic_ns();
         if (w->calibration.phase==PD_CAL_ARMED &&
-            (!w->calibration_control || !w->calibration_software_owner || !w->correct || native_apd_blocked(w) || w->active_slice<0 ||
+            (!w->calibration_control || !w->calibration_software_owner ||
+             (!w->correct && w->calibration.purpose==PD_SOURCE_CALIBRATION) || native_apd_blocked(w) || w->active_slice<0 ||
              w->local_iq.last_valid_ns<=0 || cal_now<w->local_iq.last_valid_ns || cal_now-w->local_iq.last_valid_ns>100000000)) {
             pd_calibration_cancel(&w->calibration);
         }
@@ -1834,7 +1835,7 @@ static struct pd_calibration_reply operator_calibration_command(wf_t* w,
 {
     int eligible=w->calibration_control && w->calibration_idle && w->calibration_gui && !w->keyed && !w->tx_on && w->api>=0 && w->api_leased && w->tx_in &&
         w->active_slice>=0 && w->active_slice<16 && w->calibration_slice_owner[w->active_slice]==w->calibration_gui &&
-        w->correct && !native_apd_blocked(w) && w->local_iq_mode &&
+        (w->correct || (size==9 && request && request[0]=='M')) && !native_apd_blocked(w) && w->local_iq_mode &&
         w->local_iq.frames>0 && w->daxiq_sid && w->tx_mhz>0 && w->pan_mhz>0 &&
         w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns && now-w->local_iq.last_valid_ns<=100000000 &&
         !(w->test_f1>0);
@@ -1845,7 +1846,7 @@ static struct pd_calibration_reply operator_calibration_command(wf_t* w,
             // explicitly admitted new arm and its replay counter.
             struct pd_calibration accepted=w->calibration;
             w->test_started=0;model_changed(w);w->calibration=accepted;
-        } else { disarm_bounded_test(w); }
+        } else if (request[0]=='X') { disarm_bounded_test(w); }
     }
     return reply;
 }
