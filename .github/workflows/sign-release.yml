@@ -3,6 +3,8 @@ name: Sign Release Artifacts
 # GPG signs Linux AppImages and release tarballs, Windows binaries, and source
 # archives. SHA256SUMS.txt also lists the PDF manual (Docs attaches it), which
 # is verified through SHA256SUMS.txt.asc rather than a signature of its own.
+# Docs completing triggers this too, so a manual attached or replaced after
+# signing is re-signed (tools/release_manual_signing.py decides).
 # macOS artifacts are signed via Apple codesign + notarization.
 
 on:
@@ -15,7 +17,7 @@ on:
   # remembered to run one.  The `if` is what restricts this to tags; a `main`
   # build still reaches it and is still skipped there.
   workflow_run:
-    workflows: ["AppImage", "Windows Installer", "macOS DMG"]
+    workflows: ["AppImage", "Windows Installer", "macOS DMG", "Docs"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -37,15 +39,66 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sign:
-    # A build of this repository's own tag, pushed or dispatched; a run from
-    # any other repository or event never reaches the release key.
+  # Whether this run signs. A build run always does. A Docs run (it runs on
+  # the release event) signs only when the signed SHA256SUMS.txt doesn't cover
+  # the manual now attached: signing ran while Docs had failed, or a Docs
+  # rerun replaced the PDF. Before any signing it skips, because the
+  # build-triggered runs list the manual themselves. This job holds no key
+  # and asks for no approval; it runs the default branch's decision script
+  # with a read-only token.
+  plan:
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
+       (contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) ||
+        (github.event.workflow_run.name == 'Docs' && github.event.workflow_run.event == 'release')) &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    outputs:
+      sign: ${{ steps.decide.outputs.sign }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Docs' }}
+        with:
+          sparse-checkout: tools/release_manual_signing.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [ "$EVENT_NAME" != workflow_run ] || [ "$RUN_NAME" != Docs ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Not a release tag."
+            exit 1
+          fi
+          mkdir -p probe
+          pdf="AetherSDR-Manual-${TAG}.pdf"
+          gh release download "$TAG" --dir probe --pattern "$pdf" --pattern SHA256SUMS.txt || true
+          decision=$(python3 tools/release_manual_signing.py resign --name "$pdf" \
+            --pdf "probe/$pdf" --sums probe/SHA256SUMS.txt)
+          echo "$decision"
+          if [ "$decision" = resign ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  sign:
+    # A build of this repository's own tag, pushed or dispatched, or a Docs
+    # run the plan above says needs a re-sign; a run from any other
+    # repository or event never reaches the release key.
+    needs: plan
+    if: ${{ needs.plan.outputs.sign == 'true' }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -102,6 +155,7 @@ jobs:
       # signed, so they are neither waited for nor signed here. The macOS app
       # tarballs (the in-app update's payload) are signed, like Linux's.
       - name: Wait for every signable artifact to be attached
+        id: wait
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -118,11 +172,15 @@ jobs:
             app="macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
           fi
           # The PDF manual, when the tag has the docs site that renders it
-          # (the same test docs.yml uses).
+          # and the tag's own Docs workflow no longer signs it apart: the rule
+          # tools/release_manual_signing.py `shape` and check_release_assets.py
+          # share, so a dispatch for an older tag keeps that tag's shape.
           pdf=
-          if [ -f tools/docs/build_pdf.py ] && [ -f docs/user/sidebars.js ]; then
+          if [ -f tools/docs/build_pdf.py ] && [ -f docs/user/sidebars.js ] \
+             && ! grep -q -- '--detach-sign' .github/workflows/docs.yml; then
             pdf="AetherSDR-Manual-${TAG}.pdf"
           fi
+          echo "pdf=$pdf" >> "$GITHUB_OUTPUT"
           base="$want"
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
@@ -176,11 +234,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
+          PDF: ${{ steps.wait.outputs.pdf }}
         run: |
           mkdir -p artifacts
           gh release download "$TAG" \
             --dir artifacts --pattern '*.AppImage' --pattern '*.tar.zst' \
-            --pattern '*.exe' --pattern '*.zip' --pattern 'AetherSDR-Manual-*.pdf'
+            --pattern '*.exe' --pattern '*.zip'
+          # Only this tag's manual, by exact name, and only in the shape above.
+          if [ -n "$PDF" ]; then
+            gh release download "$TAG" --dir artifacts --pattern "$PDF" || \
+              echo "::warning::$PDF is not attached; SHA256SUMS.txt will not list it."
+          fi
 
       - name: Generate source archive
         env:

@@ -279,15 +279,19 @@ def release_makes_app_tarballs(repo: str, v: str) -> bool:
 
 
 def release_sums_manual(repo: str, v: str) -> bool:
-    """Whether the tag's own signing workflow lists the PDF manual in
-    SHA256SUMS.txt (RFC #6964): from then on the manual has no .asc of its own,
-    and SHA256SUMS.txt.asc is its signature. Earlier releases sign it apart."""
-    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/.github/workflows/sign-release.yml?ref={v}",
+    """Whether the manual is listed in SHA256SUMS.txt with no .asc of its own
+    (RFC #6964), or signed apart as before. It is decided by the tag's own
+    Docs workflow, which is the copy that ran for that tag: the one rule
+    sign-release.yml and tools/release_manual_signing.py also apply, so a
+    signing dispatch for an older tag keeps that tag's shape. (sign-release.yml
+    itself always runs from the default branch, so its copy at the tag says
+    nothing about what ran.)"""
+    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/.github/workflows/docs.yml?ref={v}",
                 "-H", "Accept: application/vnd.github.raw"], check=False)
     if proc.returncode != 0:
-        report("WARN", "the tag's signing workflow read", "could not read it; expecting the manual in SHA256SUMS.txt")
+        report("WARN", "the tag's Docs workflow read", "could not read it; expecting the manual in SHA256SUMS.txt")
         return True
-    return "AetherSDR-Manual-" in proc.stdout
+    return "--detach-sign" not in proc.stdout
 
 
 def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: bool = True,

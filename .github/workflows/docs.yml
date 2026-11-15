@@ -212,8 +212,10 @@ jobs:
     if: ${{ needs.release-pdf.outputs.present == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # No environment gate: this job holds no signing key, and its token can
-    # only write release assets.
+    # No environment gate (maintainer ruling on #6964): this job holds no
+    # signing key. Its token is contents: write, used only for the one
+    # `gh release upload` below. Sign Release Artifacts re-signs after it
+    # when the signed SHA256SUMS.txt doesn't cover the PDF it attached.
     permissions:
       contents: write
     env:
