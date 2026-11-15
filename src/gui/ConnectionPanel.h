@@ -4,6 +4,8 @@
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/SmartLinkClient.h"
 #include "core/IConnectionAutomation.h"
+#include "core/backends/aetherd/RemoteEngineCredentials.h"
+#include "core/backends/aetherd/RemoteEngineDiscovery.h"
 
 #include <QWidget>
 #include <QMargins>
@@ -23,6 +25,7 @@
 #include <QToolButton>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QHash>
 #include <QAbstractSocket>
 #include <functional>
 #include <optional>
@@ -32,6 +35,8 @@ class QScreen;
 class QScrollArea;
 class QSpinBox;
 class QTcpSocket;
+
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -95,6 +100,8 @@ public:
     // RTL-SDR USB dongles (RTL2832U / R820T). USB-addressed (device index +
     // serial), not network. Receive-only (Principle VI).
     static constexpr const char* kFamilyRtl  = "rtl";
+    // A remote aetherd engine (docs/aetherd-remote-backend.md); never a manual-IP choice.
+    static constexpr const char* kFamilyAetherd = "aetherd";
 
     // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
     QList<RadioInfo> automationLocalRadios() const override;
@@ -388,6 +395,27 @@ private:
     QPushButton* m_localConnectBtn{nullptr};
 
     QList<RadioInfo> m_radios;   // LAN radios only
+
+    // Remote engines (family "aetherd", docs/aetherd-remote-backend.md §3):
+    // pairing with an advertised or typed engine, and its radio-list entry.
+    void buildRemoteEngineSection(QWidget* parent, QVBoxLayout* layout,
+                                  const QString& editStyle, const QString& comboStyle);
+    void onRemoteEngineAdvert(const AetherSDR::aetherd::RemoteEngineDiscovery::Advert& advert);
+    void startRemoteEnginePairing();
+    void publishRemoteEngine(const AetherSDR::aetherd::RemoteEngineRecord& record);
+    void forgetRemoteEngine(const QString& engineId);
+    void removeRemoteEngineEntry(const QString& serial);
+    void editRemoteEngineTailnet(const QString& engineId);
+    [[nodiscard]] RadioInfo remoteEngineRadioInfo(const AetherSDR::aetherd::RemoteEngineRecord& record) const;
+    QWidget* m_remoteEngineGroup{nullptr};
+    QComboBox* m_remoteEngineAddress{nullptr};
+    QLineEdit* m_remoteEngineCode{nullptr};
+    QPushButton* m_remoteEnginePairBtn{nullptr};
+    QLabel* m_remoteEngineStatus{nullptr};
+    AetherSDR::aetherd::RemoteEngineDiscovery* m_remoteEngineDiscovery{nullptr};
+    QObject* m_remoteEnginePairing{nullptr};   // RemoteEnginePairing; QObject so no-WebSockets builds link
+    QTimer* m_remoteEngineProbeTimer{nullptr};
+    QHash<QString, AetherSDR::aetherd::RemoteEngineDiscovery::Advert> m_remoteEngineAdverts;  // by fingerprint
     bool m_connected{false};
 
     // SmartLink UI
