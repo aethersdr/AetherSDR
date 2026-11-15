@@ -103,9 +103,20 @@ RemoteEngineBackend::~RemoteEngineBackend()
 
 std::optional<RemoteEngineRecord> RemoteEngineBackend::recordFor(const RadioConnectRequest& request)
 {
-    const std::optional<RemoteEngineRecord> record = RemoteEngineCredentials::session(request.serial);
+    const std::optional<RemoteEngineRecord> record =
+        RemoteEngineCredentials::session(engineIdOf(request.serial));
     if (!record || !record->usable()) { return std::nullopt; }
     return record;
+}
+
+QString RemoteEngineBackend::engineIdOf(const QString& serial)
+{
+    return serial.endsWith(QLatin1String(kTailnetSuffix)) ? serial.chopped(int(qstrlen(kTailnetSuffix))) : serial;
+}
+
+bool RemoteEngineBackend::tailnetSerial(const QString& serial)
+{
+    return serial.endsWith(QLatin1String(kTailnetSuffix));
 }
 
 bool RemoteEngineBackend::tailnetPathAdmitted(const QHostAddress& localAddress,
@@ -136,13 +147,12 @@ void RemoteEngineBackend::connectRadio(const RadioConnectRequest& request)
                                 "from the Remote engine section."));
         return;
     }
-    // The token goes only to the address it was paired at, or to a tailnet
-    // address stored in the same engine's record.
-    bool tailnet = false;
-    if (!record->tailnetUrl.isEmpty()) {
-        const QUrl url(record->tailnetUrl);
-        tailnet = QHostAddress(url.host()) == QHostAddress(request.host)
-            && (request.port == 0 || url.port() == request.port);
+    // The token goes only to the address it was paired at, or to the tailnet
+    // address stored in the same engine's record; the entry's serial says which.
+    const bool tailnet = tailnetSerial(request.serial);
+    if (tailnet && record->tailnetUrl.isEmpty()) {
+        emit connectionError(tr("This engine has no tailnet address."));
+        return;
     }
     openSocket(*record, tailnet);
 }
