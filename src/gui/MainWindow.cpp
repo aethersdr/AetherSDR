@@ -3926,6 +3926,10 @@ void MainWindow::applyNonClientBandInsets()
     // way, and nothing doubles: TitleBar::updateChromeLayout() adds
     // contentInsets(), which is safeAreaMargins() and 0 on those edges here.
     setContentsMargins(insets);
+    // The window's size has not changed, so no resizeEvent re-places the grip,
+    // and the minimum width has to make room for the new side insets.
+    positionSizeGrip();
+    updateStatusBarMinimumWidth();
 }
 
 bool MainWindow::event(QEvent* event)
@@ -4160,13 +4164,22 @@ void MainWindow::reapplyStartupGeometryAfterShow()
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
+    positionSizeGrip();
+}
+
+void MainWindow::positionSizeGrip()
+{
     // Anchor the frameless-mode size grip to the bottom-right corner,
     // overlaying the status bar.  Direct child of MainWindow so the
     // grip's native dotted-texture paint isn't suppressed by the
-    // status-bar stylesheet.
+    // status-bar stylesheet.  Inside the contents margins, which hold the
+    // Windows 11 non-client band (applyNonClientBandInsets()) and are 0
+    // everywhere else.
     if (m_sizeGrip) {
         const int s = m_sizeGrip->width();
-        m_sizeGrip->move(width() - s - 1, height() - s - 1);
+        const QMargins margins = contentsMargins();
+        m_sizeGrip->move(width() - margins.right() - s - 1,
+                         height() - margins.bottom() - s - 1);
         m_sizeGrip->raise();
     }
 }
@@ -4186,8 +4199,11 @@ void MainWindow::updateStatusBarMinimumWidth()
 
     const int sizeGripAllowance =
         (m_sizeGrip && m_sizeGrip->isVisible()) ? m_sizeGrip->width() + 4 : 4;
-    const int statusMinWidth =
-        m_statusBarContainer->minimumSizeHint().width() + sizeGripAllowance;
+    // The contents margins (the Windows 11 non-client band) come off the
+    // status bar's width, and the grip sits inside them.
+    const QMargins margins = contentsMargins();
+    const int statusMinWidth = m_statusBarContainer->minimumSizeHint().width()
+        + sizeGripAllowance + margins.left() + margins.right();
     const int screenWidthCap =
         screen() ? screen()->availableGeometry().width() : statusMinWidth;
     const int boundedMinWidth =

@@ -476,6 +476,9 @@ private:
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
     void updateStatusBarMinimumWidth();
+    // Pin the frameless size grip to the bottom-right corner inside the
+    // window's contents margins, so it clears the non-client band.
+    void positionSizeGrip();
 
     // Audio thread helpers — invoke AudioEngine methods on the worker thread (#502)
     void audioStartRx();
