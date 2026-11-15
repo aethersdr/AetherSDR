@@ -88,6 +88,15 @@ struct MetisClientTestAccess {
     {
         return MetisClient::kTxPrimeMaxHoldPackets;
     }
+    // The client-leveled (TCI/DAX) prime, same reason.
+    static constexpr std::size_t clientPrimeTarget()
+    {
+        return MetisClient::kTxPrimeClientTargetSamples;
+    }
+    static constexpr std::uint64_t clientPrimeMaxHoldPackets()
+    {
+        return MetisClient::kTxPrimeClientMaxHoldPackets;
+    }
 };
 
 struct Hl2TxGateTestAccess {
@@ -1944,7 +1953,20 @@ int main(int argc, char** argv)
               "THE PRIME: the margin is a whole number of blocks, so the hold ends on a block");
         const std::size_t targetBlocks = MetisClientTestAccess::primeTarget() / block;
         const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
+        // The client-leveled margin is wall-clock time, not blocks: about
+        // 171 ms at the EP2 rate whatever the block is, plus one block draining.
         const auto packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::size_t clientMarginMs =
+            (MetisClientTestAccess::clientPrimeTarget() - block) * 1000
+            / static_cast<std::size_t>(MetisClientTestAccess::ep2AudioRateHz());
+        check(clientMarginMs >= 170 && clientMarginMs <= 171,
+              "THE PRIME: the client-leveled margin is 171 ms on top of one block, "
+              "independent of the block size");
+        check(MetisClientTestAccess::clientPrimeMaxHoldPackets()
+                  == 2 * (MetisClientTestAccess::clientPrimeTarget() - block) / packet,
+              "THE PRIME: the client-leveled deadline is twice its margin's arrival time");
+        check(MetisClientTestAccess::clientPrimeTarget() < MetisClientTestAccess::queueMax(),
+              "THE PRIME: the client-leveled target fits below the overflow bound");
 
         TxTestAuthority tx;
         ScopedTxFifoLog log;
@@ -2030,6 +2052,62 @@ int main(int argc, char** argv)
             check(stopped.txPrimeDeadlineReleases() == 1
                       && stopped.txPrimeHoldPackets() == MetisClientTestAccess::primeMaxHoldPackets(),
                   "THE PRIME: and the release is counted as a deadline, not as primed");
+        }
+
+        // The deadline block above runs with the client-leveled flag at its
+        // default, false: a microphone over keeps the two-block target and the
+        // short deadline.
+
+        {   // CLIENT-LEVELED AUDIO (TCI/DAX) HOLDS THE DEEPER PRIME
+            const std::size_t micTarget = MetisClientTestAccess::primeTarget();
+            const std::size_t clientTarget = MetisClientTestAccess::clientPrimeTarget();
+            check(clientTarget > micTarget,
+                  "CLIENT PRIME: fixture -- the client target is deeper than the microphone's");
+            TxTestAuthority clientTx;
+            MetisClient client;
+            MetisClientTestAccess::setStreaming(client);
+            client.enableTransmit(true);
+            client.setTxClientLeveledMargin(true);
+            client.setMox(true, clientTx.operation);
+            client.queueTxIq(std::vector<std::complex<float>>(micTarget,
+                                                              std::complex<float>(0.25f, -0.25f)),
+                             clientTx.context);
+            const auto held = client.buildNextControlPacket();
+            check(anyFrameKeyed(held) && !payloadNonZero(held)
+                      && client.txQueueDepth() == micTarget,
+                  "CLIENT PRIME: the microphone's target still holds silence for client audio");
+            client.queueTxIq(std::vector<std::complex<float>>(clientTarget - micTarget,
+                                                              std::complex<float>(0.25f, -0.25f)),
+                             clientTx.context);
+            const auto firstShape = ep2IqShape(client.buildNextControlPacket());
+            check(firstShape.carryingIq == kTxSamplesPerPacket && firstShape.firstSilent < 0
+                      && client.txQueueDepth() == clientTarget - packet,
+                  "CLIENT PRIME: at the client target the next packet is a full packet of IQ");
+            check(client.txPrimeHoldPackets() == 1 && client.txPrimeDeadlineReleases() == 0,
+                  "CLIENT PRIME: one packet held, and the target let it go, not the deadline");
+        }
+
+        {   // ITS DEADLINE IS THE CLIENT ONE, LONGER THAN THE MICROPHONE'S
+            check(MetisClientTestAccess::clientPrimeMaxHoldPackets()
+                      > MetisClientTestAccess::primeMaxHoldPackets(),
+                  "CLIENT PRIME: fixture -- the client deadline is longer");
+            TxTestAuthority clientTx;
+            MetisClient stopped;
+            MetisClientTestAccess::setStreaming(stopped);
+            stopped.enableTransmit(true);
+            stopped.setTxClientLeveledMargin(true);
+            stopped.setMox(true, clientTx.operation);
+            stopped.queueTxIq(oneBlock, clientTx.context);
+            for (std::uint64_t i = 0; i < MetisClientTestAccess::clientPrimeMaxHoldPackets(); ++i) {
+                check(!payloadNonZero(stopped.buildNextControlPacket()),
+                      "CLIENT PRIME: one block alone is held up to the client deadline, "
+                      "past the microphone's");
+            }
+            check(payloadNonZero(stopped.buildNextControlPacket())
+                      && stopped.txPrimeDeadlineReleases() == 1
+                      && stopped.txPrimeHoldPackets()
+                             == MetisClientTestAccess::clientPrimeMaxHoldPackets(),
+                  "CLIENT PRIME: at the client deadline the held block goes out, counted as a deadline");
         }
 
         {   // CW AND THE TEST TONE ARE NOT HELD: they never reach the queue
