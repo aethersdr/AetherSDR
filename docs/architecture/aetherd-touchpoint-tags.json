@@ -295,7 +295,7 @@
  },
  "core/ClientCessb.h": {
   "tag": "universal",
-  "note": "Client TX final peak control (WDSP compressor + CESSB osctrl between bandpasses, used standalone; clip, ceiling, passband following the TX filter + envelope peak); radio-agnostic engine DSP feature.",
+  "note": "Client TX final peak control (WDSP compressor + CESSB osctrl between bandpasses + TX ALC backstop, used standalone; clip, ceiling, passband following the TX filter + envelope peak); radio-agnostic engine DSP feature.",
   "split": "",
   "confidence": "high"
  },

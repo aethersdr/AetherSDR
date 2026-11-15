@@ -3,8 +3,9 @@
 /* WDSP's SSB speech processor as a standalone block, with no TXA channel
    behind it: the bandpass that makes the one-sided SSB signal (bp0), the
    envelope clipper (compress.c, "COMP"), the bandpass that removes its
-   splatter (bp1), CESSB overshoot control (osctrl.c) and the last bandpass
-   (bp2), in xtxa()'s order. Its output is the real part, which is ordinary
+   splatter (bp1), CESSB overshoot control (osctrl.c), the last bandpass
+   (bp2) and create_txa()'s ALC (wcpAGC.c) as a look-ahead backstop on the
+   envelope, in xtxa()'s order. Its output is the real part, which is ordinary
    audio whose SSB envelope the clipper and CESSB have bounded.
 
    Threading: create and destroy allocate and build FFTW plans, so the caller
@@ -34,7 +35,7 @@ void aether_cessb_set_clip_gain_db(AetherCessb* c, double db);
 /* CESSB overshoot control on or off; the last bandpass runs either way. */
 void aether_cessb_set_overshoot_control(AetherCessb* c, int enabled);
 
-/* Samples of delay the three bandpasses add. */
+/* Samples of delay the three bandpasses and the ALC look-ahead add. */
 int aether_cessb_delay(const AetherCessb* c);
 
 #ifdef __cplusplus

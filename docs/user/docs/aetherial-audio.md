@@ -540,9 +540,9 @@ which you will notice on quick overs.
 ### Peak control (AetherTX)
 
 WDSP's SSB speech processor: a bandpass, an envelope clipper, a second
-bandpass, CESSB (controlled-envelope SSB) overshoot control and a last
-bandpass. It holds the envelope of the SSB signal your radio builds from this
-audio at a ceiling, to within about half a dB. That is not the same as limiting the audio's sample
+bandpass, CESSB (controlled-envelope SSB) overshoot control, a last bandpass
+and WDSP's transmit ALC as a look-ahead backstop. It holds the envelope of the
+SSB signal your radio builds from this audio at a ceiling. That is not the same as limiting the audio's sample
 peaks: band-limited audio can have an envelope several dB above its highest
 sample, which is why a limiter alone cannot cap the peak RF power. With the
 envelope held, you can run more average power at the same peak. Peak control
@@ -554,7 +554,7 @@ The page traces the envelope peak over the last five seconds against the
 | Control | Range | What it does |
 |---|---|---|
 | **Clip** | 0 to 20 dB | How hard the envelope is driven into the clipper. More clip, more average power and more distortion. Default 6 dB |
-| **CESSB** | On / off | Removes the overshoot the bandpass after the clipper puts back. Without it the envelope runs about 1 dB over the ceiling at 12 dB of clip. Default on |
+| **CESSB** | On / off | Removes the overshoot the bandpass after the clipper puts back. Without it the ALC backstop still holds the ceiling, but by turning you down, which costs up to about 1 dB of average power. Default on |
 | **Ceiling** | −12 to 0 dBFS | The envelope level it holds to. Default −1 dBFS |
 
 **Passband.** The stage's bandpass follows your radio's TX filter, 50 Hz inside
@@ -564,7 +564,7 @@ while you talk is seamless. ESSB filters are followed up to the radio's
 10 kHz maximum. The passband is never narrower than 500 Hz, so with a TX
 filter narrower than 600 Hz it no longer matches the radio's.
 
-**Delay.** Peak control adds about 33 ms.
+**Delay.** Peak control adds about 39 ms.
 
 **Example: SSB contest or DX punch.** Clip 6 dB, CESSB on, Ceiling −1 dBFS. On
 a FLEX-8600 at 25 W into a dummy load, with the Contest profile ahead of it

@@ -17,6 +17,7 @@ struct AetherCessb {
     BANDPASS bp1;
     OSCTRL osctrl;
     BANDPASS bp2;
+    WCPAGC alc;
 };
 
 AetherCessb* aether_cessb_create(int blockSize, int sampleRate, int nc, double lowHz,
@@ -48,7 +49,12 @@ AetherCessb* aether_cessb_create(int blockSize, int sampleRate, int nc, double l
     a->osctrl = create_osctrl(1, blockSize, a->buffer, a->buffer, sampleRate, 1.95);
     a->bp2 = create_bandpass(1, 0, blockSize, nc, 0, a->buffer, a->buffer, lowHz, highHz,
                              sampleRate, 1, 1.0);
-    if (!a->buffer || !a->bp0 || !a->comp || !a->bp1 || !a->osctrl || !a->bp2) {
+    /* The lookahead backstop: create_txa()'s always-on ALC, verbatim. It
+       pulls back what overshoot bp2 leaves on the envelope. */
+    a->alc = create_wcpagc(1, 5, 1, a->buffer, a->buffer, blockSize, sampleRate, 0.001, 0.010, 6,
+                           1.0, 1.0, 1.0, 1.0, 1.0, 0.250, 0.005, 5.0, 0, 0.500, 0.500, 2.000,
+                           0.100);
+    if (!a->buffer || !a->bp0 || !a->comp || !a->bp1 || !a->osctrl || !a->bp2 || !a->alc) {
         aether_cessb_destroy(a);
         return NULL;
     }
@@ -60,6 +66,7 @@ void aether_cessb_destroy(AetherCessb* a)
     if (!a) {
         return;
     }
+    if (a->alc) destroy_wcpagc(a->alc);
     if (a->bp2) destroy_bandpass(a->bp2);
     if (a->osctrl) destroy_osctrl(a->osctrl);
     if (a->bp1) destroy_bandpass(a->bp1);
@@ -89,6 +96,7 @@ void aether_cessb_process(AetherCessb* a)
     xbandpass(a->bp1, 0);
     xosctrl(a->osctrl);
     xbandpass(a->bp2, 0);
+    xwcpagc(a->alc);
 }
 
 void aether_cessb_flush(AetherCessb* a)
@@ -105,6 +113,7 @@ void aether_cessb_flush(AetherCessb* a)
     memset(a->osctrl->dl, 0, (size_t)a->osctrl->pn * sizeof(complex));
     a->osctrl->max_env = 0.0;
     flush_bandpass(a->bp2);
+    flush_wcpagc(a->alc);
     memset(a->buffer, 0, 2 * (size_t)a->blockSize * sizeof(complex));
 }
 
@@ -124,6 +133,7 @@ void aether_cessb_set_overshoot_control(AetherCessb* a, int enabled)
 
 int aether_cessb_delay(const AetherCessb* a)
 {
-    /* Three linear-phase bandpasses of nc taps, nc / 2 each. */
-    return a ? 3 * (a->nc / 2) : 0;
+    /* Three linear-phase bandpasses of nc taps, nc / 2 each, and the ALC's
+       look-ahead. */
+    return a ? 3 * (a->nc / 2) + a->alc->attack_buffsize : 0;
 }

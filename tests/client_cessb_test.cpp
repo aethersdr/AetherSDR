@@ -1,6 +1,6 @@
 // ClientCessb, the AetherTX final peak control (RFC #4836): the SSB envelope
-// a radio builds from its output stays under the ceiling, and CESSB is what
-// holds it there; the delay equals the latency it reports; the passband cuts
+// a radio builds from its output stays at the ceiling, with or without CESSB
+// thanks to the ALC backstop; the delay equals the latency it reports; the passband cuts
 // what lies outside it and follows the radio TX filter; a passband change
 // while running neither gaps the audio nor leaks a block; every range clamps;
 // re-enabling starts clean; and the settings JSON round-trips. Socket-free.
@@ -179,14 +179,13 @@ void testEnvelopeBound()
             std::snprintf(name, sizeof name,
                           "clip %.0f, ceiling %.0f: radio envelope stays under the ceiling", clip,
                           ceiling);
-            report(name, env <= ceiling + 0.5, fmt("%.2f dBFS vs %.2f", env, ceiling));
+            report(name, env <= ceiling + 0.25, fmt("%.2f dBFS vs %.2f", env, ceiling));
         }
     }
 
     // The range limits, the passband the 8600's 50..4000 Hz SSB filter gives
     // (100..3950), and ESSB filters to the Flex's 10 kHz maximum with a voice
-    // that reaches them. Against a radio filter only 50 Hz wider the last
-    // bandpass leaves a little overshoot, so the bound there is 0.75 dB.
+    // that reaches them.
     struct Limit {
         float clip;
         float ceiling;
@@ -195,13 +194,13 @@ void testEnvelopeBound()
         double tolerance;
         double voiceTopHz;
     };
-    for (const Limit& l : {Limit{20.0f, -1.0f, 100.0, 2900.0, 0.5, 2800.0},
-                           Limit{6.0f, 0.0f, 100.0, 2900.0, 0.5, 2800.0},
-                           Limit{6.0f, -12.0f, 100.0, 2900.0, 0.5, 2800.0},
-                           Limit{6.0f, -1.0f, 50.0, 4000.0, 0.75, 2800.0},
-                           Limit{20.0f, -1.0f, 50.0, 4000.0, 0.75, 2800.0},
-                           Limit{6.0f, -1.0f, 50.0, 6000.0, 0.75, 7000.0},
-                           Limit{6.0f, -1.0f, 50.0, 10000.0, 0.75, 11000.0}}) {
+    for (const Limit& l : {Limit{20.0f, -1.0f, 100.0, 2900.0, 0.25, 2800.0},
+                           Limit{6.0f, 0.0f, 100.0, 2900.0, 0.25, 2800.0},
+                           Limit{6.0f, -12.0f, 100.0, 2900.0, 0.25, 2800.0},
+                           Limit{6.0f, -1.0f, 50.0, 4000.0, 0.25, 2800.0},
+                           Limit{20.0f, -1.0f, 50.0, 4000.0, 0.25, 2800.0},
+                           Limit{6.0f, -1.0f, 50.0, 6000.0, 0.25, 7000.0},
+                           Limit{6.0f, -1.0f, 50.0, 10000.0, 0.25, 11000.0}}) {
         auto s = makeStage(l.clip, true, l.ceiling);
         s->followRadioFilter(static_cast<int>(l.radioLow), static_cast<int>(l.radioHigh));
         auto audio = voice(2.0, 0.9, l.voiceTopHz);
@@ -224,8 +223,13 @@ void testEnvelopeBound()
     run(*off, b);
     const double envOn = radioEnvelopePeakDb(a, skip);
     const double envOff = radioEnvelopePeakDb(b, skip);
-    report("CESSB is what holds it: off overshoots the ceiling by more",
-           envOff > envOn + 0.5, fmt("on %.2f, off %.2f dBFS", envOn, envOff));
+    report("CESSB off, the ALC backstop still holds the ceiling", envOff <= -1.0 + 0.25,
+           fmt("on %.2f, off %.2f dBFS", envOn, envOff));
+    const double rmsGain = db(rmsOf(a, skip, a.size()) / rmsOf(b, skip, b.size()));
+    // The ALC gives up what CESSB would have kept: +0.1 dB on this voice,
+    // +0.8 dB on the harness's synthetic speech.
+    report("CESSB never costs average power under the same ceiling", rmsGain > 0.0,
+           fmt("+%.2f dB with CESSB", rmsGain));
 
     const float reported = on->takeEnvelopePeakDb();
     report("the reported envelope peak sits at the ceiling",

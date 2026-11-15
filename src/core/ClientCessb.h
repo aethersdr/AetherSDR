@@ -4,7 +4,8 @@
 // processor as the last client stage before Final Output. It bounds the
 // envelope of the SSB signal the radio builds from this audio, not just the
 // audio's sample peaks: bandpass, envelope clip ("Clip"), bandpass, CESSB
-// overshoot control, bandpass, then the real part. The radio's own TX filter
+// overshoot control, bandpass, WDSP's TX ALC as a look-ahead backstop, then
+// the real part. The radio's own TX filter
 // must be wider than this stage's passband, or it reshapes the bounded
 // envelope; AudioEngine keeps the passband inside it.
 //
