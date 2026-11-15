@@ -22,6 +22,7 @@ standard library only.
 """
 
 import argparse
+import ipaddress
 import logging
 import socket
 import struct
@@ -45,6 +46,10 @@ ANNOUNCE_PORT = 4992
 MAX_FRAME = 2048
 RETRY_SECONDS = 5
 CONNECT_TIMEOUT = 10
+# Tailscale's address ranges. The helper connects to the shim only over the
+# tailnet, where the shim checks which device is connecting; pointed at the
+# radio's LAN address it would skip that check.
+TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 # How often the main thread wakes to notice Ctrl+C. On Windows, Ctrl+C can't
 # interrupt a blocked socket call, and the helper waits on one indefinitely
 # while the radio is quiet, so the network side runs in its own thread.
@@ -175,6 +180,26 @@ def broadcast_socket():
     return out
 
 
+def is_tailnet_address(text):
+    """Whether text is an address in Tailscale's ranges."""
+    try:
+        ip = ipaddress.ip_address(text.split("%", 1)[0])
+    except ValueError:
+        return False
+    return any(ip in net for net in TAILNET_NETS)
+
+
+def tailnet_addresses(shim, resolve=socket.getaddrinfo):
+    """The addresses shim names, in order, split into the tailnet ones and
+    the rest."""
+    found = []
+    for info in resolve(shim, FEED_PORT, type=socket.SOCK_STREAM):
+        addr = info[4][0]
+        if addr not in found:
+            found.append(addr)
+    return [a for a in found if is_tailnet_address(a)], [a for a in found if not is_tailnet_address(a)]
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Broadcast a tailnet radio's discovery announcement on this computer.")
@@ -182,7 +207,16 @@ def parse_args(argv=None):
                         help="the radio's tailnet name or address, e.g. flex-radio")
     parser.add_argument("--broadcast", default=default_broadcast(),
                         help="address to broadcast the announcement to (default: %(default)s)")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        ipaddress.ip_address(args.shim.split("%", 1)[0])
+    except ValueError:
+        pass  # a name: checked each time it is looked up
+    else:
+        if not is_tailnet_address(args.shim):
+            parser.error(f"--shim {args.shim} is not a tailnet address (100.64.0.0/10 or "
+                         "fd7a:115c:a1e0::/48); use the radio's tailnet name or address")
+    return args
 
 
 def main(argv=None):
@@ -209,9 +243,26 @@ def serve(shim, out, dst):
     feed = f"{shim}:{FEED_PORT}"
     while True:
         try:
-            conn = socket.create_connection((shim, FEED_PORT), timeout=CONNECT_TIMEOUT)
+            addrs, other = tailnet_addresses(shim)
         except OSError as e:
-            log.warning("cannot reach %s: %s; retrying", feed, e)
+            log.warning("cannot look up %s: %s; retrying", shim, e)
+            time.sleep(RETRY_SECONDS)
+            continue
+        if not addrs:
+            log.error("%s is %s, not a tailnet address; this helper connects to the radio only "
+                      "over the tailnet. Retrying in %d s", shim, ", ".join(other) or "nothing",
+                      REFUSED_RETRY_SECONDS)
+            time.sleep(REFUSED_RETRY_SECONDS)
+            continue
+        conn, err = None, None
+        for addr in addrs:
+            try:
+                conn = socket.create_connection((addr, FEED_PORT), timeout=CONNECT_TIMEOUT)
+                break
+            except OSError as e:
+                err = e
+        if conn is None:
+            log.warning("cannot reach %s: %s; retrying", feed, err)
             time.sleep(RETRY_SECONDS)
             continue
         with conn:

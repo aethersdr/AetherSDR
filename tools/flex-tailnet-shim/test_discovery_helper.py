@@ -231,6 +231,9 @@ shim = socket.socket()
 shim.bind(("127.0.0.1", 0))
 shim.listen(1)
 discovery_helper.FEED_PORT = shim.getsockname()[1]
+# This stand-in shim is on loopback, outside the tailnet ranges.
+import ipaddress
+discovery_helper.TAILNET_NETS += (ipaddress.ip_network("127.0.0.0/8"),)
 held = []
 
 def quiet_shim():
@@ -262,6 +265,72 @@ def test_ctrl_c_stops_a_waiting_helper():
     except subprocess.TimeoutExpired:
         raise AssertionError("Ctrl+C did not stop the helper within 10 s") from None
     check("stopped" in done.stdout, f"helper output: {done.stdout!r} {done.stderr!r}")
+
+
+class Stop(Exception):
+    pass
+
+
+def test_tailnet_only():
+    """The helper connects to the shim only at a tailnet address: one given
+    outside the tailnet ranges stops it at the start, and a name that looks
+    up to none is never dialled."""
+    h = discovery_helper
+    for addr, want in [("100.64.0.1", True), ("100.127.255.254", True), ("100.128.0.1", False),
+                       ("192.168.0.20", False), ("127.0.0.1", False), ("fd7a:115c:a1e0::5", True),
+                       ("fd7a:115c:a1e1::5", False), ("fd7a:115c:a1e0::5%12", True), ("flex-radio", False)]:
+        check(h.is_tailnet_address(addr) == want, f"is_tailnet_address({addr!r}) != {want}")
+
+    import contextlib
+    import io
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        try:
+            h.parse_args(["--shim", "192.168.0.20"])
+            raise AssertionError("--shim at a LAN address was accepted")
+        except SystemExit:
+            pass
+    check("not a tailnet address" in err.getvalue(), f"no reason given: {err.getvalue()!r}")
+    check(h.parse_args(["--shim", "100.64.0.5"]).shim == "100.64.0.5", "a tailnet address refused")
+    check(h.parse_args(["--shim", "flex-radio"]).shim == "flex-radio", "a name refused")
+
+    def fake_resolve(name, port, type=0):
+        return [(0, 0, 0, "", ("192.168.0.20", port)), (0, 0, 0, "", ("100.64.0.5", port)),
+                (0, 0, 0, "", ("100.64.0.5", port))]
+    check(h.tailnet_addresses("flex-radio", fake_resolve) == (["100.64.0.5"], ["192.168.0.20"]),
+          "lookup split")
+
+    # serve(): never dials a name that looks up only outside the tailnet,
+    # and dials the tailnet address of one that has both.
+    dialled = []
+    captured = Captured()
+    saved = (h.tailnet_addresses, socket.create_connection, h.time.sleep)
+
+    def no_dial(addr, timeout=None):
+        dialled.append(addr)
+        raise OSError("refused")
+
+    def stop(_):
+        raise Stop()
+    h.log.addHandler(captured)
+    try:
+        socket.create_connection, h.time.sleep = no_dial, stop
+        h.tailnet_addresses = lambda shim: ([], ["192.168.0.20"])
+        try:
+            h.serve("radio.lan", None, ("127.0.0.1", 0))
+        except Stop:
+            pass
+        check(dialled == [], f"dialled {dialled} for a name outside the tailnet")
+        check(any("not a tailnet address" in line for line in captured.lines),
+              f"no reason logged: {captured.lines}")
+        h.tailnet_addresses = lambda shim: (["100.64.0.5"], ["192.168.0.20"])
+        try:
+            h.serve("flex-radio", None, ("127.0.0.1", 0))
+        except Stop:
+            pass
+        check(dialled == [("100.64.0.5", h.FEED_PORT)], f"dialled {dialled}")
+    finally:
+        h.tailnet_addresses, socket.create_connection, h.time.sleep = saved
+        h.log.removeHandler(captured)
 
 
 if __name__ == "__main__":
