@@ -432,7 +432,7 @@ The last stage before the radio.
 
 | Control | What it does |
 |---|---|
-| **LIM** | Final brickwall limiter at the end of the TX chain: no sample leaves above the ceiling. **On by default**, ceiling −0.5 dB |
+| **LIM** | Final brickwall limiter at the end of the TX chain: no 48 kHz sample leaves the limiter above the ceiling. **On by default**, ceiling −0.5 dB |
 | **DC** | 25 Hz high-pass that strips DC offset |
 | **TONE** | 1 kHz test tone injected at the head of the chain; right-click for frequency and level |
 | **QUIN** | Quindar tones on PTT engage and release; right-click for the editor (below) |
@@ -446,8 +446,10 @@ the limiter ceiling as a draggable handle (−12 to 0 dB, default −0.5 dB).
 limiter is clamping. The waveform scope below the meter shows what you are
 sending.
 
-LIM holds the audio samples under the ceiling. It cannot hold the SSB RF
-envelope, which can rise a few dB above the highest audio sample.
+LIM holds its own 48 kHz output samples under the ceiling. The conversion to
+the radio's 24 kHz rate after it can overshoot that slightly between samples,
+and LIM cannot hold the SSB RF envelope, which can rise a few dB above the
+highest audio sample.
 
 #### Quindar tones
 

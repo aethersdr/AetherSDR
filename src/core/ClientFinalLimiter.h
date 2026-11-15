@@ -12,16 +12,21 @@ namespace AetherSDR {
 // gain, before the 48->24 kHz egress SRC. A look-ahead brickwall: no 48 kHz
 // sample leaves above the ceiling. SRC reconstruction can still overshoot
 // between samples before final Int16 saturation, and it bounds audio samples,
-// not the SSB RF envelope (that is Peak control's job).
+// not the SSB RF envelope.
 //
 // The signal is delayed by the look-ahead L (0..5 ms). The gain each sample
 // needs (ceiling / |x|, channel-linked) is released toward 1, slid through a
 // minimum over L+1 samples and then a moving average over L+1 samples, so the
 // gain has ramped down to what a peak needs by the time that peak leaves the
 // delay. L = 0 is an instant hard limit. A hard clip after the gain is a safety
-// net only; safetyClipCount() counts the samples it touched, which a steady
-// look-ahead never produces. Changing L, or switching the limiter on or off,
-// crossfades between the old and new delay taps over kCrossfadeFrames.
+// net only; safetyClipCount() counts the samples it touched. Under steady
+// parameters it never acts; a look-ahead, ceiling or on/off change while the
+// limiter is working can need it for up to one window.
+//
+// Changing L, or switching the limiter on or off, crossfades between the old
+// and new delay taps over kCrossfadeFrames; a change that arrives during a
+// fade waits for it to end. The fade covers the delay tap only: switching off
+// while limiting releases the gain at once.
 //
 // UI thread writes atomics + bumps a version; the audio thread recaches per
 // block and publishes the meters. No locks, allocations or exceptions.
@@ -90,8 +95,8 @@ public:
     // actively clamping.  Range [0, 1].
     float   limiterActivityPct() const noexcept;
     // Samples the safety clip after the look-ahead gain had to touch.
-    // Monotonic. Stays 0 under a steady look-ahead; only a look-ahead or
-    // enable change mid-signal can need it.
+    // Monotonic. Stays 0 under steady parameters; a look-ahead, ceiling or
+    // on/off change while the limiter is working can need it.
     quint64 safetyClipCount() const noexcept;
 
     double sampleRate() const noexcept

@@ -600,16 +600,22 @@ average over L+1 samples. Every minimum averaged for an output sample covers
 the sample leaving the delay, so the gain never exceeds what that sample needs
 and no 48 kHz sample leaves above the ceiling. L = 0 is an instant hard limit.
 A hard clip after the gain is a safety net only; `safetyClipCount()` counts the
-samples it touched, and a steady look-ahead never produces one. Changing L, or
-switching the limiter on or off, crossfades the delay tap over 240 frames.
+samples it touched. Under steady parameters it never acts; a look-ahead,
+ceiling or on/off change while the limiter is working can need it for up to
+one window, so the output stays under the ceiling throughout. Changing L, or
+switching the limiter on or off, crossfades the delay tap over 240 frames; a
+change that arrives during a fade waits for it to end. The fade covers the
+delay tap only: switching off while limiting releases the gain at once.
 
 The look-ahead is the limiter's whole latency, and `TxVoiceProcessor::latencyFrames()`
 includes it while the limiter is enabled (72 frames at the 1.5 ms default).
 Adding it was a maintainer ruling (2026-11-15), which also turned the limiter
 on by default at the -0.5 dBFS ceiling, superseding #3004's default-off.
-A saved `ClientFinalLimiterTxEnabled` is read back unchanged, so an existing
-installation keeps its LIM state; only installs that never saved it pick up
-the new default.
+The configuration is one object under the `ClientFinalLimiterTx` key
+(Principle V): `{enabled, ceilingDb, lookaheadMs, outputTrimDb, dcBlock}`. The
+legacy flat keys (`ClientFinalLimiterTxEnabled`, `…CeilingDb`, `…OutputTrimDb`,
+`…DcBlock`) are folded into it once and removed, so an existing installation
+keeps the LIM state it saved; a field that is absent takes the default.
 
 The limiter precedes the 48-to-24 kHz egress SRC. It bounds samples in the
 48 kHz domain only: the SRC's band-limited reconstruction can overshoot that

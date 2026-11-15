@@ -237,9 +237,11 @@ void ClientFinalLimiter::process(float* interleaved, int frames, int channels) n
     // tap. Fade from the old tap to the new one instead of jumping, and
     // restart the gain path for the new window. While the fade runs, audio
     // the old tap delayed can reach the output under a gain computed for the
-    // new window, so the safety clip may act; a steady tap never needs it.
+    // new window, so the safety clip may act. A change that arrives while a
+    // fade is still running waits for it to finish: retargeting mid-fade
+    // would drop the blend being output and jump to a different waveform.
     const int tap = enabled ? m_cached.lookaheadFrames : 0;
-    if (tap != m_tap) {
+    if (tap != m_tap && m_fadeLeft == 0) {
         const bool unprepared = m_tap < 0;
         m_fadeFromTap = unprepared ? tap : m_tap;
         m_fadeLeft    = unprepared ? 0 : kCrossfadeFrames;
@@ -339,7 +341,8 @@ void ClientFinalLimiter::process(float* interleaved, int frames, int channels) n
         r = outR * gain;
 
         if (enabled) {
-            // Safety net: past float rounding, only a tap change can get here.
+            // Safety net: past float rounding, only a parameter change while
+            // limiting (look-ahead, ceiling, on/off) can get here.
             const float peak = std::max(std::fabs(l), std::fabs(r));
             if (peak > ceilingLin) {
                 if (peak > ceilingLin * kSafetyTolerance) ++safetyCount;

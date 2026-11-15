@@ -419,9 +419,9 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_enable->setFixedSize(56, 18);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_enable, amberStyle);
         m_enable->setToolTip(tr("Final brickwall limiter at the tail of the "
-                                "TX chain: no sample leaves above the ceiling. "
-                                "Drag the amber handle on the meter to set "
-                                "the ceiling."));
+                                "TX chain: no 48 kHz sample leaves the limiter "
+                                "above the ceiling. Drag the amber handle on "
+                                "the meter to set the ceiling."));
         connect(m_enable, &QPushButton::toggled,
                 this, &StripFinalOutputPanel::applyEnable);
         col->addWidget(m_enable);

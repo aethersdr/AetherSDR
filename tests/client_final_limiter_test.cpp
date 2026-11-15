@@ -4,7 +4,9 @@
 // look-ahead, and so is the reported latency (none while disabled). The gain
 // ramps down over the look-ahead ahead of a peak instead of stepping, and a
 // look-ahead or enable change mid-signal fades the delay tap instead of
-// jumping it. Ranges clamp, and the defaults are the 2026-11-15 ruling's.
+// jumping it, also when a second change arrives mid-fade in short blocks. A
+// ceiling change while limiting still never lets a sample past the new
+// ceiling. Ranges clamp, and the defaults are the 2026-11-15 ruling's.
 // Standalone: no Qt event loop, no settings, no audio device.
 
 #include "core/ClientFinalLimiter.h"
@@ -289,6 +291,91 @@ void testChangesFadeTheTap()
     }
 }
 
+// A second look-ahead change while the first fade is still running, in
+// 128-frame blocks so the fade cannot finish between the changes (the review
+// probe on #7355): the output must not jump.
+void testChangeDuringAFadeDoesNotJump()
+{
+    constexpr double kToneHz = 1234.5;
+    ClientFinalLimiter lim;
+    configure(lim, 0.0f, -0.5f);
+    const float toneSlope = 0.3f * 2.0f * 3.14159265f * static_cast<float>(kToneHz) / 48000.0f;
+    std::vector<float> y;
+    int n = 0;
+    const auto feed = [&](int frames) {
+        while (frames > 0) {
+            const int block = std::min(128, frames);
+            std::vector<float> buf(static_cast<std::size_t>(block) * 2);
+            for (int i = 0; i < block; ++i) {
+                const float v = 0.3f * static_cast<float>(
+                    std::sin(2.0 * 3.14159265358979 * kToneHz * (n + i) / kRate));
+                buf[static_cast<std::size_t>(i) * 2]     = v;
+                buf[static_cast<std::size_t>(i) * 2 + 1] = v;
+            }
+            lim.process(buf.data(), block, 2);
+            for (int i = 0; i < block; ++i) y.push_back(buf[static_cast<std::size_t>(i) * 2]);
+            n += block;
+            frames -= block;
+        }
+    };
+    feed(4191);
+    lim.setLookaheadMs(5.0f);
+    feed(128);
+    lim.setLookaheadMs(1.5f);      // the first fade has 112 frames to go
+    feed(1);
+    lim.setLookaheadMs(0.0f);
+    feed(64);
+    lim.setEnabled(false);
+    feed(64);
+    lim.setEnabled(true);
+    feed(2048);
+    float jump = 0.0f;
+    for (std::size_t i = 1; i < y.size(); ++i) jump = std::max(jump, std::fabs(y[i] - y[i - 1]));
+    report("changes arriving mid-fade in 128-frame blocks do not jump",
+           jump <= toneSlope * 1.05f, "jump=" + num(jump) + " tone=" + num(toneSlope));
+    // The deferred changes all land once the fades finish: the last one set
+    // 0 ms, so an impulse now comes straight through, undelayed.
+    lim.setLookaheadMs(5.0f);
+    feed(1);                       // starts a fade toward 240 frames
+    lim.setLookaheadMs(1.5f);      // waits for it
+    std::vector<float> quiet(960 * 2, 0.0f);
+    lim.process(quiet.data(), 960, 2);  // both fades finish
+    std::vector<float> imp(480 * 2, 0.0f);
+    imp[100 * 2] = imp[100 * 2 + 1] = 0.5f;
+    lim.process(imp.data(), 480, 2);
+    int at = -1;
+    for (int i = 0; i < 480; ++i) {
+        if (imp[static_cast<std::size_t>(i) * 2] != 0.0f) { at = i; break; }
+    }
+    report("a change deferred by a fade still lands once it finishes",
+           at == 100 + 72, "impulse at " + std::to_string(at) + ", expected 172");
+}
+
+// Lowering the ceiling while limiting: gains computed for the old ceiling
+// are still in the window, so the safety clip acts, but nothing passes the
+// new ceiling; at a steady ceiling it never acts.
+void testCeilingChangeWhileLimiting()
+{
+    ClientFinalLimiter lim;
+    configure(lim, 1.5f, 0.0f);
+    std::vector<float> mono(9600);
+    for (int i = 0; i < 9600; ++i) {
+        mono[static_cast<std::size_t>(i)] = 0.8f * std::sin(2.0f * 3.14159265f * 1000.0f * i / 48000.0f);
+    }
+    auto a = stereoOf(mono);
+    run(lim, a);
+    const quint64 before = lim.safetyClipCount();
+    lim.setCeilingDb(-12.0f);
+    auto b = stereoOf(mono);
+    run(lim, b);
+    const float peak = peakOf(b);
+    report("a ceiling change while limiting never passes the new ceiling",
+           peak <= dbToLin(-12.0f) * (1.0f + 1e-6f), "peak=" + num(peak));
+    report("the steady ceiling before it needed no safety clip", before == 0,
+           "clips before=" + std::to_string(before) + " after="
+               + std::to_string(lim.safetyClipCount()));
+}
+
 void testDisabledPassesThrough()
 {
     ClientFinalLimiter lim;
@@ -313,6 +400,8 @@ int main()
     testDelayIsTheLookahead();
     testGainRampsInsteadOfStepping();
     testChangesFadeTheTap();
+    testChangeDuringAFadeDoesNotJump();
+    testCeilingChangeWhileLimiting();
     testDisabledPassesThrough();
     if (g_failed) {
         std::printf("%d check(s) failed\n", g_failed);
