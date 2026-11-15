@@ -553,7 +553,9 @@ ADC headroom or calibrated output power.
    Capture waits for the guarded tone interval and collects four frames. A cold
    correction fit can use most of the source window; capture waits within that
    eight-second window and reports a failure if enough qualified frames do not
-   arrive. The independent transmit cutoff remains in force.
+   arrive. The independent transmit cutoff remains in force. Routine status
+   polling keeps **Prepare receive check** available while the last status is
+   fresh; a failed status request or pending source change disables it.
 5. **Stop measurement** requests release of that measurement. Closing the
    window also requests stop; it does not stop AetherPD correction. After confirmed
    release, another measurement requires a fresh arm and receive check; it does

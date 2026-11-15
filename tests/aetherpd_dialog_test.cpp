@@ -132,6 +132,20 @@ int main(int argc, char** argv)
     measurement->findChild<QCheckBox*>(QStringLiteral("pdMeasureDummyLoad"))->setChecked(true);
     measurement->findChild<QDoubleSpinBox*>(QStringLiteral("pdMeasurePowerLimit"))->setValue(10);
     ok &= check(!mb("pdMeasurePrepare")->isEnabled(), "source capability without identity cannot prepare from UI");
+    measurementStatus["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}};
+    button(*dialog, "pdRefresh")->click();
+    network.last->complete(200, QJsonDocument(measurementStatus).toJson());
+    ok &= check(mb("pdMeasurePrepare")->isEnabled(), "fresh armed identity permits receive preparation");
+    button(*dialog, "pdRefresh")->click();
+    ok &= check(mb("pdMeasurePrepare")->isEnabled() && !mb("pdMeasureTransmit")->isEnabled()
+        && captureNetwork.sent.empty(), "routine status poll preserves receive preparation without RF or capture");
+    network.last->complete(503, "{}");
+    ok &= check(!mb("pdMeasurePrepare")->isEnabled(), "failed status poll withdraws receive preparation");
+    button(*dialog, "pdRefresh")->click();
+    network.last->complete(200, QJsonDocument(measurementStatus).toJson());
+    mb("pdMeasureCancelSource")->click();
+    ok &= check(!mb("pdMeasurePrepare")->isEnabled(), "pending source mutation blocks receive preparation");
+    network.last->complete(503, "{}");
     QJsonObject unarmedStatus = QJsonDocument::fromJson(idleBody).object();
     unarmedStatus["measurement_control"] = true;
     unarmedStatus["source_purpose"] = QStringLiteral("calibration");

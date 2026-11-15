@@ -215,7 +215,10 @@ void AetherPDMeasurementDialog::render()
     AetherPDMeasurementModel* model = valid ? &m_radio->aetherPDMeasurementModel() : nullptr;
     const State state = model ? model->state() : State::Idle;
     const std::optional<aetherpd::Status> source = valid ? m_radio->aetherPDModel().status() : std::nullopt;
-    const bool busy = valid && m_radio->aetherPDModel().pendingOperation().has_value();
+    const std::optional<aetherpd::Operation> pending = valid
+        ? m_radio->aetherPDModel().pendingOperation() : std::nullopt;
+    const bool busy = pending.has_value();
+    const bool changingSource = pending && *pending != aetherpd::Operation::Status;
     const bool installed = valid && !m_radio->aetherPDInstallationModel().active();
     const bool idle = state == State::Idle;
     const bool readySource = source && source->available && source->registered && source->measurementControl && !source->keyed
@@ -227,7 +230,7 @@ void AetherPDMeasurementDialog::render()
     availability(m_cancelSource, valid && source && source->measurementControl,
         tr("A current authenticated measurement-capable service is required."));
     if (!alive) { return; }
-    availability(m_prepare, installed && idle && readySource && !busy && m_dummyLoad->isChecked() && m_limit->value() > 0
+    availability(m_prepare, installed && idle && readySource && !changingSource && m_dummyLoad->isChecked() && m_limit->value() > 0
         && source->measurement && source->measurement->sourceId && source->sourcePurpose == aetherpd::SourcePurpose::Measurement
         && source->calibrationState == aetherpd::CalibrationState::Armed,
         tr("Arm the measurement source, confirm the bench path and choose a forward-power limit."));

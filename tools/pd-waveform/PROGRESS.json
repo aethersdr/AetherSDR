@@ -952,5 +952,23 @@
       "Four-frame measurement and matched correction comparison",
       "All P1-P10 production gates"
     ]
+  },
+  "repeat_measurement_live": {
+    "production_ready": false,
+    "evidence": "repeat-readiness-live/validation.json under evidence_root",
+    "completed": "Repeated bounded keying after confirmedstop succeeds in one GUI after deadlinefix. Correctionactiveinfinitecoldruns; cleanupconfirmed.",
+    "remaining": "Retainedmodelmeasurement notyetkeyed: firstattemptcooldownrefusal, secondattemptPreparepollrace. Four-frameIMD incomplete."
+  },
+  "receive_prepare_poll": {
+    "production_ready": false,
+    "status": "regression_reproduced_component_fix_verified_live_pending",
+    "evidence": "capture-budget-development/prepare-poll-*.log under evidence_root",
+    "change": "Read-only status polling preserves Prepare availability while observed status remainsfresh. Failure and pending source mutation stilldisable. No keying or capture starts automatically.",
+    "checks": [
+      "Beforefix regressionfails; afterfix dialogtestpasses",
+      "Desktopbuild anduserdocsbuildpass",
+      "Accessibilitycheck nofindings",
+      "gitdiffcheckpasses"
+    ]
   }
 }
