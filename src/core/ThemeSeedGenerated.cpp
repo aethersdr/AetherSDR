@@ -215,9 +215,9 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.toggle.footer.warning.background.hover", QString("#46ffb84d"));
     m_tokens.insert("color.toggle.foreground", QString("#c8d8e8"));
     m_tokens.insert("color.toggle.foreground.disabled", QString("#3a4a5a"));
-    m_tokens.insert("color.toggle.success.background.checked", QString("#006040"));
+    m_tokens.insert("color.toggle.success.background.checked", QString("#004a33"));
     m_tokens.insert("color.toggle.success.border.checked", QString("#4dd87a"));
-    m_tokens.insert("color.toggle.success.foreground.checked", QString("#4dd87a"));
+    m_tokens.insert("color.toggle.success.foreground.checked", QString("#146634"));
     m_tokens.insert("color.toggle.warning.background.checked", QString("#5a3a0a"));
     m_tokens.insert("color.toggle.warning.border.checked", QString("#ffb84d"));
     m_tokens.insert("color.toggle.warning.foreground.checked", QString("#ffb84d"));
