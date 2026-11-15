@@ -20,7 +20,8 @@
 //              --hl2-alc 0|1           HL2 ALC in that measurement (default 0)
 // Gate:        --gate-threshold -40 --gate-ratio 2.5 --gate-release 80
 //              --gate-hold 20 --gate-floor -15 --gate-return 3 --gate-mode 0|1
-// EQ:          --eq-hpf 80             one 24 dB/oct high-pass band
+// EQ:          --eq-hpf 80             a 24 dB/oct high-pass band
+//              --eq-p1-freq 500 --eq-p1-gain 2 --eq-p1-q 1   peaking bands p1..p4
 // De-esser:    --deess-freq 5000 --deess-q 2 --deess-threshold -25 --deess-amount -6
 // Compressor:  --comp-threshold -20 --comp-ratio 4 --comp-attack 20
 //              --comp-release 150 --comp-knee 6 --comp-makeup 5
@@ -28,11 +29,12 @@
 // Tube:        --tube-drive 6 --tube-model 0|1|2 --tube-tone 0 --tube-bias 0
 //              --tube-drywet 0.4 --tube-output 0
 // Exciter:     --exciter-air 6 --exciter-mix 0.2 --exciter-low-mix 0
-//              --exciter-mode 0|1
+//              --exciter-mode 0|1      0 = Even (Aphex), 1 = Odd (Behringer)
 // Final:       --lim-ceiling -1 (Final Output LIM) --trim 0
 //
 // Any flag of a stage turns that stage on in the processed run; the rest keep
-// the stage's own defaults. Stage order is the shipped default: Gate, EQ,
+// the stage's own defaults. An unknown flag is an error, so a typo cannot
+// switch a stage on with defaults behind the operator's back. Stage order is the shipped default: Gate, EQ,
 // De-esser, Compressor, Tube, Exciter.
 
 #include "core/ClientComp.h"
@@ -62,7 +64,6 @@
 #include <cstring>
 #include <map>
 #include <memory>
-#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -136,8 +137,15 @@ std::vector<float> synthesizeVoice(double seconds)
                                    {300, 870, 2240}, {660, 1720, 2410}};
     const double bandwidths[3] = {80, 100, 140};
     const double weights[3] = {1.0, 0.6, 0.35};
-    std::mt19937 rng(7);
-    std::uniform_real_distribution<double> uniform(-0.5, 0.5);
+    // xorshift64, not <random>: the standard distributions are
+    // implementation-defined, and the same input must reach every platform.
+    std::uint64_t rngState = 0x9E3779B97F4A7C15ULL;
+    auto uniform = [&rngState]() {
+        rngState ^= rngState << 13;
+        rngState ^= rngState >> 7;
+        rngState ^= rngState << 17;
+        return static_cast<double>(rngState >> 11) * 0x1.0p-53 - 0.5;  // [-0.5, 0.5)
+    };
 
     const std::size_t total = static_cast<std::size_t>(seconds * kFs);
     const std::size_t syllable = static_cast<std::size_t>(0.22 * kFs);
@@ -152,11 +160,11 @@ std::vector<float> synthesizeVoice(double seconds)
         const double target = talking ? std::pow(std::sin(kPi * pos), 0.6) : 0.0;
         envelope += (target - envelope) * 0.002;
         const double f0 = 115.0 * (1.0 + 0.08 * std::sin(2.0 * kPi * 0.7 * n / kFs))
-                        * (1.0 + 0.01 * uniform(rng));
+                        * (1.0 + 0.01 * uniform());
         phase += f0 / kFs;
         double excitation = 0.0;
         if (phase >= 1.0) { phase -= 1.0; excitation = 1.0; }
-        const double x = excitation * envelope + 0.002 * uniform(rng);
+        const double x = excitation * envelope + 0.002 * uniform();
         double acc = 0.0;
         for (int i = 0; i < 3; ++i) {
             const double r = std::exp(-kPi * bandwidths[i] / kFs);
@@ -174,6 +182,20 @@ std::vector<float> synthesizeVoice(double seconds)
         result[n] = static_cast<float>(0.5 * out[n] / std::max(peak, 1e-12));  // -6 dBFS peak
     return result;
 }
+
+const char* const kKnownKeys[] = {
+    "low", "high", "gain", "hl2", "hl2-alc",
+    "gate-threshold", "gate-ratio", "gate-release", "gate-hold", "gate-floor", "gate-return",
+    "gate-mode", "eq-hpf",
+    "eq-p1-freq", "eq-p1-gain", "eq-p1-q", "eq-p2-freq", "eq-p2-gain", "eq-p2-q",
+    "eq-p3-freq", "eq-p3-gain", "eq-p3-q", "eq-p4-freq", "eq-p4-gain", "eq-p4-q",
+    "deess-freq", "deess-q", "deess-threshold", "deess-amount",
+    "comp-threshold", "comp-ratio", "comp-attack", "comp-release", "comp-knee", "comp-makeup",
+    "comp-drive", "comp-phase", "comp-ceiling",
+    "tube-drive", "tube-model", "tube-tone", "tube-bias", "tube-drywet", "tube-output",
+    "exciter-air", "exciter-mix", "exciter-low-mix", "exciter-mode",
+    "lim-ceiling", "trim",
+};
 
 struct Settings {
     std::map<std::string, double> values;
@@ -225,14 +247,27 @@ struct Chain {
             gate.setReturnDb(s.get("gate-return", 3));
             gate.setEnabled(true);
         }
-        if (s.has("eq-hpf")) {
-            ClientEq::BandParams hpf;
-            hpf.type = ClientEq::FilterType::HighPass;
-            hpf.freqHz = s.get("eq-hpf", 80);
-            hpf.slopeDbPerOct = 24;
-            eq.setBand(0, hpf);
-            eq.setActiveBandCount(1);
-            eq.setEnabled(true);
+        if (s.any("eq-")) {
+            int bands = 0;
+            if (s.has("eq-hpf")) {
+                ClientEq::BandParams hpf;
+                hpf.type = ClientEq::FilterType::HighPass;
+                hpf.freqHz = s.get("eq-hpf", 80);
+                hpf.slopeDbPerOct = 24;
+                eq.setBand(bands++, hpf);
+            }
+            for (int i = 1; i <= 4; ++i) {
+                const std::string prefix = "eq-p" + std::to_string(i) + "-";
+                if (!s.any(prefix.c_str())) continue;
+                ClientEq::BandParams peak;
+                peak.type = ClientEq::FilterType::Peak;
+                peak.freqHz = s.get((prefix + "freq").c_str(), 1000);
+                peak.gainDb = s.get((prefix + "gain").c_str(), 0);
+                peak.q = s.get((prefix + "q").c_str(), 1);
+                eq.setBand(bands++, peak);
+            }
+            eq.setActiveBandCount(bands);
+            eq.setEnabled(bands > 0);
         }
         if (s.any("deess-")) {
             deEss.setFrequencyHz(s.get("deess-freq", 5000));
@@ -402,11 +437,11 @@ double dbfs(double linear) { return 20.0 * std::log10(std::max(linear, 1e-9)); }
 void printRow(const char* label, const SsbEnvelopeReport& r, bool iq)
 {
     if (iq) {
-        std::printf("%-26s %8s %8.2f %8.2f %8.2f %8.2f %8s %8s\n", label, "-",
+        std::printf("%-26s %8s %8.3f %8.2f %8.2f %8.2f %8s %8s\n", label, "-",
                     dbfs(r.envelopePeak), dbfs(r.activeEnvelopeRms), r.activePaprDb,
                     r.activeP999PaprDb, "-", "-");
     } else {
-        std::printf("%-26s %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.1f\n", label,
+        std::printf("%-26s %8.2f %8.3f %8.2f %8.2f %8.2f %8.2f %8.1f\n", label,
                     dbfs(r.audioPeak), dbfs(r.envelopePeak), dbfs(r.activeEnvelopeRms),
                     r.activePaprDb, r.activeP999PaprDb, r.envelopeOverAudioPeakDb,
                     r.outOfBandDbc);
@@ -450,7 +485,21 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "unexpected argument %s\n", argv[i]);
             return 2;
         }
-        settings.values[argv[i] + 2] = std::atof(argv[i + 1]);
+        const std::string key = argv[i] + 2;
+        bool known = false;
+        for (const char* k : kKnownKeys) known = known || key == k;
+        char* end = nullptr;
+        const double value = std::strtod(argv[i + 1], &end);
+        if (!known || end == argv[i + 1] || *end != '\0') {
+            std::fprintf(stderr, "%s %s: %s\n", argv[i], argv[i + 1],
+                         known ? "not a number" : "unknown flag (see the header of this file)");
+            return 2;
+        }
+        settings.values[key] = value;
+    }
+    if (argc % 2 != 0) {
+        std::fprintf(stderr, "%s has no value\n", argv[argc - 1]);
+        return 2;
     }
 
     std::vector<float> input;
@@ -472,8 +521,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::printf("input %.2f s, passband %.0f..%.0f Hz, transport 24 kHz int16\n",
-                static_cast<double>(input.size()) / 48000.0, band.lowHz, band.highHz);
+    std::printf("input %s, %.2f s, passband %.0f..%.0f Hz, transport 24 kHz int16\n",
+                argv[1], static_cast<double>(input.size()) / 48000.0, band.lowHz, band.highHz);
+    std::printf("settings:");
+    for (const auto& [key, value] : settings.values) std::printf(" --%s %g", key.c_str(), value);
+    std::printf("%s\n", settings.values.empty() ? " (none: both runs bypassed)" : "");
     std::printf("added latency: baseline %.1f ms, processed %.1f ms\n",
                 baseline.latencyFrames48 / 48.0, processed.latencyFrames48 / 48.0);
     for (const Run* r : {&baseline, &processed}) {
