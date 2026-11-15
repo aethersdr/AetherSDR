@@ -359,6 +359,12 @@ func (n *Node) replaceNode(cfg provisionConfig) error {
 		return fmt.Errorf("could not save settings: %w", err)
 	}
 	n.mu.Lock()
+	if n.cfg.TokenSHA256 != cfg.TokenSHA256 {
+		n.retirePDSessionLocked()
+	}
+	if n.cfg.TokenSHA256 != cfg.TokenSHA256 && n.pdProcess != nil {
+		n.pdProcess.Stop()
+	}
 	n.cfg = cfg
 	n.mu.Unlock()
 	return nil

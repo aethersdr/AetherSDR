@@ -25,6 +25,7 @@ struct RadioControlSession;
 class RadioModel;
 class WaveformEnvironmentDialog;
 class WaveformInstaller;
+class AetherPDDialog;
 
 // Non-modal WFP status and waveform management (Tools -> Waveforms), mirroring
 // SmartSDR's File -> Waveforms: WFP power/ready/IP, one row per installed
@@ -104,6 +105,8 @@ private:
     QLabel*            m_connectedRadioNameLabel{nullptr};
     QLabel*            m_connectedRadioSerialLabel{nullptr};
     QToolButton*       m_installBtn{nullptr};
+    QPushButton*       m_aetherPDBtn{nullptr};
+    QPointer<AetherPDDialog> m_aetherPDDialog;
     QAction*           m_installDockerAction{nullptr};
     QAction*           m_installRemoteAccessAction{nullptr};
     QAction*           m_installWsprAction{nullptr};

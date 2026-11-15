@@ -11,6 +11,7 @@ namespace AetherSDR {
 void RadioModel::resetSessionControls()
 {
     m_sessionCommands.retireSession();
+    m_aetherPDModel->clearSession();
     const auto cancelled = std::exchange(m_sessionCancellations, {});
     for (const auto& cancel : cancelled) { cancel(); }
 }

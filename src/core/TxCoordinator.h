@@ -105,6 +105,10 @@ public:
         [[nodiscard]] bool sameOperation(const Operation& other) const;
         [[nodiscard]] bool sameAuthority(const Operation& other) const;
         [[nodiscard]] bool independent() const;
+        // Historical qualified readback for this exact operation, shared by
+        // copies and safe to read on workers. Teardown/local completion alone
+        // never sets it. This does not describe later RF or grant authority.
+        [[nodiscard]] bool hasConfirmedStop() const;
         // Restrict an existing grant with a producer's immutable cancellation
         // predicate. The trusted caller captures only worker-safe state; the
         // predicate cannot authorize a command or extend the operation.
@@ -387,6 +391,7 @@ private:
     struct OperationState {
         std::shared_ptr<ActorState> actor;
         std::atomic<bool> cancelled{false};
+        std::atomic<bool> confirmedStop{false};
         qint64 startedMs{0};
         qint64 maximumMs{0};
         quint64 generation{0};

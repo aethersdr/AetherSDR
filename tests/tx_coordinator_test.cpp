@@ -20,6 +20,56 @@ void check(bool condition, const char* message)
     failures += !condition;
 }
 
+void retainedQualifiedStop()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const TxCoordinator::Actor actor = coordinator.registerActor({true, 0});
+    const TxCoordinator::Operation operation = coordinator.acquire(actor, 0).operation;
+    const TxCoordinator::Operation copy = operation;
+    check(!TxCoordinator::Operation{}.hasConfirmedStop() && !operation.hasConfirmedStop(),
+          "empty and active operations have no release evidence");
+    TxCoordinator::Dispatch writer = operation.beginDispatch(0);
+    check(bool(writer) && coordinator.cancel(actor, operation), "held writer survives cancellation only for cleanup");
+    const TxCoordinator::StopRequest replaced = coordinator.requestStopConfirmation(operation);
+    const TxCoordinator::StopRequest proof = coordinator.requestStopConfirmation(operation);
+    check(!coordinator.confirmStopped(replaced) && !operation.hasConfirmedStop(),
+          "superseded readback cannot publish operation release");
+    check(!coordinator.confirmStopped(proof) && !copy.hasConfirmedStop(),
+          "qualified readback waits until the terminal writer returns");
+    writer = {};
+    check(coordinator.confirmStopped(proof) && copy.hasConfirmedStop(),
+          "qualified readback publishes release to every original operation copy");
+    const TxCoordinator::Operation next = coordinator.acquire(actor, 1).operation;
+    check(!next.hasConfirmedStop() && operation.hasConfirmedStop()
+              && !coordinator.confirmStopped(proof) && next.permitsDispatch(1),
+          "retained historical proof neither transfers to nor affects a successor");
+    check(coordinator.finishLocalIntent(next) && !next.hasConfirmedStop(),
+          "local completion alone cannot publish RF release");
+    const TxCoordinator::StopRequest stale = coordinator.requestStopConfirmation(next);
+    coordinator.reset();
+    check(coordinator.acknowledgeStopped(next) && !next.hasConfirmedStop()
+              && !coordinator.confirmStopped(stale),
+          "transport teardown does not masquerade as qualified RF release");
+    bool workerSawProof = false;
+    std::unique_ptr<QThread> worker(QThread::create([&] {
+        workerSawProof = copy.hasConfirmedStop() && !next.hasConfirmedStop();
+    }));
+    worker->start();
+    worker->wait();
+    check(workerSawProof, "worker can read retained exact-operation proof");
+    TxCoordinator::Operation retained;
+    {
+        TxCoordinator ephemeral([](const auto&, auto) {});
+        const TxCoordinator::Actor owner = ephemeral.registerActor({true, 0});
+        retained = ephemeral.acquire(owner, 0).operation;
+        check(ephemeral.cancel(owner, retained)
+                  && ephemeral.confirmStopped(ephemeral.requestStopConfirmation(retained)),
+              "ephemeral coordinator records qualified release");
+    }
+    check(retained.hasConfirmedStop() && !retained.permitsDispatch(0) && !retained.permitsCleanup(),
+          "historical proof survives destruction without preserving command authority");
+}
+
 void ownershipAndRecovery()
 {
     int stops = 0;
@@ -638,6 +688,7 @@ void capturedProducerRequests()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    retainedQualifiedStop();
     ownershipAndRecovery();
     expiryAndRevocation();
     unconfirmedCompletion();

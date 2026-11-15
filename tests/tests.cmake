@@ -353,6 +353,121 @@ target_include_directories(shared_capture_policy_test PRIVATE src)
 set_target_properties(shared_capture_policy_test PROPERTIES AUTOMOC OFF)
 add_test(NAME shared_capture_policy_test COMMAND shared_capture_policy_test)
 
+# AetherPD fixed session policies: Linux-only, socket-free parser/profile
+# checks. These test entry points perform no privileged setup or radio I/O.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Standalone on-radio DSP, with its own patched WDSP core. These tests
+    # inject sample buffers; no radio peer, API socket or privileged setup.
+    add_library(aether_pd_test_core STATIC
+        tools/pd-waveform/pd_core.c
+        tools/pd-waveform/pd_align.c
+        tools/pd-waveform/pd_eq.c
+        tools/pd-waveform/pd_acquire.c
+        tools/pd-waveform/pd_local_iq.c
+        tools/pd-waveform/pd_stream_guard.c
+        tools/pd-waveform/pd_tx_guard.c
+        tools/pd-waveform/pd_udp_rx.c
+        tools/pd-waveform/pd_owner.c
+        tools/pd-waveform/pd_status.c
+        tools/pd-waveform/pd_capture.c
+        tools/pd-waveform/pd_start_gate.c
+        tools/pd-waveform/pd_calibration.c
+        tools/pd-waveform/vendor/calcc.c
+        tools/pd-waveform/vendor/iqc.c
+        third_party/wdsp/upstream/delay.c
+        third_party/wdsp/upstream/extrapolate.c
+        third_party/wdsp/upstream/nurbs.c
+        third_party/wdsp/upstream/nurbs_fit.c
+        third_party/wdsp/upstream/nurbs_spline.c
+        third_party/wdsp/upstream/fir.c
+        third_party/wdsp/upstream/utilities.c
+        third_party/wdsp/upstream/impulse_cache.c
+        third_party/wdsp/port/wdsp_port.c)
+    target_include_directories(aether_pd_test_core PUBLIC
+        tools/pd-waveform third_party/wdsp/upstream
+        third_party/wdsp/port/include third_party/wdsp/include
+        third_party/fftw3/include)
+    target_compile_options(aether_pd_test_core PUBLIC
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wdsp/port/include/wdsp_port.h"
+        -ffunction-sections -fdata-sections)
+    target_compile_definitions(aether_pd_test_core PUBLIC _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+    target_compile_definitions(aether_pd_test_core PRIVATE AETHER_PD_PI_CRITICAL_SECTIONS)
+    target_link_options(aether_pd_test_core INTERFACE -Wl,--gc-sections)
+    target_link_libraries(aether_pd_test_core PUBLIC Threads::Threads m)
+    set_target_properties(aether_pd_test_core PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
+
+    add_executable(pd_recovery_collection_test tools/pd-waveform/recovery_collection_test.c)
+    target_link_libraries(pd_recovery_collection_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_recovery_collection_test COMMAND pd_recovery_collection_test)
+    # Socket-free raw IQ snapshot and real waveform tap; no radio commands.
+    add_executable(pd_capture_test tools/pd-waveform/capture_test.c)
+    target_link_libraries(pd_capture_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_capture_test COMMAND pd_capture_test)
+    add_executable(pd_eq_phase_startup_test tools/pd-waveform/eq_phase_startup_test.c)
+    target_link_libraries(pd_eq_phase_startup_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_eq_phase_startup_test COMMAND pd_eq_phase_startup_test)
+    add_executable(pd_warm_core_test tools/pd-waveform/warm_core_test.c)
+    target_link_libraries(pd_warm_core_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_warm_core_test COMMAND pd_warm_core_test)
+    add_executable(pd_eq_worker_test tools/pd-waveform/eq_worker_test.c)
+    target_link_libraries(pd_eq_worker_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_eq_worker_test COMMAND pd_eq_worker_test)
+    add_executable(pd_dispatch_deadline_test
+        tools/pd-waveform/dispatch_deadline_test.c
+        tools/pd-waveform/warm_seed_curve.c)
+    target_link_libraries(pd_dispatch_deadline_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_dispatch_deadline_test COMMAND pd_dispatch_deadline_test)
+    add_executable(pd_calibration_dispatch_test tools/pd-waveform/calibration_dispatch_test.c)
+    target_link_libraries(pd_calibration_dispatch_test PRIVATE aether_pd_test_core)
+    add_test(NAME pd_calibration_dispatch_test COMMAND pd_calibration_dispatch_test)
+    set_target_properties(pd_capture_test pd_recovery_collection_test pd_eq_phase_startup_test pd_warm_core_test pd_eq_worker_test pd_dispatch_deadline_test pd_calibration_dispatch_test
+        PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    set_tests_properties(pd_capture_test pd_recovery_collection_test pd_eq_phase_startup_test pd_warm_core_test pd_eq_worker_test pd_dispatch_deadline_test pd_calibration_dispatch_test
+        PROPERTIES TIMEOUT 70)
+
+    # Actual port boundary with injected pthread failures; no sockets or radio.
+    add_executable(pd_pi_lock_policy_test tools/pd-waveform/pi_lock_policy_test.c)
+    target_include_directories(pd_pi_lock_policy_test PRIVATE
+        third_party/wdsp/port/include third_party/wdsp/include
+        third_party/wdsp/upstream third_party/fftw3/include)
+    target_compile_options(pd_pi_lock_policy_test PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(pd_pi_lock_policy_test PRIVATE -Wl,--gc-sections)
+    target_link_libraries(pd_pi_lock_policy_test PRIVATE Threads::Threads)
+    set_target_properties(pd_pi_lock_policy_test PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    add_test(NAME pd_pi_lock_policy_test COMMAND pd_pi_lock_policy_test)
+    set_tests_properties(pd_pi_lock_policy_test PROPERTIES TIMEOUT 10)
+
+    add_executable(pd_session_lease_guard_test
+        tools/pd-waveform/session/lease_guard_test.c)
+    add_test(NAME pd_session_lease_guard_test COMMAND pd_session_lease_guard_test)
+    add_executable(pd_startup_iq_test tools/pd-waveform/startup_iq_test.c tools/pd-waveform/pd_local_iq.c tools/pd-waveform/pd_stream_guard.c)
+    add_test(NAME pd_startup_iq_test COMMAND pd_startup_iq_test)
+    add_executable(pd_start_gate_test tools/pd-waveform/start_gate_test.c tools/pd-waveform/pd_start_gate.c tools/pd-waveform/pd_owner.c)
+    add_test(NAME pd_start_gate_test COMMAND pd_start_gate_test)
+    add_executable(pd_iq_stream_policy_test tools/pd-waveform/session/iq_stream_test.c)
+    add_test(NAME pd_iq_stream_policy_test COMMAND pd_iq_stream_policy_test)
+    add_executable(pd_shim_launch_policy_test tools/pd-waveform/session/shim_launch_test.c)
+    add_test(NAME pd_shim_launch_policy_test COMMAND pd_shim_launch_policy_test)
+    add_executable(pd_fixed_arp_test
+        tools/pd-waveform/session/fixed_arp_test.c)
+    add_test(NAME pd_fixed_arp_test COMMAND pd_fixed_arp_test)
+    add_executable(pd_kernel_probe_json_test
+        tools/pd-waveform/session/kernel_probe_test.c)
+    add_test(NAME pd_kernel_probe_json_test COMMAND pd_kernel_probe_json_test)
+    add_executable(pd_capture_policy_test
+        tools/pd-waveform/session/capture_test.c
+        tools/pd-waveform/pd_local_iq.c
+        tools/pd-waveform/pd_stream_guard.c)
+    target_include_directories(pd_capture_policy_test PRIVATE tools/pd-waveform)
+    add_test(NAME pd_capture_policy_test COMMAND pd_capture_policy_test)
+    set_target_properties(pd_session_lease_guard_test pd_shim_launch_policy_test pd_iq_stream_policy_test pd_start_gate_test pd_startup_iq_test pd_fixed_arp_test pd_kernel_probe_json_test pd_capture_policy_test
+        PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    set_tests_properties(pd_session_lease_guard_test pd_shim_launch_policy_test pd_iq_stream_policy_test pd_start_gate_test pd_startup_iq_test pd_fixed_arp_test pd_kernel_probe_json_test pd_capture_policy_test
+        PROPERTIES TIMEOUT 10)
+endif()
+
 # ── AetherD control protocol tests ───────────────────────────────────────────
 # AetherD control protocol v1: transport-neutral envelope validation and
 # fail-closed structural limits. QtCore only; no daemon/socket/model dependency.
@@ -4797,6 +4912,142 @@ endif()
 add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 
 # In-radio tailnet shim client: wire parsing and request bodies, socket-free.
+add_executable(aetherpd_protocol_test
+    tests/aetherpd_protocol_test.cpp
+    src/core/AetherPDProtocol.cpp)
+target_include_directories(aetherpd_protocol_test PRIVATE src)
+target_compile_definitions(aetherpd_protocol_test PRIVATE
+    AETHERPD_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/public")
+target_link_libraries(aetherpd_protocol_test PRIVATE Qt6::Core)
+set_target_properties(aetherpd_protocol_test PROPERTIES AUTOMOC OFF)
+add_test(NAME aetherpd_protocol_test COMMAND aetherpd_protocol_test)
+
+# Our HTTP client uses an injected manager; no sockets or fake radio server.
+add_executable(aetherpd_client_test
+    tests/aetherpd_client_test.cpp
+    src/core/AetherPDClient.cpp
+    src/core/AetherPDProtocol.cpp)
+target_include_directories(aetherpd_client_test PRIVATE src)
+target_compile_definitions(aetherpd_client_test PRIVATE
+    AETHERPD_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/public")
+target_link_libraries(aetherpd_client_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME aetherpd_client_test COMMAND aetherpd_client_test)
+set_tests_properties(aetherpd_client_test PROPERTIES TIMEOUT 10)
+
+# Bounded helper client: inject HTTP and time; no sockets or radio simulator.
+add_executable(aetherpd_test_client_test
+    tests/aetherpd_test_client_test.cpp
+    src/core/txlinearity/AetherPDTestClient.cpp
+    src/core/AetherPDProtocol.cpp)
+target_include_directories(aetherpd_test_client_test PRIVATE src tests)
+target_link_libraries(aetherpd_test_client_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME aetherpd_test_client_test COMMAND aetherpd_test_client_test)
+set_tests_properties(aetherpd_test_client_test PROPERTIES TIMEOUT 10)
+
+# PR4770 measurement core: deterministic signals, no capture sockets or RF.
+add_executable(tx_linearity_telemetry_test tests/tx_linearity_telemetry_test.cpp)
+target_include_directories(tx_linearity_telemetry_test PRIVATE src)
+target_link_libraries(tx_linearity_telemetry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_linearity_telemetry_test COMMAND tx_linearity_telemetry_test)
+set_tests_properties(tx_linearity_telemetry_test PROPERTIES TIMEOUT 10)
+
+# Socket-free capture transport: inject our HTTP replies, never bind a listener.
+add_executable(aetherpd_capture_source_test
+    tests/aetherpd_capture_source_test.cpp
+    src/core/txlinearity/AetherPDCaptureSource.cpp
+    src/core/txlinearity/TxLinearityController.cpp
+    src/core/txlinearity/TxLinearitySafety.cpp
+    src/core/txlinearity/SpectrumWindow.cpp
+    src/core/txlinearity/TxSpectrumAnalyzer.cpp
+    src/core/txlinearity/ImdAnalyzer.cpp
+    src/core/dsp/FftwPlannerLock.cpp
+    src/core/AetherPDProtocol.cpp)
+target_include_directories(aetherpd_capture_source_test PRIVATE src tests ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(aetherpd_capture_source_test PRIVATE Qt6::Core Qt6::Network ${FFTW3_LIBRARIES})
+add_test(NAME aetherpd_capture_source_test COMMAND aetherpd_capture_source_test)
+set_tests_properties(aetherpd_capture_source_test PROPERTIES TIMEOUT 15)
+
+# Socket-free controller: inject capture callbacks, telemetry, clock and TX lease.
+add_executable(tx_linearity_controller_test
+    tests/tx_linearity_controller_test.cpp
+    src/core/txlinearity/TxLinearityController.cpp
+    src/core/txlinearity/TxLinearitySafety.cpp
+    src/core/txlinearity/SpectrumWindow.cpp
+    src/core/txlinearity/TxSpectrumAnalyzer.cpp
+    src/core/txlinearity/ImdAnalyzer.cpp
+    src/core/dsp/FftwPlannerLock.cpp)
+target_include_directories(tx_linearity_controller_test PRIVATE src tests ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(tx_linearity_controller_test PRIVATE Qt6::Core ${FFTW3_LIBRARIES})
+add_test(NAME tx_linearity_controller_test COMMAND tx_linearity_controller_test)
+set_tests_properties(tx_linearity_controller_test PROPERTIES TIMEOUT 15)
+
+add_executable(tx_linearity_safety_test
+    tests/tx_linearity_safety_test.cpp
+    src/core/txlinearity/TxLinearitySafety.cpp)
+target_include_directories(tx_linearity_safety_test PRIVATE src)
+add_test(NAME tx_linearity_safety_test COMMAND tx_linearity_safety_test)
+set_tests_properties(tx_linearity_safety_test PROPERTIES TIMEOUT 30)
+
+add_executable(tx_linearity_spectrum_test
+    tests/tx_linearity_spectrum_test.cpp
+    src/core/txlinearity/SpectrumWindow.cpp
+    src/core/txlinearity/TxSpectrumAnalyzer.cpp
+    src/core/txlinearity/ImdAnalyzer.cpp
+    src/core/dsp/FftwPlannerLock.cpp)
+target_include_directories(tx_linearity_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(tx_linearity_spectrum_test PRIVATE ${FFTW3_LIBRARIES})
+add_test(NAME tx_linearity_spectrum_test COMMAND tx_linearity_spectrum_test)
+set_tests_properties(tx_linearity_spectrum_test PROPERTIES TIMEOUT 30)
+
+add_executable(tx_linearity_imd_test
+    tests/tx_linearity_imd_test.cpp
+    src/core/txlinearity/SpectrumWindow.cpp
+    src/core/txlinearity/TxSpectrumAnalyzer.cpp
+    src/core/txlinearity/ImdAnalyzer.cpp
+    src/core/dsp/FftwPlannerLock.cpp)
+target_include_directories(tx_linearity_imd_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(tx_linearity_imd_test PRIVATE ${FFTW3_LIBRARIES})
+add_test(NAME tx_linearity_imd_test COMMAND tx_linearity_imd_test)
+set_tests_properties(tx_linearity_imd_test PROPERTIES TIMEOUT 30)
+
+# PD lifecycle model uses the same injected socket-free HTTP transport.
+add_executable(aetherpd_model_test
+    tests/aetherpd_model_test.cpp
+    src/models/AetherPDModel.cpp
+    src/core/txlinearity/AetherPDTestClient.cpp
+    src/core/txlinearity/AetherPDCaptureSource.cpp
+    src/core/AetherPDClient.cpp
+    src/core/AetherPDProtocol.cpp)
+target_include_directories(aetherpd_model_test PRIVATE src)
+target_compile_definitions(aetherpd_model_test PRIVATE
+    AETHERPD_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/public")
+target_link_libraries(aetherpd_model_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME aetherpd_model_test COMMAND aetherpd_model_test)
+set_tests_properties(aetherpd_model_test PROPERTIES TIMEOUT 10)
+
+# Production RadioModel lifetime with injected connection state and HTTP.
+add_executable(aetherpd_session_test tests/aetherpd_session_test.cpp)
+target_include_directories(aetherpd_session_test PRIVATE src tests)
+target_compile_definitions(aetherpd_session_test PRIVATE
+    AETHERPD_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/public")
+target_link_libraries(aetherpd_session_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME aetherpd_session_test COMMAND aetherpd_session_test)
+set_tests_properties(aetherpd_session_test PROPERTIES TIMEOUT 30)
+
+# Socket-free credentials/HTTP injection through the actual radio model and panel.
+add_executable(aetherpd_dialog_test
+    tests/aetherpd_dialog_test.cpp
+    src/gui/AetherPDDialog.cpp
+    src/gui/CanonWindow.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(aetherpd_dialog_test PRIVATE src tests)
+target_compile_definitions(aetherpd_dialog_test PRIVATE
+    AETHERPD_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/public")
+target_link_libraries(aetherpd_dialog_test PRIVATE aethercore Qt6::Widgets Qt6::Network)
+add_test(NAME aetherpd_dialog_test COMMAND aetherpd_dialog_test)
+set_tests_properties(aetherpd_dialog_test PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tailnet_shim_client_test
     tests/tailnet_shim_client_test.cpp
     src/core/TailnetShimClient.cpp
@@ -8893,6 +9144,8 @@ target_link_libraries(flex_cw_controls_test PRIVATE aethercore Qt6::Core)
 add_test(NAME flex_cw_controls_test COMMAND flex_cw_controls_test)
 
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
+target_compile_definitions(tx_operation_integration_test PRIVATE
+    AETHERPD_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/public")
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
@@ -11131,6 +11384,8 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    aetherpd_session_test
+    aetherpd_dialog_test
     session_control_test
     audio_control_routing_test
     dax_tx_backend_test

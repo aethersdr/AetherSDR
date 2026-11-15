@@ -1,0 +1,26 @@
+{
+  "idle": {
+    "source_case": "production-receive-guardian-stop-01",
+    "source_sha256": "d2d25e4a91c3fc43dbbaa4b9fb6cad7960fe540436994056689ab2cc3ab510a6",
+    "fixture_sha256": "b2cfd933fa270b16b8a50ec33a86c3034a263008c265bb8e18afb561cac5b0c5",
+    "scope": "Actual Go HTTP status body; relative observation time removed from keyed capture; operational fields only"
+  },
+  "armed": {
+    "source_case": "production-receive-guardian-stop-01",
+    "source_sha256": "d2d25e4a91c3fc43dbbaa4b9fb6cad7960fe540436994056689ab2cc3ab510a6",
+    "fixture_sha256": "d99c5b8c1b76b3cdc762ef3a202e027773565eef89145c4f17a2cdad6f22b01e",
+    "scope": "Actual Go HTTP status body; relative observation time removed from keyed capture; operational fields only"
+  },
+  "unavailable": {
+    "source_case": "production-receive-guardian-stop-01",
+    "source_sha256": "d2d25e4a91c3fc43dbbaa4b9fb6cad7960fe540436994056689ab2cc3ab510a6",
+    "fixture_sha256": "fa7ee8bceb31dcf406455daa1ab8a0676afa3100222384e9647f789113d77577",
+    "scope": "Actual Go HTTP status body; relative observation time removed from keyed capture; operational fields only"
+  },
+  "correcting": {
+    "source_case": "production-receive-guardian-rf-crash-01",
+    "source_sha256": "60ef5b030dccff8e3d70404ffeb4ad0797cee08b1268f90c9fa6959de47e325d",
+    "fixture_sha256": "2b6e26deb052d89dfda8b5a20193c9a3f15f60ff61785df0704d1e3fc14bfd0a",
+    "scope": "Actual Go HTTP status body; relative observation time removed from keyed capture; operational fields only"
+  }
+}

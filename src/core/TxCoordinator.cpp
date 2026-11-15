@@ -69,6 +69,11 @@ bool TxCoordinator::Operation::permitsDispatch(qint64 now) const
         || now - m_state->startedMs < m_state->maximumMs;
 }
 
+bool TxCoordinator::Operation::hasConfirmedStop() const
+{
+    return m_state && m_state->confirmedStop.load(std::memory_order_acquire);
+}
+
 bool TxCoordinator::Operation::sameOperation(const Operation& other) const
 {
     return m_state && m_state == other.m_state;
@@ -1029,7 +1034,11 @@ bool TxCoordinator::confirmStopped(const StopRequest& request)
     // Keep the qualified token available if a terminal writer is still
     // entered. Retrying this bookkeeping must not create a new stop attempt.
     const Operation operation = request.m_state->operation;
-    return acknowledgeStopped(operation);
+    if (!acknowledgeStopped(operation)) {
+        return false;
+    }
+    operation.m_state->confirmedStop.store(true, std::memory_order_release);
+    return true;
 }
 
 void TxCoordinator::finishLocalIntents(const Operation& operation)

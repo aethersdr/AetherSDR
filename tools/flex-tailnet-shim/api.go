@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -125,6 +126,14 @@ func decode(r *http.Request, v any) error {
 
 // NewAPI returns the provisioning HTTP handler for n.
 func NewAPI(n *Node) http.Handler {
+	read := func(context.Context) (aetherPDStatus, error) { return aetherPDStatus{}, errAetherPDNotManaged }
+	if n.pdProcess != nil {
+		read = n.pdProcess.queryStatus
+	}
+	return newAPIWithAetherPDReader(n, read)
+}
+
+func newAPIWithAetherPDReader(n *Node, read func(context.Context) (aetherPDStatus, error)) http.Handler {
 	mux := http.NewServeMux()
 	// The token is checked by the Node, inside the same lock as the change
 	// it authorizes; checked here, a token rotated by a concurrent provision
@@ -137,6 +146,41 @@ func NewAPI(n *Node) http.Handler {
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, n.Status())
 	})
+
+	mux.HandleFunc("POST /v1/aetherpd/install-request", aetherPDInstallRequestHandler(n))
+	mux.HandleFunc("GET /v1/aetherpd/install-request/{requestID}", aetherPDInstallStateHandler(n, false))
+	mux.HandleFunc("DELETE /v1/aetherpd/install-request/{requestID}", aetherPDInstallStateHandler(n, true))
+	mux.HandleFunc("POST /v1/aetherpd/start", aetherPDStartHandler(n))
+	mux.HandleFunc("POST /v1/aetherpd/test-unkey", aetherPDTestUnkeyHandler(n, pdTestBegin))
+	mux.HandleFunc("GET /v1/aetherpd/test-unkey/{testID}", aetherPDTestUnkeyHandler(n, pdTestStatus))
+	mux.HandleFunc("POST /v1/aetherpd/test-unkey/{testID}/stop", aetherPDTestUnkeyHandler(n, pdTestStop))
+	mux.HandleFunc("POST /v1/aetherpd/capture", aetherPDCaptureHandler(n, true))
+	mux.HandleFunc("GET /v1/aetherpd/capture/{captureID}/{chunk}", aetherPDCaptureHandler(n, false))
+	mux.HandleFunc("GET /v1/aetherpd/status", aetherPDSessionHandler(n, 'S', aetherPDStatusHandler(n, read)))
+	mux.HandleFunc("POST /v1/aetherpd/calibration/arm", aetherPDSessionHandler(n, 'A', aetherPDCalibrationHandler(n, 'A')))
+	mux.HandleFunc("POST /v1/aetherpd/calibration/cancel", aetherPDSessionHandler(n, 'X', aetherPDCalibrationHandler(n, 'X')))
+	mux.HandleFunc("POST /v1/aetherpd/receive/restore", aetherPDSessionHandler(n, 'R', aetherPDReceiveRestoreHandler(n)))
+
+	mux.HandleFunc("POST /v1/aetherpd/stop", aetherPDSessionHandler(n, 'T', func(w http.ResponseWriter, r *http.Request) {
+		if !n.checkToken(bearer(r)) {
+			unauthorized(w)
+			return
+		}
+		if r.URL.RawQuery != "" || r.ContentLength != 0 {
+			writeJSON(w, http.StatusBadRequest, apiError{"this endpoint accepts no parameters or body"})
+			return
+		}
+		err := n.stopAetherPD(bearer(r))
+		if errors.Is(err, errUnauthorized) {
+			unauthorized(w)
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusConflict, apiError{err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"state": "stop_requested"})
+	}))
 
 	mux.HandleFunc("POST /v1/provision", func(w http.ResponseWriter, r *http.Request) {
 		var req provisionRequest

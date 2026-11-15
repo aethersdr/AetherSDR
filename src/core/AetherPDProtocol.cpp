@@ -1,0 +1,413 @@
+#include "AetherPDProtocol.h"
+
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
+#include <QList>
+#include <QSet>
+#include <QtEndian>
+
+#include <bit>
+#include <cmath>
+#include <limits>
+
+namespace AetherSDR::aetherpd {
+namespace {
+constexpr qsizetype kMaxReplyBytes = 16 * 1024;
+constexpr double kMaxExactJsonCounter = 9'007'199'254'740'991.0;
+
+// QJsonDocument validates syntax but collapses duplicate members. Scan its
+// validated input before using the object, including escaped-equivalent keys.
+// The protocol has objects and scalar values only, with no arrays.
+bool uniqueKeys(const QByteArray& json)
+{
+    QList<QSet<QString>> objects;
+    QList<bool> expectKey;
+    for (qsizetype i = 0; i < json.size(); ++i) {
+        const char c = json.at(i);
+        if (c == '[' || c == ']') {
+            return false;
+        }
+        if (c == '{') {
+            if (objects.size() == 4) {
+                return false;
+            }
+            objects.append(QSet<QString>{});
+            expectKey.append(true);
+        } else if (c == '}') {
+            if (objects.isEmpty()) {
+                return false;
+            }
+            objects.removeLast();
+            expectKey.removeLast();
+        } else if (c == ',' || c == ':') {
+            if (expectKey.isEmpty()) {
+                return false;
+            }
+            expectKey.last() = c == ',';
+        } else if (c == '-') {
+            return false;
+        } else if (c >= '0' && c <= '9') {
+            while (i + 1 < json.size() && json.at(i + 1) >= '0' && json.at(i + 1) <= '9') {
+                ++i;
+            }
+            if (i + 1 < json.size()) {
+                const char next = json.at(i + 1);
+                if (next != ',' && next != '}' && next != ' ' && next != '\t' && next != '\r' && next != '\n') {
+                    return false;
+                }
+            }
+        } else if (c == '"') {
+            const qsizetype start = i;
+            for (++i; i < json.size() && json.at(i) != '"'; ++i) {
+                if (json.at(i) == '\\') {
+                    ++i;
+                }
+            }
+            if (i >= json.size() || objects.isEmpty()) {
+                return false;
+            }
+            if (expectKey.last()) {
+                const QByteArray literal = '[' + json.mid(start, i - start + 1) + ']';
+                const QString key = QJsonDocument::fromJson(literal).array().at(0).toString();
+                if (key.size() > 128 || objects.last().contains(key)) {
+                    return false;
+                }
+                objects.last().insert(key);
+            }
+        }
+    }
+    return objects.isEmpty();
+}
+
+std::optional<QJsonObject> object(const QByteArray& json)
+{
+    if (json.isEmpty() || json.size() > kMaxReplyBytes) {
+        return std::nullopt;
+    }
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject() || !uniqueKeys(json)) {
+        return std::nullopt;
+    }
+    return doc.object();
+}
+
+bool captureIdValid(const QString& id)
+{
+    if (id.size() != 32) { return false; }
+    for (const QChar c : id) {
+        if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return false; }
+    }
+    return true;
+}
+
+bool timestamp(const QJsonObject& o, const char* key, quint64& result)
+{
+    const QJsonValue value = o.value(QLatin1String(key));
+    if (!value.isString()) { return false; }
+    const QString text = value.toString();
+    bool ok = false;
+    result = text.toULongLong(&ok);
+    return ok && result > 0 && result <= quint64(std::numeric_limits<qint64>::max())
+        && text == QString::number(result);
+}
+
+bool boolean(const QJsonObject& o, const char* key, bool& result)
+{
+    const QJsonValue value = o.value(QLatin1String(key));
+    if (!value.isBool()) {
+        return false;
+    }
+    result = value.toBool();
+    return true;
+}
+
+bool counter(const QJsonObject& o, const char* key, quint64& result)
+{
+    const QJsonValue value = o.value(QLatin1String(key));
+    if (!value.isDouble()) {
+        return false;
+    }
+    const double number = value.toDouble();
+    if (!std::isfinite(number) || number < 0 || number > kMaxExactJsonCounter
+        || std::trunc(number) != number) {
+        return false;
+    }
+    result = static_cast<quint64>(number);
+    return true;
+}
+
+std::optional<State> state(const QJsonValue& value)
+{
+    if (!value.isString()) {
+        return std::nullopt;
+    }
+    const QString text = value.toString();
+    if (text == QLatin1String("unavailable")) { return State::Unavailable; }
+    if (text == QLatin1String("starting")) { return State::Starting; }
+    if (text == QLatin1String("disabled")) { return State::Disabled; }
+    if (text == QLatin1String("blocked_by_radio_apd")) { return State::BlockedByRadioApd; }
+    if (text == QLatin1String("calibration_armed")) { return State::CalibrationArmed; }
+    if (text == QLatin1String("recalibration_required")) { return State::RecalibrationRequired; }
+    if (text == QLatin1String("idle")) { return State::Idle; }
+    if (text == QLatin1String("correcting")) { return State::Correcting; }
+    if (text == QLatin1String("calibrating")) { return State::Calibrating; }
+    return std::nullopt;
+}
+
+std::optional<CalibrationState> calibrationState(const QJsonValue& value)
+{
+    if (!value.isString()) { return std::nullopt; }
+    const QString text = value.toString();
+    if (text == QLatin1String("idle")) { return CalibrationState::Idle; }
+    if (text == QLatin1String("completed")) { return CalibrationState::Completed; }
+    if (text == QLatin1String("canceled")) { return CalibrationState::Canceled; }
+    if (text == QLatin1String("expired")) { return CalibrationState::Expired; }
+    if (text == QLatin1String("armed")) { return CalibrationState::Armed; }
+    if (text == QLatin1String("running")) { return CalibrationState::Running; }
+    return std::nullopt;
+}
+
+bool consistent(const Status& s)
+{
+    const bool armed = s.calibrationState == CalibrationState::Armed;
+    const bool running = s.calibrationState == CalibrationState::Running;
+    if (armed || running) {
+        if (!s.calibrationControl || s.calibrationSamplesLeft == 0
+            || s.calibrationSamplesLeft > 192'000 || running != s.keyed) {
+            return false;
+        }
+    } else if (s.calibrationSamplesLeft != 0) {
+        return false;
+    }
+    if (s.correcting && (!s.registered || !s.keyed || !s.correctionEnabled
+                         || s.calibrationRequired || s.state == State::BlockedByRadioApd)) {
+        return false;
+    }
+    if (s.calibrationRequired && !s.faults.any()) { return false; }
+    State expected = State::Calibrating;
+    if (!s.registered) { expected = State::Starting; }
+    else if (!s.correctionEnabled) { expected = State::Disabled; }
+    else if (s.state == State::BlockedByRadioApd) { expected = State::BlockedByRadioApd; }
+    else if (armed) { expected = State::CalibrationArmed; }
+    else if (s.calibrationRequired) { expected = State::RecalibrationRequired; }
+    else if (!s.keyed) { expected = State::Idle; }
+    else if (s.correcting) { expected = State::Correcting; }
+    return s.state == expected;
+}
+} // namespace
+
+bool Faults::any() const
+{
+    return dispatchDeadlines != 0 || sendErrors != 0 || rejectedInput != 0 || staleIq != 0;
+}
+
+std::optional<Request> request(Operation operation)
+{
+    switch (operation) {
+    case Operation::Status: return Request{"GET", QStringLiteral("/v1/aetherpd/status"), 2'000};
+    case Operation::ArmCalibration: return Request{"POST", QStringLiteral("/v1/aetherpd/calibration/arm"), 8'000};
+    case Operation::CancelCalibration: return Request{"POST", QStringLiteral("/v1/aetherpd/calibration/cancel"), 3'000};
+    case Operation::Stop: return Request{"POST", QStringLiteral("/v1/aetherpd/stop"), 3'000};
+    case Operation::RestoreReceive: return Request{"POST", QStringLiteral("/v1/aetherpd/receive/restore"), 8'000};
+    case Operation::Start: return Request{"POST", QStringLiteral("/v1/aetherpd/start"), 22'000};
+    }
+    return std::nullopt;
+}
+
+std::optional<QByteArray> startBody(const StartIdentity& identity)
+{
+    if (!identity.guiHandle || identity.guiClientId.size() != 36) {
+        return std::nullopt;
+    }
+    for (qsizetype i = 0; i < 36; ++i) {
+        const QChar c = identity.guiClientId.at(i);
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != u'-') { return std::nullopt; }
+        } else if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f')
+                     || (c >= u'A' && c <= u'F'))) {
+            return std::nullopt;
+        }
+    }
+    return QJsonDocument(QJsonObject{
+        {QStringLiteral("gui_client_id"), identity.guiClientId},
+        {QStringLiteral("gui_handle"), static_cast<qint64>(identity.guiHandle)}}).toJson(QJsonDocument::Compact);
+}
+
+std::optional<Status> parseStatus(const QByteArray& json)
+{
+    const std::optional<QJsonObject> parsed = object(json);
+    if (!parsed) { return std::nullopt; }
+    const QJsonObject& o = *parsed;
+    Status s;
+    const std::optional<State> parsedState = state(o.value(QStringLiteral("state")));
+    if (!parsedState || !boolean(o, "available", s.available)) { return std::nullopt; }
+    s.state = *parsedState;
+    if (!s.available) {
+        return o.size() == 2 && s.state == State::Unavailable ? std::optional<Status>(s) : std::nullopt;
+    }
+    static const QSet<QString> known{
+        QStringLiteral("available"), QStringLiteral("state"), QStringLiteral("registered"),
+        QStringLiteral("keyed"), QStringLiteral("correction_enabled"), QStringLiteral("correcting"),
+        QStringLiteral("calibration_required"), QStringLiteral("calibration_control"),
+        QStringLiteral("calibration_state"), QStringLiteral("calibration_samples_left"),
+        QStringLiteral("input_limited_samples"), QStringLiteral("faults")};
+    for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
+        if (!known.contains(it.key())) { return std::nullopt; }
+    }
+    if (!boolean(o, "registered", s.registered) || !boolean(o, "keyed", s.keyed)
+        || !boolean(o, "correction_enabled", s.correctionEnabled) || !boolean(o, "correcting", s.correcting)
+        || !boolean(o, "calibration_required", s.calibrationRequired)
+        || !boolean(o, "calibration_control", s.calibrationControl)
+        || !counter(o, "input_limited_samples", s.inputLimitedSamples)) {
+        return std::nullopt;
+    }
+    const QJsonValue faults = o.value(QStringLiteral("faults"));
+    if (!faults.isObject() || faults.toObject().size() != 4) { return std::nullopt; }
+    const QJsonObject f = faults.toObject();
+    if (!counter(f, "dispatch_deadlines", s.faults.dispatchDeadlines)
+        || !counter(f, "send_errors", s.faults.sendErrors)
+        || !counter(f, "rejected_input", s.faults.rejectedInput)
+        || !counter(f, "stale_iq", s.faults.staleIq)) { return std::nullopt; }
+    if (o.contains(QStringLiteral("calibration_state"))) {
+        const std::optional<CalibrationState> parsedCalibration = calibrationState(o.value(QStringLiteral("calibration_state")));
+        if (!parsedCalibration) { return std::nullopt; }
+        s.calibrationState = *parsedCalibration;
+    } else if (s.calibrationControl) { return std::nullopt; }
+    if (o.contains(QStringLiteral("calibration_samples_left"))) {
+        quint64 left = 0;
+        if (!counter(o, "calibration_samples_left", left) || left > 192'000) { return std::nullopt; }
+        s.calibrationSamplesLeft = static_cast<quint32>(left);
+    }
+    return consistent(s) ? std::optional<Status>(s) : std::nullopt;
+}
+
+std::optional<Acknowledgment> parseAcknowledgment(Operation operation, int httpStatus, const QByteArray& json)
+{
+    const std::optional<QJsonObject> parsed = object(json);
+    if (!parsed || parsed->size() != 1 || !parsed->value(QStringLiteral("state")).isString()) {
+        return std::nullopt;
+    }
+    const QString value = parsed->value(QStringLiteral("state")).toString();
+    switch (operation) {
+    case Operation::Start:
+        if (httpStatus == 202 && value == QLatin1String("start_requested")) { return Acknowledgment::StartRequested; }
+        break;
+    case Operation::ArmCalibration:
+        if (httpStatus == 200 && value == QLatin1String("calibration_arm_accepted")) { return Acknowledgment::ArmAccepted; }
+        break;
+    case Operation::CancelCalibration:
+        if (httpStatus == 200 && value == QLatin1String("calibration_cancel_accepted")) { return Acknowledgment::CancelAccepted; }
+        break;
+    case Operation::Stop:
+        if (httpStatus == 202 && value == QLatin1String("stop_requested")) { return Acknowledgment::StopRequested; }
+        break;
+    case Operation::RestoreReceive:
+        if (httpStatus == 200 && value == QLatin1String("receive_restored")) { return Acknowledgment::ReceiveRestored; }
+        break;
+    case Operation::Status: break;
+    }
+    return std::nullopt;
+}
+Request captureBeginRequest()
+{
+    return {"POST", QStringLiteral("/v1/aetherpd/capture"), 4000};
+}
+
+std::optional<Request> captureChunkRequest(const CaptureManifest& manifest, int chunk)
+{
+    if (!captureIdValid(manifest.captureId) || chunk < 0 || chunk >= kCaptureSamples / kCaptureChunkSamples) {
+        return std::nullopt;
+    }
+    return Request{"GET", QStringLiteral("/v1/aetherpd/capture/%1/%2").arg(manifest.captureId).arg(chunk), 1500};
+}
+
+std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
+{
+    if (json.size() > 2048) { return std::nullopt; }
+    const std::optional<QJsonObject> parsed = object(json);
+    if (!parsed || parsed->size() != 10) { return std::nullopt; }
+    const QJsonObject& o = *parsed;
+    CaptureManifest m;
+    m.captureId = o.value(QStringLiteral("capture_id")).toString();
+    quint64 rate = 0, samples = 0, chunk = 0;
+    if (!captureIdValid(m.captureId) || o.value(QStringLiteral("format")).toString() != QLatin1String("f32le-iq-v1")
+        || !counter(o, "sample_rate_hz", rate) || (rate != 24000 && rate != 48000 && rate != 96000 && rate != 192000)
+        || !counter(o, "center_hz", m.centerHz) || m.centerHz == 0 || m.centerHz > 1'000'000'000
+        || !counter(o, "sample_count", samples) || samples != kCaptureSamples
+        || !counter(o, "chunk_samples", chunk) || chunk != kCaptureChunkSamples
+        || !boolean(o, "keyed", m.keyed) || !boolean(o, "correcting", m.correcting) || (m.correcting && !m.keyed)
+        || !timestamp(o, "first_receive_ns", m.firstReceiveNs) || !timestamp(o, "last_receive_ns", m.lastReceiveNs)
+        || m.lastReceiveNs < m.firstReceiveNs || m.lastReceiveNs - m.firstReceiveNs > 1'000'000'000) {
+        return std::nullopt;
+    }
+    m.sampleRateHz = quint32(rate);
+    return m;
+}
+
+std::optional<QByteArray> parseCaptureChunk(const QByteArray& json, const CaptureManifest& manifest, int chunk)
+{
+    if (json.size() > 8192 || !captureChunkRequest(manifest, chunk)) { return std::nullopt; }
+    const std::optional<QJsonObject> parsed = object(json);
+    if (!parsed || parsed->size() != 3) { return std::nullopt; }
+    const QJsonObject& o = *parsed;
+    quint64 offset = 0;
+    if (o.value(QStringLiteral("capture_id")).toString() != manifest.captureId
+        || !counter(o, "offset", offset) || offset != quint64(chunk * kCaptureChunkSamples)
+        || !o.value(QStringLiteral("iq_f32le")).isString()) { return std::nullopt; }
+    const QString encoded = o.value(QStringLiteral("iq_f32le")).toString();
+    const QByteArray raw = QByteArray::fromBase64(encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+    if (raw.size() != 8 * kCaptureChunkSamples || QString::fromLatin1(raw.toBase64()) != encoded) {
+        return std::nullopt;
+    }
+    for (qsizetype i = 0; i < raw.size(); i += 4) {
+        if (!std::isfinite(std::bit_cast<float>(qFromLittleEndian<quint32>(raw.constData() + i)))) {
+            return std::nullopt;
+        }
+    }
+    return raw;
+}
+std::optional<Request> testRequest(TestOperation operation, const QString& testId)
+{
+    if (operation == TestOperation::Begin) {
+        if (!testId.isEmpty()) { return std::nullopt; }
+        return Request{"POST", QStringLiteral("/v1/aetherpd/test-unkey"), 7500};
+    }
+    if (!captureIdValid(testId) || testId == QString(32, u'0')) { return std::nullopt; }
+    const QString path = QStringLiteral("/v1/aetherpd/test-unkey/") + testId;
+    if (operation == TestOperation::Status) { return Request{"GET", path, 500}; }
+    if (operation == TestOperation::Stop) { return Request{"POST", path + QStringLiteral("/stop"), 7500}; }
+    return std::nullopt;
+}
+
+std::optional<QByteArray> testBeginBody(int cleanupAfterMs)
+{
+    if (cleanupAfterMs < 1 || cleanupAfterMs > 15000) { return std::nullopt; }
+    return QJsonDocument(QJsonObject{{QStringLiteral("cleanup_after_ms"), cleanupAfterMs}}).toJson(QJsonDocument::Compact);
+}
+
+std::optional<TestObservation> parseTestObservation(const QByteArray& json)
+{
+    if (json.size() > 512) { return std::nullopt; }
+    const std::optional<QJsonObject> parsed = object(json);
+    if (!parsed || parsed->size() != 4) { return std::nullopt; }
+    TestObservation result;
+    result.testId = parsed->value(QStringLiteral("test_id")).toString();
+    quint64 remaining = 0;
+    if (!testRequest(TestOperation::Status, result.testId)
+        || !timestamp(*parsed, "cleanup_due_ms", result.cleanupDueMs)
+        || !counter(*parsed, "remaining_ms", remaining) || remaining > 15000) {
+        return std::nullopt;
+    }
+    const QString state = parsed->value(QStringLiteral("state")).toString();
+    if (state == QLatin1String("observing") && remaining > 0) { result.state = TestState::Observing; }
+    else if (state == QLatin1String("retiring") && remaining == 0) { result.state = TestState::Retiring; }
+    else if (state == QLatin1String("ended") && remaining == 0) { result.state = TestState::Ended; }
+    else { return std::nullopt; }
+    result.remainingMs = static_cast<int>(remaining);
+    return result;
+}
+} // namespace AetherSDR::aetherpd

@@ -1300,3 +1300,23 @@ stop-and-flush wait". With the patch, all of `wdsp_channel_test` passes.
 
 Drop this if upstream narrows the condition itself, or if `WdspChannel` ever
 clocks a stopping channel's ramp out before handing control to WDSP.
+
+## Standalone AetherPD priority inheritance (port boundary)
+
+`port/wdsp_port.c` accepts the standalone build definition
+`AETHER_PD_PI_CRITICAL_SECTIONS`. It preserves recursive critical sections
+and requests `PTHREAD_PRIO_INHERIT` so the ordinary fit worker can release a
+lock needed by AetherPD's RR packet thread under ordinary CPU contention.
+Without that definition the desktop port retains its existing lock behavior.
+The standalone build terminates on pthread initialization, lock, unlock or
+destruction errors, including an unsupported PI slow path, instead of executing
+an unprotected critical section. No upstream WDSP source is modified for this.
+
+A bounded CPU probe on the8600 compares the actual `pd_core_correct` path with
+an injected nice10 owner doing1ms CPU work and two ordinary competitors on the
+same CPU. Current locks reached21.2/23.0ms onARM64/ARMv7; the PI variant stayed
+below1.3ms. This demonstrates priority inversion under that load, not the
+historical natural128sample slip's cause. Actual6300 kernel support and RF
+qualification of the new build remain required. `pd_pi_lock_policy_test` checks
+recursive PI construction and injected pthread failures without sockets or a
+firmware peer.

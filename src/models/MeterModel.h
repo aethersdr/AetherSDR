@@ -292,6 +292,12 @@ public:
     // Convenience: PA heatsink temperature (°C).
     float paTemp() const { return m_paTemp; }
     bool hasPaTemp() const { return m_hasPaTempValue; }
+    qint64 swrSampleUpdatedAtMs() const
+    { return m_swrIdx >= 0 ? valueUpdatedAtMs(m_swrIdx) : 0; }
+    qint64 paTempUpdatedAtMs() const
+    { return m_paTempIdx >= 0 ? valueUpdatedAtMs(m_paTempIdx) : 0; }
+    qint64 supplyVoltsUpdatedAtMs() const
+    { return m_supplyIdx >= 0 ? valueUpdatedAtMs(m_supplyIdx) : 0; }
     // Age of the low-rate vitals, -1 when the meter is undeclared. "Ever fed"
     // is not "current": a radio that reported PA temperature once and stopped
     // would otherwise keep that reading alive forever on every surface that

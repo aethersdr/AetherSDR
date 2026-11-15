@@ -67,6 +67,14 @@ func (c provisionConfig) shareDiscovered() bool {
 // swapped in-process: nothing is known to restart a container whose process
 // exits, so the shim never relies on exiting to reconfigure itself.
 type Node struct {
+	pdInstall        *pdInstallTask
+	pdInstallRun     pdInstallRun
+	pdProcess        *aetherPDProcess
+	pdSession        *pdSessionChannel
+	pdStarting       *pdSessionStart
+	pdSessionStopped bool
+	pdSessionDial    func(context.Context, pdStartIdentity) (*pdSessionChannel, error)
+
 	StateDir string
 	// RunDir, when set, holds tsnet's logs and caches on volatile storage,
 	// leaving only the node's identity in StateDir. A legacy waveform on a
@@ -769,8 +777,12 @@ func (n *Node) checker(lc *local.Client) identityCheck {
 // checkToken compares a presented admin token with the stored hash.
 func (n *Node) checkToken(presented string) bool {
 	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.checkTokenLocked(presented)
+}
+
+func (n *Node) checkTokenLocked(presented string) bool {
 	want := n.cfg.TokenSHA256
-	n.mu.Unlock()
 	if want == "" || presented == "" {
 		return false
 	}
@@ -919,11 +931,17 @@ func (n *Node) SignOut(presented string) error {
 	if err := os.Remove(n.cfgPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("could not delete the saved settings, so nothing was changed: %w", err)
 	}
-	err = n.stop(true)
+	// Revoke the token and its owned PD lifetime together, before network
+	// logout can block. A failed settings deletion above changes neither.
 	n.mu.Lock()
+	if n.pdProcess != nil {
+		n.pdProcess.Stop()
+	}
+	n.retirePDSessionLocked()
 	n.cfg = provisionConfig{}
 	n.state, n.lastError = stateUnprovisioned, ""
 	n.mu.Unlock()
+	err = n.stop(true)
 	if err != nil {
 		return fmt.Errorf("signed out, but %w", err)
 	}

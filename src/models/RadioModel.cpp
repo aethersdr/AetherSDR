@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "AetherPDMeasurementModel.h"
 #include "core/backends/FileTransferOperation.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include <QScopedValueRollback>
@@ -2333,9 +2334,16 @@ QJsonObject RadioModel::automationInterlockProbe(const QString& source,
 
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
+    , m_aetherPDModel(std::make_unique<AetherPDModel>())
     , m_txCoordinator([this](const TxCoordinator::Operation& operation,
                             TxCoordinator::StopReason reason) { stopTxOperation(operation, reason); })
 {
+    connect(this, &RadioModel::otherClientsChanged, this, [this] {
+        m_aetherPDModel->reconcileSession();
+    });
+    connect(this, &RadioModel::connectionStateChanged, this, [this] {
+        m_aetherPDModel->reconcileSession();
+    });
     connect(this, &RadioModel::infoChanged, this, &RadioModel::reconcileAdministration);
     connect(this, &RadioModel::licenseFeaturesChanged, this, &RadioModel::reconcileAdministration);
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::reconcileAdministration);
@@ -3057,13 +3065,17 @@ AprsDigipeaterModel* RadioModel::aprsDigipeater()
 
 RadioModel::~RadioModel()
 {
+    if (m_aetherPDMeasurementModel) { m_aetherPDMeasurementModel->blockSignals(true); }
     m_sessionCommands.retireSession();
+    m_aetherPDModel->blockSignals(true);
+    m_aetherPDModel->clearSession();
     // Observers may already be tearing down. Cleanup must reach the backend
     // without calling presentation slots from a partially destroyed aggregate.
     blockSignals(true);
     resetAdministration(false);
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
+    m_aetherPDMeasurementModel.reset();
     m_independentTxGrants.reset(); // stop while every model member is still alive
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {

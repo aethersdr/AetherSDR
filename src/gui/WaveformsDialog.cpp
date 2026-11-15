@@ -1,4 +1,6 @@
 #include "WaveformsDialog.h"
+#include "AetherPDDialog.h"
+#include "ControlAvailabilityRegistry.h"
 #include "CanonIndicators.h"
 #include "core/DigitalVoiceWaveformProcess.h"
 #include "core/DigitalVoiceWaveformSettings.h"
@@ -1387,6 +1389,27 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     auto* installedTitle = makePanelTitle(tr("Installed Waveforms"), installedFrame);
     installedHeader->addWidget(installedTitle);
     installedHeader->addStretch();
+
+    m_aetherPDBtn = new QPushButton(tr("AetherPD…"), installedFrame);
+    m_aetherPDBtn->setObjectName(QStringLiteral("openAetherPD"));
+    m_aetherPDBtn->setAccessibleName(tr("AetherPD controls"));
+    m_aetherPDBtn->setAutoDefault(false);
+    installedHeader->addWidget(m_aetherPDBtn);
+    auto* pdAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
+    pdAvailability->registerWidget(m_aetherPDBtn,
+        tr("Connect to a radio that supports on-radio waveforms."),
+        [](bool connected, const RadioCapabilities& caps) { return connected && caps.hasWaveforms; }, {}, false);
+    connect(m_aetherPDBtn, &QPushButton::clicked, this, [this] {
+        if (!m_radioModel || !m_radioModel->isConnected()
+            || !m_radioModel->backendCapabilities().hasWaveforms) {
+            return;
+        }
+        if (!m_aetherPDDialog) {
+            m_aetherPDDialog = new AetherPDDialog(m_radioModel, this);
+            m_aetherPDDialog->setAttribute(Qt::WA_DeleteOnClose);
+        }
+        m_aetherPDDialog->showAndActivate();
+    });
 
     m_installBtn = new QToolButton;
     m_installBtn->setText(tr("Install..."));

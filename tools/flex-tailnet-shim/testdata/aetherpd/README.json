@@ -1,0 +1,18 @@
+{
+  "cold_start": {
+    "source_native_report_sha256": "21afc2b9f3c9baaecb5e9086f2359fc1ac5a6124178a1f4225f22744ca6c1024",
+    "note": "Measured FLEX8600 keyed status; no credentials or operator IDs"
+  },
+  "correcting": {
+    "source_native_report_sha256": "21afc2b9f3c9baaecb5e9086f2359fc1ac5a6124178a1f4225f22744ca6c1024",
+    "note": "Measured FLEX8600 keyed status; no credentials or operator IDs"
+  },
+  "warm_correcting": {
+    "source_native_report_sha256": "3c58ea4fc5e8ab8ed2192eaf449a62b182a5aa79358b44ec80edfc4a4e3ad053",
+    "note": "Measured FLEX8600 keyed status; no credentials or operator IDs"
+  },
+  "stall_bypassed": {
+    "source_native_report_sha256": "2eabc04a43d637babf787db6dd8eafb896a2e677f52b9654d42e1f4a8c568c8f",
+    "note": "Measured FLEX8600 keyed status; no credentials or operator IDs"
+  }
+}

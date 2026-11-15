@@ -1,0 +1,30 @@
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+
+enum { PD_CAPTURE_SAMPLES = 16384, PD_CAPTURE_CHUNK = 1024,
+       PD_CAPTURE_HEADER = 72, PD_CAPTURE_REPLY = PD_CAPTURE_HEADER + 8 * PD_CAPTURE_CHUNK };
+enum pd_capture_state { PD_CAPTURE_EMPTY, PD_CAPTURE_PENDING, PD_CAPTURE_READY,
+                        PD_CAPTURE_INVALID, PD_CAPTURE_EXPIRED, PD_CAPTURE_UNAVAILABLE };
+struct pd_capture_meta {
+    uint64_t generation, center_hz;
+    uint32_t stream, rate, keyed, correcting;
+};
+/* Owned exclusively by the DSP event loop. Samples are unchanged little-endian
+ * complex float32 DAX IQ, before the correction feedback decimator/EQ. */
+struct pd_capture {
+    struct pd_capture_meta meta;
+    uint64_t id;
+    int64_t started_ns, first_ns, last_ns;
+    enum pd_capture_state state;
+    unsigned count;
+    unsigned char samples[8 * PD_CAPTURE_SAMPLES];
+};
+void pd_capture_begin(struct pd_capture*, uint64_t id, const struct pd_capture_meta*, int64_t now);
+void pd_capture_invalidate(struct pd_capture*);
+void pd_capture_feed(struct pd_capture*, const struct pd_capture_meta*,
+                     const unsigned char* samples, size_t bytes, int64_t now);
+/* Fixed binary response; never returns partial or mismatched snapshot samples.
+ * Completed snapshots remain readable after unkey, until the five-second TTL. */
+size_t pd_capture_read(struct pd_capture*, uint64_t id, uint32_t offset, int64_t now,
+                       unsigned char* output, size_t capacity);

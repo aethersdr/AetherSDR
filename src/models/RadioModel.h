@@ -37,6 +37,7 @@
 #include <optional>
 #include "SliceModel.h"
 #include "MeterModel.h"
+#include "AetherPDModel.h"
 #include "PanadapterModel.h"
 #include "PanBandTransitions.h"
 #include "ProfileLoadPanWriteQueue.h"
@@ -75,6 +76,7 @@
 
 namespace AetherSDR {
 class TxController;
+class AetherPDMeasurementModel;
 class WanConnection;
 class FlexStatusIngress;
 struct TxBandDelta;
@@ -164,6 +166,15 @@ public:
     [[nodiscard]] DataLiveness dataLiveness() const;
     TunerModel&       tunerModel()       { return m_tunerModel; }
     TransmitModel&    transmitModel()    { return m_transmitModel; }
+    AetherPDMeasurementModel& aetherPDMeasurementModel();
+    const AetherPDModel& aetherPDModel() const { return *m_aetherPDModel; }
+    bool attachAetherPD(const RadioControlSession& session, const QString& adminToken);
+    std::function<bool()> bindAetherPDCapture(const RadioControlSession& session,
+                                            txlin::AetherPDCaptureSource& source);
+    std::function<bool()> bindAetherPDTest(const RadioControlSession& session,
+                                         txlin::AetherPDTestClient& client);
+    bool requestAetherPD(const RadioControlSession& session, aetherpd::Operation operation);
+    bool detachAetherPD(const RadioControlSession& session);
     EqualizerModel&   equalizerModel()   { return m_equalizerModel; }
     TnfModel&         tnfModel()         { return m_tnfModel; }
     SpotModel&        spotModel()        { return m_spotModel; }
@@ -2326,6 +2337,8 @@ private:
     qint64 m_lastAudioMs{0};
     TunerModel       m_tunerModel;
     TransmitModel    m_transmitModel;
+    std::unique_ptr<AetherPDModel> m_aetherPDModel;
+    std::unique_ptr<AetherPDMeasurementModel> m_aetherPDMeasurementModel;
     // Transitional desktop actor: existing integrations still enter through
     // the desktop methods. Independent daemon clients use separate granted
     // actors on the same coordinator and cannot obtain this desktop actor.

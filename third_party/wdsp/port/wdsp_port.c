@@ -97,6 +97,17 @@ static HANDLE createWaitable(enum WdspHandleKind kind, LONG initialCount,
     return handle;
 }
 
+static void critical_result(int result)
+{
+#ifdef AETHER_PD_PI_CRITICAL_SECTIONS
+    if (result != 0) {
+        abort();
+    }
+#else
+    (void)result;
+#endif
+}
+
 void InitializeCriticalSection(CRITICAL_SECTION* section)
 {
     InitializeCriticalSectionAndSpinCount(section, 0);
@@ -106,25 +117,31 @@ void InitializeCriticalSectionAndSpinCount(CRITICAL_SECTION* section, DWORD spin
 {
     pthread_mutexattr_t attributes;
     (void)spinCount;
-    pthread_mutexattr_init(&attributes);
-    pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(section, &attributes);
-    pthread_mutexattr_destroy(&attributes);
+    critical_result(pthread_mutexattr_init(&attributes));
+    critical_result(pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE));
+#ifdef AETHER_PD_PI_CRITICAL_SECTIONS
+    // Standalone AetherPD's RR packet thread shares these locks with ordinary
+    // fit workers. Donation prevents an unrelated ordinary workload from
+    // starving a lock owner while the packet deadline expires.
+    critical_result(pthread_mutexattr_setprotocol(&attributes, PTHREAD_PRIO_INHERIT));
+#endif
+    critical_result(pthread_mutex_init(section, &attributes));
+    critical_result(pthread_mutexattr_destroy(&attributes));
 }
 
 void EnterCriticalSection(CRITICAL_SECTION* section)
 {
-    pthread_mutex_lock(section);
+    critical_result(pthread_mutex_lock(section));
 }
 
 void LeaveCriticalSection(CRITICAL_SECTION* section)
 {
-    pthread_mutex_unlock(section);
+    critical_result(pthread_mutex_unlock(section));
 }
 
 void DeleteCriticalSection(CRITICAL_SECTION* section)
 {
-    pthread_mutex_destroy(section);
+    critical_result(pthread_mutex_destroy(section));
 }
 
 HANDLE CreateSemaphore(void* attributes, LONG initialCount, LONG maximumCount, const char* name)

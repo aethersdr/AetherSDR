@@ -15,6 +15,7 @@ test build; the address is in the package.
 """
 import argparse
 import gzip
+import importlib.util
 import os
 import pathlib
 import re
@@ -97,6 +98,7 @@ def main():
     ap.add_argument('--output', required=True, type=pathlib.Path)
     ap.add_argument('--log-url', default='', help='diagnostic log sink baked into the launcher')
     ap.add_argument('--small', action='store_true', help='omit unused Tailscale features (about 0.8 MB smaller)')
+    ap.add_argument('--with-aetherpd', action='store_true', help='include experimental AetherPD for trusted inherited-session startup; requires Zig')
     a = ap.parse_args()
     check_version()
     a.output.mkdir(parents=True, exist_ok=True)
@@ -119,6 +121,22 @@ def main():
             'flex-tailnet-shim-armv7.gz': (shim_gz, 0o644, zipfile.ZIP_STORED),
             'LICENSES': (licenses(env).encode(), 0o644, zipfile.ZIP_DEFLATED),
         }
+        if a.with_aetherpd:
+            source = MODULE.parent / 'pd-waveform' / 'build.py'
+            spec = importlib.util.spec_from_file_location('aetherpd_builder', source)
+            pd = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(pd)
+            runtime = stage / 'aether-pd-armv7'
+            pd.zig_cc(pd.ARMV7, runtime, a.output / 'pd-cache')
+            files['aether-pd-armv7.gz'] = (gzip.compress(runtime.read_bytes(), compresslevel=9, mtime=0), 0o644, zipfile.ZIP_STORED)
+            guardian = stage / 'pd-unkey-guard-armv7'
+            pd.zig_unkey_guardian(pd.ARMV7, guardian, a.output / 'pd-cache')
+            files['pd-unkey-guard-armv7.gz'] = (gzip.compress(guardian.read_bytes(), compresslevel=9, mtime=0), 0o644, zipfile.ZIP_STORED)
+            lease_guardian = stage / 'pd-lease-guard-armv7'
+            pd.zig_lease_guardian(pd.ARMV7, lease_guardian, a.output / 'pd-cache')
+            files['pd-lease-guard-armv7.gz'] = (gzip.compress(lease_guardian.read_bytes(), compresslevel=9, mtime=0), 0o644, zipfile.ZIP_STORED)
+            notice = pd.licenses() + '\n' + (pd.WDSP / 'LICENSE').read_text()
+            files['AETHERPD-LICENSES'] = (notice.encode(), 0o644, zipfile.ZIP_DEFLATED)
         target = a.output / f'{NAME}.ssdr_waveform'
         tmp = target.with_suffix('.tmp')
         with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:

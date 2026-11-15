@@ -3,6 +3,12 @@
 #include "core/backends/flex/FlexCwxStatus.h"
 #include "core/backends/flex/FlexStatusIngress.h"
 #include "TestSettingsProfile.h"
+#include "AetherPDTestTransport.h"
+#include "models/AetherPDRunLease.h"
+#include "models/AetherPDMeasurementModel.h"
+#include "TxLinearityTestSignals.h"
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "TestEventLoop.h"
 #include "TxTestAuthority.h"
 #include "CwxControlTestFixture.h"
@@ -44,6 +50,8 @@
 #include <QtEndian>
 #include <cstdio>
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <memory>
 #include <limits>
 #include <vector>
@@ -308,6 +316,22 @@ public:
         radio.m_sessionCommands = SessionCommandGuard::create();
         radio.m_sessionWire = radio.m_connection;
         radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+    }
+    static void preparePDLease(RadioModel& radio, RadioConnection& connection, AetherPDTest::Network& network)
+    {
+        radio.m_connection = &connection;
+        connection.m_handle.store(7);
+        primeInertSession(radio);
+        radio.m_aetherPDModel = std::make_unique<AetherPDModel>(network);
+        radio.m_aetherPDModel->setSession(QHostAddress(QStringLiteral("192.168.50.100")), QString(43, u'a'),
+            radio.sessionControlFence(), aetherpd::StartIdentity{QStringLiteral("0D3EA0E8-B052-4AC6-9D32-D96918634469"), 7});
+    }
+    static void retirePDLease(RadioModel& radio) { radio.resetSessionControls(); }
+    static void pdLeaseKeyed(RadioModel& radio, quint32 owner)
+    {
+        radio.m_txClientHandle = owner;
+        radio.m_radioTransmitting = true;
+        emit radio.radioTransmittingChanged(true);
     }
     static void beginMultiFlexProbe(RadioModel& radio)
     {
@@ -793,11 +817,262 @@ void flexSharedProtocolEligibility()
     check(backend.independentTxControl().activities == 0, "shared command sequence provider is still required");
 }
 
+void aetherPDRunLeaseLifecycle()
+{
+    using LeaseState = txlin::ITxLinearityRunLease::State;
+    QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
+    check(fixture.open(QIODevice::ReadOnly), "PD lease has public status fixture");
+    const QByteArray idle = fixture.readAll();
+    for (int scenario = 0; scenario < 10; ++scenario) {
+        RadioConnection connection;
+        AetherPDTest::Network controlNetwork, helperNetwork;
+        Fixture f;
+        TxOperationIntegrationTestAccess::preparePDLease(f.radio, connection, controlNetwork);
+        controlNetwork.last->complete(200, idle);
+        qint64 helperNow = 1000;
+        std::unique_ptr<txlin::AetherPDTestClient> helper = std::make_unique<txlin::AetherPDTestClient>(
+            helperNetwork, [&] { return helperNow; });
+        std::shared_ptr<AetherPDRunLease> lease = AetherPDRunLease::create(f.radio, f.radio.controlSession(), std::move(helper));
+        check(bool(lease) && f.commands.empty() && helperNetwork.sent.empty(), "creating lease does not arm helper or key TX");
+        if (!lease) { continue; }
+        TxCoordinator::StopRequest proof;
+        f.backend->stopWriter = [&](const auto&, const auto& request) { proof = request; };
+        const qint64 deadline = TxCoordinator::monotonicMs() + (scenario == 6 ? 1000 : scenario == 7 ? 5600 : 10000);
+        const bool started = lease->start(deadline);
+        if (scenario == 6) {
+            check(!started && helperNetwork.sent.empty() && !f.commands.contains("mox:on")
+                      && lease->state() == LeaseState::Released,
+                  "insufficient cleanup budget refuses before any admission or helper request");
+            continue;
+        }
+        check(started && helperNetwork.sent.size() == 1 && !f.commands.contains("mox:on"),
+              "explicit start admits original intent but waits for helper verification");
+        check(!lease->start(deadline), "lease cannot rearm or replace original intent");
+        const int helperBudget = QJsonDocument::fromJson(helperNetwork.sent.front().body).object().value("cleanup_after_ms").toInt();
+        const QByteArray observing = QByteArray(R"({"test_id":"0123456789abcdef0123456789abcdef","state":"observing","cleanup_due_ms":"20000","remaining_ms":)")
+            + QByteArray::number(helperBudget) + '}';
+        if (scenario == 1) { lease->release(); }
+        if (scenario == 2) { TxOperationIntegrationTestAccess::retirePDLease(f.radio); }
+        if (scenario == 8) { QThread::msleep(1100); helperNow += 1100; }
+        helperNetwork.last->complete(200, observing);
+        if (scenario == 1 || scenario == 2) {
+            lease->poll();
+            check(!f.commands.contains("mox:on") && lease->state() != LeaseState::Keyed,
+                  "cancel or session retirement during startup cannot key from late readiness");
+        } else {
+            check(helperNetwork.sent.size() == 2 && !f.commands.contains("mox:on"),
+                  "begin receipt alone never keys the radio");
+            if (scenario == 3) { helperNow += 5100; }
+            if (scenario == 9) {
+                QObject::connect(&f.radio, &RadioModel::localTransmitEngaged, &f.radio, [&] {
+                    lease->release();
+                    lease.reset();
+                });
+            }
+            helperNetwork.last->complete(200, observing);
+            if (scenario == 9) {
+                check(!lease && !f.commands.contains("mox:on"),
+                      "reentrant owner destruction fences dispatch and keeps cleanup safe");
+                f.backend->stopWriter = {};
+                continue;
+            }
+            if (scenario == 3 || scenario == 8) {
+                check(!f.commands.contains("mox:on") && lease->state() != LeaseState::Keyed,
+                      "startup consuming usable window cannot dispatch key");
+            } else {
+                if (!lease->error().isEmpty()) {
+                    qWarning().noquote() << "PD lease startup failed in scenario" << scenario << lease->error();
+                }
+                check(f.commands.contains("mox:on") && lease->state() == LeaseState::AwaitingKey,
+                      "verified helper keys through existing PTT gate but waits for radio readback");
+                TxOperationIntegrationTestAccess::pdLeaseKeyed(f.radio, scenario == 4 ? 8 : 7);
+                check(lease->state() == (scenario == 4 ? LeaseState::Failed : LeaseState::Keyed),
+                      "only original operation and GUI owner publish observed keying");
+                if (scenario == 7) {
+                    const TxCoordinator::Operation original = f.radio.transmitOperation();
+                    QThread::msleep(1200); // Leave all owner-thread timers undelivered.
+                    bool refused = false;
+                    std::unique_ptr<QThread> writer(QThread::create([&] {
+                        refused = !original.permitsDispatch(TxCoordinator::monotonicMs());
+                    }));
+                    writer->start(); writer->wait();
+                    check(refused && lease->state() == LeaseState::Failed,
+                          "worker gate expires helper window before GUI timers or grant maximum run");
+                }
+                if (scenario == 5) {
+                    helperNow += 500;
+                    check(lease->state() == LeaseState::Failed, "stale helper readiness cannot remain keyed before timer delivery");
+                }
+            }
+        }
+        lease->release();
+        check(lease->state() == LeaseState::Failed && proof.valid(),
+              "stop request retains release pending rather than claiming RF cessation");
+        TxOperationIntegrationTestAccess::stopEvidence(f.radio,
+            {proof, std::make_shared<const std::atomic<bool>>(true), TxCoordinator::monotonicMs() + 1000});
+        check(lease->state() == LeaseState::Released, "exact qualified operation stop completes the lease");
+        f.backend->stopWriter = {};
+    }
+}
+
+void aetherPDMeasurementWorkflow()
+{
+    using State = AetherPDMeasurementModel::State;
+    QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
+    check(fixture.open(QIODevice::ReadOnly), "measurement has public status fixture");
+    const QByteArray idle = fixture.readAll();
+    const QString captureId = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const auto encode = [](const QJsonObject& object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); };
+    const auto manifest = [&](bool keyed) {
+        return encode({{"capture_id", captureId}, {"format", "f32le-iq-v1"}, {"sample_rate_hz", 192000},
+            {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
+            {"keyed", keyed}, {"correcting", keyed}, {"first_receive_ns", "1000000000"},
+            {"last_receive_ns", "1085000000"}});
+    };
+    const std::vector<std::complex<double>> tones = txlin_test::twoTone(16384, 192000, 750, 1875, .2);
+    const std::vector<std::complex<double>> products = txlin_test::twoTone(16384, 192000, -375, 3000, .002);
+    const auto chunk = [&](int index) {
+        QByteArray raw(4096, '\0');
+        for (int i = 0; i < 512; ++i) {
+            const std::complex<double> sample = tones[index * 512 + i] + products[index * 512 + i];
+            qToLittleEndian<quint32>(std::bit_cast<quint32>(float(sample.real())), raw.data() + 8 * i);
+            qToLittleEndian<quint32>(std::bit_cast<quint32>(float(sample.imag())), raw.data() + 8 * i + 4);
+        }
+        return encode({{"capture_id", captureId}, {"offset", index * 512}, {"iq_f32le", QString::fromLatin1(raw.toBase64())}});
+    };
+    for (int scenario = 0; scenario < 7; ++scenario) {
+        RadioConnection connection;
+        AetherPDTest::Network controlNetwork, measurementNetwork;
+        Fixture f;
+        TxOperationIntegrationTestAccess::preparePDLease(f.radio, connection, controlNetwork);
+        controlNetwork.last->complete(200, idle);
+        SliceDelta slice;
+        slice.frequency = 7.15;
+        slice.txAntenna = QStringLiteral("ANT1");
+        f.radio.txSlice()->applyChanges(slice);
+        TransmitDelta power;
+        power.rfPower = 5;
+        TxOperationIntegrationTestAccess::transmitDelta(f.radio, power);
+        MeterModel& meters = f.radio.meterModel();
+        const std::array<QString, 4> names = {"SWR", "PATEMP", "+13.8A", "FWDPWR"};
+        const std::array<QString, 4> units = {"SWR", "degC", "Volts", "Watts"};
+        const std::array<float, 4> values = {1.08f, 40.f, 13.8f, 0.f};
+        for (int i = 0; i < 4; ++i) {
+            MeterDef def;
+            def.index = i + 1; def.source = (i == 0 || i == 3) ? "TX" : "RAD";
+            def.name = names[i]; def.unit = units[i];
+            meters.defineMeter(def);
+            check(meters.updateValueByName(def.source, def.name, values[i]), "measurement meter sample accepted");
+        }
+        std::unique_ptr<AetherPDMeasurementModel> model = std::make_unique<AetherPDMeasurementModel>(f.radio, measurementNetwork);
+        const RadioControlSession session = f.radio.controlSession();
+        txlin::LinearityRunConfig config;
+        config.capture.centerFreqHz = 7150000;
+        config.capture.settleMsAfterKey = 0;
+        config.targetAverages = 1;
+        config.maxForwardWatts = 10;
+        config.expectedCorrection = true;
+        txlin::RunRequest request;
+        request.tone1Hz = 7150750; request.tone2Hz = 7151875;
+        request.allocations = {{7000000, 7300000}};
+        check(!model->prepare(session, config, request, false) && measurementNetwork.sent.empty(),
+              "measurement requires explicit dummy-load confirmation before capture");
+        check(model->prepare(session, config, request, true), "measurement preparation accepted");
+        check(model->state() == State::CheckingReceive && !f.commands.contains("mox:on"),
+              "measurement preparation is receive-only");
+        measurementNetwork.last->complete(200, manifest(false));
+        for (int i = 0; i < 31; ++i) { measurementNetwork.last->complete(200, chunk(i)); }
+        check(model->state() == State::CheckingReceive && !model->start(session),
+              "partial receive capture cannot start a measurement");
+        measurementNetwork.last->complete(200, chunk(31));
+        check(model->state() == State::Ready && measurementNetwork.sent.size() == 33
+                  && !f.commands.contains("mox:on") && !model->result(),
+              "complete receive capture grants readiness without keying or publishing a result");
+        check(!model->stop({}) && model->state() == State::Ready, "foreign session cannot cancel preparation");
+        if (scenario == 6) {
+            f.radio.transmitModel().setRfPower(5);
+            TxOperationIntegrationTestAccess::transmitDelta(f.radio, power);
+            check(model->state() == State::Idle && !model->start(session) && !f.commands.contains("mox:on"),
+                  "same-value power request retires preparation even after its radio echo");
+            continue;
+        }
+        if (scenario == 1) {
+            slice.frequency = 7.151;
+            f.radio.txSlice()->applyChanges(slice);
+            check(model->state() == State::Idle && !model->start(session) && !f.commands.contains("mox:on"),
+                  "frequency change cancels readiness immediately");
+            continue;
+        }
+        TxCoordinator::StopRequest proof;
+        f.backend->stopWriter = [&](const auto&, const auto& stopped) { proof = stopped; };
+        const auto detach = qScopeGuard([&] { f.backend->stopWriter = {}; });
+        check(model->start(session) && !f.commands.contains("mox:on"),
+              "explicit measurement start waits for helper readiness");
+        const int budget = QJsonDocument::fromJson(measurementNetwork.sent.back().body).object().value("cleanup_after_ms").toInt();
+        const QByteArray observing = encode({{"test_id", captureId}, {"state", "observing"},
+            {"cleanup_due_ms", "20000"}, {"remaining_ms", budget}});
+        QPointer<AetherPDTest::Reply> begin = measurementNetwork.last;
+        if (scenario == 2) {
+            power.rfPower = 6;
+            TxOperationIntegrationTestAccess::transmitDelta(f.radio, power);
+        }
+        if (scenario == 3) { model->stop(session); }
+        begin->complete(200, observing);
+        if (scenario == 2 || scenario == 3) {
+            check(!f.commands.contains("mox:on"), "late helper response cannot key after power change or cancellation");
+        } else {
+            measurementNetwork.last->complete(200, observing);
+            check(f.commands.contains("mox:on") && model->state() == State::AwaitingKey,
+                  "verified helper requests TX but capture waits for original owner readback");
+            TxOperationIntegrationTestAccess::pdLeaseKeyed(f.radio, 7);
+            model->poll();
+            check(model->state() == State::Capturing, "observed original TX opens measurement capture");
+            if (scenario == 4) {
+                model.reset();
+                check(proof.valid(), "measurement destruction requests original operation cleanup");
+                continue;
+            }
+            if (scenario == 5) {
+                meters.updateValueByName("TX", "FWDPWR", 11.f);
+                model->poll();
+            } else {
+                measurementNetwork.last->complete(200, manifest(true));
+                for (int i = 0; i < 32; ++i) { measurementNetwork.last->complete(200, chunk(i)); }
+            }
+        }
+        check(model->state() == State::Releasing && !model->result() && proof.valid(),
+              "measurement holds result until exact transmission stop evidence");
+        TxOperationIntegrationTestAccess::stopEvidence(f.radio,
+            {proof, std::make_shared<const std::atomic<bool>>(true), TxCoordinator::monotonicMs() + 1000});
+        model->poll();
+        check(model->state() == State::Idle && model->result(), "qualified release completes measurement");
+        if (scenario == 0) {
+            const auto& result = model->result();
+            check(result && result->measurement.measurement && result->measurement.measurement->valid
+                      && result->powerSetting == 5 && result->mode == "USB" && result->transmitAntenna == "ANT1"
+                      && result->measurement.captures.size() == 1 && !result->measurement.fullScaleKnown,
+                  "composed workflow preserves measurement and station provenance");
+            if (result && result->measurement.measurement) {
+                for (const txlin::ImdProduct& product : result->measurement.measurement->products) {
+                    if (product.order == 3) {
+                        check(std::abs(product.dbcPerTone + 40) < .1, "composed workflow measures analytic -40 dBc IMD3");
+                    }
+                }
+            }
+            check(!model->prepare(session, config, request, true), "persistent measurement controller preserves TX cooldown");
+        } else {
+            check(model->result() && !model->result()->measurement.measurement
+                      && !model->result()->measurement.error.empty(),
+                  "canceled or over-power measurement cannot publish a successful analysis");
+        }
+    }
+}
+
 void grantedModelWireStopIdentity()
 {
     // Inject only the terminal writer. These raw observations were captured
     // from FLEX-6700 4.2.18.41174; no synthetic firmware/socket peer runs here.
-    for (int scenario = 0; scenario < 6; ++scenario) {
+    for (int scenario = 0; scenario < 7; ++scenario) {
         GrantedFixture f;
         QStringList writes;
         quint32 sequence = 100;
@@ -870,17 +1145,27 @@ void grantedModelWireStopIdentity()
         feed(QStringLiteral("R%1|0|").arg(stopSequence));
         feed(u"S0|interlock tx_client_handle=0x12345678 state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=");
         feed(u"S0|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=1 amplifier=");
-        check(!proof.valid() && f.coordinator.hasOwnership(), "owned READY cannot release model ownership");
+        check(!proof.valid() && f.coordinator.hasOwnership() && !a.operation.hasConfirmedStop(),
+              "owned READY cannot publish release or clear model ownership");
         feed(idle);
-        check(proof.valid(), "complete terminal stop trace produces original model stop evidence");
+        check(proof.valid() && !a.operation.hasConfirmedStop(),
+              "wire certificate alone cannot publish release before model validation");
+        if (scenario == 6) {
+            wire.reset(2, 0x12345678);
+            TxOperationIntegrationTestAccess::stopEvidence(f.radio, proof);
+            check(!a.operation.hasConfirmedStop() && f.coordinator.hasOwnership(),
+                  "wire teardown revokes queued evidence before model can publish release");
+            continue;
+        }
         // setBackendForTest deliberately skips production signal wiring;
         // inject into the same receiver, preserving its exact-token checks.
         TxOperationIntegrationTestAccess::stopEvidence(f.radio, proof);
-        check(!f.coordinator.hasOwnership() && !f.coordinator.recovering(),
-              "production model consumes qualified evidence after each cleanup route");
+        check(!f.coordinator.hasOwnership() && !f.coordinator.recovering() && a.operation.hasConfirmedStop(),
+              "production model retains exact-operation release after each qualified cleanup route");
         const auto b = f.grants.acquire(f.b, f.gb.grant, 1, TxCoordinator::Activity::Mox);
         const auto replacement = TxController::fromGrantedPtt(&f.radio, b.input, b.operation);
-        check(b.accepted() && replacement.start() && writes.size() == 3 && writes.last() == "xmit 1",
+        check(b.accepted() && replacement.start() && !b.operation.hasConfirmedStop()
+                  && a.operation.hasConfirmedStop() && writes.size() == 3 && writes.last() == "xmit 1",
               "fresh client reaches terminal writer after complete model-to-wire handoff");
     }
 }
@@ -3759,6 +4044,8 @@ int main(int argc, char** argv)
     serialInputQueueLifetimes();
     testInjectionReopensAdmission();
     grantedModelBindingAndHandoff();
+    aetherPDRunLeaseLifecycle();
+    aetherPDMeasurementWorkflow();
     grantedModelWireStopIdentity();
     grantedModelPreflightAndCancellation();
     grantedModelSessionAndActivityBoundaries();

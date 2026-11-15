@@ -37,6 +37,15 @@ fi
 rm -f "$state/.w" 2>/dev/null
 SHIM_STATE_DIR=$state
 export SHIM_STATE_DIR
+# Only a trusted launcher can supply the live session descriptors. The
+# ordinary shim package and startup remain independent of AetherPD.
+if [ -n "${SHIM_PD_IQ_FD:-}${SHIM_PD_API_FD:-}${SHIM_PD_GUARD_FD:-}${SHIM_PD_SETUP_FD:-}" ]; then
+  "$dir/unpack-armv7" "$dir/aether-pd-armv7.gz" "$SHIM_RUN_DIR/aether-pd" || exit 1
+  "$dir/unpack-armv7" "$dir/pd-unkey-guard-armv7.gz" "$SHIM_RUN_DIR/pd-unkey-guard" || exit 1
+  if [ "${SHIM_PD_OWN_LEASE_GUARD:-0}" = 1 ]; then
+    "$dir/unpack-armv7" "$dir/pd-lease-guard-armv7.gz" "$SHIM_RUN_DIR/pd-lease-guard" || exit 1
+  fi
+fi
 # Below SmartSDR, so the radio wins when the one core is contended.
 if command -v nice >/dev/null 2>&1; then
   exec nice -n 10 "$bin"

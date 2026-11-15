@@ -41,6 +41,12 @@ func env(k, def string) string {
 }
 
 func main() {
+	if runPDSessionMode() {
+		return
+	}
+	if runPDReceiveGuardianMode() {
+		return
+	}
 	var (
 		stateDir  = flag.String("state", env("SHIM_STATE_DIR", "/var/lib/flex-tailnet-shim"), "state directory (persists across reboots)")
 		radioAddr = flag.String("radio", env("SSDR_RADIO_ADDRESS", "172.30.1.1"), "radio API address (set by the radio)")
@@ -53,8 +59,12 @@ func main() {
 	startLogSink()
 	log.Printf("flex-tailnet-shim %s starting; state in %s", version(), *stateDir)
 
+	pdProcess, pdErr := startInheritedAetherPD()
+	if pdErr != nil {
+		log.Fatalf("AetherPD startup: %v", pdErr)
+	}
 	disc := &Discovery{}
-	node := &Node{StateDir: *stateDir, RunDir: *runDir, RadioAddr: *radioAddr, MaxMTU: *maxMTU, Discovery: disc}
+	node := &Node{StateDir: *stateDir, RunDir: *runDir, RadioAddr: *radioAddr, MaxMTU: *maxMTU, Discovery: disc, pdProcess: pdProcess}
 	disc.OnChange = node.RefreshRoutes
 	disc.Start()
 	if err := node.load(); err != nil {

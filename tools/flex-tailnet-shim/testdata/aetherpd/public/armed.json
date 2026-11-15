@@ -1,0 +1,19 @@
+{
+  "input_limited_samples": 0,
+  "calibration_control": true,
+  "calibration_state": "armed",
+  "calibration_samples_left": 192000,
+  "available": true,
+  "state": "calibration_armed",
+  "registered": true,
+  "keyed": false,
+  "correction_enabled": true,
+  "correcting": false,
+  "calibration_required": false,
+  "faults": {
+    "dispatch_deadlines": 0,
+    "send_errors": 0,
+    "rejected_input": 0,
+    "stale_iq": 0
+  }
+}

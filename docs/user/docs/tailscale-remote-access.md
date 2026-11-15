@@ -435,6 +435,8 @@ about a fifth of one core and around 34 MB of memory.
 
 ## Troubleshooting
 
+
+
 - **The container won't install or start**: check that the radio runs
   firmware 4.2.18 or later (see [Firmware Update](./firmware-update.md)).
 - **Remote Access says "Unavailable"**: connect to the radio over its
@@ -468,6 +470,124 @@ about a fifth of one core and around 34 MB of memory.
   - set the applet to the device's LAN address.
 - Before reporting a problem, turn on the relevant log categories in **Help →
   Support & Diagnostics...** (see [Support and Logging](./support-and-logging.md)).
+
+### AetherPD diagnostics in development builds
+
+Development builds of the shim can report an on-radio AetherPD waveform's
+state through authenticated diagnostics. A
+`recalibration_required` result means correction has been bypassed after a
+transport fault and is waiting for a validated model. `unavailable` means the
+shim could not obtain a valid current report. Installing the released
+Tailscale service does not install the experimental AetherPD waveform.
+
+Development diagnostics can also retrieve a short raw DAX IQ snapshot from
+the session already running on the radio. This does not transmit or change
+the IQ stream. Snapshots expire and cannot be retrieved after the session is
+stopped or replaced. The analyzer window is not yet connected to this capture
+path; this is not a released measurement feature.
+
+In development builds with a prepared local AetherPD session, authenticated
+stop ends the process owned by that shim. A stop request is acknowledged
+before the independent guardian finishes restoring a safe radio mode. The
+shim leaves separately started AetherPD processes alone.
+
+The development service can accept an explicit start request bound to your
+current radio connection. Starting never keys the radio or arms calibration.
+After a reboot, it needs the new connection identity; it cannot reuse a saved
+session handle. Automatic AetherPD startup and installation are still in
+development. A missing or unrelated waveform is reported
+as unavailable.
+
+In development builds, open **Tools → Waveforms... → AetherPD…** to control a
+prepared installation. The window loads this computer's saved Remote Access
+credential for the connected radio. Opening it reads status only.
+
+- **Start AetherPD** requests a session for the current connection. It does
+  not transmit or arm calibration. A start receipt is followed by a status
+  read; it is not confirmation that correction is running.
+- **Arm calibration** requires fresh, unkeyed status and radio APD off.
+  **Cancel calibration** withdraws the calibration request.
+- **Stop AetherPD** can interrupt startup. Closing the window leaves the
+  session running; use Stop when you want it stopped.
+- **Restore receive** explicitly requests the checked receive recovery
+  described below. It is never triggered by opening or closing the window.
+- **Refresh** reads status or reloads a missing/rejected credential. After a
+  radio reconnect, close and reopen the window for the new connection.
+
+**Status unknown** means there is no fresh observation. The window does not
+retry Start, calibration or Stop automatically after a lost reply. The released
+Remote Access package alone does not supply the AetherPD installation required
+by these controls.
+
+Signing out or replacing the admin token also stops the shim's owned AetherPD
+session and cancels calibration. Signing in again does not restart correction
+or rearm calibration. A rejected sign-out or failed token update leaves the
+existing session intact.
+
+When the receive slice survives a stopped, journaled session, the development
+interface's authenticated `POST /v1/aetherpd/receive/restore` can reapply the
+captured modeled receive settings, including filter, AGC and noise-blanker
+level. It accepts no parameters or body, requires the DSP and unkey helper to
+have stopped, and verifies ownership and radio readback. Reassigned slices are
+refused. Missing slices require the additional API-loss checks described below.
+The development window exposes this request as **Restore receive**.
+
+A managed development session also requires an independent unkey helper.
+Startup waits for that helper before launching the DSP. It can stop software
+PTT owned by the prepared GUI client if the DSP exits; it cannot start a
+transmission. The shim can also own an independent lease guardian that preserves the radio
+API connection until it can safely restore the original receive mode. Receive
+restoration waits for that guardian to finish and checks the original client
+and panadapter ownership. Installing the shim alone does not provision this
+session. A separate unprivileged receive guardian keeps the modeled receive
+snapshot in memory so it can restore settings after the shim process exits.
+It verifies the original receiver and radio state before writing, and cannot
+recreate a missing slice or start a transmission. The snapshot does not survive
+a reboot. Managed startup currently supports USB only and rejects other modes
+before launching the DSP.
+
+The development calibration interface can arm a bounded source for the next
+AetherSDR software PTT after PD mode and RF settings are selected on the
+prepared GUI's slice. Arming alone emits
+no signal and expires after 30 seconds. It checks a wall-clock expiry and emits at most eight seconds of calibration
+samples before returning to microphone input. Unkey, configuration changes or
+a fault cancel it; recovery never rearms it. Saved settings for other bands
+do not cancel an arm; changing live transmit power does. Completing the source
+sequence does not by itself prove successful correction. Cancel also cancels
+an arm request still being prepared. If an arm request loses its reply, the shim
+cancels it separately; if cancellation cannot be confirmed, it stops the owned
+DSP process. Use PTT to unkey the radio.
+These controls remain in development and are not included in the released
+Tailscale service.
+Loss of the waveform's radio API connection can remove its active PD receive
+slice, even while unkeyed. The development restore request can recreate a
+receiver after confirmed API loss for a basic single-receiver USB/LSB session,
+provided the original GUI and pan survive and the radio reports free resources.
+It checks allocation and ownership before restoring receive settings. A confirmed conflict with another receiver using the original DAX channel
+makes the automatic receive guardian refuse restoration promptly and report the
+reason in its log. It leaves that receiver untouched. Advanced
+receive profiles and ambiguous allocation replies are refused; recreate the
+receive slice in AetherSDR in those cases. Recovery requires an explicit request
+and never transmits or rearms calibration. Automatic lifecycle/UI recovery and
+FLEX-6000 recovery qualification remain unfinished.
+For a process started by the shim, status comes from that process's private
+connection. After it exits, status reports `unavailable` even if another
+waveform is serving diagnostic status elsewhere.
+
+The authenticated development status includes `input_limited_samples`. A
+nonzero count means samples clipped before correction during the current or
+last transmission. Reduce **Microphone gain** before the next test; the count
+resets when transmission starts. An active correction flag alone does not
+establish clean RF output.
+
+The AetherPD development session resumes a recent correction model after a
+brief transmit scheduling stall only after fresh DAX IQ, alignment and a
+matching linear-path fit validate it. Correction stays bypassed during those
+checks. The candidate must be less than 30 seconds old; changed configuration,
+stale IQ or a send error discards it. This assumes the amplifier's unexcited
+nonlinear response has not changed. Recovery never transmits or starts a new
+calibration signal. This behavior remains under bench qualification.
+
 
 ## Licensing
 

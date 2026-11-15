@@ -1,0 +1,44 @@
+{
+  "updated_utc": "2026-11-15T07:32:25.553914+00:00",
+  "status": "work_in_progress_not_production_ready",
+  "branch": "feat/aetherpd-shim-integration",
+  "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
+  "purpose": "Durable source checkpoint requested by maintainer; includes unfinished drafts and preserves prior tested code. This is not a release or merge recommendation.",
+  "evidence_root": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration",
+  "authoritative_plan": "production-completion-plan-20261113.json",
+  "completed_evidence": [
+    "Local DAX IQ capture and bounded on-radio correction have prior bench evidence; sustained final-candidate RF qualification remains.",
+    "Installed shim retention, reboot and rollback proofs are preserved in their separate reports.",
+    "Signed candidateF carrier upgrade committed on the8600 with bounded worker capabilities and temporary child cleanup.",
+    "Native request upload, authentication and completion components passed9 integration,9 sanitizer and15 upload regression tests before the current RAM-handoff changes.",
+    "Native launch inspection established UID1001 extraction versus UID78666 runtime and world-readable retained upload archives; credential-bearing waveform packages must not ship.",
+    "Temporary test waveforms and exact leftover archives were removed. Installed shim remained running, FDX off, no RF."
+  ],
+  "current_changes": {
+    "description": "Authenticated installed-shim API and fixed native launcher RAM credential handoff, plus a root-only one-request credential descriptor broker. No new radio deployment.",
+    "builds": "Native host request fixtures and ARM64 session helpers built.",
+    "tests": "The new Go race suite ran: API boundary, lifetime, exclusion, revocation and identity cases passed. Two socket-refusal assertions failed and require diagnosis; do not claim this suite passes.",
+    "unfinished": [
+      "Actual Go-to-native handoff integration test",
+      "Carrier consumption of public receipt/credential commitment and RAM credential",
+      "Full updated boot build and cross-platform regression gates",
+      "Integration into signed release, live upgrade and automatic outer cleanup"
+    ]
+  },
+  "remaining": [
+    "Complete RAM-only request authorization for upgrades without any credential in upload archives.",
+    "Establish initial-install trust independently of an already-installed shim.",
+    "Complete ordinary-user operator approval, credential, UI and PR4770 integration.",
+    "Resolve alignment slip and cold-start bypass; qualify final process graph, failure/unkey/restart behavior.",
+    "Repeat matched8600 RF measurements and compare final candidate with stock APD.",
+    "Complete actual6300 teammate hardware qualification, disk/resource budgets, docs and release gates."
+  ],
+  "constraints": [
+    "LP100A deferred",
+    "No GitHub issues; local tracking",
+    "No AetherTX or settings restore",
+    "RF only within explicitly authorized bounded bench limits",
+    "No new live tests during this checkpoint"
+  ],
+  "production_ready": false
+}
