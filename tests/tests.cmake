@@ -5693,6 +5693,11 @@ target_include_directories(client_cessb_test PRIVATE src)
 target_link_libraries(client_cessb_test PRIVATE aethercore Qt6::Core)
 add_test(NAME client_cessb_test COMMAND client_cessb_test)
 
+add_executable(client_mb_limiter_test tests/client_mb_limiter_test.cpp)
+target_include_directories(client_mb_limiter_test PRIVATE src)
+target_link_libraries(client_mb_limiter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME client_mb_limiter_test COMMAND client_mb_limiter_test)
+
 add_executable(client_reverb_test
     tests/client_reverb_test.cpp
     src/core/ClientReverb.cpp
@@ -11038,6 +11043,7 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientDbHistoryWidget.cpp
     src/gui/StripLevelerPanel.cpp
     src/gui/StripPeakPanel.cpp
+    src/gui/StripMbLimiterPanel.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
 target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)

@@ -113,13 +113,14 @@ the one final conversion to 16-bit.
 
 ```
 PC mic → (RN2) → Tube → EQ → LVLR → CFC → Compressor → Exciter → Reverb
-       → Peak control → Final Output (Quindar, limiter, meters) → radio
+       → MB limiter → Peak control → Final Output (Quindar, limiter, meters) → radio
 ```
 
 The middle seven stages are the reorderable chain; the order above is the
-default. **Peak control** is not part of it: it always runs last, after the
-chain, because it bounds the envelope of everything ahead of it. If you saved
-your own order before LVLR and CFC existed, they are added
+default. **MB limiter** and **Peak control** are not part of it: they always
+run last, in that order, after the chain, because they bound the peaks of
+everything ahead of them. If you saved your own order before LVLR and CFC
+existed, they are added
 at the end of it; drag them ahead of the Compressor to match the default.
 **RN2** is not a chain stage: when it is on it always runs first, ahead of
 every stage, so the tube and everything after it work on denoised audio. Its
@@ -140,6 +141,7 @@ with no threshold to set. To tame sibilance, use a gentle EQ cut around
 | **Compressor** | Compressor with Drive/Phase peak-to-average (PAPR) controls and its own brickwall limiter. |
 | **Exciter** | AetherVoice™ harmonic exciter. |
 | **Reverb** | Freeverb room reverb. Off by default. |
+| **MB limiter** | Four-band look-ahead limiter: holds each band's peaks under its own threshold, so one band (a boomy low, sibilance) cannot dominate what follows. Fixed ahead of Peak control; off by default. |
 | **Peak control** | Clipper and CESSB overshoot control that holds the SSB envelope under a ceiling, for more average power at the same peak. Always last; off by default. |
 | **Final Output** | Final limiter (**LIM**), DC block, test tone, Quindar tones, output meters with **HOLD**, and a waveform scope. |
 
@@ -536,6 +538,35 @@ Freeverb room reverb. Reverb trades intelligibility for size, so it ships
 PreDly 15 ms, Mix 8 %. Keep the reverb last in the chain; a compressor after
 it squashes the tail. Pre-delay adds directly to the delay of the wet signal,
 which you will notice on quick overs.
+
+### MB limiter (AetherTX)
+
+A four-band limiter with 5 ms of look-ahead. The voice is split into four
+bands at **X1**, **X2** and **X3** (Linkwitz-Riley crossovers that sum flat
+when nothing is limited), each band is held under its own **Threshold**, and
+the bands are added back together. Because it looks ahead, a band never passes
+a peak above its threshold, even on a sudden onset. It always runs after the
+chain and just ahead of Peak control, and ships **off**; tick its tab to turn
+it on.
+
+Each band's column shows its gain reduction.
+
+| Control | Range | What it does |
+|---|---|---|
+| **X1 / X2 / X3** | 80–500, 500–2000, 2000–6000 Hz | The crossovers, kept at least 1.5× apart. Defaults 250, 1000, 3000 Hz |
+| **Threshold** (per band) | −24 to 0 dBFS | The band's peak ceiling. Default −6 dBFS |
+| **Release** (per band) | 10 to 1000 ms | How fast the band recovers after a peak. Default 100 ms |
+
+**Delay.** The MB limiter adds 5 ms.
+
+**What it is for.** Tonal control under load: keeping a boomy low end or
+sibilant highs from taking over the clipper. It does not raise talk power; that
+is Peak control's **Clip**. Measured on a multitone ahead of Peak control, the
+limiter adds its own distortion at the same output level, so set thresholds
+only as low as the problem band needs.
+
+**Example: a boomy dynamic mic.** Low band Threshold −12 dBFS, Release 200 ms;
+the other bands at 0 dBFS so they pass untouched.
 
 ### Peak control (AetherTX)
 

@@ -9,6 +9,7 @@
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
 #include "core/ClientCessb.h"
+#include "core/ClientMbLimiter.h"
 #include "core/ClientLeveler.h"
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
@@ -55,6 +56,7 @@ private slots:
     void roundTripsTheCfcStage();
     void roundTripsTheLevelerStage();
     void roundTripsThePeakControl();
+    void roundTripsTheMbLimiter();
     void exportsAndRestoresCompressorDriveAndPhase();
     void legacyCompressorProfilesKeepCurrentDriveAndPhase();
     void importedCompressorValuesAreClamped();
@@ -403,6 +405,28 @@ void AetherTxProfilesTest::roundTripsThePeakControl()
     QCOMPARE(peak->clipDb(), 12.0f);
     QVERIFY(!peak->overshootControl());
     QCOMPARE(peak->outputDb(), -2.0f);
+}
+
+void AetherTxProfilesTest::roundTripsTheMbLimiter()
+{
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine, nullptr);
+    ClientMbLimiter* mbl = engine.clientMbLimiterTx();
+    QVERIFY(mbl);
+    mbl->setEnabled(true);
+    mbl->setCrossoversHz(150.0f, 700.0f, 2400.0f);
+    mbl->setThresholdDb(3, -14.0f);
+    QVERIFY(lib.saveFromCurrent("MBL Round Trip"));
+
+    mbl->setEnabled(false);
+    mbl->setCrossoversHz(250.0f, 1000.0f, 3000.0f);
+    mbl->setThresholdDb(3, -6.0f);
+    QVERIFY(lib.loadProfile("MBL Round Trip"));
+
+    QVERIFY(mbl->isEnabled());
+    QCOMPARE(mbl->crossoverHz(0), 150.0f);
+    QCOMPARE(mbl->crossoverHz(2), 2400.0f);
+    QCOMPARE(mbl->thresholdDb(3), -14.0f);
 }
 
 void AetherTxProfilesTest::exportsAndRestoresCompressorDriveAndPhase()

@@ -64,6 +64,9 @@ Optional native-48 kHz RN2 (switch on the Tube page; replaced the TX gate)
 └─────────┬──────────────────────────────────────────────────────────┘
           │
           ▼
+     ClientMbLimiter — 4-band LR4 look-ahead limiter (#4836), 5 ms, not a
+          │            chain stage: after the chain, ahead of peak control
+          ▼
      ClientCessb — WDSP COMP + CESSB + ALC peak control (#4836), not a chain
           │        stage: always after the chain; passband follows the
           │        radio TX filter

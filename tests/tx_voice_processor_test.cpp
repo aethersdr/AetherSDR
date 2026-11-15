@@ -3,6 +3,7 @@
 #include "core/Resampler.h"
 #include "core/ClientCfc.h"
 #include "core/ClientCessb.h"
+#include "core/ClientMbLimiter.h"
 #include "core/ClientLeveler.h"
 #include "core/TxChainLayout.h"
 #include "core/ClientFinalLimiter.h"
@@ -17,10 +18,12 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 using AetherSDR::ClientCessb;
+using AetherSDR::ClientMbLimiter;
 using AetherSDR::ClientCfc;
 using AetherSDR::ClientLeveler;
 using AetherSDR::ClientTube;
@@ -875,6 +878,67 @@ void testPeakControlRunsAfterTheChain()
     report("and leaves the latency", processor.latencyFrames() == baseLatency);
 }
 
+// The multiband limiter is not a chain stage either: with an empty chain it
+// runs, its look-ahead joins the latency, and it runs ahead of the peak
+// control (both on equals the limiter's output fed through peak control).
+void testMbLimiterRunsAheadOfPeakControl()
+{
+    const auto run = [](bool limiter, bool peak) {
+        ClientMbLimiter mbl;
+        ClientCessb cessb;
+        for (int b = 0; b < ClientMbLimiter::kBands; ++b) {
+            mbl.setThresholdDb(b, -18.0f);
+        }
+        TxVoiceProcessor processor;
+        TxVoiceProcessor::Processors processors;
+        processors.mbLimiter = &mbl;
+        processors.cessb = &cessb;
+        processor.setProcessors(processors);
+        processor.setStageOrder(0);
+        processor.setMeasurementCaptureEnabled(true);
+        processor.prepare(48000, 1024);
+        const int base = processor.latencyFrames();
+        mbl.setEnabled(limiter);
+        cessb.setEnabled(peak);
+        std::vector<float> post;
+        for (int block = 0; block < 20; ++block) {
+            QByteArray tone = makeCanonicalTone(480, 48000, 700.0f);
+            processor.processCapturedInt16(tone);
+            const QByteArray& p = processor.postChannelStripFloat48Stereo();
+            const auto* f = reinterpret_cast<const float*>(p.constData());
+            post.insert(post.end(), f, f + p.size() / static_cast<int>(sizeof(float)));
+        }
+        return std::make_tuple(post, processor.latencyFrames() - base, 0);
+    };
+    const auto [limited, limLatency, unused1] = run(true, false);
+    const auto [open, openLatency, unused2] = run(false, false);
+    report("an enabled multiband limiter runs with an empty chain", limited != open);
+    report("its look-ahead joins the reported latency", limLatency == 240 && openLatency == 0);
+
+    // Order: peak control alone on the limiter's output must equal both on.
+    ClientMbLimiter mbl;
+    for (int b = 0; b < ClientMbLimiter::kBands; ++b) {
+        mbl.setThresholdDb(b, -18.0f);
+    }
+    mbl.prepare(48000);
+    mbl.setEnabled(true);
+    ClientCessb cessb;
+    cessb.prepare(48000);
+    cessb.setEnabled(true);
+    std::vector<float> chained = open;
+    for (std::size_t at = 0; at < chained.size(); at += 960) {
+        mbl.process(chained.data() + at, 480, 2);
+        cessb.process(chained.data() + at, 480, 2);
+    }
+    const auto [both, bothLatency, unused3] = run(true, true);
+    float diff = 0.0f;
+    for (std::size_t i = 0; i < both.size() && i < chained.size(); ++i) {
+        diff = std::max(diff, std::fabs(both[i] - chained[i]));
+    }
+    report("it runs ahead of peak control", diff < 1e-5f, std::to_string(diff));
+    report("and both latencies add", bothLatency == 240 + cessb.latencyFrames());
+}
+
 void testNonFiniteSamplesCannotPoisonEgressSrc()
 {
     std::vector<float> input(480 * 2, 0.1f);
@@ -1361,6 +1425,7 @@ int main()
     testCfcStageRunsAndBypasses();
     testLevelerStageRunsAndBypasses();
     testPeakControlRunsAfterTheChain();
+    testMbLimiterRunsAheadOfPeakControl();
     testNonFiniteSamplesCannotPoisonEgressSrc();
     testNonFiniteCapturedFloatCannotPoisonIngressSrc();
     testMeasurementCaptureCanBeDisabled();

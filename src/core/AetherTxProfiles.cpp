@@ -268,7 +268,7 @@ QJsonObject AetherTxProfiles::readFile(const QString& path,
     // rather than by its "kind", so a hand-written file still imports.
     static const char* kStageKeys[] = { "gate", "eq", "deess", "comp",
                                         "tube", "pudu", "reverb", "cfc",
-                                        "leveler", "peak" };
+                                        "leveler", "mblim", "peak" };
     const bool looksLikeProfile =
         root.contains(QStringLiteral("chain"))
         || std::any_of(std::begin(kStageKeys), std::end(kStageKeys),

@@ -71,6 +71,7 @@ class ClientReverb;
 class ClientCfc;
 class ClientLeveler;
 class ClientCessb;
+class ClientMbLimiter;
 class ClientFinalLimiter;
 class ClientTxTestTone;
 class RxClientEffects;
@@ -475,6 +476,7 @@ public:
     ClientCfc* clientCfcTx() { return m_clientCfcTx.get(); }
     ClientLeveler* clientLevelerTx() { return m_clientLevelerTx.get(); }
     ClientCessb* clientCessbTx() { return m_clientCessbTx.get(); }
+    ClientMbLimiter* clientMbLimiterTx() { return m_clientMbLimiterTx.get(); }
 
     // Final brickwall limiter — sits at the very tail of the TX audio
     // path, after every user-configurable chain stage AND after PC mic
@@ -668,6 +670,10 @@ public:
     // (ClientCessbJson). Save emits clientCessbStateChanged().
     void loadClientCessbSettings();
     void saveClientCessbSettings();
+    // Multiband limiter, one nested-JSON key (ClientMbLimiterJson). Save
+    // emits clientMbLimiterStateChanged().
+    void loadClientMbLimiterSettings();
+    void saveClientMbLimiterSettings();
     // The radio's TX filter, which the peak control's passband stays inside.
     void setTxFilterPassband(int lowHz, int highHz);
     void loadClientFinalLimiterSettings();
@@ -932,6 +938,8 @@ signals:
     void clientLevelerStateChanged();
     // Fired by saveClientCessbSettings().
     void clientCessbStateChanged();
+    // Fired by saveClientMbLimiterSettings().
+    void clientMbLimiterStateChanged();
 
 private slots:
     void onTxAudioReady();
@@ -1490,6 +1498,7 @@ private:
     std::unique_ptr<ClientCfc> m_clientCfcTx;
     std::unique_ptr<ClientLeveler> m_clientLevelerTx;
     std::unique_ptr<ClientCessb> m_clientCessbTx;
+    std::unique_ptr<ClientMbLimiter> m_clientMbLimiterTx;
     std::unique_ptr<ClientFinalLimiter> m_clientFinalLimiterTx;
     std::unique_ptr<ClientTxTestTone>   m_clientTxTestTone;
     std::unique_ptr<WsprBeacon>         m_wsprBeacon;
@@ -1526,6 +1535,7 @@ private:
     // The final peak control runs after the chain, outside TxChainStage, so
     // BYPASS snapshots it beside RN2.
     bool m_txBypassSnapshotCessb{false};
+    bool m_txBypassSnapshotMbLimiter{false};
     bool m_txBypassActive{false};
     // RX chain — same packing convention.  RxChainStage::None terminates
     // the list.  Phase 0 dispatcher iterates this but every stage is a

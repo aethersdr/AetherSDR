@@ -15,6 +15,7 @@
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
 #include "core/ClientCessb.h"
+#include "core/ClientMbLimiter.h"
 #include "core/ClientLeveler.h"
 #include "core/ChannelStripPresets.h"
 #include "core/ClientFinalLimiter.h"
@@ -62,6 +63,7 @@ private slots:
     void levelerSettingsRoundTripAndClamp();
     void peakSettingsRoundTripAndClamp();
     void bypassRestoresThePeakControl();
+    void mbLimiterSettingsRoundTripAndBypass();
 };
 
 void TxChainSettingsTest::initTestCase()
@@ -490,6 +492,43 @@ void TxChainSettingsTest::bypassRestoresThePeakControl()
     engine.setTxBypassed(true);
     engine.setTxBypassed(false);
     QVERIFY(!peak->isEnabled());
+}
+
+void TxChainSettingsTest::mbLimiterSettingsRoundTripAndBypass()
+{
+    {
+        AudioEngine engine;
+        ClientMbLimiter* mbl = engine.clientMbLimiterTx();
+        QVERIFY(mbl);
+        QVERIFY(!mbl->isEnabled());  // ships off
+        mbl->setEnabled(true);
+        mbl->setCrossoversHz(200.0f, 900.0f, 2800.0f);
+        mbl->setThresholdDb(1, -10.0f);
+        mbl->setReleaseMs(2, 400.0f);
+        engine.saveClientMbLimiterSettings();
+    }
+    {
+        AudioEngine reloaded;
+        ClientMbLimiter* mbl = reloaded.clientMbLimiterTx();
+        QVERIFY(mbl->isEnabled());
+        QCOMPARE(mbl->crossoverHz(1), 900.0f);
+        QCOMPARE(mbl->thresholdDb(1), -10.0f);
+        QCOMPARE(mbl->releaseMs(2), 400.0f);
+
+        reloaded.setTxBypassed(true);
+        QVERIFY(!mbl->isEnabled());
+        reloaded.setTxBypassed(false);
+        QVERIFY(mbl->isEnabled());
+    }
+    AppSettings::instance().setValue(
+        "ClientMbLimiterTx",
+        QStringLiteral(R"({"enabled":false,"x1":5,"x2":"mid","bands":[{"thresholdDb":-90,"releaseMs":99999}]})"));
+    AudioEngine clamped;
+    ClientMbLimiter* mbl = clamped.clientMbLimiterTx();
+    QVERIFY(!mbl->isEnabled());
+    QCOMPARE(mbl->crossoverHz(0), ClientMbLimiter::kMinCrossoverHz[0]);
+    QCOMPARE(mbl->thresholdDb(0), ClientMbLimiter::kMinThresholdDb);
+    QCOMPARE(mbl->releaseMs(0), ClientMbLimiter::kMaxReleaseMs);
 }
 
 int main(int argc, char** argv)

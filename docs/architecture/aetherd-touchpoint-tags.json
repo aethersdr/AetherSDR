@@ -329,6 +329,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ClientMbLimiter.h": {
+  "tag": "universal",
+  "note": "Client TX four-band LR4 look-ahead limiter after the chain, ahead of peak control (crossovers, per-band threshold/release + gain reduction); radio-agnostic engine DSP feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientMbLimiterJson.h": {
+  "tag": "universal",
+  "note": "ClientMbLimiter's one-object JSON shape shared by its settings key and TX profiles/presets; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ClientTube.h": {
   "tag": "universal",
   "note": "Client TX-chain tube saturator DSP (drive/tone/env follower); radio-agnostic engine DSP, no vendor ties.",

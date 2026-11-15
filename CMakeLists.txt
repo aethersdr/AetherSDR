@@ -1039,6 +1039,8 @@ set(CORE_SOURCES
     src/core/ClientLevelerJson.cpp
     src/core/ClientCessb.cpp  # WDSP COMP + CESSB final peak control (RFC #4836)
     src/core/ClientCessbJson.cpp
+    src/core/ClientMbLimiter.cpp  # four-band look-ahead limiter ahead of peak control (RFC #4836)
+    src/core/ClientMbLimiterJson.cpp
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp
@@ -1606,6 +1608,7 @@ set(GUI_SOURCES
     src/gui/ClientDbHistoryWidget.cpp
     src/gui/StripLevelerPanel.cpp
     src/gui/StripPeakPanel.cpp
+    src/gui/StripMbLimiterPanel.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
     src/gui/AetherialAudioStrip.cpp

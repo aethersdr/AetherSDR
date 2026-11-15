@@ -31,6 +31,8 @@
 // CFC:         --cfc-fft 1024 --cfc-precomp 0 --cfc-posteq 0|1 --cfc-postgain 0
 //              --cfc-band<N>-hz / -comp / -eq (N = 1..10) override the
 //              first-enable profile's band N; --cfc-flat 1 zeroes every band
+// MB limiter:  --mbl-x1 250 --mbl-x2 1000 --mbl-x3 3000 --mbl-thr1..4 -6 --mbl-rel1..4 100
+//              (after the chain, ahead of the peak control)
 // Peak ctrl:   --cessb-clip 3 --cessb-os 1|0 --cessb-out -1 --cessb-low 150 --cessb-high 2850
 //              (the final peak control, after the chain, ahead of Final Output)
 // Final:       --lim-ceiling -0.5 (Final Output LIM) --lim-lookahead 1.5 (ms)
@@ -49,6 +51,7 @@
 #include "core/ClientCfc.h"
 #include "core/ClientComp.h"
 #include "core/ClientCessb.h"
+#include "core/ClientMbLimiter.h"
 #include "core/ClientLeveler.h"
 #include "core/ClientEq.h"
 #include "core/ClientFinalLimiter.h"
@@ -294,6 +297,17 @@ const char* const kKnownKeys[] = {
     "cfc-band10-hz",
     "cfc-band10-comp",
     "cfc-band10-eq",
+    "mbl-x1",
+    "mbl-x2",
+    "mbl-x3",
+    "mbl-thr1",
+    "mbl-thr2",
+    "mbl-thr3",
+    "mbl-thr4",
+    "mbl-rel1",
+    "mbl-rel2",
+    "mbl-rel3",
+    "mbl-rel4",
     "cessb-clip",
     "cessb-os",
     "cessb-out",
@@ -333,6 +347,7 @@ struct Chain {
     ClientPudu pudu;
     ClientFinalLimiter limiter;
     ClientCessb cessb;
+    ClientMbLimiter mbl;
 
     void configure(const Settings& s, bool processed)
     {
@@ -440,6 +455,17 @@ struct Chain {
             cfc.setBands(bands);
             cfc.setEnabled(true);
         }
+        if (s.any("mbl-")) {
+            mbl.setCrossoversHz(s.get("mbl-x1", ClientMbLimiter::kDefaultCrossoverHz[0]),
+                                s.get("mbl-x2", ClientMbLimiter::kDefaultCrossoverHz[1]),
+                                s.get("mbl-x3", ClientMbLimiter::kDefaultCrossoverHz[2]));
+            for (int b = 0; b < ClientMbLimiter::kBands; ++b) {
+                const std::string n = std::to_string(b + 1);
+                mbl.setThresholdDb(b, s.get(("mbl-thr" + n).c_str(), ClientMbLimiter::kDefaultThresholdDb));
+                mbl.setReleaseMs(b, s.get(("mbl-rel" + n).c_str(), ClientMbLimiter::kDefaultReleaseMs));
+            }
+            mbl.setEnabled(true);
+        }
         if (s.any("cessb-")) {
             cessb.setClipDb(s.get("cessb-clip", 3));
             cessb.setOvershootControl(s.get("cessb-os", 1) > 0.5);
@@ -479,6 +505,7 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     processors.cfc = &chain->cfc;
     processors.leveler = &chain->leveler;
     processors.cessb = &chain->cessb;
+    processors.mbLimiter = &chain->mbl;
     processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
     using Stage = TxVoiceProcessor::Stage;

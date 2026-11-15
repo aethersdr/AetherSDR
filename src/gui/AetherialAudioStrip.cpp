@@ -15,6 +15,7 @@
 #include "StripCfcPanel.h"
 #include "StripLevelerPanel.h"
 #include "StripPeakPanel.h"
+#include "StripMbLimiterPanel.h"
 #include "StripTubePanel.h"
 #include "StripWaveformPanel.h"
 #include "StripFinalOutputPanel.h"
@@ -26,6 +27,7 @@
 #include "core/ClientReverb.h"
 #include "core/ClientCfc.h"
 #include "core/ClientCessb.h"
+#include "core/ClientMbLimiter.h"
 #include "core/ClientLeveler.h"
 #include "core/ClientTube.h"
 
@@ -144,10 +146,11 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     m_tabs = new StageTabBar(QStringLiteral("aetherTx"), content);
     StageTabBar::Host host;
     host.isChainStage = [](int id) {
-        // Peak control is fixed last before Final Output: it bounds the
-        // envelope of everything ahead of it, so it cannot move.
+        // The multiband limiter and Peak control are fixed last before Final
+        // Output: they bound the peaks of everything ahead of them, so they
+        // cannot move.
         const auto stage = static_cast<Stage>(id);
-        return stage != Output && stage != Peak;
+        return stage != Output && stage != Peak && stage != MbLimiter;
     };
     host.stageEnabled = [this](int id) { return stageEnabled(static_cast<Stage>(id)); };
     host.setStageEnabled = [this](int id, bool on) {
@@ -194,6 +197,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     m_reverb      = new StripReverbPanel      (m_audio, this);
     m_cfc         = new StripCfcPanel         (m_audio, this);
     m_leveler     = new StripLevelerPanel     (m_audio, this);
+    m_mbLimiter   = new StripMbLimiterPanel   (m_audio, this);
     m_peak        = new StripPeakPanel        (m_audio, this);
     m_waveform    = new StripWaveformPanel    (m_audio, this);
     m_finalOutput = new StripFinalOutputPanel (m_audio, this);
@@ -206,6 +210,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     addStage(Reverb,  QStringLiteral("Reverb"),     makeStagePage(m_reverb));
     addStage(Cfc,     QStringLiteral("CFC"),        makeStagePage(m_cfc));
     addStage(Leveler, QStringLiteral("LVLR"),       makeStagePage(m_leveler));
+    addStage(MbLimiter, QStringLiteral("MB limiter"), makeStagePage(m_mbLimiter));
     addStage(Peak,    QStringLiteral("Peak control"), makeStagePage(m_peak));
 
     // Output and waveform share the last tab: the meter is what you read and
@@ -414,6 +419,8 @@ bool AetherialAudioStrip::stageEnabled(Stage stage) const
         case Reverb: return m_audio->clientReverbTx() && m_audio->clientReverbTx()->isEnabled();
         case Cfc:    return m_audio->clientCfcTx()    && m_audio->clientCfcTx()->isEnabled();
         case Leveler: return m_audio->clientLevelerTx() && m_audio->clientLevelerTx()->isEnabled();
+        case MbLimiter:
+            return m_audio->clientMbLimiterTx() && m_audio->clientMbLimiterTx()->isEnabled();
         case Peak:   return m_audio->clientCessbTx() && m_audio->clientCessbTx()->isEnabled();
         default:     return false;
     }
@@ -458,6 +465,12 @@ void AetherialAudioStrip::setStageEnabled(Stage stage, bool on)
             if (auto* l = m_audio->clientLevelerTx()) {
                 l->setEnabled(on);
                 m_audio->saveClientLevelerSettings();
+            }
+            break;
+        case MbLimiter:
+            if (auto* m = m_audio->clientMbLimiterTx()) {
+                m->setEnabled(on);
+                m_audio->saveClientMbLimiterSettings();
             }
             break;
         case Peak:
@@ -631,6 +644,7 @@ void AetherialAudioStrip::refreshAllPanelsFromEngine()
     if (m_reverb) m_reverb->syncControlsFromEngine();
     if (m_cfc)    m_cfc->syncControlsFromEngine();
     if (m_leveler) m_leveler->syncControlsFromEngine();
+    if (m_mbLimiter) m_mbLimiter->syncControlsFromEngine();
     if (m_peak)    m_peak->syncControlsFromEngine();
     if (m_waveform)    m_waveform->syncControlsFromEngine();
     if (m_finalOutput) m_finalOutput->syncControlsFromEngine();

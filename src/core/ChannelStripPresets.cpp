@@ -7,6 +7,8 @@
 #include "ClientLevelerJson.h"
 #include "ClientCessb.h"
 #include "ClientCessbJson.h"
+#include "ClientMbLimiter.h"
+#include "ClientMbLimiterJson.h"
 #include "ClientComp.h"
 #include "ClientEq.h"
 #include "ClientFinalLimiter.h"
@@ -784,6 +786,10 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
     if (auto* p = engine->clientCessbTx()) {
         preset["peak"] = clientCessbToJson(*p);
     }
+    // Multiband limiter (after the chain, ahead of the peak control).
+    if (auto* m = engine->clientMbLimiterTx()) {
+        preset["mblim"] = clientMbLimiterToJson(*m);
+    }
 
     // RN2 mic pre-amp (#3054).  Sibling of the per-stage objects so a
     // future NR-cluster addition can extend `rn2` into an object —
@@ -944,6 +950,12 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
         applyClientCessbJson(*p, preset.value("peak").toObject());
     }
 
+    // Multiband limiter.
+    if (auto* m = engine->clientMbLimiterTx();
+        m && preset.contains("mblim") && preset.value("mblim").isObject()) {
+        applyClientMbLimiterJson(*m, preset.value("mblim").toObject());
+    }
+
     // Final brickwall limiter.
     if (auto* lim = engine->clientFinalLimiterTx();
         lim && preset.contains("finalLimiter")
@@ -977,6 +989,7 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
     engine->saveClientCfcSettings();
     engine->saveClientLevelerSettings();
     engine->saveClientCessbSettings();
+    engine->saveClientMbLimiterSettings();
     engine->saveClientFinalLimiterSettings();
 }
 
