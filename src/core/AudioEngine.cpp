@@ -226,9 +226,12 @@ qsizetype rawEquivalentAudioBytes(qsizetype bytes, int sampleRate,
         bytes * producerRate / sampleRate);
 }
 
+enum class TrimSearch { AroundRequested, AtOrAfterRequested };
+
 qsizetype quietStereoFloatTrimPoint(const QByteArray& buffer,
                                     qsizetype requestedBytes,
-                                    int sampleRate)
+                                    int sampleRate,
+                                    TrimSearch search)
 {
     constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
     constexpr int kTrimSearchMs = 6;
@@ -246,8 +249,8 @@ qsizetype quietStereoFloatTrimPoint(const QByteArray& buffer,
 
     const qsizetype searchFrames =
         std::max<qsizetype>(1, sampleRate * kTrimSearchMs / 1000);
-    const qsizetype begin =
-        std::max<qsizetype>(1, requestedFrame - searchFrames);
+    const qsizetype begin = search == TrimSearch::AtOrAfterRequested
+        ? requestedFrame : std::max<qsizetype>(1, requestedFrame - searchFrames);
     const qsizetype end =
         std::min<qsizetype>(frames - 1, requestedFrame + searchFrames);
     const auto* samples = reinterpret_cast<const float*>(buffer.constData());
@@ -293,10 +296,11 @@ void fadeInStereoFloatFront(QByteArray& buffer, int sampleRate)
     }
 }
 
-void dropAudioBufferFront(QByteArray& buffer, qsizetype bytes, int sampleRate)
+void dropAudioBufferFront(QByteArray& buffer, qsizetype bytes, int sampleRate,
+                          TrimSearch search = TrimSearch::AroundRequested)
 {
     const qsizetype dropBytes =
-        std::min(quietStereoFloatTrimPoint(buffer, bytes, sampleRate),
+        std::min(quietStereoFloatTrimPoint(buffer, bytes, sampleRate, search),
                  alignedStereoFloatBytes(buffer.size()));
     if (dropBytes > 0) {
         buffer.remove(0, dropBytes);
@@ -913,10 +917,7 @@ void AudioEngine::setReceivePresentationDelays(
                    || !source.outputBuffer.isEmpty();
         };
     if (flexDelay < previousFlex) {
-        trimReceivePresentationBuffers(
-            m_rxBuffer, m_rxPackets, m_rxOutputBuffer, outputRate,
-            audioBytesForMsAtRate(m_rxProducerRate.load(), flexDelay),
-            m_rxProducerRate.load());
+        trimMainRxBuffers(audioBytesForMsAtRate(m_rxProducerRate.load(), flexDelay));
     }
     if (legacyKiwiDelay < previousKiwi) {
         const qsizetype targetBytes =
@@ -2094,10 +2095,7 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
     const qsizetype outputMaxBufBytes =
         sampleRate * 2 * static_cast<qsizetype>(sizeof(float))
         * effectiveBufMs / 1000;
-    trimReceivePresentationBuffers(
-        m_rxBuffer, m_rxPackets, m_rxOutputBuffer, sampleRate,
-        audioBytesForMsAtRate(m_rxProducerRate.load(), effectiveBufMs),
-        m_rxProducerRate.load());
+    trimMainRxBuffers(audioBytesForMsAtRate(m_rxProducerRate.load(), effectiveBufMs));
     trimReceivePresentationBuffers(
         m_kiwiSdrRxBuffer, m_kiwiSdrRxPackets, m_kiwiSdrOutputBuffer,
         sampleRate, sourceMaxBufBytes);
@@ -5675,7 +5673,7 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
         && m_nr2Enabled.load(std::memory_order_relaxed)) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         m_rxPackets.push_back(alignedPcm);
-        trimAudioPacketQueue(m_rxPackets, cap);
+        trimMainRxBuffers(cap);
         updateRxBufferStats();
         return;
     }
@@ -5684,10 +5682,66 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
         targetBuffer == RxAudioBuffer::KiwiSdr ? m_kiwiSdrRxBuffer
                                                : m_rxBuffer;
     target.append(alignedPcm);
-    if (target.size() > cap) {
+    if (targetBuffer == RxAudioBuffer::Main) {
+        trimMainRxBuffers(cap);
+    } else if (target.size() > cap) {
         dropAudioBufferFront(target, target.size() - cap, producerRate);
     }
     updateRxBufferStats();
+}
+
+void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
+{
+    retireInvalidPcmSources();
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    const int producerRate = m_rxProducerRate.load();
+    const int outputRate = std::max(1, m_rxOutputRate.load());
+    targetRawBytes = alignedStereoFloatBytes(targetRawBytes);
+    constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
+    const auto outputRawBytes = [&]() {
+        const qsizetype outputFrames = m_rxOutputBuffer.size() / kFrameBytes;
+        return (outputFrames * producerRate + outputRate - 1) / outputRate * kFrameBytes;
+    };
+    const auto excessBytes = [&]() {
+        return alignedStereoFloatBytes(m_rxBuffer.size())
+            + queuedAudioBytes(m_rxPackets)
+            + outputRawBytes() - targetRawBytes;
+    };
+    constexpr int kMaxTrimBlockMs = 20;
+    const qsizetype maxBlockBytes = std::max(
+        kFrameBytes, audioBytesForMsAtRate(producerRate, kMaxTrimBlockMs));
+    // Covers the 6 ms quiet-point search and the 2 ms fade past the cut.
+    constexpr int kRetainedTailMs = 10;
+    const qsizetype retainedTailBytes = audioBytesForMsAtRate(producerRate, kRetainedTailMs);
+    for (qsizetype excess = excessBytes(); excess > 0; excess = excessBytes()) {
+        const qsizetype rawBytes = alignedStereoFloatBytes(m_rxBuffer.size());
+        if (rawBytes > 0 && m_rxPackets.empty()
+            && outputRawBytes() < excess + retainedTailBytes) {
+            // Process only the oldest raw the cut needs, plus a tail for the
+            // quiet-point search and fade; the rest stays held for the
+            // presentation delay. Bounded blocks also prevent NR wrappers
+            // from retaining seconds of output behind an input-sized
+            // startup-silence response.
+            const qsizetype bytes = std::min(maxBlockBytes, rawBytes);
+            const QByteArray pcm = m_rxBuffer.left(bytes);
+            m_rxBuffer.remove(0, bytes);
+            processMixedRxAudioData(pcm, RxDspSource::Main);
+        } else if (!m_rxOutputBuffer.isEmpty()) {
+            const qsizetype outputFrames =
+                (excess / kFrameBytes * outputRate + producerRate - 1) / producerRate;
+            // A cut before the required bound would reapply the fade on the next pass.
+            dropAudioBufferFront(m_rxOutputBuffer, outputFrames * kFrameBytes, outputRate,
+                                 TrimSearch::AtOrAfterRequested);
+        } else if (!m_rxPackets.empty()) {
+            // Queue overflow is not missing input. Advance NR/strip/SRC history
+            // with the received samples, then trim only speaker-ready output.
+            QByteArray packet = std::move(m_rxPackets.front());
+            m_rxPackets.pop_front();
+            processMixedRxAudioData(packet, RxDspSource::Main);
+        } else {
+            break;
+        }
+    }
 }
 
 void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,

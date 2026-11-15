@@ -220,6 +220,27 @@ if(ENABLE_DATA2G)
     add_test(NAME data2g_receive_model_test COMMAND data2g_receive_model_test)
     set_tests_properties(data2g_receive_model_test PROPERTIES TIMEOUT 120)
 
+    # The connected-mode adapter against a second station; no radio (RFC #7159 Stage 2).
+    add_executable(data2g_session_test tests/data2g_session_test.cpp)
+    target_link_libraries(data2g_session_test PRIVATE aether_hfdata aether_data2g_core)
+    add_test(NAME data2g_session_test COMMAND data2g_session_test)
+    # About 45 s plain and 5 min under ASan + UBSan on a fast desktop.
+    set_tests_properties(data2g_session_test PROPERTIES TIMEOUT 2400)
+
+    # The admission gate: the real worker thread, a fake transmitter, a second
+    # station, and a clock the test owns. No radio fixture.
+    add_executable(data2g_session_model_test
+        tests/data2g_session_model_test.cpp
+        src/models/Data2gSessionModel.cpp
+    )
+    target_include_directories(data2g_session_model_test PRIVATE src)
+    target_compile_definitions(data2g_session_model_test PRIVATE HAVE_DATA2G)
+    target_link_libraries(data2g_session_model_test PRIVATE
+        aether_hfdata aether_data2g_core Qt6::Core)
+    add_test(NAME data2g_session_model_test COMMAND data2g_session_model_test)
+    # About 30 s plain and 5 min under ASan + UBSan on a fast desktop.
+    set_tests_properties(data2g_session_model_test PROPERTIES TIMEOUT 2400)
+
     # A recording the adapter did not make: two upstream data2g-host 0.4.3
     # processes working each other, held to upstream data2g-monitor's reading.
     add_executable(data2g_replay_test tests/data2g_replay_test.cpp)
@@ -287,7 +308,7 @@ foreach(_case IN ITEMS rateMatrix bandwidthAndMono negotiatedSpeakerOutput
         transitionsAndRejection queueBudgetsAndDeviceTransitions lineOutDrainCatchUp
         effects-bypass effects-EQ
         effects-NR2 effects-RN2 effects-NR4 effects-DFNR effects-MNR kiwiDeviceRateMatrix
-        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains)
+        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains overflowPreservesDspHistory revokedDelayReduction steadyOutputOverflowFade rawOverflowFade boundedNrTrim delayedOverflowBounded)
     add_test(NAME audio_engine_rates_${_case}_test
         COMMAND audio_engine_rates_test --case=${_case})
     set_tests_properties(audio_engine_rates_${_case}_test PROPERTIES TIMEOUT 120)
@@ -390,6 +411,7 @@ add_executable(control_authorization_test
     src/core/control/ControlProtocolCodec.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlCredentialVault.cpp # no HAVE_KEYCHAIN: unavailable path, never opens OS vault
@@ -399,6 +421,26 @@ target_compile_definitions(control_authorization_test PRIVATE
     AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_authorization_test PRIVATE Qt6::Core)
 add_test(NAME control_authorization_test COMMAND control_authorization_test)
+
+# Paired clients at run time through the real VaultPairingIssuer and vault
+# adapter, with in-memory QtKeychain jobs (no OS vault, sockets or radio):
+# vault-first revoke, local identities never removable, a refused write keeps
+# the client, a revoke queued behind a pairing write.
+add_executable(control_remote_clients_vault_test
+    tests/control_remote_clients_vault_test.cpp
+    tests/fakes/qt6keychain/keychain.h
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlCredentialProvisioner.cpp
+    src/core/control/VaultPairingIssuer.cpp
+)
+target_include_directories(control_remote_clients_vault_test BEFORE PRIVATE tests/fakes src)
+target_compile_definitions(control_remote_clients_vault_test PRIVATE HAVE_KEYCHAIN)
+target_link_libraries(control_remote_clients_vault_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(control_remote_clients_vault_test PRIVATE advapi32)
+endif()
+add_test(NAME control_remote_clients_vault_test COMMAND control_remote_clients_vault_test)
 
 # Production native-vault adapter with in-memory QtKeychain jobs: no OS vault,
 # sockets, settings or radio. Pins fallback prohibition and async lifetimes.
@@ -430,6 +472,7 @@ add_executable(control_transport_lifecycle_test
     src/core/control/ControlProtocolCodec.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlInputPump.cpp
@@ -471,6 +514,7 @@ add_executable(control_transmit_service_test
     src/core/control/TransmitControlTarget.h
     src/core/control/TransmitControlService.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlProtocolCodec.cpp
@@ -481,6 +525,38 @@ target_include_directories(control_transmit_service_test PRIVATE src)
 target_compile_definitions(control_transmit_service_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_transmit_service_test PRIVATE Qt6::Core)
 add_test(NAME control_transmit_service_test COMMAND control_transmit_service_test)
+
+# Remote clients' scoped credentials (aetherd-remote-clients.md): the scope is
+# the grant on a network session, local and remote identities never cross, and
+# a network session never reaches transmit. Socket-free.
+add_executable(control_remote_scope_test
+    tests/control_remote_scope_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/control/TransmitControlTarget.h
+    src/core/control/TransmitControlService.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp)
+target_include_directories(control_remote_scope_test PRIVATE src)
+target_compile_definitions(control_remote_scope_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_remote_scope_test PRIVATE Qt6::Core)
+add_test(NAME control_remote_scope_test COMMAND control_remote_scope_test)
+
+# Remote-client pairing (aetherd-remote-clients.md §3): the code, its check
+# digits, expiry and attempt limit; pairing.begin only locally with control;
+# pairing.complete only before hello on the TLS listener, through a deferred
+# reply; the paired token's scope; v2 vault names; endpoint rules. Binds no
+# socket (the listener's refusals happen before any bind).
+add_executable(control_remote_pairing_test tests/control_remote_pairing_test.cpp)
+target_include_directories(control_remote_pairing_test PRIVATE src)
+target_link_libraries(control_remote_pairing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME control_remote_pairing_test COMMAND control_remote_pairing_test)
 
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
@@ -513,14 +589,19 @@ target_link_libraries(unicast_endpoint_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME unicast_endpoint_test COMMAND unicast_endpoint_test)
 
 # CTR2 relay model: the destination is only the radio the owner pushes in, and
-# every unusable case keeps Start disabled with its reason. Socket-free.
+# every unusable case keeps Start disabled with its reason. Every model gets an
+# injected USB backend (no HID device is enumerated or opened). One case,
+# testSeveralDevicesAtOnce, binds a 127.0.0.1 ephemeral TCP listener (a generic
+# byte peer standing in for the radio endpoint the relays connect to); no radio
+# protocol or firmware stand-in. Exit 77 when loopback cannot be bound.
 add_executable(ctr2_proxy_model_test tests/ctr2_proxy_model_test.cpp)
-target_include_directories(ctr2_proxy_model_test PRIVATE src)
+target_include_directories(ctr2_proxy_model_test PRIVATE src tests)
 target_link_libraries(ctr2_proxy_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
 # The udev rule must grant exactly the devices the app recognises as a CTR2.
 target_compile_definitions(ctr2_proxy_model_test PRIVATE
     AETHER_CTR2_UDEV_RULES="${CMAKE_CURRENT_LIST_DIR}/../packaging/linux/70-aethersdr-ctr2.rules")
 add_test(NAME ctr2_proxy_model_test COMMAND ctr2_proxy_model_test)
+set_tests_properties(ctr2_proxy_model_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 
 # Socket-free CLOSED retention: injected HID output and an inert QTcpSocket
 # whose connectToHost() only queues an injected refusal; no socket is opened.
@@ -577,7 +658,7 @@ set_source_files_properties(tools/ctr2-firmware-reference/ctr2_link.c
     TARGET_DIRECTORY ctr2_firmware_updater_test PROPERTIES LANGUAGE C)
 set_property(TARGET ctr2_firmware_updater_test PROPERTY C_STANDARD 99)
 target_include_directories(ctr2_firmware_updater_test PRIVATE
-    src tools/ctr2-firmware-reference)
+    src tests tools/ctr2-firmware-reference)
 target_link_libraries(ctr2_firmware_updater_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME ctr2_firmware_updater_test COMMAND ctr2_firmware_updater_test)
 set_tests_properties(ctr2_firmware_updater_test PROPERTIES TIMEOUT 120)
@@ -702,6 +783,7 @@ add_executable(radio_catalogue_test
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
 target_include_directories(radio_catalogue_test PRIVATE src)
@@ -720,6 +802,7 @@ add_executable(control_connection_test
     src/core/control/ControlSession.cpp
     src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
+    src/core/control/ControlPairing.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
 target_include_directories(control_connection_test PRIVATE src)
@@ -3843,6 +3926,17 @@ target_include_directories(vita_sequence_loss_log_test PRIVATE src)
 target_link_libraries(vita_sequence_loss_log_test PRIVATE aethercore Qt6::Core)
 add_test(NAME vita_sequence_loss_log_test COMMAND vita_sequence_loss_log_test)
 
+# Socket-free bounded VITA resequencing and actual PCM/Opus decode/PLC.
+add_executable(vita_rx_reorder_test tests/vita_rx_reorder_test.cpp)
+target_include_directories(vita_rx_reorder_test PRIVATE src)
+target_link_libraries(vita_rx_reorder_test PRIVATE Qt6::Core)
+add_test(NAME vita_rx_reorder_test COMMAND vita_rx_reorder_test)
+
+add_executable(vita_rx_reorder_audio_test tests/vita_rx_reorder_audio_test.cpp)
+target_include_directories(vita_rx_reorder_audio_test PRIVATE src)
+target_link_libraries(vita_rx_reorder_audio_test PRIVATE aethercore Qt6::Core)
+add_test(NAME vita_rx_reorder_audio_test COMMAND vita_rx_reorder_audio_test)
+
 # RadioModel restarts remote_audio_rx's VITA-49 sequence tracking when the radio
 # reports the stream adopted or removed (#6285). Socket-free: status lines go to
 # the model's router and packets straight to processDatagram().
@@ -4304,6 +4398,16 @@ target_include_directories(tx_audio_path_policy_test PRIVATE src)
 target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
 add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
 
+# #6331: socket-free status row sizing and notices; no radio peer.
+add_executable(status_bar_message_test
+    tests/status_bar_message_test.cpp
+    src/gui/StatusBarMessageOverlay.h
+)
+target_include_directories(status_bar_message_test PRIVATE src)
+target_link_libraries(status_bar_message_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME status_bar_message_test COMMAND status_bar_message_test)
+set_tests_properties(status_bar_message_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # #7078: socket-free voice-key notice and MIC readiness policy.
 add_executable(tx_voice_key_notice_test tests/tx_voice_key_notice_test.cpp)
 target_include_directories(tx_voice_key_notice_test PRIVATE src)
@@ -4375,6 +4479,8 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
 # Radio Setup pages must not show a parentless widget while building (macOS focus steal).
 add_executable(radio_setup_no_transient_window_test
     tests/radio_setup_no_transient_window_test.cpp
+    src/gui/ClientEqOutputFader.cpp
+    src/gui/ShackSwitchApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/CanonWindow.cpp
@@ -7920,6 +8026,19 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
+
+    # Socket-owning test: aetherd's own network listener is the subject. It
+    # binds 127.0.0.1 on an EPHEMERAL port and a local socket in a private
+    # runtime directory, with in-process clients only: the certificate pin,
+    # pairing, the paired token, a change mirrored between a local and a
+    # network client, the session budget and frame rules. Skips (77) without
+    # the openssl tool that makes its throwaway certificate.
+    add_executable(remote_control_loopback_test tests/remote_control_loopback_test.cpp)
+    target_include_directories(remote_control_loopback_test PRIVATE src)
+    target_link_libraries(remote_control_loopback_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME remote_control_loopback_test COMMAND remote_control_loopback_test)
+    set_tests_properties(remote_control_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
@@ -12291,3 +12410,28 @@ add_executable(transfer_lifecycle_test tests/transfer_lifecycle_test.cpp)
 target_include_directories(transfer_lifecycle_test PRIVATE src)
 target_link_libraries(transfer_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME transfer_lifecycle_test COMMAND transfer_lifecycle_test)
+
+# The update and firmware HTTP transport retries a connection reset before
+# receiving bytes, but never repeats a partial, rejected or oversized transfer.
+# Binds an ephemeral 127.0.0.1 TCP listener to serve versioned HTTP/1.1 replies.
+add_executable(capped_download_test
+    tests/capped_download_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_test PRIVATE src)
+target_link_libraries(capped_download_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_test COMMAND capped_download_test)
+set_tests_properties(capped_download_test PROPERTIES TIMEOUT 30)
+
+# Which failures the update and firmware transport retries before a body
+# arrives, including the HTTP/2 refusals a loopback peer cannot produce.
+# Socket-free.
+add_executable(capped_download_retry_policy_test
+    tests/capped_download_retry_policy_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_retry_policy_test PRIVATE src)
+target_link_libraries(capped_download_retry_policy_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_retry_policy_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_retry_policy_test COMMAND capped_download_retry_policy_test)
