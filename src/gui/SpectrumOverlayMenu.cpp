@@ -933,11 +933,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_wnbBtn = new QPushButton("WNB");
     m_wnbBtn->setCheckable(true);
     m_wnbBtn->setFixedSize(48, 22);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wnbBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 2px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
-        "QPushButton:checked { background: {{color.background.2}}; color: {{color.text.primary}}; "
-        "border: 1px solid {{color.accent.dim}}; }"
-        "QPushButton:hover { border: 1px solid {{color.accent.dim}}; }");
+    applyToggleButtonStyle(m_wnbBtn, ToggleTribe::Success);
     wnbRow->addWidget(m_wnbBtn);
     m_wnbSlider = new GuardedSlider(Qt::Horizontal);
     m_wnbSlider->setRange(0, 100);
