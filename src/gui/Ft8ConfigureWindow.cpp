@@ -212,8 +212,14 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     rgrid->setColumnStretch(3, 1);
     m_bandCombo = new QComboBox(body);
     m_bandCombo->setAccessibleName(tr("Band"));
+    // The agent CAN band hop -- band_for_cycle() carries WSPR's gray-line
+    // schedule, coordinated bands and random permutation across to FT8 -- but
+    // this window does not expose the hop lists, so with the settings it can
+    // write the receiver stays on one band. Say that, rather than "does not
+    // band hop", which was wrong about the receiver and would be read aloud
+    // to someone who cannot see the window.
     m_bandCombo->setAccessibleDescription(tr("The band the receiver listens on. It stays there: "
-                                             "this receiver does not band hop."));
+                                             "band hopping is not set up from this window."));
     for (const QString& b : ft8::bands()) {
         m_bandCombo->addItem(bandDisplay(b), b);
     }
