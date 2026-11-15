@@ -32,6 +32,7 @@
 #include "core/DigitalVoiceFeature.h"
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
+#include "core/MemoryFieldValues.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -2402,6 +2403,12 @@ void VfoWidget::buildTabContent()
 
                 static constexpr int MARK_STEP = 25;
                 static constexpr int SHIFT_STEP = 5;
+                // The app's RTTY range (ruling on #7093); a step that would
+                // pass either edge is not taken.
+                static constexpr int MARK_MIN = MemoryFields::kRttyMarkMinHz;
+                static constexpr int MARK_MAX = MemoryFields::kRttyMarkMaxHz;
+                static constexpr int SHIFT_MIN = MemoryFields::kRttyShiftMinHz;
+                static constexpr int SHIFT_MAX = MemoryFields::kRttyShiftMaxHz;
 
                 // Mark selector: ◀ 2125 ▶
                 auto* markMinus = new TriBtn(TriBtn::Left);
@@ -2414,11 +2421,12 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(markPlus);
 
                 auto markDown = [this] {
-                    if (m_slice && m_slice->rttyMark() >= MARK_STEP)
+                    if (m_slice && m_slice->rttyMark() - MARK_STEP >= MARK_MIN)
                         m_slice->setRttyMark(m_slice->rttyMark() - MARK_STEP);
                 };
                 auto markUp = [this] {
-                    if (m_slice) m_slice->setRttyMark(m_slice->rttyMark() + MARK_STEP);
+                    if (m_slice && m_slice->rttyMark() + MARK_STEP <= MARK_MAX)
+                        m_slice->setRttyMark(m_slice->rttyMark() + MARK_STEP);
                 };
                 connect(markMinus, &QPushButton::clicked, this, markDown);
                 connect(markPlus, &QPushButton::clicked, this, markUp);
@@ -2438,11 +2446,12 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(shiftPlus);
 
                 auto shiftDown = [this] {
-                    if (m_slice && m_slice->rttyShift() >= SHIFT_STEP)
+                    if (m_slice && m_slice->rttyShift() - SHIFT_STEP >= SHIFT_MIN)
                         m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
                 };
                 auto shiftUp = [this] {
-                    if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() + SHIFT_STEP);
+                    if (m_slice && m_slice->rttyShift() + SHIFT_STEP <= SHIFT_MAX)
+                        m_slice->setRttyShift(m_slice->rttyShift() + SHIFT_STEP);
                 };
                 connect(shiftMinus, &QPushButton::clicked, this, shiftDown);
                 connect(shiftPlus, &QPushButton::clicked, this, shiftUp);

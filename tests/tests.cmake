@@ -1446,7 +1446,11 @@ add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
 # trip, the read-modify-write that keeps a newer build's field alive, and the
 # empty-serial case that would otherwise write the family-wide default row.
 # Needs AppSettings and therefore Qt, which is why it is a second target rather
-# than more of the pure-policy one above. Still socket-free and radio-free.
+# than more of the pure-policy one above. Still socket-free and radio-free: the
+# two connectRadio() calls (§4f) take the boardMaxRx seam and are abandoned in
+# the same turn, so MetisClient::start() never runs. They still wait out the
+# WDSP channel opens (TestDspBuildWait.h), which on a cold FFTW wisdom cache
+# can take tens of seconds; that is the planner, not a hang in this test.
 add_executable(hl2_hardware_document_test
     tests/hl2_hardware_document_test.cpp)
 target_include_directories(hl2_hardware_document_test PRIVATE src tests)
@@ -3814,6 +3818,23 @@ target_include_directories(tx_mic_channel_normalizer_test PRIVATE
 target_link_libraries(tx_mic_channel_normalizer_test PRIVATE Qt6::Core)
 add_test(NAME tx_mic_channel_normalizer_test COMMAND tx_mic_channel_normalizer_test)
 
+# The packed TX chain order: 16 four-bit slots round-trip, an order that does
+# not fit is reported instead of truncated, and the load-time migration keeps
+# the saved order and appends stages an upgrade adds (RFC #4836 precursor).
+add_executable(tx_chain_layout_test tests/tx_chain_layout_test.cpp)
+target_include_directories(tx_chain_layout_test PRIVATE src)
+target_link_libraries(tx_chain_layout_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_chain_layout_test COMMAND tx_chain_layout_test)
+
+# The chain order between AudioEngine and the settings file: persisted equals
+# running, a saved list keeps its order and gains missing stages, and repeated
+# names from a hand-edited file or an imported preset are dropped, not packed.
+# Isolated settings (TestSettingsProfile); no audio device, no radio.
+add_executable(tx_chain_settings_test tests/tx_chain_settings_test.cpp)
+target_include_directories(tx_chain_settings_test PRIVATE src tests)
+target_link_libraries(tx_chain_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME tx_chain_settings_test COMMAND tx_chain_settings_test)
+
 add_executable(tx_voice_processor_test
     tests/tx_voice_processor_test.cpp
 )
@@ -4971,6 +4992,18 @@ else()
     target_link_libraries(legacy_waveform_package_test PRIVATE zlibstatic)
 endif()
 add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
+
+# Remote-session predicates (bandwidth defaults; IP Configuration), header-only.
+add_executable(remote_session_test tests/remote_session_test.cpp)
+target_include_directories(remote_session_test PRIVATE src)
+target_link_libraries(remote_session_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME remote_session_test COMMAND remote_session_test)
+
+# Tailscale-interface check for IP Configuration's gate, injected interfaces.
+add_executable(tailscale_interface_test tests/tailscale_interface_test.cpp)
+target_include_directories(tailscale_interface_test PRIVATE src)
+target_link_libraries(tailscale_interface_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME tailscale_interface_test COMMAND tailscale_interface_test)
 
 # In-radio tailnet shim client: wire parsing and request bodies, socket-free.
 add_executable(tailnet_shim_client_test
@@ -10894,6 +10927,36 @@ add_test(NAME vfo_dsp_launcher_width_test
 set_tests_properties(vfo_dsp_launcher_width_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The VFO DSP tab's RTTY Mark/Shift ◀ ▶ and label scroll stay inside the app's
+# range (#7093). Same socket-free build as the launcher-width test above.
+add_executable(vfo_rtty_step_limits_test
+    tests/vfo_rtty_step_limits_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_rtty_step_limits_test PRIVATE src)
+target_link_libraries(vfo_rtty_step_limits_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_rtty_step_limits_test
+         COMMAND vfo_rtty_step_limits_test)
+set_tests_properties(vfo_rtty_step_limits_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free NRS requests/readback through the production bridge dispatcher,
 # model, Flex encoder and VFO. Firmware/status/transport are injected; no listener.
 add_executable(nrs_level_range_test
@@ -11065,6 +11128,19 @@ target_link_libraries(kat500_tx_controls_test PRIVATE aethercore Qt6::Widgets Qt
 add_test(NAME kat500_tx_controls_test COMMAND kat500_tx_controls_test)
 set_tests_properties(kat500_tx_controls_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(band_applet_test
+    tests/band_applet_test.cpp
+    src/gui/BandApplet.cpp
+)
+target_include_directories(band_applet_test PRIVATE src)
+target_link_libraries(band_applet_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(band_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME band_applet_test COMMAND band_applet_test)
+set_tests_properties(band_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
@@ -11177,6 +11253,22 @@ target_link_libraries(phone_applet_vox_disarm_test PRIVATE
 set_target_properties(phone_applet_vox_disarm_test PROPERTIES AUTOMOC ON)
 add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
 set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# CW speed entry survives repeated capability limits between keystrokes.
+# Real applet/model, offscreen; no radio or sockets.
+add_executable(phone_cw_speed_entry_test
+    tests/phone_cw_speed_entry_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_speed_entry_test PRIVATE src)
+target_link_libraries(phone_cw_speed_entry_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_cw_speed_entry_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_speed_entry_test COMMAND phone_cw_speed_entry_test)
+set_tests_properties(phone_cw_speed_entry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # PhoneCwApplet — the APF row on the CW face (#4879). Widget-level, offscreen:
@@ -11589,6 +11681,7 @@ set(AETHER_SETTINGS_CONSUMERS
     comp_makeup_fader_test
     stage_tab_bar_drag_test
     aether_tx_profiles_test
+    tx_chain_settings_test
     aether_rx_profiles_test
     theme_manager_test
     canon_window_test

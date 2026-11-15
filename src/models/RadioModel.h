@@ -983,6 +983,15 @@ public:
     // timer brings the link back when the radio finishes booting.
     bool rebootRadio(std::optional<RadioControlSession> expectedSession = {});
     bool isWan() const { return m_wanConn != nullptr; }
+    // WAN, routed or a radio at a tailnet address (RFC #6271 D4): the
+    // network thresholds, NTP, discovery release.
+    bool isRemoteSession() const;
+    // Whether this session's connection runs through Tailscale's interface,
+    // decided once at GUI-client registration (core/TailscaleInterface.h).
+    bool sessionOverTailscale() const { return m_sessionOverTailscale; }
+    // WAN, routed or sessionOverTailscale(): Radio Setup's IP Configuration
+    // gate. Never an address match, so a LAN in 100.64.0.0/10 stays local.
+    bool isRemoteForIpConfiguration() const;
 
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forward the user's
     // cert-mismatch decision down to the active WAN connection. No-op
@@ -2291,6 +2300,9 @@ private:
     // Whether this session's path to the radio runs over Tailscale, decided
     // once at GUI-client registration on this thread (networkMtuParam).
     bool m_pathOverTailnet{false};
+    // Whether this session's local end sits on Tailscale's interface, decided
+    // at the same point; reset by every connect.
+    bool m_sessionOverTailscale{false};
     // Bumped at every session end. Captured by deferred work (the multiFLEX
     // peek window) so a timer armed in one session cannot fire into the next.
     quint64 m_sessionGeneration{0};

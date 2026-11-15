@@ -1,4 +1,10 @@
 {
+ "core/RemoteSession.h": {
+  "tag": "universal",
+  "note": "isRemoteRadioSession(): whether a session is remote (WAN, routed, or a radio at a tailnet address), shared by the connection panel and RadioModel for the Radio Setup IP gate, network-quality thresholds, NTP gate, discovery socket and low-bandwidth default. Reads only RadioInfo's core-profile address and isRouted; no protocol message, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ReceiveData.h": {
   "tag": "universal",
   "note": "Backend-neutral receive payloads: spectrum frames, waterfall rows, meter batches, leases and per-category stream counters. No vendor surface; Flex fills them below the seam (FlexReceiveData).",
