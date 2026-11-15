@@ -2114,3 +2114,21 @@ not independently inventory host processes/capabilities or remaining images,
 qualify rollback/reboot of this candidate, supply the operator installation
 coordinator, or establish first-install/6000 support. The separately built and
 verified ARMv7 package was not installed on a 6300.
+
+A subsequent public-path test delivered a validly signed, bench-only candidate
+whose replacement primary is `int main(void){return 42;}`. It has no network,
+state-write or RF behavior and must never ship. The ordinary desktop monitor
+ignored the older successful transaction, waited through transport failures and
+unavailable status, then matched **RolledBack** to the exact new plan and previous
+working release/key at 45.660 s. Normal carrier removal completed at 47.177 s;
+identity was preserved and the radio remained connected, unkeyed, FDX off and
+TX power 0. No broad host-root diagnostics bridge executed or queried the test.
+
+The working payload remains candidate I. Rollback can retain the newer J
+management/control generation while selecting I's payload; this is not a claim
+that every installed file reverted byte-for-byte. Evidence is in
+`public-rollback-monitor-development/validation.json` and its public probe result
+under the evidence root. The candidate's actual exit status was not independently
+read from the host journal, so the observed terminal rollback does not identify
+its exact failure phase. Reboot, successor upgrade, process inventory and the
+remaining operator/6000/production gates still require their own evidence.

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T09:04:13.130140+00:00",
+  "updated_utc": "2026-11-15T09:13:37.108610+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Qualify rollback to an endpoint-capable previous release through the same public path and desktop monitor, preserving candidateI identity; then integrate the approved install coordinator/operator workflow. Keep first-install/6000 provisioning and the complete production plan open.",
+  "next_action": "Verify ordinary status publication after an authorized reboot of the rolled-back installation, then a healthy successor upgrade from the retained management/previous-payload lineage. Continue operator coordinator and first-install/6000/full production gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -98,6 +98,18 @@
       "Ordinary operator installation coordinator/UI and first-install trust",
       "6000 privilege adapter and real 6300 hardware qualification",
       "All remaining production/DSP/PR4770/RF/stock-comparison/release gates"
+    ]
+  },
+  "public_rollback_monitor": {
+    "evidence": "public-rollback-monitor-development/validation.json and public-upgrade-01/result.json under evidence_root",
+    "selected_payload": "I",
+    "attempted_fault_candidate": "J; never ship",
+    "result": "Exact-plan RolledBack at45.660s; normal carrier removal47.177s; identity preserved, no RF and no broad root diagnostics bridge.",
+    "limitations": [
+      "Candidate process exit42 was not independently read from the host journal; terminal rollback alone does not establish the exact failure phase",
+      "Current management/control generation was not independently inventoried; rollback can retain J management with I payload by design",
+      "Reboot and next upgrade after rollback remain unqualified for this path",
+      "Operator workflow, first-install/6000 provisioning, full process inventory, DSP/PR4770/RF and release gates remain"
     ]
   }
 }
