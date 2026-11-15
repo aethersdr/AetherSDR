@@ -66,7 +66,7 @@ void rates()
     const std::vector<float> silence(4800, 0.0f);
     check(bad.feed(silence).empty(), "an invalid monitor decodes nothing");
 
-    check(std::string(Data2gMonitor::upstreamVersion()) == "0.4.3", "the vendored release is 0.4.3");
+    check(std::string(Data2gMonitor::upstreamVersion()) == "0.5.0", "the vendored version is 0.5.0");
 }
 
 void noiseOnly()

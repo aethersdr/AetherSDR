@@ -153,7 +153,7 @@ public:
     bool want_dup() override { return shifter.want_dup; }
     int rv_cycle(const std::string& submode) override;
     bool has_outcome() override { return true; }
-    void outcome(const std::string& submode, int decoded, int sent, bool usable) override {
+    void outcome(const std::string& submode, int decoded, int sent, std::optional<bool> usable) override {
         shifter.outcome(submode, decoded, sent, usable);
     }
     std::string mode_name(int rec) override;

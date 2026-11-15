@@ -6,7 +6,7 @@ description: "AetherSDR is an open-source client for FlexRadio transceivers with
 
 *Native. Open. Yours.*
 
-AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. FlexRadio is the supported target; the Hermes-Lite 2, networked Icom radios, the ANAN-G2 and RTL-SDR dongles are also supported at an earlier stage, each labeled with its status. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
+AetherSDR is an open-source client for **FlexRadio** transceivers with native builds for Linux, macOS and Windows, including an aarch64 build for the Raspberry Pi. FlexRadio is the supported target, and the Hermes-Lite 2 is supported in the desktop application; networked Icom radios, the ANAN-G2 and RTL-SDR dongles are also supported at an earlier stage, each labeled with its status. No radio? [Demo Mode](./demo-mode.md) runs the full interface against a built-in simulator.
 
 These docs come in two versions, chosen from the version menu at the top of every page. **Stable**, the default, describes the latest release. **Next (main)** tracks `main`: it describes what has landed since that release and will ship in the next one. Release notes for every version are in the [CHANGELOG](https://github.com/aethersdr/AetherSDR/blob/main/CHANGELOG.md).
 
@@ -36,7 +36,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 
 - [Supported Radios](./supported-radios.md) — FlexRadio models and firmware, other radio families' status, and what works where
 - [FlexRadio](./flexradio.md) — Start here with a FlexRadio: models, firmware, setup order and every Flex feature page
-- [Hermes-Lite 2](./hermes-lite-2.md) — Experimental: setup, hardware, calibration, receive, transmit and limits
+- [Hermes-Lite 2](./hermes-lite-2.md) — Supported (desktop application; Windows not yet certified): setup, hardware, calibration, receive, transmit and limits
 - [Networked Icom](./networked-icom.md) — IC-7300MK2 (supported), IC-705, IC-9700 over RS-BA1: connecting, PC Audio, CWK, XFC
 - [ANAN-G2](./anan-g2.md) — Experimental, receive-only: connect options, droop correction, what works
 - [RTL-SDR](./rtl-sdr.md) — Experimental, receive-only USB dongles: availability, modes, receiver corrections

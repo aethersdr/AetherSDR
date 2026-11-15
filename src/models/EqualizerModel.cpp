@@ -39,28 +39,18 @@ QString EqualizerModel::bandLabel(Band b)
 
 // ── Status parsing ──────────────────────────────────────────────────────────
 
-void EqualizerModel::applyTxEqStatus(const QMap<QString, QString>& kvs)
+void EqualizerModel::applyEqStatus(const GraphicEqStatus& status)
 {
-    applyEqStatus(kvs, true);
-}
-
-void EqualizerModel::applyRxEqStatus(const QMap<QString, QString>& kvs)
-{
-    applyEqStatus(kvs, false);
-}
-
-void EqualizerModel::applyEqStatus(const QMap<QString, QString>& kvs, bool isTx)
-{
+    const bool isTx = status.path == GraphicEqRequest::Path::Transmit;
     auto& bands   = isTx ? m_txBands : m_rxBands;
     bool& enabled = isTx ? m_txEnabled : m_rxEnabled;
 
-    if (kvs.contains("mode"))
-        enabled = (kvs["mode"] == "1");
+    if (status.enabled)
+        enabled = *status.enabled;
 
     for (int i = 0; i < BandCount; ++i) {
-        const QString key = QString("%1Hz").arg(kBandKeys[i]);
-        if (kvs.contains(key))
-            bands[i] = kvs[key].toInt();
+        if (status.bands[i])
+            bands[i] = *status.bands[i];
     }
 
     if (isTx)

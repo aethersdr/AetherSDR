@@ -307,6 +307,7 @@ func (n *Node) telemetryHandler(authorize func(net.Addr) (string, bool)) http.Ha
 			http.Error(w, "not allowed", http.StatusForbidden)
 			return
 		}
+		n.telemetryReadAt.Store(time.Now().UnixNano())
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(n.sessionReport(ap.Addr().Unmap()))
@@ -314,8 +315,24 @@ func (n *Node) telemetryHandler(authorize func(net.Addr) (string, bool)) http.Ha
 	return mux
 }
 
-// runTelemetry samples every 2 s (pinging session peers every other tick)
-// until ctx ends.
+// While a caller has read /v1/session in the last telemetryActiveFor (the
+// Network Diagnostics window is open), telemetry samples every 2 s; otherwise
+// every telemetryIdleEvery ticks. Each sample is a LocalAPI Status round trip
+// in JSON plus a disco ping, about 7% of the shim's CPU on a FLEX-6000 when
+// run every 2 s with nobody reading it (#6990).
+const (
+	telemetryActiveFor = 10 * time.Second
+	telemetryIdleEvery = 15 // ticks: 30 s
+)
+
+// telemetryDue reports whether tick i should sample.
+func (n *Node) telemetryDue(i int, now time.Time) bool {
+	read := n.telemetryReadAt.Load()
+	return i%telemetryIdleEvery == 0 || (read != 0 && now.Sub(time.Unix(0, read)) < telemetryActiveFor)
+}
+
+// runTelemetry samples on the schedule telemetryDue sets (pinging session
+// peers every other tick) until ctx ends.
 func (n *Node) runTelemetry(ctx context.Context, lc *local.Client) {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
@@ -326,6 +343,9 @@ func (n *Node) runTelemetry(ctx context.Context, lc *local.Client) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+		}
+		if !n.telemetryDue(i, time.Now()) {
+			continue
 		}
 		var peers []netip.Addr
 		n.mu.Lock()

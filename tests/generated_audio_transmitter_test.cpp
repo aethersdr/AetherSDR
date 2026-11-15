@@ -175,6 +175,20 @@ int main(int argc, char** argv)
                h.trace());
     }
 
+    // A route that cannot carry an outside input's authority (every route but
+    // the voice keyer's) refuses an originated start before anything keys.
+    {
+        Harness h;
+        h.route.needs = false;
+        QString err;
+        const bool started = h.tx.start(audio(50), err, TxCoordinator::Request{});
+        h.spin(20);
+        report("route_without_origin_support_refuses_originated_start",
+               !started && !err.isEmpty() && !h.tx.isActive() && !h.route.calls.contains("keyOn")
+                   && !h.route.calls.contains("admit"),
+               h.trace());
+    }
+
     // HL2-shaped route: no stream, command-edge PTT.
     {
         Harness h;

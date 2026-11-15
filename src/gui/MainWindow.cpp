@@ -14,11 +14,13 @@
 #include "core/backends/AutoRfGainControl.h"
 
 #include "MainWindowHelpers.h"
+#include "StatusBarLayout.h"
 #include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
 #include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
+#include "RttyDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -72,8 +74,10 @@
 #include "VfoWidget.h"
 #include "AppletPanel.h"
 #include "DemoApplet.h"
+#include "LpMeterApplet.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
+#include "BandApplet.h"
 #include "SMeterWidget.h"
 #include "TunerApplet.h"
 #include "TxApplet.h"
@@ -429,12 +433,7 @@ bool setStatusBarStationText(QLabel* label, const QString& text)
         label->setText(rendered);
         changed = true;
     }
-    label->ensurePolished();
-    const int minimumWidth = label->sizeHint().width() + 2;
-    if (label->minimumWidth() != minimumWidth) {
-        label->setMinimumWidth(minimumWidth);
-        changed = true;
-    }
+    changed = AetherSDR::updateStationLabelMinimumWidth(label) || changed;
     return changed;
 }
 
@@ -841,6 +840,16 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
         return;
     }
 
+    if (!m_radioModel.prepareWanConnection()) {
+        const QString reason = tr("Disconnect the current radio before preparing SmartLink.");
+        // As the guard below: let the next reconnect tick try again rather
+        // than re-arm behind an attempt that never started.
+        setPanadapterConnectionAnimation(false);
+        m_wanReconnectAttemptInProgress = false;
+        if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(reason); }
+        else { m_connPanel->setStatusText(reason); }
+        return;
+    }
     m_userDisconnected = false;
     m_radioModel.setKnownGuiClients(splitClientField(info.guiClientHandles),
                                     splitClientField(info.guiClientPrograms),
@@ -856,10 +865,7 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
     // Pre-bind UDP socket for VITA-49 reception BEFORE requesting
     // connection, so we can pass our port to the SmartLink server.
     // The server tells the radio our public IP:port for UDP streaming.
-    // SmartLink is a Flex service, but the session may still hold the backend
-    // of the last non-Flex radio (IC-705, HL2), which has no PanadapterStream.
-    // Swap to Flex first; decline rather than dereference null if that fails.
-    if (!m_radioModel.prepareFlexBackendForWan()) {
+    if (!m_radioModel.panStream()) {
         qWarning() << "MainWindow: WAN connect requested with no PanadapterStream"
                    << "— Flex backend unavailable";
         m_connPanel->setStatusText("SmartLink connection failed");
@@ -2517,7 +2523,7 @@ MainWindow::MainWindow(QWidget* parent)
     // Auto-connect to routed radios (probed, not broadcast-discovered)
     connect(m_connPanel, &ConnectionPanel::routedRadioFound,
             this, [this](const RadioInfo& info) {
-        if (m_userDisconnected || m_radioModel.isConnected()) return;
+        if (m_userDisconnected || m_startupConnectSuperseded || m_radioModel.isConnected()) return;
         if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
             return;
         const QString lastSerial = AppSettings::instance()
@@ -2570,7 +2576,9 @@ MainWindow::MainWindow(QWidget* parent)
             m_connPanel->setStatusText("Looking for your radio…");
             setPanadapterConnectionAnimation(true, "Looking for your radio…");
             QTimer::singleShot(500, this, [this, routedIp] {
-                m_connPanel->probeRadio(routedIp, /*restoreSavedFamily=*/true);
+                if (!m_startupConnectSuperseded && !m_userDisconnected) {
+                    m_connPanel->probeRadio(routedIp, /*restoreSavedFamily=*/true);
+                }
             });
         }
     }
@@ -3703,6 +3711,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
     // and HID-encoder edits. The Ulanzi/HID branches below run regardless of
     // HAVE_SERIALPORT because those backends exist on all platforms (#3257).
+    connect(dlg, &RadioSetupDialog::lpMeterPollIntervalChanged, this, [this](int ms) {
+        m_appletPanel->lpMeterApplet()->setPollIntervalMs(ms);
+    });
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
 #ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
@@ -4082,7 +4093,20 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    restoreGeometry(m_startupGeometryForFirstShow);
+    const bool restored = restoreGeometry(m_startupGeometryForFirstShow);
+    if (!restored) {
+        // Qt rejects saved geometry after a large monitor-resolution/DPI
+        // change. Without a fallback the window can appear on whichever
+        // monitor a restored pop-out left active (and repeat every launch).
+        // Recover its normal size from the saved blob and put it on the
+        // primary display, rather than letting an obsolete native client rect
+        // move it back to a missing or unrelated screen (#7076).
+        if (QScreen* screen = QGuiApplication::primaryScreen()) {
+            placeWindowAfterRejectedRestore(this, m_startupGeometryForFirstShow,
+                                            screen->availableGeometry());
+        }
+        return;
+    }
 #ifdef Q_OS_WIN
     // Qt 6.12's frame margins under the expanded client area do not match the
     // window, so neither restoreGeometry() nor geometry() round-trips its size.
@@ -4131,26 +4155,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
-        || !statusBar()->currentMessage().isEmpty()) {
-        return;
-    }
-
-    if (QLayout* layout = m_statusBarContainer->layout()) {
-        layout->activate();
-    }
-    m_statusBarContainer->updateGeometry();
-    statusBar()->updateGeometry();
-
-    const int sizeGripAllowance =
-        (m_sizeGrip && m_sizeGrip->isVisible()) ? m_sizeGrip->width() + 4 : 4;
-    const int statusMinWidth =
-        m_statusBarContainer->minimumSizeHint().width() + sizeGripAllowance;
-    const int screenWidthCap =
-        screen() ? screen()->availableGeometry().width() : statusMinWidth;
-    const int boundedMinWidth =
-        qBound(1024, statusMinWidth, qMax(1024, screenWidthCap));
-    setMinimumSize(boundedMinWidth, qMax(400, minimumHeight()));
+    updateStatusBarWindowMinimum(this, m_statusBarContainer, m_sizeGrip, m_minimalMode,
+                                screen() ? screen()->availableGeometry().width() : QWIDGETSIZE_MAX);
 }
 
 void MainWindow::changeEvent(QEvent* event)
@@ -4915,16 +4921,16 @@ bool MainWindow::automationTitleBarAction(const QString& action,
         return fail(QStringLiteral("no radio tab bar"));
     }
 
-    if (action == QLatin1String("selectRadio")) {
+    if (action == QLatin1String("selectRadio") || action == QLatin1String("showRadioMenu")) {
         if (target.isEmpty()) {
-            return fail(QStringLiteral("selectRadio needs a radio id"));
+            return fail(action + QStringLiteral(" needs a radio id"));
         }
         // Drive the real tab widget rather than the model behind it: the point
         // of the verb is to prove the control the operator clicks works, and a
         // model-only path would pass even if the tab were unreachable.
         const auto tabWidgets = tabs->findChildren<RadioTab*>();
         for (RadioTab* tab : tabWidgets) {
-            if (tab->entry().id == target) {
+            if (tab->entry().id == target || tab->entry().serial == target) {
                 // A hidden tab (removed from the strip, or compacted away)
                 // is one the operator cannot click either.
                 if (!tab->isVisible()) {
@@ -4933,8 +4939,12 @@ bool MainWindow::automationTitleBarAction(const QString& action,
                 }
                 // Discovery can rebuild the strip before the deferred turn.
                 const QPointer<RadioTab> guarded(tab);
-                return later([guarded]() {
-                    if (guarded) guarded->click();
+                const bool menu = action == QLatin1String("showRadioMenu");
+                const QPointer<RadioTabBar> bar(tabs);
+                return later([guarded, bar, menu]() {
+                    if (!guarded) { return; }
+                    if (menu && bar) { bar->showRadioContextMenu(guarded->entry().id); }
+                    else { guarded->click(); }
                 });
             }
         }
@@ -6584,7 +6594,7 @@ void MainWindow::buildUI()
     timeVbox->addWidget(m_gpsTimeLabel);
     hbox->addWidget(timeStack);
 
-    statusBar()->addWidget(m_statusBarContainer, 1);
+    statusBar()->addPermanentWidget(m_statusBarContainer, 1);
     wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
@@ -6948,6 +6958,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 applyNotchCapabilities(applet->spectrumWidget());
                 applyRadioSideDspToPanDisplay(applet->spectrumWidget());
             }
+            if (m_appletPanel && m_appletPanel->bandApplet()) {
+                auto* bandApplet = m_appletPanel->bandApplet();
+                bandApplet->setRadioCapabilities(caps);
+                bandApplet->setDeclaredBands(declaredBands, declaredBandRanges);
+                QVector<BandApplet::XvtrBand> appletXvtrBands;
+                for (const auto& x : xvtrBands) {
+                    appletXvtrBands.append({x.name, x.rfFreqMhz, x.stackKey});
+                }
+                bandApplet->setXvtrBands(appletXvtrBands);
+                applyTuningRangeToBandApplet();
+            }
         };
         QTimer::singleShot(2000, this, refreshXvtr);
         connect(&m_radioModel, &RadioModel::infoChanged, this, refreshXvtr);
@@ -7114,7 +7135,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_userDisconnected) {
             if (m_heartbeatMissTimer) m_heartbeatMissTimer->stop();
             if (m_titleBar) m_titleBar->clearLinkAlarm();
-            m_lastSessionTab = {};
             scheduleRadioTabRefresh();
         }
 
@@ -7221,7 +7241,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         setPanadapterConnectionAnimation(
-            !m_userDisconnected && !terminalConnectionFailure,
+            !m_userDisconnected && !terminalConnectionFailure && m_pendingRadioTarget.isEmpty(),
             "Reconnecting to radio…");
 
         if (terminalConnectionFailure) {
@@ -7229,7 +7249,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
+        if (!m_userDisconnected && m_pendingRadioTarget.isEmpty() && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));
@@ -7307,6 +7327,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
 void MainWindow::onConnectionError(const QString& msg)
 {
+    if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(msg); return; }
+
     // A failed auto-connect must count, or the retry is unbounded — see
     // maybeAutoConnectToDiscoveredRadio(). Done here rather than in that slot
     // because this is the only place a connect is known to have ended badly.
@@ -7923,6 +7945,14 @@ void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
     menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
 }
 
+void MainWindow::applyTuningRangeToBandApplet() const
+{
+    if (!m_appletPanel || !m_appletPanel->bandApplet())
+        return;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    m_appletPanel->bandApplet()->setTuningRange(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
+}
+
 void MainWindow::applyNotchCapabilities(SpectrumWidget* sw) const
 {
     if (!sw)
@@ -7999,6 +8029,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
             proc.label, proc.levelMaximum);
+        if (auto* band = m_appletPanel->bandApplet()) {
+            band->setRadioCapabilities(m_radioModel.capabilities());
+            applyTuningRangeToBandApplet();
+        }
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
@@ -10696,10 +10730,10 @@ void MainWindow::updateKeyerAvailability()
 
     const bool txIsCw  = hasCwKeyer
                          && isCwMode(txMode);
-    // Voice-mode test through the shared predicate: the ASR block below asks
-    // the same question of a DIFFERENT slice, and one list keeps the two from
-    // drifting on which modes count (VoiceModeGate.h).
-    const bool txIsSsb = isVoiceMode(txMode);
+    // ASR accepts receive-only voice modes; keyer availability and the
+    // mode-change abort must also respect the backend's TX-mode exclusions.
+    const bool txIsSsb = isVoiceTransmitMode(
+        txMode, m_radioModel.backendCapabilities().receiveOnlyModes);
 
     // DVK carries a second, mode-independent gate: the radio's own DVK
     // entitlement. Unlike the mode gate it survives every mode change, so it is
@@ -11930,6 +11964,104 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
             PerfTelemetry::instance().recordSHistorySkipped();
         }
     }
+}
+
+bool MainWindow::hasBandStackEntries() const
+{
+    return !BandStackSettings::instance().entries(m_radioModel.settingsScope()).isEmpty();
+}
+
+// Step through the band-stack bookmarks inside the active slice's band, in
+// frequency order, wrapping at the ends, through the panel's own recall path.
+void MainWindow::stepBandStack(int direction)
+{
+    auto* s = activeSlice();
+    if (!s) return;
+    const double here = s->frequency();
+    const BandDef* band = nullptr;
+    for (const BandDef& b : kBands) {
+        if (here >= b.lowMhz && here <= b.highMhz) { band = &b; break; }
+    }
+    QVector<BandStackEntry> inBand;
+    for (const BandStackEntry& e : BandStackSettings::instance().entries(m_radioModel.settingsScope())) {
+        if (band ? (e.frequencyMhz >= band->lowMhz && e.frequencyMhz <= band->highMhz)
+                 : std::abs(e.frequencyMhz - here) < 1e-9) {
+            inBand.append(e);
+        }
+    }
+    if (inBand.isEmpty()) {
+        refuseControlAction(direction > 0 ? tr("Band Stack Up") : tr("Band Stack Down"));
+        return;
+    }
+    std::sort(inBand.begin(), inBand.end(), [](const BandStackEntry& a, const BandStackEntry& b) {
+        return a.frequencyMhz < b.frequencyMhz;
+    });
+    int pick = -1;
+    if (direction > 0) {
+        for (int i = 0; i < inBand.size() && pick < 0; ++i)
+            if (inBand[i].frequencyMhz > here + 1e-6) pick = i;
+        if (pick < 0) pick = 0;                       // wrap to the lowest
+    } else {
+        for (int i = inBand.size() - 1; i >= 0 && pick < 0; --i)
+            if (inBand[i].frequencyMhz < here - 1e-6) pick = i;
+        if (pick < 0) pick = inBand.size() - 1;       // wrap to the highest
+    }
+    const QPointer<MainWindow> owner(this);
+    m_radioModel.recallBandStack(s, inBand[pick], [owner](SliceModel* slice, double mhz) {
+        if (owner)
+            owner->applyTuneRequest(slice, mhz, TuneIntent::AbsoluteJump, "bandstack-recall");
+    });
+}
+
+QStringList MainWindow::panIdsInScreenOrder() const
+{
+    QStringList ids;
+    if (m_workspaceController && m_workspaceController->isEnabled())
+        ids = m_workspaceController->activeMainPanIdsForLayout();
+    if (m_panStack) {
+        if (ids.isEmpty())
+            ids = m_panStack->dockedPanIdsInLayoutOrder();
+        for (const QString& id : m_panStack->panIds())
+            if (!ids.contains(id)) ids.append(id);
+    }
+    ids.removeAll(PanSliceTitle::kPlaceholderPanId);
+    return ids;
+}
+
+// Band plan strip: Off, or back to the operator's last size (Small if none),
+// through the View ▸ Band Plan entries so the menu's check state follows.
+void MainWindow::toggleBandPlanStrip()
+{
+    const int size = AppSettings::instance().value("BandPlanFontSize", "6").toInt();
+    if (size > 0) m_lastBandPlanFontSize = size;
+    const QString target = size > 0 ? QStringLiteral("Off")
+        : m_lastBandPlanFontSize >= 16 ? QStringLiteral("Huge")
+        : m_lastBandPlanFontSize >= 12 ? QStringLiteral("Large")
+        : m_lastBandPlanFontSize >= 10 ? QStringLiteral("Medium")
+                                       : QStringLiteral("Small");
+    if (QAction* act = findMenuAction({"Band Plan", target})) act->trigger();
+}
+
+bool MainWindow::cwDecodeRxEnabled() const
+{
+    return CwDecodeSettings::rxEnabled();
+}
+
+void MainWindow::setCwDecodeRxEnabled(bool on)
+{
+    CwDecodeSettings::setRxEnabled(on);
+    refreshCwDecodeState();
+}
+
+bool MainWindow::rttyDecodeEnabled() const
+{
+    return RttyDecodeSettings::enabled();
+}
+
+void MainWindow::setRttyDecodeEnabled(bool on)
+{
+    RttyDecodeSettings::setEnabled(on);
+    refreshRttyDecodeState();
 }
 
 } // namespace AetherSDR
