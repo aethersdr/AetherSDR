@@ -7437,18 +7437,17 @@ void AudioEngine::loadClientFinalLimiterSettings()
 {
     if (!m_clientFinalLimiterTx) return;
     auto& s = AppSettings::instance();
-    // Default OFF: SmartSDR has no client-side brickwall limiter, so a fresh
-    // install with the limiter on at a -1 dBFS ceiling produces noticeably
-    // less forward power than SmartSDR for the same mic level (radio's SW ALC
-    // sees ~1 dB less peak to set its working point off of).  The limiter is
-    // still available for users who want headroom protection when running
-    // hot Comp/Tube/PUDU/Reverb settings — they can flip LIM on in the
-    // Aetherial Final Output Stage panel.  Existing users whose setting was
-    // already persisted keep their previous behavior.
+    // Default ON at a -0.5 dBFS ceiling with 1.5 ms look-ahead (maintainer
+    // ruling 2026-11-15, superseding #3004's default-off). The look-ahead
+    // makes it a true brickwall, and the ceiling sits half a dB under full
+    // scale so it costs little drive against SmartSDR. A setting an operator
+    // already saved is read back unchanged.
     m_clientFinalLimiterTx->setEnabled(
-        s.value("ClientFinalLimiterTxEnabled", "False").toString() == "True");
+        s.value("ClientFinalLimiterTxEnabled", "True").toString() == "True");
     m_clientFinalLimiterTx->setCeilingDb(
-        s.value("ClientFinalLimiterTxCeilingDb", "-1.0").toFloat());
+        s.value("ClientFinalLimiterTxCeilingDb", "-0.5").toFloat());
+    m_clientFinalLimiterTx->setLookaheadMs(
+        s.value("ClientFinalLimiterTxLookaheadMs", "1.5").toFloat());
     m_clientFinalLimiterTx->setOutputTrimDb(
         s.value("ClientFinalLimiterTxOutputTrimDb", "0.0").toFloat());
     m_clientFinalLimiterTx->setDcBlockEnabled(
@@ -7463,6 +7462,8 @@ void AudioEngine::saveClientFinalLimiterSettings() const
         m_clientFinalLimiterTx->isEnabled() ? QString("True") : QString("False"));
     s.setValue("ClientFinalLimiterTxCeilingDb",
         QString::number(m_clientFinalLimiterTx->ceilingDb()));
+    s.setValue("ClientFinalLimiterTxLookaheadMs",
+        QString::number(m_clientFinalLimiterTx->lookaheadMs()));
     s.setValue("ClientFinalLimiterTxOutputTrimDb",
         QString::number(m_clientFinalLimiterTx->outputTrimDb()));
     s.setValue("ClientFinalLimiterTxDcBlock",

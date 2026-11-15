@@ -5,12 +5,15 @@
 // imported preset is dropped rather than packed. AetherTX's gate and de-esser
 // are retired: a saved order that names them loads without them, an operator
 // who had the gate on gets RN2 instead, once, and both stages' keys go.
-// Isolated settings, no audio device, no radio.
+// The final limiter: a fresh install gets it on at -0.5 dB with 1.5 ms of
+// look-ahead, a saved setting is kept, and a TX profile carries the
+// look-ahead. Isolated settings, no audio device, no radio.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ChannelStripPresets.h"
+#include "core/ClientFinalLimiter.h"
 #include "core/SettingsPaths.h"
 #include "core/TxChainLayout.h"
 
@@ -46,6 +49,9 @@ private slots:
     void theOldDefaultBecomesTheNewDefault();
     void aGateThatWasOnBecomesRn2Once();
     void aGateThatWasOffLeavesRn2Alone();
+    void aFreshInstallGetsTheLookaheadLimiterOn();
+    void aSavedFinalLimiterIsKept();
+    void aTxProfileCarriesTheLookahead();
 };
 
 void TxChainSettingsTest::initTestCase()
@@ -221,6 +227,84 @@ void TxChainSettingsTest::aGateThatWasOffLeavesRn2Alone()
     QVERIFY(!s.contains("ClientGateTxEnabled"));
     QVERIFY(!s.contains("ClientGateTxRatio"));
     QVERIFY(!s.value("AetherialTubePreampTx").toString().contains(QStringLiteral("\"rn2\":true")));
+}
+
+namespace {
+constexpr const char* kFinalLimiterKeys[] = {
+    "ClientFinalLimiterTxEnabled", "ClientFinalLimiterTxCeilingDb",
+    "ClientFinalLimiterTxLookaheadMs", "ClientFinalLimiterTxOutputTrimDb",
+    "ClientFinalLimiterTxDcBlock",
+};
+}  // namespace
+
+void TxChainSettingsTest::aFreshInstallGetsTheLookaheadLimiterOn()
+{
+    auto& s = AppSettings::instance();
+    for (const char* key : kFinalLimiterKeys) {
+        s.remove(key);
+    }
+    s.save();
+    AudioEngine engine;
+    const auto* lim = engine.clientFinalLimiterTx();
+    QVERIFY(lim);
+    QVERIFY(lim->isEnabled());
+    QCOMPARE(lim->ceilingDb(), -0.5f);
+    QCOMPARE(lim->lookaheadMs(), 1.5f);
+}
+
+// An installation that saved its limiter (off, as #3004 shipped it) keeps
+// it, look-ahead included, and the look-ahead is persisted on save.
+void TxChainSettingsTest::aSavedFinalLimiterIsKept()
+{
+    auto& s = AppSettings::instance();
+    s.setValue("ClientFinalLimiterTxEnabled", "False");
+    s.setValue("ClientFinalLimiterTxCeilingDb", "-1");
+    s.setValue("ClientFinalLimiterTxLookaheadMs", "3");
+    s.save();
+    {
+        AudioEngine engine;
+        auto* lim = engine.clientFinalLimiterTx();
+        QVERIFY(lim);
+        QVERIFY(!lim->isEnabled());
+        QCOMPARE(lim->ceilingDb(), -1.0f);
+        QCOMPARE(lim->lookaheadMs(), 3.0f);
+        lim->setLookaheadMs(4.5f);
+        engine.saveClientFinalLimiterSettings();
+    }
+    s.save();
+    s.load();  // what is on disk, not the cache
+    QCOMPARE(s.value("ClientFinalLimiterTxLookaheadMs").toString(), QStringLiteral("4.5"));
+    for (const char* key : kFinalLimiterKeys) {
+        s.remove(key);
+    }
+    s.save();
+}
+
+void TxChainSettingsTest::aTxProfileCarriesTheLookahead()
+{
+    AudioEngine engine;
+    auto* lim = engine.clientFinalLimiterTx();
+    QVERIFY(lim);
+    lim->setLookaheadMs(4.0f);
+    const QJsonObject captured = ChannelStripPresets::captureTxJson(&engine);
+    QCOMPARE(captured.value("finalLimiter").toObject().value("lookaheadMs").toDouble(), 4.0);
+
+    lim->setLookaheadMs(0.5f);
+    ChannelStripPresets::applyTxJson(&engine, captured);
+    QCOMPARE(lim->lookaheadMs(), 4.0f);
+
+    // An older profile without the key leaves the look-ahead alone.
+    QJsonObject old = captured;
+    QJsonObject fl = old.value("finalLimiter").toObject();
+    fl.remove("lookaheadMs");
+    old["finalLimiter"] = fl;
+    lim->setLookaheadMs(2.0f);
+    ChannelStripPresets::applyTxJson(&engine, old);
+    QCOMPARE(lim->lookaheadMs(), 2.0f);
+    for (const char* key : kFinalLimiterKeys) {
+        AppSettings::instance().remove(key);
+    }
+    AppSettings::instance().save();
 }
 
 int main(int argc, char** argv)

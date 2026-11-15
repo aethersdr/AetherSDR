@@ -25,8 +25,10 @@ compact view of both chains (see [Using the docked applet](#using-the-docked-app
 > - Channel-strip presets are retired. The first time you open the new
 >   windows, each saved preset is split once into a TX profile and an RX
 >   profile, so nothing is lost.
-> - The **LIM** final limiter on the transmit Final Output stage is **off by
->   default**, so drive level matches SmartSDR. Turn it on if you relied on it.
+> - The **LIM** final limiter on the transmit Final Output stage is now a true
+>   brickwall with look-ahead, and it is **on by default** at a −0.5 dB ceiling
+>   with 1.5 ms of look-ahead. An existing installation keeps the LIM
+>   setting it has saved; turn LIM on in Final Output to get the new limiter.
 > - **BYPASS** is remembered across restarts.
 > - AetherTX's **Gate** and **De-esser** are gone. If you had the TX gate on,
 >   **RN2** was switched on for you. An old profile that does not set RN2
@@ -430,17 +432,22 @@ The last stage before the radio.
 
 | Control | What it does |
 |---|---|
-| **LIM** | Final brickwall limiter at the end of the TX chain. **Off by default** |
+| **LIM** | Final brickwall limiter at the end of the TX chain: no sample leaves above the ceiling. **On by default**, ceiling −0.5 dB |
 | **DC** | 25 Hz high-pass that strips DC offset |
 | **TONE** | 1 kHz test tone injected at the head of the chain; right-click for frequency and level |
 | **QUIN** | Quindar tones on PTT engage and release; right-click for the editor (below) |
 | **Trim** | Output gain, −12 to +12 dB |
+| **Look-ahead** | 0 to 5 ms (default 1.5 ms). How far ahead LIM sees a peak coming, so it ramps down in time instead of clamping. It is also the delay LIM adds while it is on; 0 ms is an instant hard limit |
 | **HOLD** | When lit, the **PK / RMS / GR / CRST** readouts latch the worst value since you engaged it. Click again to release |
 
 The horizontal meter shows the input peak, the output peak, gain reduction and
-the limiter ceiling as a draggable handle. **OVR** latches red on a clip and
-clears itself; **LIMIT** lights while the limiter is clamping. The waveform
-scope below the meter shows what you are sending.
+the limiter ceiling as a draggable handle (−12 to 0 dB, default −0.5 dB).
+**OVR** latches red on a clip and clears itself; **LIMIT** lights while the
+limiter is clamping. The waveform scope below the meter shows what you are
+sending.
+
+LIM holds the audio samples under the ceiling. It cannot hold the SSB RF
+envelope, which can rise a few dB above the highest audio sample.
 
 #### Quindar tones
 

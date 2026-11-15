@@ -2351,6 +2351,18 @@ add_test(NAME client_eq_smoothing_test COMMAND client_eq_smoothing_test)
 set_tests_properties(client_eq_smoothing_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
 
+# ClientFinalLimiter, the look-ahead brickwall at the end of the TX chain: no
+# sample above the ceiling at any look-ahead without the safety clip, the delay
+# and reported latency are the look-ahead, the gain ramps instead of stepping,
+# and a look-ahead or enable change fades the delay tap. Standalone DSP.
+add_executable(client_final_limiter_test
+    tests/client_final_limiter_test.cpp
+    src/core/ClientFinalLimiter.cpp
+)
+target_include_directories(client_final_limiter_test PRIVATE src)
+target_link_libraries(client_final_limiter_test PRIVATE Qt6::Core)
+add_test(NAME client_final_limiter_test COMMAND client_final_limiter_test)
+
 add_executable(client_comp_test
     tests/client_comp_test.cpp
     src/core/ClientComp.cpp
