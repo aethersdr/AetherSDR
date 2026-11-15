@@ -18,6 +18,9 @@
 //              --gain 0                dB applied to the input before both runs
 //              --hl2 0|1               also measure through the HL2 modulator
 //              --hl2-alc 0|1           HL2 ALC in that measurement (default 0)
+//              --hl2-peak-clip 6 --hl2-peak-cessb 1|0
+//                                      Peak control inside the HL2 modulator
+//                                      (WDSP COMP + CESSB), processed run only
 // EQ:          --eq-hpf 80             a 24 dB/oct high-pass band
 //              --eq-p1-freq 500 --eq-p1-gain 2 --eq-p1-q 1   peaking bands p1..p4
 // Compressor:  --comp-threshold -20 --comp-ratio 4 --comp-attack 20
@@ -226,6 +229,8 @@ const char* const kKnownKeys[] = {
     "gain",
     "hl2",
     "hl2-alc",
+    "hl2-peak-clip",
+    "hl2-peak-cessb",
     "eq-hpf",
     "eq-p1-freq",
     "eq-p1-gain",
@@ -575,7 +580,7 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
 // as long as the audio lasts. Returns IQ at 48 kHz with the channel's 48.7 ms
 // priming (mute ramp and fill) dropped.
 std::vector<std::complex<float>> runHl2(const std::vector<float>& transport, const Settings& s,
-                                        unsigned long long* faults)
+                                        bool processed, unsigned long long* faults)
 {
     hl2::Hl2TxDsp tx;
     TxTestAuthority authority;
@@ -589,6 +594,9 @@ std::vector<std::complex<float>> runHl2(const std::vector<float>& transport, con
         return {};
     }
     tx.setMicGain(1.0);
+    if (processed && s.has("hl2-peak-clip")) {
+        tx.setPeakControl(true, s.get("hl2-peak-clip", 6), s.get("hl2-peak-cessb", 1) > 0.5);
+    }
 
     std::vector<std::complex<float>> iq;
     QObject::connect(&tx, &hl2::Hl2TxDsp::iqReady, &tx,
@@ -773,8 +781,8 @@ int main(int argc, char** argv)
                     static_cast<double>(baseline.transport.size()) / 24000.0,
                     settings.get("hl2-alc", 0) > 0.5 ? "on" : "off");
         std::fflush(stdout);
-        const auto baseIq = runHl2(baseline.transport, settings, &baseFaults);
-        const auto procIq = runHl2(processed.transport, settings, &procFaults);
+        const auto baseIq = runHl2(baseline.transport, settings, false, &baseFaults);
+        const auto procIq = runHl2(processed.transport, settings, true, &procFaults);
         if (baseIq.empty() || procIq.empty()) {
             std::fprintf(stderr, "the HL2 modulator produced no IQ\n");
             return 1;

@@ -34,6 +34,8 @@
 #include "core/AetherDspModePolicy.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ClientCessb.h"
+#include "core/PeakControlRoute.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/HostVoiceChainPolicy.h"
@@ -906,6 +908,33 @@ bool MainWindow::hostModulatesTxAudio() const
     return caps.hostModulates && caps.canTransmit;
 }
 
+void MainWindow::syncPeakControlRoute()
+{
+    ClientCessb* const peak = m_audio ? m_audio->clientCessbTx() : nullptr;
+    if (!peak) {
+        return;
+    }
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    const bool available = m_radioModel.isConnected() && caps.modulatorPeakControl.has_value();
+    const auto resolved =
+        PeakControlRoute::resolve(peak->isEnabled(), peak->route(), available);
+    // Out of the chain before the modulator takes over, so the two never
+    // overlap; the reverse order on the way back.
+    if (resolved.modulatorActive) {
+        peak->setRoutedAway(true);
+    }
+    if (available) {
+        if (IRadioBackend* backend = m_radioModel.backend()) {
+            backend->setModulatorPeakControl(resolved.modulatorActive, peak->clipDb(),
+                                             peak->overshootControl());
+        }
+    }
+    if (!resolved.modulatorActive) {
+        peak->setRoutedAway(false);
+    }
+    m_audio->setModulatorPeakControlAvailable(available);
+}
+
 void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
 {
     if (!m_audio || !hostModulatesTxAudio())
@@ -1084,6 +1113,17 @@ void MainWindow::wireHostModulatedVoiceChain()
             [this] { applySpeechProcessorToClientComp(true); });
     connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
             this, [this] { applySpeechProcessorToClientComp(false); });
+
+    // Peak control's route follows its own state and the radio's capability.
+    if (m_audio) {
+        connect(m_audio, &AudioEngine::clientCessbStateChanged, this,
+                &MainWindow::syncPeakControlRoute);
+    }
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, this,
+            &MainWindow::syncPeakControlRoute);
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
+            [this](bool) { syncPeakControlRoute(); });
+    syncPeakControlRoute();
 
     // ── Connection edges ────────────────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::connectionStateChanged,

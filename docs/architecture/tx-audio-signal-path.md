@@ -69,7 +69,9 @@ Optional native-48 kHz RN2 (switch on the Tube page; replaced the TX gate)
           ▼
      ClientCessb — WDSP COMP + CESSB + ALC peak control (#4836), not a chain
           │        stage: always after the chain; passband follows the
-          │        radio TX filter
+          │        radio TX filter; on an HL2 it can run inside the TXA
+          │        modulator instead (WDSP COMP + CESSB, linear-phase filter),
+          │        never both (PeakControlRoute.h)
           ▼  (meters: per-stage inputPeak/outputPeak/GR, ClientEq FFT
           │   tap, ClientPudu wet RMS, ClientReverb wet RMS)
           │

@@ -2265,6 +2265,13 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasPaCurrentTelemetry = false;
     // PROC runs in this host's ClientComp (hostModulates), not in the radio.
     c.speechProcessorControl = std::nullopt;
+    // Peak control can run in the TXA modulator (WDSP's COMP + CESSB); the
+    // phasing build has no such stage.
+    if (AETHER_HL2_TX_TXA && m_txAllowed) {
+        c.modulatorPeakControl = RadioCapabilities::ModulatorPeakControl{};
+    } else {
+        c.modulatorPeakControl = std::nullopt;
+    }
     c.voxControl = std::nullopt;
     c.txMonitorControl = std::nullopt;
     c.lineoutControl = std::nullopt;
@@ -5898,6 +5905,19 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 // 0.8 dB/step (no ALC makeup gain; hl2_tx_level_policy_test pins the join).
 // Applies to mic and TCI/DAX, not EngineGenerated audio (Hl2TxLevelPolicy.h).
 // Level 0 mutes the mic and TCI/DAX path; it does not stop a WSPR beacon.
+void Hl2Backend::setModulatorPeakControl(bool on, double clipDb, bool cessb)
+{
+    m_modPeakOn = on && AETHER_HL2_TX_TXA;
+    m_modPeakClipDb = std::isfinite(clipDb) ? std::clamp(clipDb, 0.0, 20.0) : 6.0;
+    m_modPeakCessb = cessb;
+    if (m_txDsp) {
+        QMetaObject::invokeMethod(m_txDsp, "setPeakControl", Qt::QueuedConnection,
+            Q_ARG(bool, m_modPeakOn), Q_ARG(double, m_modPeakClipDb),
+            Q_ARG(bool, m_modPeakCessb));
+        requestDspChainsPublish();
+    }
+}
+
 void Hl2Backend::setMicGain(int level)
 {
     level = std::clamp(level, 0, 100);
@@ -6913,6 +6933,12 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     // than TransmitModel, so request and applied value can be compared.
     section("micLevel", QStringLiteral("Transmit voice chain"));
     put("micLevel", QStringLiteral("Mic slider (0-100, 50 = unity)"), m_micLevel);
+    put("modulatorPeakControl",
+        QStringLiteral("Peak control in the modulator (COMP + CESSB, linear phase)"),
+        m_modPeakOn ? QStringLiteral("on, clip %1 dB, CESSB %2")
+                          .arg(m_modPeakClipDb, 0, 'f', 1)
+                          .arg(m_modPeakCessb ? QStringLiteral("on") : QStringLiteral("off"))
+                    : QStringLiteral("off"));
     // NUMERIC ON EVERY PATH. An earlier revision reported the string "muted"
     // here at slider 0 and a number everywhere else, which reads fine in the
     // dialog and breaks the bridge: `health` serialises this row straight to
@@ -8642,6 +8668,10 @@ void Hl2Backend::pushInitialState()
             Q_ARG(WdspChannel::Mode,
                   modeFromString(txRx ? txRx->mode : QStringLiteral("USB"))));
         QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
+        // The client's Peak control route, onto this connect's modulator.
+        QMetaObject::invokeMethod(m_txDsp, "setPeakControl", Qt::QueuedConnection,
+            Q_ARG(bool, m_modPeakOn), Q_ARG(double, m_modPeakClipDb),
+            Q_ARG(bool, m_modPeakCessb));
     }
     requestDspChainsPublish();
 

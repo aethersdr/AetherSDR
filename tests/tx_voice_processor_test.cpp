@@ -870,6 +870,16 @@ void testPeakControlRunsAfterTheChain()
            cessb.latencyFrames() > 0
                && processor.latencyFrames() == baseLatency + cessb.latencyFrames());
 
+    cessb.setRoutedAway(true);
+    {
+        QByteArray t = makeCanonicalTone(480, 48000, 1000.0f);
+        processor.processCapturedInt16(t);
+    }
+    report("routed to the radio's modulator, the chain leaves the audio alone",
+           processor.normalizedFloat48Stereo() == processor.postChannelStripFloat48Stereo());
+    report("and does not count its latency", processor.latencyFrames() == baseLatency);
+    cessb.setRoutedAway(false);
+
     cessb.setEnabled(false);
     QByteArray tone = makeCanonicalTone(480, 48000, 1000.0f);
     processor.processCapturedInt16(tone);

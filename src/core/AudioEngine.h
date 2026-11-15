@@ -674,6 +674,12 @@ public:
     // emits clientMbLimiterStateChanged().
     void loadClientMbLimiterSettings();
     void saveClientMbLimiterSettings();
+    // Whether the connected radio's modulator can run Peak control
+    // (RadioCapabilities::modulatorPeakControl). The GUI thread sets it; the
+    // Peak control page reads it to offer the "Run in" choice. Emits
+    // clientCessbStateChanged() when it changes.
+    void setModulatorPeakControlAvailable(bool available);
+    bool modulatorPeakControlAvailable() const { return m_modulatorPeakAvailable.load(); }
     // The radio's TX filter, which the peak control's passband stays inside.
     void setTxFilterPassband(int lowHz, int highHz);
     void loadClientFinalLimiterSettings();
@@ -1535,6 +1541,7 @@ private:
     // The final peak control runs after the chain, outside TxChainStage, so
     // BYPASS snapshots it beside RN2.
     bool m_txBypassSnapshotCessb{false};
+    std::atomic<bool> m_modulatorPeakAvailable{false};
     bool m_txBypassSnapshotMbLimiter{false};
     bool m_txBypassActive{false};
     // RX chain — same packing convention.  RxChainStage::None terminates

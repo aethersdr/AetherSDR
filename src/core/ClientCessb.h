@@ -25,6 +25,11 @@ namespace AetherSDR {
 
 class ClientCessb {
 public:
+    // Where the operator wants Peak control to run. Modulator is honored only
+    // on a radio that advertises RadioCapabilities::modulatorPeakControl
+    // (PeakControlRoute.h); anywhere else it runs in the chain.
+    enum class Route { Chain, Modulator };
+
     static constexpr int kBlockSize = 64;
     static constexpr int kTaps = 1024;          // each of the three bandpasses
     static constexpr float kMaxClipDb = 20.0f;
@@ -50,6 +55,15 @@ public:
 
     void setEnabled(bool on) noexcept;
     bool isEnabled() const noexcept;
+    void setRoute(Route route) noexcept;
+    Route route() const noexcept;
+    // Set by the owner when the stage is running in the radio's modulator
+    // instead: the chain then passes audio straight through and adds no
+    // latency. Re-entering the chain starts clean.
+    void setRoutedAway(bool away) noexcept;
+    bool isRoutedAway() const noexcept;
+    // Enabled and not routed away: what the audio thread runs.
+    bool isActiveInChain() const noexcept { return isEnabled() && !isRoutedAway(); }
     void setClipDb(float db) noexcept;          // 0..20
     float clipDb() const noexcept;
     void setOvershootControl(bool on) noexcept; // CESSB
@@ -95,6 +109,8 @@ private:
     // it on the audio engine's thread.
     std::atomic<double> m_sampleRate{0.0};
     std::atomic<bool> m_enabled{false};
+    std::atomic<Route> m_route{Route::Chain};
+    std::atomic<bool> m_routedAway{false};
     std::atomic<float> m_clipDb{kDefaultClipDb};
     std::atomic<bool> m_overshoot{true};
     std::atomic<float> m_outputDb{kDefaultOutputDb};

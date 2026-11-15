@@ -927,6 +927,17 @@ public:
         Q_UNUSED(level);
     }
 
+    // Peak control in the modulator (RadioCapabilities::modulatorPeakControl):
+    // WDSP's COMP at clipDb and, with cessb, CESSB. The client sends the whole
+    // state on every change and after connect; the backend does not persist it.
+    // Default no-op.
+    virtual void setModulatorPeakControl(bool on, double clipDb, bool cessb)
+    {
+        Q_UNUSED(on);
+        Q_UNUSED(clipDb);
+        Q_UNUSED(cessb);
+    }
+
     // VOX — the enable, the trigger threshold and the hang time.
     //
     // Three together for the same reason the speech processor's two are: they

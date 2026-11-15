@@ -9,6 +9,7 @@
 #include "core/ThemeManager.h"
 
 #include <QCloseEvent>
+#include <QButtonGroup>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QLabel>
@@ -133,6 +134,41 @@ StripPeakPanel::StripPeakPanel(AudioEngine* engine, QWidget* parent)
     row->addStretch();
     root->addLayout(row);
 
+    // Where it runs: offered only when the radio's modulator can run it (the
+    // HL2's WDSP TXA channel). Exclusive by construction.
+    m_routeRow = new QWidget;
+    auto* routeBox = new QHBoxLayout(m_routeRow);
+    routeBox->setContentsMargins(0, 0, 0, 0);
+    routeBox->setSpacing(6);
+    routeBox->addStretch();
+    auto* routeLabel = new QLabel(tr("Run in"));
+    routeBox->addWidget(routeLabel);
+    m_routeChain = new QPushButton(tr("AetherTX chain"));
+    m_routeChain->setObjectName(QStringLiteral("aetherTxPeakRouteChain"));
+    m_routeModulator = new QPushButton(tr("Radio modulator"));
+    m_routeModulator->setObjectName(QStringLiteral("aetherTxPeakRouteModulator"));
+    m_routeModulator->setToolTip(
+        tr("Run WDSP's clipper and CESSB inside the radio's modulator (HL2), where they see "
+           "the final envelope. The TX filter runs linear phase while it is on (about 19 ms "
+           "more delay); the radio's ALC and drive set the peak."));
+    m_routeModulator->setAccessibleDescription(m_routeModulator->toolTip());
+    auto* group = new QButtonGroup(m_routeRow);
+    group->setExclusive(true);
+    for (QPushButton* b : {m_routeChain, m_routeModulator}) {
+        b->setCheckable(true);
+        ThemeManager::instance().applyStyleSheet(b, kToggleStyle);
+        group->addButton(b);
+        routeBox->addWidget(b);
+    }
+    routeBox->addStretch();
+    root->addWidget(m_routeRow);
+    connect(m_routeModulator, &QPushButton::toggled, this, [this](bool on) {
+        if (auto* const peak = m_audio ? m_audio->clientCessbTx() : nullptr) {
+            peak->setRoute(on ? ClientCessb::Route::Modulator : ClientCessb::Route::Chain);
+            m_audio->saveClientCessbSettings();
+        }
+    });
+
     m_passband = new QLabel;
     m_passband->setObjectName(QStringLiteral("aetherTxPeakPassband"));
     m_passband->setAlignment(Qt::AlignCenter);
@@ -160,7 +196,7 @@ StripPeakPanel::StripPeakPanel(AudioEngine* engine, QWidget* parent)
     m_poll->setInterval(33);
     connect(m_poll, &QTimer::timeout, this, [this]() {
         auto* const peak = m_audio ? m_audio->clientCessbTx() : nullptr;
-        const bool on = peak && peak->isEnabled();
+        const bool on = peak && peak->isActiveInChain();
         m_history->setActive(on);
         if (on) {
             m_history->push(std::max(peak->takeEnvelopePeakDb(), kTraceFloorDb));
@@ -194,14 +230,28 @@ void StripPeakPanel::syncControlsFromEngine()
     const QSignalBlocker b1(m_clip);
     const QSignalBlocker b2(m_ceiling);
     const QSignalBlocker b3(m_cessb);
+    const QSignalBlocker b4(m_routeChain);
+    const QSignalBlocker b5(m_routeModulator);
     m_clip->setValue(peak->clipDb());
     m_ceiling->setValue(peak->outputDb());
     m_cessb->setChecked(peak->overshootControl());
-    m_history->setReference(peak->outputDb(), tr("Ceiling"));
-    m_history->setActive(peak->isEnabled());
-    m_passband->setText(tr("Passband %1\xe2\x80\x93%2 Hz, inside the radio TX filter")
-                            .arg(std::lround(peak->lowHz()))
-                            .arg(std::lround(peak->highHz())));
+    const bool offered = m_audio->modulatorPeakControlAvailable();
+    const bool inModulator = offered && peak->route() == ClientCessb::Route::Modulator;
+    m_routeRow->setVisible(offered);
+    m_routeChain->setChecked(!inModulator);
+    m_routeModulator->setChecked(inModulator);
+    m_ceiling->setEnabled(!inModulator);
+    m_ceiling->setToolTip(inModulator
+                              ? tr("In the radio's modulator the radio's ALC and drive set the peak")
+                              : tr("The largest SSB envelope this stage lets through, in dBFS"));
+    m_ceiling->setAccessibleDescription(m_ceiling->toolTip());
+    m_history->setReference(peak->outputDb(), inModulator ? QString() : tr("Ceiling"));
+    m_history->setActive(peak->isEnabled() && !inModulator);
+    m_passband->setText(
+        inModulator ? tr("Running in the radio's modulator: its TX filter, linear phase while on")
+                    : tr("Passband %1\xe2\x80\x93%2 Hz, inside the radio TX filter")
+                          .arg(std::lround(peak->lowHz()))
+                          .arg(std::lround(peak->highHz())));
     m_passband->setAccessibleName(m_passband->text());
 }
 

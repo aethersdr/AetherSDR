@@ -340,7 +340,7 @@ bool TxVoiceProcessor::processWorkBuffer(int frames48,
         m_processors.mbLimiter->process(reinterpret_cast<float*>(m_work48.data()), frames48,
                                         kChannels);
     }
-    if (m_processors.cessb && m_processors.cessb->isEnabled()) {
+    if (m_processors.cessb && m_processors.cessb->isActiveInChain()) {
         m_processors.cessb->process(reinterpret_cast<float*>(m_work48.data()), frames48, kChannels);
     }
     if (m_captureMeasurements) {
@@ -587,7 +587,7 @@ int TxVoiceProcessor::latencyFrames() const noexcept
     if (m_processors.mbLimiter && m_processors.mbLimiter->isEnabled()) {
         frames += m_processors.mbLimiter->latencyFrames();
     }
-    if (m_processors.cessb && m_processors.cessb->isEnabled()) {
+    if (m_processors.cessb && m_processors.cessb->isActiveInChain()) {
         frames += m_processors.cessb->latencyFrames();
     }
     for (int index = 0; index < kMaxStages; ++index) {

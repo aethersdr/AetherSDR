@@ -746,6 +746,9 @@ private:
     // plane is not where the TX audio chain lives. Same capability pair
     // MainWindow_Session.cpp tests before opening the mic.
     bool hostModulatesTxAudio() const;
+    // Peak control runs in the chain or in the radio's modulator, never both
+    // (PeakControlRoute.h). Idempotent; called on every relevant change.
+    void syncPeakControlRoute();
     // Push the operator's PROC state onto the shared client compressor.
     // operatorIntent gates the NOR/DX/DX+ preset write: only a PROC move the
     // operator actually made may overwrite the strip's compressor settings.

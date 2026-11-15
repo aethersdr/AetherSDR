@@ -184,6 +184,7 @@ public:
     void setTunePower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
+    void setModulatorPeakControl(bool on, double clipDb, bool cessb) override;
     // No default argument: defaults on virtuals bind statically and would diverge
     // from the base's. The sole call site passes it explicitly.
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
@@ -1270,6 +1271,11 @@ private:
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.
     int m_micLevel = 50;
+    // Modulator peak control as the client last sent it; pushed to every new
+    // m_txDsp at link-up. Not persisted: the client owns the setting.
+    bool m_modPeakOn = false;
+    double m_modPeakClipDb = 6.0;
+    bool m_modPeakCessb = true;
 
     // Mic level from this radio's restored document, applied once by
     // pushInitialState() (m_txDsp does not exist at applyRestoredState() time).

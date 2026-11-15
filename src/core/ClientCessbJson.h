@@ -2,7 +2,8 @@
 
 // The final peak control's configuration as one JSON object (Principle V),
 // shared by its settings key and TX profiles/presets:
-//   {"enabled": bool, "clipDb": num, "cessb": bool, "outputDb": num}
+//   {"enabled": bool, "clipDb": num, "cessb": bool, "outputDb": num,
+//    "route": "chain" | "modulator"}
 // The passband is not a setting: it follows the radio's TX filter.
 
 #include <QJsonObject>

@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 292 touchpoint headers (237 core, 55 models) — 292/292 tagged, 0/292 converted.
+**Totals:** 293 touchpoint headers (238 core, 55 models) — 293/293 tagged, 0/293 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -30,7 +30,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/CallsignLookupService.h` | 3 | universal — Orchestrates QRZ/cty.dat callsign lookups + cache; radio-agnostic spot/logging integration. | unconverted |
 | `core/CallsignUtils.h` | 1 | universal — Stateless callsign parsing/validation helpers; radio-agnostic. | unconverted |
 | `core/CatPort.h` | 2 | ui-support — CAT server (TCP+PTY, rigctld/TS-2000/FlexCAT dialects) for external apps; desktop integration, needs a home | unconverted |
-| `core/ClientCessb.h` | 2 | universal — Client TX final peak control (WDSP compressor + CESSB osctrl between bandpasses + TX ALC backstop, used standalone; clip, ceiling, passband following the TX filter + envelope peak); radio-agnostic engine DSP feature. | unconverted |
+| `core/ClientCessb.h` | 3 | universal — Client TX final peak control (WDSP compressor + CESSB osctrl between bandpasses + TX ALC backstop, used standalone; clip, ceiling, passband following the TX filter + envelope peak); radio-agnostic engine DSP feature. | unconverted |
 | `core/ClientCfc.h` | 6 | universal — Client TX-chain CFC multiband compressor (WDSP cfcomp used standalone; curves, pre-comp, post-EQ, FFT size + live compression); radio-agnostic engine DSP feature. | unconverted |
 | `core/ClientComp.h` | 13 | universal — Client-side TX dynamics DSP (compressor/limiter/drive/phase rotator + GR meters); radio-agnostic engine DSP. | unconverted |
 | `core/ClientDisplaySettings.h` | 1 | ui-support — Radio-scoped client persistence for locally shaped display state (waterfall cadence, FFT FPS, the dBm range) under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state. | unconverted |
@@ -122,6 +122,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/NnrSettings.h` | 3 | ui-support — AppSettings-backed JSON store for NNR strength, model and the six WDSP tuning controls; persistence, not radio state | unconverted |
 | `core/NvidiaAfxPack.h` | 1 | ui-support — Download/install manager for NVIDIA AFX BNR runtime pack (CUDA/TensorRT); deployment plumbing, no radio state | unconverted |
 | `core/NvidiaBnrSettings.h` | 1 | ui-support — AppSettings-backed JSON store for Maxine BNR intensity + licence acceptance; persistence, not radio state | unconverted |
+| `core/PeakControlRoute.h` | 1 | universal — Pure policy for where Peak control runs: AetherTX chain or the radio's modulator (capability modulatorPeakControl), never both; radio-agnostic. | unconverted |
 | `core/PerfTelemetry.h` | 3 | ui-support — Singleton perf-instrumentation logger for client render/UDP/input timing; diagnostics, not radio state. | unconverted |
 | `core/PeripheralAuthCodeValidation.h` | 1 | peripheral(4o3a) — Stateless validation of authorization codes before constructing line-oriented TGXL, PGXL and Antenna Genius peripheral commands; no radio-family wire or UI state. | unconverted |
 | `core/PeripheralEndpointFallback.h` | 1 | peripheral(4o3a) — Stateless choice of the radio-reported address to retry once after a saved manual TGXL or PGXL address fails at the socket level; no radio-family wire or UI state. | unconverted |

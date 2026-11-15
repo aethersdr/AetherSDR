@@ -49,6 +49,9 @@ private:
     ClientCompKnob* m_clip{nullptr};
     ClientCompKnob* m_ceiling{nullptr};
     QPushButton* m_cessb{nullptr};
+    QWidget* m_routeRow{nullptr};
+    QPushButton* m_routeChain{nullptr};
+    QPushButton* m_routeModulator{nullptr};
     QLabel* m_passband{nullptr};
     QTimer* m_poll{nullptr};
     bool m_restoring{false};

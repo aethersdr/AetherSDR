@@ -597,6 +597,20 @@ filter narrower than 600 Hz it no longer matches the radio's.
 
 **Delay.** Peak control adds about 39 ms.
 
+**On a Hermes-Lite 2: run it in the modulator.** With an HL2 connected, the
+page offers **Run in: AetherTX chain / Radio modulator**. In the modulator,
+WDSP's own clipper and CESSB run inside the HL2's transmit channel, where they
+see the final envelope, and the stage in the AetherTX chain stands aside: the
+two never run at once. **Clip** and **CESSB** apply as usual; there is no
+**Ceiling**, because the HL2's ALC and drive set the peak. While it is on, the
+HL2's SSB TX filter runs linear phase instead of minimum phase, which adds
+about 19 ms. Measured with the Contest profile through the HL2 modulator
+(300–2700 Hz filter): the peak-to-average ratio is 5.2 dB with no peak
+control, 4.9 dB with it in the chain (the HL2's minimum-phase filter undoes
+most of it), and 2.5 dB with it in the modulator, about 2.7 dB more talk
+power. Off an HL2 the choice is not shown, and a saved **Radio modulator**
+choice runs in the chain.
+
 **Example: SSB contest or DX punch.** Clip 6 dB, CESSB on, Ceiling −1 dBFS. On
 a FLEX-8600 at 25 W into a dummy load, with the Contest profile ahead of it
 and the passband following the radio's 50–4000 Hz TX filter, this lowered the

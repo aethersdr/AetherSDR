@@ -7546,6 +7546,13 @@ void AudioEngine::loadClientCessbSettings()
     applyClientCessbJson(*m_clientCessbTx, doc.object());
 }
 
+void AudioEngine::setModulatorPeakControlAvailable(bool available)
+{
+    if (m_modulatorPeakAvailable.exchange(available) != available) {
+        emit clientCessbStateChanged();
+    }
+}
+
 void AudioEngine::setTxFilterPassband(int lowHz, int highHz)
 {
     if (m_clientCessbTx) {

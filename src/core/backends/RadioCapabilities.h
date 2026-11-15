@@ -801,6 +801,18 @@ struct RadioCapabilities {
     };
     std::optional<SpeechProcessorControl> speechProcessorControl;
 
+    // The modulator can run Peak control itself (RFC #4836): the HL2's WDSP TXA
+    // channel runs WDSP's own COMP + CESSB on the true final envelope. Present
+    // only where that stage exists; the client then offers "Run in: HL2
+    // modulator" on its Peak control page and keeps the two exclusive, so two
+    // clippers are never on at once. Applied by
+    // IRadioBackend::setModulatorPeakControl.
+    struct ModulatorPeakControl {
+        double maxClipDb = 20.0;
+        QString label{QStringLiteral("HL2 modulator")};
+    };
+    std::optional<ModulatorPeakControl> modulatorPeakControl;
+
     // The radio can temporarily monitor the transmit frequency while the
     // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
     // persistent repeater-reverse setting: releasing it returns reception to

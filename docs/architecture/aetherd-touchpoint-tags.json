@@ -341,6 +341,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/PeakControlRoute.h": {
+  "tag": "universal",
+  "note": "Pure policy for where Peak control runs: AetherTX chain or the radio's modulator (capability modulatorPeakControl), never both; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ClientTube.h": {
   "tag": "universal",
   "note": "Client TX-chain tube saturator DSP (drive/tone/env follower); radio-agnostic engine DSP, no vendor ties.",

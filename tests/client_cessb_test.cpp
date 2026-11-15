@@ -7,6 +7,7 @@
 
 #include "core/ClientCessb.h"
 #include "core/ClientCessbJson.h"
+#include "core/PeakControlRoute.h"
 #include "core/dsp/SsbEnvelopeMeter.h"
 
 #include <QJsonObject>
@@ -409,6 +410,54 @@ void testJson()
                !AetherSDR::clientCessbToJson(a).contains(QStringLiteral("highHz")));
 }
 
+void testRoute()
+{
+    using AetherSDR::PeakControlRoute::resolve;
+    using Route = ClientCessb::Route;
+    bool neverBoth = true;
+    for (bool enabled : {false, true}) {
+        for (Route route : {Route::Chain, Route::Modulator}) {
+            for (bool available : {false, true}) {
+                const auto r = resolve(enabled, route, available);
+                neverBoth = neverBoth && !(r.chainActive && r.modulatorActive);
+            }
+        }
+    }
+    report("chain and modulator are never both active", neverBoth);
+    report("disabled: neither runs", !resolve(false, Route::Modulator, true).chainActive
+                                         && !resolve(false, Route::Modulator, true).modulatorActive);
+    report("modulator chosen and offered: the modulator runs",
+           resolve(true, Route::Modulator, true).modulatorActive);
+    const auto fallback = resolve(true, Route::Modulator, false);
+    report("modulator chosen but not offered: the chain runs it, and says so",
+           fallback.chainActive && fallback.fellBackToChain);
+    report("chain chosen: the chain runs, even where a modulator is offered",
+           resolve(true, Route::Chain, true).chainActive);
+
+    // Routed away, the stage is enabled but out of the chain; back in, it
+    // starts clean.
+    auto s = makeStage(12.0f, true, -1.0f);
+    s->setRoutedAway(true);
+    report("routed away: enabled but not active in the chain",
+           s->isEnabled() && !s->isActiveInChain());
+    auto loud = voice(0.5, 0.9);
+    run(*s, loud);
+    s->setRoutedAway(false);
+    std::vector<float> silence(static_cast<std::size_t>(0.2 * kRate), 0.0f);
+    run(*s, silence);
+    report("back in the chain it starts clean", peakOf(silence) < 1e-6);
+
+    ClientCessb a;
+    a.setRoute(Route::Modulator);
+    ClientCessb b;
+    AetherSDR::applyClientCessbJson(b, AetherSDR::clientCessbToJson(a));
+    report("the route round-trips through JSON", b.route() == Route::Modulator);
+    QJsonObject bad;
+    bad["route"] = QStringLiteral("radio");
+    AetherSDR::applyClientCessbJson(b, bad);
+    report("an unknown route reads as the chain", b.route() == Route::Chain);
+}
+
 }  // namespace
 
 int main()
@@ -422,6 +471,7 @@ int main()
     testReenableClean();
     testStereo();
     testJson();
+    testRoute();
     std::printf("%s\n", g_failed == 0 ? "ALL PASSED" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }

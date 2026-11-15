@@ -257,6 +257,7 @@ int main(int argc, char** argv)
                   && !hl2Backend.capabilities().voxControl
                   && !hl2Backend.capabilities().txMonitorControl,
               "HL2 declares no radio-side PROC, VOX or monitor (its PROC is ClientComp)");
+        check(!caps.modulatorPeakControl, "Flex offers no modulator peak control");
     }
     {
         const IcomModel* ic705 = modelForName("IC-705");

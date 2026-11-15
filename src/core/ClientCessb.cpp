@@ -117,6 +117,30 @@ bool ClientCessb::isEnabled() const noexcept
     return m_enabled.load(std::memory_order_acquire);
 }
 
+void ClientCessb::setRoute(Route route) noexcept
+{
+    m_route.store(route, std::memory_order_relaxed);
+}
+
+ClientCessb::Route ClientCessb::route() const noexcept
+{
+    return m_route.load(std::memory_order_relaxed);
+}
+
+void ClientCessb::setRoutedAway(bool away) noexcept
+{
+    const bool was = m_routedAway.exchange(away, std::memory_order_acq_rel);
+    if (was && !away) {
+        // The filters still hold audio from before it left the chain.
+        m_flushRequested.store(true, std::memory_order_release);
+    }
+}
+
+bool ClientCessb::isRoutedAway() const noexcept
+{
+    return m_routedAway.load(std::memory_order_acquire);
+}
+
 void ClientCessb::setClipDb(float db) noexcept
 {
     m_clipDb.store(std::clamp(finiteOr(db, kDefaultClipDb), 0.0f, kMaxClipDb),

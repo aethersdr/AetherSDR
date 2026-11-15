@@ -52,6 +52,15 @@ struct Hl2DspReadbackTestAccess {
     }
     static void pushInitialState(Hl2Backend& backend) { backend.pushInitialState(); }
     static int micLevel(const Hl2Backend& backend) { return backend.m_micLevel; }
+    // The modulator's own copy of its config, read on its thread.
+    static Hl2TxDsp::Config txConfig(Hl2Backend& backend)
+    {
+        Hl2TxDsp::Config out;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&backend, &out] {
+            out = backend.m_txDsp->config();
+        }, Qt::BlockingQueuedConnection);
+        return out;
+    }
     static void connectFailed(Hl2Backend& backend)
     {
         QMetaObject::invokeMethod(backend.m_metis, "connectFailed", Qt::BlockingQueuedConnection,
@@ -419,6 +428,31 @@ int main(int argc, char** argv)
                    AetherSDR::hl2::kMicLevelCurve}}) == 70,
               "a stamped level is taken as written, so the migration is "
               "one-shot");
+    }
+
+    // Peak control in the modulator (RFC #4836): the client's whole state
+    // reaches the modulator, the capability follows the build, and turning it
+    // off reaches it too.
+    {
+        using Access = AetherSDR::hl2::Hl2DspReadbackTestAccess;
+        Hl2Backend backend;
+        check(Access::configure(backend), "peak-control case configures the modulator");
+        backend.setModulatorPeakControl(true, 8.0, false);
+        Hl2TxDsp::Config c = Access::txConfig(backend);
+#if AETHER_HL2_TX_TXA
+        check(c.peakControlOn && near(c.peakClipDb, 8.0) && !c.peakCessb,
+              "setModulatorPeakControl reaches the TXA modulator");
+#else
+        check(!c.peakControlOn, "the phasing build has no modulator peak control");
+#endif
+        backend.setModulatorPeakControl(true, 50.0, true);
+        c = Access::txConfig(backend);
+        check(near(c.peakClipDb, 20.0), "clip drive clamps to 20 dB on the way in");
+        backend.setModulatorPeakControl(false, 6.0, true);
+        check(!Access::txConfig(backend).peakControlOn, "and off reaches it too");
+        const auto caps = backend.capabilities();
+        check(caps.modulatorPeakControl.has_value() == (AETHER_HL2_TX_TXA && caps.canTransmit),
+              "HL2 offers modulator peak control only in the TXA build and when it may transmit");
     }
 
     if (g_failures == 0) {
