@@ -484,9 +484,9 @@ void dxCallPlaceholder()
     check(model.resolvePlaceholders(QStringLiteral("{CALL} DE {Call}"))
               == QStringLiteral("K1ABC/P DE K1ABC/P"),
           "every occurrence is filled");
-    check(!model.resolvePlaceholders(QStringLiteral("{MYCALL} TU"), &reason)
-              && reason.contains(QLatin1String("{MYCALL}")),
-          "an unknown placeholder is refused by name");
+    check(model.resolvePlaceholders(QStringLiteral("{MYCALL} TU {CALL}"), &reason)
+              == QStringLiteral("{MYCALL} TU K1ABC/P") && reason.isEmpty(),
+          "any other name in braces is text, returned as typed");
     check(model.resolvePlaceholders(QStringLiteral("CQ TEST")) == QStringLiteral("CQ TEST")
               && model.resolvePlaceholders(QStringLiteral("CQ {")) == QStringLiteral("CQ {"),
           "text without a placeholder pair is unchanged");
@@ -494,8 +494,9 @@ void dxCallPlaceholder()
     keyed.clear();
     model.saveMacro(2, QStringLiteral("{MYCALL} TU"));
     model.sendMacro(3);
-    check(keyed.isEmpty() && refusals.size() == 2,
-          "a macro with an unknown placeholder keys nothing");
+    check(keyed == QStringList{QStringLiteral("{MYCALL} TU")} && refusals.size() == 1,
+          "a macro with another name in braces is keyed as typed");
+    keyed.clear();
 
     model.send(QStringLiteral("{CALL} TEST"));
     check(keyed == QStringList{QStringLiteral("{CALL} TEST")},

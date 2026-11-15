@@ -53,9 +53,9 @@ public:
     // written to the radio. Kept as capitals, digits and '/'.
     QString dxCall() const { return m_dxCall; }
     void setDxCall(const QString& call);
-    // Replaces every {NAME} placeholder (names are not case-sensitive).
-    // Returns nullopt, with *reason set, when one cannot be filled: an unknown
-    // name, or {CALL} with no DX call. Text without a placeholder is unchanged.
+    // Replaces every {CALL} (not case-sensitive) with the DX call. Returns
+    // nullopt, with *reason set, when the text has {CALL} and no DX call is
+    // set. Any other {...} is text and is returned as typed.
     std::optional<QString> resolvePlaceholders(const QString& text, QString* reason = nullptr) const;
     // resolvePlaceholders() for text about to be keyed: a refusal is reported
     // through requestRejected(). Text from another program (TCI, MQTT, the

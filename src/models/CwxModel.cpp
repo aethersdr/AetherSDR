@@ -56,8 +56,8 @@ void CwxModel::setDxCall(const QString& call)
 
 std::optional<QString> CwxModel::resolvePlaceholders(const QString& text, QString* reason) const
 {
-    // Any {...} pair is a placeholder, so a misspelt one is refused rather
-    // than keyed as literal characters. A brace without its partner is text.
+    // {CALL} is the only placeholder. Any other {...} pair is text and is
+    // keyed as typed, as is a brace without its partner.
     static const QRegularExpression placeholder(QStringLiteral("\\{([^{}]*)\\}"));
     QString resolved;
     qsizetype copied = 0;
@@ -65,19 +65,13 @@ std::optional<QString> CwxModel::resolvePlaceholders(const QString& text, QStrin
     while (it.hasNext()) {
         const QRegularExpressionMatch match = it.next();
         const QString name = match.captured(1).trimmed().toUpper();
-        QString value;
-        if (name == QLatin1String("CALL")) {
-            if (m_dxCall.isEmpty()) {
-                if (reason) { *reason = tr("CWX send refused: {CALL} needs a DX call, and none is set."); }
-                return std::nullopt;
-            }
-            value = m_dxCall;
-        } else {
-            if (reason) { *reason = tr("CWX send refused: unknown placeholder %1.").arg(match.captured(0)); }
+        if (name != QLatin1String("CALL")) { continue; }
+        if (m_dxCall.isEmpty()) {
+            if (reason) { *reason = tr("CWX send refused: {CALL} needs a DX call, and none is set."); }
             return std::nullopt;
         }
         resolved += QStringView(text).mid(copied, match.capturedStart() - copied);
-        resolved += value;
+        resolved += m_dxCall;
         copied = match.capturedEnd();
     }
     if (copied == 0) { return text; }

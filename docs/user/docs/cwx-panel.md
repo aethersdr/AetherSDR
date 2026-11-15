@@ -67,7 +67,7 @@ The **DX call** box is at the top of the panel, beside its title, in the Send an
 - Type in the box to enter a call or to correct a letter. It keeps capital letters, digits and `/`.
 - **✕** clears it. It also clears when you disconnect, and it is not saved.
 
-While the box is empty, a macro or message that contains `{CALL}` is not sent and AetherSDR shows a notice. The same applies to a name in braces that AetherSDR does not know, such as `{NAME}`. The sent bubble shows the text as keyed, with the call filled in, and **Resend** on that bubble sends the same call again.
+While the box is empty, a macro or message that contains `{CALL}` is not sent and AetherSDR shows a notice. Any other text in braces, such as `{NAME}`, is sent as typed. The sent bubble shows the text as keyed, with the call filled in, and **Resend** on that bubble sends the same call again.
 
 Where `{CALL}` applies:
 
