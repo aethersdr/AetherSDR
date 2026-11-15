@@ -71,11 +71,12 @@ While the box is empty, a macro or message that contains `{CALL}` is not sent an
 
 Where `{CALL}` applies:
 
-- It is filled in for stored macros (F1–F12, a click on the F-key label, a controller or MIDI macro button) and for text sent with **Send**. It is not case-sensitive.
+- It is filled in for stored macros (F1–F12, a click on the F-key label, and a keyboard shortcut, controller or MIDI button assigned to **Macro F1** … **Macro F12**) and for text sent with **Send**. It is not case-sensitive.
 - It is not used in **Live**, where each character is keyed as you type it.
 - Text sent by another program over TCI or MQTT is keyed as received.
-- The macro is stored on the radio as you wrote it. Another client that plays that macro does not fill `{CALL}` in.
-- A macro fired in the first moments after connecting, before the radio has reported its macro texts, is played by the radio as stored.
+- AetherSDR keeps a `{CALL}` macro as you wrote it, for this radio, on this computer. The radio's own slot holds the text without `{CALL}` (`{CALL} 5NN TU` is stored as `5NN TU`), so SmartSDR, a Maestro or AetherSDR on another computer plays that macro without the call.
+- If the radio's slot is changed from another client, AetherSDR shows the radio's text the next time it reports the slot, and the `{CALL}` version is dropped.
+- A macro fired in the first moments after connecting, before the radio has reported its macro texts, is played by the radio as stored, without the call.
 
 ### Keyboard and MIDI keying (local iambic keyer)
 
