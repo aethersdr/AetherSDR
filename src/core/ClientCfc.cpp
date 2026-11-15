@@ -63,12 +63,12 @@ ClientCfc::~ClientCfc()
 
 AetherCfc* ClientCfc::buildBlock(int fftSize) const
 {
-    if (m_sampleRate <= 0.0) {
+    const double rate = m_sampleRate.load(std::memory_order_acquire);
+    if (rate <= 0.0) {
         return nullptr;
     }
     auto lock = fftwPlannerLock();
-    AetherCfc* block =
-        aether_cfc_create(fftSize, kBlockSize, static_cast<int>(std::lround(m_sampleRate)));
+    AetherCfc* block = aether_cfc_create(fftSize, kBlockSize, static_cast<int>(std::lround(rate)));
     if (block) {
         g_liveBlocks.fetch_add(1, std::memory_order_relaxed);
     }
@@ -125,7 +125,7 @@ void ClientCfc::prepare(double sampleRate)
     destroyBlock(m_pending.exchange(nullptr));
     collectRetiredBlocks();
     m_next = nullptr;
-    m_sampleRate = sampleRate;
+    m_sampleRate.store(sampleRate, std::memory_order_release);
     m_active = buildBlock(m_fftSize.load(std::memory_order_relaxed));
     m_activeFftSize.store(m_active ? aether_cfc_fft_size(m_active) : 0,
                           std::memory_order_relaxed);

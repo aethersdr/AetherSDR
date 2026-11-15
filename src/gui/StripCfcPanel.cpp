@@ -29,6 +29,16 @@ namespace AetherSDR {
 
 namespace {
 
+// A lit toggle, so Post-EQ on reads as on.
+constexpr const char* kToggleStyle =
+    "QPushButton {"
+    "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}};"
+    "  border-radius: 3px; color: {{color.text.secondary}}; font-size: 12px;"
+    "  font-weight: bold; padding: 4px 14px;"
+    "}"
+    "QPushButton:hover { background: {{color.background.2}}; }"
+    "QPushButton:checked { color: {{color.accent}}; border: 1px solid {{color.accent}}; }";
+
 constexpr const char* kWindowStyle =
     "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
     "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
@@ -123,6 +133,7 @@ StripCfcPanel::StripCfcPanel(AudioEngine* engine, QWidget* parent)
 
     m_postEq = new QPushButton(tr("Post-EQ"));
     m_postEq->setCheckable(true);
+    ThemeManager::instance().applyStyleSheet(m_postEq, kToggleStyle);
     m_postEq->setToolTip(tr("Apply the post-EQ curve and the Post gain after compression"));
     row->addWidget(m_postEq);
 

@@ -114,7 +114,9 @@ private:
     void clearFifo() noexcept;
     void bumpVersion() noexcept;
 
-    double m_sampleRate{0.0};
+    // Read by setFftSize() on the GUI thread while prepare() may be writing
+    // it on the audio engine's thread.
+    std::atomic<double> m_sampleRate{0.0};
 
     std::atomic<bool> m_enabled{false};
     std::atomic<int> m_fftSize{kDefaultFftSize};
