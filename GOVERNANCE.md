@@ -34,8 +34,8 @@ maintainer's decision is final.
 
 ### Contributor
 
-Anyone who opens a PR. No special permissions. PRs are reviewed by the
-maintainer or a Domain Maintainer with authority over the affected area.
+Anyone who opens a PR. No special permissions. A PR is reviewed by a code
+owner of every CODEOWNERS tier its paths touch (see §CODEOWNERS below).
 
 ### Triager
 
@@ -44,44 +44,55 @@ Can label, close, and comment on issues. Cannot merge PRs.
 **How to earn it:** Demonstrated pattern of helpful, accurate issue responses.
 Nominate yourself or ask in an issue — the maintainer will grant it.
 
-### Domain Maintainer
+### Reviewer (Tier 3)
 
-Can review and merge PRs **within their designated area** without waiting for
-maintainer review, subject to the RFC and CODEOWNERS requirements below.
+A member of the `@aethersdr/reviewers` team. Can review, approve, and merge
+PRs whose paths are all Tier 3: all of `src/` (including the whole of
+`MainWindow`), `tests/`, `docs/` (except `docs/agents/`), `resources/`, and
+everything else not claimed by a higher tier. An approval from a reviewer
+satisfies CODEOWNERS for those paths without waiting for the maintainer. A PR
+that also touches Tier 2 or Tier 1 paths still needs an owner of each of
+those tiers.
 
-Current domain areas:
+Reviewers are expected to:
 
-| Area | Path(s) | Notes |
-|------|---------|-------|
-| Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides. Spans two CODEOWNERS tiers: `docs/` and `resources/help/` are Tier 3 except `docs/agents/`, which is Tier 2 with the rest of the agent guide; bare `*.md` is Tier 2 |
-| Build / CI | `CMakeLists.txt`, `.github/` | Build system, CI pipelines |
-| Platform: macOS | `src/platform/macos/` | macOS-specific code only |
-| Platform: Windows | `src/platform/windows/` | Windows-specific code only |
+- Review against the [Constitution](CONSTITUTION.md) and this document,
+  including cross-platform correctness on Linux, macOS, and Windows.
+- Merge nothing that requires an RFC until the RFC is approved.
+- Escalate to the Project Maintainer any PR that makes a call reserved under
+  §Project Direction (visual design, UX behavior, architecture, feature
+  scope) instead of deciding it.
+- Never approve their own work. Bot-opened PRs always need a human code
+  owner's approval (see §AI Contributors).
 
-Domain Maintainers cannot merge PRs that touch files outside their area.
-Changes that touch `src/gui/`, `src/core/`, or `src/models/` always require
-maintainer review regardless of domain.
+**How to earn it:** Sustained, high-quality merged work, a demonstrated
+understanding of the cross-platform requirements, good judgment in review,
+and explicit agreement to the project direction in this document. Reviewers
+join by invitation from the Project Maintainer; you may also open an issue
+titled `[Governance] Reviewer request` to start the conversation.
 
-**How to earn it:** Three or more merged PRs in the area, demonstrated
-understanding of the cross-platform requirements, and explicit agreement to
-the project direction in this document. Open an issue titled
-`[Governance] Domain Maintainer request: <area>` to start the conversation.
+### Infrastructure Owner (Tier 2)
 
-### Core Maintainer
+A member of the `@aethersdr/infrastructure` team, which is drawn from the
+reviewers and is a strict subset of them. Has every reviewer permission plus
+approval over the Tier 2 paths: build configuration, the routine CI
+workflows, markdown matched by the Tier 2 rules at any depth, and the
+AI-instruction files. These
+changes need deeper repository context than routine source review, so the
+team is deliberately smaller. Infrastructure owners join by invitation from
+the Project Maintainer.
 
-Can review and merge PRs across most of the codebase, excluding areas
-protected by CODEOWNERS. Expected to understand the full architecture and
-the SmartSDR protocol.
+### Project Maintainer (Tier 1)
 
-This role does not currently exist outside the project maintainer. It will be
-established when the project has contributors who have demonstrated sustained,
-high-quality work across multiple areas over an extended period.
+Jeremy Fielder ([@ten9876](https://github.com/ten9876)), the sole member of
+`@aethersdr/maintainers`. Owns the Tier 1 governance and security paths and
+holds final authority on all decisions. Assisted by Claude (AI development
+partner) for implementation, review, and issue triage — see the AI
+Contributors section below.
 
-### Project Maintainer
-
-Jeremy Fielder ([@ten9876](https://github.com/ten9876)). Final authority on
-all decisions. Assisted by Claude (AI development partner) for implementation,
-review, and issue triage — see the AI Contributors section below.
+The current membership of each team is listed in
+[`CONTRIBUTING.md`](CONTRIBUTING.md#reviews-and-merging). The GitHub
+organization's team rosters are authoritative if the two ever disagree.
 
 ---
 
@@ -253,8 +264,8 @@ AI-assisted PRs that touch protected areas still require RFC approval first.
 
 ## Decision Making
 
-For ordinary PRs, the process is simple: a Triager or Domain Maintainer can
-comment, the maintainer reviews and merges or requests changes.
+For ordinary PRs, the process is simple: anyone may comment, and a code owner
+of each tier the PR touches reviews it, then merges or requests changes.
 
 For significant decisions (RFC-required changes, new maintainer roles,
 changes to this document), the maintainer may open a discussion period of

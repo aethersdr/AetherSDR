@@ -3,6 +3,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QMainWindow>
+#include <QMargins>
 #include <QStatusBar>
 
 namespace AetherSDR {
@@ -32,7 +33,11 @@ inline void updateStatusBarWindowMinimum(QMainWindow* window, QWidget* row,
     row->updateGeometry();
     bar->updateGeometry();
     const int sizeGripAllowance = sizeGrip && sizeGrip->isVisible() ? sizeGrip->width() + 4 : 4;
-    const int statusMinWidth = row->minimumSizeHint().width() + sizeGripAllowance;
+    // The contents margins (the Windows 11 non-client band) come off the row's
+    // width, and the grip sits inside them. 0 on every other platform.
+    const QMargins margins = window->contentsMargins();
+    const int statusMinWidth = row->minimumSizeHint().width() + sizeGripAllowance
+        + margins.left() + margins.right();
     window->setMinimumSize(qBound(1024, statusMinWidth, qMax(1024, screenWidthCap)),
                            qMax(400, window->minimumHeight()));
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TxChainLayout.h"
+
 #include <QByteArray>
 
 #include <atomic>
@@ -34,7 +36,7 @@ public:
     static constexpr int kDspRate = 48000;
     static constexpr int kTransportRate = 24000;
     static constexpr int kChannels = 2;
-    static constexpr int kMaxStages = 8;
+    static constexpr int kMaxStages = TxChainLayout::kSlots;
     // Voice only: preserve the supported 10 kHz modulation passband while
     // avoiding the delay of r8brain's general-purpose 2% transition profile.
     static constexpr double kVoiceSrcTransitionBandPercent = 12.0;

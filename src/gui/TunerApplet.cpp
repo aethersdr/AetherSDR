@@ -1078,11 +1078,10 @@ void TunerApplet::setTunerModel(TunerModel* model)
             this, &TunerApplet::updateSourceIndicator);
     updateSourceIndicator(m_model->hasDirectConnection());
 
-    // Antenna switch: show buttons only when direct connection is active AND
-    // the TGXL reports antA (models without a switch never send antA).
+    // The direct info response identifies the 3-way antenna switch.
     auto updateAntVisible = [this]() {
-        m_antContainer->setVisible(m_model->hasDirectConnection()
-                                   && m_model->hasAntennaSwitch());
+        const bool visible = m_model->hasDirectConnection() && m_model->hasAntennaSwitch();
+        m_antContainer->setVisible(visible);
     };
     connect(m_model, &TunerModel::portsChanged, this, &TunerApplet::updatePortRows);
     // stateChanged carries the port->antenna map, which arrives after the
@@ -1129,6 +1128,7 @@ void TunerApplet::setTunerModel(TunerModel* model)
     });
 
     connect(m_model, &TunerModel::directConnectionChanged, this, updateAntVisible);
+    connect(m_model, &TunerModel::stateChanged, this, updateAntVisible);
     connect(m_model, &TunerModel::antennaAChanged, this, [this, updateAntVisible](int antA) {
         updateAntVisible();
         updateAntennaButtons(antA);

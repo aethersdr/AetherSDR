@@ -640,11 +640,16 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     }
     // Changing sessions must not turn a range clamp into a radio command.
     const QSignalBlocker blocker(m_speedSlider);
+    const bool speedRangeChanged = m_speedSlider->minimum() != minWpm
+                                   || m_speedSlider->maximum() != maxWpm;
     m_speedSlider->setRange(minWpm, maxWpm);
     auto* speedValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_speedEdit->validator()));
     speedValidator->setRange(minWpm, maxWpm);
-    if (!m_speedEdit->hasFocus() || !m_speedEdit->hasAcceptableInput()) {
+    // Capability refreshes can arrive between digits. Intermediate input
+    // belongs to the active edit unless the supported range actually changes.
+    if (!m_speedEdit->hasFocus()
+        || (speedRangeChanged && !m_speedEdit->hasAcceptableInput())) {
         m_speedEdit->setText(QString::number(m_speedSlider->value()));
     }
     m_speedEdit->setAccessibleDescription(
@@ -653,6 +658,8 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     m_pitchMaxHz = maxPitchHz;
     m_pitchStepHz = pitchStepHz;
     const QSignalBlocker pitchBlocker(m_pitchSlider);
+    const bool pitchRangeChanged = m_pitchSlider->minimum() != minPitchHz
+                                   || m_pitchSlider->maximum() != maxPitchHz;
     m_pitchSlider->setRange(minPitchHz, maxPitchHz);
     if (m_model) {
         m_pitchSlider->setValue(m_model->cwPitch());
@@ -662,7 +669,10 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     auto* pitchValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_pitchEdit->validator()));
     pitchValidator->setRange(minPitchHz, maxPitchHz);
-    if (!m_pitchEdit->hasFocus() || !m_pitchEdit->hasAcceptableInput()) {
+    // Same rule as speed: a refresh with an unchanged range leaves the
+    // active pitch edit alone, even while its first digits are Intermediate.
+    if (!m_pitchEdit->hasFocus()
+        || (pitchRangeChanged && !m_pitchEdit->hasAcceptableInput())) {
         m_pitchEdit->setText(QString::number(
             m_model ? m_model->cwPitch() : m_pitchSlider->value()));
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/RadioCapabilities.h"
+
 #include <QString>
 
 #include <optional>
@@ -42,21 +44,19 @@ inline ExperimentalRadioIdentityHold experimentalRadioIdentityHold(
 // The supported Hermes-Lite 2 (#7257): gateware major 74 on a board that does
 // not name itself. A family of "hl2" already means board id 6 over Ethernet /
 // Protocol 1: both places that build an HL2 RadioInfo drop any other board.
-// version is the gateware as "major.minor"; versionLabel is the backend's
-// "Gateware", or "<board> gateware" for a derived board such as SQUARE SDR 2.
-inline bool isSupportedHl2Identity(const QString& version, const QString& versionLabel)
+// Reads the backend's typed board identity (#7311), never the display label: a
+// reworded or translated "Gateware" cannot change the tier. Absent identity
+// stays experimental.
+inline bool isSupportedHl2Identity(
+    const std::optional<RadioCapabilities::BoardIdentity>& identity)
 {
-    if (versionLabel.trimmed() != QLatin1String("Gateware")) {
-        return false;
-    }
-    const QString major = version.trimmed().section(QLatin1Char('.'), 0, 0);
-    bool ok = false;
-    return major.toInt(&ok) == 74 && ok;
+    return identity && identity->board == QLatin1String("hl2")
+        && identity->gatewareMajor == 74;
 }
 
 inline std::optional<ExperimentalRadioDescriptor> experimentalRadioDescriptor(
     const QString& family, const QString& model = {},
-    const QString& version = {}, const QString& versionLabel = {})
+    const std::optional<RadioCapabilities::BoardIdentity>& boardIdentity = std::nullopt)
 {
     const QString normalized = family.trimmed().toLower();
     if (normalized == QLatin1String("icom")) {
@@ -75,7 +75,7 @@ inline std::optional<ExperimentalRadioDescriptor> experimentalRadioDescriptor(
     }
     if (normalized == QLatin1String("hl2")) {
         // Other gateware and other boards remain experimental.
-        if (isSupportedHl2Identity(version, versionLabel)) {
+        if (isSupportedHl2Identity(boardIdentity)) {
             return std::nullopt;
         }
         return ExperimentalRadioDescriptor{
