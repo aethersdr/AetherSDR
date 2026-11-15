@@ -4,8 +4,8 @@ name: Update Manifest
 # (RFC #5304 Phase 2; the format is docs/architecture/update-manifest.md).
 #
 # build    reads only: waits for the release's payload assets, extracts each
-#          payload, and writes manifest-v2.json, the full-only manifest.json
-#          (RFC #6964) and one patch bundle per payload and per earlier
+#          payload, and writes manifest-v2.json, the GitHub-only manifest.json
+#          (RFC #6964; full downloads only once the bundles are on R2) and one patch bundle per payload and per earlier
 #          release (tools/build_update_manifest.py). Linux's
 #          `full` is the release tarball the AppImage build attached, once it
 #          is shown to hold exactly the payload's files. macOS's payload and
@@ -238,8 +238,9 @@ jobs:
           sudo apt-get install -y -q squashfs-tools zstd
 
       # Two manifests (RFC #6964): manifest-v2.json for the bridge client,
-      # and manifest.json, full downloads only on GitHub, for copies without
-      # it. The UPDATE_PAYLOAD_BASE repository variable says where
+      # and manifest.json, GitHub downloads only, for copies without it: the
+      # same patches while they are on the release page, full downloads only
+      # once they are on updates.aethersdr.com. The UPDATE_PAYLOAD_BASE repository variable says where
       # manifest-v2.json puts the patch bundles: unset or "github" keeps them
       # on the release page; "r2" puts them on updates.aethersdr.com.
       - name: Build the manifests and patch bundles

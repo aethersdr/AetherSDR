@@ -6,8 +6,9 @@ docs/architecture/update-manifest.md).
 
 Each release has two manifests (RFC #6964): manifest-v2.json, which the
 bridge client reads and whose patch bundles may live on updates.aethersdr.com,
-and manifest.json, the full-only GitHub-URL manifest that copies without the
-bridge read. A release counts as published only when everything a client
+and manifest.json, the GitHub-URL manifest that copies without the bridge read:
+manifest-v2.json's own content while the bundles are on the release page, and
+full downloads only once they are on updates.aethersdr.com. A release counts as published only when everything a client
 reads is served and verifies: both releases/<tag>/ pairs with signatures that
 check against the committed public key, every payload manifest-v2.json names
 on updates.aethersdr.com at its recorded size, and, when the tag is GitHub's
@@ -21,9 +22,9 @@ no older run can interleave between that read and its write.
 
     publish_update_manifest.py validate --tag T --dir D
         refuses either manifest unless it is schema 1 for T with a key_id and
-        only this release's download URLs: GitHub only, and no patches, in
-        manifest.json; GitHub or updates.aethersdr.com in manifest-v2.json
-        (run before signing)
+        only this release's download URLs (GitHub only in manifest.json;
+        GitHub or updates.aethersdr.com in manifest-v2.json), and manifest.json
+        unless it is exactly what manifest-v2.json implies (run before signing)
     publish_update_manifest.py payload-base --tag T --dir D
         prints where manifest-v2.json puts the patch bundles: github, r2 or none
     publish_update_manifest.py check   --tag T --latest-tag L --public-key P
@@ -46,12 +47,13 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_update_manifest import (DOWNLOAD_BASE, LEGACY_MANIFEST, R2_BASE, SCHEMA,  # noqa: E402
-                                   V2_MANIFEST, version_key)
+                                   V2_MANIFEST, legacy_of, version_key)
 
 MANIFESTS = (V2_MANIFEST, LEGACY_MANIFEST)
 
@@ -265,18 +267,32 @@ def is_complete(store, tag: str, latest_tag: str, public_key: Path) -> bool:
 # ── Publish ─────────────────────────────────────────────────────────────────
 
 def one_file_under(url: str, base: str, tag: str) -> bool:
-    """`url` is exactly <base><tag>/<one file>, the shape the client accepts."""
-    prefix = base + tag + "/"
-    rest = url[len(prefix):]
-    return (url.startswith(prefix) and rest != ""
-            and not any(c in rest for c in "/?#\\") and ".." not in rest)
+    """`url` is exactly <base><tag>/<one file>, the shape the client accepts
+    (UpdateChecker::isTrustedPayloadUrl): https, the base's host alone (no
+    port, no user info), no query or fragment, and, once the path is
+    percent-decoded, no '..' and nothing after the tag but one file name."""
+    if not tag or "/" in tag or "?" in url or "#" in url:
+        return False
+    b = urllib.parse.urlsplit(base)
+    try:
+        u = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if u.scheme != "https" or u.netloc != b.hostname:
+        return False
+    path = urllib.parse.unquote(u.path)
+    prefix = urllib.parse.unquote(b.path) + tag + "/"
+    rest = path[len(prefix):]
+    return (path.startswith(prefix) and rest != "" and ".." not in path
+            and not any(c in rest for c in "/\\"))
 
 
 def validate_manifest(manifest: bytes, tag: str, name: str = LEGACY_MANIFEST) -> None:
     """What the key may sign: a schema-1 manifest for `tag`, with a key_id,
     whose every URL is one file of this release. manifest.json is read by
     copies that accept only GitHub, so its URLs must be GitHub's and it may
-    carry no patches; manifest-v2.json may also name updates.aethersdr.com."""
+    may name nothing else; manifest-v2.json may also name updates.aethersdr.com.
+    That manifest.json is what manifest-v2.json implies is validate_pair's."""
     if name not in MANIFESTS:
         raise PublishError(f"{name} is not a manifest this tool publishes")
     try:
@@ -294,11 +310,21 @@ def validate_manifest(manifest: bytes, tag: str, name: str = LEGACY_MANIFEST) ->
         raise PublishError("no payloads")
     bases = (DOWNLOAD_BASE,) if name == LEGACY_MANIFEST else (DOWNLOAD_BASE, R2_BASE)
     for p in payloads:
-        if name == LEGACY_MANIFEST and p.get("patches"):
-            raise PublishError(f"{name} carries patches; it must list full downloads only")
         for a in [p["full"], *(q["bundle"] for q in p.get("patches", []))]:
             if not any(one_file_under(a["url"], b, tag) for b in bases):
                 raise PublishError(f"{a['url']} is not a {tag} download {name} may name")
+
+
+def validate_pair(legacy: bytes, v2: bytes, tag: str) -> None:
+    """Both manifests of one release, each valid, and manifest.json exactly
+    what manifest-v2.json implies (legacy_of): its patches while they are on
+    the release page, none once they are on updates.aethersdr.com."""
+    validate_manifest(legacy, tag, LEGACY_MANIFEST)
+    validate_manifest(v2, tag, V2_MANIFEST)
+    m = json.loads(v2)
+    if json.loads(legacy) != legacy_of(m, payload_base(m)):
+        raise PublishError(f"{LEGACY_MANIFEST} is not what {V2_MANIFEST} implies: the same "
+                           "manifest while the patch bundles are on GitHub, no patches once on R2")
 
 
 def payload_base(m: dict) -> str:
@@ -348,10 +374,10 @@ def publish(store, tag: str, latest_tag: str, pairs: dict[str, tuple[bytes, byte
     newer is there. Returns the prefixes written."""
     if set(pairs) != set(MANIFESTS):
         raise PublishError(f"publish needs exactly {', '.join(MANIFESTS)}")
+    validate_pair(pairs[LEGACY_MANIFEST][0], pairs[V2_MANIFEST][0], tag)
     parsed = {}
     for name in MANIFESTS:
         manifest, sig = pairs[name]
-        validate_manifest(manifest, tag, name)
         if not verifies(manifest, sig, public_key):
             raise PublishError(f"{name}: the signature does not verify against the public key")
         parsed[name] = json.loads(manifest)
@@ -394,8 +420,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "validate":
             if args.dir is None:
                 ap.error("validate needs --dir")
+            validate_pair((args.dir / LEGACY_MANIFEST).read_bytes(),
+                          (args.dir / V2_MANIFEST).read_bytes(), args.tag)
             for name in MANIFESTS:
-                validate_manifest((args.dir / name).read_bytes(), args.tag, name)
                 print(f"{name} is a valid schema-{SCHEMA} manifest for {args.tag}")
             return 0
         if args.action == "payload-base":

@@ -661,7 +661,7 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
 
     payload_base: "github" or "r2", where manifest-v2.json says the patch
     bundles are. Returns manifest-v2's content; manifest.json is written
-    beside it with no patches."""
+    beside it (legacy_of)."""
     bundle_base = PAYLOAD_BASES[payload_base]
     out.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -749,16 +749,21 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
         manifest["payloads"].append(entry)
 
     (out / V2_MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=False) + "\n")
-    (out / LEGACY_MANIFEST).write_text(json.dumps(legacy_of(manifest), indent=1, sort_keys=False) + "\n")
+    (out / LEGACY_MANIFEST).write_text(
+        json.dumps(legacy_of(manifest, payload_base), indent=1, sort_keys=False) + "\n")
     return manifest
 
 
-def legacy_of(manifest: dict) -> dict:
-    """manifest.json for copies without the bridge: full downloads only,
-    each on this release's GitHub page, which those copies accept."""
+def legacy_of(manifest: dict, payload_base: str) -> dict:
+    """manifest.json for copies without the bridge, which accept only this
+    release's GitHub downloads. While the patch bundles are on the release
+    page ("github") it is manifest-v2.json itself, so those copies keep their
+    patch updates; once the bundles are on updates.aethersdr.com ("r2") it
+    lists full downloads only. "none" (no patches) is the same either way."""
     legacy = json.loads(json.dumps(manifest))
-    for p in legacy["payloads"]:
-        p["patches"] = []
+    if payload_base == "r2":
+        for p in legacy["payloads"]:
+            p["patches"] = []
     return legacy
 
 

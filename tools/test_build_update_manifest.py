@@ -716,20 +716,22 @@ class Manifest(Base):
                         "the default payload base is the release page")
 
         # The legacy manifest (RFC #6964): what copies without the R2 bridge
-        # read. The same release and full downloads, no patches, and every
-        # URL a GitHub download of this tag.
+        # read. While the bundles are on the release page it is manifest-v2
+        # itself, patches included, so those copies keep patch updates; every
+        # URL is a GitHub download of this tag.
         legacy = json.loads((out / "manifest.json").read_text())
-        self.assertEqual(legacy["tag"], "v26.10.3")
+        self.assertEqual(legacy, m)
         self.assertEqual(legacy["generated_at"], m["generated_at"])
         (lp,) = legacy["payloads"]
-        self.assertEqual(lp["patches"], [])
+        self.assertEqual(lp["patches"], p["patches"])
+        self.assertTrue(lp["patches"], "a github base keeps the patches in the legacy manifest")
         self.assertEqual(lp["full"], p["full"])
         self.assertEqual(lp["files"], p["files"])
         self.assertTrue(lp["full"]["url"].startswith(bum.DOWNLOAD_BASE + "v26.10.3/"))
 
         # With --payload-base r2 only the bundle URLs move; the bundle and
-        # every full download stay the same, and the legacy manifest is
-        # unchanged in all but its build time.
+        # every full download stay the same, and the legacy manifest, which
+        # those copies read GitHub-only, drops to full downloads.
         out2 = self.tmp / "out-r2"
         rc = bum.main(["--tag", "v26.10.3", "--out", str(out2), "--work", str(self.tmp / "w2"),
                        "--public-key", str(pub), "--payload-base", "r2",
@@ -743,7 +745,9 @@ class Manifest(Base):
         self.assertEqual(patch2["bundle"]["sha256"], patch["bundle"]["sha256"])
         self.assertEqual(p2["full"], p["full"], "full stays on the release page")
         (lp2,) = json.loads((out2 / "manifest.json").read_text())["payloads"]
-        self.assertEqual(lp2, lp)
+        self.assertEqual(lp2["patches"], [])
+        self.assertEqual({k: v for k, v in lp2.items() if k != "patches"},
+                         {k: v for k, v in lp.items() if k != "patches"})
         with self.assertRaises(SystemExit):
             bum.main(["--tag", "v26.10.3", "--out", str(self.tmp / "o3"), "--payload-base", "s3"])
 

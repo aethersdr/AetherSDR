@@ -76,14 +76,15 @@ class Base(unittest.TestCase):
     def body(cls, release: str, name: str = V2, bundle_base: str = pub.DOWNLOAD_BASE,
              **override) -> dict:
         """manifest-v2.json with one patch on bundle_base, or (name=LEGACY)
-        the same payload with no patches."""
+        what it implies: the same patch on GitHub, none once on R2."""
         base = pub.DOWNLOAD_BASE + release + "/"
         bundle = {"asset": "AetherSDR-x.update.tar", "url": bundle_base + release + "/AetherSDR-x.update.tar",
                   "sha256": hashlib.sha256(cls.BUNDLE).hexdigest(), "size": len(cls.BUNDLE)}
         m = {"schema": 1, "tag": release, "version": release[1:], "key_id": "788fb6e31f7ecba4",
              "payloads": [{"platform": "windows", "arch": "x86_64",
                            "full": {"url": base + "AetherSDR-x.zip"},
-                           "patches": [] if name == LEGACY else [{"bundle": bundle}]}]}
+                           "patches": ([] if name == LEGACY and bundle_base != pub.DOWNLOAD_BASE
+                                       else [{"bundle": bundle}])}]}
         m.update(override)
         return m
 
@@ -306,16 +307,64 @@ class S3Credentials(Base):
 
 class TwoManifests(Base):
     """RFC #6964: manifest-v2.json for the bridge client, manifest.json
-    (full downloads only, GitHub only) for copies without it."""
+    (GitHub only; full downloads only once the bundles are on R2) for copies
+    without it."""
 
     R2 = pub.R2_BASE
 
-    def test_legacy_names_only_github_and_no_patches(self) -> None:
+    def test_legacy_names_only_github(self) -> None:
         r2_full = self.body("v26.10.4", LEGACY)
         r2_full["payloads"][0]["full"]["url"] = self.R2 + "v26.10.4/AetherSDR-x.zip"
-        for m in (r2_full, self.body("v26.10.4", V2), self.body("v26.10.4", V2, self.R2)):
+        for m in (r2_full, self.body("v26.10.4", V2, self.R2)):   # R2 full; R2 patch
             with self.assertRaises(pub.PublishError):
                 pub.validate_manifest(json.dumps(m).encode(), "v26.10.4", LEGACY)
+        # GitHub patches are what v26.11.1 and v26.11.2 already apply.
+        pub.validate_manifest(json.dumps(self.body("v26.10.4", LEGACY)).encode(), "v26.10.4", LEGACY)
+
+    def test_legacy_is_what_v2_implies(self) -> None:
+        enc = lambda m: json.dumps(m).encode()   # noqa: E731
+        gh_v2, gh_legacy = self.body("v26.10.4", V2), self.body("v26.10.4", LEGACY)
+        r2_v2, r2_legacy = self.body("v26.10.4", V2, self.R2), self.body("v26.10.4", LEGACY, self.R2)
+        self.assertEqual(gh_legacy["payloads"][0]["patches"], gh_v2["payloads"][0]["patches"])
+        self.assertEqual(r2_legacy["payloads"][0]["patches"], [])
+        pub.validate_pair(enc(gh_legacy), enc(gh_v2), "v26.10.4")
+        pub.validate_pair(enc(r2_legacy), enc(r2_v2), "v26.10.4")
+        dropped = self.body("v26.10.4", LEGACY)
+        dropped["payloads"][0]["patches"] = []          # v2's GitHub patches left out
+        kept = self.body("v26.10.4", LEGACY)           # GitHub patches while v2 is on R2
+        other = self.body("v26.10.4", LEGACY)
+        other["payloads"][0]["patches"][0]["bundle"]["sha256"] = "0" * 64
+        for legacy, v2 in ((dropped, gh_v2), (kept, r2_v2), (other, gh_v2), (r2_v2, r2_v2)):
+            with self.assertRaises(pub.PublishError):
+                pub.validate_pair(enc(legacy), enc(v2), "v26.10.4")
+        pairs = self.signed("v26.10.4", bundle_base=self.R2)
+        pairs[LEGACY] = (enc(kept), self.sign(enc(kept)))
+        with self.assertRaises(pub.PublishError):
+            pub.publish(self.store, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=self.payload_dir())
+        self.assertEqual(self.store.objects, {}, "a mismatched pair writes nothing")
+
+    def test_urls_are_checked_decoded_like_the_client(self) -> None:
+        for base in (pub.DOWNLOAD_BASE, self.R2):
+            host = base.split("/")[2]
+            rel = base.split(host, 1)[1]
+            good = base + "v26.10.4/AetherSDR-x.update.tar"
+            self.assertTrue(pub.one_file_under(good, base, "v26.10.4"), good)
+            for url in [base + "v26.10.4/sub%2fpatch.update.tar",
+                        base + "v26.10.4/sub%2Fpatch.update.tar",
+                        base + "v26.10.4/%2e%2e",
+                        base + "v26.10.4/..%2Fx",
+                        base + "v26.10.4/x%5cy.update.tar",
+                        f"https://{host}:8443{rel}v26.10.4/AetherSDR-x.update.tar",
+                        f"https://u@{host}{rel}v26.10.4/AetherSDR-x.update.tar",
+                        f"https://u:p@{host}{rel}v26.10.4/AetherSDR-x.update.tar",
+                        f"https://{host}.evil.example{rel}v26.10.4/AetherSDR-x.update.tar",
+                        f"http://{host}{rel}v26.10.4/AetherSDR-x.update.tar",
+                        good + "?x=1", good + "?", good + "#f", good + "#",
+                        base + "v26.10.3/AetherSDR-x.update.tar",
+                        base + "v26.10.4/"]:
+                with self.subTest(url=url):
+                    self.assertFalse(pub.one_file_under(url, base, "v26.10.4"))
+            self.assertFalse(pub.one_file_under(good, base, ""), "no tag, no trust")
 
     def test_v2_may_name_r2_with_the_clients_rules(self) -> None:
         pub.validate_manifest(json.dumps(self.body("v26.10.4", V2, self.R2)).encode(), "v26.10.4", V2)
@@ -401,7 +450,7 @@ class TwoManifests(Base):
     def test_payload_base(self) -> None:
         self.assertEqual(pub.payload_base(self.body("v26.10.4")), "github")
         self.assertEqual(pub.payload_base(self.body("v26.10.4", V2, self.R2)), "r2")
-        self.assertEqual(pub.payload_base(self.body("v26.10.4", LEGACY)), "none")
+        self.assertEqual(pub.payload_base(self.body("v26.10.4", LEGACY, self.R2)), "none")
         mixed = self.body("v26.10.4", V2, self.R2)
         mixed["payloads"].append(self.body("v26.10.4")["payloads"][0])
         with self.assertRaises(pub.PublishError):
@@ -417,7 +466,7 @@ class TwoManifests(Base):
             self.assertEqual(pub.main(["validate", "--tag", "v26.10.4", "--dir", str(d)]), 0)
             self.assertEqual(pub.main(["payload-base", "--tag", "v26.10.4", "--dir", str(d)]), 0)
         self.assertEqual(out.getvalue().strip().splitlines()[-1], "r2")
-        (d / LEGACY).write_text(json.dumps(self.body("v26.10.4", V2)))   # patches in the legacy one
+        (d / LEGACY).write_text(json.dumps(self.body("v26.10.4", V2)))   # GitHub patches while v2 is R2
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(pub.main(["validate", "--tag", "v26.10.4", "--dir", str(d)]), 1)
 
@@ -432,6 +481,17 @@ class LatestPromotion(Base):
         self.assertEqual(self.latest_tag(), "v26.10.5")
         self.assertTrue(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub),
                         "a newer latest/ completes an older release")
+
+    def test_a_newer_legacy_latest_alone_is_not_rolled_back(self) -> None:
+        """v26.11.2's latest/ shape: only a valid newer legacy pair, no v2.
+        An older run must leave it, though there is no manifest-v2 to block it."""
+        newer = self.signed("v26.10.5")[LEGACY]
+        self.store.objects["latest/manifest.json"] = newer[0]
+        self.store.objects["latest/manifest.json.sig"] = newer[1]
+        written = pub.publish(self.store, "v26.10.4", "v26.10.4", self.signed("v26.10.4"), self.pub)
+        self.assertEqual(written, ["releases/v26.10.4"])
+        self.assertEqual(self.latest_tag(LEGACY), "v26.10.5")
+        self.assertIsNone(self.latest_tag(V2))
 
     def test_a_torn_latest_is_repaired_when_this_is_githubs_latest(self) -> None:
         """A newer run killed between latest/'s two writes leaves a manifest
