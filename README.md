@@ -330,12 +330,15 @@ the native backend does not yet cover.
 
 ## Verifying Downloads
 
-Linux and Windows binaries are GPG-signed. macOS artifacts are Apple notarized. Each release includes `.asc` signatures and `SHA256SUMS.txt`.
+Linux and Windows binaries are GPG-signed. macOS artifacts are Apple notarized. Each release includes `SHA256SUMS.txt` and its signature `SHA256SUMS.txt.asc`, which covers every file listed.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/aethersdr/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
-gpg --verify AetherSDR-vX.Y.Z-x86_64.AppImage.asc AetherSDR-vX.Y.Z-x86_64.AppImage
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c --ignore-missing SHA256SUMS.txt
 ```
+
+From v26.11.4, per-file `.asc` signatures are at `https://updates.aethersdr.com/releases/vX.Y.Z/` (on the release page for its first few hours).
 
 See [docs/VERIFYING-RELEASES.md](docs/VERIFYING-RELEASES.md) for full instructions.
 

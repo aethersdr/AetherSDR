@@ -3,7 +3,9 @@
 
 Steps 3, 4 and 5 of the tag-release skill: the tag and its verification, the
 release's flags and title, the three build runs and the signing runs, the
-asset set with signature timing and the ``.msixupload`` version, the
+asset set with signature timing and the ``.msixupload`` version (from
+v26.11.4, the 14-file page and the files Release Offload moved to
+updates.aethersdr.com), the
 ``SHA256SUMS.txt`` coverage, downloaded-and-verified signatures and checksums,
 the source tarball's version, and the Store staging step. Every check prints
 ``PASS``, ``FAIL``, ``WARN``, ``INFO`` or ``SKIP``; the exit status is
@@ -31,6 +33,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +57,8 @@ def signables(tarballs: bool, app_tarballs: bool = True) -> tuple[str, ...]:
 # attaches the PDF manual (and, on releases before RFC #6964, signs it).
 DOCS_WORKFLOW = "Docs"
 STORE_STEP = "Publish Microsoft Store package"
+# Where Release Offload moves the files people don't download (RFC #6964).
+R2_RELEASES = "https://updates.aethersdr.com/releases/"
 
 results: list[tuple[str, str, str]] = []
 
@@ -288,12 +294,65 @@ def _tag_file(repo: str, v: str, path: str) -> tuple[bool, str | None]:
     return ("Not Found" in (proc.stderr + proc.stdout) or "404" in proc.stderr), None
 
 
+def _repo_tools() -> None:
+    path = str(Path(__file__).resolve().parents[4] / "tools")
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+
+def release_offloaded(v: str) -> bool:
+    """Whether Release Offload trims this release's page (from v26.11.4).
+    tools/offload_release_assets.py's rule, so the two always agree."""
+    return _offload().eligible(v)
+
+
+def moved_off_page(v: str, names: list[str]) -> list[str]:
+    """Of `names`, the ones Release Offload moves to R2, by its own rule."""
+    return [a["name"] for a in _offload().moves(v, [{"name": n} for n in names])]
+
+
+# r2_size's answer when updates.aethersdr.com could not be asked.
+UNKNOWN = -1
+
+
+def _offload():
+    _repo_tools()
+    import offload_release_assets  # noqa: PLC0415
+    return offload_release_assets
+
+
+def r2_size(v: str, name: str) -> int | None:
+    """The size updates.aethersdr.com serves for a release file, None when it
+    is absent, or UNKNOWN when it could not be asked. Read past the edge
+    cache, the way Release Offload checks its copies."""
+    o = _offload()
+    try:
+        size = o.served_size(o.PublicStore(), o.key_for(v, name))
+    except o.PublishError:
+        return UNKNOWN
+    return size
+
+
+def r2_fetch(v: str, name: str, dest: Path) -> bool:
+    o = _offload()
+    try:
+        data = o.PublicStore().get(f"{o.key_for(v, name)}?check={time.time_ns()}")
+    except o.PublishError as e:
+        report("FAIL", f"download {R2_RELEASES}{v}/{name}", str(e))
+        return False
+    if data is None:
+        report("FAIL", f"download {R2_RELEASES}{v}/{name}", "HTTP 404")
+        return False
+    dest.write_bytes(data)
+    return True
+
+
 def release_sums_manual(repo: str, v: str) -> bool:
     """Whether the manual is listed in SHA256SUMS.txt with no .asc of its own
     (RFC #6964), or signed apart as before. The rule is
     tools/release_manual_signing.py's, applied to the tag's own files, the
     same call sign-release.yml makes, so the two always agree."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools"))
+    _repo_tools()
     import release_manual_signing  # noqa: PLC0415
     reads = {path: _tag_file(repo, v, path)
              for path in (".github/workflows/docs.yml", "tools/docs/build_pdf.py", "docs/user/sidebars.js")}
@@ -330,24 +389,96 @@ def expected_symbol_assets(v: str) -> list[str]:
             f"AetherSDR-{v}-Windows-x64-symbols.tar.xz"]
 
 
+def is_patch_bundle(v: str, name: str) -> bool:
+    return name.startswith(f"AetherSDR-{v}-") and re.search(r"-from-v[0-9.]+\.update\.tar$", name) is not None
+
+
 def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
-                 app_tarballs: bool = True, manual_in_sums: bool = True) -> dict[str, dict[str, Any]]:
+                 app_tarballs: bool = True, manual_in_sums: bool = True,
+                 offloaded: bool = False) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Checks the page, and from v26.11.4 the files Release Offload moved to
+    updates.aethersdr.com. Returns the page's assets and the names served
+    there instead of on the page."""
     assets = {a["name"]: a for a in rel.get("assets", [])}
     want = expected_assets(v, hotfix, tarballs, app_tarballs, manual_in_sums)
-    missing = [n for n in want if n not in assets]
-    n_want = len(want)
-    if missing:
-        report("FAIL", f"the {n_want}-asset set is present", "missing: " + ", ".join(missing))
-    else:
-        report("PASS", f"the {n_want}-asset set is present ({'hotfix: no .msixupload' if hotfix else 'incl. .msixupload'})")
     symbols = expected_symbol_assets(v)
-    sym_missing = [n for n in symbols if n not in assets]
-    if sym_missing:
-        report("WARN", f"the {len(symbols)} debug-symbol archives are present",
-               "missing: " + ", ".join(sym_missing) + " (crashes on that build cannot be symbolized)")
+    on_r2: list[str] = []
+    page = want
+    if offloaded:
+        moved = set(moved_off_page(v, want))
+        page = [n for n in want if n not in moved]
+        moving = [n for n in want if n in moved] + symbols
+        # A hotfix makes no .msixupload; one moved off its page is still one.
+        if hotfix:
+            moving.append(f"AetherSDR-{v.lstrip('v')}-Windows-x64.msixupload")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            sizes = dict(zip(moving, pool.map(lambda n: r2_size(v, n), moving)))
+        still, absent, unknown = [], [], []
+        for n in moving:
+            size = sizes[n]
+            if size == UNKNOWN:
+                (still if n in assets else unknown).append(n)
+            elif size is not None and size > 0 and (n not in assets or size == assets[n]["size"]):
+                on_r2.append(n)
+                if n in assets:
+                    still.append(n)
+            elif n in assets:
+                still.append(n)
+            elif size is not None:
+                absent.append(f"{n} ({size} bytes)")
+            else:
+                absent.append(n)
+        if hotfix:
+            stray = moving.pop()
+            # On the page, the check below reports it.
+            if stray in on_r2 and stray not in assets:
+                report("FAIL", ".msixupload absent for a hotfix", f"{stray}, on {R2_RELEASES}{v}/")
+            for lst in (still, absent, unknown, on_r2):
+                if stray in lst:
+                    lst.remove(stray)
+        if unknown:
+            report("WARN", f"updates.aethersdr.com answered for every moved file",
+                   "could not check: " + ", ".join(unknown))
+        lost = [n for n in absent if n.split(" ")[0] not in symbols]
+        if lost:
+            report("FAIL", f"the {len(moving) - len(symbols)} signatures and packages Release Offload moves are "
+                   "on updates.aethersdr.com or the page", "on neither: " + ", ".join(lost))
+        sym_lost = [n for n in absent if n.split(" ")[0] in symbols]
+        if sym_lost:
+            report("WARN", f"the {len(symbols)} debug-symbol archives are present",
+                   "on neither updates.aethersdr.com nor the page: " + ", ".join(sym_lost)
+                   + " (crashes on that build cannot be symbolized)")
+        if still:
+            report("WARN", "Release Offload has moved its files off the page",
+                   "still on the page: " + ", ".join(still)
+                   + "\napprove its update-signing run, or dispatch release-offload.yml with dry_run=false")
+        elif not absent and not unknown:
+            report("PASS", f"the {len(moving)} files Release Offload moves are on updates.aethersdr.com",
+                   f"{R2_RELEASES}{v}/")
+    missing = [n for n in page if n not in assets]
+    n_want = len(page)
+    label = f"the {n_want}-asset page" if offloaded else f"the {n_want}-asset set"
+    if missing:
+        report("FAIL", f"{label} is present", "missing: " + ", ".join(missing))
     else:
-        report("PASS", f"the {len(symbols)} debug-symbol archives are present")
-    extra = sorted(set(assets) - set(want) - set(symbols))
+        where = "hotfix: no .msixupload" if hotfix else (
+            "the .msixupload is checked on updates.aethersdr.com" if offloaded else "incl. .msixupload")
+        report("PASS", f"{label} is present ({where})")
+    if not offloaded:
+        sym_missing = [n for n in symbols if n not in assets]
+        if sym_missing:
+            report("WARN", f"the {len(symbols)} debug-symbol archives are present",
+                   "missing: " + ", ".join(sym_missing) + " (crashes on that build cannot be symbolized)")
+        else:
+            report("PASS", f"the {len(symbols)} debug-symbol archives are present")
+    bundles = sorted(n for n in assets if is_patch_bundle(v, n))
+    if bundles and offloaded:
+        report("WARN", "no patch bundles on the page",
+               f"{len(bundles)} on the page: Update Manifest ran with UPDATE_PAYLOAD_BASE unset or github, "
+               "so manifest-v2.json names them here and Release Offload leaves them")
+    elif bundles:
+        report("INFO", "patch bundles on the page", f"{len(bundles)} (Update Manifest attaches them)")
+    extra = sorted(set(assets) - set(want) - set(symbols) - set(bundles))
     if extra:
         bad = [e for e in extra if "msixupload" in e]
         report("FAIL" if bad else "WARN", "no unexpected assets", ", ".join(extra))
@@ -361,6 +492,8 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
     built = [f"AetherSDR-{v}-{s}" for s in signables(tarballs, app_tarballs)]
     late, gaps = [], []
     for n in want:
+        # A signature on updates.aethersdr.com has no page timestamp; gpg
+        # checks it below instead.
         if not n.endswith(".asc") or n not in assets or n[:-4] not in assets:
             continue
         d = ts(assets[n]["created_at"]) - ts(assets[n[:-4]]["created_at"])
@@ -374,6 +507,17 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
             late.append(f"{n} and {n[:-4]} were not uploaded together ({int(secs)} s apart)")
         else:
             gaps.append(f"{n[:-4]}: same upload as its .asc")
+    if offloaded and "SHA256SUMS.txt" in assets:
+        # The signatures on updates.aethersdr.com came from the signing run
+        # that wrote SHA256SUMS.txt, so a binary re-attached after it is
+        # signed by none of them.
+        sums_at = ts(assets["SHA256SUMS.txt"]["created_at"])
+        after = [n for n in built if n in assets and ts(assets[n]["created_at"]) >= sums_at]
+        if after:
+            report("FAIL", "every signed binary predates SHA256SUMS.txt (its signatures are on updates.aethersdr.com)",
+                   "attached after signing: " + ", ".join(after))
+        else:
+            report("PASS", "every signed binary predates SHA256SUMS.txt (its signatures are on updates.aethersdr.com)")
     if late:
         report("FAIL", "every .asc postdates the binary it signs (tarball and SHA256SUMS travel with theirs)", "\n".join(late))
     elif gaps:
@@ -387,10 +531,13 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
                 report("PASS", ".msixupload version is the release version plus .0", m.group(1))
             else:
                 report("FAIL", ".msixupload version is the release version plus .0", n)
+    for msix in [n for n in want if n.endswith(".msixupload") and n in on_r2 and n not in assets]:
+        report("PASS", ".msixupload version is the release version plus .0",
+               msix[len("AetherSDR-"):-len("-Windows-x64.msixupload")] + " (on updates.aethersdr.com)")
     uploaders = sorted({a["uploader"]["login"] for a in assets.values()})
     if uploaders != ["github-actions[bot]"]:
         report("WARN", "every asset was uploaded by CI", "uploaders: " + ", ".join(uploaders))
-    return assets
+    return assets, on_r2
 
 
 # ------------------------------------------------------------------- downloads
@@ -404,7 +551,8 @@ def sha256(path: Path) -> str:
 
 
 def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Namespace, tarballs: bool,
-                    app_tarballs: bool = True, manual_in_sums: bool = True) -> None:
+                    app_tarballs: bool = True, manual_in_sums: bool = True,
+                    on_r2: list[str] | None = None) -> None:
     if args.skip_download:
         report("SKIP", "download and verify signatures and checksums", "--skip-download")
         return
@@ -420,8 +568,12 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
         # And macOS's (Apple silicon), the app the in-app update installs.
         patterns += [f"AetherSDR-{v}-macOS-apple-silicon.app.tar.zst",
                      f"AetherSDR-{v}-macOS-apple-silicon.app.tar.zst.asc"]
+    on_r2 = on_r2 or []
     if args.all:
-        patterns = [n for n in assets if not n.endswith(".dmg") and not n.endswith(".msixupload")]
+        patterns = [n for n in [*assets, *on_r2] if not n.endswith((".dmg", ".msixupload", "-symbols.tar.xz"))
+                    and not is_patch_bundle(v, n)]
+    # From v26.11.4 the per-file signatures come from updates.aethersdr.com.
+    remote = [p for p in patterns if p not in assets and p in on_r2]
     patterns = [p for p in patterns if p in assets]
     argv = ["release", "download", v, "--repo", repo, "--dir", str(ddir), "--clobber"]
     for p in patterns:
@@ -431,7 +583,9 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
     if proc.returncode != 0 or len(got) != len(patterns):
         report("FAIL", "download the verification set", (proc.stderr or "").strip() or f"got {len(got)}/{len(patterns)}")
         return
-    report("INFO", "downloaded", f"{len(got)} files into {ddir}")
+    fetched = [p for p in remote if r2_fetch(v, p, ddir / p)]
+    report("INFO", "downloaded", f"{len(got)} files from the release page"
+           + (f", {len(fetched)} from {R2_RELEASES}{v}/" if remote else "") + f" into {ddir}")
 
     sums_path = ddir / "SHA256SUMS.txt"
     if sums_path.exists():
@@ -619,8 +773,9 @@ def main(argv: list[str] | None = None) -> int:
         tarballs = release_makes_tarballs(args.repo, v)
         app_tarballs = release_makes_app_tarballs(args.repo, v)
         manual_in_sums = release_sums_manual(args.repo, v)
-        assets = check_assets(rel, v, hotfix, tarballs, app_tarballs, manual_in_sums)
-        check_downloads(args.repo, v, assets, args, tarballs, app_tarballs, manual_in_sums)
+        offloaded = release_offloaded(v)
+        assets, on_r2 = check_assets(rel, v, hotfix, tarballs, app_tarballs, manual_in_sums, offloaded)
+        check_downloads(args.repo, v, assets, args, tarballs, app_tarballs, manual_in_sums, on_r2)
     check_store(args.repo, windows_run, hotfix)
 
     fails = [r for r in results if r[0] == "FAIL"]
