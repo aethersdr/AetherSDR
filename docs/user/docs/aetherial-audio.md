@@ -568,8 +568,9 @@ narrower than 500 Hz, so with a wider (ESSB) TX filter, or one narrower than
 
 **Example: SSB contest or DX punch.** Clip 6 dB, CESSB on, Ceiling −1 dBFS. On
 a FLEX-8600 at 25 W into a dummy load, with the Contest profile ahead of it
-and a 150–2850 Hz passband, this lowered the peak-to-average ratio from about
-6.4 dB to about 3 dB and raised average power by about 3 dB at the same peak.
+and the passband following the radio's 50–4000 Hz TX filter, this lowered the
+peak-to-average ratio from about 6.1 dB to about 3.3 dB and raised average
+power by about 3 dB at the same peak.
 
 **Pitfalls:**
 - Clip is distortion by design. Beyond about 10 dB, voices get rough. Record
