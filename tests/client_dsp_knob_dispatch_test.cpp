@@ -76,6 +76,12 @@ private slots:
         QVERIFY(engine.rn2TxEnabled());
         rn2->click();
         QVERIFY(!engine.rn2TxEnabled());
+        // A change made elsewhere (a profile, the gate migration) shows at
+        // once, without waiting for the page's poll.
+        engine.setRn2TxEnabled(true);
+        QVERIFY(rn2->isChecked());
+        engine.setRn2TxEnabled(false);
+        QVERIFY(!rn2->isChecked());
         panel.showForRx();
         QVERIFY(!rn2->isVisibleTo(&panel));
     }

@@ -568,6 +568,13 @@ public:
     // appended, as on load, so a stage is bypassed by its processor's
     // enable flag, never by leaving it out.  Persists what was packed.
     void setTxChainStages(const QVector<TxChainStage>& stages);
+    // A chain order from stage names, as the settings file and profiles store
+    // it. The retired "Gate" and "DeEss" are dropped; unknown names are
+    // skipped. An order that names a retired stage and is otherwise the old
+    // default (Eq, Comp, Tube, Enh, Reverb) is a pre-retirement default the
+    // operator never changed, so it becomes today's default. Empty when no
+    // name parses.
+    static QVector<TxChainStage> txChainFromNames(const QStringList& names);
     QVector<TxChainStage> txChainStages() const;
 
     // ── Master TX bypass ─────────────────────────────────────────
@@ -613,8 +620,8 @@ public:
 
     // Client-side RX gate — persistence mirrors the compressor. AetherTX
     // has no gate (RN2 replaces it) and no de-esser; migrateRetiredTxStages()
-    // carries an enabled TX gate over to RN2 once and removes both stages'
-    // keys.
+    // carries an enabled TX gate over to RN2 once, and
+    // dropRetiredSettingsKeys() removes both stages' other keys.
     void loadClientGateRxSettings();
     void saveClientGateRxSettings() const;
     void migrateRetiredTxStages();

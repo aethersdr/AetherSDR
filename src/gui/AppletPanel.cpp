@@ -1032,7 +1032,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_clientEqRxApplet  = new ClientEqApplet(ClientEqApplet::Path::Rx);
     m_clientCompApplet   = new ClientCompApplet(ClientCompApplet::Side::Tx);
     m_clientCompRxApplet = new ClientCompApplet(ClientCompApplet::Side::Rx);
-    m_clientGateRxApplet = new ClientGateApplet(ClientGateApplet::Side::Rx);
+    m_clientGateRxApplet = new ClientGateApplet;
     m_clientTubeApplet   = new ClientTubeApplet(ClientTubeApplet::Side::Tx);
     m_clientTubeRxApplet = new ClientTubeApplet(ClientTubeApplet::Side::Rx);
     m_clientPuduApplet   = new ClientPuduApplet(ClientPuduApplet::Side::Tx);

@@ -97,9 +97,8 @@ const QString kEnableStyle =
 
 } // namespace
 
-ClientGateApplet::ClientGateApplet(Side side, QWidget* parent)
+ClientGateApplet::ClientGateApplet(QWidget* parent)
     : QWidget(parent)
-    , m_side(side)
 {
     theme::setContainer(this, QStringLiteral("applet/gate"));
     buildUI();

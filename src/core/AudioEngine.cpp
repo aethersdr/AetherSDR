@@ -1978,7 +1978,7 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientQuindarSettings();       // restore persisted Quindar tone params
     loadClientRxChainOrder();    // restore persisted RX chain order (Phase 0+)
     loadAetherialTubePreampTxSettings(); // restore TX mic pre-amp toggles (#2813)
-    migrateRetiredTxStages();    // gate on/off becomes RN2, once; gate + de-esser keys go
+    migrateRetiredTxStages();    // a TX gate that was on becomes RN2, once
     dropRetiredSettingsKeys();   // tidy keys no build reads any more
 
     // Restore saved audio device selections
@@ -6331,11 +6331,11 @@ QString stageName(AudioEngine::TxChainStage s)
     return "";
 }
 
+// Retired stage names ("Gate", "DeEss") parse as None, as AetherRX's retired
+// name does; withoutRetiredTxStages() is the backstop for enum callers.
 AudioEngine::TxChainStage stageFromName(const QString& name)
 {
-    if (name == "Gate")   return AudioEngine::TxChainStage::Gate;
     if (name == "Eq")     return AudioEngine::TxChainStage::Eq;
-    if (name == "DeEss")  return AudioEngine::TxChainStage::DeEss;
     if (name == "Comp")   return AudioEngine::TxChainStage::Comp;
     if (name == "Tube")   return AudioEngine::TxChainStage::Tube;
     if (name == "Enh")    return AudioEngine::TxChainStage::Enh;
@@ -6376,6 +6376,11 @@ QVector<AudioEngine::TxChainStage> withoutRetiredTxStages(
 QVector<AudioEngine::TxChainStage> defaultChain()
 {
     return {std::begin(kCanonicalTxChain), std::end(kCanonicalTxChain)};
+}
+
+bool isRetiredTxStageName(const QString& name)
+{
+    return name == QLatin1String("Gate") || name == QLatin1String("DeEss");
 }
 
 // ── RX chain helpers — parallel to the TX functions above ───────────────
@@ -6451,6 +6456,30 @@ QVector<AudioEngine::RxChainStage> defaultRxChain()
 }
 
 } // namespace
+
+QVector<AudioEngine::TxChainStage> AudioEngine::txChainFromNames(const QStringList& names)
+{
+    QVector<TxChainStage> stages;
+    bool namesRetired = false;
+    for (const QString& raw : names) {
+        const QString name = raw.trimmed();
+        namesRetired = namesRetired || isRetiredTxStageName(name);
+        const auto stage = stageFromName(name);
+        if (stage != TxChainStage::None) {
+            stages.append(stage);
+        }
+    }
+    // The default before the gate and de-esser were retired was Gate, Eq,
+    // DeEss, Comp, Tube, Enh, Reverb. Saved with its retired stages, it is an
+    // order nobody chose, so it takes today's default and Tube leads.
+    static const QVector<TxChainStage> kOldDefaultRest{
+        TxChainStage::Eq, TxChainStage::Comp, TxChainStage::Tube,
+        TxChainStage::Enh, TxChainStage::Reverb};
+    if (namesRetired && TxChainLayout::withoutDuplicates(stages) == kOldDefaultRest) {
+        return defaultChain();
+    }
+    return stages;
+}
 
 void AudioEngine::setTxChainStages(const QVector<TxChainStage>& stages)
 {
@@ -6774,6 +6803,16 @@ void AudioEngine::dropRetiredSettingsKeys()
         // ClientGate::kAttackMs and ClientTube::kAttackMs.
         "ClientGateTxAttackMs",     "ClientGateRxAttackMs",
         "ClientTubeTxAttackMs",     "ClientTubeRxAttackMs",
+        // AetherTX's gate and de-esser are retired. The gate's on/off key is
+        // migrateRetiredTxStages()'s: it carries over to RN2.
+        "ClientGateTxMode",         "ClientGateTxThresholdDb",
+        "ClientGateTxReturnDb",     "ClientGateTxRatio",
+        "ClientGateTxHoldMs",       "ClientGateTxReleaseMs",
+        "ClientGateTxFloorDb",      "ClientGateTxLookaheadMs",
+        "ClientDeEssTxEnabled",     "ClientDeEssTxFrequencyHz",
+        "ClientDeEssTxQ",           "ClientDeEssTxThresholdDb",
+        "ClientDeEssTxAmountDb",    "ClientDeEssTxAttackMs",
+        "ClientDeEssTxReleaseMs",   "ClientDeEssTxSlopeStages",
     };
     auto& s = AppSettings::instance();
     bool removedAny = false;
@@ -6932,20 +6971,17 @@ void AudioEngine::loadClientCompSettings()
     QVector<TxChainStage> stages;
     const QString stored = s.value("ClientCompTxChainStages", "").toString();
     if (!stored.isEmpty()) {
-        for (const QString& name : stored.split(',', Qt::SkipEmptyParts)) {
-            const auto stage = stageFromName(name.trimmed());
-            if (stage != TxChainStage::None) stages.append(stage);
-        }
+        stages = txChainFromNames(stored.split(',', Qt::SkipEmptyParts));
     } else if (s.contains("ClientCompTxChainOrder")) {
         const int legacy = s.value("ClientCompTxChainOrder", "0").toInt();
         // Preserve the user's Comp-vs-Eq preference from the old two-
         // option setting — bracket it with the default canonical
         // layout for the not-yet-implemented stages.
         stages = (legacy == 1)
-            ? QVector<TxChainStage>{TxChainStage::Eq, TxChainStage::Comp,
-                                     TxChainStage::Tube, TxChainStage::Enh}
-            : QVector<TxChainStage>{TxChainStage::Comp, TxChainStage::Eq,
-                                     TxChainStage::Tube, TxChainStage::Enh};
+            ? QVector<TxChainStage>{TxChainStage::Tube, TxChainStage::Eq,
+                                     TxChainStage::Comp, TxChainStage::Enh}
+            : QVector<TxChainStage>{TxChainStage::Tube, TxChainStage::Comp,
+                                     TxChainStage::Eq, TxChainStage::Enh};
     }
     if (stages.isEmpty()) stages = defaultChain();
 
@@ -7031,34 +7067,30 @@ void AudioEngine::saveClientCompRxSettings() const
                QString::number(m_clientCompRx->limiterCeilingDb()));
 }
 
-// AetherTX's gate and de-esser are gone (2026-11-15). RN2 replaces the gate:
-// an operator who had it on gets RN2 instead, once. The de-esser has no
-// replacement. Then every key either stage kept is removed, so this never runs
-// again.
+// AetherTX's gate is gone (2026-11-15) and RN2 replaces it: an operator who
+// had it on gets RN2 instead. Its on/off key is removed only once that
+// hand-off has happened (or the gate was off), so a host where RN2 cannot
+// start tries again next launch rather than losing the setting. The gate's
+// other keys and the de-esser's go with dropRetiredSettingsKeys().
 void AudioEngine::migrateRetiredTxStages()
 {
     auto& s = AppSettings::instance();
-    const bool gateWasOn = s.value("ClientGateTxEnabled", "False").toString() == "True";
+    const QString key = QStringLiteral("ClientGateTxEnabled");
+    if (!s.contains(key)) {
+        return;
+    }
+    const bool gateWasOn = s.value(key, "False").toString() == "True";
     if (gateWasOn && !m_rn2TxEnabled.load()) {
-        qCInfo(lcAudio) << "AudioEngine: the TX gate is retired; it was on, so RN2 is turned on";
         setRn2TxEnabled(true);  // persists through AetherialTubePreampTx
+        if (!m_rn2TxEnabled.load()) {
+            qCWarning(lcAudio) << "AudioEngine: the TX gate is retired and RN2 could not "
+                                  "start; keeping the gate's setting to try again";
+            return;
+        }
+        qCInfo(lcAudio) << "AudioEngine: the TX gate is retired; it was on, so RN2 is on";
     }
-    static const char* const kGateKeys[] = {
-        "ClientGateTxEnabled",   "ClientGateTxMode",      "ClientGateTxThresholdDb",
-        "ClientGateTxReturnDb",  "ClientGateTxRatio",     "ClientGateTxHoldMs",
-        "ClientGateTxReleaseMs", "ClientGateTxFloorDb",   "ClientGateTxLookaheadMs",
-        "ClientDeEssTxEnabled",  "ClientDeEssTxFrequencyHz", "ClientDeEssTxQ",
-        "ClientDeEssTxThresholdDb", "ClientDeEssTxAmountDb", "ClientDeEssTxAttackMs",
-        "ClientDeEssTxReleaseMs", "ClientDeEssTxSlopeStages",
-    };
-    bool removedAny = false;
-    for (const char* key : kGateKeys) {
-        const QString name = QString::fromLatin1(key);
-        if (!s.contains(name)) continue;
-        s.remove(name);
-        removedAny = true;
-    }
-    if (removedAny) s.save();
+    s.remove(key);
+    s.save();
 }
 
 void AudioEngine::loadClientGateRxSettings()

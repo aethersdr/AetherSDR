@@ -29,10 +29,11 @@ compact view of both chains (see [Using the docked applet](#using-the-docked-app
 >   default**, so drive level matches SmartSDR. Turn it on if you relied on it.
 > - **BYPASS** is remembered across restarts.
 > - AetherTX's **Gate** and **De-esser** are gone. If you had the TX gate on,
->   **RN2** was switched on for you, and a profile saved with the gate on
->   turns RN2 on when you load it, unless the profile sets RN2 itself. A
->   saved chain order keeps its order without either stage, and a profile's
->   old gate and de-esser settings are ignored.
+>   **RN2** was switched on for you. An old profile that does not set RN2
+>   itself sets it to match its gate, on or off. A chain order still at the
+>   old default becomes the new one, with **Tube** first; an order you
+>   changed keeps its order without either stage. Old gate and de-esser
+>   settings are ignored.
 > - The compressor's **Drive** and **Phase** are saved in AetherTX profiles.
 
 <img src="/img/screens/aethertx.png" width="720" alt="AetherTX window. The left column lists the transmit chain stages Gate (selected), EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with MIC and TX indicators, REC, PLAY, a settings gear and BYPASS at the bottom. The right side shows the gate's level graph with View (Level, Curve), Mode (Gate, Expander), RN2 and Peek controls, and six knobs: Thresh, Return, Hold, Release, Floor and Ratio." />

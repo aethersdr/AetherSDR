@@ -146,8 +146,8 @@ public:
     ClientCompApplet* clientCompApplet()   { return m_clientCompApplet; }
     ClientCompApplet* clientCompTxApplet() { return m_clientCompApplet; }
     ClientCompApplet* clientCompRxApplet() { return m_clientCompRxApplet; }
-    // Phase 7.2: GATE-TX retains the legacy accessor name; GATE-RX is
-    // the new sibling tile bound to AudioEngine::clientGateRx().
+    // AetherRX's gate tile, bound to AudioEngine::clientGateRx(). AetherTX
+    // has no gate tile (RN2 replaces the TX gate).
     ClientGateApplet* clientGateRxApplet() { return m_clientGateRxApplet; }
     // Phase 7.4: TUBE-TX retains the legacy accessor; TUBE-RX is the new
     // sibling tile bound to AudioEngine::clientTubeRx().

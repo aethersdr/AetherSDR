@@ -43,6 +43,7 @@ private slots:
     void loadDropsRepeatedNames();
     void aPresetWithRepeatsCannotOverflowTheChain();
     void freshInstallGetsTheCanonicalOrder();
+    void theOldDefaultBecomesTheNewDefault();
     void aGateThatWasOnBecomesRn2Once();
     void aGateThatWasOffLeavesRn2Alone();
 };
@@ -134,6 +135,39 @@ void TxChainSettingsTest::freshInstallGetsTheCanonicalOrder()
     const QVector<Stage> expected{Stage::Tube, Stage::Eq, Stage::Comp,
                                   Stage::Enh, Stage::Reverb};
     QCOMPARE(engine.txChainStages(), expected);
+}
+
+// An upgrader whose saved order is the old default never chose it (it is
+// saved on any profile load): it becomes today's, Tube first. The same five
+// stages saved without retired names were chosen, and stay.
+void TxChainSettingsTest::theOldDefaultBecomesTheNewDefault()
+{
+    const QVector<Stage> canonical{Stage::Tube, Stage::Eq, Stage::Comp,
+                                   Stage::Enh, Stage::Reverb};
+    AppSettings::instance().setValue(kKey, "Gate,Eq,DeEss,Comp,Tube,Enh,Reverb");
+    {
+        AudioEngine engine;
+        engine.loadClientCompSettings();
+        QCOMPARE(engine.txChainStages(), canonical);
+    }
+    AppSettings::instance().setValue(kKey, "Eq,Comp,Tube,Enh,Reverb");
+    {
+        AudioEngine engine;
+        engine.loadClientCompSettings();
+        const QVector<Stage> chosen{Stage::Eq, Stage::Comp, Stage::Tube,
+                                    Stage::Enh, Stage::Reverb};
+        QCOMPARE(engine.txChainStages(), chosen);
+    }
+    // The two-option setting from before the chain was reorderable: Tube
+    // leads either way.
+    AppSettings::instance().remove(kKey);
+    AppSettings::instance().setValue("ClientCompTxChainOrder", "1");
+    {
+        AudioEngine engine;
+        engine.loadClientCompSettings();
+        QCOMPARE(engine.txChainStages().first(), Stage::Tube);
+    }
+    AppSettings::instance().remove("ClientCompTxChainOrder");
 }
 
 // Across the store boundary: the seeded keys are committed first, and every

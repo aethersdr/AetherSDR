@@ -304,11 +304,16 @@ void AetherTxProfilesTest::aLegacyGateProfileTurnsRn2On()
     ChannelStripPresets::applyTxJson(&engine, withRn2);
     QVERIFY(!engine.rn2TxEnabled());
 
-    // A gate that was off changes nothing.
+    // A gate that was off turns RN2 off, so switching between two old
+    // profiles still reproduces each.
+    engine.setRn2TxEnabled(true);
     QJsonObject gateOff = sampleProfile();
     gateOff["gate"] = QJsonObject{ { "enabled", false } };
     ChannelStripPresets::applyTxJson(&engine, gateOff);
     QVERIFY(!engine.rn2TxEnabled());
+
+    // Its chain is the old default, so it loads as today's, Tube first.
+    QCOMPARE(engine.txChainStages().first(), AudioEngine::TxChainStage::Tube);
 
     // And capture writes no "gate", nor "deess" (the de-esser is retired too).
     const QJsonObject captured = ChannelStripPresets::captureTxJson(&engine);

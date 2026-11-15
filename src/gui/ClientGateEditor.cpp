@@ -299,7 +299,6 @@ void ClientGateEditor::saveGateSettings() const
 
 void ClientGateEditor::showForRx()
 {
-    m_side = Side::Rx;
     if (m_levelView && gate()) m_levelView->setGate(gate());
     const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 RX");
     if (m_titleBar)

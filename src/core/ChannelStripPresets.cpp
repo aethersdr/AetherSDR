@@ -44,18 +44,6 @@ QString stageEnumToName(AudioEngine::TxChainStage s)
     return "";
 }
 
-AudioEngine::TxChainStage stageNameToEnum(const QString& n)
-{
-    if (n == "Gate")   return AudioEngine::TxChainStage::Gate;
-    if (n == "Eq")     return AudioEngine::TxChainStage::Eq;
-    if (n == "DeEss")  return AudioEngine::TxChainStage::DeEss;
-    if (n == "Comp")   return AudioEngine::TxChainStage::Comp;
-    if (n == "Tube")   return AudioEngine::TxChainStage::Tube;
-    if (n == "Enh")    return AudioEngine::TxChainStage::Enh;
-    if (n == "Reverb") return AudioEngine::TxChainStage::Reverb;
-    return AudioEngine::TxChainStage::None;
-}
-
 // RX-side enum↔name mapping (#2425).  Only stages that exist in
 // RxChainStage; the pre-existing TX-only stages (Enh / Reverb) have no
 // RX equivalent and aren't in the enum.
@@ -806,20 +794,20 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
     if (!engine) return;
     // Chain order.
     if (preset.contains("chain") && preset.value("chain").isArray()) {
-        QVector<AudioEngine::TxChainStage> stages;
+        QStringList names;
         for (const auto& v : preset.value("chain").toArray()) {
-            const auto s = stageNameToEnum(v.toString());
-            if (s != AudioEngine::TxChainStage::None) stages.append(s);
+            names.append(v.toString());
         }
+        const auto stages = AudioEngine::txChainFromNames(names);
         if (!stages.isEmpty()) engine->setTxChainStages(stages);
     }
 
     // A profile saved before the TX gate was retired may carry "gate". Its
-    // settings have nowhere to go; if it was on and the profile does not say
-    // what RN2 should be, RN2 takes its place, as the settings migration does.
-    if (!preset.contains("rn2") && preset.value("gate").isObject()
-        && jbool(preset.value("gate").toObject(), "enabled", false)) {
-        engine->setRn2TxEnabled(true);
+    // settings have nowhere to go; when the profile does not say what RN2
+    // should be, RN2 takes the gate's place, on or off, so loading the profile
+    // still reproduces it.
+    if (!preset.contains("rn2") && preset.value("gate").isObject()) {
+        engine->setRn2TxEnabled(jbool(preset.value("gate").toObject(), "enabled", false));
     }
 
     // EQ.

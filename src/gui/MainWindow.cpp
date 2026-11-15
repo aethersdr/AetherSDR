@@ -3208,9 +3208,8 @@ ClientGateEditor* MainWindow::ensureClientGateEditor()
         m_clientGateEditor = new ClientGateEditor(m_audio, this);
         setEditorFramelessMode(m_clientGateEditor, framelessWindowEnabled());
         connect(m_clientGateEditor, &ClientGateEditor::bypassToggled,
-                this, [this](ClientGateEditor::Side side, bool bypassed) {
+                this, [this](bool bypassed) {
             if (!m_appletPanel) return;
-            Q_UNUSED(side);  // RX only: AetherTX has no gate
             if (m_appletPanel->clientGateRxApplet())
                 m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
             m_appletPanel->setAppletVisible("GATE-RX", !bypassed);
@@ -6014,8 +6013,11 @@ void MainWindow::buildUI()
     // Called synchronously here, before the event loop starts, so that legacy
     // float migration singleShot(0) timers posted inside AppletPanel::makeEntry()
     // cannot call saveState() and overwrite ContainerTree before we read it.
+    // "gate" and "dess" were AetherTX's gate and de-esser tiles, both retired:
+    // a layout saved before must not bring them back as empty shells.
     if (m_appletPanel && m_appletPanel->containerManager())
-        m_appletPanel->containerManager()->restoreState();
+        m_appletPanel->containerManager()->restoreState(
+            {QStringLiteral("gate"), QStringLiteral("dess")});
 
     // Set initial splitter sizes: CWX=0, DVK=0 (both hidden), center=stretch, right=310
     const int centerWidth = qMax(400, width() - 310);

@@ -109,6 +109,17 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
         if (m_audio && m_side == Side::Tx) m_audio->setRn2TxEnabled(on);
     });
     toolbar->addWidget(m_rn2Btn);
+    if (m_audio) {
+        // Follow the engine at once: a refused enable (RNNoise unavailable),
+        // a profile load or the gate migration must not wait for the poll,
+        // which only runs while this page is on screen.
+        connect(m_audio, &AudioEngine::rn2TxEnabledChanged, this, [this](bool on) {
+            if (m_side == Side::Tx && m_rn2Btn->isChecked() != on) {
+                const QSignalBlocker block(m_rn2Btn);
+                m_rn2Btn->setChecked(on);
+            }
+        });
+    }
 
     toolbar->addWidget(new QLabel("Model:"));
     {

@@ -371,7 +371,6 @@ void StripGatePanel::saveGateSettings() const
 
 void StripGatePanel::showForRx()
 {
-    m_side = Side::Rx;
     if (gate()) {
         if (m_levelView) m_levelView->setGate(gate());
         if (m_curveView) m_curveView->setGate(gate());
