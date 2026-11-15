@@ -109,15 +109,13 @@ ClientGateApplet::ClientGateApplet(Side side, QWidget* parent)
 ClientGate* ClientGateApplet::gate() const
 {
     if (!m_audio) return nullptr;
-    return m_side == Side::Rx ? m_audio->clientGateRx()
-                              : m_audio->clientGateTx();
+    return m_audio->clientGateRx();  // AetherTX has no gate (RN2 replaces it)
 }
 
 void ClientGateApplet::saveGateSettings() const
 {
     if (!m_audio) return;
-    if (m_side == Side::Rx) m_audio->saveClientGateRxSettings();
-    else                    m_audio->saveClientGateSettings();
+    m_audio->saveClientGateRxSettings();
 }
 
 void ClientGateApplet::buildUI()

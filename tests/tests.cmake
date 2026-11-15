@@ -360,7 +360,7 @@ set_tests_properties(nnr_model_publication_test PROPERTIES TIMEOUT 120)
 
 add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
     src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
-    src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
+    src/core/ClientComp.cpp src/core/ClientTube.cpp
     src/core/ClientPudu.cpp src/core/ClientPhaseRotator.cpp)
 target_include_directories(rx_client_effects_test PRIVATE src)
 add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
@@ -5633,12 +5633,6 @@ add_executable(client_gate_test
     src/core/ClientGate.cpp
 )
 target_include_directories(client_gate_test PRIVATE src)
-
-add_executable(client_deess_test
-    tests/client_deess_test.cpp
-    src/core/ClientDeEss.cpp
-)
-target_include_directories(client_deess_test PRIVATE src)
 
 add_executable(client_tube_test
     tests/client_tube_test.cpp
@@ -10986,10 +10980,10 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientGateCurveWidget.cpp
     src/gui/ClientTubeApplet.cpp
     src/gui/ClientTubeCurveWidget.cpp
-    src/gui/ClientDeEssApplet.cpp
-    src/gui/ClientDeEssCurveWidget.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
+    src/gui/StripTubePanel.cpp
+    src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
 target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)

@@ -13,10 +13,10 @@ class AudioEngine;
 class ClientCompKnob;    // reused — generic rotary knob
 class ClientGateLevelView;
 
-// Floating editor for the client-side TX gate / expander, laid out like
-// Ableton's Gate: THR/RET/Flip/Lookahead column on the left, level view on the
-// right, ATK/HLD/REL/FLR knobs below. One instance on MainWindow; showForTx()
-// binds it to AudioEngine::clientGateTx(). Geometry persists in AppSettings
+// Floating editor for the AetherRX gate / expander, laid out like Ableton's
+// Gate: THR/RET/Flip/Lookahead column on the left, level view on the right,
+// ATK/HLD/REL/FLR knobs below. Bound to AudioEngine::clientGateRx(); AetherTX
+// has no gate (RN2 replaces it). Geometry persists in AppSettings
 // (`ClientGateEditorGeometry`).
 class ClientGateEditor : public QWidget {
     Q_OBJECT
@@ -27,9 +27,7 @@ public:
     explicit ClientGateEditor(AudioEngine* engine, QWidget* parent = nullptr);
     ~ClientGateEditor() override;
 
-    void showForTx();
     void showForRx();
-    bool isShowingTx() const { return isVisible() && m_side == Side::Tx; }
 
 signals:
     // Fired when bypass toggles.  Docked applet subscribes to keep
@@ -61,7 +59,7 @@ private:
     void applyMode(int modeIdx);   // 0=Expander, 1=Gate
 
     AudioEngine*          m_audio{nullptr};
-    Side                  m_side{Side::Tx};
+    Side                  m_side{Side::Rx};
     // Side-aware accessor — picks Tx or Rx instance based on m_side.
     // Saves dispatch logic at every parameter setter.
     class ClientGate* gate() const;

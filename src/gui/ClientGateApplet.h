@@ -22,7 +22,7 @@ class ClientGateApplet : public QWidget {
 public:
     enum class Side { Tx, Rx };
 
-    explicit ClientGateApplet(Side side = Side::Tx, QWidget* parent = nullptr);
+    explicit ClientGateApplet(Side side = Side::Rx, QWidget* parent = nullptr);
 
     void setAudioEngine(AudioEngine* engine);
     Side side() const { return m_side; }
@@ -42,7 +42,7 @@ private:
     void tickMeter();
 
     AudioEngine*           m_audio{nullptr};
-    const Side             m_side{Side::Tx};
+    const Side             m_side{Side::Rx};
     class ClientGate*      gate() const;
     void                   saveGateSettings() const;
     QPushButton*           m_enable{nullptr};

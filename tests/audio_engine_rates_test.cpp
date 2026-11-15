@@ -5,7 +5,6 @@
 #include "core/AudioEngine.h"
 #include "core/AudioFormatNegotiator.h"
 #include "core/ClientComp.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
 #include "core/ClientPudu.h"

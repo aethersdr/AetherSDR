@@ -372,7 +372,7 @@ flowchart TD
     I --> J["Input SRC when needed<br/>device rate -> fixed 48 kHz DSP rate<br/>duplicate mono to L/R"]
     J --> K["Optional TX RN2 at native 48 kHz"]
     K --> L["Optional 48 kHz test tone"]
-    L --> M["User-ordered 48 kHz float strip<br/>Gate / EQ / DeEss / Comp / Tube / PUDU / Reverb"]
+    L --> M["User-ordered 48 kHz float strip<br/>Tube / EQ / Comp / PUDU / Reverb"]
     M --> N["PC mic gain -> Quindar -> final limiter<br/>48 kHz float32 stereo"]
     N --> O["Independent L/R egress SRC<br/>48 kHz -> 24 kHz float32"]
     O --> P["Linked TPDF dither + round-to-nearest<br/>quantize once to 24 kHz stereo Int16"]
@@ -525,8 +525,9 @@ After capture channel canonicalization, `onTxAudioReady()` uses this ordering:
 5. **Test tone**: `ClientTxTestTone` can replace the mic signal with a generated
    48 kHz float32 stereo tone before the user voice strip.
 6. **Voice DSP strip**: `TxVoiceProcessor::processChannelStrip()` runs float32
-   processors directly in the user-selected order. The default order is Gate,
-   EQ, DeEss, Comp, Tube, PUDU, Reverb.
+   processors directly in the user-selected order. The default order is Tube,
+   EQ, Comp, PUDU, Reverb (the TX gate and de-esser are retired; RN2 runs
+   ahead of the strip).
 7. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates the
    48 kHz float samples. It is not a boost stage.
 8. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones at
@@ -924,7 +925,7 @@ Radio-provided taps:
 | PC mic channel canonicalization | `TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo()` | Int16 mono/stereo | duplicated-stereo Int16 | negotiated device rate | 1 or 2 -> 1 -> 2 | Auto selects stronger one-sided stereo channel or averages balanced stereo; no SRC here |
 | Voice float conversion / ingress SRC | `TxVoiceProcessor::processCapturedInt16()` | duplicated-stereo Int16 | float32 stereo | device rate -> 48 kHz when needed | 2 -> 1 -> 2 | Converts to float once; stateful mono r8brain SRC; native 48 kHz skips SRC |
 | TX RN2 | `RNNoiseFilter::process48kStereo(input, output)` | float32 stereo | float32 stereo | 48 kHz | 2 -> 1 -> 2 | Optional mic denoiser in `Native48k` rate domain; reuses caller-owned output storage |
-| PC mic voice strip | `TxVoiceProcessor::processChannelStrip()` | float32 stereo | float32 stereo | 48 kHz | 2 | Ordered Gate/EQ/DeEss/Comp/Tube/PUDU/Reverb |
+| PC mic voice strip | `TxVoiceProcessor::processChannelStrip()` | float32 stereo | float32 stereo | 48 kHz | 2 | Ordered Tube/EQ/Comp/PUDU/Reverb |
 | PC mic gain | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | float32 stereo | 48 kHz | 2 | 0..100 maps to 0.0..1.0 attenuation |
 | Quindar TX insertion | `ClientQuindarTone::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | Inserts tones before final limiter |
 | Final voice limiter | `ClientFinalLimiter::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | DC block, output trim, linked peak limiting |

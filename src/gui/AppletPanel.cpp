@@ -33,7 +33,6 @@
 #include "ClientEqApplet.h"
 #include "ClientCompApplet.h"
 #include "ClientGateApplet.h"
-#include "ClientDeEssApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientPuduApplet.h"
 #include "ClientReverbApplet.h"
@@ -1033,9 +1032,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_clientEqRxApplet  = new ClientEqApplet(ClientEqApplet::Path::Rx);
     m_clientCompApplet   = new ClientCompApplet(ClientCompApplet::Side::Tx);
     m_clientCompRxApplet = new ClientCompApplet(ClientCompApplet::Side::Rx);
-    m_clientGateApplet   = new ClientGateApplet(ClientGateApplet::Side::Tx);
     m_clientGateRxApplet = new ClientGateApplet(ClientGateApplet::Side::Rx);
-    m_clientDeEssApplet = new ClientDeEssApplet;
     m_clientTubeApplet   = new ClientTubeApplet(ClientTubeApplet::Side::Tx);
     m_clientTubeRxApplet = new ClientTubeApplet(ClientTubeApplet::Side::Rx);
     m_clientPuduApplet   = new ClientPuduApplet(ClientPuduApplet::Side::Tx);
@@ -1066,11 +1063,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // pop-outable sub-containers since users commonly want them
     // floating while working on the chain.)
     if (txDsp) txDsp->insertChildWidget(-1, m_clientChainApplet);
-    makeChildContainer("gate",    "Aetherial TX Gate",       m_clientGateApplet,   -1);
     makeChildContainer("gate-rx", "Aetherial AGC-G",          m_clientGateRxApplet, -1);
     makeChildContainer("ceq",     "Aetherial TX EQ",          m_clientEqTxApplet,   -1);
     makeChildContainer("ceq-rx",  "Aetherial RX EQ",          m_clientEqRxApplet,   -1);
-    makeChildContainer("dess",    "Aetherial De-Esser",       m_clientDeEssApplet,  -1);
     makeChildContainer("cmp",     "Aetherial Compressor",     m_clientCompApplet,   -1);
     makeChildContainer("cmp-rx",  "Aetherial AGC-C",          m_clientCompRxApplet, -1);
     makeChildContainer("tube",    "Aetherial Mic-PreAmp",     m_clientTubeApplet,   -1);
@@ -1642,8 +1637,6 @@ void AppletPanel::setPooDooActiveSide(PooDooSide side)
     // — they hide entirely on RX and reappear on TX.
     static const QStringList kTxOnly{
         QStringLiteral("ceq"),
-        QStringLiteral("dess"),
-        QStringLiteral("gate"),
         QStringLiteral("cmp"),
         QStringLiteral("tube"),
         QStringLiteral("pudu"),
@@ -2096,9 +2089,9 @@ void AppletPanel::setTxDspChainOrder(
     // should have been hidden via stageEnabledChanged anyway).
     auto idFor = [](AudioEngine::TxChainStage s) -> QString {
         switch (s) {
-            case AudioEngine::TxChainStage::Gate:   return "gate";
+            case AudioEngine::TxChainStage::Gate:   return {};  // retired
             case AudioEngine::TxChainStage::Eq:     return "ceq";
-            case AudioEngine::TxChainStage::DeEss:  return "dess";
+            case AudioEngine::TxChainStage::DeEss:  return {};  // retired
             case AudioEngine::TxChainStage::Comp:   return "cmp";
             case AudioEngine::TxChainStage::Tube:   return "tube";
             case AudioEngine::TxChainStage::Enh:    return "pudu";

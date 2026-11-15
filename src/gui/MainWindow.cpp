@@ -93,7 +93,6 @@
 #include "ClientCompEditor.h"
 #include "ClientGateApplet.h"
 #include "ClientGateEditor.h"
-#include "ClientDeEssApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientTubeEditor.h"
 #include "ClientPuduApplet.h"
@@ -105,7 +104,6 @@
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientTube.h"
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
@@ -3145,12 +3143,6 @@ void MainWindow::onTxChainStageEnabledChanged(
     } else if (stage == AudioEngine::TxChainStage::Comp) {
         if (m_appletPanel->clientCompApplet())
             m_appletPanel->clientCompApplet()->refreshEnableFromEngine();
-    } else if (stage == AudioEngine::TxChainStage::Gate) {
-        if (m_appletPanel->clientGateApplet())
-            m_appletPanel->clientGateApplet()->refreshEnableFromEngine();
-    } else if (stage == AudioEngine::TxChainStage::DeEss) {
-        if (m_appletPanel->clientDeEssApplet())
-            m_appletPanel->clientDeEssApplet()->refreshEnableFromEngine();
     } else if (stage == AudioEngine::TxChainStage::Tube) {
         if (m_appletPanel->clientTubeApplet())
             m_appletPanel->clientTubeApplet()->refreshEnableFromEngine();
@@ -3218,15 +3210,10 @@ ClientGateEditor* MainWindow::ensureClientGateEditor()
         connect(m_clientGateEditor, &ClientGateEditor::bypassToggled,
                 this, [this](ClientGateEditor::Side side, bool bypassed) {
             if (!m_appletPanel) return;
-            if (side == ClientGateEditor::Side::Tx) {
-                // TX applet visibility is independent of bypass state.
-                if (m_appletPanel->clientGateTxApplet())
-                    m_appletPanel->clientGateTxApplet()->refreshEnableFromEngine();
-            } else {
-                if (m_appletPanel->clientGateRxApplet())
-                    m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
-                m_appletPanel->setAppletVisible("GATE-RX", !bypassed);
-            }
+            Q_UNUSED(side);  // RX only: AetherTX has no gate
+            if (m_appletPanel->clientGateRxApplet())
+                m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
+            m_appletPanel->setAppletVisible("GATE-RX", !bypassed);
             if (m_appletPanel->clientChainApplet())
                 m_appletPanel->clientChainApplet()->refreshFromEngine();
         });
