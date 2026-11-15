@@ -153,8 +153,9 @@ a test, see *Tests*):
    - **What the client bucket charges.** Every frame the backend sends after
      `welcome`: control requests, subscribes, re-reads, conflict retries and
      resync snapshots.
-   - **Its size.** Half of each advertised limit, so 50 a second with a burst
-     of 50 at today's values. It falls back to exactly that when `welcome`
+   - **Its size.** Half the advertised rate, with a burst of the same size but
+     never more than half the advertised burst: 50 a second with a burst of
+     50 at today's values. It falls back to exactly that when `welcome`
      carries no limits.
    - **The invariant.** Client burst + client rate × T stays below server
      burst + server rate × T for every interval T. The 150 frames of
@@ -163,8 +164,11 @@ a test, see *Tests*):
      in the latest-wins queue, which therefore still holds only the newest
      intent per resource. Tuning stays smooth at 50 updates a second, and the
      session is never closed for rate.
-4. **Resync.** `resource.resyncRequired` and a sequence gap trigger a fresh
-   snapshot, charged to the client bucket. A `resource.changed` event for a new
+4. **Resync.** `resource.resyncRequired` triggers a fresh snapshot, charged
+   to the client bucket. A skipped sequence number is not a gap: the engine
+   coalesces a resource's queued events to its newest complete value
+   (`ControlSession::enqueueCoalesced`), so sequences rise but skip. An event
+   whose sequence does not rise is stale and ignored. A `resource.changed` event for a new
    slice or panadapter id creates that slice or panadapter in the model, and
    `resource.removed` retires it.
 
@@ -297,7 +301,8 @@ desktop process like every current family, and speaks only aetherd's protocol.
     or the fallback;
   - a conflicting change from a second session is retried with the latest
     intent (rule 3);
-  - a forced resync and slice add/remove reach the model (rule 4);
+  - a forced resync and slice add/remove reach the model (rule 4); a
+    resync retires what the fresh snapshot no longer has;
   - a wrong certificate fingerprint fails before anything is sent;
   - `ws://` is refused before `hello` unless the local end is on a WireGuard
     interface (socket-free, with an injected interface list), and
