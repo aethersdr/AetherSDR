@@ -75,7 +75,7 @@ Where `{CALL}` applies:
 - It is not used in **Live**, where each character is keyed as you type it.
 - Text sent by another program over TCI or MQTT is keyed as received.
 - AetherSDR keeps a `{CALL}` macro as you wrote it, for this radio, on this computer. The radio's own slot holds the text without `{CALL}` (`{CALL} 5NN TU` is stored as `5NN TU`), so SmartSDR, a Maestro or AetherSDR on another computer plays that macro without the call.
-- If the radio's slot is changed from another client, AetherSDR shows the radio's text the next time it reports the slot, and the `{CALL}` version is dropped.
+- If the radio's slot is changed from another client, AetherSDR shows the radio's text. Your `{CALL}` version is kept and is shown again if the slot holds the same text once more; editing the macro in AetherSDR replaces it.
 - A macro fired in the first moments after connecting, before the radio has reported its macro texts, is played by the radio as stored, without the call.
 
 ### Keyboard and MIDI keying (local iambic keyer)
