@@ -57,6 +57,7 @@ void sourceFilter()
           "100.64/10 (the tailnet's IPv4) is ignored");
     check(accepts("100.128.0.1") == false, "just past 100.64/10 is public, still ignored");
     check(!accepts("fd7a:115c:a1e0::1", "tailscale0"), "Tailscale's ULA on tailscale0 is ignored");
+    check(!accepts("fd7a:115c:a1e0:ab12::5"), "Tailscale's IPv6 prefix is ignored on any interface");
     check(!accepts("192.168.50.10", "wg0"), "any source arriving on a wg* interface is ignored");
     check(!accepts("127.0.0.1") && !accepts("::1"), "loopback is ignored by default");
     check(DiscoveryResponder::acceptsSource(QHostAddress::LocalHost, {}, true),

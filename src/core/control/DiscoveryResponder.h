@@ -64,9 +64,10 @@ public:
     // Socket-free pieces, public so they can be tested without a network.
     [[nodiscard]] static bool isProbe(const QByteArray& datagram);
     // A private (RFC 1918, IPv6 ULA) or link-local source, and not the
-    // tailnet: not 100.64/10 and not arriving on a tailscale*/wg* interface
-    // (Tailscale's IPv6 range is itself ULA). An IPv4-mapped IPv6 source is
-    // judged as IPv4.
+    // tailnet: not 100.64/10 or Tailscale's fd7a:115c:a1e0::/48, and not
+    // arriving on a tailscale*/wg* interface (any WireGuard ULA). An
+    // IPv4-mapped IPv6 source is judged as IPv4. readPending() also ignores a
+    // probe whose arrival interface it cannot resolve.
     [[nodiscard]] static bool acceptsSource(const QHostAddress& source,
                                             const QString& arrivalInterface,
                                             bool acceptLoopback = false);
