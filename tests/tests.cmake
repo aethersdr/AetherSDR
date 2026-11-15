@@ -5680,6 +5680,14 @@ target_include_directories(client_cfc_test PRIVATE src)
 target_link_libraries(client_cfc_test PRIVATE aethercore Qt6::Core)
 add_test(NAME client_cfc_test COMMAND client_cfc_test)
 
+# ClientLeveler, the AetherTX stage around WDSP's TX leveler (RFC #4836):
+# Max gain, the target, delay equal to the reported latency, decay, range
+# limits and a clean re-enable. Socket-free.
+add_executable(client_leveler_test tests/client_leveler_test.cpp)
+target_include_directories(client_leveler_test PRIVATE src)
+target_link_libraries(client_leveler_test PRIVATE aethercore Qt6::Core)
+add_test(NAME client_leveler_test COMMAND client_leveler_test)
+
 add_executable(client_reverb_test
     tests/client_reverb_test.cpp
     src/core/ClientReverb.cpp

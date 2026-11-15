@@ -1035,6 +1035,7 @@ set(CORE_SOURCES
     src/core/ClientReverb.cpp
     src/core/ClientCfc.cpp  # WDSP CFC multiband compressor stage (RFC #4836)
     src/core/ClientCfcJson.cpp
+    src/core/ClientLeveler.cpp  # WDSP TX leveler stage (RFC #4836)
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp

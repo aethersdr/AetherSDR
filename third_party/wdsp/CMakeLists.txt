@@ -17,6 +17,7 @@ add_library(aether_wdsp STATIC
     ${WDSP_UPSTREAM_SOURCES}
     port/wdsp_port.c
     port/aether_cfc.c
+    port/aether_leveler.c
 )
 add_library(aether::wdsp ALIAS aether_wdsp)
 
