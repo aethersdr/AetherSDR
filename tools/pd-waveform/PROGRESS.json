@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T11:24:39.521576+00:00",
+  "updated_utc": "2026-11-15T11:44:35.098514+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -351,6 +351,22 @@
       "Initial-install trust, ARMv7 provisioning and actual6300 qualification.",
       "App-exit/crash cleanup recovery and full public process graph qualification.",
       "All original P1-P10 DSP, PR4770, RF/stock APD and release gates."
+    ]
+  },
+  "desktop_development_selection": {
+    "status": "component_and_full_desktop_build_validated_not_live_qualified",
+    "evidence": "development-selection/validation.json under evidence_root",
+    "implemented": [
+      "Build-time-only local development selection with compiled exact hashes and independent signing keys; default builds select nothing.",
+      "Prepare update verifies fixed local files and signatures on the existing thread pool, then offers the exact plan; no credential lookup or radio writes before approval.",
+      "Cancel and connection-generation changes discard late preparation; no automatic approval."
+    ],
+    "validation": "Default and signed-candidate configurations passed three registered tests each; full desktop build, four generator tests, scoped ASan/UBSan/LSan, docs and architecture checks passed. Offscreen preview inspected. No live installation.",
+    "remaining": [
+      "Live complete UI/coordinator upgrade with PDUPGR02 and independent cleanup confirmation.",
+      "Shipping authenticated catalogue; initial-install trust and actual6000 provisioning.",
+      "Final process-graph exit/crash/cancel/reboot tests.",
+      "All original P1-P10 DSP, PR4770, RF repeatability/stock APD, actual6300 hardware qualification and release gates."
     ]
   }
 }

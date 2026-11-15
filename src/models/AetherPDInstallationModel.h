@@ -29,6 +29,8 @@ public:
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
     AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {});
     bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
+    QString selectedDevelopmentVersion() const;
+    bool prepareSelectedDevelopment(const RadioControlSession& session);
     ~AetherPDInstallationModel() override;
     bool offer(const Coordinator::Prepared& package, const RadioControlSession& session);
     struct Preview {
@@ -59,6 +61,7 @@ private:
     void unavailable(Failure reason);
     void retirePreparation();
     void downloaded(quint64 generation);
+    void preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation);
     void credential(const QString& token, quint64 generation);
     QPointer<RadioModel> m_radio;
     RadioControlSession m_session{};

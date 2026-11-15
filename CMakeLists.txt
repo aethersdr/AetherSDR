@@ -2804,6 +2804,8 @@ endif()
 # PUBLIC: src/ is the project include root for both layers ("core/..." and
 # "gui/..." includes); the vendored include dirs leak into headers used by
 # gui translation units today (e.g. hidapi via MainWindow_Controllers.cpp).
+include(cmake/AetherPDDevelopmentSelection.cmake)
+
 target_include_directories(aethercore PUBLIC
     src/
     ${RNNOISE_DIR}/include

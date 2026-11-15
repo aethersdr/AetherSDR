@@ -89,6 +89,34 @@ struct Fixture {
 class CoordinatorTest : public QObject {
     Q_OBJECT
 private slots:
+    void compiledDevelopmentSelectionRequiresExplicitPreparation()
+    {
+        Fixture f;
+        int loads = 0;
+        AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; }, {});
+        const bool selected = !model.selectedDevelopmentVersion().isEmpty();
+        QCOMPARE(model.prepareSelectedDevelopment(f.model.controlSession()), selected);
+        if (!selected) {
+            QCOMPARE(model.state(), AetherPDInstallationModel::State::Idle);
+        } else {
+            QVERIFY(!model.prepareSelectedDevelopment(f.model.controlSession()));
+            QTRY_COMPARE_WITH_TIMEOUT(model.state(), AetherPDInstallationModel::State::AwaitingApproval, 30000);
+            QVERIFY(model.approvedPlan().startsWith("PDUPGR02"));
+            model.cancel();
+            QVERIFY(model.prepareSelectedDevelopment(f.model.controlSession()));
+            model.cancel();
+            QThreadPool::globalInstance()->waitForDone();
+            QCoreApplication::processEvents();
+            QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
+            QVERIFY(model.prepareSelectedDevelopment(f.model.controlSession()));
+            RadioSetupControlTestAccess::replaceConnectionGeneration(f.model);
+            model.reconcile();
+            QThreadPool::globalInstance()->waitForDone();
+            QCoreApplication::processEvents();
+            QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
+        }
+        QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+    }
     void downloadedPackagePreparesPreviewWithoutCredentialOrRadioEffects()
     {
         Fixture f; AetherPDTest::PackageFixture fixture;

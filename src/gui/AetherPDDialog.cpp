@@ -135,6 +135,11 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     auto* installControls = new QWidget(bodyWidget());
     auto* installButtons = new QHBoxLayout(installControls);
     installButtons->setContentsMargins(0, 0, 0, 0);
+    m_installPrepare = new QPushButton(tr("Prepare update"), bodyWidget());
+    m_installPrepare->setObjectName(QStringLiteral("pdInstallPrepare"));
+    m_installPrepare->setAccessibleName(tr("Prepare AetherPD development update"));
+    m_installPrepare->setAutoDefault(false);
+    layout->addWidget(m_installPrepare);
     m_installApprove = new QPushButton(tr("Approve update"), bodyWidget());
     m_installApprove->setObjectName(QStringLiteral("pdInstallApprove"));
     m_installApprove->setAccessibleName(tr("Approve AetherPD update"));
@@ -148,6 +153,7 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     installButtons->addStretch();
     installButtons->addWidget(done);
     layout->addWidget(installControls);
+    connect(m_installPrepare, &QPushButton::clicked, this, &AetherPDDialog::prepareInstallation);
     connect(m_installApprove, &QPushButton::clicked, this, &AetherPDDialog::approveInstallation);
     connect(m_installCancel, &QPushButton::clicked, this, &AetherPDDialog::cancelInstallation);
     m_installRefresh = new QTimer(this);
@@ -335,6 +341,10 @@ void AetherPDDialog::render()
     renderInstallation();
 }
 
+void AetherPDDialog::prepareInstallation()
+{
+    if (current()) { m_radio->aetherPDInstallationModel().prepareSelectedDevelopment(m_session); }
+}
 void AetherPDDialog::approveInstallation()
 {
     if (!current()) { return; }
@@ -354,6 +364,7 @@ void AetherPDDialog::renderInstallation()
     const Model* model = current() ? &m_radio->aetherPDInstallationModel() : nullptr;
     const State state = model ? model->state() : State::Unavailable;
     const auto preview = model ? model->preview() : std::nullopt;
+    const QString developmentVersion = model ? model->selectedDevelopmentVersion() : QString{};
     QString detail;
     QByteArray displayed;
     if (preview) {
@@ -375,6 +386,11 @@ void AetherPDDialog::renderInstallation()
     } else {
         detail = tr("No verified update is prepared. Qualified package selection is not yet available in this development build. "
             "Installing the released Remote Access shim alone does not install AetherPD.");
+    }
+    if (!developmentVersion.isEmpty()) {
+        const QString selection = tr("Development package %1 — not qualified for production.\n").arg(developmentVersion);
+        detail = preview ? tr("Development build — not qualified for production.\n") + detail
+            : selection + tr("Choose Prepare update to verify the package and review its plan. Preparation does not change the radio.");
     }
     QString status;
     switch (state) {
@@ -427,6 +443,9 @@ void AetherPDDialog::renderInstallation()
     const bool cancel = model && (state == State::Downloading || state == State::Preparing || state == State::AwaitingApproval
         || state == State::LoadingCredential || state == State::Running);
     const QPointer<AetherPDDialog> alive(this);
+    enable(m_installPrepare, model && !developmentVersion.isEmpty() && !model->active() && state != State::AwaitingApproval,
+        tr("A development package compiled for this radio firmware and no pending update are required."));
+    if (!alive) { return; }
     enable(m_installApprove, approve, tr("A verified plan for this connection and an idle transmitter are required."));
     if (!alive) { return; }
     enable(m_installCancel, cancel, tr("No pending update can be canceled in this connection."));

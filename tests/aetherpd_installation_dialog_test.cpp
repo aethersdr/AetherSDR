@@ -78,12 +78,30 @@ struct Fixture {
 class InstallationDialogTest : public QObject {
     Q_OBJECT
 private slots:
+    void prepareButtonDoesNotApprove()
+    {
+        Fixture f;
+        if (f.model().selectedDevelopmentVersion().isEmpty()) {
+            QVERIFY(!f.button("pdInstallPrepare")->isEnabled());
+            return;
+        }
+        QTest::mouseClick(f.button("pdInstallPrepare"), Qt::LeftButton);
+        QTRY_COMPARE_WITH_TIMEOUT(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval, 30000);
+        QVERIFY(!f.button("pdInstallPrepare")->isEnabled());
+        QVERIFY(f.button("pdInstallApprove")->isEnabled());
+        QCOMPARE(f.loads, 0); QVERIFY(f.network.sent.empty());
+        QTest::mouseClick(f.button("pdInstallCancel"), Qt::LeftButton);
+        QCOMPARE(f.model().state(), AetherPDInstallationModel::State::Finished);
+        QVERIFY(f.button("pdInstallPrepare")->isEnabled());
+    }
     void exactPreviewAndExplicitApproval()
     {
         Fixture f;
         QVERIFY(!f.button("pdInstallApprove")->isEnabled());
         QVERIFY(!f.button("pdInstallApprove")->accessibleDescription().isEmpty());
-        QVERIFY(f.preview().contains("Qualified package selection is not yet available"));
+        const bool selected = !f.model().selectedDevelopmentVersion().isEmpty();
+        QCOMPARE(f.button("pdInstallPrepare")->isEnabled(), selected);
+        QVERIFY(f.preview().contains(selected ? "not qualified for production" : "Qualified package selection is not yet available"));
         QVERIFY(f.offer());
         const auto preview = f.model().preview(); QVERIFY(preview);
         QVERIFY(f.preview().contains(preview->serial)); QVERIFY(f.preview().contains(preview->firmware));

@@ -29,6 +29,7 @@ private:
     void refresh();
     void render();
     void renderInstallation();
+    void prepareInstallation();
     void approveInstallation();
     void cancelInstallation();
     void request(aetherpd::Operation operation);
@@ -45,6 +46,7 @@ private:
     QByteArray m_displayedPlan;
     QLabel* m_installState{nullptr};
     QPlainTextEdit* m_installPlan{nullptr};
+    QPushButton* m_installPrepare{nullptr};
     QPushButton* m_installApprove{nullptr};
     QPushButton* m_installCancel{nullptr};
     QTimer* m_installRefresh{nullptr};

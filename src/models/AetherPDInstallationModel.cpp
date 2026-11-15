@@ -1,5 +1,6 @@
 #include "AetherPDInstallationModel.h"
 #include "RadioModel.h"
+#include "AetherPDDevelopmentSelection.h"
 #include "core/AetherPDProtocol.h"
 #include "core/TailnetShimTokenStore.h"
 #include <QThread>
@@ -73,6 +74,25 @@ bool AetherPDInstallationModel::prepareRelease(const AetherPDRelease& release, c
     if (!m_download->start(release)) { unavailable(Failure::DownloadFailed); return false; }
     return true;
 }
+QString AetherPDInstallationModel::selectedDevelopmentVersion() const
+{
+    return m_radio && m_radio->version() == aetherpd::development::firmware()
+        ? aetherpd::development::version() : QString{};
+}
+bool AetherPDInstallationModel::prepareSelectedDevelopment(const RadioControlSession& session)
+{
+    if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
+        || !m_radio->controlSessionCurrent(session) || selectedDevelopmentVersion().isEmpty()
+        || m_radio->serial().isEmpty()) { return false; }
+    retirePreparation();
+    if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); }
+    m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
+    m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
+    m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
+    const quint64 generation = ++m_generation;
+    preparePackage([] { return aetherpd::development::load(); }, generation);
+    return true;
+}
 void AetherPDInstallationModel::retirePreparation()
 {
     if (m_download) {
@@ -93,6 +113,10 @@ void AetherPDInstallationModel::downloaded(quint64 generation)
     const auto package = m_download->package();
     retirePreparation();
     if (!package) { unavailable(Failure::PackageRejected); return; }
+    preparePackage([package = *package] { return std::optional<AetherPDPackage>(package); }, generation);
+}
+void AetherPDInstallationModel::preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation)
+{
     m_state = State::Preparing;
     const QString serial = m_serial;
     auto* watcher = new QFutureWatcher<std::optional<Coordinator::Prepared>>(this);
@@ -107,7 +131,10 @@ void AetherPDInstallationModel::downloaded(quint64 generation)
         if (!offer(*prepared, m_session)) { unavailable(Failure::PackageRejected); }
     });
     // Only value snapshots cross threads; no radio, model or credential access.
-    watcher->setFuture(QtConcurrent::run([package = *package, serial] { return Coordinator::prepare(package, serial); }));
+    watcher->setFuture(QtConcurrent::run([load = std::move(load), serial] {
+        const auto package = load();
+        return package ? Coordinator::prepare(*package, serial) : std::nullopt;
+    }));
     emit changed();
 }
 bool AetherPDInstallationModel::offer(const Coordinator::Prepared& package, const RadioControlSession& session)

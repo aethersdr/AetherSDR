@@ -521,8 +521,13 @@ by these controls.
 
 The **AetherPD service update** section shows a prepared update's target radio,
 firmware, planned changes and authenticated package identifiers. Qualified package
-selection is not yet available in this development build; **Approve update** stays
-disabled until a verified plan has been prepared for the current connection.
+selection is not yet available. Builds explicitly configured with a development
+package show its version and **not qualified for production**. **Prepare update**
+verifies that package against the hashes and signing keys compiled into the app
+and prepares a plan without changing the radio or loading credentials. This
+button is dimmed when no package is compiled for the connected firmware.
+**Approve update** stays disabled until a verified plan has been prepared for
+the current connection.
 
 - **Approve update** approves exactly the displayed plan, then loads the saved
   radio credential and starts installation. Approval is unavailable while the

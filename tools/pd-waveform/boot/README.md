@@ -2314,3 +2314,22 @@ terminal-result presentation and readable layout. The terminal presentation test
 inject coordinator terminal signals; they do not prove live commitment or cleanup.
 The offscreen preview and targeted sanitizers are component evidence, not a
 running operator instance or screen-reader/cross-platform qualification.
+
+### Local desktop development selection
+
+A qualification build can set `-DAETHERPD_DEVELOPMENT_SELECTION=/absolute/path/development-selection.json`.
+This is off by default and must never be enabled in shipping builds. The reviewed
+JSON contains a version, exact firmware, profile 1, independent `candidate_key`
+and `previous_key` Ed25519 keys (hex), and a `files` map with exact sizes and
+SHA-256 hashes for the eight `AetherPDPackage` filenames. The files reside in
+`package/` beside the selection. CMake compiles the pins and absolute package
+path into the application. Runtime manifests and environment variables cannot
+replace those pins; package signatures and hashes are verified again on Prepare.
+The generator does not certify or install a package. Profile 2 remains unavailable
+through the current desktop carrier, pending actual 6000 provisioning qualification.
+
+In the AetherPD panel, **Prepare update** performs bounded local verification and
+carrier preparation on the existing thread pool. It neither loads credentials nor
+contacts the radio. **Approve update** remains a separate exact-plan action.
+Changing connections or canceling preparation discards late results. A package
+prepared successfully is still a development candidate, not production-qualified.
