@@ -184,8 +184,9 @@ signals:
 private:
     // What the radio's slot holds for a typed macro: speed marks and {CALL} removed.
     QString portableMacroText(const QString& typed) const;
-    // The text to keep for a slot the radio reports: the saved typed text while
-    // its portable form equals the report, else the report (and the saved copy goes).
+    // The text to show for a slot the radio reports: the saved typed text while
+    // its portable form equals the report, else the report. Never removes the
+    // saved text.
     QString macroTextFor(int idx, const QString& reported);
     TransmissionPermit admitTransmission(const TransmissionRoute& route = {});
     void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit,

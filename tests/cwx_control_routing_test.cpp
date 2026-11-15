@@ -557,12 +557,29 @@ void callMacrosAreKeptByTheApp()
     shown.clear();
     model.applyStatusDelta(flexCwxStatus({{"macro1", QStringLiteral("\"CQ") + QChar(0x7f) + QStringLiteral("TEST\"")}}));
     check(model.macro(0) == QLatin1String("CQ TEST") && shown == QStringList{QStringLiteral("0=CQ TEST")}
-              && !store.contains(0) && removals == 1,
-          "a slot changed elsewhere shows the radio's text and the stored copy is removed");
+              && store.value(0) == QLatin1String("+{CALL} DE W1AW K") && removals == 0,
+          "a slot that differs shows the radio's text and the stored copy stays");
+    model.applyStatusDelta(flexCwxStatus({{"macro1", QStringLiteral("\"DE") + QChar(0x7f) + QStringLiteral("W1AW") + QChar(0x7f) + QStringLiteral("K\"")}}));
+    check(model.macro(0) == QLatin1String("+{CALL} DE W1AW K") && removals == 0,
+          "the stored typed text is shown again once the slot equals its portable form");
 
     model.saveMacro(0, QStringLiteral("{CALL} 5NN"));
     model.saveMacro(0, QStringLiteral("5NN TU"));
-    check(!store.contains(0) && removals == 2, "editing {CALL} out of a macro removes its stored copy");
+    check(!store.contains(0) && removals == 1, "editing {CALL} out of a macro removes its stored copy");
+
+    // MEASURED (FLEX-8400 fw 4.3.16, 2026-11-15, PR #7213 round): the radio returned these slots
+    // byte for byte as saved; the status decoder then reads '*' as '='.
+    model.saveMacro(2, QStringLiteral("{CALL} tu \"5nn\" = * k"));
+    model.applyStatusDelta(flexCwxStatus({{"macro3", QStringLiteral("\"tu") + QChar(0x7f) + QChar(0x1e) + QStringLiteral("5nn")
+                                                         + QChar(0x1e) + QChar(0x7f) + QStringLiteral("=") + QChar(0x7f)
+                                                         + QStringLiteral("*") + QChar(0x7f) + QStringLiteral("k\"")}}));
+    check(model.macro(2) == QLatin1String("{CALL} tu \"5nn\" = * k"),
+          "a {CALL} macro holding '*' keeps its typed text when the slot is reported");
+    model.saveMacro(3, QStringLiteral("{CALL} DE KM6LFY {X}"));
+    model.applyStatusDelta(flexCwxStatus({{"macro4", QStringLiteral("\"DE") + QChar(0x7f) + QStringLiteral("KM6LFY") + QChar(0x7f)
+                                                         + QStringLiteral("{X}\"")}}));
+    check(saved.last() == QLatin1String("DE KM6LFY {X}") && model.macro(3) == QLatin1String("{CALL} DE KM6LFY {X}"),
+          "a {CALL} macro holding other braces keeps its typed text when the slot is reported");
 
     AppSettings::instance().load();
     const RadioSettingsScope radio(QStringLiteral("flex"), QStringLiteral("0000-0000-0000-0001"));

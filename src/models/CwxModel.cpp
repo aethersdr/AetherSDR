@@ -506,11 +506,15 @@ QString CwxModel::portableMacroText(const QString& typed) const
 QString CwxModel::macroTextFor(int idx, const QString& reported)
 {
     const QString typed = m_macroTemplates.load ? m_macroTemplates.load(idx) : QString();
-    if (typed.isEmpty()) { return reported; }
-    if (hasCallPlaceholder(typed) && portableMacroText(typed) == reported) { return typed; }
-    // The slot was changed elsewhere: the radio's text stands.
-    if (m_macroTemplates.save) { m_macroTemplates.save(idx, QString()); }
-    return reported;
+    if (typed.isEmpty() || !hasCallPlaceholder(typed)) { return reported; }
+    // A reported slot arrives with '*' read as '=' (the radio's BT alias), so
+    // the typed text is compared the same way.
+    QString expected = portableMacroText(typed);
+    expected.replace(QLatin1Char('*'), QLatin1Char('='));
+    // A slot that differs was changed elsewhere, or belongs to another client
+    // identity (the radio keeps a set of slots per GUI client): the radio's
+    // text stands. The saved text is left alone; only saveMacro() replaces it.
+    return expected == reported ? typed : reported;
 }
 
 void CwxModel::erase(int numChars)
