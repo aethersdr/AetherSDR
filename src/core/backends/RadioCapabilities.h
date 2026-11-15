@@ -1028,11 +1028,12 @@ struct RadioCapabilities {
     // error. False means no text buffer, not no CW.
     bool hasRadioSideCwKeyer = false;
 
-    // The backend turns client-timed CW elements, sent as
-    // requestCwControl(Kind::Carrier), into on-air CW (HL2: shaped host IQ), so
-    // this host can time CW text for a radio with no text buffer. Asked via
-    // RadioModel::hasHostCwTextKeyer() / hasCwTextKeyer() (#7146). Absent: the
-    // IRadioBackend default refuses carrier edges, and text stays radio-side only.
+    // This host times CW text for this radio: it has no text buffer, and the
+    // backend turns client-timed elements, sent as requestCwControl(Kind::Carrier),
+    // into on-air CW (HL2: shaped host IQ). Asked via
+    // RadioModel::hasHostCwTextKeyer() / hasCwTextKeyer() (#7146). Absent: text
+    // stays radio-side only. Not a carrier-edge capability: Flex accepts carrier
+    // edges through FlexCwControls and still declares this absent.
     struct HostCwKeyingControl {};
     std::optional<HostCwKeyingControl> hostCwKeyingControl;
 
