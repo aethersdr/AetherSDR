@@ -228,6 +228,11 @@ bool updateAvailable(const QString& installed, const QString& pinned)
     return false;
 }
 
+bool shouldRereadWithToken(const TailnetShimStatus& st, bool haveToken, bool alreadyReread)
+{
+    return st.announceDevicesHidden && haveToken && !alreadyReread;
+}
+
 bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
                          bool busy, bool lanReachable, bool alreadyTried)
 {

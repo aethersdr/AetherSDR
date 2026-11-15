@@ -161,6 +161,23 @@ int main(int argc, char** argv)
         ok &= expect(!tailnetshim::supportsQrSignIn(QString()), "an unknown version doesn't");
     }
 
+    // A status read before the keychain answered left the devices out: the
+    // window reads it again with the token, once, and again after a status
+    // that lists them.
+    {
+        TailnetShimStatus hidden;
+        hidden.announceDevicesHidden = true;
+        TailnetShimStatus listed;
+        ok &= expect(tailnetshim::shouldRereadWithToken(hidden, true, false),
+                     "a hidden list is read again with the token");
+        ok &= expect(!tailnetshim::shouldRereadWithToken(hidden, false, false),
+                     "not without a token");
+        ok &= expect(!tailnetshim::shouldRereadWithToken(hidden, true, true),
+                     "only once, so a refused token can't loop");
+        ok &= expect(!tailnetshim::shouldRereadWithToken(listed, true, false),
+                     "not when the devices are listed");
+    }
+
     // The window starts the sign-in unasked only once the keychain has
     // answered, and a late keychain read never replaces a newer token
     // (review of #6932: held read -> fresh status -> provision -> late read).

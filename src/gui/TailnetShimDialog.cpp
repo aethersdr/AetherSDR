@@ -539,6 +539,15 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
         setBusy(false);
         showStatus(st);
         maybeSignInUnasked();
+        // The window opens with a status read that can go before the
+        // keychain answers, and doesn't poll a running radio: read it again
+        // with the token, or the card keeps saying the devices are hidden.
+        if (tailnetshim::shouldRereadWithToken(st, !m_adminToken.isEmpty(), m_rereadForToken)) {
+            m_rereadForToken = true;
+            m_client.fetchStatus(m_adminToken);
+        } else if (!st.announceDevicesHidden) {
+            m_rereadForToken = false;
+        }
     });
     connect(&m_client, &TailnetShimClient::requestFailed,
             this, &TailnetShimDialog::onRequestFailed);

@@ -100,6 +100,9 @@ private:
     bool m_signingIn{false};
     // The code is offered unasked once per window, and again on Refresh.
     bool m_autoSignInTried{false};
+    // The status was read again with the token after one came back without
+    // the devices; cleared when a status lists them.
+    bool m_rereadForToken{false};
     bool m_fitPending{false};
     bool m_advancedOpenedForVersion{false};
     QString m_authUrl;   // the sign-in URL the QR code shows, if any

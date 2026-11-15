@@ -130,6 +130,11 @@ bool updateAvailable(const QString& installed, const QString& pinned);
 // arrive after a new one.
 bool shouldSignInUnasked(const TailnetShimStatus& status, bool tokenLoaded, bool haveToken,
                          bool busy, bool lanReachable, bool alreadyTried);
+// Whether a status the window just received should be read again with the
+// admin token: the shim left the devices out because the read went before
+// the keychain answered, and the window holds the token now. Once until a
+// status lists them, so a token the shim refuses can't keep it reading.
+bool shouldRereadWithToken(const TailnetShimStatus& status, bool haveToken, bool alreadyReread);
 // The token the window keeps when the keychain answers: one it already
 // holds (issued by a sign-in meanwhile) wins over the read.
 QString tokenAfterKeychainRead(const QString& held, const QString& read);
