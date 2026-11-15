@@ -11,6 +11,8 @@
 
 namespace AetherSDR {
 
+struct DxSpot;
+
 // The FT8 receiver that runs on the radio (tools/ft8-agent): a legacy
 // waveform that decodes FT8 from a slice of its own and serves its spots and
 // settings as JSON on TCP 48997. Built from AetherWSPR (WsprAgent.h), which
@@ -169,6 +171,19 @@ bool reachableAddress(const QHostAddress& address);
 // `error` set when the shipped bytes do not match the pin. Mirrors
 // wspr::writeBundledPackage.
 QString writeBundledPackage(const Ft8Package::Pin& pin, const QString& dir, QString* error);
+
+// One decode as a panadapter spot.
+//
+// ⚠ hasSnr is FALSE, deliberately. Ft8Spot::score is ft8_lib's candidate
+// correlation strength, not a dB signal-to-noise ratio, and DxSpot::snr is
+// read as dB everywhere else (cluster, RBN, WSJT-X). Setting it would put a
+// number on the panadapter that looks like an SNR and is not one, beside
+// WSPR spots whose dB figures are real. The score goes in the comment, named.
+DxSpot toDxSpot(const Ft8Spot& spot, const QString& receiver);
+
+// The decodes with a cycle at or after `since`, newest cycle written back to
+// `next` so the caller advances. Same shape as wspr::spotsSince.
+QList<Ft8Spot> spotsSince(const QList<Ft8Spot>& spots, qint64 since, qint64* next);
 
 }  // namespace ft8
 }  // namespace AetherSDR

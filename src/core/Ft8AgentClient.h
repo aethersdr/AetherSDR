@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 
 class QNetworkReply;
 
@@ -57,6 +58,50 @@ private:
     QHostAddress m_address;
     quint64 m_generation{0};
     QPointer<QNetworkReply> m_statusReply;   // one status poll at a time
+};
+
+// Polls the FT8 receiver and turns its decodes into spots.
+//
+// The same shape as WsprSpotFeed, and deliberately a narrow copy of it rather
+// than a shared base: see the note at the top of Ft8Agent.h for why the WSPR
+// pair was copied instead of abstracted. What differs is the cycle (15 s, not
+// 120 s) and that an FT8 decode carries no dB SNR.
+class Ft8SpotFeed : public QObject {
+    Q_OBJECT
+
+public:
+    explicit Ft8SpotFeed(QObject* parent = nullptr);
+
+    void start(const QHostAddress& radio);
+    void stop();
+    bool isRunning() const { return m_running; }
+    QHostAddress radioAddress() const { return m_client->radioAddress(); }
+
+    const QList<Ft8Spot>& recentSpots() const { return m_recent; }
+    QString receiverCallsign() const { return m_receiverCall; }
+
+signals:
+    void started();
+    void stopped();
+    void statusReceived(const AetherSDR::Ft8Status& status);
+    // Every new decode, for a console that wants them all.
+    void decoded(const AetherSDR::Ft8Spot& spot);
+    // A new decode with a callsign, for the panadapter.
+    void spotReceived(const AetherSDR::DxSpot& spot);
+    // recentSpots() gained this poll's decodes.
+    void spotsUpdated();
+    void failed(const QString& message);
+
+private:
+    void poll();
+    void onStatus(const Ft8Status& status);
+
+    Ft8AgentClient* m_client{nullptr};
+    QTimer* m_timer{nullptr};
+    bool m_running{false};
+    qint64 m_since{0};           // the first cycle start not yet emitted
+    QList<Ft8Spot> m_recent;
+    QString m_receiverCall;
 };
 
 }  // namespace AetherSDR

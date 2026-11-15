@@ -11,6 +11,7 @@
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
 #include "core/N1MMSpotClient.h"
+#include "core/Ft8AgentClient.h"
 #include "core/WsprAgentClient.h"
 #include "models/TransmitModel.h"
 #include "core/N1MMSpotParser.h"
@@ -75,6 +76,7 @@ void MainWindow::wireSpotSubsystem()
     m_eibiClient = new EibiClient;
     m_n1mmSpotClient = new N1MMSpotClient;
     m_wsprFeed = new WsprSpotFeed(this);
+    m_ft8Feed = new Ft8SpotFeed(this);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
 #endif
@@ -770,8 +772,27 @@ void MainWindow::wireSpotSubsystem()
             this, [queueSpotCmd](const DxSpot& spot) {
         queueSpotCmd(spot, "WSPR");
     });
+
+    // The FT8 receiver's decodes reach the panadapter the same way. Without
+    // this the receiver decodes and the operator sees nothing: before it, FT8
+    // appeared in no GUI surface except its own Configure window, while the
+    // agent held hundreds of spots with nowhere to go.
+    connect(m_ft8Feed, &Ft8SpotFeed::spotReceived,
+            this, [queueSpotCmd](const DxSpot& spot) {
+        queueSpotCmd(spot, "FT8");
+    });
     // A new session or address: the feed belongs to the radio it started on.
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        // The FT8 feed follows the radio exactly as the WSPR one does. There
+        // is no autoStart setting for it yet (the WSPR SpotHub has one), so
+        // it starts whenever the radio can host waveforms: a radio without
+        // the receiver installed simply refuses the poll, and the feed says
+        // so once rather than retrying in a loop.
+        m_ft8Feed->stop();
+        if (connected && m_radioModel.backendCapabilities().hasWaveforms
+            && ft8::reachableAddress(m_radioModel.radioAddress())) {
+            m_ft8Feed->start(m_radioModel.radioAddress());
+        }
         m_wsprFeed->stop();
         // A radio without the receiver just refuses the poll, and one that
         // gets it later is picked up by the next one.

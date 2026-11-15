@@ -1,9 +1,13 @@
 #include "Ft8Agent.h"
 
+#include "DxSpot.h"
+
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QTimeZone>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -243,6 +247,47 @@ QString writeBundledPackage(const Ft8Package::Pin& pin, const QString& dir, QStr
     }
     out.close();
     return target;
+}
+
+DxSpot toDxSpot(const Ft8Spot& spot, const QString& receiver)
+{
+    DxSpot d;
+    d.spotterCall = receiver;
+    d.freqMhz = static_cast<double>(spot.frequencyHz) / 1e6;
+    d.dxCall = spot.call;
+    // ⚠ "score", not "dB". ft8_lib's candidate score is a correlation
+    // strength; calling it an SNR here would be read as dB by everything
+    // downstream. wspr::toDxSpot sets hasSnr = true because a WSPR spot
+    // carries a real dB figure. This one does not, so it does not.
+    d.comment = QStringLiteral("FT8 score %1").arg(spot.score);
+    if (!spot.message.isEmpty()) {
+        d.comment += QStringLiteral(" — ") + spot.message;
+    }
+    d.utcTime = QDateTime::fromSecsSinceEpoch(spot.cycleStart, QTimeZone::UTC).time();
+    d.source = QStringLiteral("FT8");
+    d.hasSnr = false;
+    d.dxGrid = spot.grid.left(4);
+    return d;
+}
+
+QList<Ft8Spot> spotsSince(const QList<Ft8Spot>& spots, qint64 since, qint64* next)
+{
+    QList<Ft8Spot> fresh;
+    qint64 newest = since - 1;
+    for (const Ft8Spot& s : spots) {
+        if (s.cycleStart >= since) {
+            fresh.append(s);
+            newest = qMax(newest, s.cycleStart);
+        }
+    }
+    if (next) {
+        // The NEXT cycle, so the newest is not sent twice. Written even when
+        // nothing was fresh (newest stays since-1, so *next stays since), as
+        // wspr::spotsSince does: a caller that only advances on a hit would
+        // stall if it ever read a status with no new decodes.
+        *next = newest + 1;
+    }
+    return fresh;
 }
 
 }  // namespace ft8

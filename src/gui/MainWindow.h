@@ -142,6 +142,7 @@ namespace AetherSDR {
 enum class RadioSliceSelectionSource;
 
 class AetherClockApplet;
+class Ft8SpotFeed;
 class WsprSpotFeed;
 class AetherClockEngine;
 class AetherClockModel;
@@ -1489,6 +1490,7 @@ private:
     // The WSPR receiver on the radio (tools/wspr-agent): its spots for
     // SpotHub and the panadapter. Main thread; it only polls HTTP.
     WsprSpotFeed*        m_wsprFeed{nullptr};
+    Ft8SpotFeed*         m_ft8Feed{nullptr};
     // Reserves the WSPR receiver's slice in RadioModel when the receiver
     // at `radio` names one, then calls `done`. Waits at most
     // kWsprSliceReadMs: a radio without the receiver refuses at once.

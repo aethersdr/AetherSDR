@@ -1,5 +1,8 @@
 #include "Ft8AgentClient.h"
 
+#include "DxSpot.h"
+
+#include <QDateTime>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrl>
@@ -141,6 +144,90 @@ void Ft8AgentClient::handle(QNetworkReply* reply, const QString& operation)
             emit configReceived(*cfg, claimed);
         }
     });
+}
+
+Ft8SpotFeed::Ft8SpotFeed(QObject* parent)
+    : QObject(parent)
+    , m_client(new Ft8AgentClient(this))
+    , m_timer(new QTimer(this))
+{
+    // 15 s, where the WSPR feed uses 30 s: an FT8 cycle IS 15 s, so a slower
+    // poll would show a decode later than the operator hears it. Each poll
+    // asks only for cycles since the last one, so the reply stays small --
+    // and the radio is a 1-core Cortex-A8 already near its decode budget, so
+    // this deliberately does not go faster than the cycle rate.
+    m_timer->setInterval(15000);
+    connect(m_timer, &QTimer::timeout, this, &Ft8SpotFeed::poll);
+    connect(m_client, &Ft8AgentClient::statusReceived, this, &Ft8SpotFeed::onStatus);
+    connect(m_client, &Ft8AgentClient::requestFailed, this,
+            [this](const QString&, const QString& message, bool) { emit failed(message); });
+}
+
+void Ft8SpotFeed::start(const QHostAddress& radio)
+{
+    stop();
+    if (!ft8::reachableAddress(radio)) {
+        emit failed(tr("The radio's address can't reach the FT8 receiver."));
+        return;
+    }
+    if (radio != m_client->radioAddress()) {
+        m_recent.clear();   // another radio's decodes
+    }
+    m_client->setRadioAddress(radio);
+    // From now on, not from the receiver's whole history: a receiver that has
+    // been up for hours holds hundreds of spots, and replaying them as fresh
+    // would put stale decodes on the panadapter at startup.
+    m_since = QDateTime::currentSecsSinceEpoch();
+    m_running = true;
+    m_timer->start();
+    emit started();
+    poll();
+}
+
+void Ft8SpotFeed::stop()
+{
+    if (!m_running) {
+        return;
+    }
+    m_running = false;
+    m_timer->stop();
+    m_client->cancel();
+    emit stopped();
+}
+
+void Ft8SpotFeed::poll()
+{
+    if (m_running) {
+        m_client->fetchStatus(m_since);
+    }
+}
+
+void Ft8SpotFeed::onStatus(const Ft8Status& status)
+{
+    if (!m_running) {
+        return;
+    }
+    emit statusReceived(status);
+    m_receiverCall = status.callsign;
+    const QList<Ft8Spot> fresh = ft8::spotsSince(status.spots, m_since, &m_since);
+    for (const Ft8Spot& s : fresh) {
+        emit decoded(s);
+        if (s.call.isEmpty()) {
+            continue;   // nothing to label a spot with
+        }
+        emit spotReceived(ft8::toDxSpot(s, status.callsign));
+    }
+    if (!fresh.isEmpty()) {
+        m_recent.append(fresh);
+        // An FT8 cycle is 15 s against WSPR's 120 s and a busy band yields
+        // ~10 decodes a cycle, so this fills about 8x faster. The receiver
+        // itself keeps far fewer.
+        constexpr qsizetype kMaxRecent = 2000;
+        if (m_recent.size() > kMaxRecent) {
+            m_recent.remove(0, m_recent.size() - kMaxRecent);
+        }
+        emit spotsUpdated();
+    }
 }
 
 }  // namespace AetherSDR
