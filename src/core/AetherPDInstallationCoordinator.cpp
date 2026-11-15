@@ -29,8 +29,9 @@ constexpr qint64 kLifetimeMs = 500'000;
 constexpr qint64 kCleanupMs = 60'000;
 }
 std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoordinator::prepare(
-    const AetherPDInstallUpload::Inputs& inputs, const aetherpd::CarrierExecutables& code, const QByteArray& licenses)
+    const AetherPDPackage& package, const QString& serial)
 {
+    const AetherPDInstallUpload::Inputs inputs{package.m_worker, package.plan(serial), package.m_candidate, package.m_previous};
     const auto plan = aetherpd::parseInstallationPlan(inputs[1]);
     if (!plan || plan->profile != 1 || inputs[0].size() <= 184 || inputs[0].size() > 184 + 512 * 1024
         || inputs[2].size() < 432 || inputs[2].size() > 18 * 1024 * 1024
@@ -50,7 +51,7 @@ std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoo
     receipt += digest(inputs[0]) + digest(*attempt);
     prepared.m_privateConfig = QByteArray("PDXFER01") + randomBytes() + receipt;
     const auto publicBytes = AetherPDInstallRequestClient::publicRecord(prepared.m_privateConfig, *attempt);
-    const auto image = publicBytes ? aetherpd::buildCarrierImage(code, *publicBytes, licenses) : std::nullopt;
+    const auto image = publicBytes ? aetherpd::buildCarrierImage(package.m_code, *publicBytes, package.m_licenses) : std::nullopt;
     if (!image) { return std::nullopt; }
     prepared.m_image = *image;
     return prepared;

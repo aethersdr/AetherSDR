@@ -2169,8 +2169,8 @@ hardware behavior.
 ### Desktop installation coordinator (development)
 
 `AetherPDInstallationCoordinator` composes the installed-shim upgrade path.
-`prepare()` accepts caller-authenticated releases, worker and carrier code,
-checks release digest bindings, creates a fresh `PDUPGR02` attempt and private
+`prepare()` accepts an `AetherPDPackage` verified snapshot and the connected
+radio serial, checks release digest bindings, creates a fresh `PDUPGR02` attempt and private
 RAM request, and builds the public archive. This potentially expensive local
 operation belongs off the UI thread. Its immutable `Prepared` value exposes the
 exact approval plan, public carrier name and archive hash for preview. It does
@@ -2232,5 +2232,31 @@ The model has component tests for approval-before-credential ordering, duplicate
 and late credential callbacks, timeout/missing credentials, changed identity,
 active-TX refusal, cancellation through cleanup, single-use approval copies, and
 radio-owned lifetime. It is not yet wired to a package-selection/approval panel.
-Authenticated package loading, complete operator UI, installed qualification,
-application-crash recovery and the remaining production gates are still open.
+Authenticated release catalogue/distribution, complete operator UI, installed
+qualification, application-crash recovery and the remaining production gates
+are still open.
+
+### Desktop package verification (development)
+
+`AetherPDPackage::load()` reads eight fixed files: `worker.envelope`,
+`candidate.release`, `previous.release`, `pd-accept`, `pd-carrier`, `pd-send`,
+`pd-deliver` and `LICENSES`. The caller supplies bounded sizes, SHA-256 pins and
+candidate/previous Ed25519 keys from an independently authenticated application
+release catalogue. No trust manifest or key is read from the package directory.
+The catalogue and shipping key/pin distribution are not implemented yet.
+
+The loader retains the verified file bytes. Installation does not reopen source
+paths after verification. It checks both outer release signatures, member hashes,
+architecture/profile/firmware agreement and the upgrade worker's signature,
+source hash, candidate digest and executable hash. The carrier executables and
+license are authenticated by their independent pins. Native installation still
+validates the inner compressed payload and exact fixed service definitions before
+mutation; the desktop loader does not duplicate those checks.
+
+Native publisher-generated fixtures exercise ARM64 and ARMv7 verification,
+independent pins/keys, corrupt signatures and members, signed wrong worker
+bindings, truncation/trailing bytes, mixed architectures and retained snapshots.
+Unix input handling rejects final-component symlinks and nonregular files without
+blocking on FIFOs. These fixtures contain public test keys and must never serve
+as release trust anchors. ARMv7 verification does not enable ARMv7 carrier delivery;
+the current coordinator refuses that unsupported profile.

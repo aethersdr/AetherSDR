@@ -2,6 +2,7 @@
 // events. Crypto/stream transport and waveform upload have separate tests.
 #include "RadioSetupControlFixture.h"
 #include "AetherPDTestTransport.h"
+#include "AetherPDPackageFixture.h"
 #include "core/AetherPDInstallationCoordinator.h"
 #include "core/AetherPDInstallationMonitor.h"
 #include "core/AetherPDInstallRequestClient.h"
@@ -36,21 +37,11 @@ public:
     bool finishWrites() override { return false; }
     void close() override {}
 };
-AetherPDInstallUpload::Inputs inputs()
-{
-    QFile file(QStringLiteral(AETHERPD_UPLOAD_TESTDATA));
-    if (!file.open(QIODevice::ReadOnly)) { return {}; }
-    const QJsonArray list = QJsonDocument::fromJson(file.readAll()).object().value("inputs").toArray();
-    AetherPDInstallUpload::Inputs result;
-    for (int i = 0; i < 4; ++i) { result[i] = QByteArray::fromHex(list[i].toString().toLatin1()); }
-    return result;
-}
 std::optional<Coordinator::Prepared> prepare()
 {
-    QByteArray elf(64, '\0');
-    elf.replace(0, 7, QByteArray::fromHex("7f454c46020101"));
-    qToLittleEndian<quint16>(183, elf.data() + 18);
-    return Coordinator::prepare(inputs(), {elf, elf, elf, elf}, "fixture license");
+    AetherPDTest::PackageFixture fixture;
+    const auto package = fixture.load();
+    return package ? Coordinator::prepare(*package, "fixture-8600") : std::nullopt;
 }
 struct Fixture {
     RadioModel model;
@@ -223,8 +214,12 @@ private slots:
         QVERIFY(first->approvedPlan().startsWith("PDUPGR02"));
         QVERIFY(first->approvedPlan() != second->approvedPlan());
         QVERIFY(first->carrierName() != second->carrierName());
-        auto bad = inputs(); bad[2][0] ^= 1;
-        QVERIFY(!Coordinator::prepare(bad, {}, "license"));
+        AetherPDTest::PackageFixture fixture;
+        const auto package = fixture.load(); QVERIFY(package);
+        QVERIFY(!Coordinator::prepare(*package, QString()));
+        AetherPDTest::PackageFixture arm(7);
+        const auto armPackage = arm.load(); QVERIFY(armPackage);
+        QVERIFY(!Coordinator::prepare(*armPackage, "fixture-6300"));
     }
     void wrongSessionAndIdentityHaveNoEffects()
     {

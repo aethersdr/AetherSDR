@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T10:36:47.040434+00:00",
+  "updated_utc": "2026-11-15T10:50:43.059376+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Integrate authenticated package loading and explicit operator preview/approval with the radio-owned installation model; qualify compatible signed PDUPGR02 packages through the complete coordinator on 8600. Preserve explicit app-crash cleanup, 6000 provisioning/hardware and all original P1-P10 gates.",
+  "next_action": "Implement authenticated package catalogue/selection and explicit operator preview; qualify compatible signed PDUPGR02 packages through the complete coordinator on8600. Preserve all original production requirements, including crash cleanup and actual6300 qualification.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -307,5 +307,17 @@
       "Application exit/crash public cleanup recovery, 6000 privilege provisioning, actual6300 hardware and all remaining P1-P10 gates remain."
     ],
     "radio_actions": "none; no RF or installation"
+  },
+  "desktop_package_verification": {
+    "status": "component_validated_not_production_ready",
+    "evidence": "package-loader-development/validation.json under evidence_root",
+    "result": "Coordinator accepts verified immutable package snapshots. Native ARM64/ARMv7 signed-format fixtures, two registered test targets, partial sanitizer run and signature-guard mutation passed. No radio or network access.",
+    "remaining": [
+      "Shipping authenticated catalogue/key/pin distribution and package selection.",
+      "Full operator UI and process-exit/crash cleanup recovery.",
+      "Compatible signed PDUPGR02 live complete-coordinator qualification.",
+      "Initial-install trust, ARMv7 delivery/provisioning and actual6300 teammate qualification.",
+      "All original P1-P10 DSP, PR4770, RF comparison and release gates."
+    ]
   }
 }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AetherPDCarrierImage.h"
+#include "AetherPDPackage.h"
 #include "AetherPDInstallUpload.h"
 #include "core/backends/FileTransferRequest.h"
 
@@ -50,10 +50,9 @@ public:
                                    AetherPDInstallChannel& channel, AetherPDCarrierUpload& carrier, Clock clock, QObject* parent = nullptr);
     ~AetherPDInstallationCoordinator() override;
     // Pure local packaging, potentially expensive: call off the UI thread.
-    // Caller authenticates the code/releases first. Generates fresh RAM-only
+    // Accepts only verified package snapshots. Generates fresh RAM-only
     // key and attempt nonce; preview/approve these exact bytes before begin().
-    static std::optional<Prepared> prepare(const AetherPDInstallUpload::Inputs& inputs,
-        const aetherpd::CarrierExecutables& executables, const QByteArray& licenses);
+    static std::optional<Prepared> prepare(const AetherPDPackage& package, const QString& serial);
     bool begin(const Prepared& approved, const RadioControlSession& expectedSession, const QString& token);
     void cancel();
     void poll();
