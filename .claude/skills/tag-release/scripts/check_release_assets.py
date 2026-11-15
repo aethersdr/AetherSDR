@@ -278,20 +278,30 @@ def release_makes_app_tarballs(repo: str, v: str) -> bool:
     return "--app-tarball" in proc.stdout
 
 
+def _tag_file(repo: str, v: str, path: str) -> tuple[bool, str | None]:
+    """(read ok, text) of one file at the tag. A 404 is a successful read of
+    an absent file: (True, None)."""
+    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/{path}?ref={v}",
+                "-H", "Accept: application/vnd.github.raw"], check=False)
+    if proc.returncode == 0:
+        return True, proc.stdout
+    return ("Not Found" in (proc.stderr + proc.stdout) or "404" in proc.stderr), None
+
+
 def release_sums_manual(repo: str, v: str) -> bool:
     """Whether the manual is listed in SHA256SUMS.txt with no .asc of its own
-    (RFC #6964), or signed apart as before. It is decided by the tag's own
-    Docs workflow, which is the copy that ran for that tag: the one rule
-    sign-release.yml and tools/release_manual_signing.py also apply, so a
-    signing dispatch for an older tag keeps that tag's shape. (sign-release.yml
-    itself always runs from the default branch, so its copy at the tag says
-    nothing about what ran.)"""
-    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/.github/workflows/docs.yml?ref={v}",
-                "-H", "Accept: application/vnd.github.raw"], check=False)
-    if proc.returncode != 0:
-        report("WARN", "the tag's Docs workflow read", "could not read it; expecting the manual in SHA256SUMS.txt")
+    (RFC #6964), or signed apart as before. The rule is
+    tools/release_manual_signing.py's, applied to the tag's own files, the
+    same call sign-release.yml makes, so the two always agree."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools"))
+    import release_manual_signing  # noqa: PLC0415
+    reads = {path: _tag_file(repo, v, path)
+             for path in (".github/workflows/docs.yml", "tools/docs/build_pdf.py", "docs/user/sidebars.js")}
+    if not all(ok for ok, _ in reads.values()):
+        report("FAIL", "the tag's manual shape", "could not read the tag's docs files; the expected set below may be wrong")
         return True
-    return "--detach-sign" not in proc.stdout
+    has_site = reads["tools/docs/build_pdf.py"][1] is not None and reads["docs/user/sidebars.js"][1] is not None
+    return release_manual_signing.shape_of(reads[".github/workflows/docs.yml"][1], has_site) == "sums"
 
 
 def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: bool = True,

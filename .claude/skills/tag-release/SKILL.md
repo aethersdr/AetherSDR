@@ -435,9 +435,12 @@ the PDF just attached. A pre-release attaches the PDF but deploys nothing. Its
 runs execute on the tag; read its conclusion with the build workflows. A red run is re-run once
 without asking (`gh run rerun <id> --failed`). Signing depends on it now: when
 a Docs run attaches or replaces the PDF after signing, Sign Release Artifacts
-starts again by itself (its `plan` job compares the attached PDF with the
-signed `SHA256SUMS.txt`) and parks at the `release` approval, like the build
-runs. Approve it, and confirm the re-signed `SHA256SUMS.txt` lists the
+starts again by itself and parks at the `release` approval, like the build
+runs. Its `plan` job signs when the signed `SHA256SUMS.txt` misses the
+manual's current hash, or when a build artifact is unsigned or newer than the
+sums (a Docs-triggered run can displace a pending build-triggered one). It
+skips before any build has attached anything, and for a tag that signs the
+manual apart. A red `plan` means a read failed; re-run it. Approve it, and confirm the re-signed `SHA256SUMS.txt` lists the
 manual's current hash.
 
 **The Windows run's colour includes the Store step** ("Publish Microsoft Store
