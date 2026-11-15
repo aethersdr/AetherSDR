@@ -10,10 +10,18 @@ Between two releases only a handful of those files change, so each release
 carries, per payload and per earlier release, one bundle of per-file
 `zstd --patch-from` deltas.
 
-Outputs, in --out:
+Outputs, in --out (RFC #6964):
 
-  manifest.json                 schema 1, described in
-                                docs/architecture/update-manifest.md
+  manifest-v2.json              schema 1, described in
+                                docs/architecture/update-manifest.md: every
+                                payload's `full` and its patches. Patch bundle
+                                URLs are on --payload-base (github: this
+                                release's GitHub page; r2: updates.aethersdr.com
+                                releases/<tag>/); `full` is always on the page.
+  manifest.json                 the same, with every `patches` empty and only
+                                GitHub URLs: what copies without the R2 bridge
+                                (v26.11.1, v26.11.2) read. Built for every
+                                release, so its tag always matches GitHub's latest.
   <payload>-from-<tag>.update.tar   one bundle per (payload, earlier release)
 
 Each Linux payload's `full` is the release tarball, AetherSDR-<tag>-<arch>.tar.zst,
@@ -80,6 +88,13 @@ SCHEMA = 1
 # its own); the app's allowlist accepts only aethersdr/AetherSDR's.
 REPO = os.environ.get("GITHUB_REPOSITORY", "aethersdr/AetherSDR")
 DOWNLOAD_BASE = f"https://github.com/{REPO}/releases/download/"
+# Where patch bundles live once they leave the release page (RFC #6964). Only
+# manifest-v2.json may name it; the bridge client accepts exactly
+# <R2_BASE><tag>/<file>.
+R2_BASE = "https://updates.aethersdr.com/releases/"
+PAYLOAD_BASES = {"github": DOWNLOAD_BASE, "r2": R2_BASE}
+LEGACY_MANIFEST = "manifest.json"
+V2_MANIFEST = "manifest-v2.json"
 # A stable release: vYY.M.patch, with an optional hotfix (v26.7.4.1).
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 
@@ -625,7 +640,8 @@ class MissingPayload(RuntimeError):
 def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
           public_key: Path | None, work_root: Path, discard_assets: bool = False,
           require_all: bool = False, release_tarballs: bool = True,
-          macos_payloads: bool = True, dax_driver_source: str | None = None) -> dict:
+          macos_payloads: bool = True, dax_driver_source: str | None = None,
+          payload_base: str = "github") -> dict:
     """discard_assets: delete each downloaded asset once used (CI disk);
     never set for assets the caller supplied.
 
@@ -641,7 +657,12 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
     app tarballs: macOS is then left out, as it was.
 
     dax_driver_source: the git tree hash of hal-plugin/ at the tag, named in
-    each macOS entry so the app can tell a release changes the DAX driver."""
+    each macOS entry so the app can tell a release changes the DAX driver.
+
+    payload_base: "github" or "r2", where manifest-v2.json says the patch
+    bundles are. Returns manifest-v2's content; manifest.json is written
+    beside it with no patches."""
+    bundle_base = PAYLOAD_BASES[payload_base]
     out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema": SCHEMA,
@@ -716,7 +737,7 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
             bundle = out / bundle_name
             entry["patches"].append({
                 "from": old_tag[1:],
-                "bundle": {"asset": bundle_name, "url": DOWNLOAD_BASE + f"{tag}/{bundle_name}",
+                "bundle": {"asset": bundle_name, "url": bundle_base + f"{tag}/{bundle_name}",
                            "sha256": sha256_file(bundle), "size": bundle.stat().st_size},
                 **ops,
             })
@@ -727,8 +748,18 @@ def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
             asset.unlink(missing_ok=True)
         manifest["payloads"].append(entry)
 
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=False) + "\n")
+    (out / V2_MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=False) + "\n")
+    (out / LEGACY_MANIFEST).write_text(json.dumps(legacy_of(manifest), indent=1, sort_keys=False) + "\n")
     return manifest
+
+
+def legacy_of(manifest: dict) -> dict:
+    """manifest.json for copies without the bridge: full downloads only,
+    each on this release's GitHub page, which those copies accept."""
+    legacy = json.loads(json.dumps(manifest))
+    for p in legacy["payloads"]:
+        p["patches"] = []
+    return legacy
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -777,6 +808,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="a release cut before the macOS DMG workflow made app tarballs: macOS is left out")
     ap.add_argument("--dax-driver-source", metavar="HASH",
                     help="the git tree hash of hal-plugin/ at the tag, for the macOS entries")
+    ap.add_argument("--payload-base", choices=sorted(PAYLOAD_BASES), default="github",
+                    help="where manifest-v2.json names the patch bundles (default: github)")
     ap.add_argument("--require-all", action="store_true",
                     help="fail unless every payload is present (implied by --fetch-from-github)")
     args = ap.parse_args(argv)
@@ -808,7 +841,8 @@ def main(argv: list[str] | None = None) -> int:
                          require_all=args.require_all or args.fetch_from_github,
                          release_tarballs=not args.no_release_tarballs,
                          macos_payloads=not args.no_macos_payloads,
-                         dax_driver_source=args.dax_driver_source)
+                         dax_driver_source=args.dax_driver_source,
+                         payload_base=args.payload_base)
     except MissingPayload as e:
         print(f"error: {e}; no manifest written", file=sys.stderr)
         return 1
