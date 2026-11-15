@@ -18,9 +18,10 @@ test archives were removed through the bench helper after hash verification.
 Keep the private configuration guard. Production integration needs request
 credentials delivered into process memory through an authenticated channel,
 without including them in the native archive or another public upload artifact.
-The installed shim's authenticated API is a candidate for the upgrade path;
-initial installation must separately establish that channel. This replacement
-is not implemented or qualified by the component tests below.
+The installed shim's authenticated API now implements the upgrade request's
+RAM handoff to the fixed native requester. The carrier's credential receiver
+and initial-install trust setup remain unfinished; this does not yet replace
+the complete live installation workflow.
 
 The production entry accepts no command-line arguments or radio commands. It
 requires UID 78666/GID 20 and empty effective, permitted and inheritable
@@ -98,6 +99,37 @@ remain outside the archive. The package holds a per-request secret and must be
 kept private and removed after use. This remains an offline/bench fixture because
 the radio does not preserve that privacy. Building it is not operator approval.
 
+## Installed-shim RAM handoff (development)
+
+The authenticated shim endpoint `POST /v1/aetherpd/install-request` accepts
+exactly one 120-byte `PDXFER01` record with `application/octet-stream`. It accepts
+upgrade receipts only and blocks concurrent AetherPD session startup. The shim
+opens the fixed protected `/run/aetherpd/bin/pd-primary-launch` executable and
+runs its `--install-request` entry as the existing unprivileged identity.
+No request field chooses an executable, path, argument, environment or port.
+
+The inherited configuration on fd3 must be read-only, mode 0600, owner-matching,
+unlinked and on tmpfs. The shim unlinks its temporary file before writing the
+credential. The native entry additionally requires a write-only readiness pipe
+on fd4; it reports readiness only after its fixed listener opens. Cancellation
+kills the owned child, closes its broker, and releases the RAM descriptor.
+Credential revocation cancels the owned job. The job has a 400-second limit.
+
+The public record is `PDPUB001` + the 80-byte receipt +
+BLAKE2b-256(`PDKEY001` + the 120-byte private record). It contains no private
+request key. A one-use abstract Unix broker at `aetherpd-config-<digest hex>`
+accepts only a UID-0 peer and the exact `PDCFG001` + public-record frame. It sends
+`PDSECR01` with one read-only private RAM descriptor. Unexpected incoming
+descriptors are closed and refused. The carrier still needs to consume this
+record, verify the commitment and pass the credential to its fixed child;
+its current image format is not eligible for public radio upload.
+
+`GET /v1/aetherpd/install-request/<request_id>` reports the owned job's state;
+`DELETE` cancels it. Both require the current operator token. Readiness and
+delivery results do not assert installed commit. This API inherits the shim's
+existing trusted-LAN, plain-HTTP transport; RAM-only storage does not add
+transport encryption. It is not yet connected to the normal desktop installer.
+
 ## Offline verification
 
 Build with `python3 build.py --output OUT` and run:
@@ -121,6 +153,15 @@ listener and substitutes the test user's identity. `test_request.py` exercises
 the entry and Python uploader against a simulated carrier, including refused
 authentication, failed delivery, cleanup failures and authenticated results.
 The fixture clears capabilities inherited from the test runner before startup.
+
+`--request --inherited-fixture` substitutes only the test identity, using the
+real fixed listener and inherited descriptors. The shim's `TestPDInstall` tests
+use `AETHERPD_REQUEST_FIXTURE` to locate this executable. Set
+`AETHERPD_TEST_DISK_DIRECTORY` to a non-tmpfs directory for the disk refusal test.
+Run the suite with inherited runner capabilities cleared, for example
+`setpriv --inh-caps=-all go test -race -run '^TestPDInstall' -v .` in the shim
+directory. It exercises the real native requester and Python client, with a
+simulated carrier, and checks cancellation and unsafe credential rejection.
 
 `--sanitize` enables ASan/UBSan; `--arch arm64` and `--arch armv7` cross-build.
 Cross-builds do not establish Linux 2.6 runtime, resource or actual FLEX-6300

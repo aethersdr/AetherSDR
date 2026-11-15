@@ -5,11 +5,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"golang.org/x/crypto/blake2b"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -76,8 +83,8 @@ func TestPDInstallRAMAndCarrierAdmission(t *testing.T) {
 			n, o, _, _, readErr := conn.ReadMsgUnix(data[:], oob)
 			if scenario != "valid" {
 				pdDiscardRights(oob[:o])
-				if readErr == nil || n != 0 || o != 0 {
-					t.Fatal("unauthorized peer received reply or credential")
+				if (!errors.Is(readErr, io.EOF) && !errors.Is(readErr, syscall.ECONNRESET)) || n > 0 || o != 0 {
+					t.Fatalf("refused peer read: bytes=%d ancillary=%d error=%v", n, o, readErr)
 				}
 				if <-done {
 					t.Fatal("unauthorized peer admitted")
@@ -139,8 +146,8 @@ func TestPDInstallBrokerCancellationAndRootOnly(t *testing.T) {
 	n, o, _, _, err := conn.ReadMsgUnix(data[:], oob)
 	pdDiscardRights(oob[:o])
 	conn.Close()
-	if err == nil || n != 0 || o != 0 {
-		t.Fatal("nonroot client received secret")
+	if (!errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET)) || n > 0 || o != 0 {
+		t.Fatalf("nonroot read: bytes=%d ancillary=%d error=%v", n, o, err)
 	}
 	cancel()
 	closeBroker()
@@ -155,5 +162,257 @@ func TestPDInstallProductionIdentity(t *testing.T) {
 	}
 	if _, err := runPDInstallRequest(context.Background(), pdInstallFixture(), func() { t.Error("invalid identity became ready") }); err == nil {
 		t.Fatal("local user admitted by production launcher")
+	}
+}
+
+func TestPDInstallNativeRejectsPersistentOrWritableCredentials(t *testing.T) {
+	program := pdNativeRequestFixture(t)
+	config := pdInstallFixture()
+	for _, scenario := range []string{"named-ram", "disk", "writable", "permissions", "wrong-size", "not-a-ready-pipe"} {
+		t.Run(scenario, func(t *testing.T) {
+			var file *os.File
+			var err error
+			if scenario == "named-ram" || scenario == "disk" || scenario == "writable" {
+				directory := "/dev/shm"
+				if scenario == "disk" {
+					directory = os.Getenv("AETHERPD_TEST_DISK_DIRECTORY")
+					if directory == "" {
+						t.Skip("set AETHERPD_TEST_DISK_DIRECTORY to a non-tmpfs directory")
+					}
+				}
+				writer, e := os.CreateTemp(directory, "pd-private-config-test-")
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer writer.Close()
+				defer os.Remove(writer.Name())
+				if _, e = writer.Write(config[:]); e != nil {
+					t.Fatal(e)
+				}
+				if scenario == "writable" {
+					file = writer
+				} else {
+					file, err = os.Open(writer.Name())
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if scenario != "named-ram" {
+					if e = os.Remove(writer.Name()); e != nil {
+						t.Fatal(e)
+					}
+				}
+				if scenario == "disk" {
+					var fs unix.Statfs_t
+					if unix.Fstatfs(int(file.Fd()), &fs) != nil || fs.Type == unix.TMPFS_MAGIC {
+						t.Fatal("disk refusal fixture must actually use disk")
+					}
+				}
+			} else {
+				file, err = pdInstallRAM(config[:])
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer file.Close()
+			if scenario == "permissions" {
+				if err = file.Chmod(0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "wrong-size" {
+				writer, e := os.OpenFile(fmt.Sprintf("/proc/self/fd/%d", file.Fd()), os.O_WRONLY, 0)
+				if e != nil {
+					t.Fatal(e)
+				}
+				e = writer.Truncate(119)
+				writer.Close()
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			readReady, writeReady, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer readReady.Close()
+			defer writeReady.Close()
+			inheritedReady := writeReady
+			if scenario == "not-a-ready-pipe" {
+				inheritedReady = file
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "/proc/self/fd/5", "--install-request")
+			cmd.Env = []string{"PATH=/usr/bin:/bin"}
+			cmd.ExtraFiles = []*os.File{file, inheritedReady, program}
+			output, runErr := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(runErr, &exit) || exit.ExitCode() != 3 || ctx.Err() != nil {
+				t.Fatalf("unsafe credential accepted or rejected for the wrong reason: %v, %s", runErr, output)
+			}
+		})
+	}
+}
+
+func pdNativeRequestFixture(t *testing.T) *os.File {
+	t.Helper()
+	path := os.Getenv("AETHERPD_REQUEST_FIXTURE")
+	if path == "" {
+		t.Skip("set AETHERPD_REQUEST_FIXTURE to the built --inherited-fixture executable")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { file.Close() })
+	return file
+}
+func pdRequestNativeCarrier(listener *net.UnixListener, config [120]byte, inputs [][]byte) error {
+	listener.SetDeadline(time.Now().Add(8 * time.Second))
+	conn, err := listener.AcceptUnix()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	nonce := bytes.Repeat([]byte{'n'}, 32)
+	mac := func(domain string) []byte {
+		h, _ := blake2b.New256(config[8:40])
+		h.Write([]byte(domain))
+		h.Write(nonce)
+		h.Write(config[40:])
+		return h.Sum(nil)
+	}
+	hello := append(append([]byte("PDCARR01"), nonce...), mac("PDSERV01")...)
+	if _, err = conn.Write(hello); err != nil {
+		return err
+	}
+	frame := make([]byte, 64)
+	control := make([]byte, syscall.CmsgSpace(32))
+	n, o, flags, _, err := conn.ReadMsgUnix(frame, control)
+	fds := []int{}
+	messages, _ := syscall.ParseSocketControlMessage(control[:o])
+	for _, message := range messages {
+		rights, _ := syscall.ParseUnixRights(&message)
+		fds = append(fds, rights...)
+	}
+	defer func() {
+		for _, fd := range fds {
+			syscall.Close(fd)
+		}
+	}()
+	if err != nil || n != 40 || flags & ^syscall.MSG_CMSG_CLOEXEC != 0 || len(fds) != 5 || !bytes.Equal(frame[:n], append([]byte("PDROOT01"), mac("PDSEND01")...)) {
+		return fmt.Errorf("native descriptor authentication failed: n=%d fds=%d flags=%d error=%v", n, len(fds), flags, err)
+	}
+	for i, fd := range fds {
+		var st unix.Stat_t
+		if unix.Fstat(fd, &st) != nil {
+			return errors.New("received fd unavailable")
+		}
+		if i == 0 {
+			if st.Mode&unix.S_IFMT != unix.S_IFDIR || st.Uid != 0 {
+				return errors.New("invalid root descriptor")
+			}
+			continue
+		}
+		content := make([]byte, len(inputs[i-1])+1)
+		n, e := unix.Pread(fd, content, 0)
+		mode, e2 := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+		if e != nil || e2 != nil || mode&unix.O_ACCMODE != unix.O_RDONLY || st.Nlink != 0 || !bytes.Equal(content[:n], inputs[i-1]) {
+			return errors.New("native input descriptor not exact, readonly and unlinked")
+		}
+	}
+	_, err = conn.Write(append([]byte("PDDONE01"), 0, 0, 0, 3))
+	return err
+}
+func TestPDInstallNativeUploadAndCancellation(t *testing.T) {
+	program := pdNativeRequestFixture(t)
+	for _, cancelOnly := range []bool{false, true} {
+		t.Run(map[bool]string{false: "authenticated-delivery", true: "cancel-before-upload"}[cancelOnly], func(t *testing.T) {
+			n := newTestNode(t, "owner")
+			inputs := [][]byte{bytes.Repeat([]byte{'e'}, 185), bytes.Repeat([]byte{'p'}, 352), bytes.Repeat([]byte{'c'}, 432), bytes.Repeat([]byte{'o'}, 432)}
+			config := pdInstallFixture()
+			envelope := blake2b.Sum256(inputs[0])
+			plan := blake2b.Sum256(inputs[1])
+			copy(config[56:88], envelope[:])
+			copy(config[88:], plan[:])
+			if cancelOnly {
+				config[8] ^= 1
+			}
+			n.pdInstallRun = func(ctx context.Context, private [120]byte, ready func()) (int, error) {
+				return runPDInstallProgram(ctx, program, private, ready)
+			}
+			h := NewAPI(n)
+			w := pdInstallCall(h, "POST", "/v1/aetherpd/install-request", "owner", config[:])
+			if w.Code != 202 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			n.mu.Lock()
+			task := n.pdInstall
+			n.mu.Unlock()
+			t.Cleanup(func() { task.cancel(); pdInstallWait(t, n) })
+			path := "/v1/aetherpd/install-request/" + task.id()
+			if cancelOnly {
+				if w := pdInstallCall(h, "DELETE", path, "owner", nil); w.Code != 202 {
+					t.Fatal(w.Code)
+				}
+				pdInstallWait(t, n)
+				if conn, err := net.DialTimeout("tcp", "127.0.0.1:48995", time.Second); err == nil {
+					conn.Close()
+					t.Fatal("cancelled native listener survived")
+				}
+				return
+			}
+			listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: "@aetherpd-bootstrap-" + hex.EncodeToString(envelope[:]), Net: "unixpacket"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			delivered := make(chan error, 1)
+			go func() { delivered <- pdRequestNativeCarrier(listener, config, inputs) }()
+			script := `import sys,json,socket
+sys.path.insert(0,'../pd-waveform/request')
+import client
+request=json.load(sys.stdin)
+with socket.create_connection(('127.0.0.1',48995),3) as channel:
+ upload=client.Upload(channel,bytes.fromhex(request['config']))
+ first=upload.send([bytes.fromhex(x) for x in request['inputs']])
+ second=upload.finish()
+ assert first=={'inputs_verified':True,'installation_committed':False}
+ assert second=={'delivery_result':3,'installation_committed':False},second
+ print('authenticated native delivery refusal received')
+`
+			encoded := []string{}
+			for _, data := range inputs {
+				encoded = append(encoded, hex.EncodeToString(data))
+			}
+			body, _ := json.Marshal(map[string]any{"config": hex.EncodeToString(config[:]), "inputs": encoded})
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, "python3", "-c", script)
+			command.Stdin = bytes.NewReader(body)
+			output, err := command.CombinedOutput()
+			clear(body)
+			if err != nil {
+				t.Fatal(err, string(output), <-delivered)
+			}
+			if err = <-delivered; err != nil {
+				t.Fatal(err)
+			}
+			pdInstallWait(t, n)
+			w = pdInstallCall(h, "GET", path, "owner", nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"delivery_result":3`) || !strings.Contains(w.Body.String(), `"state":"delivery_finished"`) || !strings.Contains(w.Body.String(), `"installation_committed":false`) {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			// The public artifact commits to the request without carrying the secret.
+			public, err := pdInstallPublic(config[:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if binary.BigEndian.Uint32(public[16:20]) != 64 || bytes.Contains(public[:], config[8:40]) {
+				t.Fatal("bad public request record")
+			}
+		})
 	}
 }

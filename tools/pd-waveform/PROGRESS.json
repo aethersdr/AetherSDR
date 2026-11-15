@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T07:32:25.553914+00:00",
+  "updated_utc": "2026-11-15T07:43:32.301585+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -16,12 +16,12 @@
   ],
   "current_changes": {
     "description": "Authenticated installed-shim API and fixed native launcher RAM credential handoff, plus a root-only one-request credential descriptor broker. No new radio deployment.",
-    "builds": "Native host request fixtures and ARM64 session helpers built.",
-    "tests": "The new Go race suite ran: API boundary, lifetime, exclusion, revocation and identity cases passed. Two socket-refusal assertions failed and require diagnosis; do not claim this suite passes.",
+    "builds": "Native host fixtures, ARM64/ARMv7 session helpers and ARM64/ARMv7 updated boot entries built.",
+    "tests": "The two refusal failures were test assertions rejecting recvmsg=-1/ECONNRESET with no payload or descriptors. Corrected tests preserve the production guard. Nine installer test methods now pass with the race detector, including actual native/Python upload, simulated carrier completion, cancellation, and six unsafe-credential cases. The full shim race suite and native ASan/UBSan tests pass.",
     "unfinished": [
-      "Actual Go-to-native handoff integration test",
-      "Carrier consumption of public receipt/credential commitment and RAM credential",
-      "Full updated boot build and cross-platform regression gates",
+      "Carrier consumption of public receipt/credential commitment and RAM credential, including its child process",
+      "Initial-install trust and ordinary desktop integration",
+      "Remaining cross-platform and release gates",
       "Integration into signed release, live upgrade and automatic outer cleanup"
     ]
   },

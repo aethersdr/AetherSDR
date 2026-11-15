@@ -215,6 +215,24 @@ platform-specific boot delivery and qualification. This development endpoint
 is not an installer or a claim of automatic
 AetherPD boot recovery. The FLEX-6300 service manager remains unqualified.
 
+### AetherPD upgrade requests in RAM (development)
+
+`POST /v1/aetherpd/install-request` accepts an authenticated, fixed 120-byte
+upgrade request configuration. It keeps the credential in unlinked tmpfs and
+launches only the installed `pd-primary-launch --install-request` entry as the
+unprivileged waveform user. Its 202 reply means the input listener is ready;
+it is not an installation-success response. The request blocks overlapping
+AetherPD startup and expires after 400 seconds. Token revocation cancels it.
+
+Authenticated `GET` and `DELETE` on
+`/v1/aetherpd/install-request/<request_id>` report or cancel the owned request.
+The carrier's RAM credential receiver, ordinary desktop installer and live
+qualification remain unfinished. This path requires an already-installed shim
+and cannot establish first-install trust. It uses the existing trusted-LAN HTTP
+transport. See [`request/README.md`](../pd-waveform/request/README.md) for the
+descriptor contract and why request credentials cannot be packaged in native
+waveform archives.
+
 ### Managed AetherPD lifetime (development)
 
 The desktop-side `AetherPDModel` wraps the fixed HTTP client as a volatile
