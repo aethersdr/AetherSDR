@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T08:54:24.565173+00:00",
+  "updated_utc": "2026-11-15T09:04:13.130140+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Build a fresh signed candidate carrying the installation-status endpoint, then use the desktop monitor for a bounded public-path upgrade across shim restart. Preserve current installed candidateH and qualify rollback compatibility before claiming the installer complete; operator workflow and full production gates remain.",
+  "next_action": "Qualify rollback to an endpoint-capable previous release through the same public path and desktop monitor, preserving candidateI identity; then integrate the approved install coordinator/operator workflow. Keep first-install/6000 provisioning and the complete production plan open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -82,6 +82,22 @@
       "Backward-shim rollback observability and cleanup compatibility",
       "First-install trust and FLEX-6000 adapter/hardware qualification",
       "Remaining full production plan: DSP alignment/cold-start, PR4770, final RF/stock comparison and release gates"
+    ]
+  },
+  "installed_monitor_upgrade": {
+    "evidence": "installation-monitor-live-development/validation.json and public-upgrade-01/result.json under evidence_root",
+    "installed_candidate": "I",
+    "release_sha256": "f4d05bf50e1b40a8a19d1c9b26f0eccbe7ba5bf503fda0f56f1ddcd64ab5e2be",
+    "source_commit": "9a6077b2bc60fe08020b7c431dea6098611039ff",
+    "result": "Public-path upgrade passed; production desktop monitor confirmed the exact commit at 50.020s, total outer cleanup 51.538s. Identity preserved; FDX off, TX power0 and no RF.",
+    "root_diagnostics_bridge_used": false,
+    "limitations": [
+      "Independent host process/capability/image inventory for this candidate",
+      "Rollback to a previous endpoint-capable release and old-shim compatibility",
+      "Reboot/power interruption behavior of this new mirror",
+      "Ordinary operator installation coordinator/UI and first-install trust",
+      "6000 privilege adapter and real 6300 hardware qualification",
+      "All remaining production/DSP/PR4770/RF/stock-comparison/release gates"
     ]
   }
 }

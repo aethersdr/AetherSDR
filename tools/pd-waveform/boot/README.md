@@ -2093,3 +2093,24 @@ HTTP and monotonic time, including synchronous destruction callbacks. Its native
 fixtures come through the C publisher and Go reader/JSON encoder. The component
 is registered in the core build but not yet wired to the operator installation
 coordinator or dialog. Live installed monitoring remains unqualified.
+
+The ARM64 development candidate built from `9a6077b2b` passed one actual public
+upgrade on the FLEX-8600 running firmware 4.3.16.42034. The ordinary desktop
+monitor used the existing QtKeychain credential, began before upload, and saw
+60 HTTP 404 replies, 17 disconnected requests and 14 HTTP 503 replies before a
+matching HTTP 200 terminal observation. It reported **Committed** at 50.020 s;
+normal carrier removal completed at 51.538 s. The separate delivery receipt
+remained `delivery_result: 0, installation_committed: false`, as intended: only
+the later exact-plan observation established commit. Shim identity was preserved;
+the radio remained connected, FDX off, TX power 0 and unkeyed. No broad host-root
+diagnostics bridge executed or queried this upgrade.
+
+Evidence is `installation-monitor-live-development/validation.json`, the public
+probe result and monitor event log under the evidence root in `PROGRESS.json`.
+The release SHA-256 is
+`f4d05bf50e1b40a8a19d1c9b26f0eccbe7ba5bf503fda0f56f1ddcd64ab5e2be`.
+This proof covers one forward upgrade and ordinary commit observation. It does
+not independently inventory host processes/capabilities or remaining images,
+qualify rollback/reboot of this candidate, supply the operator installation
+coordinator, or establish first-install/6000 support. The separately built and
+verified ARMv7 package was not installed on a 6300.
