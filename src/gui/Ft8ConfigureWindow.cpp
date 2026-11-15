@@ -225,11 +225,38 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     }
     m_antennaCombo = new QComboBox(body);
     m_antennaCombo->setAccessibleName(tr("Receive antenna"));
-    m_antennaCombo->addItem(tr("Radio default"), QString());
-    if (m_model) {
-        for (const QString& ant : m_model->antennaList()) {
+    // RadioModel fills its antenna list from a PANADAPTER's status
+    // (panAntennaListChanged), so a window opened before any pan has reported
+    // sees an EMPTY list and offers only "Radio default" -- on a radio that
+    // has ANT1, ANT2 and XVTR. Measured on a FLEX-6300: the radio's pan
+    // status carries `ant_list=ANT1,ANT2,XVTR`, but the window had already
+    // built its combo. Fill it now AND on every change, keeping whatever is
+    // selected so a late arrival cannot move the operator's choice.
+    //
+    // ⚠ WsprConfigureWindow has the same one-shot read and therefore the same
+    // latent bug; it is left alone here rather than changed from an FT8 branch.
+    auto fillAntennas = [this] {
+        if (!m_model) {
+            return;
+        }
+        const QStringList ants = m_model->antennaList();
+        if (m_antennaCombo->count() == ants.size() + 1) {
+            return;   // nothing new; do not disturb a selection mid-edit
+        }
+        const QString keep = m_antennaCombo->currentData().toString();
+        const QSignalBlocker block(m_antennaCombo);
+        m_antennaCombo->clear();
+        m_antennaCombo->addItem(tr("Radio default"), QString());
+        for (const QString& ant : ants) {
             m_antennaCombo->addItem(m_model->antennaDisplayName(ant), ant);
         }
+        const int idx = m_antennaCombo->findData(keep);
+        m_antennaCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    };
+    fillAntennas();
+    if (m_model) {
+        connect(m_model, &RadioModel::antListChanged, this,
+                [fillAntennas](const QStringList&) { fillAntennas(); });
     }
     m_daxCombo = new QComboBox(body);
     m_daxCombo->setAccessibleName(tr("DAX channel"));
