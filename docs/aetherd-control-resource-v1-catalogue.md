@@ -247,6 +247,11 @@ commands. Create a new instance to restart discovery.
     `features`, an object naming each steerable host DSP feature
     (`agcThreshold`, `noiseBlanker`, `noiseReduction`, `rit`) with the modes
     it applies in; a feature that applies in no mode is omitted.
+  - Optional `receiveAudioPlayout`: `prefillMs` and `bufferCapMs`, the host
+    playback prefill and queue cap the backend asks for on the primary receive
+    PCM queue; null when the host defaults apply. Today only an Icom MAIN/SUB
+    radio with stereo LAN receive sets it (200 and 400 ms). It is timing
+    metadata and grants no control.
   - Optional `radioSpeakerControl`: `authority` only, for
     `radioSession.setRadioSpeaker` (the radio's own speaker; ANAN declares it).
   - Optional `receivePanRfGainControl`: `authority`, inclusive

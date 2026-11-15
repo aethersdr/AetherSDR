@@ -243,6 +243,25 @@ shared receiver map, but neither a listening TCI server nor an attached TCI
 client. Builds without it retain their existing Flex bridge and do not offer
 native DAX. See [native DAX receive routing](../native-dax-receive.md).
 
+### Receive audio playout
+
+`receiveAudioPlayout` gives the host playback prefill and queue cap the
+backend wants for the primary receive PCM queue. `MainWindow` hands it to
+`AudioEngine::setReceiveJitterBuffer()` on each capability change and clears it
+on disconnect. Icom sets 200 ms prefill and a 400 ms cap when the session
+negotiated stereo LAN receive (MAIN/SUB radios); every other backend, and Icom
+with mono receive, explicitly leaves it absent, so no extra prefill or cap applies.
+It is serialized in the daemon catalogue as timing metadata only.
+
+| Backend | Value |
+|---|---|
+| Flex | absent |
+| HL2 | absent |
+| ANAN | absent |
+| RTL | absent |
+| Icom | 200/400 ms with stereo LAN receive; absent otherwise |
+| Demo | absent |
+
 ### Native squelch
 
 `squelchLevelScale` adds `automaticInEngine` for backend-owned Auto SQL, dispatched
