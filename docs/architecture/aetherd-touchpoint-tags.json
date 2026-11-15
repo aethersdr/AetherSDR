@@ -293,6 +293,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/ClientCfc.h": {
+  "tag": "universal",
+  "note": "Client TX-chain CFC multiband compressor (WDSP cfcomp used standalone; curves, pre-comp, post-EQ, FFT size + live compression); radio-agnostic engine DSP feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientCfcJson.h": {
+  "tag": "universal",
+  "note": "ClientCfc's one-object JSON shape shared by its settings key and TX profiles/presets; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ClientTube.h": {
   "tag": "universal",
   "note": "Client TX-chain tube saturator DSP (drive/tone/env follower); radio-agnostic engine DSP, no vendor ties.",

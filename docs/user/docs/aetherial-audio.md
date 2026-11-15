@@ -8,7 +8,8 @@ Aetherial Audio is AetherSDR's client-side audio processing. It runs on your
 computer, independent of the radio's own DSP, and comes as two windows:
 
 - **AetherTX** — the transmit voice chain: RN2 noise reduction, tube preamp,
-  EQ, compressor, AetherVoice exciter, reverb and a brickwall limiter.
+  EQ, CFC multiband compressor, compressor, AetherVoice exciter, reverb and a
+  brickwall limiter.
   Open it from **Tools → AetherTX...**
 - **AetherRX** — the receive chain: noise reduction, gate, EQ, compressor,
   tube, AetherVoice and an output meter. Open it from
@@ -111,14 +112,16 @@ conversion takes it to the radio's 24 kHz transport rate, with dither, before
 the one final conversion to 16-bit.
 
 ```
-PC mic → (RN2) → Tube → EQ → Compressor → Exciter → Reverb
+PC mic → (RN2) → Tube → EQ → CFC → Compressor → Exciter → Reverb
        → Final Output (Quindar, limiter, meters) → radio
 ```
 
-The middle five stages are the reorderable chain; the order above is the
-default. **RN2** is not a chain stage: when it is on it always runs first,
-ahead of every stage, so the tube and everything after it work on denoised
-audio. Its switch is on the **Tube** page.
+The middle six stages are the reorderable chain; the order above is the
+default. If you saved your own order before CFC existed, CFC is added at the end
+of it; drag it ahead of the Compressor to match the default. **RN2** is not a
+chain stage: when it is on it always runs first, ahead of every stage, so the
+tube and everything after it work on denoised audio. Its switch is on the
+**Tube** page.
 
 AetherTX has no gate or de-esser. RN2 keeps room noise out of your pauses,
 with no threshold to set. To tame sibilance, use a gentle EQ cut around
@@ -130,6 +133,7 @@ with no threshold to set. To tame sibilance, use a gentle EQ cut around
 |---|---|
 | **Tube** | Dynamic tube preamp/saturator. Also holds the **RN2** microphone noise reducer, which runs before it. |
 | **EQ** | Parametric EQ with an optional reference target curve. |
+| **CFC** | Continuous Frequency Compressor: a multiband compressor whose compression and post-EQ are curves over frequency. Off by default. |
 | **Compressor** | Compressor with Drive/Phase peak-to-average (PAPR) controls and its own brickwall limiter. |
 | **Exciter** | AetherVoice™ harmonic exciter. |
 | **Reverb** | Freeverb room reverb. Off by default. |
@@ -326,6 +330,70 @@ noise; −3 dB around 200 Hz to cut mud; −2 dB around 500 Hz to scoop
 boxiness; +3 dB at 2 kHz and +2 dB at 3.5 kHz for presence; low-pass at your
 SSB filter width (about 3 kHz). For a bright condenser mic, do the opposite:
 a little low-mid warmth, pull back 2–4 kHz, roll off above 4 kHz.
+
+### CFC (AetherTX)
+
+The Continuous Frequency Compressor from WDSP, the DSP library behind
+OpenHPSDR radios. Instead of splitting your voice into a few fixed bands, it
+compresses every frequency by its own amount, set by a curve: you can drive the
+low end harder without the whole voice ducking, or add presence-band density
+without making the lows boom. A second curve, the post-EQ, reshapes the result.
+CFC ships **off**.
+
+The page shows both curves over frequency: **compression** (filled points,
+0 to 20 dB) and **post-EQ** (hollow points, −20 to +20 dB, dashed while Post-EQ is
+off). While you talk, the compression actually being applied is shaded below
+the 0 dB line.
+
+- **Drag a point** to move its band in frequency, and that curve up or down.
+  A band can't pass its neighbours.
+- **Double-click** empty space to add a band (up to ten); **right-click** a point
+  and choose **Remove band** to remove one (at least two stay).
+- The **Freq**, **Comp** and **EQ** fields under the curves type the selected
+  band's values exactly.
+
+How compression works here: a band's level is gain applied before a ceiling.
+Quiet sound at that frequency comes up by the full amount; loud sound is held
+at the ceiling, so the louder the input the less it is raised. Between bands,
+the curves are straight lines in frequency.
+
+| Control | Range | What it does |
+|---|---|---|
+| **Comp** (per band) | 0 to 20 dB | Compression at that frequency |
+| **EQ** (per band) | −20 to +20 dB | Post-EQ at that frequency, applied after compression when **Post-EQ** is on |
+| **Freq** (per band) | 10 to 9990 Hz | Where the band sits |
+| **Pre-comp** | 0 to 20 dB | Compression added at every frequency alike |
+| **Post-EQ** | On / Off | Applies the post-EQ curve and **Post** gain. Default off |
+| **Post** | −20 to +20 dB | Gain after the post-EQ; works only with Post-EQ on |
+| **FFT size** | 1024 to 16384 | Frequency resolution, and the delay CFC adds (below) |
+
+**FFT size and delay.** CFC analyses your voice in blocks, and every block costs
+delay. The slider shows the delay it adds:
+
+| FFT size | Adds | Resolves |
+|---|---|---|
+| 1024 (default) | 21 ms | 47 Hz |
+| 2048 | 43 ms | 23 Hz |
+| 4096 | 85 ms | 12 Hz |
+| 8192 | 171 ms | 6 Hz |
+| 16384 | 341 ms | 3 Hz |
+
+That delay sits between your voice and your RF, so at large sizes you hear it
+on monitor playback and feel it on quick turnarounds. 1024 resolves voice bands well;
+go larger only for very narrow, low-frequency shaping. Changing the size while
+you talk crossfades to the new size with no gap.
+
+The first time you turn CFC on, it starts from WDSP's own transmit profile:
+compression 0, 5, 10, 10 and 5 dB at 200 Hz, 1 kHz, 2 kHz, 3 kHz and 4 kHz, with
+a +7 dB post-EQ (Post-EQ itself off).
+
+**Example: more density without boom.** Pre-comp 0. Compression 2 dB at 200 Hz,
+6 dB at 1 kHz, 10 dB at 2 kHz and 3 kHz, 6 dB at 4 kHz. Leave Post-EQ off. Record
+a phrase with **REC** and compare against **BYPASS**. If the voice gets gritty,
+lower the 2–3 kHz points before touching anything else.
+
+**Pitfall:** CFC raises quiet sound, so room noise between words rises with it.
+Use the Gate ahead of it, and keep the Compressor after it gentle.
 
 ### Compressor
 

@@ -11018,6 +11018,9 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/StripReverbPanel.cpp
     src/gui/StripTubePanel.cpp
     src/gui/ClientLevelMeter.cpp
+    src/gui/ClientCfcApplet.cpp
+    src/gui/ClientCfcCurveWidget.cpp
+    src/gui/StripCfcPanel.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
 target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)

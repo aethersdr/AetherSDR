@@ -1034,6 +1034,7 @@ set(CORE_SOURCES
     src/core/ClientPuduMonitor.cpp
     src/core/ClientReverb.cpp
     src/core/ClientCfc.cpp  # WDSP CFC multiband compressor stage (RFC #4836)
+    src/core/ClientCfcJson.cpp
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp
@@ -1594,6 +1595,9 @@ set(GUI_SOURCES
     src/gui/StripPuduPanel.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
+    src/gui/ClientCfcApplet.cpp
+    src/gui/ClientCfcCurveWidget.cpp
+    src/gui/StripCfcPanel.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
     src/gui/AetherialAudioStrip.cpp

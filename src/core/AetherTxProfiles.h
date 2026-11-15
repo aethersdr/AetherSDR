@@ -12,21 +12,21 @@ class AudioEngine;
 // JSON profile library for the AetherTX window, at
 // ~/.config/AetherSDR/AetherTxProfiles.json; holds only what the operator saves
 // and recalls (live state stays in AetherSDR.settings). TX-only mirror of
-// AetherRxProfiles: a profile carries the five TX chain stages, enables, order,
+// AetherRxProfiles: a profile carries the six TX chain stages, enables, order,
 // RN2 and the final limiter, and applying one writes nothing on the RX side.
 // A profile saved before the TX gate and de-esser were retired may still
 // carry "gate"/"deess" and those chain names; they are ignored, except that a
-// gate that was on turns RN2 on when the profile has no "rn2". Format:
+// profile with no "rn2" sets RN2 to match its old gate. Format:
 //   {
 //     "version": 1,
 //     "profiles": {
 //       "Contest Punch": {
 //         "createdBy": "AetherSDR x.y.z",
 //         "createdAt": "ISO-8601",
-//         "chain": ["Tube","Eq","Comp","Enh","Reverb"],
+//         "chain": ["Tube","Eq","Cfc","Comp","Enh","Reverb"],
 //         "rn2":   bool,  "tube":   { … }, "eq":    { … },
-//         "comp":  { … }, "pudu":   { … }, "reverb":{ … },
-//         "finalLimiter": { … }
+//         "cfc":   { … }, "comp":   { … }, "pudu":  { … },
+//         "reverb":{ … }, "finalLimiter": { … }
 //       }
 //     }
 //   }

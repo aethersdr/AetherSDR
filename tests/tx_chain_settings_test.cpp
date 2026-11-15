@@ -13,6 +13,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ClientCfc.h"
 #include "core/ChannelStripPresets.h"
 #include "core/ClientFinalLimiter.h"
 #include "core/SettingsPaths.h"
@@ -54,6 +55,8 @@ private slots:
     void aFreshInstallGetsTheLookaheadLimiterOn();
     void aSavedFinalLimiterIsKept();
     void aTxProfileCarriesTheLookahead();
+    void cfcSettingsRoundTrip();
+    void cfcSettingsRejectMalformedAndClampRanges();
 };
 
 void TxChainSettingsTest::initTestCase()
@@ -71,7 +74,7 @@ void TxChainSettingsTest::theAudioThreadGetsTheNibbleLayout()
 {
     AudioEngine engine;
     const QVector<Stage> order{Stage::Reverb, Stage::Enh, Stage::Tube, Stage::Comp,
-                               Stage::Eq};
+                               Stage::Eq, Stage::Cfc};
     engine.setTxChainStages(order);
     uint64_t expected = 0;
     QVERIFY(TxChainLayout::pack(order, expected));
@@ -83,10 +86,10 @@ void TxChainSettingsTest::persistsExactlyWhatRuns()
     AudioEngine engine;
     // The retired gate and de-esser are dropped like repeats.
     engine.setTxChainStages({Stage::Comp, Stage::Gate, Stage::DeEss, Stage::Comp, Stage::Eq});
-    const QVector<Stage> expected{Stage::Comp, Stage::Eq, Stage::Tube,
+    const QVector<Stage> expected{Stage::Comp, Stage::Eq, Stage::Tube, Stage::Cfc,
                                   Stage::Enh, Stage::Reverb};
     QCOMPARE(engine.txChainStages(), expected);
-    QCOMPARE(stored(), QStringLiteral("Comp,Eq,Tube,Enh,Reverb"));
+    QCOMPARE(stored(), QStringLiteral("Comp,Eq,Tube,Cfc,Enh,Reverb"));
 }
 
 void TxChainSettingsTest::loadKeepsTheSavedOrderAndAppendsTheRest()
@@ -97,14 +100,14 @@ void TxChainSettingsTest::loadKeepsTheSavedOrderAndAppendsTheRest()
     AudioEngine engine;
     engine.loadClientCompSettings();
     const QVector<Stage> expected{Stage::Tube, Stage::Comp, Stage::Eq,
-                                  Stage::Enh, Stage::Reverb};
+                                  Stage::Cfc, Stage::Enh, Stage::Reverb};
     QCOMPARE(engine.txChainStages(), expected);
 }
 
 void TxChainSettingsTest::loadDropsRepeatedNames()
 {
     // Seventeen names: more than the packed order holds, all of them repeats
-    // of stages that exist. They load as the five stages, in first-seen order.
+    // of stages that exist. They load as the six stages, in first-seen order.
     QStringList names;
     for (int i = 0; i < 17; ++i) {
         names << (i % 2 ? QStringLiteral("Eq") : QStringLiteral("Reverb"));
@@ -113,7 +116,7 @@ void TxChainSettingsTest::loadDropsRepeatedNames()
     AudioEngine engine;
     engine.loadClientCompSettings();
     const QVector<Stage> expected{Stage::Reverb, Stage::Eq, Stage::Tube,
-                                  Stage::Comp, Stage::Enh};
+                                  Stage::Cfc, Stage::Comp, Stage::Enh};
     QCOMPARE(engine.txChainStages(), expected);
 }
 
@@ -127,10 +130,10 @@ void TxChainSettingsTest::aPresetWithRepeatsCannotOverflowTheChain()
     ChannelStripPresets::applyTxJson(&engine, QJsonObject{{"chain", chain}});
     // A preset saved before a stage existed must not remove it: the repeats
     // go, and the canonical stages the preset lacks follow its order.
-    const QVector<Stage> expected{Stage::Tube, Stage::Eq,
+    const QVector<Stage> expected{Stage::Tube, Stage::Eq, Stage::Cfc,
                                   Stage::Comp, Stage::Enh, Stage::Reverb};
     QCOMPARE(engine.txChainStages(), expected);
-    QCOMPARE(stored(), QStringLiteral("Tube,Eq,Comp,Enh,Reverb"));
+    QCOMPARE(stored(), QStringLiteral("Tube,Eq,Cfc,Comp,Enh,Reverb"));
 }
 
 void TxChainSettingsTest::freshInstallGetsTheCanonicalOrder()
@@ -140,7 +143,7 @@ void TxChainSettingsTest::freshInstallGetsTheCanonicalOrder()
     AudioEngine engine;
     engine.loadClientCompSettings();
     // Tube leads: it is the mic preamp, and RN2 runs ahead of it.
-    const QVector<Stage> expected{Stage::Tube, Stage::Eq, Stage::Comp,
+    const QVector<Stage> expected{Stage::Tube, Stage::Eq, Stage::Cfc, Stage::Comp,
                                   Stage::Enh, Stage::Reverb};
     QCOMPARE(engine.txChainStages(), expected);
 }
@@ -150,7 +153,7 @@ void TxChainSettingsTest::freshInstallGetsTheCanonicalOrder()
 // stages saved without retired names were chosen, and stay.
 void TxChainSettingsTest::theOldDefaultBecomesTheNewDefault()
 {
-    const QVector<Stage> canonical{Stage::Tube, Stage::Eq, Stage::Comp,
+    const QVector<Stage> canonical{Stage::Tube, Stage::Eq, Stage::Cfc, Stage::Comp,
                                    Stage::Enh, Stage::Reverb};
     AppSettings::instance().setValue(kKey, "Gate,Eq,DeEss,Comp,Tube,Enh,Reverb");
     {
@@ -163,7 +166,7 @@ void TxChainSettingsTest::theOldDefaultBecomesTheNewDefault()
         AudioEngine engine;
         engine.loadClientCompSettings();
         const QVector<Stage> chosen{Stage::Eq, Stage::Comp, Stage::Tube,
-                                    Stage::Enh, Stage::Reverb};
+                                    Stage::Enh, Stage::Reverb, Stage::Cfc};
         QCOMPARE(engine.txChainStages(), chosen);
     }
     // The two-option setting from before the chain was reorderable: Tube
@@ -350,6 +353,55 @@ void TxChainSettingsTest::aTxProfileCarriesTheLookahead()
     ChannelStripPresets::applyTxJson(&engine, old);
     QCOMPARE(lim->lookaheadMs(), 2.0f);
     clearFinalLimiterSettings();
+}
+
+void TxChainSettingsTest::cfcSettingsRoundTrip()
+{
+    const std::vector<ClientCfc::Band> bands{{150.0f, 2.0f, -3.0f}, {900.0f, 8.0f, 1.5f},
+                                             {2500.0f, 12.0f, 4.0f}};
+    {
+        AudioEngine engine;
+        ClientCfc* cfc = engine.clientCfcTx();
+        QVERIFY(cfc);
+        cfc->setEnabled(true);
+        cfc->setFftSize(4096);
+        cfc->setPrecompDb(3.5f);
+        cfc->setPostEqEnabled(true);
+        cfc->setPostGainDb(-2.0f);
+        cfc->setBands(bands);
+        engine.saveClientCfcSettings();
+    }
+    AudioEngine reloaded;
+    ClientCfc* cfc = reloaded.clientCfcTx();
+    QVERIFY(cfc->isEnabled());
+    QCOMPARE(cfc->fftSize(), 4096);
+    QCOMPARE(cfc->precompDb(), 3.5f);
+    QVERIFY(cfc->postEqEnabled());
+    QCOMPARE(cfc->postGainDb(), -2.0f);
+    QVERIFY(cfc->bands() == bands);
+}
+
+void TxChainSettingsTest::cfcSettingsRejectMalformedAndClampRanges()
+{
+    AppSettings::instance().setValue("ClientCfcTx", "{not json");
+    {
+        AudioEngine engine;
+        QVERIFY(!engine.clientCfcTx()->isEnabled());
+        QVERIFY(engine.clientCfcTx()->bands() == ClientCfc::defaultBands());
+    }
+    AppSettings::instance().setValue(
+        "ClientCfcTx",
+        QStringLiteral(R"({"fftSize":999999,"precompDb":80,"postGainDb":-80,"enabled":"yes",)"
+                       R"("bands":[{"hz":1,"compDb":99,"eqDb":-99},{"hz":50000,"compDb":-5,"eqDb":99}]})"));
+    AudioEngine engine;
+    ClientCfc* cfc = engine.clientCfcTx();
+    QCOMPARE(cfc->fftSize(), ClientCfc::kMaxFftSize);
+    QCOMPARE(cfc->precompDb(), ClientCfc::kMaxPrecompDb);
+    QCOMPARE(cfc->postGainDb(), -ClientCfc::kMaxPostGainDb);
+    QVERIFY(!cfc->isEnabled());  // "yes" is not a bool
+    const std::vector<ClientCfc::Band> expected{{ClientCfc::kMinHz, ClientCfc::kMaxCompDb, -ClientCfc::kMaxEqDb},
+                                                {ClientCfc::kMaxHz, 0.0f, ClientCfc::kMaxEqDb}};
+    QVERIFY(cfc->bands() == expected);
 }
 
 int main(int argc, char** argv)

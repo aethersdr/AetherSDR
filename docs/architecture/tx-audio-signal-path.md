@@ -49,10 +49,11 @@ Optional native-48 kHz RN2 (switch on the Tube page; replaced the TX gate)
 ┌───────────────────────────────────────────────────────────────────┐
 │  CHAIN widget — drag-drop ordered 48 kHz float TX DSP pipeline     │
 │                                                                     │
-│  [TUBE] → [EQ] → [COMP] → [PUDU] → [VERB]                          │
+│  [TUBE] → [EQ] → [CFC] → [COMP] → [PUDU] → [VERB]                  │
 │                                                                     │
 │  ClientTube    — dynamic tube preamp/saturator (3 models)           │
 │  ClientEq      — 10-band parametric, 4 filter families, #1660      │
+│  ClientCfc     — WDSP CFC multiband compressor, standalone (#4836)  │
 │  ClientComp    — Pro-XL-style compressor + brickwall limiter, #1661 │
 │  ClientPudu    — exciter (Aphex-even / Behringer-odd harmonics)     │
 │  ClientReverb  — Freeverb (disabled by default)                     │

@@ -1,6 +1,7 @@
 #include "core/ClientTube.h"
 #include "core/RNNoiseFilter.h"
 #include "core/Resampler.h"
+#include "core/ClientCfc.h"
 #include "core/TxChainLayout.h"
 #include "core/ClientFinalLimiter.h"
 #include "core/TxVoiceProcessor.h"
@@ -17,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+using AetherSDR::ClientCfc;
 using AetherSDR::ClientTube;
 using AetherSDR::RNNoiseFilter;
 using AetherSDR::Resampler;
@@ -763,6 +765,42 @@ void testNinthSlotStageRuns()
                       != processor.postChannelStripFloat48Stereo());
 }
 
+// CFC in its chain slot: on, it changes the audio and its FFT length joins
+// the reported latency; off, the strip passes the audio and the latency
+// drops it.
+void testCfcStageRunsAndBypasses()
+{
+    ClientCfc cfc;
+    cfc.setPrecompDb(12.0f);  // a quiet tone comes out 12 dB up
+    TxVoiceProcessor processor;
+    TxVoiceProcessor::Processors processors;
+    processors.cfc = &cfc;
+    processor.setProcessors(processors);
+    processor.setStageOrder(packedSingleStage(TxVoiceProcessor::Stage::Cfc));
+    processor.setMeasurementCaptureEnabled(true);
+    processor.prepare(48000, 1024);
+    const int baseLatency = processor.latencyFrames();
+
+    cfc.setEnabled(true);
+    bool changed = false;
+    for (int block = 0; block < 10; ++block) {
+        QByteArray tone = makeCanonicalTone(480, 48000, 1000.0f);
+        processor.processCapturedInt16(tone);
+        changed = changed
+                  || processor.normalizedFloat48Stereo() != processor.postChannelStripFloat48Stereo();
+    }
+    report("an enabled CFC changes the post-strip audio", changed);
+    report("its FFT length joins the reported latency",
+           processor.latencyFrames() == baseLatency + 1024);
+
+    cfc.setEnabled(false);
+    QByteArray tone = makeCanonicalTone(480, 48000, 1000.0f);
+    processor.processCapturedInt16(tone);
+    report("a bypassed CFC leaves the post-strip audio alone",
+           processor.normalizedFloat48Stereo() == processor.postChannelStripFloat48Stereo());
+    report("and leaves the latency", processor.latencyFrames() == baseLatency);
+}
+
 void testNonFiniteSamplesCannotPoisonEgressSrc()
 {
     std::vector<float> input(480 * 2, 0.1f);
@@ -1246,6 +1284,7 @@ int main()
     testCapturedFloat32MatchesInt16ForRepresentableAudio();
     testChannelStripRunsAt48k();
     testNinthSlotStageRuns();
+    testCfcStageRunsAndBypasses();
     testNonFiniteSamplesCannotPoisonEgressSrc();
     testNonFiniteCapturedFloatCannotPoisonIngressSrc();
     testMeasurementCaptureCanBeDisabled();

@@ -18,6 +18,7 @@
 #include "ClientPuduApplet.h"
 #include "ClientPuduEditor.h"
 #include "ClientReverbApplet.h"
+#include "ClientCfcApplet.h"
 #include "ClientRxDspApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientTubeEditor.h"
@@ -623,6 +624,7 @@ void MainWindow::wireDspApplets()
 
     // ── Client Reverb applet: TX reverb (Freeverb) ─
     m_appletPanel->clientReverbApplet()->setAudioEngine(m_audio);
+    m_appletPanel->clientCfcApplet()->setAudioEngine(m_audio);
 
     // ── RX-side AetherDSP applet — same controls as the Settings menu
     // dialog, embedded as a docked tile in PooDoo Audio (RX).  Parameter

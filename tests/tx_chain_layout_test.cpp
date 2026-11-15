@@ -142,11 +142,11 @@ void testTodaysStages()
 {
     const QVector<AudioEngine::TxChainStage> today{
         AudioEngine::TxChainStage::Tube, AudioEngine::TxChainStage::Eq,
-        AudioEngine::TxChainStage::Comp, AudioEngine::TxChainStage::Enh,
-        AudioEngine::TxChainStage::Reverb};
+        AudioEngine::TxChainStage::Cfc, AudioEngine::TxChainStage::Comp,
+        AudioEngine::TxChainStage::Enh, AudioEngine::TxChainStage::Reverb};
     uint64_t packed = 0;
     const bool fits = Layout::pack(today, packed);
-    report("today's five stages pack and round-trip",
+    report("today's six stages pack and round-trip",
            fits && Layout::unpack<QVector<AudioEngine::TxChainStage>>(packed) == today);
     report("the engine and the voice processor read the same slot count",
            AudioEngine::kMaxTxChainStages == 16 && TxVoiceProcessor::kMaxStages == 16);

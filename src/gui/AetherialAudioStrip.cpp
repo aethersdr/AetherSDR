@@ -12,6 +12,7 @@
 #include "StripEqPanel.h"
 #include "StripPuduPanel.h"
 #include "StripReverbPanel.h"
+#include "StripCfcPanel.h"
 #include "StripTubePanel.h"
 #include "StripWaveformPanel.h"
 #include "StripFinalOutputPanel.h"
@@ -21,6 +22,7 @@
 #include "core/ClientEq.h"
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
+#include "core/ClientCfc.h"
 #include "core/ClientTube.h"
 
 #include <QButtonGroup>
@@ -64,6 +66,7 @@ AudioEngine::TxChainStage toChainStage(AetherialAudioStrip::Stage s)
         case AetherialAudioStrip::Tube:   return AudioEngine::TxChainStage::Tube;
         case AetherialAudioStrip::Enh:    return AudioEngine::TxChainStage::Enh;
         case AetherialAudioStrip::Reverb: return AudioEngine::TxChainStage::Reverb;
+        case AetherialAudioStrip::Cfc:    return AudioEngine::TxChainStage::Cfc;
         default:                          return AudioEngine::TxChainStage::None;
     }
 }
@@ -78,6 +81,7 @@ AetherialAudioStrip::Stage fromChainStage(AudioEngine::TxChainStage s)
         case AudioEngine::TxChainStage::Tube:   return AetherialAudioStrip::Tube;
         case AudioEngine::TxChainStage::Enh:    return AetherialAudioStrip::Enh;
         case AudioEngine::TxChainStage::Reverb: return AetherialAudioStrip::Reverb;
+        case AudioEngine::TxChainStage::Cfc:    return AetherialAudioStrip::Cfc;
         case AudioEngine::TxChainStage::None:   return AetherialAudioStrip::StageCount;
     }
     // No default: a new stage must be mapped above, or -Wswitch says so.
@@ -179,6 +183,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     m_comp        = new StripCompPanel        (m_audio, this);
     m_pudu        = new StripPuduPanel        (m_audio, this);
     m_reverb      = new StripReverbPanel      (m_audio, this);
+    m_cfc         = new StripCfcPanel         (m_audio, this);
     m_waveform    = new StripWaveformPanel    (m_audio, this);
     m_finalOutput = new StripFinalOutputPanel (m_audio, this);
 
@@ -188,6 +193,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     addStage(Comp,    QStringLiteral("Compressor"), makeStagePage(m_comp));
     addStage(Enh,     QStringLiteral("Exciter"),    makeStagePage(m_pudu));
     addStage(Reverb,  QStringLiteral("Reverb"),     makeStagePage(m_reverb));
+    addStage(Cfc,     QStringLiteral("CFC"),        makeStagePage(m_cfc));
 
     // Output and waveform share the last tab: the meter is what you read and
     // the waveform is what you read it against, so splitting them would mean
@@ -316,6 +322,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     if (m_tube)        m_tube->showForTx();
     if (m_pudu)        m_pudu->showForTx();
     if (m_reverb)      m_reverb->showForTx();
+    if (m_cfc)         m_cfc->showForTx();
     if (m_finalOutput) m_finalOutput->showForTx();
     if (m_waveform)    m_waveform->showForTx();
 
@@ -324,7 +331,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
                            static_cast<QWidget*>(m_comp),
                            static_cast<QWidget*>(m_tube),
                            static_cast<QWidget*>(m_pudu),
-                           static_cast<QWidget*>(m_reverb)}) {
+                           static_cast<QWidget*>(m_reverb),
+                           static_cast<QWidget*>(m_cfc)}) {
         tidyEmbeddedPanel(panel);
     }
     // The Final Output page stacks two, and their plates say which is which.
@@ -356,6 +364,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     m_comp->showForTx();
     m_pudu->showForTx();
     m_reverb->showForTx();
+    m_cfc->showForTx();
     m_waveform->showForTx();
     m_finalOutput->showForTx();
 
@@ -387,6 +396,7 @@ bool AetherialAudioStrip::stageEnabled(Stage stage) const
         case Tube:   return m_audio->clientTubeTx()  && m_audio->clientTubeTx()->isEnabled();
         case Enh:    return m_audio->clientPuduTx()  && m_audio->clientPuduTx()->isEnabled();
         case Reverb: return m_audio->clientReverbTx() && m_audio->clientReverbTx()->isEnabled();
+        case Cfc:    return m_audio->clientCfcTx()    && m_audio->clientCfcTx()->isEnabled();
         default:     return false;
     }
 }
@@ -418,6 +428,12 @@ void AetherialAudioStrip::setStageEnabled(Stage stage, bool on)
         case Reverb:
             if (auto* r = m_audio->clientReverbTx()) {
                 r->setEnabled(on); m_audio->saveClientReverbSettings();
+            }
+            break;
+        case Cfc:
+            if (auto* c = m_audio->clientCfcTx()) {
+                c->setEnabled(on);
+                m_audio->saveClientCfcSettings();
             }
             break;
         default:
@@ -583,6 +599,7 @@ void AetherialAudioStrip::refreshAllPanelsFromEngine()
     if (m_comp)   m_comp->syncControlsFromEngine();
     if (m_pudu)   m_pudu->syncControlsFromEngine();
     if (m_reverb) m_reverb->syncControlsFromEngine();
+    if (m_cfc)    m_cfc->syncControlsFromEngine();
     if (m_waveform)    m_waveform->syncControlsFromEngine();
     if (m_finalOutput) m_finalOutput->syncControlsFromEngine();
     if (m_tabs)   m_tabs->refreshFromHost();

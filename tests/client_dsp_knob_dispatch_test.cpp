@@ -6,16 +6,20 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ClientCfc.h"
 #include "core/ClientComp.h"
 #include "core/ClientGate.h"
 #include "core/ClientReverb.h"
 #include "core/ClientTube.h"
+#include "gui/ClientCfcApplet.h"
+#include "gui/ClientCfcCurveWidget.h"
 #include "gui/ClientCompApplet.h"
 #include "gui/ClientCompKnob.h"
 #include "gui/ClientGateApplet.h"
 #include "gui/StripTubePanel.h"
 #include "gui/ClientReverbApplet.h"
 #include "gui/ClientTubeApplet.h"
+#include "gui/StripCfcPanel.h"
 #include "gui/StripReverbPanel.h"
 
 #include <QApplication>
@@ -118,6 +122,40 @@ private slots:
         QCOMPARE(engine.clientReverbTx()->size(), 0.3f);
     }
 
+    void cfcAppletPrecomp()
+    {
+        AudioEngine engine;
+        ClientCfcApplet applet;
+        applet.setAudioEngine(&engine);
+        ClientCompKnob* knob = firstKnob(applet);
+        QVERIFY(knob);
+        emit knob->valueChanged(6.0f);
+        QCOMPARE(engine.clientCfcTx()->precompDb(), 6.0f);
+    }
+
+    void stripCfcPrecomp()
+    {
+        AudioEngine engine;
+        StripCfcPanel panel(&engine);
+        ClientCompKnob* knob = firstKnob(panel);
+        QVERIFY(knob);
+        emit knob->valueChanged(4.5f);
+        QCOMPARE(engine.clientCfcTx()->precompDb(), 4.5f);
+    }
+
+    // Double-clicking empty curve space adds a band to the engine's profile.
+    void stripCfcCurveAddsABand()
+    {
+        AudioEngine engine;
+        StripCfcPanel panel(&engine);
+        auto* curve = panel.findChild<ClientCfcCurveWidget*>();
+        QVERIFY(curve);
+        curve->resize(560, 220);
+        const auto before = engine.clientCfcTx()->bands().size();
+        QTest::mouseDClick(curve, Qt::LeftButton, {}, QPoint(curve->width() / 2, 40));
+        QCOMPARE(engine.clientCfcTx()->bands().size(), before + 1);
+    }
+
     void knobsWithoutEngineAreNoOps()
     {
         ClientCompApplet comp;
@@ -125,9 +163,12 @@ private slots:
         ClientTubeApplet tube;
         ClientReverbApplet reverb;
         StripReverbPanel strip(nullptr);
+        ClientCfcApplet cfc;
+        StripCfcPanel cfcStrip(nullptr);
         for (QWidget* w : {static_cast<QWidget*>(&comp), static_cast<QWidget*>(&gate),
                            static_cast<QWidget*>(&tube),
-                           static_cast<QWidget*>(&reverb), static_cast<QWidget*>(&strip)}) {
+                           static_cast<QWidget*>(&reverb), static_cast<QWidget*>(&strip),
+                           static_cast<QWidget*>(&cfc), static_cast<QWidget*>(&cfcStrip)}) {
             ClientCompKnob* knob = firstKnob(*w);
             QVERIFY(knob);
             emit knob->valueChanged(knob->value());

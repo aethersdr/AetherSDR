@@ -7,6 +7,7 @@
 #include "core/AetherTxProfiles.h"
 #include "core/ChannelStripPresets.h"
 #include "core/AudioEngine.h"
+#include "core/ClientCfc.h"
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
 #include "core/SettingsPaths.h"
@@ -49,6 +50,7 @@ private slots:
     void aRefusedWriteKeepsTheLibraryAndReportsFailure();
     void roundTripsTheLiveTransmitChain();
     void aLegacyGateProfileTurnsRn2On();
+    void roundTripsTheCfcStage();
     void exportsAndRestoresCompressorDriveAndPhase();
     void legacyCompressorProfilesKeepCurrentDriveAndPhase();
     void importedCompressorValuesAreClamped();
@@ -325,6 +327,33 @@ void AetherTxProfilesTest::aLegacyGateProfileTurnsRn2On()
     withDeEss["deess"] = QJsonObject{ { "enabled", true }, { "amountDb", -12.0 } };
     ChannelStripPresets::applyTxJson(&engine, withDeEss);
     QVERIFY(!engine.txChainStages().contains(AudioEngine::TxChainStage::DeEss));
+}
+
+// The CFC rides in a profile as the same object as its settings key.
+void AetherTxProfilesTest::roundTripsTheCfcStage()
+{
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine, nullptr);
+    ClientCfc* cfc = engine.clientCfcTx();
+    QVERIFY(cfc);
+    const std::vector<ClientCfc::Band> saved{{300.0f, 4.0f, 2.0f}, {1200.0f, 9.0f, 0.0f},
+                                             {3300.0f, 6.0f, -1.0f}};
+    cfc->setEnabled(true);
+    cfc->setFftSize(2048);
+    cfc->setPrecompDb(5.0f);
+    cfc->setBands(saved);
+    QVERIFY(lib.saveFromCurrent("CFC Round Trip"));
+
+    cfc->setEnabled(false);
+    cfc->setFftSize(16384);
+    cfc->setPrecompDb(0.0f);
+    cfc->setBands(ClientCfc::defaultBands());
+    QVERIFY(lib.loadProfile("CFC Round Trip"));
+
+    QVERIFY(cfc->isEnabled());
+    QCOMPARE(cfc->fftSize(), 2048);
+    QCOMPARE(cfc->precompDb(), 5.0f);
+    QVERIFY(cfc->bands() == saved);
 }
 
 void AetherTxProfilesTest::exportsAndRestoresCompressorDriveAndPhase()

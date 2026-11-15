@@ -1,6 +1,8 @@
 #include "ChannelStripPresets.h"
 
 #include "AudioEngine.h"
+#include "ClientCfc.h"
+#include "ClientCfcJson.h"
 #include "ClientComp.h"
 #include "ClientEq.h"
 #include "ClientFinalLimiter.h"
@@ -39,6 +41,7 @@ QString stageEnumToName(AudioEngine::TxChainStage s)
         case AudioEngine::TxChainStage::Tube:   return "Tube";
         case AudioEngine::TxChainStage::Enh:    return "Enh";
         case AudioEngine::TxChainStage::Reverb: return "Reverb";
+        case AudioEngine::TxChainStage::Cfc:    return "Cfc";
         case AudioEngine::TxChainStage::None:   return "";
     }
     return "";
@@ -762,6 +765,11 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
         preset["reverb"] = o;
     }
 
+    // CFC: the same object as its settings key.
+    if (auto* c = engine->clientCfcTx()) {
+        preset["cfc"] = clientCfcToJson(*c);
+    }
+
     // RN2 mic pre-amp (#3054).  Sibling of the per-stage objects so a
     // future NR-cluster addition can extend `rn2` into an object —
     // today we only persist the enable bit because that is the entire
@@ -903,6 +911,12 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
         r->setMix(jnum(o, "mix", r->mix()));
     }
 
+    // CFC.
+    if (auto* c = engine->clientCfcTx();
+        c && preset.contains("cfc") && preset.value("cfc").isObject()) {
+        applyClientCfcJson(*c, preset.value("cfc").toObject());
+    }
+
     // Final brickwall limiter.
     if (auto* lim = engine->clientFinalLimiterTx();
         lim && preset.contains("finalLimiter")
@@ -933,6 +947,7 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
     engine->saveClientTubeSettings();
     engine->saveClientPuduSettings();
     engine->saveClientReverbSettings();
+    engine->saveClientCfcSettings();
     engine->saveClientFinalLimiterSettings();
 }
 

@@ -17,6 +17,7 @@ class ClientFinalLimiter;
 class ClientPudu;
 class ClientQuindarTone;
 class ClientReverb;
+class ClientCfc;
 class ClientTube;
 class ClientTxTestTone;
 class RNNoiseFilter;
@@ -51,6 +52,7 @@ public:
         Tube = 5,
         Enh = 6,
         Reverb = 7,
+        Cfc = 8,
     };
 
     struct Processors {
@@ -61,6 +63,7 @@ public:
         ClientTube* tube{nullptr};
         ClientPudu* pudu{nullptr};
         ClientReverb* reverb{nullptr};
+        ClientCfc* cfc{nullptr};
         ClientFinalLimiter* finalLimiter{nullptr};
         ClientTxTestTone* testTone{nullptr};
         // RNNoiseFilter is deliberately absent: it is the one processor whose
@@ -138,7 +141,8 @@ public:
 
     // Configured-path delay expressed in 48 kHz DSP frames. Includes exact
     // serial ingress/egress SRC group delay, RNNoise's nominal one-frame delay,
-    // and the final limiter's look-ahead while it is enabled. The matched L/R egress SRCs run in parallel
+    // the enabled CFC block and the final limiter's look-ahead while it is
+    // enabled. The matched L/R egress SRCs run in parallel
     // and therefore contribute one delay. RNNoise's callback-sized streaming
     // adapter can add startup silence for irregular block partitions, so its
     // term is not an exact wall-clock guarantee. Reverb pre-delay is an

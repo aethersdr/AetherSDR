@@ -98,6 +98,7 @@
 #include "ClientPuduApplet.h"
 #include "ClientPuduEditor.h"
 #include "ClientReverbApplet.h"
+#include "ClientCfcApplet.h"
 #include "AetherialAudioStrip.h"
 #include "StripFinalOutputPanel.h"
 #include "ClientChainApplet.h"
@@ -3152,6 +3153,10 @@ void MainWindow::onTxChainStageEnabledChanged(
     } else if (stage == AudioEngine::TxChainStage::Reverb) {
         if (m_appletPanel->clientReverbApplet())
             m_appletPanel->clientReverbApplet()->refreshEnableFromEngine();
+    } else if (stage == AudioEngine::TxChainStage::Cfc) {
+        if (m_appletPanel->clientCfcApplet()) {
+            m_appletPanel->clientCfcApplet()->refreshEnableFromEngine();
+        }
     }
     // Cross-paint: nudge whichever chain widget didn't initiate the
     // change.  Engine state is the source of truth — both widgets read

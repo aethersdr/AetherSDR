@@ -6,6 +6,7 @@
 #include "ClientPudu.h"
 #include "ClientQuindarTone.h"
 #include "ClientReverb.h"
+#include "ClientCfc.h"
 #include "ClientTube.h"
 #include "ClientTxTestTone.h"
 #include "RNNoiseFilter.h"
@@ -91,6 +92,9 @@ void TxVoiceProcessor::prepareProcessors()
     if (m_processors.pudu) {
         m_processors.pudu->prepare(kDspRate);
     }
+    if (m_processors.cfc) {
+        m_processors.cfc->prepare(kDspRate);
+    }
     if (m_processors.reverb) {
         m_processors.reverb->prepare(kDspRate);
     }
@@ -130,6 +134,9 @@ void TxVoiceProcessor::reset()
     }
     if (m_processors.pudu) {
         m_processors.pudu->reset();
+    }
+    if (m_processors.cfc) {
+        m_processors.cfc->reset();
     }
     if (m_processors.reverb) {
         m_processors.reverb->reset();
@@ -498,6 +505,11 @@ void TxVoiceProcessor::processChannelStrip(QByteArray& float48Stereo) noexcept
                     m_processors.reverb->process(samples, frames, kChannels);
                 }
                 break;
+            case Stage::Cfc:
+                if (m_processors.cfc && m_processors.cfc->isEnabled()) {
+                    m_processors.cfc->process(samples, frames, kChannels);
+                }
+                break;
         }
     }
 }
@@ -538,6 +550,15 @@ int TxVoiceProcessor::latencyFrames() const noexcept
         : 0;
     if (m_processors.finalLimiter) {
         frames += m_processors.finalLimiter->latencyFrames();
+    }
+    for (int index = 0; index < kMaxStages; ++index) {
+        const Stage stage = TxChainLayout::slot<Stage>(m_packedStages, index);
+        if (stage == Stage::None) {
+            break;
+        }
+        if (stage == Stage::Cfc && m_processors.cfc && m_processors.cfc->isEnabled()) {
+            frames += m_processors.cfc->latencyFrames();
+        }
     }
     return frames;
 }
