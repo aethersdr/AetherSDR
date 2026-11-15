@@ -158,6 +158,7 @@ func newAPIWithAetherPDReader(n *Node, read func(context.Context) (aetherPDStatu
 	mux.HandleFunc("POST /v1/aetherpd/capture", aetherPDCaptureHandler(n, true))
 	mux.HandleFunc("GET /v1/aetherpd/capture/{captureID}/{chunk}", aetherPDCaptureHandler(n, false))
 	mux.HandleFunc("GET /v1/aetherpd/status", aetherPDSessionHandler(n, 'S', aetherPDStatusHandler(n, read)))
+	mux.HandleFunc("POST /v1/aetherpd/measurement/arm", aetherPDSessionHandler(n, 'M', aetherPDCalibrationHandler(n, 'M')))
 	mux.HandleFunc("POST /v1/aetherpd/calibration/arm", aetherPDSessionHandler(n, 'A', aetherPDCalibrationHandler(n, 'A')))
 	mux.HandleFunc("POST /v1/aetherpd/calibration/cancel", aetherPDSessionHandler(n, 'X', aetherPDCalibrationHandler(n, 'X')))
 	mux.HandleFunc("POST /v1/aetherpd/receive/restore", aetherPDSessionHandler(n, 'R', aetherPDReceiveRestoreHandler(n)))

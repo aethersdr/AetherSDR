@@ -176,7 +176,7 @@ bool AetherPDModel::request(aetherpd::Operation operation)
         const bool preempts = (operation == Operation::Stop && *m_pending != Operation::Stop)
             || (operation == Operation::Start && *m_pending == Operation::Status)
             || (operation == Operation::CancelCalibration
-                && (*m_pending == Operation::Status || *m_pending == Operation::ArmCalibration));
+                && (*m_pending == Operation::Status || *m_pending == Operation::ArmCalibration || *m_pending == Operation::ArmMeasurement));
         if (!preempts) {
             emit operationFailed(operation, Failure::Busy);
             return false;
@@ -188,9 +188,11 @@ bool AetherPDModel::request(aetherpd::Operation operation)
         emit operationFailed(operation, Failure::InvalidRequest);
         return false;
     }
-    if (operation == Operation::ArmCalibration
+    if ((operation == Operation::ArmCalibration || operation == Operation::ArmMeasurement)
         && (!observed || !observed->available || !observed->registered
-            || observed->keyed || !observed->correctionEnabled || !observed->calibrationControl
+            || observed->keyed || !observed->calibrationControl
+            || (operation == Operation::ArmCalibration && !observed->correctionEnabled)
+            || (operation == Operation::ArmMeasurement && !observed->measurementControl)
             || observed->state == aetherpd::State::BlockedByRadioApd
             || observed->calibrationState == aetherpd::CalibrationState::Armed
             || observed->calibrationState == aetherpd::CalibrationState::Running)) {

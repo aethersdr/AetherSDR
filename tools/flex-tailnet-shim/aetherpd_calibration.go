@@ -35,7 +35,7 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			return
 		}
 		operationContext := r.Context()
-		if opcode == 'A' {
+		if opcode == 'A' || opcode == 'M' {
 			armContext, finish, err := process.calibrationIntents.beginArm(operationContext)
 			if errors.Is(err, errPDCalibrationStopped) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
@@ -50,8 +50,15 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 		} else if opcode == 'X' {
 			process.calibrationIntents.cancelPendingArm()
 		}
+		if opcode == 'M' {
+			status, err := process.queryStatus(operationContext)
+			if err != nil || !status.Available || !status.Registered || !status.MeasurementControl {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "measurement_unavailable"})
+				return
+			}
+		}
 		var observed pdReceiveView
-		if opcode == 'A' && process.receiveJournal != nil {
+		if (opcode == 'A' || opcode == 'M') && process.receiveJournal != nil {
 			var err error
 			observed, err = observe(operationContext, process.receiveJournal.original)
 			if err != nil {
@@ -69,12 +76,12 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			return
 		}
 		result, err := process.calibrate(operationContext, opcode)
-		if opcode == 'A' && (err != nil || operationContext.Err() != nil) {
+		if (opcode == 'A' || opcode == 'M') && (err != nil || operationContext.Err() != nil) {
 			cancelFailedAetherPDArm(process)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
 			return
 		}
-		if err == nil && result == 0 && opcode == 'A' && process.receiveJournal != nil {
+		if err == nil && result == 0 && (opcode == 'A' || opcode == 'M') && process.receiveJournal != nil {
 			if journalErr := process.receiveJournal.recordPD(observed, time.Now()); journalErr != nil {
 				cancelFailedAetherPDArm(process)
 				log.Printf("AetherPD: calibration receive journal rejected: %v", journalErr)
@@ -84,7 +91,7 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			log.Print("AetherPD: recorded owned PD receiver in receive-recovery journal")
 		}
 		if !n.checkToken(token) {
-			if opcode == 'A' && err == nil && result == 0 {
+			if (opcode == 'A' || opcode == 'M') && err == nil && result == 0 {
 				cancelFailedAetherPDArm(process)
 			}
 			writeJSON(w, http.StatusUnauthorized, apiError{errUnauthorized.Error()})
@@ -103,6 +110,9 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			return
 		}
 		state := "calibration_arm_accepted"
+		if opcode == 'M' {
+			state = "measurement_arm_accepted"
+		}
 		if opcode == 'X' {
 			state = "calibration_cancel_accepted"
 		}

@@ -35,7 +35,7 @@ func newPDCalibrationChannel() (*net.UnixConn, *os.File, error) {
 	return unix, child, nil
 }
 func (p *aetherPDProcess) calibrate(ctx context.Context, opcode byte) (int, error) {
-	if opcode != 'A' && opcode != 'X' {
+	if opcode != 'A' && opcode != 'M' && opcode != 'X' {
 		return 0, errors.New("invalid calibration command")
 	}
 	if p == nil || p.calibration == nil || p.calibrationReads == nil {

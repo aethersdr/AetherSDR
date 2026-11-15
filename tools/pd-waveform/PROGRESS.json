@@ -568,5 +568,35 @@
       "Installed qualification and bounded RF measurements; this checkpoint does not change the installed source 1316e4d80e7b5666e3a7579542086b67367e4f03.",
       "All outstanding P1-P10 production and hardware qualification requirements remain."
     ]
+  },
+  "measurement_source_control_integration": {
+    "status": "native_shim_private_session_and_desktop_protocol_model_verified_offline_not_installed",
+    "production_ready": false,
+    "evidence": "measurement-source-development/validation.json under evidence_root",
+    "completed": [
+      "Fixed authenticated empty-body measurement arm M preserves the model at arm admission; neither A nor M keys RF.",
+      "PDTALK04 session capability plus fresh owned-native measurement_control report; legacy requests rejected without sending M.",
+      "Shared cancellation handles pending snapshots and lost replies for both arm purposes; fallback retires owned DSP if cancellation cannot be confirmed.",
+      "Explicit source_purpose and measurement_armed status parsed by desktop; model gates capability, supports uncorrected baseline, and fences late replies after cancel.",
+      "Existing operator status displays measurement arm and leaves shared cancellation available; no measurement start controls yet."
+    ],
+    "checks": {
+      "focused_ctests": 7,
+      "go_race": true,
+      "native_sanitizers": "ASan/UBSan/LSan including native core dependencies, three tests",
+      "desktop_sanitizers": "ASan/UBSan/LSan scoped protocol/client/model/capture/test-client and model test",
+      "mutation_checks": 3,
+      "native_armv7_and_arm64_builds": true,
+      "shim_armv7_and_arm64_test_compiles": true,
+      "docs_build": true
+    },
+    "remaining": [
+      "Bind measurement preparation and key admission to a fresh, matching measurement-source arm; current AetherPDMeasurementModel does not yet enforce source purpose.",
+      "Capture must exclude the fixed four-second alignment-noise preamble and the final microphone blend. Implement source-phase/capture provenance and bounded timing before exposing a measurement key control.",
+      "Current controller default ten-second total budget minus 3.5-second cleanup and one-second startup reserves leaves about 5.5 seconds for keying; reconcile it with the four-second preamble and 48kHz capture transfer/averaging, without weakening independent unkey.",
+      "Wire PR4770 operator controls, measurements and export, then install and qualify actual final workflow and matched RF.",
+      "Full P1-P10 production scope remains; actual6300 qualification, current-candidate reboot/failures, sustained RF/stockAPD comparison and release gates are incomplete."
+    ],
+    "installed_source_unchanged": "1316e4d80e7b5666e3a7579542086b67367e4f03"
   }
 }

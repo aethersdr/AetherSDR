@@ -115,10 +115,10 @@ int main(int argc, char** argv)
         check(fixture.open(QIODevice::ReadOnly), "shared measured fixture missing");
         check(parseStatus(fixture.readAll()).has_value(), "measured Go HTTP status contract rejected");
     }
-    const std::array<Operation, 6> operations{Operation::Status, Operation::ArmCalibration,
-        Operation::CancelCalibration, Operation::Stop, Operation::RestoreReceive, Operation::Start};
-    const std::array<const char*, 6> paths{"/v1/aetherpd/status", "/v1/aetherpd/calibration/arm",
-        "/v1/aetherpd/calibration/cancel", "/v1/aetherpd/stop", "/v1/aetherpd/receive/restore", "/v1/aetherpd/start"};
+    const std::array<Operation, 7> operations{Operation::Status, Operation::ArmCalibration,
+        Operation::CancelCalibration, Operation::Stop, Operation::RestoreReceive, Operation::Start, Operation::ArmMeasurement};
+    const std::array<const char*, 7> paths{"/v1/aetherpd/status", "/v1/aetherpd/calibration/arm",
+        "/v1/aetherpd/calibration/cancel", "/v1/aetherpd/stop", "/v1/aetherpd/receive/restore", "/v1/aetherpd/start", "/v1/aetherpd/measurement/arm"};
     for (std::size_t i = 0; i < operations.size(); ++i) {
         const std::optional<Request> r = request(operations[i]);
         check(r && r->path == QLatin1String(paths[i]) && r->timeoutMs > 0 && r->timeoutMs <= (operations[i] == Operation::Start ? 22'000 : 8'000),
@@ -243,8 +243,32 @@ int main(int argc, char** argv)
     o = idle(); o[QStringLiteral("calibration_control")] = false; o.remove(QStringLiteral("calibration_state"));
     check(parseStatus(encode(o)).has_value(), "legacy source-control absence rejected");
 
+    o = idle();
+    check(!parseStatus(encode(o))->measurementControl, "legacy status advertises measurement capability");
+    o[QStringLiteral("measurement_control")] = true;
+    rejects(o, "measurement capability without source purpose accepted");
+    o[QStringLiteral("source_purpose")] = QStringLiteral("measurement");
+    o[QStringLiteral("calibration_state")] = QStringLiteral("armed");
+    o[QStringLiteral("calibration_samples_left")] = 192000;
+    o[QStringLiteral("state")] = QStringLiteral("measurement_armed");
+    check(parseStatus(encode(o))->sourcePurpose == SourcePurpose::Measurement, "measurement arm purpose lost");
+    o[QStringLiteral("correction_enabled")] = false;
+    o[QStringLiteral("state")] = QStringLiteral("disabled");
+    check(parseStatus(encode(o)).has_value(), "uncorrected measurement rejected");
+    for (const QJsonValue& bad : {QJsonValue(QJsonValue::Null), QJsonValue(17), QJsonValue("unexpected")}) {
+        QJsonObject invalid = o;
+        invalid[QStringLiteral("measurement_control")] = bad;
+        rejects(invalid, "malformed measurement capability accepted");
+        invalid = o;
+        invalid[QStringLiteral("source_purpose")] = bad;
+        rejects(invalid, "malformed source purpose accepted");
+    }
+    o[QStringLiteral("measurement_control")] = false;
+    rejects(o, "measurement purpose admitted without capability");
+
     struct AckCase { Operation operation; int code; const char* body; Acknowledgment expected; };
-    const std::array<AckCase, 5> replies{{
+    const std::array<AckCase, 6> replies{{
+        {Operation::ArmMeasurement, 200, R"({"state":"measurement_arm_accepted"})", Acknowledgment::MeasurementArmAccepted},
         {Operation::Start, 202, R"({"state":"start_requested"})", Acknowledgment::StartRequested},
         {Operation::ArmCalibration, 200, R"({"state":"calibration_arm_accepted"})", Acknowledgment::ArmAccepted},
         {Operation::CancelCalibration, 200, R"({"state":"calibration_cancel_accepted"})", Acknowledgment::CancelAccepted},

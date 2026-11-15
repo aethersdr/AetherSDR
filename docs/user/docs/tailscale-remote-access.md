@@ -523,6 +523,12 @@ credential for the connected radio. Opening it reads status only.
 - **Refresh** reads status or reloads a missing/rejected credential. After a
   radio reconnect, close and reopen the window for the new connection.
 
+If a development measurement client arms the shared source, the window can
+show **Measurement tones armed — waiting for your transmission**.
+**Cancel calibration** also cancels that source. An arm receipt does not
+confirm transmission or correction. The integrated measurement controls are
+still in development.
+
 **Status unknown** means there is no fresh observation. The window does not
 retry Start, calibration or Stop automatically after a lost reply. The released
 Remote Access package alone does not supply the AetherPD installation required

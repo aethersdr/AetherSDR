@@ -22,6 +22,8 @@ var aetherPDReads = make(chan struct{}, 1)
 // This report never authorizes capture provisioning or transmitter control.
 type aetherPDStatus struct {
 	InputLimitedSamples    uint64         `json:"input_limited_samples"`
+	MeasurementControl     bool           `json:"measurement_control,omitempty"`
+	SourcePurpose          string         `json:"source_purpose,omitempty"`
 	CalibrationControl     bool           `json:"calibration_control"`
 	CalibrationState       string         `json:"calibration_state,omitempty"`
 	CalibrationSamplesLeft uint32         `json:"calibration_samples_left,omitempty"`
@@ -128,6 +130,25 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 	} else if _, present := fields["calibration_samples_left"]; present {
 		return result, errors.New("partial calibration status")
 	}
+	if _, present := fields["measurement_control"]; present {
+		if err = read("measurement_control", &result.MeasurementControl); err != nil {
+			return result, err
+		}
+		if err = read("source_purpose", &result.SourcePurpose); err != nil {
+			return result, err
+		}
+		if result.SourcePurpose != "calibration" && result.SourcePurpose != "measurement" {
+			return result, errors.New("invalid source purpose")
+		}
+		if result.MeasurementControl && !result.CalibrationControl {
+			return result, errors.New("measurement requires source control")
+		}
+		if result.SourcePurpose == "measurement" && !result.MeasurementControl {
+			return result, errors.New("measurement source unavailable")
+		}
+	} else if _, present := fields["source_purpose"]; present {
+		return result, errors.New("partial measurement status")
+	}
 	if _, present := fields["limited_samples"]; present {
 		if err = read("limited_samples", &result.InputLimitedSamples); err != nil {
 			return result, err
@@ -165,6 +186,9 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 		result.State = "blocked_by_radio_apd"
 	case result.CalibrationState == "armed":
 		result.State = "calibration_armed"
+		if result.SourcePurpose == "measurement" {
+			result.State = "measurement_armed"
+		}
 	case result.CalibrationRequired:
 		result.State = "recalibration_required"
 	case !result.Keyed:

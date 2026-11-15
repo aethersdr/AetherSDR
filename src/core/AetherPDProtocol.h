@@ -9,14 +9,15 @@
 namespace AetherSDR::aetherpd {
 
 // These are the shim's bounded control verbs. None can key the transmitter.
-enum class Operation { Status, ArmCalibration, CancelCalibration, Stop, RestoreReceive, Start };
+enum class Operation { Status, ArmMeasurement, ArmCalibration, CancelCalibration, Stop, RestoreReceive, Start };
 enum class State {
-    Unavailable, Starting, Disabled, BlockedByRadioApd, CalibrationArmed,
+    Unavailable, Starting, Disabled, BlockedByRadioApd, MeasurementArmed, CalibrationArmed,
     RecalibrationRequired, Idle, Correcting, Calibrating, Stopped, CleanupUnconfirmed,
     StoppedReceiveUnconfirmed
 };
+enum class SourcePurpose { Calibration, Measurement };
 enum class CalibrationState { Unavailable, Idle, Completed, Canceled, Expired, Armed, Running };
-enum class Acknowledgment { ArmAccepted, CancelAccepted, StopRequested, ReceiveRestored, StartRequested };
+enum class Acknowledgment { MeasurementArmAccepted, ArmAccepted, CancelAccepted, StopRequested, ReceiveRestored, StartRequested };
 
 struct StartIdentity {
     QString guiClientId;
@@ -40,6 +41,8 @@ struct Status {
     bool correcting{false};
     bool calibrationRequired{false};
     bool calibrationControl{false};
+    bool measurementControl{false};
+    SourcePurpose sourcePurpose{SourcePurpose::Calibration};
     CalibrationState calibrationState{CalibrationState::Unavailable};
     quint32 calibrationSamplesLeft{0};
     quint64 inputLimitedSamples{0};

@@ -155,6 +155,7 @@ std::optional<State> state(const QJsonValue& value)
     if (text == QLatin1String("starting")) { return State::Starting; }
     if (text == QLatin1String("disabled")) { return State::Disabled; }
     if (text == QLatin1String("blocked_by_radio_apd")) { return State::BlockedByRadioApd; }
+    if (text == QLatin1String("measurement_armed")) { return State::MeasurementArmed; }
     if (text == QLatin1String("calibration_armed")) { return State::CalibrationArmed; }
     if (text == QLatin1String("recalibration_required")) { return State::RecalibrationRequired; }
     if (text == QLatin1String("idle")) { return State::Idle; }
@@ -192,12 +193,14 @@ bool consistent(const Status& s)
                          || s.calibrationRequired || s.state == State::BlockedByRadioApd)) {
         return false;
     }
+    if (s.measurementControl && !s.calibrationControl) { return false; }
+    if (s.sourcePurpose == SourcePurpose::Measurement && !s.measurementControl) { return false; }
     if (s.calibrationRequired && !s.faults.any()) { return false; }
     State expected = State::Calibrating;
     if (!s.registered) { expected = State::Starting; }
     else if (!s.correctionEnabled) { expected = State::Disabled; }
     else if (s.state == State::BlockedByRadioApd) { expected = State::BlockedByRadioApd; }
-    else if (armed) { expected = State::CalibrationArmed; }
+    else if (armed) { expected = s.sourcePurpose == SourcePurpose::Measurement ? State::MeasurementArmed : State::CalibrationArmed; }
     else if (s.calibrationRequired) { expected = State::RecalibrationRequired; }
     else if (!s.keyed) { expected = State::Idle; }
     else if (s.correcting) { expected = State::Correcting; }
@@ -214,6 +217,7 @@ std::optional<Request> request(Operation operation)
 {
     switch (operation) {
     case Operation::Status: return Request{"GET", QStringLiteral("/v1/aetherpd/status"), 2'000};
+    case Operation::ArmMeasurement: return Request{"POST", QStringLiteral("/v1/aetherpd/measurement/arm"), 8'000};
     case Operation::ArmCalibration: return Request{"POST", QStringLiteral("/v1/aetherpd/calibration/arm"), 8'000};
     case Operation::CancelCalibration: return Request{"POST", QStringLiteral("/v1/aetherpd/calibration/cancel"), 3'000};
     case Operation::Stop: return Request{"POST", QStringLiteral("/v1/aetherpd/stop"), 3'000};
@@ -262,6 +266,7 @@ std::optional<Status> parseStatus(const QByteArray& json)
         QStringLiteral("keyed"), QStringLiteral("correction_enabled"), QStringLiteral("correcting"),
         QStringLiteral("calibration_required"), QStringLiteral("calibration_control"),
         QStringLiteral("calibration_state"), QStringLiteral("calibration_samples_left"),
+        QStringLiteral("measurement_control"), QStringLiteral("source_purpose"),
         QStringLiteral("input_limited_samples"), QStringLiteral("faults")};
     for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
         if (!known.contains(it.key())) { return std::nullopt; }
@@ -290,6 +295,14 @@ std::optional<Status> parseStatus(const QByteArray& json)
         if (!counter(o, "calibration_samples_left", left) || left > 192'000) { return std::nullopt; }
         s.calibrationSamplesLeft = static_cast<quint32>(left);
     }
+    if (o.contains(QStringLiteral("measurement_control"))
+        && !boolean(o, "measurement_control", s.measurementControl)) { return std::nullopt; }
+    if (o.contains(QStringLiteral("source_purpose"))) {
+        const QJsonValue purpose = o.value(QStringLiteral("source_purpose"));
+        if (!purpose.isString()) { return std::nullopt; }
+        if (purpose.toString() == QLatin1String("measurement")) { s.sourcePurpose = SourcePurpose::Measurement; }
+        else if (purpose.toString() != QLatin1String("calibration")) { return std::nullopt; }
+    } else if (s.measurementControl) { return std::nullopt; }
     return consistent(s) ? std::optional<Status>(s) : std::nullopt;
 }
 
@@ -303,6 +316,9 @@ std::optional<Acknowledgment> parseAcknowledgment(Operation operation, int httpS
     switch (operation) {
     case Operation::Start:
         if (httpStatus == 202 && value == QLatin1String("start_requested")) { return Acknowledgment::StartRequested; }
+        break;
+    case Operation::ArmMeasurement:
+        if (httpStatus == 200 && value == QLatin1String("measurement_arm_accepted")) { return Acknowledgment::MeasurementArmAccepted; }
         break;
     case Operation::ArmCalibration:
         if (httpStatus == 200 && value == QLatin1String("calibration_arm_accepted")) { return Acknowledgment::ArmAccepted; }

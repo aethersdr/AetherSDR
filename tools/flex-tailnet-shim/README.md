@@ -380,11 +380,36 @@ the compressed ARMv7 runtime, unkey helper, lease guardian and licenses; the lau
 them into RAM only when a descriptor handoff is present. This does not install the
 privileged IQ setup helper or enable correction by itself. The actual 6300 still requires kernel, scheduling and RF qualification.
 
+### Bounded measurement source (development)
+
+`POST /v1/aetherpd/measurement/arm` accepts the admin token and an empty
+request. It selects the same fixed eight-second source as calibration, with
+four seconds of alignment noise followed by 710/1900 Hz tones. Admission
+preserves the existing PA model; ordinary rekey validation and fault handling
+still apply. This operation never keys the radio. It also supports an
+uncorrected baseline when correction is disabled. The shared calibration
+cancel endpoint withdraws either source.
+
+The installed private session must advertise `PDTALK04`, and its owned DSP
+must report `measurement_control=true`. Older session versions reject the
+request locally without sending an unknown opcode or retiring the session.
+Native and public status report `source_purpose` as `calibration` or
+`measurement`; absent capability means unsupported. The shared
+`calibration_state` and sample counter describe either source. An armed
+measurement reports `measurement_armed` when correction is enabled; a
+correction-disabled baseline retains `disabled` with the explicit source
+purpose. An acceptance receipt alone does not establish source readiness.
+
+The desktop protocol/model can request and cancel this source. The operator
+measurement panel and capture timing integration remain unfinished: capture
+must exclude alignment noise and complete before source expiry. This
+component has not yet been installed or RF-qualified on a radio.
+
 ### Bounded calibration control (development)
 
 An owned managed session exposes `POST /v1/aetherpd/calibration/arm` and
 `POST /v1/aetherpd/calibration/cancel` with the admin token and no query or body.
-The shim creates a second private Unix datagram pair for these two fixed
+The shim creates a second private Unix datagram pair for fixed source
 commands; status remains read-only on its original socket. There are no caller
 parameters for tones, gain, duration, frequency, power, PID or executable.
 

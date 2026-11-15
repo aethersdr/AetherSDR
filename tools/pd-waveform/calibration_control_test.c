@@ -81,6 +81,12 @@ int main(void)
     uint64_t resets=w.correction_resets;
     assert(request(&w,'M',15).applied);
     assert(w.calibration.purpose==PD_SOURCE_MEASUREMENT && !w.keyed && !w.test_f1);
+    char measurement_status[4096];
+    int measurement_size=status_json(&w,measurement_status,sizeof(measurement_status));
+    assert(measurement_size>0 && (size_t)measurement_size<sizeof(measurement_status));
+    assert(strstr(measurement_status,"\"measurement_control\":true"));
+    assert(strstr(measurement_status,"\"source_purpose\":\"measurement\""));
+
     assert(w.acquisition_generation==generation && w.correction_resets==resets);
     int64_t measurement_deadline=w.calibration.deadline_ns;
     assert(!request(&w,'M',15).applied && w.calibration.deadline_ns==measurement_deadline);
@@ -88,6 +94,7 @@ int main(void)
     assert(w.calibration.purpose==PD_SOURCE_MEASUREMENT && w.acquisition_generation==generation);
     api_line(&w,own);
     assert(w.keyed && w.calibration.phase==PD_CAL_RUNNING && w.test_f1==710 && w.test_f2==1900);
+    assert(w.test_noise_left==TEST_NOISE_SAMPLES);
     assert(request(&w,'X',17).applied && w.keyed && !w.test_f1);
     api_line(&w,idle);w.local_iq.last_valid_ns=pd_iq_monotonic_ns();
     w.correct=0;

@@ -5,6 +5,8 @@
 #include "core/txlinearity/AetherPDTestClient.h"
 
 #include <QThread>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 int main(int argc, char** argv)
 {
@@ -126,6 +128,31 @@ int main(int argc, char** argv)
                 "retired helper lost original cleanup identity");
         }
         if (!bindingOk) { return 1; }
+    }
+    {
+        Network measurementNetwork;
+        AetherPDModel measurement(measurementNetwork);
+        measurement.setSession(address, token);
+        measurementNetwork.last->complete(200, idle);
+        const size_t requests = measurementNetwork.sent.size();
+        if (!check(!measurement.request(Operation::ArmMeasurement)
+            && measurementNetwork.sent.size() == requests, "legacy model admitted measurement source")) { return 1; }
+        QJsonObject supported = QJsonDocument::fromJson(idle).object();
+        supported[QStringLiteral("measurement_control")] = true;
+        supported[QStringLiteral("source_purpose")] = QStringLiteral("calibration");
+        supported[QStringLiteral("correction_enabled")] = false;
+        supported[QStringLiteral("state")] = QStringLiteral("disabled");
+        measurement.refresh();
+        measurementNetwork.last->complete(200, QJsonDocument(supported).toJson());
+        if (!check(measurement.request(Operation::ArmMeasurement)
+            && measurementNetwork.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/measurement/arm"),
+            "uncorrected measurement source was not submitted")) { return 1; }
+        Reply* pending = measurementNetwork.last;
+        if (!check(measurement.request(Operation::CancelCalibration) && pending->aborted,
+            "cancel failed to preempt pending measurement source")) { return 1; }
+        pending->complete(200, R"({"state":"measurement_arm_accepted"})");
+        if (!check(!measurement.lastAcknowledgment() && measurement.pendingOperation() == Operation::CancelCalibration,
+            "late measurement receipt overrode cancellation")) { return 1; }
     }
     Network network;
     AetherPDModel model(network);

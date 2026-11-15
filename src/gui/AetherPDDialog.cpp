@@ -28,6 +28,7 @@ QString stateText(aetherpd::State state)
     case State::Starting: return QObject::tr("Starting");
     case State::Disabled: return QObject::tr("Correction disabled");
     case State::BlockedByRadioApd: return QObject::tr("Blocked by radio APD");
+    case State::MeasurementArmed: return QObject::tr("Measurement tones armed — waiting for your transmission");
     case State::CalibrationArmed: return QObject::tr("Calibration armed — waiting for your transmission");
     case State::RecalibrationRequired: return QObject::tr("Calibration required");
     case State::Idle: return QObject::tr("Idle");
@@ -296,6 +297,7 @@ void AetherPDDialog::render()
         using aetherpd::Acknowledgment;
         switch (*model->lastAcknowledgment()) {
         case Acknowledgment::StartRequested: receipt = tr("Start requested; waiting for observed status."); break;
+        case Acknowledgment::MeasurementArmAccepted: receipt = tr("Measurement arm accepted; waiting for observed status."); break;
         case Acknowledgment::ArmAccepted: receipt = tr("Arm request accepted; waiting for observed status."); break;
         case Acknowledgment::CancelAccepted: receipt = tr("Cancel request accepted; waiting for observed status."); break;
         case Acknowledgment::StopRequested:
@@ -331,7 +333,7 @@ void AetherPDDialog::render()
     enable(m_arm, active && !installing && arm, installing ? tr("Wait for the service update to finish before arming calibration.")
         : tr("Fresh, unkeyed status with calibration available is required. Radio APD must be off."));
     if (!alive) { return; }
-    enable(m_cancel, active && (!pending || pending == Operation::Status || pending == Operation::ArmCalibration), unavailable);
+    enable(m_cancel, active && (!pending || pending == Operation::Status || pending == Operation::ArmCalibration || pending == Operation::ArmMeasurement), unavailable);
     if (!alive) { return; }
     enable(m_stop, active && pending != Operation::Stop, unavailable);
     if (!alive) { return; }

@@ -22,7 +22,7 @@ bool mayPreempt(aetherpd::Operation next, aetherpd::Operation current)
         return current == Operation::Status;
     }
     return next == Operation::CancelCalibration
-        && (current == Operation::Status || current == Operation::ArmCalibration);
+        && (current == Operation::Status || current == Operation::ArmCalibration || current == Operation::ArmMeasurement);
 }
 } // namespace
 

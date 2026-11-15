@@ -6,6 +6,8 @@
 
 #include <QApplication>
 #include <QLabel>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPushButton>
 #include <functional>
 #include <memory>
@@ -90,9 +92,22 @@ int main(int argc, char** argv)
     button(*dialog, "pdRefresh")->click();
     QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
     if (!fixture.open(QIODevice::ReadOnly)) { return 1; }
-    network.last->complete(200, fixture.readAll());
+    const QByteArray idleBody = fixture.readAll();
+    network.last->complete(200, idleBody);
     ok &= check(!button(*dialog, "pdStart")->isEnabled() && button(*dialog, "pdArm")->isEnabled(),
                 "fresh registered state gates calibration and duplicate startup");
+    QJsonObject measurementStatus = QJsonDocument::fromJson(idleBody).object();
+    measurementStatus[QStringLiteral("measurement_control")] = true;
+    measurementStatus[QStringLiteral("source_purpose")] = QStringLiteral("measurement");
+    measurementStatus[QStringLiteral("calibration_state")] = QStringLiteral("armed");
+    measurementStatus[QStringLiteral("calibration_samples_left")] = 192000;
+    measurementStatus[QStringLiteral("state")] = QStringLiteral("measurement_armed");
+    button(*dialog, "pdRefresh")->click();
+    const size_t beforeMeasurement = network.sent.size();
+    network.last->complete(200, QJsonDocument(measurementStatus).toJson());
+    ok &= check(label("pdState") == QStringLiteral("Measurement tones armed — waiting for your transmission")
+        && button(*dialog, "pdCancel")->isEnabled() && !button(*dialog, "pdArm")->isEnabled()
+        && network.sent.size() == beforeMeasurement, "measurement status neither keys nor rearms and keeps source cancel available");
     const size_t beforeClose = network.sent.size();
     dialog->reject();
     loaded(token);
