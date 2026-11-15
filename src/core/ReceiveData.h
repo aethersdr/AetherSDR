@@ -77,8 +77,20 @@ struct ReceiveStreamStats {
     struct Counters {
         qint64 bytes = 0;
         int packets = 0;
-        int errors = 0;
+        int errors = 0; // Missing packets; DAX retains sequence-break events.
         int late = 0;
+        int reordered = 0;
+        int breaks = 0; // Resolved gaps, independent of their missing-packet counts.
+
+        qint64 expectedPackets(Category category) const
+        {
+            return qint64(packets) + (category == Dax ? 0 : errors);
+        }
+        double lossPercent(Category category) const
+        {
+            const qint64 expected = expectedPackets(category);
+            return expected > 0 ? errors * 100.0 / expected : 0.0;
+        }
     };
 };
 
@@ -98,6 +110,7 @@ struct ReceiveTelemetry {
     qint64 txBytes = 0;
     int packets = 0;
     int errors = 0;
+    int breaks = 0; // Gap events, independent of the number of missing packets.
     int gapMs = 0;
     int gapMaxMs = 0;
     int jitterMs = 0;

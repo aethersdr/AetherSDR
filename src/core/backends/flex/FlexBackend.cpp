@@ -740,6 +740,8 @@ RadioCapabilities FlexBackend::capabilities() const
             "https://www.flexradio.com/documentation/smartsdr-v%1-release-notes/"),
         m_publishedReleases};
     caps.model = m_modelProvider ? m_modelProvider() : QString();
+    // The model string is this family's identity; no support tier reads a board.
+    caps.boardIdentity = std::nullopt;
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};
     // squelch_level 0..100 is dBm above -160 on the calibrated pan axis, in
