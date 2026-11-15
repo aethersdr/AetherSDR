@@ -1,0 +1,405 @@
+// Socket-free tests for TGXL custom antenna name parsing and TunerApplet wiring.
+//
+// All frames are injected via processLine() — the declared test seam in
+// TgxlConnection.h — so no fake TCP peer or real TGXL is required.
+// The antenna R-frame handler, the decode lambda (underscore→space, length
+// cap, control-character strip), and the TunerApplet setText wiring are all
+// exercised end-to-end through the live signal chain.
+
+#include "core/ThemeManager.h"
+#include "core/TgxlConnection.h"
+#include "core/backends/TunerDelta.h"
+#include "gui/TunerApplet.h"
+#include "models/TunerModel.h"
+
+#include <QApplication>
+#include <QDeadlineTimer>
+#include <QMetaObject>
+#include <QPushButton>
+#include <QStringList>
+
+#include <cstdio>
+
+namespace AetherSDR {
+struct PeripheralConnectionTestAccess {
+    static void captureCommands(TgxlConnection& connection, QStringList& commands)
+    {
+        connection.m_commandWriter = [&commands](const QByteArray& line) {
+            commands.append(QString::fromUtf8(line));
+        };
+    }
+    static void setPollInFlight(TgxlConnection& connection, bool value)
+    {
+        connection.m_pollInFlight = value;
+    }
+    static bool pollInFlight(const TgxlConnection& connection)
+    {
+        return connection.m_pollInFlight;
+    }
+};
+}
+
+using namespace AetherSDR;
+
+namespace {
+
+int g_failures = 0;
+
+#define CHECK(cond) do { if (!(cond)) { \
+    std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); \
+    ++g_failures; } } while (0)
+
+void settle(int ms = 120)
+{
+    QDeadlineTimer deadline(ms);
+    while (!deadline.hasExpired())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+}
+
+// Find an ant button by its initial default text (e.g. "ANT 1").
+// The ant buttons are the only QPushButtons in the applet with that exact text.
+QPushButton* findAntBtn(QWidget* applet, const QString& defaultText)
+{
+    for (auto* btn : applet->findChildren<QPushButton*>()) {
+        if (btn->text() == defaultText)
+            return btn;
+    }
+    return nullptr;
+}
+
+// Inject a protocol line into `conn` synchronously.
+bool inject(TgxlConnection* conn, const QString& line)
+{
+    return QMetaObject::invokeMethod(conn, "processLine", Qt::DirectConnection,
+                                     Q_ARG(QString, line));
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+
+    // ── Fixture: model + applet + 3-way direct connection ────────────────
+    //
+    // Relayed identification is the fallback until direct info identifies the variant.
+
+    TunerModel model;
+    model.setHandle(QStringLiteral("0x2000"));
+
+    {
+        TunerDelta d;
+        d.oneByThree = true;    // 3-way model: enable the antenna switch row
+        model.applyChanges(d);
+    }
+
+    TunerApplet applet;
+    applet.setTunerModel(&model);
+    applet.resize(300, 200);
+    applet.show();
+    settle();
+
+    // The ant buttons are always created; find them by their initial default
+    // text before any injection so we hold stable pointers through the test.
+    // (Other panel buttons — STBY, BYP, TUNE — have different text and are
+    // not matched here.)
+    QPushButton* b1 = findAntBtn(&applet, QStringLiteral("ANT 1"));
+    QPushButton* b2 = findAntBtn(&applet, QStringLiteral("ANT 2"));
+    QPushButton* b3 = findAntBtn(&applet, QStringLiteral("ANT 3"));
+
+    CHECK(b1 != nullptr);
+    CHECK(b2 != nullptr);
+    CHECK(b3 != nullptr);
+
+    if (!b1 || !b2 || !b3) {
+        std::fprintf(stderr, "SKIP: ant buttons not found — cannot continue\n");
+        return 1;
+    }
+
+    QStringList commands;
+    TgxlConnection direct;
+    PeripheralConnectionTestAccess::captureCommands(direct, commands);
+    model.setDirectConnection(&direct);
+
+    // Injecting the version line triggers finishHandshake(), which sets
+    // m_connected=true and emits connected() — without a real TCP socket.
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    settle();
+
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(b1->isVisible() && b2->isVisible() && b3->isVisible());
+    commands.clear();
+    b2->click();
+    CHECK(commands.size() == 1 && commands.front().contains(QStringLiteral("|activate ant=2\n")));
+    {
+        TunerDelta d;
+        d.oneByThree = false;
+        model.applyChanges(d);
+        CHECK(!b1->isVisible());
+        commands.clear();
+        model.setAntennaA(1);
+        CHECK(commands.isEmpty());
+        d.oneByThree = true;
+        model.applyChanges(d);
+        CHECK(b1->isVisible());
+    }
+    CHECK(inject(&direct, QStringLiteral("R99|0|serial=TG123 3way=1")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("S1|status antA=1")));
+    PeripheralConnectionTestAccess::setPollInFlight(direct, true);
+    CHECK(inject(&direct, QStringLiteral("R1|0|serial=TG123 3way=1")));
+    CHECK(PeripheralConnectionTestAccess::pollInFlight(direct));
+    PeripheralConnectionTestAccess::setPollInFlight(direct, false);
+    settle();
+    CHECK(b1->isVisible() && b2->isVisible() && b3->isVisible());
+    CHECK(model.antennaA() == 1);
+    CHECK(b2->styleSheet() != b1->styleSheet());
+    CHECK(b1->styleSheet() == b3->styleSheet());
+    commands.clear();
+    b1->click();
+    b2->click();
+    b3->click();
+    CHECK(commands.size() == 3);
+    if (commands.size() == 3) {
+        CHECK(commands.at(0).contains(QStringLiteral("|activate ant=1\n")));
+        CHECK(commands.at(1).contains(QStringLiteral("|activate ant=2\n")));
+        CHECK(commands.at(2).contains(QStringLiteral("|activate ant=3\n")));
+    }
+
+    // Buttons start at their defaults.
+    CHECK(b1->text() == QStringLiteral("ANT 1"));
+    CHECK(b2->text() == QStringLiteral("ANT 2"));
+    CHECK(b3->text() == QStringLiteral("ANT 3"));
+    // ── Happy path: all three names present ──────────────────────────────
+    //
+    // Firmware response to `antenna read` on a 3-way model. Underscores
+    // encode spaces; the names here are exactly 8 characters or fewer.
+
+    CHECK(inject(&direct, QStringLiteral("R2|0|antenna name1=Vertical name2=Invert_L name3=6M_Loop")));
+    settle();
+
+    CHECK(b1->text() == QStringLiteral("Vertical"));
+    CHECK(b2->text() == QStringLiteral("Invert L"));   // underscore → space
+    CHECK(b3->text() == QStringLiteral("6M Loop"));    // underscore → space
+
+    // ── Missing name2: button 2 stays at default ─────────────────────────
+
+    CHECK(inject(&direct, QStringLiteral("R3|0|antenna name1=40m_Wire name3=6M_Yagi")));
+    settle();
+
+    CHECK(b1->text() == QStringLiteral("40m Wire"));
+    CHECK(b2->text() == QStringLiteral("ANT 2"));      // empty → fallback
+    CHECK(b3->text() == QStringLiteral("6M Yagi"));
+
+    // ── All-empty names: all three keys present but with empty values ─────
+    //
+    // If the firmware returns name1= name2= name3= (empty values), every
+    // button falls back to its "ANT N" default.
+
+    CHECK(inject(&direct, QStringLiteral("R4|0|antenna name1= name2= name3=")));
+    settle();
+
+    CHECK(b1->text() == QStringLiteral("ANT 1"));
+    CHECK(b2->text() == QStringLiteral("ANT 2"));
+    CHECK(b3->text() == QStringLiteral("ANT 3"));
+
+    // ── Length cap: name longer than 8 chars is truncated ────────────────
+    //
+    // The TGXL firmware caps names at 8 characters. The client enforces the
+    // same limit so a misbehaving device cannot overflow the button widget.
+
+    CHECK(inject(&direct, QStringLiteral("R5|0|antenna name1=ABCDEFGHIJ name2=Short name3=X")));
+    settle();
+
+    CHECK(b1->text() == QStringLiteral("ABCDEFGH")); // truncated to 8
+    CHECK(b2->text() == QStringLiteral("Short"));
+    CHECK(b3->text() == QStringLiteral("X"));
+
+    // ── Ampersand escaping: '&' must not register as a mnemonic ──────────
+    //
+    // QPushButton renders '&' as an Alt-accelerator. A device-supplied name
+    // like "A&B" must be escaped to "A&&B" before setText so it displays as
+    // a literal '&' with no keybinding side-effect.
+    // setText receives the doubled form; text() returns what was passed to it.
+
+    CHECK(inject(&direct, QStringLiteral("R6|0|antenna name1=A&B name2=Normal name3=C&D")));
+    settle();
+
+    CHECK(b1->text() == QStringLiteral("A&&B"));
+    CHECK(b2->text() == QStringLiteral("Normal"));
+    CHECK(b3->text() == QStringLiteral("C&&D"));
+
+    // ── Disconnect: buttons reset to "ANT 1/2/3" ─────────────────────────
+
+    // Re-inject real names first so the reset is observable.
+    CHECK(inject(&direct, QStringLiteral("R7|0|antenna name1=Vertical name2=Invert_L name3=6M_Loop")));
+    settle();
+    CHECK(b1->text() == QStringLiteral("Vertical"));
+
+    // ── TX coloring: active button turns red while transmitting ──────────
+    //
+    // The TGXL hardware interlock is not always wired (TCI-only setups).
+    // TX is detected via forward power crossing 5 W, the same threshold
+    // the meter labels use. Status frames with antA=0 seat the selection;
+    // fwd=22.0 dBm (~160 mW) is below the threshold (RX noise floor in
+    // typical captures); fwd=50.0 dBm (100 W) is well above it.
+    //
+    // The RX status frame selects ANT 1; the later threshold crossing in
+    // updateMeters is what drives the color change.
+
+    // RX: inject a low-power status frame to seat antA=0 and confirm green.
+    CHECK(inject(&direct, QStringLiteral(
+        "S100|status fwd=22.0 peak=22.0 max=63.00 swr=-60.0000 "
+        "pttA=0 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle();
+    CHECK(b1->styleSheet().contains(QLatin1String("#006030")));   // active = green
+    CHECK(b2->styleSheet().contains(QLatin1String("#1a2a3a")));   // inactive = dark
+    CHECK(b3->styleSheet().contains(QLatin1String("#1a2a3a")));
+
+    // TX coloring: active button turns red while transmitting ──────────
+    const QString txFill = AetherSDR::ThemeManager::instance()
+        .color(b1, QStringLiteral("color.highlight.tx")).name();
+
+    // TX: fwd=50 dBm (100 W) crosses the 5 W threshold — active button goes red.
+    CHECK(inject(&direct, QStringLiteral(
+        "S101|status fwd=50.0 peak=50.0 max=63.00 swr=-20.0000 "
+        "pttA=0 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle();
+    CHECK(b1->styleSheet().contains(txFill));   // active TX = color.highlight.tx
+    CHECK(b2->styleSheet().contains(QLatin1String("#1a2a3a")));   // inactive still dark
+    CHECK(b3->styleSheet().contains(QLatin1String("#1a2a3a")));
+
+    // Back to RX: power drops below threshold — 800 ms label hold keeps the
+    // button red until the timer fires; check inside the hold, then after it.
+    CHECK(inject(&direct, QStringLiteral(
+        "S102|status fwd=22.0 peak=22.0 max=63.00 swr=-60.0000 "
+        "pttA=0 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle(120);
+    CHECK(b1->styleSheet().contains(txFill));  // hold: still red inside 800 ms window
+    settle(780);
+    CHECK(b1->styleSheet().contains(QLatin1String("#006030")));   // back to green
+    CHECK(!b1->styleSheet().contains(txFill));  // not red
+
+    // PTT fallback: pttA=1 at low power also reddens the button (interlock cable present).
+    CHECK(inject(&direct, QStringLiteral(
+        "S103|status fwd=22.0 peak=22.0 max=63.00 swr=-60.0000 "
+        "pttA=1 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle();
+    CHECK(b1->styleSheet().contains(txFill));  // pttA=1 at low power → red
+
+    // A replacement 3-way device must not inherit the previous device's names.
+    {
+        TgxlConnection replacement;
+        PeripheralConnectionTestAccess::captureCommands(replacement, commands);
+        CHECK(inject(&replacement, QStringLiteral("V1.2.44")));
+        CHECK(inject(&replacement, QStringLiteral("R1|0|info serial=NEW 3way=1")));
+        commands.clear();
+        model.setDirectConnection(&replacement);
+        CHECK(b1->text() == QStringLiteral("ANT 1"));
+        CHECK(model.antennaA() == -1);
+        CHECK(commands.size() == 1 && commands.front().contains(QStringLiteral("|antenna read\n")));
+        CHECK(inject(&replacement, QStringLiteral("R2|0|antenna name1=New name2=Other name3=Third")));
+        CHECK(b1->text() == QStringLiteral("New"));
+        model.setDirectConnection(&direct);
+    }
+
+    CHECK(inject(&direct, QStringLiteral("R7|0|antenna name1=Vertical name2=Invert_L name3=6M_Loop")));
+    CHECK(inject(&direct, QStringLiteral("S1|status antA=1")));
+    CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+    settle();
+
+    CHECK(b1->text() == QStringLiteral("ANT 1"));
+    CHECK(b2->text() == QStringLiteral("ANT 2"));
+    CHECK(b3->text() == QStringLiteral("ANT 3"));
+    CHECK(!b1->isVisible());
+    CHECK(model.antennaA() == -1);
+
+    // Error replies cannot identify a variant, even with plausible KV data.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|1|info serial=TG123 3way=1")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
+    CHECK(direct.isThreeWay().value_or(false));
+    CHECK(b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("R1|0|antenna name1=Vertical name2=Other name3=Third")));
+    CHECK(direct.isThreeWay().value_or(false));
+    CHECK(b1->text() == QStringLiteral("Vertical"));
+    commands.clear();
+    b1->click();
+    CHECK(commands.size() == 1 && commands.front().contains(QStringLiteral("|activate ant=1\n")));
+    CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+
+    // A names reply matching the pending info sequence is not evidence of SO2R.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|0|antenna name1=Vertical name2=Other name3=Third")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
+    CHECK(direct.isThreeWay().value_or(false));
+    CHECK(b1->isVisible());
+    CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+
+    // Invalid info leaves the variant unknown and retains the relay fallback.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|0|info serial=TG123 3way=invalid")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(b1->isVisible());
+    {
+        TunerDelta d;
+        d.oneByThree = false;
+        model.applyChanges(d);
+        CHECK(!b1->isVisible());
+        CHECK(inject(&direct, QStringLiteral("R0|0|info serial=TG123 3way=1")));
+        CHECK(b1->isVisible()); // Confirmed direct 3-way overrides relayed SO2R.
+        d.oneByThree = true;
+        model.applyChanges(d);
+    }
+    CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+
+    // A subsequent SO2R reports no 3way field, despite stale radio data.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|0|info serial=SO2R")));
+    settle();
+    CHECK(!b1->isVisible() && !b2->isVisible() && !b3->isVisible());
+    commands.clear();
+    model.setAntennaA(1);
+    CHECK(commands.isEmpty());
+    {
+        TunerDelta d;
+        d.oneByThree = false;
+        model.applyChanges(d);
+        d.oneByThree = true;
+        model.applyChanges(d);
+        CHECK(!b1->isVisible()); // Relay updates cannot override confirmed direct SO2R.
+        CHECK(direct.isThreeWay().has_value() && !*direct.isThreeWay());
+    }
+
+    if (g_failures == 0) {
+        std::printf("tgxl_antenna_names_test: all checks passed\n");
+        return 0;
+    }
+    std::printf("tgxl_antenna_names_test: %d failure(s)\n", g_failures);
+    return 1;
+}

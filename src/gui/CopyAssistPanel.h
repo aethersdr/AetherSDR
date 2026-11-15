@@ -1,0 +1,127 @@
+#pragma once
+
+#include <QString>
+#include <QWidget>
+
+class QHBoxLayout;
+class QLabel;
+class QProgressBar;
+class QPushButton;
+class QSlider;
+class QTextEdit;
+
+namespace AetherSDR {
+
+// Copy Assist speech-to-text decode panel (RFC #4333), modeled on the CW decode
+// panel: read-only transcript coloured by whisper per-utterance confidence
+// (green high … red low), plus enable / model-tier / clear and a status line.
+// Pure view: emits intent and renders appendText()/setStatus(); the controller
+// owns the ASR engine, so this links no ASR code.
+class CopyAssistPanel : public QWidget {
+    Q_OBJECT
+public:
+    explicit CopyAssistPanel(QWidget* parent = nullptr);
+
+    // The ⚙ settings button — exposed so the controller can apply the themed
+    // style and toggle the modeless settings dialog (which now owns the model +
+    // compute-device pickers). Panel stays ThemeManager-free.
+    QPushButton* settingsButton() const { return m_settings; }
+
+    void setStatus(const QString& text);
+    // Set the always-visible transcription backlog (seconds of received audio not
+    // yet transcribed). Colour escalates amber→red as it grows.
+    void setBacklog(double seconds);
+    // Seconds of audio the engine dropped at its backlog ceiling (#5730); shown
+    // beside the queue while non-zero so a gapped transcript is never silent.
+    void setDroppedAudio(double seconds);
+    // Show/hide the indeterminate loading indicator (model download/verify/load).
+    void setBusy(bool on);
+    bool isAsrEnabled() const;
+    void setAsrEnabled(bool on);
+    // The Enable/Disable toggle button — exposed so the app layer can apply the
+    // themed applet-toggle style (the panel itself stays ThemeManager-free).
+    QPushButton* enableButton() const { return m_enable; }
+    // The ↵ newline-on-silence toggle — exposed so the controller can apply the
+    // themed applet-toggle style (panel stays ThemeManager-free).
+    QPushButton* newlineButton() const { return m_newline; }
+    // The "Context" context-carry toggle (RFC #4818) — exposed so the controller
+    // can apply the themed applet-toggle style (panel stays ThemeManager-free).
+    QPushButton* contextCarryButton() const { return m_contextCarry; }
+
+    // When on, each utterance (VAD end-of-speech) begins on a new line.
+    void setNewlineOnSilence(bool on);
+    bool newlineOnSilence() const { return m_newlineOnSilence; }
+
+    // Context-carry (RFC #4818) header toggle. setContextCarryChecked reflects the
+    // persisted state without re-emitting; setContextCarryAvailable greys it out
+    // on the non-whisper tiers whose backends can't honor it (with a tooltip).
+    void setContextCarryChecked(bool on);
+    void setContextCarryAvailable(bool available);
+
+    // Decode-buffer size in milliseconds (1000–20000). The slider works in
+    // whole seconds; setBufferMs rounds/clamps into range.
+    void setBufferMs(int ms);
+    int bufferMs() const;
+
+    // VAD sensitivity as a percentage 1–100 (higher = more sensitive).
+    void setSensitivity(int percent);
+    int sensitivity() const;
+
+    // Silence duration (hangover) that ends an utterance, in ms (100–2000).
+    void setSilenceMs(int ms);
+    int silenceMs() const;
+
+    // Transcript font size in px (8–32).
+    void setFontPx(int px);
+    int fontPx() const { return m_fontPx; }
+
+public slots:
+    // Append one transcribed utterance, colored by confidence in [0, 1].
+    void appendText(const QString& text, float confidence);
+    void clearText();
+
+signals:
+    void enableToggled(bool on);
+    void settingsRequested();
+    void clearRequested();
+    void bufferMsChanged(int ms);
+    void sensitivityChanged(int percent);
+    void silenceMsChanged(int ms);
+    void fontPxChanged(int px);
+    void newlineOnSilenceChanged(bool on);
+    void contextCarryToggled(bool on);
+
+private:
+    static QString colorForConfidence(float confidence);
+    void applyFont();
+    void adjustFont(int deltaPx);
+    // Append "<label> [compact slider] <value>" inline to the control bar,
+    // mirroring the CW decode bar's fixed-width sliders.
+    QSlider* addSliderInline(QHBoxLayout* bar, const QString& label,
+                             const QString& accessibleName, int lo, int hi, int value,
+                             QLabel** valueLabelOut);
+
+    QTextEdit* m_text = nullptr;
+    QPushButton* m_enable = nullptr;   // checkable: "Enable" / "Disable"
+    QPushButton* m_newline = nullptr;  // checkable ↵: newline on each silence
+    QPushButton* m_contextCarry = nullptr; // checkable: carry context across segments
+    QPushButton* m_settings = nullptr; // ⚙: opens the modeless settings dialog
+    QLabel* m_status = nullptr;
+    QLabel* m_backlog = nullptr; // always-visible transcription backlog (seconds)
+    double m_backlogSeconds = 0.0;
+    double m_droppedSeconds = 0.0;
+    QString m_backlogColor;      // last applied label colour ("" = theme default)
+    void renderBacklog(); // m_backlog text + colour from the two values above
+    QPushButton* m_clear = nullptr;
+    QSlider* m_buffer = nullptr;
+    QLabel* m_bufferValue = nullptr;
+    QSlider* m_sensitivity = nullptr;
+    QLabel* m_sensitivityValue = nullptr;
+    QSlider* m_silence = nullptr;
+    QLabel* m_silenceValue = nullptr;
+    QProgressBar* m_busy = nullptr;
+    int m_fontPx = 13;
+    bool m_newlineOnSilence = false;
+};
+
+} // namespace AetherSDR

@@ -1,0 +1,349 @@
+# Canonical token taxonomy for AetherSDR theming (RFC #3076 Phase 2)
+
+This document fixes the design-system token set that the Phase 2
+stylesheet migration converts every hardcoded colour to.  Generated
+from `tools/audit_colours.py` output (3621 references across 524
+unique colours) by clustering close variants into a smaller canonical
+set.
+
+> Writing new UI? The agent-facing rules for *using* these tokens —
+> the semantic system-state map, the no-new-literals rule, and the
+> add-a-token path for new UX — live in
+> [`docs/style/theme-style-guide.md`](../style/theme-style-guide.md).
+> This file is the migration inventory behind them.
+>
+> The **visual canon** — where these tokens' values are heading, the
+> `color.canon.*` group, and the order surfaces migrate in — is
+> [`docs/style/aethersdr-style-guide.md`](../style/aethersdr-style-guide.md)
+> (RFC #6226).
+
+## Methodology
+
+The audit produced 524 unique colours.  Frequency distribution:
+
+| Count bucket | Unique colours |
+|---|---|
+| Used 50+ times | 10 |
+| Used 20-49 times | 25 |
+| Used 10-19 times | 21 |
+| Used 5-9 times | 62 |
+| Used 2-4 times | 195 |
+| Used exactly once | 211 |
+
+**Canonicalisation rule:** every colour within ΔRGB ≤ ~24 of a canonical
+token's hex value collapses onto that token.  In practice this means
+that close variants — for instance `#1a2a3a`, `#203040`, `#1e2e3e`,
+`#2a3a4a`, `#1a2230`, `#2a3744` are all "blue-grey panel mid-tier" —
+become a single `color.background.1` token.  The post-migration UI
+will have sub-perceptual visual differences (most variants differ by
+1-3 RGB units, well below the eye's discrimination threshold at the
+GUI's display brightness).
+
+Result: **42 canonical tokens** covering ~95% of references.  The 211
+single-use colours snap to the nearest canonical neighbour.
+
+## Token set
+
+### Backgrounds (6 tiers)
+
+| Token | Canonical | Refs (collapses) |
+|---|---|---|
+| `color.background.0` | `#0a0e14` | `#0a0a14` (46), `#0a0a18` (40), `#08121d` (23), `#0e1b28` (23), `#0f0f1a` (84 — spectrum), `#1a1a2e` (24), `#0a1420` (19) ≈ 259 refs |
+| `color.background.1` | `#1a2a3a` | `#1a2a3a` (182), `#203040` (131), `#204060` (40), `#243a4e` (30), `#1e2e3e` (26), `#2a3a4a` (26), `#2a3744` (18), `#1a2230` (18), `#2a4458` (22) ≈ 493 refs |
+| `color.background.2` | `#304050` | `#304050` (142), `#205070` (45), `#506070` (43), `#404858` (16), `#1a3a5a` (17), `#0070c0` (27 — selected) ≈ 290 refs |
+| `color.background.3` | `#506070` | raised surface — popups, dialog headers |
+| `color.background.tx` | `#3a2a0e` | TX-active panel tint: `#3a2a0e` (22), `#4a3a1e` (13) ≈ 35 refs |
+| `color.background.spectrum` | `#000000` | spectrum/oscilloscope: `#000000` (29) — pure black, distinct from background.0 because the spectrum has its own canvas |
+
+### Text (4 tiers)
+
+| Token | Canonical | Refs (collapses) |
+|---|---|---|
+| `color.text.primary` | `#e6f0fa` | `#c8d8e8` (369 — most-referenced colour in codebase), `#d7e7f2` (29), `#d7e4f2` (12), `#d4deea` (9), `#e0f0ff` (6), `#ffffff` (94 — high-emphasis) ≈ 519 refs |
+| `color.text.secondary` | `#8ea8c0` | `#8aa8c0` (132), `#8090a0` (57), `#7f93a5` (30), `#8d99ad` (20), `#a0b0c0` (11), `#a0b4c8` (7) ≈ 257 refs |
+| `color.text.label` | `#506070` | `#808080` (47), `#607080` (16), `#6a8090` (15) ≈ 78 refs — dimmed labels, axis text |
+| `color.text.disabled` | `#3a4a5a` | currently overlaps with label tier; will surface a distinct tone in default-dark v2 for accessibility |
+
+### Accents (cyan family)
+
+| Token | Canonical | Refs (collapses) |
+|---|---|---|
+| `color.accent` | `#00b4d8` | `#00b4d8` (170) — primary brand cyan, untouched |
+| `color.accent.bright` | `#00c8f0` | `#00c8f0` (20), `#00c8ff` (15) ≈ 35 refs — hover / focused states |
+| `color.accent.dim` | `#0070c0` | `#0090e0` (35), `#0070c0` (27), `#008ba8` (13), `#4db8d4` (17) ≈ 92 refs — desaturated cyan for non-primary surfaces; canonical value matches the legacy `kBlueActive` checked-button fill so tokenised active states render identically to pre-refactor sites |
+
+### Status accents
+
+| Token | Canonical | Refs (collapses) |
+|---|---|---|
+| `color.accent.success` | `#4dd87a` | `#00ff88` (39), `#00a060` (25), `#66d19e` (15), `#00e060` (14), `#30d050` (14), `#006040` (25 — background variant) ≈ 132 refs |
+| `color.accent.warning` | `#ffb84d` | `#f2c14e` (81), `#ffd070` (9), `#e8a540` (9), `#e8b977` (7), `#ff8c00` (6), `#ffff00` (8) ≈ 120 refs |
+| `color.accent.danger` | `#ff4d4d` | `#ff4444` (12), `#ff4040` (11), `#ff6b6b` (10), `#c03030` (9), `#ff8080` (8) ≈ 50 refs |
+
+### Borders
+
+| Token | Canonical | Refs |
+|---|---|---|
+| `color.border.subtle` | `#1a2330` | hairline panel separators (~80 refs collapsed) |
+| `color.border.strong` | `#2a3a4d` | container borders, focused outlines (~60 refs) |
+| `color.border.accent` | `#00b4d8` | active / selected border highlight |
+| `color.border.tx` | `#5a4a28` | TX-active border (matches `background.tx` family) |
+
+### Title bar + brand (unified 52 px bar)
+
+Added with the frameless-window chrome. The bar is the app's only title bar on
+every platform, so it needs its own surface tokens rather than borrowing
+`background.0` — the two used to be the same colour, which silently hid a 32 px
+band of reserved-but-empty space above the old strip for as long as they matched.
+
+| Token | Canonical (dark) | Refs |
+|---|---|---|
+| `color.networkQuality.excellent` | `#00cc66` | Excellent/Very Good network grade; light aliases `green.500` |
+| `color.networkQuality.good` | `#00b4d8` | Good grade; light aliases `blue.500` |
+| `color.networkQuality.fair` | `#cc9900` | Fair grade / 8 fps cap; light `#a85a00` |
+| `color.networkQuality.poor` | `#cc3333` | Poor grade / 4 fps cap; light aliases `red.500` |
+| `color.networkQuality.off` | `#8aa8c0` | Off or unknown network grade, both themes |
+| `color.titlebar.background` | `#eb0d1624` | the 52 px bar's surface (0.92 alpha, pre-composited over `background.app` — the window is opaque) |
+| `color.titlebar.border` | `#2978bee6` | 1 px rule under the bar (0.16 alpha) |
+| `color.titlebar.tab.hover` | `#12ffffff` | inactive radio tab, hovered |
+| `color.titlebar.tab.active.background` | `#1a00b4d8` | active radio tab fill |
+| `color.titlebar.tab.active.border` | `#7300b4d8` | active radio tab border |
+| `color.titlebar.status.connected` | `{color.green.500}` | radio-link dot: this client owns the session |
+| `color.titlebar.status.available` | `{color.gray.500}` | radio-link dot: discovered, idle |
+| `color.titlebar.status.inUse` | `{color.amber.500}` | radio-link dot: another station has it |
+| `color.titlebar.menu.background` | `#eb0f0f1a` | application (☰) menu panels: `background.0` at 0.92 alpha over the see-through rounded menu window |
+| `color.titlebar.otherTx.background` | `#ffffff` | "other station transmitting" badge fill, under `color.accent.danger` text |
+| `color.titlebar.caption.glyph` | `{color.gray.400}` | window-control glyph, at rest |
+| `color.titlebar.caption.glyph.hover` | `{color.gray.50}` | window-control glyph, hovered |
+| `color.titlebar.caption.hover` | `#14ffffff` | window-control hover wash |
+| `color.titlebar.caption.close.hover` | `#c42b1c` | close control hover fill |
+| `color.titlebar.caption.close.glyph` | `#ffffff` | close glyph on that fill |
+| `color.titlebar.caption.semantic.close` | `#ff5f57` | macOS close light and Linux close-chip hover |
+| `color.titlebar.caption.semantic.minimize` | `#febc2e` | macOS minimize light and Linux minimize-chip hover |
+| `color.titlebar.caption.semantic.maximize` | `#28c840` | macOS zoom light and Linux maximize-chip hover |
+| `color.titlebar.caption.semantic.inactive` | `#565a60` | inactive macOS traffic-light cluster |
+| `color.titlebar.caption.semantic.glyph` | `#a0000000` | dark glyph on semantic caption fills |
+| `color.brand.wordmark` | `#eaf2fb` | the "Aether" half of the wordmark |
+| `color.brand.gradient` | linear 100° | the "SDR" half (`#3aa7ff → #5de3ff → #8ef7e6`) |
+
+The `status.*` triple is a **redundant** encoding: every radio tab also spells
+its state out in words, on the rendered status line and in its accessible name.
+Nothing in the bar may depend on the dot's colour alone (WCAG 1.4.1).
+
+The traffic-light / caption-chip fills retain the platform semantic values in
+both bundled themes, but still resolve through tokens so custom and future light
+themes can preserve contrast without bypassing the theme system.
+
+### Meter colours (specialised — paint code only)
+
+| Token | Canonical | Refs |
+|---|---|---|
+| `color.meter.crst` | `#ff4d4d` | crest factor peak indicator |
+| `color.meter.rms` | `#00b4d8` | RMS bar fill |
+| `color.meter.thresh` | `#ffb84d` | threshold marker |
+| `color.meter.peak` | `#e6f0fa` | peak-hold tick |
+| `color.meter.gainReduction` | `#f2c14e` | GR meter bar |
+| `color.meter.bar.fill` | `#405060` | meter bar inactive fill (~31 refs) |
+
+### CW decoder confidence (specialised — paint code only)
+
+DeepFist letters, by cost = 1 − the model's posterior (< 0.15 / < 0.35 / < 0.60 / else). Light values are at least
+4.5 : 1 on `color.background.0`.
+
+| Token | Dark | Light |
+|---|---|---|
+| `color.cw.confidence.high` | `#00ff88` | `{color.green.500}` (`#1a8040`) |
+| `color.cw.confidence.medium` | `#e0e040` | `#737313` |
+| `color.cw.confidence.fair` | `#ff9020` | `#ae5700` |
+| `color.cw.confidence.low` | `#ff4040` | `{color.red.500}` (`#c02020`) |
+
+### Spectrum / waterfall (specialised — paint code only)
+
+| Token | Canonical | Notes |
+|---|---|---|
+| `color.spectrum.trace` | `#00b4d8` | live FFT trace |
+| `color.spectrum.peakHold` | `#ffb84d` | **RESERVED — nothing paints this.** See the note below |
+| `color.spectrum.average` | `#8ea8c0` | **RESERVED — nothing paints this.** See the note below |
+| `color.spectrum.grid` | `#1a2330` | dB/frequency grid lines |
+| `color.waterfall.colormap.*` | (gradient family — Phase 2 gradient support) | the RF colormap presets: `.default`, `.grayscale`, `.blueGreen`, `.fire`, `.plasma`, `.purple`, `.glacier`. One linear gradient per `WfColorScheme` enumerator; the Display ▸ Scheme selector is generated from that enum. `.glacier` is the only preset whose `at: 0.00` stop is not `#000000` — cleared waterfall pixels take `waterfallFloorRgb()` (the `t=0` colour) rather than black so its deep-blue floor is continuous |
+| `color.spectrum.zoomButton.disabled.background` | `#5a0f0f1a` | disabled state of the waterfall zoom / band-segment buttons |
+| `color.spectrum.zoomButton.disabled.border` | `#5a304050` | as above, border |
+| `color.spectrum.zoomButton.disabled.text` | `#8c90a0b0` | as above, glyph |
+
+#### `color.spectrum.peakHold` and `color.spectrum.average` are RESERVED
+
+Nothing paints either token. They are defined under `color.spectrum` in
+`resources/themes/default-dark.json` and `default-light.json`, emitted into
+`src/core/ThemeSeedGenerated.cpp` by `tools/gen_theme_seed.py`, and listed in
+`SpectrumWidget`'s `declareWidgetTokens()` call so an Inspect-mode click on the
+panadapter produces a hit-list. That is every occurrence: no painter, no shader
+UBO and no `ThemeManager::color()` lookup resolves either one.
+
+Both entered in #3080 as 2 of 51 tokens generated wholesale under theming RFC
+#3076, which locked the token vocabulary and assumed each overlay as a region to
+colour — it never proposed building one. The only design work is @ten9876's
+2026-03-29 decomposition of #333 (item 4, *FFT Peak Hold / Max Hold*),
+explicitly deferred to community interest. Painting either needs an approved RFC
+first (GOVERNANCE.md: *"Any change to **visual design**"*); #5561, which ruled on
+the existing trace's line width, is the bar.
+
+**`peakHold`** — there is no peak-hold overlay on the panadapter: no hold state,
+no draw pass, no control. (`SMeterWidget` draws a peak-hold line, but that is a
+different surface with its own `color.meter.*` tokens.)
+
+**`average`** — no backend draws a *separate* averaged trace, which is what this
+token was for. Do not read that as "there is no averaging": there is, in three
+places that are not this token.
+
+- **The live trace is client-smoothed, unless the backend already averaged.**
+  `SpectrumWidget::updateSpectrum` runs `m_smoothed[i] = SMOOTH_ALPHA * bins[i]
+  + (1 - SMOOTH_ALPHA) * m_smoothed[i]` at `SMOOTH_ALPHA = 0.35f`, except when
+  `m_clientFftSmoothing` is off: then `m_smoothed` copies the frame straight
+  through. `MainWindow` turns that flag off while connected if
+  `RadioCapabilities::backendPanAveraging` is set, so the widget does not
+  average a second time. Today ANAN and HL2 set that capability. That paint does
+  not use `color.spectrum.trace` either — `SpectrumWidget` draws the trace in
+  `m_fftFillColor` / `m_fftLineColor`, which are operator settings rather than
+  tokens. `color.spectrum.trace` is resolved only by `BandscopeDialog` and, as
+  a fallback, by `MiniPanScope`.
+- **`SpectrumWidget::setFftAverage` stores a number no render path reads.** It
+  is not an unused member — two snapshots and the overlay-menu sync read it
+  (@ten9876's correction on #5678). On a raw-spectrum backend
+  `RadioModel::requestPanAverage` applies it in the `shapesDisplayRatesLocally()`
+  branch: ANAN turns it into WDSP analyzer averaging TIME
+  (`AnanBackend::setPanAverage`, steps of `kMsPerAverageStep`). HL2 and RTL do
+  not override `setPanAverage()`, so the slider still does not average their
+  spectra.
+- **On Flex the averaging is the radio's.** The same function sends
+  `display pan set <pan> average=<n>` and the Flex display engine applies it, so
+  the bins that arrive are already averaged and those are what is drawn.
+
+Where client-side averaging should live for the backends that still do none
+(HL2, RTL), and in which domain, is still open — see #5782 and #5794.
+
+The three `zoomButton.disabled.*` tokens are the exception to this section's
+"paint code only" heading — they are consumed from a QSS template through
+`ThemeManager::applyStyleSheet()`, not from a painter.
+
+These tokens use the enabled colours at reduced opacity against the widget's
+own dark backdrop. Both bundled themes carry the same values to preserve that
+dimming, while theme authors can override each role.
+
+Store translucent values in canonical `#AARRGGBB` format so `QColor` and the
+Theme Editor can read them and restore their factory values. The stylesheet
+resolver converts that storage format to `rgba()` before applying QSS; raw
+`rgba()` token values would bypass the editor's colour and Reset paths.
+
+The AetherRX/AetherTX footer toggles use
+`color.toggle.footer.{warning,danger,success}.background.{checked,hover}`.
+The checked and hover fills have alpha `2d` and `46` respectively, and use
+the amber, red and green accent RGB values. Both bundled themes define all
+six tokens so the footer stays editable and follows theme changes.
+
+### Hardware-display colours (specialised — paint code only)
+
+| Token | Canonical | Notes |
+|---|---|---|
+| `color.spe.lcd.background` | `#102010` | SPE Expert LCD glass background |
+| `color.spe.lcd.foreground` | `#d6f5d6` | illuminated SPE Expert LCD pixel |
+| `color.spe.lcd.dim` | `#3a553a` | waiting-for-display text |
+| `color.spe.lcd.bezel` | `#222822` | SPE Expert LCD bezel |
+
+### QR codes (specialised — paint code only)
+
+The same in every theme on purpose: phone cameras read a QR code reliably only
+as dark modules on a light ground, with a light quiet zone around it, so the
+code must not follow a dark theme's inversion.
+
+| Token | Canonical | Use |
+|---|---|---|
+| `color.qr.dark` | `#000000` | QR code modules (Remote Access sign-in) |
+| `color.qr.light` | `#ffffff` | QR code ground and quiet zone |
+
+### Slice indicators
+
+| Token | Canonical | Notes |
+|---|---|---|
+| `color.slice.a`–`color.slice.h` | TBD per slice | one per slice letter; current code uses scattered per-slice colours that need a consolidated palette |
+| `color.slice.tx` | `#ff4d4d` | active-TX slice highlight |
+
+### Font tokens
+
+| Token | Value | Notes |
+|---|---|---|
+| `font.family.ui` | `Inter` | |
+| `font.family.mono` | `monospace` | |
+| `font.family.segment7` | `DSEG7 Modern` | bundled (SIL OFL 1.1) via `third_party/dseg/`; all six weights loaded at startup from `:/fonts/DSEG7Modern-*.ttf` |
+| `font.family.segment14` | `DSEG14 Modern` | bundled (SIL OFL 1.1) via `third_party/dseg/`; all six weights loaded at startup from `:/fonts/DSEG14Modern-*.ttf` |
+| `font.family.weather` | `DSEGWeather` | bundled (SIL OFL 1.1) via `third_party/dseg/DSEGWeather/`; icon font keyed off ASCII letters. |
+| `font.family.freq` | `DSEG7 Modern` | widget-class token — `VfoWidget` + `RxApplet` frequency labels read this so the operator can swap font families across both surfaces with one pick in the Theme Editor.  Defaults to `DSEG7 Modern` so a fresh install gets the segment look out of the box; reset to `Inter` or `monospace` for a plain proportional / fixed look. |
+| `font.family.temp` | `DSEG7 Modern` | widget-class token — temperature readouts (band-conditions / propagation surfaces, future temperature widgets) read this so the operator can theme them independently from `font.family.freq`.  Same default as `freq` for visual consistency on a fresh install. |
+| `font.size.tiny` | 9 | |
+| `font.size.small` | 10 | |
+| `font.size.normal` | 12 | |
+| `font.size.large` | 14 | |
+
+### Sizing tokens (unchanged from Phase 1 seed)
+
+| Token | Value |
+|---|---|
+| `sizing.panel.padding` | 4 |
+| `sizing.panel.spacing` | 4 |
+| `sizing.panel.cornerRadius` | 4 |
+| `sizing.border.subtle` | 1 |
+| `sizing.border.strong` | 2 |
+
+## Token count summary
+
+- Backgrounds: **6**
+- Text: **4**
+- Accents: **6** (3 cyan family + 3 status)
+- Borders: **4**
+- Title bar + brand: **20** (19 scalar + 1 gradient)
+- Meters: **6**
+- Spectrum / waterfall: **5** (4 scalar + 1 gradient)
+- Slice: **9** (A–H + TX)
+- Font: **6**
+- Sizing: **5**
+
+**Total: 71 tokens** — still inside the 50-80 envelope from the RFC.
+(51 at the Phase 1 migration; +20 for the unified title bar and brand mark.)
+
+## Migration risks
+
+- **Pure black for spectrum** (`color.background.spectrum = #000000`) is intentionally distinct from `color.background.0 = #0a0e14`.  Spectrum widgets paint a pure-black canvas for maximum contrast against the trace; collapsing them onto background.0 would make the spectrum harder to read.  Keep separate.
+- **Warning family is wide** (`#f2c14e` to `#ffff00` to `#ff8c00`).  The canonical `#ffb84d` is a middle.  Sites using `#ffff00` (pure yellow) will shift visibly.  Audit those specific sites before conversion — if the visual change is unacceptable, add a `color.accent.warning.bright` token.
+- **`color.text.disabled` currently overlaps with `color.text.label`** in the existing codebase (both are around #506070-ish).  Migration introduces a distinct token even though they look identical today, so Phase 4's Light theme can give them different contrast values without breaking the dark theme.
+- **Per-slice colours need a separate small audit** before locking the slice taxonomy — current code has them scattered across SliceLabel, SliceModel, indicator paint code.
+
+## Acceptance criteria for the migration
+
+- All ~3621 colour references replaced with a canonical token lookup
+- `default-dark.json` expanded from 24 to ~51 tokens
+- Default Dark UI runs side-by-side with v26.5.3 and shows no perceptible visual diff except for the documented intentional shifts (warning bright yellow → middle yellow, etc.)
+- Audit re-run on post-migration `src/` shows 0 hardcoded colours (or only documented exemptions like resource files)
+
+## Next steps
+
+1. **Lock the taxonomy** — review this doc, edits, agreement
+2. **Expand `default-dark.json`** with the 51 tokens
+3. **Pilot conversion on one shared stylesheet** — pick `src/gui/SliceLabel.h` or `src/gui/CommonStyles.h` to validate the mechanical conversion process
+4. **Mass conversion in batches** — file-by-file, with diff-screenshot review
+5. **Resolver records widget→token reverse-map** as conversions land (feeds Phase 5 inspector)
+
+## Optional dark basemap palette
+
+`color.map.darkBackground` and `color.map.darkDetail` are the endpoints of the
+PSK Reporter dark-map luminance ramp. Both bundled themes use the same dark
+cartographic palette; selecting the light app theme does not turn an explicitly
+enabled dark map light. These tokens affect only basemap images, not data
+overlays, attribution, or window chrome.
+
+### Waterfall time markers
+
+`color.waterfall.timeMarker.foreground` is the pale gray-blue foreground for
+UTC row annotations. Lines use 55% of its opacity; timestamp text uses its full
+opacity. `color.waterfall.timeMarker.background` provides a compact translucent
+dark text backing. Both bundled themes retain the same colors because waterfall
+signal palettes do not invert when application chrome changes theme. These
+annotations are independent of RX/TX, warning, and selection colors.

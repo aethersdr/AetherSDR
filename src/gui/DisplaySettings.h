@@ -1,0 +1,295 @@
+#pragma once
+
+#include "core/AppSettings.h"
+#include "WaterfallTimeMarkers.h"
+
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QString>
+#include <QStringList>
+
+namespace AetherSDR {
+
+// Display UI toggles (SmartMTR view and options), stored as nested JSON under
+// AppSettings["Display"]. Retired keys, never reuse (old installs still carry
+// values, e.g. "True"): "leanMode" (nested), "LeanMode" (flat), "TitleBar"
+// (flat blob), "panLockEnabled" (nested in TitleBar), "PanLockEnabled" (flat).
+class DisplaySettings {
+public:
+    // Live pan status owns these values. Retire competing legacy copies for
+    // the slot being loaded, preserving client-rendered and other-slot state.
+    static void retireRadioOwnedPanSettings(int slot)
+    {
+        AppSettings& settings = AppSettings::instance();
+        const QStringList keys = {
+            QStringLiteral("DisplayFftAverage"),
+            QStringLiteral("DisplayFftFps"),
+            QStringLiteral("DisplayFftWeightedAvg"),
+            QStringLiteral("DisplayWfLineDuration"),
+            QStringLiteral("DisplayWnbEnabled"),
+            QStringLiteral("DisplayWnbLevel"),
+        };
+        bool removed = false;
+        for (const QString& base : keys) {
+            const QString key = slot == 0 ? base : QString("%1_%2").arg(base).arg(slot);
+            if (settings.contains(key)) {
+                settings.remove(key);
+                removed = true;
+            }
+        }
+        if (removed) {
+            settings.save();
+        }
+    }
+
+    static int waterfallTimeMarkerSeconds(int slot)
+    {
+        if (!isValidPanSlotIndex(slot)) {
+            return 0;
+        }
+        return validWaterfallMarkerInterval(readObj()
+            .value("waterfallTimeMarkers").toObject()
+            .value(QString::number(slot)).toInt(0));
+    }
+
+    static void setWaterfallTimeMarkerSeconds(int slot, int seconds)
+    {
+        if (!isValidPanSlotIndex(slot)) {
+            return;
+        }
+        QJsonObject document = readObj();
+        QJsonObject slotStates = document.value("waterfallTimeMarkers").toObject();
+        slotStates[QString::number(slot)] = validWaterfallMarkerInterval(seconds);
+        document["waterfallTimeMarkers"] = slotStates;
+        write(document);
+    }
+
+    // Global panadapter marker overlay preference. Default False preserves the
+    // waterfall as signal history unless the operator opts into the overlay.
+    static bool extendedPassband()
+    {
+        return readObj().value("extendedPassband").toString("False") == "True";
+    }
+
+    static void setExtendedPassband(bool on)
+    {
+        QJsonObject o = readObj();
+        o["extendedPassband"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // Sibling of extendedPassband for tracking-notch markers. Same default and
+    // same reasoning: the waterfall is a record of what was received, so an
+    // overlay that paints over that history is opt-in.
+    static bool extendedTnf()
+    {
+        return readObj().value("extendedTnf").toString("False") == "True";
+    }
+
+    static void setExtendedTnf(bool on)
+    {
+        QJsonObject o = readObj();
+        o["extendedTnf"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // Perspective shadow for slice markers and passbands in the 3D
+    // stacked-trace view. Global across panadapters; dormant in 2D. Defaults
+    // off (like every sibling Display toggle) so an upgrade never silently
+    // changes an existing user's display — the effect is opt-in.
+    static bool threeDSliceDepth()
+    {
+        return readObj().value("threeDSliceDepth").toString("False") == "True";
+    }
+
+    static void setThreeDSliceDepth(bool on)
+    {
+        QJsonObject o = readObj();
+        o["threeDSliceDepth"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // The overlay button rail belongs to the client-side display layout. Keep
+    // one value per stable pan slot inside the feature-owned Display document;
+    // radio-assigned pan IDs are not stable across sessions.
+    static bool panMenuExpanded(int panSlotIndex)
+    {
+        if (!isValidPanSlotIndex(panSlotIndex)) {
+            return true;
+        }
+        const QJsonObject slotStates =
+            readObj().value("panMenuExpanded").toObject();
+        return slotStates.value(QString::number(panSlotIndex))
+                   .toString("True") == "True";
+    }
+
+    static void setPanMenuExpanded(int panSlotIndex, bool expanded)
+    {
+        if (!isValidPanSlotIndex(panSlotIndex)) {
+            return;
+        }
+        QJsonObject o = readObj();
+        QJsonObject slotStates = o.value("panMenuExpanded").toObject();
+        slotStates[QString::number(panSlotIndex)] =
+            expanded ? QStringLiteral("True") : QStringLiteral("False");
+        o["panMenuExpanded"] = slotStates;
+        write(o);
+    }
+
+    // VFO meter view: false = standard S-meter, true = SmartMTR component.
+    // Global (not per-slice) — see MeterViewController for the live-broadcast
+    // layer that fans this choice out to every open VFO flag.
+    static bool smartMtr() { return readObj().value("smartMtr").toString("False") == "True"; }
+
+    static void setSmartMtr(bool on)
+    {
+        QJsonObject o = readObj();
+        o["smartMtr"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // ── SmartMTR-only display options ───────────────────────────────────────
+    // These apply only to the SmartMTR meter view (not the standard S-meter).
+    // Persisted here, surfaced in the VFO meter-view selector; consumed by the
+    // SmartMTR rendering layer via VfoWidget::pushSmartMtrOptions().
+
+    // Extremes-speed and shown-values choices, as typed enums so consumers get
+    // compile-time exhaustiveness rather than stringly-typed comparisons.
+    enum class ExtremesSpeed { Slow, Medium, Fast };
+    enum class MeterValues { None, Signal, Extremes };
+
+    // What the SmartMTR meter shows while transmitting. None = keep the RX
+    // signal scale (don't switch on TX); the rest swap to a TX scale for the
+    // duration of TX: MicLevel (dBFS), SWR (ratio), Power (forward watts,
+    // radio-aware full scale), Compression (dB). Default None. Appended values
+    // keep their ordinals; deserialisation is token-based so old configs and
+    // downgrades fall back to None on an unknown token.
+    enum class TxMeter { None, MicLevel, SWR, Power, Compression };
+
+    // Show the peak/trough "extremes" markers on the SmartMTR meter.
+    static bool showExtremes()
+    {
+        return readObj().value("showExtremes").toString("False") == "True";
+    }
+    static void setShowExtremes(bool on)
+    {
+        QJsonObject o = readObj();
+        o["showExtremes"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // Show the meter-type label (MIC/SWR/PWR/COMP) inside the SmartMTR hole while a
+    // TX meter is active. Default False.
+    static bool showTxMeterType()
+    {
+        return readObj().value("showTxMeterType").toString("False") == "True";
+    }
+    static void setShowTxMeterType(bool on)
+    {
+        QJsonObject o = readObj();
+        o["showTxMeterType"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // How fast the extremes markers decay / track. Default Medium.
+    static ExtremesSpeed extremesSpeed()
+    {
+        const QString s = readObj().value("extremesSpeed").toString("Medium");
+        if (s == QStringLiteral("Slow")) return ExtremesSpeed::Slow;
+        if (s == QStringLiteral("Fast")) return ExtremesSpeed::Fast;
+        return ExtremesSpeed::Medium;
+    }
+    static void setExtremesSpeed(ExtremesSpeed v)
+    {
+        QJsonObject o = readObj();
+        o["extremesSpeed"] = extremesSpeedToken(v);
+        write(o);
+    }
+
+    // Which numeric value(s) to overlay on the SmartMTR meter. Default None.
+    static MeterValues showValues()
+    {
+        const QString s = readObj().value("showValues").toString("None");
+        if (s == QStringLiteral("Signal")) return MeterValues::Signal;
+        if (s == QStringLiteral("Extremes")) return MeterValues::Extremes;
+        return MeterValues::None;
+    }
+    static void setShowValues(MeterValues v)
+    {
+        QJsonObject o = readObj();
+        o["showValues"] = meterValuesToken(v);
+        write(o);
+    }
+
+    // Which meter to show while transmitting. Default None (stay on RX signal).
+    static TxMeter txMeter()
+    {
+        const QString s = readObj().value("txMeter").toString("None");
+        if (s == QStringLiteral("MicLevel")) return TxMeter::MicLevel;
+        if (s == QStringLiteral("SWR")) return TxMeter::SWR;
+        if (s == QStringLiteral("Power")) return TxMeter::Power;
+        if (s == QStringLiteral("Compression")) return TxMeter::Compression;
+        return TxMeter::None;
+    }
+    static void setTxMeter(TxMeter v)
+    {
+        QJsonObject o = readObj();
+        o["txMeter"] = txMeterToken(v);
+        write(o);
+    }
+
+    static QString extremesSpeedToken(ExtremesSpeed v)
+    {
+        switch (v) {
+        case ExtremesSpeed::Slow: return QStringLiteral("Slow");
+        case ExtremesSpeed::Fast: return QStringLiteral("Fast");
+        case ExtremesSpeed::Medium: break;
+        }
+        return QStringLiteral("Medium");
+    }
+    static QString meterValuesToken(MeterValues v)
+    {
+        switch (v) {
+        case MeterValues::Signal: return QStringLiteral("Signal");
+        case MeterValues::Extremes: return QStringLiteral("Extremes");
+        case MeterValues::None: break;
+        }
+        return QStringLiteral("None");
+    }
+    static QString txMeterToken(TxMeter v)
+    {
+        switch (v) {
+        case TxMeter::MicLevel: return QStringLiteral("MicLevel");
+        case TxMeter::SWR: return QStringLiteral("SWR");
+        case TxMeter::Power: return QStringLiteral("Power");
+        case TxMeter::Compression: return QStringLiteral("Compression");
+        case TxMeter::None: break;
+        }
+        return QStringLiteral("None");
+    }
+
+private:
+    static bool isValidPanSlotIndex(int panSlotIndex)
+    {
+        constexpr int kPanSlotCount = 4;
+        return panSlotIndex >= 0 && panSlotIndex < kPanSlotCount;
+    }
+
+    static QJsonObject readObj()
+    {
+        const QString json =
+            AppSettings::instance().value("Display", QString{}).toString();
+        if (json.isEmpty()) return {};
+        return QJsonDocument::fromJson(json.toUtf8()).object();
+    }
+    static void write(const QJsonObject& o)
+    {
+        auto& s = AppSettings::instance();
+        s.setValue("Display",
+                   QString::fromUtf8(
+                       QJsonDocument(o).toJson(QJsonDocument::Compact)));
+        s.save();
+    }
+};
+
+} // namespace AetherSDR

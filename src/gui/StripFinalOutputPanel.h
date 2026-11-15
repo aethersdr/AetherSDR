@@ -1,0 +1,106 @@
+#pragma once
+
+#include <QElapsedTimer>
+#include <QWidget>
+
+#include "MeterSmoother.h"
+
+class QLabel;
+class QPushButton;
+class QTimer;
+
+namespace AetherSDR {
+
+class AudioEngine;
+class ClientCompKnob;
+
+// "Final Output Stage", the last strip tile (after PUDU / Reverb): a level meter
+// tapped post-final-limiter in AudioEngine (after every stage and PC mic gain,
+// i.e. what the radio receives), Enable + Ceiling for the ClientFinalLimiter
+// brickwall, and a LIMIT indicator lit while clamping.
+class StripFinalOutputPanel : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit StripFinalOutputPanel(AudioEngine* engine,
+                                   QWidget* parent = nullptr);
+    ~StripFinalOutputPanel() override;
+
+    void showForTx();
+    void syncControlsFromEngine();
+
+    // Signal-driven QUIN chip flash (#2262).  MainWindow connects this
+    // slot to TransmitModel::quindarActiveChanged so the chip lights
+    // bright the moment a Quindar tone starts and dims when it ends —
+    // no polling.  `active` true == chip flashes; false == idle styling.
+    void setQuindarActive(bool active);
+
+private:
+    void applyEnable(bool on);
+    void applyCeiling(float db);
+    void applyTrim(float db);
+    void applyDcBlock(bool on);
+    void applyTestToneEnabled(bool on);
+    void applyTestToneFreq(float hz);
+    void applyTestToneLevel(float db);
+    void showToneEditor();
+    void applyQuindarEnabled(bool on);
+    void showQuindarEditor();
+    void tickMeters();
+
+    AudioEngine*    m_audio{nullptr};
+    QPushButton*    m_enable{nullptr};
+    QPushButton*    m_dcBtn{nullptr};
+    QPushButton*    m_toneBtn{nullptr};
+    QPushButton*    m_quinBtn{nullptr};   // Quindar tones (#2262)
+    bool            m_quinActive{false};  // signal-driven flash state
+    ClientCompKnob* m_trim{nullptr};
+    QWidget*        m_meter{nullptr};
+    QLabel*         m_pkValue{nullptr};
+    QLabel*         m_rmsValue{nullptr};
+    QLabel*         m_grValue{nullptr};
+    QLabel*         m_crestValue{nullptr};
+    QWidget*        m_ovrLed{nullptr};
+    QLabel*         m_limitLed{nullptr};
+    QLabel*         m_activityLbl{nullptr};
+    QPushButton*    m_holdBtn{nullptr};   // Peak-hold toggle (#2887)
+    QTimer*         m_meterTimer{nullptr};
+    QElapsedTimer   m_animClock;
+
+    // Project-canonical MeterSmoother ballistics — 30 ms attack /
+    // 180 ms release at 120 Hz polling.  Targets normalised to [0, 1]
+    // via dbToRatio(); m_*Db members hold the post-smoother dB values
+    // for label readouts and HorizMeter rendering.
+    MeterSmoother m_inPeakSmooth;
+    MeterSmoother m_outPeakSmooth;
+    MeterSmoother m_outRmsSmooth;
+    MeterSmoother m_grSmooth;        // GR is positive-going; target = -gr/30 clamped to [0, 1]
+    float    m_inPeakDb{-120.0f};
+    float    m_outPeakDb{-120.0f};
+    float    m_outRmsDb{-120.0f};
+    float    m_grDb{0.0f};
+    bool     m_active{false};
+    quint64  m_lastClipCount{0};
+    qint64   m_ovrLatchUntilMs{0};
+    bool     m_limitFlashOn{false};   // toggled each tick while active
+
+    // Throttle the numeric PK / RMS / GR / CRST text labels to the
+    // project-canonical 10 Hz readout cadence (kMeterReadoutUpdateMs
+    // in MeterSmoother.h) so the operator can actually read them.
+    // The bar animations continue to tick at the full 125 Hz
+    // MeterSmoother rate; only the QLabel::setText calls are gated.
+    qint64   m_lastReadoutUpdateMs{0};
+
+    // Peak-hold (#2887). When enabled, the PK/RMS/GR/CRST readouts
+    // track the worst-case value seen since hold was engaged so the
+    // operator can read off the max over a TX burst without having
+    // to watch the live meter the whole time. Click HOLD to engage;
+    // click again to release (resets the held maxima).
+    bool     m_holdEnabled{false};
+    float    m_holdPkDb{-120.0f};
+    float    m_holdRmsDb{-120.0f};
+    float    m_holdGrDb{0.0f};
+    float    m_holdCrestDb{0.0f};
+};
+
+} // namespace AetherSDR

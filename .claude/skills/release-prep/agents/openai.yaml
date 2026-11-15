@@ -1,0 +1,4 @@
+interface:
+  display_name: "AetherSDR Release Prep"
+  short_description: "Cut an AetherSDR release: prep PR, tag on main, signed assets"
+  default_prompt: "Use $release-prep to prepare, tag and verify the specified AetherSDR release version."

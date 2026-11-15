@@ -1,0 +1,335 @@
+#include "IambicKeyer.h"
+
+#include "ThreadName.h"
+
+#include <algorithm>
+
+namespace AetherSDR {
+
+namespace {
+
+// Element timing follows the PARIS standard:
+//   1 dit = 1200 / WPM milliseconds
+//   1 dah = 3 dits
+//   inter-element gap = 1 dit
+//
+// We don't apply weighting or ratio knobs in this MVP; the radio's CW
+// engine handles those for the on-air signal, and the sidetone matches
+// the basic 3:1 ratio that most operators expect at the dit level.
+constexpr int kMinWpm = 5;
+constexpr int kMaxWpm = 60;
+constexpr int kDitsPerDah = 3;
+
+} // namespace
+
+IambicKeyer::IambicKeyer() = default;
+
+IambicKeyer::~IambicKeyer()
+{
+    stop();
+}
+
+void IambicKeyer::setOnKeyDownChange(KeyDownCallback cb)
+{
+    m_onKeyDownChange = std::move(cb);
+}
+
+void IambicKeyer::setOnPaddleEvent(PaddleEventCallback cb)
+{
+    m_onPaddleEvent = std::move(cb);
+}
+
+void IambicKeyer::setOnRoutedKeyDownChange(RoutedKeyDownCallback cb)
+{
+    m_onRoutedKeyDownChange = std::move(cb);
+}
+
+void IambicKeyer::start()
+{
+    if (m_running.exchange(true, std::memory_order_acq_rel))
+        return;
+    m_stopRequested.store(false, std::memory_order_release);
+    m_thread = std::thread(&IambicKeyer::workerLoop, this);
+}
+
+void IambicKeyer::stop()
+{
+    if (!m_running.exchange(false, std::memory_order_acq_rel))
+        return;
+    m_stopRequested.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        m_paddleStateDirty = true;
+    }
+    m_cv.notify_all();
+    if (m_thread.joinable())
+        m_thread.join();
+    if (m_lastEmittedKeyDown) emitKeyDown(false, std::chrono::steady_clock::now());
+    if (m_lastEmittedDit || m_lastEmittedDah) emitPaddleEvent(false, false);
+}
+
+void IambicKeyer::setMode(Mode m) noexcept
+{
+    m_mode.store(static_cast<int>(m), std::memory_order_relaxed);
+}
+
+void IambicKeyer::setWpm(int wpm) noexcept
+{
+    m_wpm.store(std::clamp(wpm, kMinWpm, kMaxWpm), std::memory_order_relaxed);
+}
+
+void IambicKeyer::setSwapPaddles(bool swap) noexcept
+{
+    m_swap.store(swap, std::memory_order_relaxed);
+}
+
+void IambicKeyer::setPaddleState(bool dit, bool dah) noexcept
+{
+    setPaddleInput(dit, dah, nullptr);
+}
+
+void IambicKeyer::setPaddleState(bool dit, bool dah, const TxCoordinator::Request& input) noexcept
+{
+    setPaddleInput(dit, dah, &input);
+}
+
+void IambicKeyer::setPaddleInput(bool dit, bool dah, const TxCoordinator::Request* input) noexcept
+{
+    const bool swap = m_swap.load(std::memory_order_relaxed);
+    const bool d = swap ? dah : dit;
+    const bool h = swap ? dit : dah;
+
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        if (!d && !h && input && !input->sameRequest(m_input)) {
+            return; // another source's late release cannot end this squeeze
+        }
+        if (m_ditPressed == d && m_dahPressed == h
+            && (!input || input->sameRequest(m_input))) { return; }
+        m_ditPressed = d;
+        m_dahPressed = h;
+        if (d || h) {
+            m_input = input ? *input : TxCoordinator::Request{};
+        }
+        m_paddleStateDirty = true;
+    }
+    m_cv.notify_all();
+}
+
+void IambicKeyer::reset() noexcept
+{
+    std::lock_guard<std::mutex> lk(m_mu);
+    m_ditMemory = false;
+    m_dahMemory = false;
+    m_paddleStateDirty = true;
+    m_cv.notify_all();
+}
+
+std::chrono::nanoseconds IambicKeyer::unitNs() const noexcept
+{
+    const int wpm = std::clamp(m_wpm.load(std::memory_order_relaxed), kMinWpm, kMaxWpm);
+    // Nanosecond unit math: integer 1200/wpm ms truncates (52 ms vs
+    // 52.17 ms at 23 WPM — a permanent 0.3% speed error); dividing in
+    // ns leaves sub-ppm error at any legal WPM (#4809).
+    return std::chrono::nanoseconds(1'200'000'000LL / wpm);
+}
+
+IambicKeyer::Element IambicKeyer::nextElementChoice(bool ditWanted,
+                                                    bool dahWanted,
+                                                    Element justSent) const noexcept
+{
+    if (ditWanted && dahWanted)
+        return justSent == Element::Dit ? Element::Dah : Element::Dit;
+    if (ditWanted) return Element::Dit;
+    if (dahWanted) return Element::Dah;
+    return justSent == Element::Dit ? Element::Dah : Element::Dit;
+}
+
+void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when)
+{
+    if (down == m_lastEmittedKeyDown) return;
+    m_lastEmittedKeyDown = down;
+    if (m_onKeyDownChange) m_onKeyDownChange(down, when);
+    if (m_onRoutedKeyDownChange) {
+        m_onRoutedKeyDownChange(down, when, m_elementInput);
+    }
+}
+
+void IambicKeyer::emitPaddleEvent(bool dit, bool dah)
+{
+    if (dit == m_lastEmittedDit && dah == m_lastEmittedDah) return;
+    m_lastEmittedDit = dit;
+    m_lastEmittedDah = dah;
+    if (m_onPaddleEvent) m_onPaddleEvent(dit, dah);
+}
+
+void IambicKeyer::workerLoop()
+{
+    // A raw std::thread never passes through QThread::start(), so Qt cannot
+    // name it the way it names the QThread workers — without this the keyer
+    // shows up as an unnamed row in the System Info thread table (#2554), which
+    // is unhelpful for exactly the CW timing work that would consult it.
+    setCurrentThreadName("IambicKeyer");
+
+    Element lastSent = Element::Dah;   // first paddle press emits whatever's wanted
+    bool firstInSqueeze = true;        // resets each time we re-enter the active phase
+
+    while (!m_stopRequested.load(std::memory_order_acquire)) {
+        // ── Idle wait — block until paddle pressed ─────────────────────
+        bool dit, dah;
+        TxCoordinator::Request input;
+        {
+            std::unique_lock<std::mutex> lk(m_mu);
+            m_cv.wait(lk, [this]() {
+                return m_paddleStateDirty
+                    || m_stopRequested.load(std::memory_order_acquire);
+            });
+            m_paddleStateDirty = false;
+            dit = m_ditPressed;
+            dah = m_dahPressed;
+            input = m_input;
+        }
+        // Always forward latest paddle state to the radio (even on
+        // release events — the radio's iambic engine needs to see them).
+        emitPaddleEvent(dit, dah);
+
+        if (m_stopRequested.load(std::memory_order_acquire)) break;
+        if (!dit && !dah) {
+            firstInSqueeze = true;
+            continue;
+        }
+
+        // ── Active phase: produce elements while paddle pressed ────────
+        bool wantDit = dit, wantDah = dah;
+        firstInSqueeze = true;
+
+        // Mode B memory latch — one definition for the three sites that
+        // must agree (element-start snapshot + the two in-wait live
+        // checks).  Caller holds m_mu.
+        const auto latchOppositeLocked = [this](Element cur) {
+            if (cur == Element::Dit && m_dahPressed) m_dahMemory = true;
+            if (cur == Element::Dah && m_ditPressed) m_ditMemory = true;
+        };
+
+        // Element edges advance on an absolute grid anchored here, when
+        // the active phase begins — the CwxLocalKeyer pattern from #3644.
+        // Each deadline is grid + duration and the grid advances by the
+        // nominal duration, so thread wake latency and callback cost eat
+        // into the following wait instead of stretching every element.
+        // The old per-element `now() + duration` anchoring made element
+        // length `nominal + wake latency + callback cost` with a fresh,
+        // strictly positive error term each element (#4809: measured
+        // +4 ms mean on the reporter's machine, one-sided).
+        auto grid = std::chrono::steady_clock::now();
+
+        while (!m_stopRequested.load(std::memory_order_acquire)
+               && (wantDit || wantDah
+                   || m_ditMemory.load() || m_dahMemory.load())) {
+
+            // Pick next element.
+            Element next;
+            if (firstInSqueeze) {
+                next = wantDit ? Element::Dit : Element::Dah;
+                firstInSqueeze = false;
+            } else if (m_ditMemory.load() || m_dahMemory.load()) {
+                // Memory bits force the opposite element.
+                next = m_ditMemory.load() ? Element::Dit : Element::Dah;
+                m_ditMemory.store(false);
+                m_dahMemory.store(false);
+            } else {
+                next = nextElementChoice(wantDit, wantDah, lastSent);
+            }
+            lastSent = next;
+
+            const std::chrono::nanoseconds unit = unitNs();
+            const std::chrono::nanoseconds onDuration =
+                (next == Element::Dit) ? unit : unit * kDitsPerDah;
+            const std::chrono::nanoseconds offDuration = unit;
+            const Mode currentMode =
+                static_cast<Mode>(m_mode.load(std::memory_order_relaxed));
+
+            // Mode B: latch the opposite paddle at element start. The wait loops only see
+            // paddle state on wake, and a simultaneous dual release (one ~10 ms serial poll,
+            // #4032) is already gone by then, degrading Mode B to Mode A. The live checks
+            // remain for a genuine mid-element tap.
+            if (currentMode == Mode::IambicB) {
+                std::lock_guard<std::mutex> lk(m_mu);
+                latchOppositeLocked(next);
+            }
+
+            // Element on. Deadline armed BEFORE the key-down callback so its cost can't push
+            // the edge. Catch-up limiter: after a stall longer than one element every
+            // deadline is past and the worker would emit zero-length `cw key` edges, so
+            // re-anchor the grid instead.
+            const auto markNow = std::chrono::steady_clock::now();
+            if (grid + onDuration < markNow) grid = markNow;
+            const auto onDeadline = grid + onDuration;
+            // `grid` is this edge's scheduled instant — the callback runs at
+            // wake time but carries the exact deadline (#4890 wake scatter).
+            // Each element gets its own normal down/up queue lifetime, but
+            // only through the input captured before the keyer was started.
+            // Cancellation/reconnect cannot mint fresh authority here. Local
+            // monitor/recorder timing remains independent of RF admission.
+            m_elementInput = input.derive();
+            emitKeyDown(true, grid);
+            {
+                std::unique_lock<std::mutex> lk(m_mu);
+                while (std::chrono::steady_clock::now() < onDeadline
+                       && !m_stopRequested.load(std::memory_order_acquire)) {
+                    m_cv.wait_until(lk, onDeadline);
+                    // Mode B: latch memory when opposite paddle is held
+                    // mid-element.
+                    if (currentMode == Mode::IambicB)
+                        latchOppositeLocked(next);
+                }
+            }
+            grid = onDeadline;
+
+            // ── Inter-element gap ──────────────────────────────────────
+            // Same limiter for the gap: without it the element that absorbed
+            // the stall is followed by a zero-length space.
+            const auto gapNow = std::chrono::steady_clock::now();
+            if (grid + offDuration < gapNow) grid = gapNow;
+            const auto offDeadline = grid + offDuration;
+            emitKeyDown(false, grid);
+            if (m_stopRequested.load(std::memory_order_acquire)) break;
+            {
+                std::unique_lock<std::mutex> lk(m_mu);
+                while (std::chrono::steady_clock::now() < offDeadline
+                       && !m_stopRequested.load(std::memory_order_acquire)) {
+                    m_cv.wait_until(lk, offDeadline);
+                    if (currentMode == Mode::IambicB)
+                        latchOppositeLocked(next);
+                }
+            }
+            grid = offDeadline;
+
+            // Re-read paddle state for the next iteration's decision.
+            // Always forward to the radio so it sees release events.
+            {
+                std::lock_guard<std::mutex> lk(m_mu);
+                wantDit = m_ditPressed;
+                wantDah = m_dahPressed;
+                if (m_input.valid() && !input.sameRequest(m_input)) {
+                    // A different input cannot inherit this squeeze's Mode-B
+                    // memory. Finish its current element, then start the new
+                    // input on the next outer iteration.
+                    m_ditMemory = false;
+                    m_dahMemory = false;
+                    m_paddleStateDirty = true;
+                    break;
+                }
+            }
+            emitPaddleEvent(wantDit, wantDah);
+        }
+
+        // Active phase ended; loop back to idle wait.
+    }
+
+    // Shutdown safety release — no grid exists here, so the wall clock is
+    // the honest scheduled time.
+    emitKeyDown(false, std::chrono::steady_clock::now());
+    emitPaddleEvent(false, false);
+}
+
+} // namespace AetherSDR

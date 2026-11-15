@@ -1,0 +1,215 @@
+---
+title: "Low Bandwidth Connections"
+slug: "/low-bandwidth-connections"
+description: "Reduce network traffic and smooth out problems when connecting over metered, congested or bandwidth-limited links such as LTE, satellite, hotel Wi-Fi, SmartLink, or VPN tunnels (ZeroTier, WireGuard, Tailscale)."
+status: "Supported"
+applies_to: ["FlexRadio"]
+---
+
+:::info[Status]
+
+**Status:** Supported · **Applies to:** FlexRadio
+
+:::
+
+Reduce network traffic and smooth out problems when connecting over metered, congested or bandwidth-limited links such as LTE, satellite, hotel Wi-Fi, SmartLink, or VPN tunnels (ZeroTier, WireGuard, Tailscale).
+
+A normal connection to a FlexRadio carries several UDP streams:
+
+| Stream | Format | Approx. Bandwidth |
+|--------|--------|--------------------|
+| RX Audio | uncompressed stereo, 24 kHz | ~1.5 Mbit/s |
+| FFT Spectrum | uint16 bins | ~0.5–1.0 Mbit/s |
+| Waterfall Tiles | uint16 bins | ~0.3–0.5 Mbit/s |
+| Meters | uint16 pairs | negligible |
+
+On a home LAN this is fine. Over a cellular or VPN link the combined 2–3 Mbit/s can cause dropouts, latency and data charges. AetherSDR has several independent controls. Use whichever your link needs.
+
+## Using the Low-Bandwidth Options
+
+### Audio compression (Opus)
+
+**Location:** **Settings → Radio Setup... → Audio → Audio Compression (SmartLink / tailnet)**
+
+| Setting | Behavior |
+|---------|-----------|
+| **Uncompressed** (default) | Uncompressed on every connection |
+| **Auto** | Opus on SmartLink and on a radio reached over a tailnet, uncompressed on the local network |
+| **Opus** | Opus on every connection |
+
+Until you choose, a radio reached over a tailnet gets Opus.
+
+Opus reduces the audio stream from about 1.5 Mbit/s to about 64–128 kbit/s. It applies to both receive audio and PC-microphone transmit audio. On a LAN connection the radio may ignore the request and send uncompressed audio anyway.
+
+**When to use:** choose **Auto** if you use SmartLink, or **Opus** on any metered or limited link.
+
+### Low bandwidth mode
+
+**Location:** connect panel → *Connection options for slower links* → **Use low bandwidth mode**
+
+The *Connection options for slower links* box appears when you choose **Remote with SmartLink** or **Connect by IP**. With the box ticked, AetherSDR asks the radio for a low-bandwidth session (`client low_bw_connect`) as it connects, and the radio reduces the FFT, waterfall and meter data it sends.
+
+- It takes effect when you connect. To change it, disconnect and reconnect.
+- The choice is remembered for SmartLink and Connect-by-IP connections. Connecting to a FlexRadio found **On This Network** always uses full bandwidth.
+- On a [Hermes-Lite 2](./hermes-lite-2.md), the same option caps the panadapter span at 96 kHz (about 6 Mbit/s).
+
+AetherSDR exposes this as a manual choice because overlay networks such as ZeroTier, WireGuard and Tailscale can make a radio look local even when the real path is cellular or satellite.
+
+### Adaptive frame-rate throttle
+
+**Location:** connect panel → **Enable adaptive frame-rate throttle** (off by default)
+
+When enabled, AetherSDR automatically lowers the FFT and waterfall frame rate when network quality degrades, reducing the chance of a disconnect on a congested link. It applies to every connection type.
+
+- Toggling it while connected takes effect at the next quality update. To lift a cap that has already been applied, reconnect.
+- While it is on, an **AT** chip follows the connected radio's name in the title bar, and the tab's dot shows the network quality color. The chip fills with color while a cap is in force; hover the tab to see the frame rate. See [Menu Reference](./menu-reference.md#radio-tabs).
+- The cap is not meant to be saved as your setting. When you disconnect, close AetherSDR, close a panadapter or pick a band from AetherSDR's band menu while a cap is in force, AetherSDR first puts back your own FFT FPS and waterfall rate, so the radio keeps those. After a band change the cap goes back on once the radio has switched bands.
+- Some changes still leave the radio holding the capped rate for a band: the connection dropping or timing out, and a band change AetherSDR didn't make (tuning or dragging the panadapter across a band edge, CAT, or another client). If a band comes back at a low rate with the throttle off, set **FFT FPS** and **WtrFall Rate** again while on it.
+- The **Stream Rates** page of **Tools → Network Diagnostics...** charts the frame-rate cap — see [Runtime Monitor](./runtime-monitor.md).
+
+### Network MTU
+
+**Location:** **Settings → Radio Setup... → Network → Advanced → Network MTU**
+
+Network MTU sets the largest VITA-49 UDP packet the radio sends. AetherSDR's default is **1450 bytes** (the radio default is 1500), which suits most VPN and SD-WAN tunnels. The range is 576–9000.
+
+VITA-49 FFT and waterfall packets are about 1436 bytes at an MTU of 1500. Tunnels add overhead that reduces the effective MTU (see [Reference](#reference)). A packet larger than the tunnel MTU is fragmented (adding latency) or silently dropped (losing spectrum and waterfall). Audio packets are smaller and usually get through — which is why you can hear audio but see no spectrum over a VPN.
+
+AetherSDR sends `client set enforce_network_mtu=1 network_mtu=<value>` to the radio on each connect. It applies to this client's session only and does not permanently change the radio or affect other clients.
+
+**Over Tailscale, AetherSDR sends at most 1200 bytes**, whatever the setting says. A tailnet carries 1280-byte packets, so larger VITA-49 packets can't cross it. AetherSDR does this automatically when either end of the connection has a Tailscale address:
+
+- the radio is at a tailnet address (see [Tailscale Remote Access](./tailscale-remote-access.md)), or
+- your computer runs Tailscale and reaches the radio's LAN address through a Tailscale subnet router.
+
+A smaller setting is kept. The setting itself doesn't change, so a LAN connection still uses the full value.
+
+If Tailscale runs only on routers at each end (site to site), or you reach the radio through a proxy, neither end has a Tailscale address and AetherSDR can't tell. Set **Network MTU** to 1200 yourself.
+
+### VITA-49 RX buffer
+
+**Location:** **Settings → Radio Setup... → Network → Advanced → VITA-49 RX buffer**
+
+The operating-system receive buffer for the radio's data stream. The slider snaps to 256 KB, 512 KB, 1 MB, 2 MB or **4 MB (default)**. A larger buffer absorbs bursts of panadapter and waterfall data so they are not dropped — dropped bursts show up as dips in the network statistics and can trigger the adaptive throttle.
+
+The **granted** label shows what the operating system actually allowed. On Linux the size is capped by `net.core.rmem_max`.
+
+### Audio smoothing
+
+Two audio settings in **Settings → Radio Setup... → Audio** help on lossy links even when bandwidth is not the problem:
+
+- **Smooth packet loss** (on by default) fades over lost audio packets instead of producing a click.
+- **Audio Buffer** (default 100 ms, range 50–1000 ms) — increase it if audio stutters because of jitter.
+
+See [Audio Settings](./audio-settings.md).
+
+### Reducing panadapter traffic
+
+You can reduce traffic further from the panadapter's **Display** panel (right-click the spectrum):
+
+- **Lower FFT FPS** — PANADAPTER section, **FFT FPS** (5–60, default 25). Try 5–10 on a slow link.
+- **Slow the waterfall** — WATERFALL section, **WtrFall Rate**.
+- **Zoom in** — a narrower span sends fewer FFT bins.
+- **Shrink the waterfall** — if you only need the spectrum trace, a minimal waterfall height reduces tile traffic.
+
+### Diagnosing a link
+
+**Tools → Network Diagnostics...** shows latency, jitter, packet loss by stream, stream rates and audio-buffer health over time, with symptom search. See [Runtime Monitor](./runtime-monitor.md).
+
+### Network priority (DSCP EF)
+
+AetherSDR automatically requests **DSCP EF (46)** for outgoing traffic from the FlexRadio streaming socket on macOS, Linux and Windows. This includes transmit audio, UDP registration and keepalives on LAN and SmartLink connections. The separate CTR2 USB controller relay socket is not marked. There is no AetherSDR setting to disable marking.
+
+This is best effort: if the operating system does not support or allow marking, the connection and streaming continue. The log reports either `VITA UDP DSCP EF configured` or `VITA UDP DSCP EF unavailable; streaming continues`. Windows uses its native QoS API; requesting the exact EF value may be denied by account privileges or system policy. An administrator can configure a Windows QoS policy for the relevant outgoing UDP traffic if needed.
+
+EF marking can help on a congested network that honors DSCP. Switches, routers, VPNs and Wi-Fi equipment may ignore or rewrite it, and Wi-Fi priority also depends on the operating system and access point. It does not reduce bandwidth or change the markings of incoming radio audio, spectrum or waterfall packets. If your network handles EF traffic poorly, ask your network administrator to remark this outgoing UDP traffic to best effort at the network boundary.
+
+## Reference
+
+### Recommended settings by connection type
+
+| Connection | Audio Compression | Low bandwidth mode | Adaptive throttle |
+|------------|-------------------|--------------------|-------------------|
+| Home LAN (Ethernet/Wi-Fi) | Uncompressed | — | Off |
+| SmartLink over broadband | Auto | Optional | Optional |
+| SmartLink over LTE / hotel Wi-Fi | Auto | On | On |
+| VPN over broadband | Opus | Optional | Optional |
+| VPN over LTE/cellular | Opus | On | On |
+| VPN over satellite | Opus | On | On |
+
+### Typical tunnel MTUs
+
+| Tunnel Type | Typical Effective MTU |
+|-------------|----------------------|
+| WireGuard | 1420 bytes |
+| OpenVPN (UDP) | 1400 bytes |
+| Cisco SD-WAN | 1400–1450 bytes |
+| ZeroTier | ~1400 bytes |
+| Tailscale | 1280 bytes (AetherSDR caps the MTU at 1200 automatically) |
+
+### Recommended MTU settings
+
+| Connection | MTU Setting |
+|------------|-------------|
+| Home LAN | 1500 (or leave at 1450) |
+| VPN / SD-WAN | 1450 (default) |
+| Tailscale on this computer or the radio | Any; AetherSDR sends at most 1200 |
+| Tailscale on routers only (site to site) | 1200 |
+| Satellite / high-overhead tunnels | 1300–1400 |
+
+## Known issues
+
+- The network-quality indicator in the status bar is averaged, so it can stay green while the link is bad; use **Tools → Network Diagnostics...** for live conditions ([#2825](https://github.com/aethersdr/AetherSDR/issues/2825)).
+
+## Troubleshooting
+
+### Audio works, but the spectrum and waterfall stay empty over a VPN
+
+Spectrum and waterfall packets are larger than the tunnel's MTU, so they are dropped while the smaller audio packets get through.
+
+1. Open **Settings → Radio Setup... → Network → Advanced**.
+2. Lower **Network MTU** to suit your tunnel (see [Recommended MTU settings](#recommended-mtu-settings)). This is automatic when this computer or the radio has a Tailscale address.
+3. Reconnect; AetherSDR sends the MTU to the radio on each connect.
+
+### The VITA-49 RX buffer says it was capped
+
+On Linux, the operating system limits the buffer to `net.core.rmem_max`.
+
+1. Raise `net.core.rmem_max` to use a larger buffer.
+2. Check the **granted** label again.
+
+### Audio stutters or clicks on a remote link
+
+Network jitter or lost packets are reaching the audio buffer.
+
+1. Raise **Audio Buffer** in **Settings → Radio Setup... → Audio** a little at a time.
+2. Leave **Smooth packet loss** on.
+3. Use Opus compression and low bandwidth mode.
+
+### Audio drops out or the waterfall has gaps
+
+Packets from the radio can be lost or arrive out of order on the way to the computer. Receive audio waits up to 30 ms for a missing packet before decoding its queued successors. Packets arriving within that wait are restored to order without packet-loss concealment; a gap that remains triggers concealment when **Smooth packet loss** is enabled. Ordered audio has no added wait. FFT, waterfall and meter accounting also allows this reorder wait.
+
+**Tools → Network Diagnostics...** reports these missing packets separately from reordered arrivals. The **Session missing packets / DAX breaks** total counts individual absent audio, FFT, waterfall and meter packets, plus DAX sequence breaks. Its network-quality score retains one event per resolved gap, so a burst of several missing packets is one scoring event. Per-stream loss percentages in Network Diagnostics, the status tooltip and performance logs use received plus missing packets as the denominator. DAX remains in arrival order and reports sequence breaks. The log shows `PanadapterStream: VITA-49 sequence errors on <stream> stream`, at most once every 10 seconds per stream.
+
+The 4-bit counter cannot uniquely identify arbitrary long loss or reordering. A PCM count reused within 30 ms of its last delivery or expiry is indistinguishable from a late copy; losses spanning a complete counter cycle are also ambiguous. Opus timestamps and display frame positions provide additional ordering information. Opus reception resumes after a backward timestamp jump greater than 60 seconds; display loss accounting resumes after a counter restart beyond its eight-frame late-packet window.
+
+1. Open **Tools → Network Diagnostics...** to see which streams lose packets.
+2. Connect the computer to the network by cable instead of Wi-Fi.
+3. If the VITA-49 RX buffer says it was capped, raise `net.core.rmem_max` (see [The VITA-49 RX buffer says it was capped](#the-vita-49-rx-buffer-says-it-was-capped)).
+4. On a remote link, use Opus compression and low bandwidth mode.
+
+### Low bandwidth mode has no effect
+
+It takes effect only when you connect, and never on a FlexRadio found **On This Network**.
+
+1. Disconnect.
+2. Connect again with **Remote with SmartLink** or **Connect by IP**, with **Use low bandwidth mode** ticked.
+
+## See also
+
+- [SmartLink Setup](./smartlink-setup.md)
+- [Tailscale Remote Access](./tailscale-remote-access.md)
+- [Manual Connection](./manual-connection.md)
+- [Audio Settings](./audio-settings.md)
+- [Runtime Monitor](./runtime-monitor.md)

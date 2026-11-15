@@ -1,0 +1,17 @@
+# AetherSDR — Ulanzi Dial access (#3599)
+#
+# Grants the active local user access to Ulanzi Dial control-surface input
+# nodes so AetherSDR's evdev encoder mapper can read rotation/button events.
+# Without this, /dev/input/event* for the dial is root:input 0660 and the
+# (non-root, non-"input"-group) AetherSDR process cannot open it — the mapper
+# then shows "disconnected" with no obvious cause.
+#
+# uaccess hands the node to whoever owns the active local session (via a
+# systemd-logind ACL), so no static group membership is required.
+#
+# This file is NOT installed by the build. AetherSDR installs an identical copy
+# on demand — only after it actually detects a Dial it cannot open — via a
+# polkit-authenticated action (Settings → Ulanzi Dial mapper → "Grant access").
+# Distro packagers who prefer to ship it unconditionally may install it to
+# /usr/lib/udev/rules.d/.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Ulanzi Dial*", TAG+="uaccess"

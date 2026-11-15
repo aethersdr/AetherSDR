@@ -1,0 +1,559 @@
+#pragma once
+
+#include "DragValuePopup.h"
+#include "Theme.h"
+
+#include <QSlider>
+#include <QComboBox>
+#include <QAbstractItemView>
+#include <QLabel>
+#include <QLineEdit>
+#include <QIntValidator>
+#include <QAccessible>
+#include <QCoreApplication>
+#include <QAccessibleWidget>
+#include <QEvent>
+#include <QLocale>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QStyle>
+#include <QStyleOptionSlider>
+#include <QWheelEvent>
+#include <functional>
+#include <utility>
+
+// Global lock for sidebar controls — when locked, sliders, combo boxes,
+// and scrollable labels ignore wheel/mouse events so the user can scroll
+// the applet panel without accidentally changing values. (#745)
+class ControlsLock {
+public:
+    static bool isLocked() { return s_locked; }
+    static void setLocked(bool locked) { s_locked = locked; }
+private:
+    static inline bool s_locked = false;
+};
+
+// QSlider subclass that always consumes wheel events, even at min/max
+// boundaries. Prevents scroll from propagating to parent widgets (e.g.
+// SpectrumWidget tuning the VFO when a slider bottoms out). (#570)
+// When controls are locked (#745), ignores wheel events and lets the
+// parent scroll area handle them.
+class GuardedSlider : public QSlider {
+public:
+    using DragValueFormatter = std::function<QString(int)>;
+
+    explicit GuardedSlider(QWidget* parent = nullptr)
+        : QSlider(parent)
+    {
+        installHoverSuppressor();
+    }
+
+    explicit GuardedSlider(Qt::Orientation orientation, QWidget* parent = nullptr)
+        : QSlider(orientation, parent)
+    {
+        installHoverSuppressor();
+    }
+
+    void setDragValueFormatter(DragValueFormatter formatter) {
+        m_dragValueFormatter = std::move(formatter);
+    }
+
+    void setDragValuePopupEnabled(bool enabled) {
+        m_dragValuePopupEnabled = enabled;
+        if (!enabled && m_dragValuePopup)
+            m_dragValuePopup->hideNow();
+    }
+
+    // Flash the value badge in response to a keyboard step, then let it
+    // linger and fade with the same timeout as a mouse release.  Keyboard
+    // nudges for these sliders are routed through MainWindow's shortcut
+    // lease (so global operating shortcuts can resume), so the lease handler
+    // calls this to mirror the mouse-drag readout. (#3303 follow-up)
+    void flashDragValue() {
+        if (!m_dragValuePopupEnabled)
+            return;
+        showDragValuePopup(mapToGlobal(rect().center()));
+        if (m_dragValuePopup)
+            m_dragValuePopup->linger();
+    }
+
+    void mousePressEvent(QMouseEvent* ev) override {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        QSlider::mousePressEvent(ev);
+        if (ev->button() == Qt::LeftButton) {
+            m_dragValueActive = true;
+            showDragValuePopup(ev->globalPosition().toPoint());
+        }
+    }
+    void mouseMoveEvent(QMouseEvent* ev) override {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        QSlider::mouseMoveEvent(ev);
+        if (m_dragValueActive || isSliderDown())
+            showDragValuePopup(ev->globalPosition().toPoint());
+    }
+    void mouseReleaseEvent(QMouseEvent* ev) override {
+        const bool wasActive = m_dragValueActive;
+        QSlider::mouseReleaseEvent(ev);
+        if (wasActive && ev->button() == Qt::LeftButton) {
+            showDragValuePopup(ev->globalPosition().toPoint());
+            m_dragValueActive = false;
+            if (m_dragValuePopup)
+                m_dragValuePopup->linger();
+        }
+    }
+    void wheelEvent(QWheelEvent* ev) override {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        // Use singleStep (default 1) instead of pageStep (default 10) so
+        // that mouse-wheel adjustments are fine-grained (#1026).
+        int delta = ev->angleDelta().y();
+        if (delta != 0)
+            setValue(value() + (delta > 0 ? singleStep() : -singleStep()));
+        ev->accept();
+    }
+
+protected:
+    // Below is protected (not private) so subclasses that override the
+    // mouse handlers for custom drag behaviour — e.g. WaterfallRateSlider's
+    // click-to-jump positioning — can still drive the same drag-value popup
+    // instead of silently losing it.
+    QString dragValueText() const {
+        if (m_dragValueFormatter)
+            return m_dragValueFormatter(value());
+        return QString::number(value());
+    }
+
+    QPoint dragValueAnchor(const QPoint& fallbackGlobal) const {
+        QStyleOptionSlider opt;
+        initStyleOption(&opt);
+        const QRect handle = style()->subControlRect(
+            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
+        if (handle.isValid())
+            return mapToGlobal(handle.center());
+        return fallbackGlobal;
+    }
+
+    void showDragValuePopup(const QPoint& fallbackGlobal) {
+        if (!m_dragValuePopupEnabled)
+            return;
+        if (!m_dragValuePopup)
+            m_dragValuePopup = new AetherSDR::DragValuePopup(this);
+        m_dragValuePopup->showValue(dragValueAnchor(fallbackGlobal),
+                                    dragValueText());
+    }
+
+    DragValueFormatter m_dragValueFormatter;
+    AetherSDR::DragValuePopup* m_dragValuePopup{nullptr};
+    bool m_dragValuePopupEnabled{true};
+    bool m_dragValueActive{false};
+
+private:
+    // #4869: every QSlider gets Qt::WA_Hover forced on by the Fusion style
+    // regardless of stylesheet (see SliderHoverSuppressor in Theme.h for the
+    // full mechanism), which triggers a hover repaint that leaves stale
+    // pixels at a fractional UI scale. Installing from the constructor
+    // covers every GuardedSlider — including the ones styled via
+    // ThemeManager::applyStyleSheet() directly rather than through
+    // applyPrimarySliderStyle() (EqApplet's band sliders, TitleBar's
+    // master/headphone sliders, RadioSetupDialog's filter slider, ...) —
+    // without touching any of those call sites.
+    void installHoverSuppressor() {
+        installEventFilter(&AetherSDR::detail::SliderHoverSuppressor::instance());
+    }
+};
+
+// QComboBox subclass that only responds to wheel events when the dropdown
+// popup is open. Prevents accidental value changes when scrolling the applet
+// panel, but allows normal wheel scrolling through the list when the user
+// has clicked to open the dropdown. (#570, #676)
+// When controls are locked (#745), also blocks mouse press to prevent
+// opening the dropdown.
+class GuardedComboBox : public QComboBox {
+public:
+    using QComboBox::QComboBox;
+    void wheelEvent(QWheelEvent* ev) override {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        if (view() && view()->isVisible())
+            QComboBox::wheelEvent(ev);  // popup open — scroll the list
+        else
+            ev->ignore();  // popup closed — let parent handle scroll
+    }
+    void mousePressEvent(QMouseEvent* ev) override {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        QComboBox::mousePressEvent(ev);
+    }
+};
+
+// Validator pinned to the C locale with group separators rejected, so it
+// accepts exactly what QString::toInt() parses (optional sign, ASCII digits).
+// No clamping fixup(): Return is handled on the editor (eventFilter), so an
+// out-of-range entry closes the editor and restores the previous value (#3627).
+inline QIntValidator* makeCLocaleIntValidator(int minimum, int maximum, QObject* parent)
+{
+    auto* validator = new QIntValidator(minimum, maximum, parent);
+    QLocale cLocale = QLocale::c();
+    cLocale.setNumberOptions(QLocale::RejectGroupSeparator
+                             | QLocale::OmitGroupSeparator);
+    validator->setLocale(cLocale);
+    return validator;
+}
+
+class ScrollableLabel;
+// Installed lazily by setEditable() — see the class comment below.
+inline QAccessibleInterface* scrollableLabelAccessibleFactory(const QString& key,
+                                                              QObject* object);
+
+// QLabel that emits scrolled(int steps) on wheel events and always consumes
+// them; ignores wheel when controls are locked (#619, #745). setEditable()
+// enables double-click typed entry over the label (#3627); off by default. A
+// committed value is a request: the owner clamps it and re-syncs the text from
+// the model.
+class ScrollableLabel : public QLabel {
+    Q_OBJECT
+public:
+    using QLabel::QLabel;
+
+    // Enable double-click-to-type. min/max bound the editor's validator;
+    // the owner still applies any cross-control clamping on commit.
+    void setEditable(int minValue, int maxValue) {
+        m_editable = true;
+        m_min = minValue;
+        m_max = maxValue;
+
+        // docs/a11y.md, "Interactive QLabel anti-pattern": a QLabel that opens
+        // an editor is an interactive control, so it needs Tab focus, a
+        // keyboard activation path (keyPressEvent below) and a role that is
+        // not StaticText. Without these the feature was reachable only by
+        // mouse double-click — which is the opposite of the accessibility
+        // motivation in issue #3627 (#5064 review).
+        //
+        // StrongFocus rather than TabFocus: the label already takes a click,
+        // and a control that focuses on Tab but not on click reads as broken.
+        setFocusPolicy(Qt::StrongFocus);
+        if (accessibleDescription().isEmpty()) {
+            setAccessibleDescription(
+                tr("Editable. Press Enter to type an exact value in Hz "
+                   "between %1 and %2, or use the arrow buttons.")
+                    .arg(minValue).arg(maxValue));
+        }
+
+        static bool s_accessibilityFactoryInstalled = false;
+        if (!s_accessibilityFactoryInstalled) {
+            s_accessibilityFactoryInstalled = true;
+            QAccessible::installFactory(scrollableLabelAccessibleFactory);
+        }
+        // Evict a STALE cached interface. QAccessible caches one interface per
+        // object for its lifetime, and on Qt 6.8.3 (the shipped Qt) the widget
+        // machinery queries this label before setEditable() runs — so the
+        // cache already holds QLabel's StaticText interface, the factory
+        // above is never consulted for this object again, and every screen
+        // reader announces an editable readout as plain text. Measured, not
+        // theorised: role 41 (StaticText) before eviction, 43 (Button) after,
+        // in the CI container; newer Qt builds happen not to query early,
+        // which is how this passed locally and shipped (#5064, #4896).
+        if (QAccessibleInterface* cached = QAccessible::queryAccessibleInterface(this)) {
+            if (cached->role() != QAccessible::Button) {
+                QAccessible::deleteAccessibleInterface(QAccessible::uniqueId(cached));
+            }
+        }
+    }
+    bool isEditable() const { return m_editable; }
+    int  editMinimum() const { return m_min; }
+    int  editMaximum() const { return m_max; }
+
+    // The owner styles the editor, so it does not flash an unthemed system box
+    // over a dark panel. A callback rather than a stylesheet string for two
+    // reasons: the owner writes a QLineEdit rule directly (a QLabel rule would
+    // not match a QLineEdit at all, since Qt selects on widget class), and the
+    // stylesheet is applied by ThemeManager itself, which owns theming
+    // and is where the colour audit expects it to live.
+    void setEditorStyler(std::function<void(QWidget*)> styler) {
+        m_editorStyler = std::move(styler);
+    }
+    bool hasEditorStyler() const { return static_cast<bool>(m_editorStyler); }
+
+    void wheelEvent(QWheelEvent* ev) override {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        int delta = ev->angleDelta().y();
+        if (delta > 0) emit scrolled(1);
+        else if (delta < 0) emit scrolled(-1);
+        ev->accept();
+    }
+
+    // Keyboard route into the editor. Same gates as the double-click: editing
+    // must be enabled and the panel unlocked. Anything else falls through to
+    // QLabel so Tab/Shift-Tab keep working.
+    void keyPressEvent(QKeyEvent* ev) override {
+        const bool activates = ev->key() == Qt::Key_Return
+                               || ev->key() == Qt::Key_Enter;
+        if (activates && m_editable && !m_editor && !ControlsLock::isLocked()) {
+            beginEdit(Qt::TabFocusReason);
+            ev->accept();
+            return;
+        }
+        QLabel::keyPressEvent(ev);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* ev) override {
+        // Same gate as the wheel handler: a locked panel is being scrolled,
+        // not operated. (#745)
+        if (!m_editable || ControlsLock::isLocked()) {
+            QLabel::mouseDoubleClickEvent(ev);
+            return;
+        }
+        beginEdit();
+        ev->accept();
+    }
+
+    // Exposed so a test (and any future keyboard route) can open the editor
+    // without synthesising a double-click.
+    void beginEdit(Qt::FocusReason reason = Qt::MouseFocusReason) {
+        if (!m_editable || m_editor)
+            return;
+        m_editor = new QLineEdit(text(), this);
+        m_editor->setValidator(makeCLocaleIntValidator(m_min, m_max, m_editor));
+        // The editor is a fresh widget every time, so it inherits none of the
+        // label's accessible metadata — to a screen reader it was an unnamed
+        // edit box appearing from nowhere (#5064 review).
+        m_editor->setAccessibleName(accessibleName());
+        m_editor->setAccessibleDescription(
+            tr("Type a value in Hz between %1 and %2, then press Enter. "
+               "Escape cancels.").arg(m_min).arg(m_max));
+        m_editor->setAlignment(alignment());
+        if (m_editorStyler)
+            m_editorStyler(m_editor);
+        m_editor->setGeometry(rect());
+        m_editor->selectAll();
+        // Escape has to be claimed on the EDITOR, via ShortcutOverride — see
+        // eventFilter() below for why a keyPressEvent override cannot work.
+        m_editor->installEventFilter(this);
+        connect(m_editor, &QLineEdit::editingFinished, this, [this]() { commitEdit(); });
+        m_editor->show();
+        m_editor->setFocus(reason);
+    }
+
+    bool isEditing() const { return m_editor != nullptr; }
+
+    // Whether closing the editor should hand focus back to the label. Yes for
+    // deliberate keyboard exits (Enter, Escape); No for focus-out, where the
+    // user is already on their way to another control.
+    enum class RestoreFocus { No, Yes };
+
+signals:
+    void scrolled(int direction);
+    // A typed value the owner should clamp and push at the model.
+    void editCommitted(int value);
+
+protected:
+    // Cancel on Esc. Must filter the editor and accept ShortcutOverride, not
+    // just KeyPress: the window has QShortcut(Qt::Key_Escape) (CwxPanel,
+    // DvkPanel), which would otherwise fire and the editor never sees the key.
+    // Same shape as VfoWidget::eventFilter.
+    bool eventFilter(QObject* obj, QEvent* ev) override {
+        if (obj == m_editor) {
+            if (ev->type() == QEvent::ShortcutOverride
+                || ev->type() == QEvent::KeyPress) {
+                auto* ke = static_cast<QKeyEvent*>(ev);
+                if (ke->key() == Qt::Key_Escape || ke->key() == Qt::Key_Cancel) {
+                    // Accepting the ShortcutOverride claims the key so the
+                    // window shortcut does not consume it; the KeyPress that
+                    // follows is what actually closes the editor.
+                    if (ev->type() == QEvent::KeyPress)
+                        closeEditor(RestoreFocus::Yes);
+                    ev->accept();
+                    return true;
+                }
+
+                // Return/Enter handled here: QLineEdit emits returnPressed only
+                // for Acceptable input, so empty or out-of-range entries would
+                // leave the editor open. Enter commits a legal value, else
+                // cancels.
+                if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
+                    if (ev->type() == QEvent::KeyPress)
+                        commitEdit(RestoreFocus::Yes);
+                    ev->accept();
+                    return true;
+                }
+            }
+
+            // Focus-out must ALWAYS end the edit.  QLineEdit emits
+            // editingFinished on focus-out only when the input is Acceptable,
+            // so a half-typed or out-of-range value emitted nothing and left
+            // the editor sitting open on top of the label — where it silently
+            // ate every wheel event aimed at the numerals underneath.
+            if (ev->type() == QEvent::FocusOut) {
+                // RestoreFocus::No — the user is on their way somewhere else
+                // (a Tab, a click on another control); pulling focus back to
+                // the label here would fight them for it.
+                commitEdit(RestoreFocus::No);
+                return false;               // let Qt finish its own focus work
+            }
+
+            // The editor covers the label exactly, so while it is open the
+            // label can never see a wheel event of its own.  Forward it, so
+            // rolling steps the value whether or not a field is open, and
+            // re-seed the text from whatever the model accepted.
+            if (ev->type() == QEvent::Wheel) {
+                if (ControlsLock::isLocked())
+                    return false;
+                auto* we = static_cast<QWheelEvent*>(ev);
+                const int delta = we->angleDelta().y();
+                if (delta != 0) {
+                    emit scrolled(delta > 0 ? 1 : -1);
+                    if (m_editor)
+                        m_editor->setText(text());   // text() is model truth
+                }
+                ev->accept();
+                return true;
+            }
+        }
+        return QLabel::eventFilter(obj, ev);
+    }
+
+private:
+    // Tear the editor down. Clears the member FIRST: destroying a focused
+    // QLineEdit emits editingFinished, and a null member is what stops that
+    // re-entering commitEdit() and committing a value twice.
+    void closeEditor(RestoreFocus restore = RestoreFocus::No) {
+        if (!m_editor)
+            return;
+        QLineEdit* ed = m_editor;
+        m_editor = nullptr;
+        // hide() before deleteLater(): the delete only lands on the next
+        // event-loop pass, and until then the editor is still a visible
+        // child sitting on top of the label.
+        // window()->focusWidget(), not hasFocus(): hasFocus() is additionally
+        // false whenever the window is not ACTIVE, so a commit made while
+        // another window happens to be in front would silently skip the
+        // restore and strand the keyboard user with no focused control. The
+        // question here is only "was the editor this window's focus target".
+        QWidget* const editorWindow = ed->window();
+        const bool editorHadFocus =
+            editorWindow && editorWindow->focusWidget() == ed;
+        ed->hide();
+        ed->deleteLater();
+        // A keyboard user who opened the editor with Enter and closed it with
+        // Enter or Escape must land back on the label, not on whatever Qt
+        // picks when the focused child disappears.
+        if (restore == RestoreFocus::Yes && editorHadFocus
+            && focusPolicy() != Qt::NoFocus) {
+            setFocus(Qt::OtherFocusReason);
+        }
+    }
+
+    // Issue #3627: "Invalid values are rejected with validation and the
+    // previous value is restored." Restoring is implicit and that is the point
+    // — the editor is a separate QLineEdit laid OVER the label, so the label's
+    // own text was never touched and still holds model truth. Returning
+    // without emitting is the restore.
+    //
+    // This replaced a clamp (#5064 review). Clamping is a defensible UX, but
+    // it is not the one the issue specifies, and silently moving an operator's
+    // typed 20000 to 3250 reads as the radio having ignored them.
+    void commitEdit(RestoreFocus restore = RestoreFocus::No) {
+        if (!m_editor)
+            return;
+        const QString typed = m_editor->text().trimmed();
+        closeEditor(restore);
+        bool ok = false;
+        const int value = typed.toInt(&ok);
+        // Empty, unparseable, or outside the accepted range: reject, and the
+        // label keeps whatever the model last put there. The range test is
+        // here and not only in the validator because focus-out reaches this
+        // with Intermediate text the validator never blocked.
+        if (!ok || value < m_min || value > m_max)
+            return;
+        emit editCommitted(value);
+    }
+
+    bool       m_editable{false};
+    int        m_min{0};
+    int        m_max{0};
+    std::function<void(QWidget*)> m_editorStyler;
+    QLineEdit* m_editor{nullptr};
+};
+
+// Editable ScrollableLabel accessibility: role Button with a `press` action
+// that opens the editor, per docs/a11y.md (QLabel's StaticText would hide that
+// it is interactive). Not EditableText: no text interfaces exist on the label;
+// the QLineEdit that appears carries Qt's editable-text semantics. AT press
+// and keyboard both go through beginEdit() and honour the #745 lock.
+// Display-only labels get nullptr from the factory and keep StaticText.
+class ScrollableLabelAccessible : public QAccessibleWidget {
+public:
+    explicit ScrollableLabelAccessible(QWidget* widget)
+        : QAccessibleWidget(widget, QAccessible::Button) {}
+
+    // QAccessibleWidget already implements QAccessibleActionInterface (it
+    // offers SetFocus for a focusable widget), so these are overrides rather
+    // than a new interface — actionInterface() is non-null either way. What
+    // was missing was an action that DOES anything.
+    QStringList actionNames() const override
+    {
+        QStringList names{QAccessibleActionInterface::pressAction()};
+        names += QAccessibleWidget::actionNames();   // keeps SetFocus
+        names.removeDuplicates();
+        return names;
+    }
+
+    void doAction(const QString& actionName) override
+    {
+        if (actionName == QAccessibleActionInterface::pressAction()) {
+            if (auto* label = qobject_cast<ScrollableLabel*>(object())) {
+                if (!ControlsLock::isLocked())
+                    label->beginEdit(Qt::OtherFocusReason);
+            }
+            return;
+        }
+        QAccessibleWidget::doAction(actionName);
+    }
+
+    QStringList keyBindingsForAction(const QString& actionName) const override
+    {
+        if (actionName == QAccessibleActionInterface::pressAction()) {
+            // The same keys keyPressEvent() answers, so what an AT announces
+            // and what the keyboard actually does cannot drift apart.
+            // Space is deliberately absent: MainWindow owns it as the default
+            // application-level PTT-hold key and intercepts it before this
+            // widget while a radio is connected (Principle VI).
+            return {QStringLiteral("Return")};
+        }
+        return QAccessibleWidget::keyBindingsForAction(actionName);
+    }
+
+    QString localizedActionDescription(const QString& actionName) const override
+    {
+        if (actionName == QAccessibleActionInterface::pressAction())
+            return QCoreApplication::translate(
+                "ScrollableLabel", "Open an editor to type an exact value");
+        return QAccessibleWidget::localizedActionDescription(actionName);
+    }
+};
+
+inline QAccessibleInterface* scrollableLabelAccessibleFactory(const QString& key,
+                                                              QObject* object)
+{
+    if (key == QLatin1String("ScrollableLabel")) {
+        auto* label = qobject_cast<ScrollableLabel*>(object);
+        if (label && label->isEditable())
+            return new ScrollableLabelAccessible(label);
+    }
+    return nullptr;
+}

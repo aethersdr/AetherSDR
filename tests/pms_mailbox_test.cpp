@@ -1,0 +1,727 @@
+// Unit + integration tests for the AX.25 connected-mode data link and the
+// Personal Mailbox System (PMS). These exercise the protocol layer in isolation
+// (no DSP / radio), driving the mailbox exactly as a remote caller's TNC would.
+
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/pms/PmsMailbox.h"
+#include "core/tnc/Ax25.h"
+#include "core/tnc/Ax25Connection.h"
+
+#include <QByteArray>
+#include <QCoreApplication>
+#include <QDeadlineTimer>
+#include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QVector>
+#include <QtGlobal>
+
+#include <cstdio>
+#include <filesystem>
+#include <system_error>
+
+using namespace AetherSDR;
+using AetherSDR::ax25::Address;
+using AetherSDR::ax25::Frame;
+using AetherSDR::ax25::FrameType;
+
+static int g_failures = 0;
+
+#define CHECK(cond, msg)                                                        \
+    do {                                                                        \
+        if (!(cond)) {                                                          \
+            std::fprintf(stderr, "FAIL: %s (%s:%d)\n", msg, __FILE__, __LINE__);\
+            ++g_failures;                                                       \
+        }                                                                       \
+    } while (0)
+
+static void testAddress()
+{
+    auto a = Address::parse(QStringLiteral("N0CALL-7"));
+    CHECK(a.has_value(), "parse N0CALL-7");
+    CHECK(a && a->call == QLatin1String("N0CALL") && a->ssid == 7, "ssid parsed");
+    CHECK(a && a->toString() == QLatin1String("N0CALL-7"), "toString with ssid");
+
+    auto b = Address::parse(QStringLiteral("w1aw"));
+    CHECK(b && b->call == QLatin1String("W1AW") && b->ssid == 0, "uppercased, ssid 0");
+    CHECK(b && b->toString() == QLatin1String("W1AW"), "toString no ssid");
+
+    CHECK(!Address::parse(QStringLiteral("")).has_value(), "empty rejected");
+    CHECK(!Address::parse(QStringLiteral("TOOLONGCALL")).has_value(), "overlong rejected");
+    // AX.25 limits the base callsign to 6 characters, so a 7-char vanity such as
+    // "AETHBBS" is not a legal address — callers must use <= 6 (e.g. "AETBBS").
+    CHECK(!Address::parse(QStringLiteral("AETHBBS")).has_value(), "7-char alias rejected");
+    CHECK(Address::parse(QStringLiteral("AETBBS")).has_value(), "6-char alias accepted");
+}
+
+static void testFrameRoundTrip()
+{
+    const Address dst{QStringLiteral("N0PMS"), 1, false, false};
+    const Address src{QStringLiteral("K7ABC"), 0, false, false};
+
+    {
+        Frame s = Frame::makeU(dst, src, FrameType::SABM, /*pf=*/true, /*cmd=*/true);
+        auto d = Frame::decode(s.encode());
+        CHECK(d && d->type == FrameType::SABM, "SABM type");
+        CHECK(d && d->dest == dst && d->src == src, "SABM addresses");
+        CHECK(d && d->pollFinal && d->command, "SABM P + command");
+    }
+    {
+        Frame i = Frame::makeI(dst, src, /*ns=*/3, /*nr=*/5, /*pf=*/false,
+                               QByteArray("hello"));
+        auto d = Frame::decode(i.encode());
+        CHECK(d && d->type == FrameType::I, "I type");
+        CHECK(d && d->ns == 3 && d->nr == 5, "I sequence numbers");
+        CHECK(d && d->info == QByteArray("hello") && d->command, "I info + command");
+    }
+    {
+        Frame r = Frame::makeS(dst, src, FrameType::RR, /*nr=*/2, /*pf=*/true,
+                               /*cmd=*/false);
+        auto d = Frame::decode(r.encode());
+        CHECK(d && d->type == FrameType::RR && d->nr == 2, "RR type + nr");
+        CHECK(d && d->pollFinal && !d->command, "RR final + response");
+    }
+    {
+        Frame ui = Frame::makeUI(Address{QStringLiteral("BEACON"), 0, false, false}, src,
+                                 {Address{QStringLiteral("WIDE1"), 1, false, false}},
+                                 QByteArray("hi"));
+        auto d = Frame::decode(ui.encode());
+        CHECK(d && d->type == FrameType::UI, "UI type");
+        CHECK(d && d->via.size() == 1 && d->via.at(0).call == QLatin1String("WIDE1")
+                  && d->via.at(0).ssid == 1, "UI via path");
+        CHECK(d && d->info == QByteArray("hi"), "UI info");
+    }
+}
+
+static void testConnection()
+{
+    Ax25Connection conn;
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    conn.setLocalAddress(local);
+
+    QVector<QByteArray> tx;
+    bool connected = false;
+    bool disconnected = false;
+    QByteArray rxData;
+    QObject::connect(&conn, &Ax25Connection::sendFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+    QObject::connect(&conn, &Ax25Connection::connected,
+                     [&](const Address&) { connected = true; });
+    QObject::connect(&conn, &Ax25Connection::disconnected,
+                     [&](const Address&, bool) { disconnected = true; });
+    QObject::connect(&conn, &Ax25Connection::dataReceived,
+                     [&](const QByteArray& d) { rxData = d; });
+
+    conn.onFrameReceived(Frame::makeU(local, peer, FrameType::SABM, true, true));
+    CHECK(connected, "connected after SABM");
+    bool sawUA = false;
+    for (const QByteArray& f : tx) {
+        auto d = Frame::decode(f);
+        if (d && d->type == FrameType::UA)
+            sawUA = true;
+    }
+    CHECK(sawUA, "UA emitted in response to SABM");
+
+    // A frame for someone else must be ignored.
+    const Address other{QStringLiteral("N9XYZ"), 2, false, false};
+    conn.onFrameReceived(Frame::makeU(other, peer, FrameType::SABM, true, true));
+
+    conn.onFrameReceived(Frame::makeI(local, peer, 0, 0, true, QByteArray("PING")));
+    CHECK(rxData == QByteArray("PING"), "I-frame data delivered");
+
+    conn.onFrameReceived(Frame::makeU(local, peer, FrameType::DISC, true, true));
+    CHECK(disconnected, "disconnected after DISC");
+}
+
+// Regression: on a half-duplex radio link the send window must be 1 — only one
+// unacknowledged I-frame in flight at a time. A multi-frame reply must drain
+// one-frame-per-ack, NOT blast several back-to-back. (Observed live 2026-05-30:
+// a 3-frame LIST reply went out as 3 back-to-back PTT keyups; the peer's ack
+// arrived while we were still transmitting, so we never heard it and stalled
+// into a T1 retransmit loop until link failure. A single-frame INFO reply with a
+// clean listen window after it worked fine.)
+static void testHalfDuplexWindowOneDrainsMultiFrame()
+{
+    Ax25Connection conn;
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    conn.setLocalAddress(local);
+    conn.setPaclen(128);
+
+    QVector<QByteArray> tx;
+    QObject::connect(&conn, &Ax25Connection::sendFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    conn.onFrameReceived(Frame::makeU(local, peer, FrameType::SABM, true, true));
+    tx.clear(); // drop the UA; we only care about I-frames below
+
+    auto iFrameNs = [&]() {
+        QVector<int> ns; // N(S) of every I-frame emitted so far
+        for (const QByteArray& f : tx) {
+            auto d = Frame::decode(f);
+            if (d && d->type == FrameType::I)
+                ns.append(d->ns);
+        }
+        return ns;
+    };
+
+    // A reply that needs three I-frames (128 + 128 + 44 bytes at paclen 128).
+    conn.sendData(QByteArray(300, 'X'));
+    CHECK(iFrameNs().size() == 1, "window=1: only one I-frame in flight initially");
+    CHECK(iFrameNs().value(0) == 0, "first I-frame is N(S)=0");
+
+    // Peer acks the first (standalone RR N(R)=1) -> the next frame may go.
+    conn.onFrameReceived(Frame::makeS(local, peer, FrameType::RR, 1, false, false));
+    CHECK(iFrameNs().size() == 2, "second I-frame goes only after the first is acked");
+    CHECK(iFrameNs().value(1) == 1, "second I-frame is N(S)=1");
+
+    conn.onFrameReceived(Frame::makeS(local, peer, FrameType::RR, 2, false, false));
+    CHECK(iFrameNs().size() == 3, "third I-frame goes only after the second is acked");
+    CHECK(iFrameNs().value(2) == 2, "third I-frame is N(S)=2");
+
+    // Final ack drains the window with no retransmit storm.
+    conn.onFrameReceived(Frame::makeS(local, peer, FrameType::RR, 3, false, false));
+    const QVector<int> all = iFrameNs();
+    CHECK(all.size() == 3, "exactly three I-frames sent, none retransmitted");
+    CHECK(all.count(0) == 1 && all.count(1) == 1 && all.count(2) == 1,
+          "each I-frame transmitted exactly once (no duplicate/retransmit storm)");
+}
+
+namespace {
+// Drives the mailbox from the perspective of a remote caller's TNC.
+struct Peer {
+    PmsMailbox* pms{nullptr};
+    Address local;
+    Address peer;
+    QVector<QByteArray>* allTx{nullptr};
+    int consumed{0}; // index into allTx already turned into text
+    int peerNs{0};
+    int pmsRx{0};    // count of in-sequence I-frames received from the mailbox
+
+    int pmsVs() const
+    {
+        int n = 0;
+        for (const QByteArray& f : *allTx) {
+            auto d = Frame::decode(f);
+            if (d && d->type == FrameType::I && d->dest == peer)
+                ++n;
+        }
+        return n % 8;
+    }
+
+    // New text the mailbox has sent since the last call. Acknowledges each
+    // mailbox I-frame with an RR and loops, so a multi-frame reply fully drains
+    // under the half-duplex window=1 (one frame per ack) exactly as a real TNC
+    // would — without this, only the first I-frame of each reply would ever be
+    // emitted.
+    QString drainText()
+    {
+        QByteArray t;
+        for (;;) {
+            int newFrames = 0;
+            for (; consumed < allTx->size(); ++consumed) {
+                auto d = Frame::decode(allTx->at(consumed));
+                if (d && d->type == FrameType::I && d->dest == peer) {
+                    t += d->info;
+                    ++pmsRx;
+                    ++newFrames;
+                }
+            }
+            if (newFrames == 0)
+                break;
+            // Ack everything received so far; this opens the mailbox's send
+            // window so it emits the next I-frame (collected on the next pass).
+            pms->onAirFrame(
+                Frame::makeS(local, peer, FrameType::RR, pmsRx % 8, false, false).encode());
+        }
+        return QString::fromLatin1(t);
+    }
+
+    void send(const QByteArray& line)
+    {
+        pms->onAirFrame(
+            Frame::makeI(local, peer, peerNs, pmsVs(), true, line).encode());
+        peerNs = (peerNs + 1) % 8;
+    }
+};
+} // namespace
+
+static void testMailbox()
+{
+    PmsMailbox pms;
+    pms.setVersionString(QStringLiteral("test"));
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setAliasCallsign(QStringLiteral("AETBBS")); // AX.25 callsigns are <= 6 chars
+    pms.setEnabled(true);
+
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    Peer p{&pms, local, peer, &tx, 0, 0};
+
+    // Connect.
+    pms.onAirFrame(Frame::makeU(local, peer, FrameType::SABM, true, true).encode());
+    bool sawUA = false;
+    for (const QByteArray& f : tx) {
+        auto d = Frame::decode(f);
+        if (d && d->type == FrameType::UA)
+            sawUA = true;
+    }
+    CHECK(sawUA, "mailbox UA on connect");
+    const QString greeting = p.drainText();
+    CHECK(greeting.contains(QLatin1String("AetherMailbox")), "greeting names AetherMailbox");
+    CHECK(greeting.contains(QLatin1String("K7ABC")), "greeting names the caller");
+    CHECK(greeting.contains(QLatin1String("ENTER COMMAND")), "greeting shows prompt");
+
+    // Help.
+    p.send(QByteArray("H\r"));
+    const QString help = p.drainText();
+    CHECK(help.contains(QLatin1String("B(ye)")), "help lists commands");
+
+    // Compose a private message to W1XYZ.
+    p.send(QByteArray("SP W1XYZ\r"));
+    CHECK(p.drainText().contains(QLatin1String("SUBJECT")), "send prompts for subject");
+    p.send(QByteArray("Test subject\r"));
+    CHECK(p.drainText().contains(QLatin1String("ENTER MESSAGE")), "prompts for body");
+    p.send(QByteArray("Line one of body\r"));
+    p.send(QByteArray("/EX\r"));
+    CHECK(p.drainText().contains(QLatin1String("SAVED")), "message saved");
+    CHECK(pms.messageCount() == 1, "one message stored");
+
+    // List + read.
+    p.send(QByteArray("L\r"));
+    const QString list = p.drainText();
+    CHECK(list.contains(QLatin1String("W1XYZ")), "list shows recipient");
+    p.send(QByteArray("R 1\r"));
+    const QString read = p.drainText();
+    CHECK(read.contains(QLatin1String("Test subject")), "read shows subject");
+    CHECK(read.contains(QLatin1String("Line one of body")), "read shows body");
+
+    // Heard list should include the caller (we received their frames).
+    p.send(QByteArray("J\r"));
+    const QString jheard = p.drainText();
+    CHECK(jheard.contains(QLatin1String("K7ABC")), "jheard lists the caller");
+
+    // Bye.
+    p.send(QByteArray("B\r"));
+    bool sawDisc = false;
+    for (const QByteArray& f : tx) {
+        auto d = Frame::decode(f);
+        if (d && d->type == FrameType::DISC)
+            sawDisc = true;
+    }
+    CHECK(sawDisc, "mailbox sends DISC on BYE");
+}
+
+// A caller dialing the vanity alias should connect, and every reply (incl. the
+// UA and greeting) must come from the alias address, not the primary.
+static void testAliasDial()
+{
+    PmsMailbox pms;
+    pms.setVersionString(QStringLiteral("test"));
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setAliasCallsign(QStringLiteral("AETBBS")); // AX.25 callsigns are <= 6 chars
+    pms.setEnabled(true);
+
+    const Address alias{QStringLiteral("AETBBS"), 0, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+
+    pms.onAirFrame(Frame::makeU(alias, peer, FrameType::SABM, true, true).encode());
+
+    bool sawAliasUA = false;
+    bool greetingFromAlias = false;
+    for (const QByteArray& f : tx) {
+        auto d = Frame::decode(f);
+        if (!d || d->dest != peer)
+            continue;
+        if (d->type == FrameType::UA && d->src == alias)
+            sawAliasUA = true;
+        if (d->type == FrameType::I && d->src == alias)
+            greetingFromAlias = true;
+    }
+    CHECK(sawAliasUA, "alias dial: UA answered from the alias address");
+    CHECK(greetingFromAlias, "alias dial: greeting sent from the alias address");
+    CHECK(pms.connectedCaller() == QLatin1String("K7ABC"), "alias dial: caller connected");
+
+    // A frame to the primary while idle would also be accepted, but a frame to a
+    // third, unrelated callsign must be ignored.
+    const Address other{QStringLiteral("N9ZZZ"), 5, false, false};
+    const int txBefore = tx.size();
+    pms.onAirFrame(Frame::makeU(other, peer, FrameType::SABM, true, true).encode());
+    CHECK(tx.size() == txBefore, "frames to an unrelated callsign are ignored");
+}
+
+// The mailbox serves ONE caller at a time and answers every other SABM with DM,
+// so a caller who connects and then wanders off used to lock it out for the
+// whole channel indefinitely: with nothing outstanding T1 is stopped, and
+// nothing else ever reclaimed the session.
+static void testSessionIdleTimeoutFreesMailbox()
+{
+    PmsMailbox pms;
+    pms.setVersionString(QStringLiteral("test"));
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setEnabled(true);
+    pms.setSessionIdleTimeoutMs(1000);
+    // The hangup is a graceful DISC, so the session ends only once that DISC is
+    // acknowledged or its own retry budget runs out. That is bounded (which was
+    // the whole point — the old behaviour was unbounded), but on real timers the
+    // bound is N2 x T1 ~ 37 s. Shrink both so the test observes the same path
+    // quickly rather than testing a different one.
+    pms.setRetryTimeoutMs(1000);
+    pms.setMaxRetries(1);
+
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+
+    pms.onAirFrame(Frame::makeU(local, peer, FrameType::SABM, true, true).encode());
+    CHECK(pms.isCallerConnected(), "caller connected");
+    CHECK(pms.sessionIdleTimerActive(), "the inactivity clock starts with the session");
+
+    // The caller now goes silent. Spin until the mailbox reclaims itself.
+    QDeadlineTimer deadline(4000);
+    while (pms.isCallerConnected() && !deadline.hasExpired())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+
+    CHECK(!pms.isCallerConnected(), "an abandoned session is reclaimed instead of held forever");
+    bool sawDisc = false;
+    for (const QByteArray& f : tx) {
+        auto d = Frame::decode(f);
+        if (d && d->type == FrameType::DISC)
+            sawDisc = true;
+    }
+    CHECK(sawDisc, "the mailbox hangs up gracefully with DISC rather than just forgetting");
+    CHECK(!pms.sessionIdleTimerActive(), "the clock stops once the session is gone");
+}
+
+// A peer that never sends a line terminator (a stuck TNC, or noise decoded off
+// the channel) must not be able to grow the inbound buffer without bound.
+static void testOverlongInputIsDiscarded()
+{
+    PmsMailbox pms;
+    pms.setVersionString(QStringLiteral("test"));
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setEnabled(true);
+
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    Peer p{&pms, local, peer, &tx, 0, 0};
+
+    pms.onAirFrame(Frame::makeU(local, peer, FrameType::SABM, true, true).encode());
+    p.drainText(); // greeting
+
+    // Feed 16 KB with no CR anywhere.
+    const QByteArray junk(200, 'X');
+    for (int i = 0; i < 80; ++i)
+        p.send(junk);
+
+    const QString out = p.drainText();
+    CHECK(out.contains(QLatin1String("too long")),
+          "the mailbox tells the caller the input was discarded");
+    CHECK(pms.isCallerConnected(),
+          "the link survives — the line was nonsense, not the session");
+
+    // A normal command still works afterwards.
+    p.send(QByteArrayLiteral("H\r"));
+    const QString help = p.drainText();
+    CHECK(help.contains(QLatin1String("HELP")) || help.contains(QLatin1String("Commands"))
+              || !help.isEmpty(),
+          "the mailbox still answers commands after discarding a runaway line");
+}
+
+static QJsonObject readJsonObject(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
+static QByteArray readFile(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return file.readAll();
+}
+
+static bool makeHardLink(const QString& source, const QString& destination)
+{
+#ifdef Q_OS_WIN
+    const std::filesystem::path sourcePath(source.toStdWString());
+    const std::filesystem::path destinationPath(destination.toStdWString());
+#else
+    const QByteArray sourceUtf8 = source.toUtf8();
+    const QByteArray destinationUtf8 = destination.toUtf8();
+    const std::filesystem::path sourcePath(sourceUtf8.constData());
+    const std::filesystem::path destinationPath(destinationUtf8.constData());
+#endif
+    std::error_code error;
+    std::filesystem::create_hard_link(sourcePath, destinationPath, error);
+    return !error;
+}
+
+// PMS JSON must be a whole-file replacement: a retained hard link observes the
+// old valid snapshot while the active path moves to the new one. The failure
+// portion temporarily makes the messages path a directory, so QSaveFile cannot
+// replace it, then proves compose/read/kill leave the in-memory and on-disk
+// message state recoverable.
+static void testPersistenceIsAtomicAndTransactional(const QString& baseDir)
+{
+    const QString store = baseDir + QStringLiteral("/pms-persistence");
+    QDir(store).removeRecursively();
+    QDir().mkpath(store);
+    qputenv("AETHER_PMS_DIR", store.toUtf8());
+
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    const Address newHeard{QStringLiteral("W1NEW"), 0, false, false};
+
+    QStringList callerActivity;
+    QStringList heardActivity;
+    QStringList activity;
+    PmsMailbox pms;
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setEnabled(true);
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& frame) { tx.append(frame); });
+    Peer session{&pms, local, peer, &tx, 0, 0};
+    pms.onAirFrame(Frame::makeU(local, peer, FrameType::SABM, true, true).encode());
+    session.drainText();
+
+    session.send(QByteArrayLiteral("SP K7ABC\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("first\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("body\r"));
+    session.send(QByteArrayLiteral("/EX\r"));
+    CHECK(session.drainText().contains(QLatin1String("SAVED")), "baseline message saved");
+
+    const QString messages = store + QStringLiteral("/messages.json");
+    const QString callers = store + QStringLiteral("/callers.json");
+    const QString heard = store + QStringLiteral("/heard.json");
+    const QString oldMessages = store + QStringLiteral("/messages-before.json");
+    const QString oldCallers = store + QStringLiteral("/callers-before.json");
+    const QString oldHeard = store + QStringLiteral("/heard-before.json");
+    CHECK(makeHardLink(messages, oldMessages), "hard-link baseline messages snapshot");
+    CHECK(makeHardLink(callers, oldCallers), "hard-link baseline callers snapshot");
+    CHECK(makeHardLink(heard, oldHeard), "hard-link baseline heard snapshot");
+
+    session.send(QByteArrayLiteral("R 1\r"));
+    session.drainText();
+    CHECK(readJsonObject(messages).value(QStringLiteral("messages")).toArray().at(0).toObject()
+              .value(QStringLiteral("read")).toBool(),
+          "active messages file records the read flag");
+    CHECK(!readJsonObject(oldMessages).value(QStringLiteral("messages")).toArray().at(0).toObject()
+               .value(QStringLiteral("read")).toBool(),
+          "message hard link retains the complete pre-replacement snapshot");
+
+    pms.onAirFrame(Frame::makeUI(local, newHeard, {}, QByteArrayLiteral("heard")).encode());
+    CHECK(readJsonObject(heard).value(QStringLiteral("heard")).toArray().size() == 2,
+          "active heard file contains the new station");
+    CHECK(readJsonObject(oldHeard).value(QStringLiteral("heard")).toArray().size() == 1,
+          "heard hard link retains the complete pre-replacement snapshot");
+
+    {
+        PmsMailbox callerWriter;
+        callerWriter.setListenCallsign(QStringLiteral("N0PMS-1"));
+        callerWriter.setEnabled(true);
+        callerWriter.onAirFrame(
+            Frame::makeU(local, Address{QStringLiteral("W1NEW"), 0, false, false},
+                         FrameType::SABM, true, true).encode());
+    }
+    CHECK(readJsonObject(callers).value(QStringLiteral("callers")).toArray().size() == 2,
+          "active callers file contains the new caller");
+    CHECK(readJsonObject(oldCallers).value(QStringLiteral("callers")).toArray().size() == 1,
+          "callers hard link retains the complete pre-replacement snapshot");
+
+    auto blockFile = [](const QString& path, const QString& backup) {
+        CHECK(QFile::rename(path, backup), "move durable file aside for failure fixture");
+        CHECK(QDir().mkdir(path), "make file path a directory so atomic open fails");
+    };
+    auto restoreFile = [](const QString& path, const QString& backup) {
+        CHECK(QDir().rmdir(path), "remove file failure fixture");
+        CHECK(QFile::rename(backup, path), "restore durable file after failure fixture");
+    };
+
+    const QByteArray durableCallers = readFile(callers);
+    const QString callersBackup = store + QStringLiteral("/callers-failure-backup.json");
+    blockFile(callers, callersBackup);
+    {
+        PmsMailbox callerFailure;
+        QObject::connect(&callerFailure, &PmsMailbox::activity,
+                         [&](const QString& message) { callerActivity.append(message); });
+        callerFailure.setListenCallsign(QStringLiteral("N0PMS-1"));
+        callerFailure.setEnabled(true);
+        callerFailure.onAirFrame(
+            Frame::makeU(local, Address{QStringLiteral("W2FAIL"), 0, false, false},
+                         FrameType::SABM, true, true).encode());
+    }
+    CHECK(callerActivity.join(QLatin1Char('\n')).contains(QLatin1String("could not save callers")),
+          "caller persistence failure is surfaced through mailbox activity");
+    CHECK(readFile(callersBackup) == durableCallers,
+          "caller persistence failure leaves the prior snapshot intact");
+    restoreFile(callers, callersBackup);
+
+    const QByteArray durableHeard = readFile(heard);
+    const QString heardBackup = store + QStringLiteral("/heard-failure-backup.json");
+    blockFile(heard, heardBackup);
+    QObject::connect(&pms, &PmsMailbox::activity,
+                     [&](const QString& message) { heardActivity.append(message); });
+    pms.onAirFrame(Frame::makeUI(local, Address{QStringLiteral("W3FAIL"), 0, false, false}, {},
+                                 QByteArrayLiteral("heard failure")).encode());
+    CHECK(heardActivity.join(QLatin1Char('\n')).contains(QLatin1String("could not save heard stations")),
+          "heard persistence failure is surfaced through mailbox activity");
+    CHECK(readFile(heardBackup) == durableHeard,
+          "heard persistence failure leaves the prior snapshot intact");
+    restoreFile(heard, heardBackup);
+
+    const QByteArray durableMessages = readFile(messages);
+    const QString composeBackup = store + QStringLiteral("/messages-compose-backup.json");
+    blockFile(messages, composeBackup);
+
+    QObject::connect(&pms, &PmsMailbox::activity,
+                     [&](const QString& message) { activity.append(message); });
+    session.send(QByteArrayLiteral("SP K7ABC\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("retry\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("body\r"));
+    session.send(QByteArrayLiteral("/EX\r"));
+    CHECK(session.drainText().contains(QLatin1String("NOT SAVED")),
+          "compose reports a failed persistence attempt");
+    CHECK(pms.messageCount() == 1, "failed compose does not change in-memory messages");
+
+    CHECK(activity.join(QLatin1Char('\n')).contains(QLatin1String("could not save messages")),
+          "failed persistence is surfaced through mailbox activity");
+
+    CHECK(readFile(composeBackup) == durableMessages,
+          "failed write did not truncate or replace the durable message snapshot");
+    restoreFile(messages, composeBackup);
+
+    session.send(QByteArrayLiteral("/EX\r"));
+    CHECK(session.drainText().contains(QLatin1String("SAVED")),
+          "retained draft can be saved after storage recovers");
+    CHECK(pms.messageCount() == 2, "recovered compose commits exactly once");
+    CHECK(readJsonObject(messages).value(QStringLiteral("nextId")).toInt() == 3,
+          "failed compose does not consume a message ID");
+
+    const QString readBackup = store + QStringLiteral("/messages-read-backup.json");
+    blockFile(messages, readBackup);
+    session.send(QByteArrayLiteral("R 2\r"));
+    CHECK(session.drainText().contains(QLatin1String("not saved")),
+          "read reports a failed persistence attempt");
+    session.send(QByteArrayLiteral("L\r"));
+    CHECK(session.drainText().contains(QLatin1String("PN")),
+          "failed read leaves the in-memory read flag unchanged");
+    CHECK(!readJsonObject(readBackup).value(QStringLiteral("messages")).toArray().at(1).toObject()
+               .value(QStringLiteral("read")).toBool(),
+          "failed read leaves the durable read flag unchanged");
+    restoreFile(messages, readBackup);
+
+    session.send(QByteArrayLiteral("R 2\r"));
+    session.drainText();
+    CHECK(readJsonObject(messages).value(QStringLiteral("messages")).toArray().at(1).toObject()
+              .value(QStringLiteral("read")).toBool(),
+          "read state saves after the messages path recovers");
+
+    const QString killBackup = store + QStringLiteral("/messages-kill-backup.json");
+    blockFile(messages, killBackup);
+    session.send(QByteArrayLiteral("K 1\r"));
+    CHECK(session.drainText().contains(QLatin1String("not killed")),
+          "kill reports a failed persistence attempt");
+    CHECK(pms.messageCount() == 2, "failed kill preserves in-memory messages");
+    CHECK(readJsonObject(killBackup).value(QStringLiteral("messages")).toArray().size() == 2,
+          "failed kill leaves the durable message snapshot intact");
+    restoreFile(messages, killBackup);
+
+    session.send(QByteArrayLiteral("K 1\r"));
+    CHECK(session.drainText().contains(QLatin1String("killed")), "recovered kill succeeds");
+    CHECK(pms.messageCount() == 1, "recovered kill updates the mailbox once");
+
+    PmsMailbox restarted;
+    restarted.setListenCallsign(QStringLiteral("N0PMS-1"));
+    restarted.setEnabled(true);
+    CHECK(restarted.messageCount() == 1, "restart recovers the last committed mailbox snapshot");
+
+    // Destructor save must not emit activity: the app parents PmsMailbox on a
+    // QWidget whose derived slots are already gone when the child is deleted.
+    {
+        const QString dtorStore = baseDir + QStringLiteral("/pms-dtor");
+        QDir(dtorStore).removeRecursively();
+        QDir().mkpath(dtorStore);
+        qputenv("AETHER_PMS_DIR", dtorStore.toUtf8());
+        QStringList dtorActivity;
+        {
+            PmsMailbox box;
+            QObject::connect(&box, &PmsMailbox::activity,
+                             [&](const QString& message) { dtorActivity.append(message); });
+            box.setListenCallsign(QStringLiteral("N0PMS-1"));
+            box.setEnabled(true);
+            const QString heardPath = dtorStore + QStringLiteral("/heard.json");
+            QFile::remove(heardPath);
+            CHECK(QDir().mkdir(heardPath), "make heard.json a directory so destructor save fails");
+        }
+        CHECK(!dtorActivity.join(QLatin1Char('\n'))
+                  .contains(QLatin1String("could not save heard")),
+              "destructor save does not emit activity on failure");
+        QDir(dtorStore).removeRecursively();
+        qputenv("AETHER_PMS_DIR", store.toUtf8());
+    }
+}
+
+int main(int argc, char** argv)
+{
+    // Isolate AppSettings / PMS storage from the real user config so the test is
+    // repeatable and never touches a live operator's mailbox. AppSettings derives
+    // its path from the home/config location, so redirect those before the
+    // singleton is first used.
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-pms-mailbox-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
+    // PmsMailbox honours AETHER_PMS_DIR for its JSON store; point it at the clean
+    // temp dir so the test is repeatable and never touches a real mailbox.
+    qputenv("AETHER_PMS_DIR",
+            (settingsProfile.path() + QStringLiteral("/pms")).toUtf8());
+
+    QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
+    testAddress();
+    testFrameRoundTrip();
+    testConnection();
+    testHalfDuplexWindowOneDrainsMultiFrame();
+    testMailbox();
+    testAliasDial();
+    testSessionIdleTimeoutFreesMailbox();
+    testOverlongInputIsDiscarded();
+    testPersistenceIsAtomicAndTransactional(settingsProfile.path());
+
+    if (g_failures == 0) {
+        std::printf("All PMS mailbox tests passed.\n");
+        return 0;
+    }
+    std::fprintf(stderr, "%d PMS mailbox test(s) failed.\n", g_failures);
+    return 1;
+}

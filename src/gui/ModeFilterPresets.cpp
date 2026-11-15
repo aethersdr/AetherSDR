@@ -1,0 +1,239 @@
+#include "ModeFilterPresets.h"
+
+#include "VoiceModeGate.h"   // isCwMode
+#include "core/backends/RadioCapabilities.h"
+
+#include <algorithm>
+#include <cstdlib>
+
+namespace AetherSDR::ModeFilters {
+
+bool isFmMode(const QString& mode)
+{
+    return mode == "FM" || mode == "NFM" || mode == "FMN"
+        || mode == "WFM" || mode == "WBFM";
+}
+
+namespace {
+QString canonicalFmMode(const QString& mode)
+{
+    if (mode == "NFM") { return QStringLiteral("FMN"); }
+    if (mode == "WBFM") { return QStringLiteral("WFM"); }
+    return mode;
+}
+
+bool withinRange(const ReceiveFilterMode& range, Edges edges)
+{
+    const qint64 width = qint64(edges.hi) - edges.lo;
+    return edges.lo < edges.hi
+        && edges.lo >= range.minimumLowHz && edges.lo <= range.maximumLowHz
+        && edges.hi >= range.minimumHighHz && edges.hi <= range.maximumHighHz
+        && width >= range.minimumWidthHz && width <= range.maximumWidthHz;
+}
+
+const ReceiveFilterMode* fmControlFor(const QString& mode, const ReceiveFilterControl* control)
+{
+    if (!control || !isFmMode(mode)) {
+        return nullptr;
+    }
+    const QString canonical = canonicalFmMode(mode);
+    for (const ReceiveFilterMode& candidate : control->modes) {
+        const QString candidateMode = canonicalFmMode(candidate.mode);
+        if (candidateMode == canonical) {
+            return &candidate;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Edges edges)
+{
+    const ReceiveFilterMode* range = fmControlFor(mode, control);
+    if (!range) {
+        return false;
+    }
+    return withinRange(*range, edges);
+}
+
+bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths)
+{
+    if (!isFmMode(mode) || radioPublishesWidths || fmControlFor(mode, control)) {
+        return true;
+    }
+    if (!control) {
+        return true;
+    }
+    // Declared FM rows enumerate the adjustable FM modes. Without any, FlexLib
+    // Slice.cs refuses FM edits on a radio-owned filter, while a host-DSP
+    // receiver keeps its existing adjustable passband.
+    const bool declaresFm = std::any_of(control->modes.cbegin(), control->modes.cend(),
+        [](const ReceiveFilterMode& row) { return isFmMode(row.mode); });
+    return !declaresFm && control->authority != SliceFrequencyControl::Authority::Radio;
+}
+
+bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths, Edges edges)
+{
+    if (!isFmMode(mode)) {
+        if (control) {
+            for (const ReceiveFilterMode& range : control->modes) {
+                if (range.mode == mode) { return withinRange(range, edges); }
+            }
+        }
+        return true;
+    }
+    if (radioPublishesWidths) { return true; }
+    return fmControlFor(mode, control) ? acceptsFmEdges(mode, control, edges)
+                                       : fmFilterAdjustable(mode, control, false);
+}
+
+bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* scale,
+                            bool modeIndependentSquelch, bool externalReplacement)
+{
+    if (scale && !externalReplacement) {
+        if (scale->controlUnavailableModes.contains(mode, Qt::CaseInsensitive)) {
+            return false;
+        }
+        if (scale->modesExclusive) {
+            return scale->appliesTo(mode);
+        }
+    }
+    // Digital/RTTY feed decoders and SQL gates weak FSK (#2504); a radio holds
+    // CW squelch itself. Only an all-mode radio squelch lifts that rule.
+    return (modeIndependentSquelch && !externalReplacement)
+        || !(mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY" || isCwMode(mode));
+}
+
+QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control)
+{
+    if (!isFmMode(mode)) {
+        return widthsForMode(mode);
+    }
+    // Broadcast FM uses RF channel widths, not the narrow-FM audio ladder.
+    // These are choices only; observed and saved valid edges remain intact.
+    static const QVector<int> broadcast{100000, 120000, 140000, 160000, 180000, 200000};
+    static const QString narrowFm = QStringLiteral("DFM");
+    const QVector<int>& candidates = canonicalFmMode(mode) == "WFM"
+        ? broadcast : widthsForMode(narrowFm);
+    QVector<int> widths;
+    for (int width : candidates) {
+        if (acceptsFmEdges(mode, control, edgesForWidth(mode, width, {}))) {
+            widths.append(width);
+        }
+    }
+    return widths;
+}
+
+const QVector<int>& widthsForMode(const QString& mode)
+{
+    // From docs/data/vfo_mode_filters.csv — 8 presets per mode, 4x2 grid
+    static const QVector<int> usb{1800, 2100, 2400, 2700, 2900, 3300, 4000, 6000};
+    static const QVector<int> am {5600, 6000, 8000, 10000, 12000, 14000, 16000, 20000};
+    static const QVector<int> cw {50, 100, 250, 400, 500, 600, 800, 1000};
+    static const QVector<int> dig{100, 300, 600, 1000, 1500, 2000, 3000, 6000};
+    static const QVector<int> rtty{250, 300, 350, 400, 500, 1000, 1500, 3000};
+    static const QVector<int> dfm{6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000};
+    static const QVector<int> fm{};
+
+    if (mode == "USB" || mode == "LSB") return usb;
+    if (mode == "AM" || mode == "SAM") return am;
+    if (isCwMode(mode)) return cw;
+    if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return dig;
+    if (mode == "RTTY") return rtty;
+    if (mode == "DFM") return dfm;
+    if (isFmMode(mode)) {
+        return fm;
+    }
+    return usb;
+}
+
+Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
+{
+    int lo = 0, hi = 0;
+
+    if (mode == "DIGU") {
+        // For widths < 3000 Hz, center the filter on the stored digu_offset.
+        // SmartSDR behavior (fw v1.4.0.0): offset is the audio center frequency;
+        // filter spans [offset - width/2, offset + width/2], clamped so lo >= 95.
+        // For widths >= 3000 Hz, SmartSDR ignores the offset and runs from 95 Hz
+        // upward — preserve that behavior unchanged.
+        if (widthHz < 3000) {
+            int offset = ctx.diguOffset;
+            lo = offset - widthHz / 2;
+            hi = offset + widthHz / 2;
+            if (lo < 95) {
+                // Clamp: don't let lo drop below 95 Hz (carrier rejection)
+                hi += (95 - lo);
+                lo = 95;
+            }
+        } else {
+            lo = 95;
+            hi = widthHz;
+        }
+    } else if (mode == "DIGL") {
+        // Mirror of DIGU: offset is negative (below carrier). For widths < 3000 Hz,
+        // center on -digl_offset, clamped so hi <= -95.
+        // For widths >= 3000 Hz, run from -95 downward.
+        if (widthHz < 3000) {
+            int offset = ctx.diglOffset;
+            hi = -offset + widthHz / 2;
+            lo = -offset - widthHz / 2;
+            if (hi > -95) {
+                lo -= (hi + 95);
+                hi = -95;
+            }
+        } else {
+            lo = -widthHz;
+            hi = -95;
+        }
+    } else if (mode == "LSB") {
+        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
+        // filter); the high cut is derived as lo + width so the effective
+        // passband equals the labeled width. Mirror of USB below the
+        // carrier: edge nearest the carrier is -100 Hz. (#3292)
+        hi = -100; lo = -100 - widthHz;
+    } else if (mode == "RTTY") {
+        // RTTY: RF_frequency = mark. Filter is relative to mark.
+        // Space is at -rttyShift. Passband should encompass both tones.
+        // Expand symmetrically around the midpoint between mark(0) and space(-shift).
+        int shift = ctx.rttyShift;
+        int mid = -shift / 2;
+        lo = mid - widthHz / 2;
+        hi = mid + widthHz / 2;
+    } else if (isCwMode(mode)) {
+        // Carrier-relative on both sidebands; the receiver's BFO owns pitch.
+        lo = -widthHz / 2;
+        hi =  widthHz / 2;
+    } else if (mode == "AM" || mode == "SAM" || mode == "DSB"
+               || isFmMode(mode) || mode == "DFM") {
+        lo = -(widthHz / 2); hi = (widthHz / 2);
+    } else if (mode == "FDVL") {
+        lo = -widthHz; hi = -95;
+    } else if (mode == "USB") {
+        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
+        // filter); the high cut is derived as lo + width so the effective
+        // passband equals the labeled width. Previously this sent lo=95,
+        // hi=width, which yielded an effective width of (label-95) — e.g.
+        // the 2.9k preset produced ~2805 Hz — and left the active-preset
+        // matcher comparing against off-by-95 widths. (#3292)
+        lo = 100; hi = 100 + widthHz;
+    } else {
+        // FDVU/FDV/etc: low cut at 95 Hz to reject carrier/hum
+        lo = 95; hi = widthHz;
+    }
+    return {lo, hi};
+}
+
+int widthForEdges(const QString& mode, int lo, int hi)
+{
+    // SSB labels its ladder by the passband it delivers, and the rule pins one
+    // edge at 100 Hz, so the span is the label. Every other mode here spans the
+    // width directly. Sign does not matter: a passband below the carrier is as
+    // wide as the mirror of it above.
+    Q_UNUSED(mode);
+    return std::abs(hi - lo);
+}
+
+} // namespace AetherSDR::ModeFilters

@@ -1,0 +1,249 @@
+#pragma once
+
+#include "CanonSurface.h"
+
+#include <QPoint>
+#include <QWidget>
+
+class QComboBox;
+class QLabel;
+class QPushButton;
+class QSlider;
+class QTextEdit;
+class RangeSlider;
+
+class QVBoxLayout;
+
+namespace AetherSDR {
+
+class SpectrumWidget;
+#ifdef AETHER_ASR_ENABLED
+class CopyAssistPanel;
+#endif
+
+// Container for a single panadapter display (FFT spectrum + waterfall).
+// A CanonPan: the canon ground and hairline around a canon header (grip,
+// slice title, pop-out, maximize and the canon close button) above the
+// SpectrumWidget, which keeps its own GPU-drawn look. Each pan in the stack
+// is one PanadapterApplet.
+class PanadapterApplet : public CanonPan {
+    Q_OBJECT
+    // Expose panId via the meta-object so the automation bridge (core/, no GUI
+    // include) can map a pan back to its radio stream id without depending on
+    // this header — used by `grab pan <index>` and `pan close <index>` (#3646).
+    Q_PROPERTY(QString panId READ panId WRITE setPanId)
+
+public:
+    explicit PanadapterApplet(QWidget* parent = nullptr);
+
+    SpectrumWidget* spectrumWidget() const { return m_spectrum; }
+
+    QString panId() const { return m_panId; }
+    void setPanId(const QString& id);
+
+    void setSliceId(int id, const QString& perClientLetter = QString());
+    void clearSliceTitle();
+    // Plain text ("Slice A₁"), for window titles; the header label is HTML.
+    QString sliceTitle() const;
+    // The slice the title names, or -1 when it names none.
+    int titleSliceId() const { return m_titleSliceId; }
+
+    void setMultiPanMode(bool multi);
+    void setFloatingState(bool floating);
+
+    // Canvas hosting (RFC #4887 phase 4): while the applet is an item on the
+    // workspace canvas its title strip streams the live-move gesture, the
+    // same mechanism as ContainerTitleBar's canvas mode — a real gesture the
+    // canvas session follows, not a QDrag ghost.  Set by PanadapterStack's
+    // detachForCanvas()/returnFromCanvas(); mutually exclusive with
+    // floating, whose frameless-move branches take precedence.
+    void setOnCanvas(bool on);
+    bool isOnCanvas() const { return m_onCanvas; }
+
+#ifdef AETHER_ASR_ENABLED
+    // Copy Assist (ASR) decode dock — mirrors the CW decode panel: docked under
+    // the waterfall, resizable, hidden until shown. copyAssistPanel() lazily
+    // builds it and returns the content widget for the controller to drive.
+    CopyAssistPanel* copyAssistPanel();
+    void setCopyAssistVisible(bool visible);
+    bool isCopyAssistVisible() const;
+#endif
+
+    // CW decode panel
+    void setCwPanelVisible(bool visible);
+    // The four CW confidence colors, lowest cost (green) to highest (red).
+    static QString cwCostColor(float cost);
+    void appendCwText(const QString& text, float cost = 0.0f);
+    void appendCwTextTx(const QString& text, float cost = 0.0f);
+    void setCwStats(float pitchHz, float speedWpm);
+    void setCwInputHint(const QString& hint, const QString& reason);
+    void clearCwText();
+#ifdef HAVE_CW_RX_BACKENDS
+    bool neuralEngineSelected() const;
+    void setCwBackendState(const QString& key, bool tuning, const QString& status, bool preparing,
+                         bool canRetry, const QString& detail);
+    void appendUnscoredCwText(const QString& text);
+    // Colored like appendCwText, and hidden at or above the selected
+    // decoder's own Sens threshold.
+    void appendColoredCwText(const QString& text, float cost);
+#endif
+    QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
+    QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
+    float        cwCostThreshold()  const { return m_cwCostThreshold; }
+    int speedRangeLow()   const;
+    int speedRangeHigh()  const;
+    int pitchRangeLow()   const;
+    int pitchRangeHigh()  const;
+    // Sets both decoder range sliders to the saved shared ranges.
+    void restoreCwRanges();
+
+    // RTTY decode panel
+    void  setRttyPanelVisible(bool visible);
+    void  appendRttyText(const QString& text, float confidence);
+    void  setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked);
+    void  setRttyInputHint(const QString& hint, const QString& reason);
+    void  clearRttyText();
+    // Show the slice's mark / shift without emitting rttyMarkHzChanged /
+    // rttyShiftHzChanged. A value off the preset list gets its own entry,
+    // replacing any earlier one.
+    void  setRttyMarkHz(int hz);
+    void  setRttyShiftHz(int hz);
+    float rttyBaud()    const;
+    bool  rttyReverse() const;
+    // Per-character confidence below which appendRttyText() drops the
+    // character (#5028).  Confidence is max(mark,space)/(mark+space), so it
+    // lives in [0.5, 1.0]; the slider maps 0..100 onto 0.50..0.95.
+    float rttyConfThreshold() const { return m_rttyConfThreshold; }
+
+    QSize sizeHint() const override { return {800, 316}; }
+
+signals:
+#ifdef HAVE_CW_RX_BACKENDS
+    void cwEngineChanged(const QString& backend);
+    void cwModelActionRequested();
+#endif
+    void activated(const QString& panId);
+    // The canvas live-move stream (RFC #4887 phase 4; only while on-canvas).
+    void canvasDragBegan(const QPoint& globalPos);
+    void canvasDragMoved(const QPoint& globalPos);
+    void canvasDragEnded(const QPoint& globalPos);
+    void closeRequested(const QString& panId);
+    void popOutClicked();
+    void dockClicked();
+    void sliceTitleChanged();
+    void maximizeRequested(const QString& panId);
+
+    // CW
+    void pitchRangeChanged(int minHz, int maxHz);
+    void speedRangeChanged(int minWpm, int maxWpm);
+    void cwPanelCloseRequested();
+    // RX text rendered in the pane by appendCwText(), appendColoredCwText()
+    // and appendUnscoredCwText() (scored text only after the selected
+    // decoder's Sens filter) — the stream the CW callsign spotter watches
+    // for "DE <call> <call>".
+    void cwRxTextDisplayed(const QString& text);
+
+    // RTTY
+    void rttyMarkHzChanged(int hz);
+    void rttyShiftHzChanged(int hz);
+    void rttyBaudChanged(float baud);
+    void rttyReverseChanged(bool rev);
+    void rttyPanelCloseRequested();
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* ev) override;
+
+private:
+    // Places the header's two pieces over the top of the spectrum: the grip
+    // and title at the left, the buttons at the right.
+    void layoutHeader();
+    // Re-apply the decoded-text stylesheet at the current font size (#3628).
+    void applyCwFont();
+    // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).
+    void adjustCwFont(int delta);
+    // Persist + clamp the CW panel height after a grip drag (#3628).
+    void setCwPanelHeight(int h);
+
+    QString         m_panId;
+    SpectrumWidget* m_spectrum{nullptr};
+    QWidget*        m_titleBar{nullptr};        // header, left: grip and title
+    QWidget*        m_headerButtons{nullptr};   // header, right: pop-out, maximize, close
+    QLabel*         m_titleLabel{nullptr};
+    QString         m_sliceTitle;
+    int             m_titleSliceId{-1};
+    QPushButton*    m_popOutBtn{nullptr};
+    QPushButton*    m_maxBtn{nullptr};
+    bool            m_isFloating{false};
+
+    // Canvas-item state (RFC #4887 phase 4).
+    bool   m_onCanvas{false};
+    bool   m_canvasPressed{false};
+    bool   m_canvasDragging{false};
+    QPoint m_canvasPressPos;
+
+    // Main vertical layout (SpectrumWidget + docks); kept so the Copy Assist
+    // dock can be inserted at the bottom on demand.
+    QVBoxLayout*  m_mainLayout{nullptr};
+
+#ifdef AETHER_ASR_ENABLED
+    // Copy Assist (ASR) dock — mirrors the CW decode panel's grip/resize.
+    void setCopyAssistHeight(int h);
+    QWidget*         m_copyAssistDock{nullptr};
+    QWidget*         m_copyAssistGrip{nullptr};
+    CopyAssistPanel* m_copyAssistPanel{nullptr};
+    int              m_copyAssistHeight{160};
+    bool             m_copyAssistResizing{false};
+    int              m_copyAssistResizeStartY{0};
+    int              m_copyAssistResizeStartH{0};
+#endif
+
+    // CW decode
+#ifdef HAVE_CW_RX_BACKENDS
+    QComboBox*    m_cwEngineCombo{nullptr};
+    QPushButton* m_cwModelAction{nullptr};
+    void          showCwSensFor(const QString& backend);
+    // Threshold for a neural decoder's colored text.  m_cwCostThreshold stays
+    // ggmorse's: the TX decode, the controller feed and MQTT read it too.
+    float         m_cwNeuralCostThreshold{1.0f};
+#endif
+    void          saveCwSens(int value);
+    // The decoder whose Sens the slider shows, and whether the slider holds
+    // a change that is not saved yet.
+    QString       m_cwSensBackend{QStringLiteral("ggmorse")};
+    bool          m_cwSensUnsaved{false};
+    QWidget*      m_cwPanel{nullptr};
+    QWidget*      m_cwGrip{nullptr};
+    QTextEdit*    m_cwText{nullptr};
+    QLabel*       m_cwStatsLabel{nullptr};
+    QLabel*       m_cwInputHint{nullptr};
+    QSlider*      m_cwSensSlider{nullptr};
+    QPushButton*  m_lockPitchBtn{nullptr};
+    QPushButton*  m_lockSpeedBtn{nullptr};
+    RangeSlider*  m_pitchRangeSlider{nullptr};
+    RangeSlider*  m_speedRangeSlider{nullptr};
+    float         m_cwCostThreshold{0.70f};
+
+    // Adjustable, persisted decoded-text display (#3628)
+    int           m_cwFontPx{13};
+    int           m_cwPanelHeight{80};
+    bool          m_cwResizing{false};
+    int           m_cwResizeStartY{0};
+    int           m_cwResizeStartH{0};
+
+    enum class CwTextSource { None, Rx, Tx };
+    CwTextSource  m_lastCwTextSource{CwTextSource::None};
+
+    // RTTY decode
+    QWidget*      m_rttyPanel{nullptr};
+    QTextEdit*    m_rttyText{nullptr};
+    QLabel*       m_rttyStatsLabel{nullptr};
+    QLabel*       m_rttyInputHint{nullptr};
+    QComboBox*    m_rttyMarkCombo{nullptr};
+    QComboBox*    m_rttyShiftCombo{nullptr};
+    QComboBox*    m_rttyBaudCombo{nullptr};
+    QPushButton*  m_rttyRevBtn{nullptr};
+    QSlider*      m_rttySensSlider{nullptr};
+    float         m_rttyConfThreshold{0.5f};   // slider default 0 = the confidence floor: never drops
+};
+
+} // namespace AetherSDR

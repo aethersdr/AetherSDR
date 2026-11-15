@@ -1,0 +1,671 @@
+#include "MainWindowHelpers.h"
+
+#include "SpectrumPreviewLogic.h"
+#include "SpectrumWidget.h"
+#include "core/RadioDiscovery.h"
+#include "core/backends/flex/SmartLinkClient.h"
+#include "models/BandSettings.h"
+#include "models/MemoryEntry.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "models/XvtrPolicy.h"
+#include "models/TnfModel.h"
+#include "core/ThemeManager.h"
+
+#include <QFileInfo>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QLocale>
+#include <QMap>
+#include <QPainter>
+
+#include <algorithm>
+#include <cmath>
+
+namespace AetherSDR {
+
+bool requestSlicePanCenter(RadioModel& model, int sliceId, double centerMhz)
+{
+    const SliceModel* slice = model.slice(sliceId);
+    if (!slice) { return false; }
+    if (model.confirmsReceiveControls()) {
+        // A reveal must admit capture placement with the preserved receiver.
+        // Range is for zoom: RTL deliberately clamps it to existing capture.
+        // Even an admitted Center remains pending until hardware/DSP adoption.
+        model.requestConfirmedReceiveTune(sliceId, centerMhz,
+            IRadioBackend::ReceiveTuneView::Center);
+        return false;
+    }
+    return model.requestPanCenter(slice->panId(), centerMhz);
+}
+
+// ─── Platform checks ─────────────────────────────────────────────────────────
+
+bool macDaxDriverInstalled()
+{
+#ifdef Q_OS_MACOS
+    const QFileInfo driverBundle("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver");
+    if (!driverBundle.exists() || !driverBundle.isDir())
+        return false;
+
+    const QString bundlePath = driverBundle.absoluteFilePath();
+    const QFileInfo driverExec(bundlePath + "/Contents/MacOS/AetherSDRDAX");
+    const QFileInfo infoPlist(bundlePath + "/Contents/Info.plist");
+    return driverExec.exists() && driverExec.isFile() && infoPlist.exists() && infoPlist.isFile();
+#else
+    return true;
+#endif
+}
+
+// ─── Band admissibility ──────────────────────────────────────────────────────
+
+QString bandTuneRefusalText(const XvtrPolicy::BandTuneAdmissibility& admissibility,
+                            const QString& bandName)
+{
+    if (admissibility.outsideTuningRange) {
+        return QObject::tr("Band %1 is outside this radio's tuning range "
+                           "(%2–%3 MHz)")
+            .arg(bandName)
+            .arg(admissibility.rangeMinMhz, 0, 'f', 3)
+            .arg(admissibility.rangeMaxMhz, 0, 'f', 3);
+    }
+    // Everything else is the Flex band-stack vocabulary, which arrives already
+    // worded because only that layer knows which of its several refusals this
+    // is. Untranslated, and pre-dating this helper.
+    return admissibility.reason;
+}
+
+// ─── Network diagnostics tooltip ─────────────────────────────────────────────
+
+// Shown where a figure exists in the readout but this transport cannot produce
+// it. Deliberately not "0" or "—": the operator must be able to tell a
+// measurement of nothing from the absence of a measurement.
+const QString kNetworkNotMeasured = QStringLiteral("not measured on this link");
+
+QString formatNetworkMs(int ms)
+{
+    return ms < 1 ? "< 1 ms" : QString("%1 ms").arg(ms);
+}
+
+QString formatNetworkSeqErrors(int errors, int packets)
+{
+    if (packets == 0) {
+        return "0 / 0 packets";
+    }
+
+    const double pct = (errors * 100.0) / packets;
+    return QString("%1 / %2 packets (%3%)")
+        .arg(errors)
+        .arg(packets)
+        .arg(pct, 0, 'f', 2);
+}
+
+namespace {
+constexpr int kNetworkTooltipWidthPx = 300;
+
+// Distinct name (not an overload of formatNetworkSeqErrors): an
+// anonymous-namespace overload would hide the namespace-scope two-int
+// overload from unqualified lookup inside this TU.
+QString formatCategorySeqErrors(const ReceiveStreamStats::Counters& stats,
+                               ReceiveStreamStats::Category category)
+{
+    return QString("%1 / %2 packets (%3%)").arg(stats.errors).arg(stats.expectedPackets(category))
+        .arg(stats.lossPercent(category), 0, 'f', 2);
+}
+
+QString networkTooltipSection(const QString& title)
+{
+    return QStringLiteral(
+        "<tr><td colspan='2' style='color:#8aa8c0; font-size:8pt; padding-top:5px;'>"
+        "%1"
+        "</td></tr>")
+        .arg(title.toHtmlEscaped());
+}
+
+QString networkTooltipRow(const QString& label, const QString& value)
+{
+    return QStringLiteral(
+        "<tr>"
+        "<td width='52%' style='color:#8aa8c0; padding-right:18px;'>%1</td>"
+        "<td width='48%' align='right' style='color:#c8d8e8;'>%2</td>"
+        "</tr>")
+        .arg(label.toHtmlEscaped(), value.toHtmlEscaped());
+}
+} // namespace
+
+QString networkQualityColor(const QString& quality)
+{
+    QString token = QStringLiteral("color.networkQuality.off");
+    if (quality == QStringLiteral("Excellent") || quality == QStringLiteral("Very Good")) {
+        token = QStringLiteral("color.networkQuality.excellent");
+    } else if (quality == QStringLiteral("Good")) {
+        token = QStringLiteral("color.networkQuality.good");
+    } else if (quality == QStringLiteral("Fair")) {
+        token = QStringLiteral("color.networkQuality.fair");
+    } else if (quality == QStringLiteral("Poor")) {
+        token = QStringLiteral("color.networkQuality.poor");
+    }
+    return ThemeManager::instance().color(token).name();
+}
+
+QString adaptiveFpsCapColor(int fpsCap)
+{
+    if (fpsCap <= 4) {
+        return networkQualityColor(QStringLiteral("Poor"));
+    }
+    if (fpsCap <= 8) {
+        return networkQualityColor(QStringLiteral("Fair"));
+    }
+    return networkQualityColor(QStringLiteral("Good"));
+}
+
+QString buildNetworkTooltip(const RadioModel& model,
+                            int adaptiveFpsCap,
+                            bool throttleRestorePending)
+{
+    const ReceiveStreamStats::Counters audioStats =
+        model.categoryStats(ReceiveStreamStats::Audio);
+    const ReceiveStreamStats::Counters fftStats =
+        model.categoryStats(ReceiveStreamStats::Spectrum);
+    const ReceiveStreamStats::Counters waterfallStats =
+        model.categoryStats(ReceiveStreamStats::Waterfall);
+    const ReceiveStreamStats::Counters meterStats =
+        model.categoryStats(ReceiveStreamStats::Meter);
+    const ReceiveStreamStats::Counters daxStats =
+        model.categoryStats(ReceiveStreamStats::Dax);
+
+    const QString quality = model.networkQuality();
+    QString html = QStringLiteral(
+        "<html><body>"
+        // Dark background so the fixed light foreground colors below stay
+        // legible regardless of the platform/theme tooltip base color (the
+        // status-bar tooltip has no global QToolTip palette). Matches the
+        // pairing used in PropDashboardDialog.
+        "<table width='%1' bgcolor='#102131' cellspacing='0' cellpadding='3'>"
+        "<tr>"
+        "<td colspan='2'>"
+        "<span style='font-size:10pt; font-weight:600; color:#c8d8e8;'>"
+        "Network diagnostics"
+        "</span>&nbsp;&nbsp;"
+        "<span style='color:%2;'>&#9679; %3</span>"
+        "</td>"
+        "</tr>")
+        .arg(kNetworkTooltipWidthPx)
+        .arg(networkQualityColor(quality), quality.toHtmlEscaped());
+
+    if (adaptiveFpsCap > 0) {
+        const QString throttleStatus = throttleRestorePending
+            ? QStringLiteral("Adaptive throttle: %1 fps cap · restoring shortly")
+                  .arg(adaptiveFpsCap)
+            : QStringLiteral("Adaptive throttle: %1 fps cap").arg(adaptiveFpsCap);
+        html += QStringLiteral(
+            "<tr><td colspan='2' style='color:#ffc000;'>%1</td></tr>")
+                    .arg(throttleStatus.toHtmlEscaped());
+    }
+
+    html += networkTooltipSection(QStringLiteral("LINK TIMING"));
+    // A transport with no request/response exchange has no round trip to time.
+    // formatNetworkMs(0) renders "< 1 ms", so printing the getter unconditionally
+    // would show the best possible latency on a link nothing ever pinged.
+    if (model.hasLinkRtt()) {
+        html += networkTooltipRow(QStringLiteral("Current RTT"),
+                                  formatNetworkMs(model.lastPingRtt()));
+        html += networkTooltipRow(QStringLiteral("Session maximum"),
+                                  formatNetworkMs(model.maxPingRtt()));
+    } else {
+        html += networkTooltipRow(QStringLiteral("Current RTT"),
+                                  kNetworkNotMeasured);
+    }
+    // Same rule, one field over. A backend is `reported` from its first tick on
+    // purpose, but its first delivery-timing window has not closed yet, and the
+    // getters clamp that "not measured" sentinel to 0 for the charts — which
+    // reads here as the best delivery the app can display.
+    if (model.hasLinkTiming()) {
+        html += networkTooltipRow(QStringLiteral("Network jitter"),
+                                  formatNetworkMs(model.audioPacketJitterMs()));
+        html += networkTooltipRow(
+            QStringLiteral("Audio gap"),
+            QStringLiteral("%1 · max %2")
+                .arg(formatNetworkMs(model.audioPacketGapMs()),
+                     formatNetworkMs(model.audioPacketGapMaxMs())));
+    } else {
+        html += networkTooltipRow(QStringLiteral("Network jitter"), kNetworkNotMeasured);
+        html += networkTooltipRow(QStringLiteral("Audio gap"), kNetworkNotMeasured);
+    }
+
+    html += networkTooltipSection(QStringLiteral("PACKET INTEGRITY"));
+    html += networkTooltipRow(
+        (model.hasStreamCategoryStats() ? QStringLiteral("Recent gap events (%1 s)")
+                                       : QStringLiteral("Recent loss (%1 s)"))
+            .arg(model.packetLossWindowSeconds()),
+        formatNetworkSeqErrors(model.packetLossWindowDrops(),
+                               model.packetLossWindowPackets()));
+    html += networkTooltipRow(
+        QStringLiteral("Session missing packets / DAX breaks"),
+        QStringLiteral("%1 (%2 received)").arg(model.packetDropCount()).arg(model.packetTotalCount()));
+
+    // Per-category counters are a property of the VITA-49 multiplex, where each
+    // category is a separately-sequenced stream sharing one socket. A transport
+    // that carries everything in a single stream has no such breakdown, and five
+    // rows of "0 / 0 packets" would read as five dead streams rather than as a
+    // distinction that does not apply.
+    if (model.hasStreamCategoryStats()) {
+        html += networkTooltipSection(QStringLiteral("MISSING PACKETS / DAX BREAKS"));
+        html += networkTooltipRow(QStringLiteral("Audio"),
+                                  formatCategorySeqErrors(audioStats, ReceiveStreamStats::Audio));
+        html += networkTooltipRow(QStringLiteral("FFT"),
+                                  formatCategorySeqErrors(fftStats, ReceiveStreamStats::Spectrum));
+        html += networkTooltipRow(QStringLiteral("Waterfall"),
+                                  formatCategorySeqErrors(waterfallStats, ReceiveStreamStats::Waterfall));
+        html += networkTooltipRow(QStringLiteral("Meters"),
+                                  formatCategorySeqErrors(meterStats, ReceiveStreamStats::Meter));
+        html += networkTooltipRow(QStringLiteral("DAX"),
+                                  formatCategorySeqErrors(daxStats, ReceiveStreamStats::Dax));
+    }
+
+    html += networkTooltipSection(QStringLiteral("UDP TRAFFIC"));
+    html += networkTooltipRow(QStringLiteral("Received"),
+                              QLocale().formattedDataSize(model.rxBytes()));
+    html += networkTooltipRow(QStringLiteral("Sent"),
+                              QLocale().formattedDataSize(model.txBytes()));
+    html += QStringLiteral(
+        "<tr>"
+        "<td colspan='2' style='color:#8aa8c0; padding-top:7px;'>"
+        "Double-click to open full diagnostics"
+        "</td>"
+        "</tr>"
+        "</table></body></html>");
+    return html;
+}
+
+// ─── TNF tooltip ─────────────────────────────────────────────────────────────
+
+long long tnfFrequencyHz(double freqMhz)
+{
+    return static_cast<long long>(std::llround(freqMhz * 1.0e6));
+}
+
+QString formatTnfFrequency(double freqMhz)
+{
+    const long long hz = tnfFrequencyHz(freqMhz);
+    const int mhzPart = static_cast<int>(hz / 1000000);
+    const int khzPart = static_cast<int>((hz / 1000) % 1000);
+    const int hzPart = static_cast<int>(hz % 1000);
+    return QStringLiteral("%1.%2.%3")
+        .arg(mhzPart)
+        .arg(khzPart, 3, 10, QChar('0'))
+        .arg(hzPart, 3, 10, QChar('0'));
+}
+
+QString formatTnfDepth(int depthDb)
+{
+    switch (std::clamp(depthDb, 1, 3)) {
+    case 1:
+        return QStringLiteral("Normal");
+    case 2:
+        return QStringLiteral("Deep");
+    case 3:
+        return QStringLiteral("Very Deep");
+    default:
+        return QStringLiteral("Normal");
+    }
+}
+
+QString buildTnfTooltip(const TnfModel& tnfModel)
+{
+    QString html = QStringLiteral(
+        "<html><body style='white-space:nowrap;'>"
+        "<div style='font-size:10pt; font-weight:600; color:#c8d8e8; margin-bottom:5px;'>"
+        "Tracking Notch Filters — click to toggle"
+        "</div>");
+
+    if (tnfModel.tnfs().isEmpty()) {
+        html += QStringLiteral(
+            "<div style='color:#8aa8c0;'>No TNF filters exist.</div>"
+            "</body></html>");
+        return html;
+    }
+
+    QVector<TnfEntry> filters;
+    filters.reserve(tnfModel.tnfs().size());
+    for (const TnfEntry& tnf : tnfModel.tnfs()) {
+        filters.append(tnf);
+    }
+    std::sort(filters.begin(), filters.end(), [](const TnfEntry& lhs, const TnfEntry& rhs) {
+        const long long lhsHz = tnfFrequencyHz(lhs.freqMhz);
+        const long long rhsHz = tnfFrequencyHz(rhs.freqMhz);
+        if (lhsHz != rhsHz) {
+            return lhsHz < rhsHz;
+        }
+        return lhs.id < rhs.id;
+    });
+
+    html += QStringLiteral(
+        "<table cellspacing='0' cellpadding='3'>"
+        "<tr style='color:#8aa8c0; font-size:8pt;'>"
+        "<th align='left'>Band</th>"
+        "<th align='left'>Frequency</th>"
+        "<th align='right'>Width</th>"
+        "<th align='left'>Depth</th>"
+        "<th align='left'>State</th>"
+        "</tr>");
+
+    for (const TnfEntry& tnf : filters) {
+        const QString band = BandSettings::bandForFrequency(tnf.freqMhz).toHtmlEscaped();
+        const QString frequency = formatTnfFrequency(tnf.freqMhz).toHtmlEscaped();
+        const QString width = QStringLiteral("%1 Hz").arg(tnf.widthHz).toHtmlEscaped();
+        const QString depth = formatTnfDepth(tnf.depthDb).toHtmlEscaped();
+        const QString state = tnf.permanent
+            ? QStringLiteral("Persistent")
+            : QStringLiteral("Temporary");
+        const QString stateColor = tnf.permanent
+            ? QStringLiteral("#30c030")
+            : QStringLiteral("#ffc000");
+
+        html += QStringLiteral(
+            "<tr>"
+            "<td style='color:#c8d8e8;'>%1</td>"
+            "<td style='color:#c8d8e8;'>%2 MHz</td>"
+            "<td align='right' style='color:#c8d8e8;'>%3</td>"
+            "<td style='color:#c8d8e8;'>%4</td>"
+            "<td style='color:%5;'>&#9679; %6</td>"
+            "</tr>")
+            .arg(band, frequency, width, depth, stateColor, state);
+    }
+
+    html += QStringLiteral("</table></body></html>");
+    return html;
+}
+
+// ─── Memory / passive spot ID math ───────────────────────────────────────────
+
+int memorySpotId(int memoryIndex)
+{
+    return -(kMemorySpotIdBase + memoryIndex);
+}
+
+int memoryIndexFromSpotId(int spotIndex)
+{
+    if (spotIndex > -kMemorySpotIdBase)
+        return -1;
+    return -spotIndex - kMemorySpotIdBase;
+}
+
+QString memorySpotLabel(const MemoryEntry& memory)
+{
+    if (!memory.name.trimmed().isEmpty())
+        return memory.name.trimmed();
+    if (!memory.group.trimmed().isEmpty())
+        return memory.group.trimmed();
+    return QString("Memory %1").arg(memory.index);
+}
+
+QString memorySpotComment(const MemoryEntry& memory)
+{
+    QStringList parts;
+    if (!memory.group.trimmed().isEmpty())
+        parts << QString("Group: %1").arg(memory.group.trimmed());
+    if (!memory.owner.trimmed().isEmpty())
+        parts << QString("Owner: %1").arg(memory.owner.trimmed());
+    if (!memory.mode.trimmed().isEmpty())
+        parts << QString("Mode: %1").arg(memory.mode.trimmed());
+    if (memory.rxFilterLow != 0 || memory.rxFilterHigh != 0) {
+        parts << QString("Filter: %1..%2 Hz")
+                    .arg(memory.rxFilterLow)
+                    .arg(memory.rxFilterHigh);
+    }
+    return parts.join(" | ");
+}
+
+// ─── Pan layout ──────────────────────────────────────────────────────────────
+
+int panCountForLayoutId(const QString& layoutId)
+{
+    static const QMap<QString, int> kPanCounts = {
+        {"1", 1}, {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"3v", 3},
+        {"2x2", 4}, {"4v", 4}, {"3h2", 5}, {"2x3", 6}, {"4h3", 7}, {"2x4", 8}
+    };
+    return kPanCounts.value(layoutId, 1);
+}
+
+// ─── XVTR policy summaries (diagnostics) ────────────────────────────────────
+
+QVector<XvtrPolicy::Transverter> xvtrPolicyBandsFrom(
+    const QMap<int, RadioModel::XvtrInfo>& xvtrs)
+{
+    QVector<XvtrPolicy::Transverter> bands;
+    bands.reserve(xvtrs.size());
+    for (auto it = xvtrs.cbegin(); it != xvtrs.cend(); ++it) {
+        const auto& x = it.value();
+        bands.append({x.index, x.order, x.name, x.rfFreq, x.ifFreq, x.isValid});
+    }
+    return bands;
+}
+
+QString xvtrSummary(const XvtrPolicy::Transverter& xvtr)
+{
+    return QStringLiteral("%1[idx=%2 order=%3 valid=%4 rf=%5 if=%6 offset=%7]")
+        .arg(xvtr.name.isEmpty() ? QStringLiteral("(unnamed)") : xvtr.name)
+        .arg(xvtr.index)
+        .arg(xvtr.order)
+        .arg(xvtr.isValid ? QStringLiteral("true") : QStringLiteral("false"))
+        .arg(xvtr.rfFreqMhz, 0, 'f', 6)
+        .arg(xvtr.ifFreqMhz, 0, 'f', 6)
+        .arg(xvtr.rfFreqMhz - xvtr.ifFreqMhz, 0, 'f', 6);
+}
+
+QString xvtrListSummary(const QVector<XvtrPolicy::Transverter>& xvtrs)
+{
+    QStringList entries;
+    entries.reserve(xvtrs.size());
+    for (const auto& xvtr : xvtrs)
+        entries << xvtrSummary(xvtr);
+    return entries.isEmpty() ? QStringLiteral("(none)") : entries.join(QStringLiteral("; "));
+}
+
+QString xvtrForBandSummary(const QString& bandName,
+                           const QVector<XvtrPolicy::Transverter>& xvtrs)
+{
+    for (const auto& xvtr : xvtrs) {
+        if (xvtr.name == bandName)
+            return xvtrSummary(xvtr);
+    }
+    return QStringLiteral("(none)");
+}
+
+// ─── Pan pixel dimensions ────────────────────────────────────────────────────
+
+namespace {
+constexpr int kDefaultPanXpixels = 1024;
+constexpr int kDefaultPanYpixels = 700;
+constexpr int kMinPanXpixels = 100;
+constexpr int kMinPanYpixels = 20;
+constexpr int kMaxRadioPanYPixels = 8192;
+// A sanity bound on a device-pixel width, not a backend limit: each backend
+// clamps to the point count it can produce.
+constexpr int kMaxLocalPanPixels = 16384;
+
+int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels, int maximumPixels)
+{
+    return panDevicePixels(logicalPixels,
+                           spectrum ? spectrum->devicePixelRatioF() : 1.0,
+                           maximumPixels);
+}
+} // namespace
+
+int panXpixelsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum || spectrum->width() < kMinPanXpixels) {
+        return kDefaultPanXpixels;
+    }
+    return panRadioXpixels(spectrum->width(), spectrum->devicePixelRatioF());
+}
+
+int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum || spectrum->width() < kMinPanXpixels) {
+        return kDefaultPanXpixels;
+    }
+    const int pixels = radioPixelsFor(spectrum, spectrum->width(), kMaxLocalPanPixels);
+    return panPointsForPixelWidth(pixels, spectrum->panEdgeCropActive());
+}
+
+int panYpixelsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum) {
+        return kDefaultPanYpixels;
+    }
+
+    const int ypix = spectrum->spectrumPixelHeight();
+    if (ypix < kMinPanYpixels) {
+        return kDefaultPanYpixels;
+    }
+    // FFT bins arrive as radio-encoded pixel positions, not full-precision dBm
+    // samples. Request render-device pixels and keep the historical 700 px
+    // floor so zoomed traces have sub-screen-pixel precision.
+    return std::max(radioPixelsFor(spectrum, ypix, kMaxRadioPanYPixels),
+                    kDefaultPanYpixels);
+}
+
+bool panPixelDimensionsReady(const SpectrumWidget* spectrum)
+{
+    return spectrum
+        && spectrum->width() >= kMinPanXpixels
+        && spectrum->spectrumPixelHeight() >= kMinPanYpixels;
+}
+
+// ─── Misc UI ─────────────────────────────────────────────────────────────────
+
+QPixmap buildBandStackIndicatorPixmap(bool active)
+{
+    QPixmap pixmap(10, 22);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(active ? QColor(0x00, 0xb4, 0xd8) : QColor(0x40, 0x48, 0x58));
+    painter.drawEllipse(2, 1, 6, 6);
+    painter.drawEllipse(2, 8, 6, 6);
+    painter.drawEllipse(2, 15, 6, 6);
+    return pixmap;
+}
+
+// ─── Client connection parsing (discovery / multiFLEX) ──────────────────────
+
+QStringList splitClientField(const QString& raw)
+{
+    QString cleaned = raw;
+    cleaned.replace(QChar(0x7f), QLatin1Char(' '));
+
+    QStringList values;
+    for (const QString& value : cleaned.split(',', Qt::SkipEmptyParts))
+        values << value.trimmed();
+    return values;
+}
+
+quint32 parseClientHandle(QString text)
+{
+    text = text.trimmed();
+    if (text.startsWith("0x", Qt::CaseInsensitive))
+        text = text.mid(2);
+
+    bool ok = false;
+    const quint32 handle = text.toUInt(&ok, 16);
+    return ok ? handle : 0;
+}
+
+QList<ClientDisconnectDialog::Client> buildDisconnectClients(const QStringList& handles,
+                                                             const QStringList& programs,
+                                                             const QStringList& stations)
+{
+    QList<ClientDisconnectDialog::Client> clients;
+    for (int i = 0; i < handles.size(); ++i) {
+        const quint32 handle = parseClientHandle(handles[i]);
+        if (handle == 0)
+            continue;
+
+        if (std::any_of(clients.cbegin(), clients.cend(), [handle](const auto& client) {
+                return client.handle == handle;
+            })) {
+            continue;
+        }
+
+        ClientDisconnectDialog::Client client;
+        client.handle = handle;
+        if (i < programs.size())
+            client.program = programs[i];
+        if (i < stations.size())
+            client.station = stations[i];
+        clients.append(client);
+    }
+    return clients;
+}
+
+QList<ClientDisconnectDialog::Client> buildDisconnectClients(const RadioInfo& info)
+{
+    return buildDisconnectClients(info.guiClientHandles,
+                                  info.guiClientPrograms,
+                                  info.guiClientStations);
+}
+
+QList<ClientDisconnectDialog::Client> buildDisconnectClients(const WanRadioInfo& info)
+{
+    return buildDisconnectClients(splitClientField(info.guiClientHandles),
+                                  splitClientField(info.guiClientPrograms),
+                                  splitClientField(info.guiClientStations));
+}
+
+QString cleanClientDisplayText(QString value)
+{
+    value.replace(QChar(0x7f), QLatin1Char(' '));
+    return value.trimmed();
+}
+
+QString clientConnectionStatusMessage(quint32 handle,
+                                      const QString& source,
+                                      const QString& station,
+                                      const QString& program)
+{
+    QString from = cleanClientDisplayText(source);
+    const QString stationText = cleanClientDisplayText(station);
+    const QString programText = cleanClientDisplayText(program);
+    QString detail = stationText;
+
+    if (detail.isEmpty() || detail.compare(QStringLiteral("Unknown"), Qt::CaseInsensitive) == 0)
+        detail = programText;
+    if (detail.compare(QStringLiteral("Unknown"), Qt::CaseInsensitive) == 0)
+        detail.clear();
+
+    if (from.isEmpty())
+        from = detail;
+    if (from.isEmpty())
+        from = QStringLiteral("client 0x%1").arg(handle, 8, 16, QChar('0')).toUpper();
+
+    if (!detail.isEmpty() && detail.compare(from, Qt::CaseInsensitive) != 0)
+        return QObject::tr("New client connection from %1 (%2)").arg(from, detail);
+
+    return QObject::tr("New client connection from %1").arg(from);
+}
+
+// ─── Status-bar compact labels ──────────────────────────────────────────────
+
+QString statusBarCompactLabelStyle(const QString& color, bool bold)
+{
+    return QStringLiteral(
+        "QLabel#statusBarCompactLabel { color: %1; font-size: 12px; font-weight: %2; "
+        "background: transparent; }")
+        .arg(color, bold ? QStringLiteral("bold") : QStringLiteral("normal"));
+}
+
+void applyStatusBarCompactLabelStyle(QLabel* label, const QString& color, bool bold)
+{
+    if (!label) {
+        return;
+    }
+
+    label->setObjectName(QStringLiteral("statusBarCompactLabel"));
+    ThemeManager::instance().applyStyleSheet(label, statusBarCompactLabelStyle(color, bold));
+}
+
+} // namespace AetherSDR

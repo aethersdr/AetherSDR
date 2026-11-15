@@ -1,0 +1,14 @@
+// Pandoc template for the printed AetherSDR manual. build_pdf.py renders it
+// with `pandoc --to typst --template`; the layout lives in manual.typ.
+#import "manual.typ": manual, admonition, appendix
+
+#let horizontalRule = line(start: (25%, 0%), end: (75%, 0%), stroke: 0.5pt + luma(160))
+#let divider = horizontalRule
+
+$if(highlighting-definitions)$
+$highlighting-definitions$
+
+$endif$
+#show: manual
+
+$body$

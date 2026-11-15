@@ -1,0 +1,160 @@
+# TX control testing — standard authorization and method
+
+Use this prompt and method for live automation-bridge tests against a real
+radio. Replace every bracketed value; do not infer them from an earlier run.
+
+## Authorization prompt
+
+> Run a control-and-transmit sweep against `[RADIO MODEL]` over the AetherSDR
+> automation bridge. The dummy load is connected to `[EXACT TX ANTENNA VALUE]`.
+> You are authorized to transmit up to `[MAX PHYSICAL WATTS] W` at
+> `[FREQUENCY]` in `[MODE]`.
+>
+> Before keying, assert the exact live TX antenna, tuner bypass, frequency,
+> mode, RF Power, and Tune Power. Treat an unreadable state as failure. Apply a
+> conservative percentage ceiling and a separate measured-watt watchdog; a
+> power-control percentage is not watts. Unkey immediately on over-limit power,
+> missing/stale power telemetry, high SWR, timeout, disconnect, or any state
+> disagreement.
+>
+> Cover meters, control set/reply/external-change paths, a short TX window, and
+> a complete AetherSDR restart. Verify actual visible widgets, not only models.
+> Restore all non-transmitting state, confirm the radio is unkeyed, and leave
+> the tuner bypassed if restoring its prior state would require RF.
+
+## Hard safety gates
+
+All gates must pass before each keying stage:
+
+1. Explicit authorization names the radio, frequency/mode, exact dummy-load
+   antenna value, and maximum physical watts.
+2. `dumpTree` reports exactly that TX antenna. Empty, ambiguous, or different
+   values abort the run.
+3. The tuner already reports bypass. `atu bypass` does not key, but changing a
+   tuned state is not automatically reversible without a new RF tune cycle.
+4. RF Power and Tune Power are both read and staged conservatively. Icom
+   two-tone uses Tune Power; an ATU cycle may use backend/radio-specific drive.
+5. `AETHER_AUTOMATION_TX_MAX_POWER` is treated only as a 0–100 control
+   percentage ceiling. It is never reported as a watt limit.
+6. A calibrated forward-power meter must produce a fresh sample promptly after
+   key. Unkey on the first sample above the authorized watt limit. This is a
+   reactive backstop and cannot prevent the first transient; use an external
+   wattmeter/interlock when a transient would be unacceptable.
+7. Every exit path sends unkey and confirms tuning, MOX, model transmitting,
+   and radio transmitting are false.
+
+Do not run unattended TX certification on a backend with no calibrated live
+power meter unless an independent physical interlock enforces the watt limit.
+
+## Evidence sequence
+
+### 1. Baseline and liveness
+
+- Confirm one automation instance and no competing radio session.
+- Capture `whoami`, `liveness`, `health`, `controls map`, `controls meters`, and
+  the relevant `dumpTree` widgets.
+- At idle, require the visible forward-power gauge to read zero. A retained
+  backend sample is diagnostic history, not current power.
+
+### 2. Control convergence
+
+For each control:
+
+1. record the operator's original radio and UI value;
+2. drive the actual widget or semantic bridge verb;
+3. verify expected protocol bytes from the model's official guide;
+4. wait for the radio reply and verify model plus actual widget;
+5. change it externally at the radio or with a safe raw protocol command;
+6. allow two periodic-poll intervals and verify model plus widget again; and
+7. restore the original value when restoration does not transmit.
+
+For Icom 0000–0255 percentage levels, independently calculate:
+
+```
+write raw = ceil(percent * 255 / 100)
+read percent = floor(raw * 100 / 255)
+```
+
+Do not use that formula for `15 xx` meters; use the model-specific published
+calibration curve. CI-V Transceive is helpful but is not accepted as the only
+subscription path.
+
+### 3. Short transmit window
+
+- Begin with the lowest authorized Tune Power percentage.
+- Sample forward power, SWR, ALC, compression, voltage, current, and thermal
+  data that the radio actually supports. Mark unsupported meters as such.
+- Reject stale ages and rail-pinned values. Do not substitute scalar defaults
+  for unsupported temperature or voltage. Report ALC in its declared native unit.
+- The forward-power median now aggregates only samples that also carry a finite
+  `fwdPowerInstant` within the 500 ms safety window, rather than any smoothed
+  reading under 1500 ms. A backend that publishes `fwdPower` but no instant peak
+  reports no median at all — that is a reporting-surface gap, not a radio fault.
+- Start the freshness deadline at the key command, including command latency.
+  A sample predating that command cannot qualify as this burst's telemetry.
+  That rule governs what may be RECORDED, not what may stop the run: an SWR or
+  forward-power reading over its ceiling still aborts on the ordinary 1500 ms
+  reporting window, because an alarming sample is a reason to unkey whether or
+  not it postdates the key command.
+- In CW, a zero-carrier gap deliberately nulls the displayed SWR. It can continue
+  only after a qualified SWR was observed in this burst, with fresh zero-watt
+  power and fresh SWR receive timestamps. Missing/stale telemetry and a missing
+  ratio with positive power still stop the run. The 0.9 s deadline, the 500 ms
+  safety-freshness window and the watt ceiling are unchanged; the post-key rule
+  narrows only which samples may enter an aggregate.
+- Icom's and the HL2's current TUNE producers are a single sine wave. `txtest
+  twotone` refuses any backend that does not declare a `twoToneGenerator`; do
+  not record ordinary TUNE output as two-tone or IMD proof.
+- Verify the actual power gauge is live only while keyed.
+- Unkey immediately, then verify the gauge is zero both at the edge and after a
+  late in-flight response could arrive.
+
+Use the guarded harness:
+
+```bash
+python3 tools/tx_meter_test.py \
+  --serial RADIO_SERIAL --ant ANT1 --frequency 14.2 --mode USB \
+  --max-watts 10 \
+  --levels 2,5
+```
+
+`--levels` and `--two-tone-percent` are Tune Power control settings, not measured
+watts. `--max-control` bounds both RF and Tune controls (default 5). Each burst
+rechecks the exact radio, TX slice, antenna, frequency, mode, offsets, VOX and
+bypass state. The sampling window repeats the context check and uses fresh
+**unsmoothed** `fwdPowerInstant` for the watt cutoff; it records peak watts,
+peak SWR and every sampled meter row. Missing/unknown link state, a missing or
+stale calibrated power definition, and missing/stale SWR stop the run. Unkey
+is confirmed before restoring power; unknown TX flags never count as unkeyed.
+Where the backend answers `civ scheduler freshness` with a `stateFreshness`
+block, model flags alone are insufficient: the harness additionally requires
+`stateFreshness.fields.ptt` to report a confirmed false value received during
+that unkey observation window and younger than 500 ms, carrying
+`accepted: true` and `pending: false`. `accepted` is what separates a real
+readback from a stale frame that merely agreed with the pending unkey intent;
+the backend publishes both, and only the first is proof. An app build that does
+not report the field fails closed. The gate is keyed on the
+backend answering, not on a radio name. A backend without CI-V diagnostics — or
+an older app build — takes the flags-only path.
+
+### 4. Restart proof
+
+Close AetherSDR completely and repeat the baseline with a fresh process. Verify
+distinctive safe values are adopted from the radio rather than replayed from
+client defaults. Repeat one external-change/poll test. A same-process
+disconnect/reconnect is useful but does not replace an application restart.
+
+## Deliverable
+
+Report a table with one row per control/meter and separate columns for:
+
+- set path;
+- protocol value;
+- same-session radio reply;
+- visible widget;
+- external-change convergence;
+- post-restart adoption; and
+- restoration.
+
+Report peak measured watts, SWR, telemetry freshness, abort reason, and final
+unkey state. Never call a percentage setting “watts.”

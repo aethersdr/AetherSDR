@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+	<key>CFBundleIconFile</key>
+	<string>${MACOSX_BUNDLE_ICON_FILE}</string>
+	<key>CFBundleIdentifier</key>
+	<string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+	<key>CFBundleVersion</key>
+	<string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+	<key>NSHumanReadableCopyright</key>
+	<string></string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AetherSDR needs microphone access for voice transmission (SSB, AM, FM, RADE digital voice).</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>AetherSDR needs local network access to discover and communicate with FlexRadio devices via UDP broadcast on port 4992.</string>
+	<key>NSInputMonitoringUsageDescription</key>
+	<string>AetherSDR reads knob and button events from supported USB control surfaces (Ulanzi Dial, Elgato Stream Deck+). This permission is only requested after you enable a controller in Preferences → Serial; it is not required for normal radio operation.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

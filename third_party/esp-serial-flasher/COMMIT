@@ -1,0 +1,4 @@
+ca7edfcef903a4075332f0ad6c8fbda1e2cb9a9d
+v2.0.0
+stubs regenerated from esp-flasher-stub v1.4.1 (cmake/gen_stub_sources.py), for its USB serial/JTAG flush fix (esp-flasher-stub #90)
+local patch: private_include/protocol.h, private_include/sip.h and src/protocol_spi.c build with MSVC (#pragma pack in place of __attribute__((packed)))

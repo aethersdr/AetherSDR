@@ -1,0 +1,212 @@
+#pragma once
+
+#include "core/SpeProtocol.h"
+
+#include <QWidget>
+#include <QPushButton>
+#include <QTimer>
+
+class QLabel;
+class QSpacerItem;
+class QVBoxLayout;
+
+namespace AetherSDR {
+
+class HGauge;
+class SpeLcdWidget;
+
+// Dedicated applet for SPE Expert amplifiers (1.3K/1.5K/2K-FA), a sibling of
+// AcomApplet and AmpApplet; see docs/architecture/spe-expert-amplifier-design.md.
+// Power, antenna SWR and ATU-input SWR are independent Status fields, so each
+// gets a gauge; supply and temperatures are text (protocol defines no scale).
+// Buttons are the amp's front-panel keys (each remote command is a keystroke);
+// ▲/▼ adjust the drive the amp requests over CAT. Band keys, SET/DISPLAY menus
+// and manual L/C tuning are not exposed: blind menu navigation is unsafe.
+class SpeApplet : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit SpeApplet(QWidget* parent = nullptr);
+
+    // Gauge scale configuration — call when the model is known (the Status
+    // ID field identifies it on the very first poll reply; see
+    // SpeConnection::modelChanged).
+    void setPowerRange(float nominalW, float warnW, float maxW);
+    void setModelName(const QString& displayName);
+
+    // Telemetry
+    void setForwardPower(float watts);
+    // estimated: derived from forward/reverse power, not the amp's own meter.
+    void setSwrAnt(float swr, bool estimated = false);
+    void setSwrAtu(float swr);
+    // Dims what the model lacks (ATU SWR, LCD mirror) with the reason on
+    // tooltip and accessibleDescription, and describes how ON works for it.
+    void setModelCapabilities(const AetherSDR::Spe::ModelSpec& spec);
+    void setSupplyVoltage(float volts);   // text readout, not a gauge
+    void setSupplyCurrent(float amps);    // text readout, not a gauge
+    // Heatsink temperatures. The amp reports degrees in whichever unit its
+    // own display is configured for (C or F, not indicated on the wire —
+    // spec §5), so values are shown verbatim with a bare ° sign rather
+    // than guessing a unit or offering a conversion toggle. Lower/combiner
+    // are only real on the 2K-FA; hasCombiner hides them elsewhere.
+    void setTemps(int upper, int lower, int combiner, bool hasCombiner);
+    void setBand(const QString& band);
+    void setAntenna(int antenna, QChar atuState);
+    void setInputPort(int input);
+    // "LOW"/"MID"/"HIGH" — shown in the info grid AND as the power-level
+    // button's own label, mirroring the reference application.
+    void setPowerLevel(const QString& levelName);
+    void setMode(bool operate, bool transmitting); // drives pill + OPR/STBY button
+    void setFaultText(const QString& text);        // empty clears/hides the banner
+    // Why the last ON may not have reached the amplifier (a network bridge
+    // without RFC 2217 line control); empty clears/hides it.
+    void setPowerOnNote(const QString& text);
+    void setSource(const QString& text);           // "SERIAL" or "NETWORK"
+    void setConnected(bool connected);   // shows/hides live controls, resets on disconnect
+    // Transport up but the amplifier isn't answering polls (ser2net with the
+    // amp switched off). Commands are disabled and the pill goes neutral
+    // until it answers again — the transport-level connected state alone
+    // can't tell this apart.
+    void setResponding(bool responding);
+
+    // Docked (panel rail) vs floating (own window) presentation. Docked is
+    // the compact layout; floating relaxes margins and type sizes and
+    // reveals the FRONT PANEL key group (BAND±, L±/C±, SET) that the rail
+    // has no room for — mirroring the reference application's expanded
+    // window. Driven by the container's dockModeChanged (see AppletPanel).
+    void setFloating(bool floating);
+
+    // A decoded refresh of the amplifier's own front-panel LCD — rendered
+    // in the floating presentation's display mirror (see SpeLcdWidget).
+    void setLcdFrame(const AetherSDR::Spe::Lcd::Frame& frame);
+    // Separately tracks whether that mirror is recent enough to make the
+    // floating-only menu/manual-tuning keys safe to use.
+    void setLcdFresh(bool fresh);
+
+signals:
+    void powerOnClicked();     // hardware power-ON pulse (works while the amp is silent)
+    void operateClicked();     // OPERATE key — toggles STANDBY <-> OPERATE
+    void powerLevelClicked();  // POWER key — cycles LOW/MID/HIGH
+    void tuneClicked();        // TUNE key
+    void offClicked();         // SWITCH OFF key
+    void inputClicked();       // INPUT key — toggles input 1/2
+    void antennaClicked();     // ANTENNA key
+    void driveUpClicked();     // ▲ (RIGHT-arrow key) — raise requested drive power
+    void driveDownClicked();   // ▼ (LEFT-arrow key) — lower requested drive power
+    // FRONT PANEL group (floating layout only — see setFloating):
+    void bandDownClicked();    // BAND− key — manual band override
+    void bandUpClicked();      // BAND+ key
+    void setKeyClicked();      // SET key — confirm/enter on the amp's own menu
+    void lMinusClicked();      // L− key — manual ATU inductance step
+    void lPlusClicked();       // L+ key
+    void cMinusClicked();      // C− key — manual ATU capacitance step
+    void cPlusClicked();       // C+ key
+    // The floating presentation wants the amplifier's LCD mirrored (and the
+    // docked one wants that polling stopped) — MainWindow routes this to
+    // SpeConnection::setLcdPolling.
+    void lcdPollingWanted(bool wanted);
+
+private:
+    static QString onButtonTip(bool holdsDtr);
+    void updateValueLabels();  // 10 Hz throttled label text refresh
+    void updateCommandsEnabled();
+    void applyModePill();
+    // Re-applies every mode-dependent style/metric (margins, type sizes,
+    // gauge heights, FRONT PANEL visibility) for the current m_floating.
+    void applyDensity();
+    // Blanks every reading back to its not-yet-known state. Shared by the
+    // disconnect path and the stopped-answering path — both mean "what is on
+    // screen is no longer telemetry", and a frozen-but-plausible panel is the
+    // worse failure of the two.
+    void clearTelemetry();
+
+    HGauge* m_pwrGauge{nullptr};
+    HGauge* m_swrAntGauge{nullptr};
+    HGauge* m_swrAtuGauge{nullptr};
+
+    QLabel* m_pwrLabel{nullptr};
+    QLabel* m_swrAntLabel{nullptr};
+    QLabel* m_swrAtuLabel{nullptr};
+
+    QLabel* m_statusPill{nullptr};
+    QLabel* m_sourceLabel{nullptr};
+    QLabel* m_modelLabel{nullptr};
+
+    // Info grid — 3 cells per row: temp / V / I, then band / antenna / input·level.
+    QLabel* m_tempLabel{nullptr};
+    QLabel* m_voltLabel{nullptr};
+    QLabel* m_currLabel{nullptr};
+    QLabel* m_bandLabel{nullptr};
+    QLabel* m_antLabel{nullptr};
+    QLabel* m_inputLabel{nullptr};
+
+    QLabel* m_faultLabel{nullptr};
+    QLabel* m_powerNoteLabel{nullptr};
+
+    QPushButton* m_onBtn{nullptr};
+    QPushButton* m_operateBtn{nullptr};
+    QPushButton* m_pwrLevelBtn{nullptr};
+    QPushButton* m_tuneBtn{nullptr};
+    QPushButton* m_offBtn{nullptr};
+    QPushButton* m_inputBtn{nullptr};
+    QPushButton* m_antBtn{nullptr};
+    QPushButton* m_driveDownBtn{nullptr};
+    QPushButton* m_driveUpBtn{nullptr};
+
+    // Floating layout only: the amp's LCD mirror and the FRONT PANEL group.
+    SpeLcdWidget* m_lcd{nullptr};
+    QWidget*     m_frontPanel{nullptr};
+    QSpacerItem* m_bottomStretch{nullptr};
+    QPushButton* m_bandDownBtn{nullptr};
+    QPushButton* m_bandUpBtn{nullptr};
+    QPushButton* m_setBtn{nullptr};
+    QPushButton* m_lMinusBtn{nullptr};
+    QPushButton* m_lPlusBtn{nullptr};
+    QPushButton* m_cMinusBtn{nullptr};
+    QPushButton* m_cPlusBtn{nullptr};
+
+    QVBoxLayout* m_vbox{nullptr};
+    bool m_floating{false};
+    bool m_lcdFresh{false};
+    // applyModePill's no-op key: mode text + density, so a dock<->float
+    // switch restyles the pill even when the mode itself is unchanged.
+    QString m_lastPillKey;
+
+    QTimer m_labelTimer;
+
+    // Last applied power-gauge scale — setPowerRange() no-ops on repeats so
+    // the wiring can re-derive the level-dependent scale on every status
+    // frame (10/s) without triggering a repaint per frame.
+    float m_rangeNominal{-1.0f};
+    float m_rangeWarn{-1.0f};
+    float m_rangeMax{-1.0f};
+
+    float m_fwdWatts{0.0f};
+    float m_swrAntVal{1.0f};
+    float m_swrAtuVal{1.0f};
+    bool  m_atuSwrAvailable{true};
+    bool  m_swrEstimated{false};
+    float m_supplyVolts{0.0f};
+    float m_supplyAmps{0.0f};
+    bool  m_operate{false};
+    bool  m_transmitting{false};
+    bool  m_connected{false};
+    bool  m_responding{false};
+
+    // Telemetry arrives at the 10 Hz poll rate — same order as ACOM's ~10 Hz
+    // push, but the same dirty-flag/10 Hz-timer throttle is kept so label
+    // repaints and accessibility NameChanged events stay bounded regardless
+    // of what a future faster poll (or a chatty firmware) delivers.
+    bool m_tempDirty{false};
+    QString m_pendingTempText;
+    bool m_diagDirty{false};
+    bool m_bandDirty{false};
+    QString m_pendingBand;
+    bool m_antDirty{false};
+    QString m_pendingAntText;
+    bool m_inputDirty{false};
+    int m_inputPort{0};       // 0 = not yet reported
+    QString m_levelName;      // empty = not yet reported
+};
+
+}  // namespace AetherSDR

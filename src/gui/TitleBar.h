@@ -1,0 +1,290 @@
+#pragma once
+
+#include "RadioTabBar.h"
+
+#include <QColor>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QList>
+#include <QPointer>
+#include <QString>
+#include <QVariantMap>
+#include <QWidget>
+
+class QPushButton;
+class QShortcut;
+class QAction;
+class QSlider;
+class QLabel;
+class QFrame;
+class QMenu;
+class QMenuBar;
+class QHBoxLayout;
+class QTimer;
+class QWindow;
+class QGraphicsOpacityEffect;
+class QPropertyAnimation;
+
+namespace AetherSDR {
+
+class BrandMark;
+class PersistentDialog;
+class WindowCaptionButtons;
+
+class TitleBar : public QWidget {
+    Q_OBJECT
+
+public:
+    // The fixed height set on `this` in the constructor. Named so
+    // MainWindow can pass it as FramelessResizer's topMoveReserve without
+    // duplicating the literal — the two must stay in lockstep, or the edge-
+    // resize margin either overlaps the title bar (#4886) or leaves a dead
+    // strip below it.
+    static constexpr int kHeight = 52;
+    static constexpr int kUnifiedBarHeight = kHeight;
+
+    explicit TitleBar(QWidget* parent = nullptr);
+
+    // Canvas mode replaces the applet panel with the workspace canvas, so
+    // the panel's dock/hide/pop-out icons hide with it (8600 field
+    // request) — offering controls for a panel that is not part of the
+    // shell invites arrangements the mode cannot honor.
+    void setAppletPanelControlsVisible(bool visible);
+
+    // Take over the window's menu bar.  A native (system) menu bar is left
+    // where the platform puts it; otherwise its menus move into a hamburger
+    // button that leads the bar, ahead of the brand.
+    void setMenuBar(QMenuBar* mb);
+
+    void setPcAudioEnabled(bool on);
+    // Lock PC audio on. A host-modulating backend (HL2) plays and captures all
+    // of its audio locally, so turning PC audio off leaves the operator deaf and
+    // mute with no indication why — there is no radio-side audio path to fall
+    // back to, unlike a Flex.
+    void setPcAudioLocked(bool locked);
+    void setPcAudioDevices(const QString& inputDevice, const QString& outputDevice);
+    void setLineoutMuted(bool muted);
+    void setHeadphoneMuted(bool muted);
+    void setMasterVolume(int pct);
+    void setHeadphoneVolume(int pct);
+    // Unavailable (false) on a radio with no headphone output of its own
+    // (MixerControlAvailability.h): the mute and slider dim, and their tooltip
+    // and accessibleDescription carry the reason and point at the controls
+    // that do drive this computer's output -- the master slider and the
+    // speaker mute (theme-style-guide.md, Three-state controls). Neither
+    // direction touches the slider value or the mute state. True restores the
+    // constructor's wording.
+    void setHeadphoneAvailable(bool available);
+    bool headphoneAvailable() const { return m_headphoneAvailable; }
+    void setOtherClientTx(bool transmitting, const QString& station);
+    // Empty hides the marker. A non-empty family name keeps the experimental
+    // status visible for the whole connected session, independent of whether
+    // the operator dismissed the explanatory notice.
+    void setExperimentalRadioFamily(const QString& familyName);
+    // A newer AetherSDR release, or empty to clear. Non-empty shows the
+    // UPDATE pill after the wordmark; clicking it emits updateBadgeClicked().
+    void setUpdateAvailable(const QString& latestVersion);
+    // An update downloaded and ready to install (empty: none). The pill
+    // then reads RESTART TO UPDATE, whatever setUpdateAvailable() says.
+    void setUpdateStaged(const QString& version);
+
+    // Status-bar transmit timer (left of the PC Audio button). Driven by
+    // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
+    // transmits, never TCI/DAX. Hidden when idle; on unkey it holds the final
+    // elapsed time for 15 s then fades out.
+    void setOperatorTransmitting(bool active);
+    // Introspection for the automation bridge (`txtimer` verb): visible /
+    // running / holding / fading / elapsedMs / text / opacity.
+    QVariantMap txTimerState() const;
+    void setMultiFlexStatus(int clientCount, const QStringList& names);
+    void onHeartbeat();       // Call when a discovery packet arrives
+    void onHeartbeatLost();   // Call when radio lost from discovery
+    // The operator disconnected on purpose: that is not a lost link, so drop
+    // any missed-beat count rather than letting it raise the red alarm on an
+    // idle tab.  An unexpected loss never calls this and keeps its alarm.
+    void clearLinkAlarm();
+    void setDiscovering(bool active); // Solid amber while discovering / not yet connected
+    void setMinimalMode(bool on);
+    bool isMinimalMode() const { return m_minimalMode; }
+    void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
+    // Set the cap's heartbeat tint; empty uses the dot's own colour.
+    // Ignored while the disconnected-alarm blink is running.
+    void setThrottleFlashColor(const QString& hexColor);
+
+    // Reflect applet-panel state on the dock-side icons:
+    //  - visible=false: both icons dim (no active side).
+    //  - visible=true:  the icon matching `left` is highlighted.
+    void setAppletDockState(bool visible, bool left);
+
+    // Highlight the pop-out icon when the applet panel is floating in its
+    // own Qt::Window.
+    void setAppletFloating(bool floating);
+
+    bool isSystemMoveAreaAt(const QPoint& globalPos) const;
+
+    // Windows caption subset: interactive controls and tooltipped handles
+    // stay client so their input and Qt tooltip delivery remain available.
+    bool isCaptionMoveAreaAt(const QPoint& globalPos) const;
+
+    // ── Radio tabs ──────────────────────────────────────────────────────────
+    // The strip of per-radio tabs plus the "+" discovered-radios popover.
+    // MainWindow feeds these from discovery + the active connection.
+    void setRadioTabs(const QList<RadioTabEntry>& radios);
+    void setActiveRadio(const QString& id);
+    void setDiscoveredRadios(const QList<RadioTabEntry>& radios);
+    RadioTabBar* radioTabBar() const { return m_radioTabs; }
+
+    WindowCaptionButtons* captionButtons() const { return m_captionButtons; }
+
+    // Introspection for the automation bridge (`titlebar` model): the whole
+    // bar — geometry, brand, tabs, audio cluster, window controls.
+    QVariantMap barState() const;
+
+signals:
+    void pcAudioToggled(bool on);
+    void masterVolumeChanged(int pct);
+    void headphoneVolumeChanged(int pct);
+    void lineoutMuteChanged(bool muted);
+    void headphoneMuteChanged(bool muted);
+    void minimalModeRequested();
+    void minimalModeWindowedExitRequested();
+    void multiFlexClicked();
+    void updateBadgeClicked();
+    // Emitted when the blink setting changes (e.g. via right-click) so the
+    // View menu checkbox can stay in sync.
+    void blinkEnabledChanged(bool enabled);
+    // Dock-side selectors — applet panel left vs right of the panadapter.
+    void dockAppletLeftRequested();
+    void dockAppletRightRequested();
+    // Toggle applet panel between docked and floating-window mode.
+    void popOutAppletRequested();
+    // A radio tab was activated, or the popover's "Connect manually…" row
+    // was chosen.  MainWindow owns what those mean.
+    void radioTabActivated(const QString& radioId);
+    void connectManuallyRequested();
+
+public:
+    // Open the feature-request dialog.  Wired from Help → Submit your idea…
+    void showFeatureRequestDialog();
+    void setChildDialogsFramelessMode(bool on);
+
+private:
+    void markDragHandle(QWidget* widget);
+    bool isDragHandle(QObject* obj) const;
+    bool startWindowMove(QMouseEvent* ev);
+    bool continueWindowMove(QMouseEvent* ev);
+    bool finishWindowMove(QMouseEvent* ev);
+    // Manual-move state for the xcb fallback (#4827); unused while the
+    // system move owns the drag.
+    bool         m_windowMoveActive{false};
+    bool         m_windowMoveUsesSystem{false};
+    QPoint       m_windowMovePressGlobal;
+    QPoint       m_windowMoveStartPos;
+    void updateChromeLayout();
+    bool m_updatingChromeLayout{false};
+    void handleTitleDoubleClick(QMouseEvent* ev);
+    void showFeatureRequestDialogImpl();
+    void updatePcAudioToolTip();
+    void applyPcAudioStyle();
+    void applyBarStyle();
+    // Bar fill pre-composited over the window background, so the bar can be
+    // WA_OpaquePaintEvent: a tab repaint then stops here instead of also
+    // repainting MainWindow underneath it.
+    QColor       m_barFill;
+    QColor       m_barBorder;
+    QPointer<QWindow> m_chromeWindow;
+    QHBoxLayout* m_hbox{nullptr};
+    QMenuBar*    m_menuBar{nullptr};
+    // Hamburger that carries the menu bar's menus where there is no native
+    // menu bar.  The QMenuBar itself stays as a hidden child: the automation
+    // bridge walks it, and it remains the single place menus are built.
+    QPushButton* m_appMenuBtn{nullptr};
+    QElapsedTimer m_appMenuClosed;   // when the menu last hid; see setMenuBar()
+    QMenu*       m_appMenu{nullptr};
+    // Alt+<letter> for each top-level menu.  The hidden bar's own mnemonics
+    // never match, so these keep the menus reachable from the keyboard.
+    QHash<QAction*, QShortcut*> m_appMenuMnemonics;
+    void addAppMenuMnemonic(QAction* menuAction);
+    void removeAppMenuMnemonic(QAction* menuAction);
+    BrandMark*   m_brand{nullptr};
+    RadioTabBar* m_radioTabs{nullptr};
+    QLabel*      m_experimentalRadioLabel{nullptr};
+    QPushButton* m_updateBadge{nullptr};
+    QString m_stagedVersion;
+    QString      m_updateVersion;
+    void refreshUpdateBadge();
+    QLabel*      m_otherTxLabel{nullptr};
+    QPushButton* m_mfBtn{nullptr};
+    QPushButton* m_pcBtn{nullptr};
+    QPushButton* m_speakerBtn{nullptr};
+    QPushButton* m_headphoneBtn{nullptr};
+    QSlider*     m_masterSlider{nullptr};
+    QSlider*     m_hpSlider{nullptr};
+    QLabel*      m_masterLabel{nullptr};
+    QLabel*      m_hpLabel{nullptr};
+    bool         m_headphoneAvailable{true};
+
+    // Fallback caption controls.  Shown only where Qt has no expanded client
+    // area (Linux/X11/Wayland); on Cocoa and Windows the native controls draw
+    // over the bar and these stay hidden — see WindowChrome::usesNativeCaption.
+    WindowCaptionButtons* m_captionButtons{nullptr};
+    // Index the menu bar is inserted at by setMenuBar() — after the brand mark
+    // rather than at 0, so the brand always leads the bar.
+    int          m_menuBarSlot{0};
+    QLabel*      m_dockLeftLbl{nullptr};
+    QLabel*      m_dockRightLbl{nullptr};
+    QLabel*      m_popOutLbl{nullptr};
+    bool         m_appletPanelVisible{true};
+    bool         m_appletPanelDockedLeft{false};
+    bool         m_appletPanelFloating{false};
+    QPointer<PersistentDialog> m_issueReporterDialog;
+    QFrame*      m_dockSep{nullptr};
+    bool         m_minimalMode{false};
+    // ── Radio-link (discovery heartbeat) state ──────────────────────────────
+    // Rendered by the active radio tab's status dot; there is no separate
+    // heartbeat lamp.  The animation lives in RadioTabBar, the state machine
+    // here.  linkOverrideColor() turns the state into the dot's colour and
+    // pushLinkIndicator() hands it over.
+    QColor       linkOverrideColor() const;
+    void         pushLinkIndicator();
+    // Three consecutive misses is the alarm threshold, unchanged from the
+    // standalone lamp: one missed discovery sweep is routine on a busy LAN.
+    static constexpr int kHeartbeatAlarmThreshold = 3;
+    int          m_missedBeats{0};
+    bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
+    QList<QString> m_connectedRadioIds;
+    bool         m_discovering{false};  // solid amber while waiting for connection
+    QString      m_throttleFlashColor; // empty = glow in the dot's own colour; set while adaptive throttle is active
+    QString      m_pcAudioInputDevice;
+    QString      m_pcAudioOutputDevice;
+
+    // ── Transmit timer ──────────────────────────────────────────────────────
+    void         updateTxTimerText();          // repaint MM:SS / H:MM:SS from elapsed
+    QString      formatTxElapsed(qint64 ms) const;
+    QLabel*      m_txTimerLabel{nullptr};
+    QTimer*      m_txTimerTick{nullptr};        // 5 Hz cadence while running
+    QTimer*      m_txTimerHoldTimer{nullptr};   // 15s post-unkey hold, then fade
+    QGraphicsOpacityEffect* m_txTimerOpacity{nullptr};
+    QPropertyAnimation*     m_txTimerFade{nullptr};
+    QElapsedTimer m_txElapsed;                  // wall-clock since this key-up
+    qint64        m_txFrozenMs{0};              // elapsed frozen at unkey (hold/fade)
+    bool          m_txTimerRunning{false};      // true between key-up and unkey
+
+protected:
+    // Drag-to-move + double-click-to-maximize for frameless main window.
+    // Click hits a child first (menu bar item, button, slider) and only
+    // bubbles to TitleBar when the press lands on bare background.
+    void mousePressEvent(QMouseEvent* ev) override;
+    void mouseMoveEvent(QMouseEvent* ev) override;
+    void mouseReleaseEvent(QMouseEvent* ev) override;
+    void mouseDoubleClickEvent(QMouseEvent* ev) override;
+    bool eventFilter(QObject* obj, QEvent* ev) override;
+    void showEvent(QShowEvent* ev) override;
+    void paintEvent(QPaintEvent* ev) override;
+
+private:
+    void updateMaximizeIcon();
+    QColor currentBeatColor() const;
+};
+
+} // namespace AetherSDR

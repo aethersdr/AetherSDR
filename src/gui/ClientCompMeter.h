@@ -1,0 +1,141 @@
+#pragma once
+
+#include "MeterSmoother.h"
+
+#include <QWidget>
+
+class QKeyEvent;
+class QMouseEvent;
+class QWheelEvent;
+#include <QElapsedTimer>
+#include <QString>
+#include <QTimer>
+
+namespace AetherSDR {
+
+// Vertical peak + peak-hold meter for the compressor editor. setMode():
+//   - Level: fills upward, green→amber→red towards 0 dBFS; range [-60, 0].
+//   - GainReduction: fills DOWN from the top (amber); range [-40, 0].
+// Fill uses HGauge's ballistics (30 ms attack, 180 ms release, 120 Hz poll).
+class ClientCompMeter : public QWidget {
+    Q_OBJECT
+
+public:
+    enum class Mode { Level, GainReduction };
+
+    // Optional scale-tick rendering side. Matches the THRESH fader's
+    // tick layout so paired meters in the compressor editor read as
+    // one consistent vocabulary. None preserves the original compact
+    // bar-only style for places that still use it.
+    enum class TickSide { None, Left, Right };
+
+    explicit ClientCompMeter(QWidget* parent = nullptr);
+
+    void setMode(Mode m);
+    Mode mode() const { return m_mode; }
+
+    // Show dB ticks on the chosen side of the bar (mirrors the THRESH
+    // fader's tick column). Level mode uses 0/-12/-24/-36/-48; GR
+    // uses 0/-10/-20/-30/-40.
+    void setTickSide(TickSide s);
+
+    // Show the current dB value as a bottom-aligned numeric label
+    // (mirrors the "-16.3 dB" footer on the THRESH fader).
+    void setShowValueLabel(bool on);
+
+    // Feed the latest dB value.  Bar fill smoothly animates toward
+    // the new value; peak-hold line still jumps instantly to any
+    // higher reading, then decays after 700 ms.
+    void setValueDb(float db);
+
+    // Optional label shown above the bar (e.g. "GR", "Out").
+    void setLabel(const QString& label);
+
+    // Limiter overlay (Level mode only).  When a ceiling <= 0 dBFS is
+    // supplied, the meter draws a dim red "no-go zone" above the
+    // ceiling, a bright amber horizontal line at the ceiling dB, and a
+    // cyan tick hanging from the line whenever limiterGrDb < 0.  Pass
+    // any value > 0 to disable the overlay.
+    void setLimiterCeilingDb(float db);
+    void setLimiterGrDb(float db);
+
+    // Optional makeup-gain fader on the bar (Level mode only).  The
+    // compressor panel's Out meter doubles as its makeup control: a handle
+    // rides the bar at the current makeup gain, a detent line marks 0 dB,
+    // and makeup ticks run down the LEFT side so they cannot be mistaken
+    // for the level ticks on the right — the two scales measure different
+    // things and must not share a gutter.  Off by default, which leaves
+    // every other user of this widget a plain meter.
+    void setMakeupControlEnabled(bool on);
+    bool makeupControlEnabled() const { return m_makeupControl; }
+    void setMakeupDb(float db);
+    float makeupDb() const { return m_makeupDb; }
+
+    static constexpr float kMakeupMinDb     = -12.0f;
+    static constexpr float kMakeupMaxDb     =  24.0f;
+    static constexpr float kMakeupDefaultDb =   0.0f;
+
+signals:
+    void makeupChanged(float db);
+
+protected:
+    void paintEvent(QPaintEvent* ev) override;
+    void mousePressEvent(QMouseEvent* ev) override;
+    void mouseMoveEvent(QMouseEvent* ev) override;
+    void mouseReleaseEvent(QMouseEvent* ev) override;
+    void mouseDoubleClickEvent(QMouseEvent* ev) override;
+    void wheelEvent(QWheelEvent* ev) override;
+    void keyPressEvent(QKeyEvent* ev) override;
+
+private:
+    // Update m_targetFrac from the current mode + currentDb and start
+    // the animation timer if the bar needs to move.
+    void recomputeTarget();
+
+    // Makeup fader helpers.  commitMakeup() is the one place that clamps,
+    // repaints, announces to assistive tech and emits — every entry point
+    // (drag, wheel, keys, double-click) goes through it so they cannot
+    // drift apart.
+    void  commitMakeup(float db);
+    void  setMakeupFromY(int y);
+    float makeupNorm() const;
+
+    bool  m_makeupControl{false};
+    float m_makeupDb{kMakeupDefaultDb};
+    bool  m_dragging{false};
+    // Bar geometry cached by the last paint, so the hit-test maps a click
+    // against the strip the operator actually sees.
+    int   m_barTop{0};
+    int   m_barH{1};
+
+    Mode m_mode{Mode::Level};
+    QString m_label;
+
+    float m_currentDb{-120.0f};
+    float m_peakDb{-120.0f};
+    QElapsedTimer m_peakHoldTimer;
+
+    // Smoothed fill — shared MeterSmoother ballistics.
+    MeterSmoother m_smooth;
+    QTimer        m_animTimer;
+    QElapsedTimer m_animElapsed;
+
+    // Optional limiter overlay state — Level mode only.
+    float m_ceilingDb{1.0f};      // >0 means "no overlay"
+    float m_limGrDb{0.0f};        // 0 means "no limiting this frame"
+
+    // THRESH-style scale chrome (off by default to preserve existing
+    // usage in other surfaces).
+    TickSide m_tickSide{TickSide::None};
+    bool     m_showValueLabel{false};
+
+    // Cached value-label text + throttle clock so the footer dB
+    // readout only re-formats at the project-canonical 10 Hz
+    // (kMeterReadoutUpdateMs in MeterSmoother.h) instead of the
+    // 125 Hz paint cadence. Keeps the digits readable without
+    // slowing the bar.
+    QString       m_cachedValueText;
+    QElapsedTimer m_valueLabelClock;
+};
+
+} // namespace AetherSDR

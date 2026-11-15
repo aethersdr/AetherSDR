@@ -1,0 +1,189 @@
+#pragma once
+
+#include <QObject>
+#include <QMap>
+#include <QString>
+
+#include "core/backends/TunerDelta.h"
+
+namespace AetherSDR {
+
+class TgxlConnection;
+
+// One RF port as reported by the tuner's direct port-9010 status (the relayed
+// "amplifier" status lacks it; see hasPortInfo()). `live` is the tuner's
+// "modeX" validity flag: 1 always came with a real band/frequency, 0 with
+// zeroes. It does not identify the source; `flexX` is reported on both ports.
+struct TunerPortInfo {
+    bool    live{false};
+    QString source;        // "flexX" — the networked radio's name
+    double  freqKhz{0.0};  // "freqX", kHz; 0 when the tuner reports none
+    bool    ptt{false};    // "pttX"
+
+    bool operator==(const TunerPortInfo& o) const {
+        return live == o.live && source == o.source
+            && qFuzzyCompare(freqKhz + 1.0, o.freqKhz + 1.0) && ptt == o.ptt;
+    }
+    bool operator!=(const TunerPortInfo& o) const { return !(*this == o); }
+};
+
+// State model for a 4O3A Tuner Genius XL relayed via the FlexRadio. Status:
+// "atu <handle> key=val ..." after "sub atu all". Commands:
+//   tgxl set handle=<H> mode=<0|1> / bypass=<0|1>; tgxl autotune handle=<H>
+// A direct connection (port 9010) adds Pi-network relay stepping:
+//   tune relay=<0|1|2> move=<+1|-1>   (C1/L/C2)
+class TunerModel : public QObject {
+    Q_OBJECT
+
+public:
+    explicit TunerModel(QObject* parent = nullptr);
+
+    // Getters
+    QString handle()    const { return m_handle; }
+    QString modelName() const { return m_model; }
+    QString serialNum() const { return m_serialNum; }
+    QString tgxlIp()    const { return m_tgxlIp; }
+    QString alert()     const { return m_alert; }     // tuner alert, empty when none
+    // Per-port readings straight from the tuner. Only populated while the
+    // direct connection is up; hasPortInfo() says whether to trust them.
+    const TunerPortInfo& portA() const { return m_portA; }
+    const TunerPortInfo& portB() const { return m_portB; }
+    bool hasPortInfo()  const { return m_havePortInfo; }
+    // Radio antenna each port is wired to ("ANT1"/"ANT2"), from the relayed
+    // status. Empty until the radio reports it.
+    QString portAAnt()  const { return m_portAAnt; }
+    QString portBAnt()  const { return m_portBAnt; }
+    bool    pttA()      const { return m_pttA; }      // port A keyed
+    bool    pttB()      const { return m_pttB; }      // port B keyed
+    bool    isOperate() const { return m_operate; }
+    bool    isBypass()  const { return m_bypass; }
+    bool    isTuning()  const { return m_tuning; }
+    int     relayC1()   const { return m_relayC1; }
+    int     relayL()    const { return m_relayL; }
+    int     relayC2()   const { return m_relayC2; }
+    int     antennaA()  const { return m_antennaA; }  // 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3, -1=unknown
+    float   fwdPower()  const { return m_fwdPower; }  // forward power in watts (from direct TGXL status)
+    float   swr()       const { return m_swr; }       // SWR ratio (from direct TGXL status)
+    bool    hasAntennaSwitch() const;
+    bool    isPresent() const { return !m_handle.isEmpty() || m_directPresence; }
+    bool    hasDirectConnection() const;
+
+    // Apply a normalized tuner delta decoded by the backend
+    // (IRadioBackend::tunerChanged). Change-gated; emits tuningChanged /
+    // antennaAChanged on their edges and stateChanged once if anything moved.
+    void applyChanges(const TunerDelta& delta);
+
+    // Set the tuner handle (extracted from the status object name).
+    void setHandle(const QString& handle);
+
+    // Direct TGXL connection for manual relay control (#469)
+    void setDirectConnection(TgxlConnection* conn);
+
+    // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; direction +1 or -1
+    void adjustRelay(int relay, int direction);
+
+private:
+    // `tuning` off the direct connection. Both direct frames carry it, and it
+    // gates abortTune() — which on this transport keys the transmitter — so
+    // it has to come from the device rather than only from the radio relaying
+    // for it.
+    void applyDirectTuning(const QMap<QString, QString>& kvs);
+    // Forgets a tune we can no longer see the end of. Clearing to false is
+    // the safe direction: abortTune() goes inert rather than commanding a
+    // tuner whose state we are guessing at.
+    void clearTuning();
+
+public:
+
+    // Command methods — emit neutral intents (operate/bypass/autotune) that
+    // RadioModel translates to the Flex TGXL relay via invokeExtension. The
+    // direct port-9010 fast-path (autoTune when a direct conn is up, and the
+    // antenna/relay methods below) stays local and does not go through the seam.
+    void setOperate(bool on);
+    void setBypass(bool on);
+    // One operator action that needs BOTH verbs (STBY, BYP, the rail cycle),
+    // commanded in the order given. On a tuner no radio relays for, it is ONE
+    // refusal, not two: relayedCommandRefused fires once, naming the first
+    // verb, and nothing is sent.
+    void setOperateAndBypass(bool operate, bool bypass, bool operateFirst);
+    void autoTune();
+    // Break a tune already in progress — the same `autotune` the start uses,
+    // which the firmware treats as a toggle. No-op when not tuning.
+    void abortTune();
+
+    // Antenna switch (TGXL 3x1): ant = 1, 2, or 3 (1-indexed for command)
+    void setAntennaA(int ant);
+
+signals:
+    void stateChanged();               // any property changed
+    void tuningChanged(bool tuning);   // tuning started/stopped
+    void antennaAChanged(int antA);    // antenna port changed (0-indexed)
+    // fwd power / SWR / peak power from a direct TGXL connection.
+    //
+    // fwdPeak is the device's own peak, not ours. The TGXL is poll-response
+    // only and `fwd` is an instantaneous sample, so on SSB most polls land
+    // between syllables at the noise floor -- measured on a live voice
+    // transmission, roughly three samples in four read 0.14 W while the
+    // envelope was hitting 82 W. A peak taken from those samples is a peak of
+    // the silences. `peak` is computed on the device's own timebase, where
+    // the envelope is actually visible.
+    void metersChanged(float fwdPower, float swr, float fwdPeak);
+    // Alert text from the tuner; empty means cleared. See TgxlConnection.
+    void alertChanged(const QString& text);
+    // Either port's reported source/frequency/keying moved.
+    void portsChanged();
+    void pttChanged(bool pttA, bool pttB);  // either port's PTT line moved
+    void presenceChanged(bool present); // tuner detected / lost
+    void directConnectionChanged(bool connected);
+    // Custom antenna names from the TGXL 3-way model (v1.2.41+).
+    void antennaNamesChanged(const QString& name1, const QString& name2, const QString& name3);
+    // Neutral relay intents. RadioModel translates each to the Flex TGXL wire
+    // ("tgxl set handle=<h> mode=/bypass=", "tgxl autotune handle=<h>") via
+    // IRadioBackend::invokeExtension. autotuneRequested also carries the TX
+    // interlock gate in RadioModel (was a commandReady string-sniff).
+    void operateRequested(bool on);
+    void bypassRequested(bool on);
+    void autotuneRequested();
+    // Emitted when an autotune goes out over the direct port-9010 channel, which
+    // bypasses autotuneRequested. The TGXL then keys the radio over its interlock
+    // line, so RadioModel arms its tune-carrier window from this edge.
+    void directAutotuneStarted();
+    // OPERATE / STANDBY / BYPASS were asked of a tuner this client reaches
+    // ONLY over its direct port-9010 link. Those three are relayed by a Flex
+    // radio (the handle above), and the direct link carries no equivalent that
+    // this client speaks, so nothing was sent. Emitted instead of the silent
+    // debug-line return so the UI can say so; `command` is "operate" or
+    // "bypass". Not emitted with no tuner at all -- that is not a refusal of
+    // anything the operator can see.
+    void relayedCommandRefused(const QString& command);
+
+private:
+    QString m_handle;
+    QString m_model;
+    QString m_serialNum;
+    QString m_tgxlIp;
+    QString m_alert;
+    QString m_portAAnt;
+    QString m_portBAnt;
+    TunerPortInfo m_portA;
+    TunerPortInfo m_portB;
+    bool          m_havePortInfo{false};
+    bool    m_pttA{false};
+    bool    m_pttB{false};
+    bool    m_operate{false};
+    bool    m_bypass{false};
+    bool    m_tuning{false};
+    int     m_relayC1{0};
+    int     m_relayL{0};
+    int     m_relayC2{0};
+    int     m_antennaA{-1};   // 0-indexed antenna port (-1 = unknown)
+    float   m_fwdPower{0.0f};  // forward power in watts (from direct TGXL status)
+    float   m_fwdPeak{0.0f};   // device-side peak power in watts (TGXL `peak`)
+    float   m_swr{1.0f};      // SWR ratio (from direct TGXL status)
+    bool    m_oneByThree{false}; // true for TGXL 3x1 model (from one_by_three=1)
+
+    TgxlConnection* m_directConn{nullptr};
+    bool            m_directPresence{false};
+};
+
+} // namespace AetherSDR

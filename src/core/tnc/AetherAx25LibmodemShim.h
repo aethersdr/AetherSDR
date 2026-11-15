@@ -1,0 +1,191 @@
+#pragma once
+
+#include "Ax25DecodedFrame.h"
+#include "core/tnc/Ax25LinkTiming.h"
+
+#include <QByteArray>
+#include <QObject>
+#include <QString>
+#include <QStringList>
+#include <QVector>
+
+#include <memory>
+
+namespace AetherSDR {
+
+enum class Ax25TonePolarity {
+    Normal,
+    Inverted,
+};
+
+// VHF 1200 baud demodulator mode.
+enum class VhfMode {
+    Off,    // VHF demodulation disabled
+    A,      // IQ-mix · 1 slicer
+    APlus,  // IQ-mix · 9 slicers (Direwolf default)
+};
+
+struct Ax25DemodConfig {
+    Ax25ModemProfile profile{Ax25ModemProfile::Hf300};
+    int sampleRate{24000};
+    int baud{300};
+    double markHz{1600.0};
+    double spaceHz{1800.0};
+    Ax25TonePolarity polarity{Ax25TonePolarity::Normal};
+    VhfMode vhfMode{VhfMode::APlus}; // VHF 1200 only; default A+ (Direwolf default)
+    // TXDELAY override in HDLC flags; 0 = use the profile default. On HF 300 the
+    // default 80 flags is 2.13 s — 42% of a data frame and 65% of an
+    // acknowledgement — so it is the largest single term in the airtime budget
+    // and the one worth sweeping on air. Both the modulator and the link-timing
+    // model read it through effectiveTxPreambleFlags(), so T1 tracks it
+    // automatically. See docs/HFMODEM.md §6, item 11.
+    int txPreambleFlags{0};
+};
+
+struct Ax25DecoderDiagnostics {
+    int sampleRate{0};
+    int audioSamples{0};
+    double rmsDbfs{-120.0};
+    double peakDbfs{-120.0};
+    double clippedPercent{0.0};
+    double markToneHz{0.0};
+    double spaceToneHz{0.0};
+    double markToneDbfs{-120.0};
+    double spaceToneDbfs{-120.0};
+    double markMinusSpaceDb{0.0};
+    double receiveGateRmsDbfs{-120.0};
+    double receiveGateFloorDbfs{-120.0};
+    bool receiveGateOpen{false};
+    quint64 receiveGateResets{0};
+    int decodeLanes{1};
+    int demodSymbols{0};
+    double averageConfidence{0.0};
+    double onesPercent{0.0};
+    bool searching{true};
+    bool inPreamble{false};
+    bool inFrame{false};
+    bool aborted{false};
+    int currentFrameBits{0};
+    int lastFrameBits{0};
+    int preambleFlags{0};
+    quint64 hdlcFrameStarts{0};
+    quint64 hdlcFrameCandidates{0};
+    quint64 plausibleAx25Candidates{0};
+    quint64 framesAccepted{0};
+    quint64 decodeRejected{0};
+    quint64 rejectTooShort{0};
+    quint64 rejectBadFcs{0};
+    quint64 rejectMalformed{0};
+    QString lastRejectReason;
+    QString lastRejectPreviewHex;
+    QString lastRejectActualFcs;
+    QString lastRejectExpectedFcs;
+    int lastRejectFrameBits{0};
+    int lastRejectFrameBytes{0};
+};
+
+struct Ax25TransmitFrame {
+    QString source;
+    QString destination;
+    QStringList path;
+    quint8 control{0x03};
+    quint8 pid{0xf0};
+    QByteArray payload;
+    QString payloadText;
+    QString payloadHex;
+};
+
+struct Ax25TransmitResult {
+    bool ok{false};
+    QString error;
+    Ax25TransmitFrame frame;
+    QByteArray stereoFloat32Pcm;
+    int sampleRate{0};
+    int baud{0};
+    double markHz{0.0};
+    double spaceHz{0.0};
+    Ax25TonePolarity polarity{Ax25TonePolarity::Normal};
+    int preambleFlags{0};
+    int postambleFlags{0};
+    int frameBytes{0};
+    int bitCount{0};
+    int audioFrames{0};
+    int vitaPacketFrames{0};
+    double durationSeconds{0.0};
+    double rmsDbfs{-120.0};
+    double peakDbfs{-120.0};
+};
+
+Ax25DemodConfig ax25DemodConfigForProfile(
+    Ax25ModemProfile profile,
+    Ax25TonePolarity polarity = Ax25TonePolarity::Normal,
+    VhfMode vhfMode = VhfMode::APlus);
+QString ax25ModemProfileName(Ax25ModemProfile profile);
+int ax25DemodLaneCount(const Ax25DemodConfig& cfg);
+QString ax25DemodDescription(const Ax25DemodConfig& cfg);
+// Number of leading/trailing HDLC flags this modulator actually transmits for
+// the given profile. Exposed so the link layer's airtime model reads the same
+// framing that goes on the air rather than a copy of it.
+int ax25TxPreambleFlags(Ax25ModemProfile profile);
+int ax25TxPostambleFlags();
+// The preamble this config will actually transmit: the operator's override when
+// set, otherwise the profile default. Single source of truth for the modulator
+// and the airtime model alike.
+int ax25EffectiveTxPreambleFlags(const Ax25DemodConfig& cfg);
+// The link-timing profile implied by this modem configuration. `localTxOverheadMs`
+// is the caller's own keying overhead (PTT lead + backend settle + TX tail) —
+// dead air paid on every transmission, so it belongs in the round-trip budget.
+ax25::LinkTimingProfile ax25LinkTimingForConfig(const Ax25DemodConfig& cfg,
+                                                int localTxOverheadMs);
+Ax25TransmitResult ax25BuildTransmitAudio(const Ax25DemodConfig& cfg,
+                                          const QString& text,
+                                          const QString& defaultSource,
+                                          const QString& defaultDestination = QStringLiteral("APRS"));
+Ax25TransmitResult ax25BuildTransmitAudioFromFrame(const Ax25DemodConfig& cfg,
+                                                   const QByteArray& ax25NoFcs);
+
+class AetherAx25LibmodemShim : public QObject {
+    Q_OBJECT
+
+public:
+    explicit AetherAx25LibmodemShim(QObject* parent = nullptr);
+    ~AetherAx25LibmodemShim() override;
+
+    Ax25DemodConfig config() const;
+    void configure(const Ax25DemodConfig& config);
+    void reset();
+    void setDiagnosticsLoggingEnabled(bool enabled);
+    bool diagnosticsLoggingEnabled() const;
+
+    QVector<Ax25DecodedFrame> processMonoFloat(const float* samples,
+                                               int sampleCount,
+                                               int sampleRate);
+    QVector<Ax25DecodedFrame> processRecoveredBitsForTest(const QVector<quint8>& bits,
+                                                          double quality = 1.0);
+    Ax25TransmitResult buildTransmitAudio(const QString& text,
+                                          const QString& defaultSource,
+                                          const QString& defaultDestination = QStringLiteral("APRS")) const;
+    // Build TX audio from a raw AX.25 frame (address..info, no FCS), e.g. the
+    // payload of a KISS data frame from a host application. The FCS is computed
+    // and appended here before HDLC framing and AFSK modulation.
+    Ax25TransmitResult buildTransmitAudioFromFrame(const QByteArray& ax25NoFcs) const;
+
+    Ax25DecoderDiagnostics diagnosticsSnapshot() const;
+    QString demodDescription() const;
+
+public slots:
+    void feedAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
+
+signals:
+    void frameDecoded(const AetherSDR::Ax25DecodedFrame& frame);
+    void diagnosticsUpdated(const AetherSDR::Ax25DecoderDiagnostics& diagnostics);
+    void statusChanged();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
+};
+
+} // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::Ax25DecoderDiagnostics)

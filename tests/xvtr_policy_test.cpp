@@ -1,0 +1,432 @@
+// Standalone regression tests for XVTR band-stack keys and waterfall IF/RF
+// mapping. Build target: xvtr_policy_test.
+
+#include "models/XvtrPolicy.h"
+
+#include <QtGlobal>
+
+#include <cmath>
+#include <cstdio>
+#include <string>
+
+using namespace AetherSDR;
+
+namespace {
+
+int g_failed = 0;
+
+void report(const char* name, bool ok, const std::string& detail = {})
+{
+    std::printf("%s %-72s %s\n",
+                ok ? "[ OK ]" : "[FAIL]",
+                name,
+                detail.c_str());
+    if (!ok) ++g_failed;
+}
+
+bool near(double a, double b, double eps = 1e-9)
+{
+    return std::abs(a - b) <= eps;
+}
+
+XvtrPolicy::Transverter xvtr(int index, int order, const char* name,
+                             double rfMhz, double ifMhz, bool valid = true)
+{
+    return {index, order, QString::fromLatin1(name), rfMhz, ifMhz, valid};
+}
+
+std::string detailFor(const XvtrPolicy::WaterfallTileRange& range)
+{
+    return "low=" + std::to_string(range.lowMhz)
+        + " high=" + std::to_string(range.highMhz)
+        + " shifted=" + std::to_string(range.shifted);
+}
+
+void expectBandKey(const char* label, const QString& bandName,
+                   const QVector<XvtrPolicy::Transverter>& xvtrs,
+                   const QString& expectedKey,
+                   ModelCapabilities caps = {})
+{
+    const auto result = XvtrPolicy::resolveBandStackKey(bandName, xvtrs, caps);
+    report(label,
+           result.isSupported() && result.key == expectedKey,
+           QStringLiteral("key=%1 reason=%2")
+               .arg(result.key, result.unsupportedReason)
+               .toStdString());
+}
+
+void expectUnsupportedBand(const char* label, const QString& bandName,
+                           const QVector<XvtrPolicy::Transverter>& xvtrs,
+                           const QString& expectedReasonFragment)
+{
+    const auto result = XvtrPolicy::resolveBandStackKey(bandName, xvtrs);
+    report(label,
+           !result.isSupported() &&
+               result.unsupportedReason.contains(expectedReasonFragment),
+           QStringLiteral("key=%1 reason=%2")
+               .arg(result.key, result.unsupportedReason)
+               .toStdString());
+}
+
+void expectBandTuneAdmitted(const char* label, const XvtrPolicy::BandTuneAdmissibility& a,
+                            const QString& expectedKey)
+{
+    report(label,
+           a.supported && a.bandStackKey == expectedKey && a.reason.isEmpty(),
+           QStringLiteral("supported=%1 key=%2 reason=%3")
+               .arg(a.supported)
+               .arg(a.bandStackKey, a.reason)
+               .toStdString());
+}
+
+void expectBandTuneRefused(const char* label, const XvtrPolicy::BandTuneAdmissibility& a,
+                           const QString& expectedReasonFragment)
+{
+    report(label,
+           !a.supported && a.bandStackKey.isEmpty()
+               && a.reason.contains(expectedReasonFragment),
+           QStringLiteral("supported=%1 key=%2 reason=%3")
+               .arg(a.supported)
+               .arg(a.bandStackKey, a.reason)
+               .toStdString());
+}
+
+// Refused BY RANGE, which is a different answer from "no band-stack mapping"
+// and has to stay distinguishable: it is the flag the GUI switches on to word
+// the refusal, and the range it carries goes into that sentence. Asserting the
+// typed fields rather than the log prose is deliberate — the prose is free to
+// be reworded, the contract is not.
+void expectRefusedByRange(const char* label, const XvtrPolicy::BandTuneAdmissibility& a,
+                          double expectedMinMhz, double expectedMaxMhz)
+{
+    report(label,
+           !a.supported && a.bandStackKey.isEmpty() && a.outsideTuningRange
+               && qFuzzyCompare(a.rangeMinMhz, expectedMinMhz)
+               && qFuzzyCompare(a.rangeMaxMhz, expectedMaxMhz),
+           QStringLiteral("supported=%1 byRange=%2 min=%3 max=%4")
+               .arg(a.supported)
+               .arg(a.outsideTuningRange)
+               .arg(a.rangeMinMhz)
+               .arg(a.rangeMaxMhz)
+               .toStdString());
+}
+
+void expectRange(const char* label, const XvtrPolicy::WaterfallTileRange& range,
+                 double expectedLow, double expectedHigh, bool expectedShifted)
+{
+    report(label,
+           near(range.lowMhz, expectedLow) &&
+               near(range.highMhz, expectedHigh) &&
+               range.shifted == expectedShifted,
+           detailFor(range));
+}
+
+void expectMaxPowerRange(const char* label, double ifMhz, const QString& radioModel,
+                         double expectedMin, double expectedMax)
+{
+    const XvtrPolicy::MaxPowerRange range =
+        XvtrPolicy::maxPowerRangeFor(ifMhz, radioModel);
+    report(label,
+           near(range.minimumDbm, expectedMin) && near(range.maximumDbm, expectedMax),
+           QStringLiteral("min=%1 max=%2")
+               .arg(range.minimumDbm)
+               .arg(range.maximumDbm)
+               .toStdString());
+}
+
+void expectClampedMaxPower(const char* label, double requestedDbm, double ifMhz,
+                           const QString& radioModel, double expectedDbm)
+{
+    const double clamped =
+        XvtrPolicy::clampMaxPowerDbm(requestedDbm, ifMhz, radioModel);
+    report(label,
+           near(clamped, expectedDbm),
+           QStringLiteral("clamped=%1").arg(clamped).toStdString());
+}
+
+void testBandStackKeysUseFlexIndex()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(12, 3, "2m",    144.0, 28.0),
+        xvtr(4,  7, "70cm",  432.0, 28.0),
+        xvtr(1,  9, "1.2G", 1296.0, 28.0),
+    };
+
+    expectBandKey("native HF strips UI suffix", "20m", xvtrs, "20");
+    expectBandKey("native utility slot WWV", "WWV", xvtrs, "33");
+    expectBandKey("native utility slot GEN", "GEN", xvtrs, "34");
+    expectBandKey("XVTR 2m uses status index, not setup order", "2m", xvtrs, "X12");
+    expectBandKey("XVTR 70cm uses status index, not RF frequency", "70cm", xvtrs, "X4");
+    expectBandKey("XVTR 1.2G uses status index", "1.2G", xvtrs, "X1");
+}
+
+void testBandStackKeysRefuseGuesses()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(2, -1, "2m", 144.0, 28.0),
+        xvtr(3,  5, "70cm", 432.0, 28.0, false),
+    };
+
+    // order=-1 is irrelevant now — index is always valid; key is X2
+    expectBandKey("XVTR with no order field uses index",
+                  "2m", xvtrs, "X2");
+    expectUnsupportedBand("invalid XVTR entry is ignored",
+                          "70cm", xvtrs, "has no Flex display pan band= mapping");
+    expectUnsupportedBand("unknown band does not use freq/mode fallback",
+                          "1.2G", xvtrs, "has no Flex display pan band= mapping");
+}
+
+void testBandStackKeysUseNativeVhfOnlyWhenCapable()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(12, 3, "2m", 144.0, 28.0),
+    };
+
+    expectBandKey("FLEX-6700 native 2m strips UI suffix",
+                  "2m", {}, "2", {.has2Meters = true});
+    expectBandKey("FLEX-6500/6700 native 4m strips UI suffix",
+                  "4m", {}, "4", {.has4Meters = true});
+    expectBandKey("native 2m wins over same-named XVTR on capable radio",
+                  "2m", xvtrs, "2", {.has2Meters = true});
+    expectBandKey("without 2m capability, same-named XVTR still resolves",
+                  "2m", xvtrs, "X12");
+}
+
+// #3930 — the tuneToNet() pre-check refuses a net tune when the target band
+// resolves unsupported. Pin the decision core it relies on, using the band
+// names BandSettings::bandForFrequency() actually produces (432.1 MHz → "440",
+// 144.2 MHz → "2m", 7.2 MHz → "40m" per BandDefs.h).
+void testNetTunePrecheckBandSupport()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(4, 7, "440", 432.0, 28.0),
+    };
+
+    // The repro: 432.1 MHz net, no XVTR configured, no native 70 cm on any
+    // model — must resolve unsupported with a non-empty reason.
+    expectUnsupportedBand("net tune 440 with no XVTR is unsupported",
+                          "440", {}, "has no Flex display pan band= mapping");
+
+    // Same band with a covering XVTR entry — must tune, not refuse.
+    expectBandKey("net tune 440 with covering XVTR resolves",
+                  "440", xvtrs, "X4");
+
+    // FLEX-6700 does 2 m natively (has2Meters) — the pre-check must not
+    // over-block a band the model covers without any XVTR.
+    expectBandKey("net tune 2m on 6700-class radio is native",
+                  "2m", {}, "2", {.has2Meters = true});
+
+    // Plain HF control.
+    expectBandKey("net tune 40m HF is always native", "40m", {}, "40");
+}
+
+// #5041: the tune gate reads the connected backend's declared tuning range, not
+// FlexLib's native-band table, so an IC-705 reaches 2 m and 70 cm natively.
+void testBandTuneAdmissibilityFollowsBackendNotBandTable()
+{
+    // IC-705 row: 30 kHz – 470 MHz, no Flex command plane.
+    constexpr double kIc705MinHz = 30'000.0;
+    constexpr double kIc705MaxHz = 470'000'000.0;
+
+    expectBandTuneAdmitted("Icom 70cm typed tune needs no XVTR",
+                           XvtrPolicy::evaluateBandTune(false, "440", 442.075,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+    expectBandTuneAdmitted("Icom 2m typed tune needs no XVTR",
+                           XvtrPolicy::evaluateBandTune(false, "2m", 144.200,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+    expectBandTuneAdmitted("Icom HF typed tune still admitted",
+                           XvtrPolicy::evaluateBandTune(false, "20m", 14.074,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+
+    // Outside the declared range the refusal stays honest — and says range, not
+    // XVTR, because a transverter would not help this backend. BOTH edges: the
+    // upper one is what 70 cm would have hit on an HF-only Icom, the lower one
+    // is the 30 kHz floor, and a comparison written with one `if` too few
+    // passes the first while admitting everything below the second.
+    expectRefusedByRange("Icom above declared range is refused by range",
+                         XvtrPolicy::evaluateBandTune(false, "900", 902.100,
+                                                      kIc705MinHz, kIc705MaxHz, {}),
+                         0.030, 470.000);
+    expectRefusedByRange("Icom below declared range is refused by range too",
+                         XvtrPolicy::evaluateBandTune(false, "2200m", 0.010,
+                                                      kIc705MinHz, kIc705MaxHz, {}),
+                         0.030, 470.000);
+    // And the boundaries themselves are INSIDE — an inclusive range, or the
+    // radio loses its own first and last tunable hertz.
+    expectBandTuneAdmitted("the low edge itself is admitted",
+                           XvtrPolicy::evaluateBandTune(false, "2200m", 0.030,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+    expectBandTuneAdmitted("and so is the high edge",
+                           XvtrPolicy::evaluateBandTune(false, "900", 470.000,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+
+    // A backend that declares no range keeps the previous permissive behaviour.
+    expectBandTuneAdmitted("backend with no declared range is not gated",
+                           XvtrPolicy::evaluateBandTune(false, "440", 442.075, 0.0, 0.0, {}),
+                           QString());
+
+    // Flex is untouched: same band, same frequency, still needs the XVTR.
+    expectBandTuneRefused("Flex 70cm without XVTR still requires one",
+                          XvtrPolicy::evaluateBandTune(true, "440", 442.075,
+                                                       0.0, 0.0, {}),
+                          "requires a configured XVTR");
+    expectBandTuneAdmitted("Flex 70cm with covering XVTR resolves its stack key",
+                           XvtrPolicy::evaluateBandTune(true, "440", 442.075, 0.0, 0.0,
+                                                        {xvtr(4, 7, "440", 432.0, 28.0)}),
+                           QStringLiteral("X4"));
+    expectBandTuneAdmitted("Flex HF resolves the native band-stack key",
+                           XvtrPolicy::evaluateBandTune(true, "40m", 7.150, 0.0, 0.0, {}),
+                           QStringLiteral("40"));
+}
+
+void testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(12, 3, "2m", 144.0, 28.0),
+    };
+
+    const auto boundary = XvtrPolicy::mapWaterfallTileRange(
+        16.150, 16.650, 16.900, xvtrs, false);
+    expectRange("HF tile at one 500 kHz span is unchanged",
+                boundary, 16.150, 16.650, false);
+
+    const auto beyond = XvtrPolicy::mapWaterfallTileRange(
+        16.150, 16.650, 16.901, xvtrs, false);
+    expectRange("HF tile beyond one 500 kHz span is still unchanged",
+                beyond, 16.150, 16.650, false);
+}
+
+void testXvtrWaterfallMapsIfToRfBands()
+{
+    {
+        const QVector<XvtrPolicy::Transverter> xvtrs = {
+            xvtr(12, 3, "2m", 144.0, 28.0),
+        };
+        const auto match = XvtrPolicy::matchWaterfallTileTransverterOffset(
+            28.125, 28.625, 144.375, xvtrs);
+        report("2m XVTR offset match reports diagnostic details",
+               match.matched &&
+                   match.index == 12 &&
+                   match.order == 3 &&
+                   match.name == "2m" &&
+                   near(match.observedOffsetMhz, 116.0) &&
+                   near(match.expectedOffsetMhz, 116.0) &&
+                   near(match.toleranceMhz, 0.5),
+               QStringLiteral("matched=%1 idx=%2 order=%3 observed=%4 expected=%5 tolerance=%6")
+                   .arg(match.matched)
+                   .arg(match.index)
+                   .arg(match.order)
+                   .arg(match.observedOffsetMhz)
+                   .arg(match.expectedOffsetMhz)
+                   .arg(match.toleranceMhz)
+                   .toStdString());
+
+        const auto mapped = XvtrPolicy::mapWaterfallTileRange(
+            28.125, 28.625, 144.375, xvtrs, false);
+        expectRange("2m XVTR maps IF waterfall range into RF range",
+                    mapped, 144.125, 144.625, true);
+        report("2m XVTR mapped range stays inside 144-148 MHz",
+               mapped.lowMhz >= 144.0 && mapped.highMhz <= 148.0,
+               detailFor(mapped));
+    }
+
+    {
+        const QVector<XvtrPolicy::Transverter> xvtrs = {
+            xvtr(4, 7, "70cm", 432.0, 28.0),
+        };
+        const auto mapped = XvtrPolicy::mapWaterfallTileRange(
+            28.200, 28.700, 432.450, xvtrs, false);
+        expectRange("70cm XVTR maps IF waterfall range into RF range",
+                    mapped, 432.200, 432.700, true);
+        report("70cm XVTR mapped range stays inside 420-450 MHz",
+               mapped.lowMhz >= 420.0 && mapped.highMhz <= 450.0,
+               detailFor(mapped));
+    }
+
+    {
+        const QVector<XvtrPolicy::Transverter> xvtrs = {
+            xvtr(1, 9, "1.2G", 1296.0, 28.0),
+        };
+        const auto mapped = XvtrPolicy::mapWaterfallTileRange(
+            28.050, 28.550, 1296.300, xvtrs, false);
+        expectRange("1.2 GHz XVTR maps IF waterfall range into RF range",
+                    mapped, 1296.050, 1296.550, true);
+        report("1.2 GHz XVTR mapped range stays inside 1240-1300 MHz",
+               mapped.lowMhz >= 1240.0 && mapped.highMhz <= 1300.0,
+               detailFor(mapped));
+    }
+}
+
+void testXvtrWaterfallGuardrails()
+{
+    const QVector<XvtrPolicy::Transverter> invalidXvtr = {
+        xvtr(12, 3, "2m", 144.0, 28.0, false),
+    };
+
+    const auto invalid = XvtrPolicy::mapWaterfallTileRange(
+        28.125, 28.625, 144.375, invalidXvtr, false);
+    expectRange("invalid XVTR does not trigger IF/RF waterfall shift",
+                invalid, 28.125, 28.625, false);
+
+    const QVector<XvtrPolicy::Transverter> missingIfXvtr = {
+        xvtr(12, 3, "2m", 144.0, 0.0, false),
+    };
+
+    const auto missingIf = XvtrPolicy::mapWaterfallTileRange(
+        28.125, 28.625, 144.375, missingIfXvtr, false);
+    expectRange("XVTR without IF frequency does not shift waterfall range",
+                missingIf, 28.125, 28.625, false);
+
+    const auto antennaFallback = XvtrPolicy::mapWaterfallTileRange(
+        28.125, 28.625, 144.375, {}, true);
+    expectRange("XVT slice antenna can authorize IF/RF waterfall shift",
+                antennaFallback, 144.125, 144.625, true);
+
+    const auto inRange = XvtrPolicy::mapWaterfallTileRange(
+        144.125, 144.625, 144.375, {}, true);
+    expectRange("XVT slice antenna does not shift already-in-range rows",
+                inRange, 144.125, 144.625, false);
+}
+
+void testMaxPowerClampMirrorsFlexLib()
+{
+    expectMaxPowerRange("6400 low IF caps max power at +10 dBm",
+                        28.0, QStringLiteral("FLEX-6400"), -10.0, 10.0);
+    expectMaxPowerRange("6600M low IF caps max power at +10 dBm",
+                        28.0, QStringLiteral("FLEX-6600M"), -10.0, 10.0);
+    expectMaxPowerRange("8600 low IF caps max power at +15 dBm",
+                        28.0, QStringLiteral("FLEX-8600"), -10.0, 15.0);
+    expectMaxPowerRange("high IF caps max power at +8 dBm",
+                        80.0, QStringLiteral("FLEX-8600"), -10.0, 8.0);
+
+    expectClampedMaxPower("max power clamps legacy low IF ceiling",
+                          100.0, 28.0, QStringLiteral("FLEX-6400"), 10.0);
+    expectClampedMaxPower("max power clamps default low IF ceiling",
+                          100.0, 28.0, QStringLiteral("FLEX-8600"), 15.0);
+    expectClampedMaxPower("max power clamps high IF ceiling",
+                          100.0, 80.0, QStringLiteral("FLEX-8600"), 8.0);
+    expectClampedMaxPower("max power clamps shared floor",
+                          -99.0, 28.0, QStringLiteral("FLEX-8600"), -10.0);
+}
+
+} // namespace
+
+int main()
+{
+    testBandStackKeysUseFlexIndex();
+    testBandStackKeysRefuseGuesses();
+    testBandStackKeysUseNativeVhfOnlyWhenCapable();
+    testNetTunePrecheckBandSupport();
+    testBandTuneAdmissibilityFollowsBackendNotBandTable();
+    testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan();
+    testXvtrWaterfallMapsIfToRfBands();
+    testXvtrWaterfallGuardrails();
+    testMaxPowerClampMirrorsFlexLib();
+
+    return g_failed == 0 ? 0 : 1;
+}

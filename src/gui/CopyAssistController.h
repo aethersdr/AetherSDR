@@ -1,0 +1,224 @@
+#pragma once
+
+#include "asr/AsrCrashMarker.h"
+
+#include <QObject>
+#include <QPointer>
+#include <QString>
+
+#include <vector>
+
+namespace AetherSDR {
+
+class AudioEngine;
+class RadioModel;
+class SliceModel;
+class DecoderAudioModel;
+class ControlAvailabilityRegistry;
+class CopyAssistPanel;
+class CopyAssistSettingsDialog;
+class PersistentDialog;
+class AsrEngine;
+class AsrModelManager;
+class AsrAudioTap;
+struct AsrGpuDevice;
+struct AsrModelTier;
+
+// Which IAsrBackend the engine is currently built around. Selects the factory in
+// buildEngine(); a local model's source (downloaded tier vs. user-supplied
+// "custom" file) is an orthogonal axis keyed off the tier id. Extending to a new
+// local engine family is a drop-in: add an enumerator, a buildEngine() case, and
+// a mapping in backendForTier(). See AsrModelFamily.
+enum class AsrBackendKind {
+    Whisper,    // local whisper.cpp (a catalog tier or a user "custom" file)
+    Remote,     // RemoteAsrBackend over HTTP
+    SherpaOnnx, // sherpa-onnx offline model (a user-picked model directory)
+};
+
+// Per-engine state for a queued speaker-embedder load. Download/verification
+// intent belongs to the controller; this state is discarded when its AsrEngine
+// is replaced so a late completion can never leave the next engine muted.
+class SpeakerLoadLifecycle {
+public:
+    void resetForEngineReplacement()
+    {
+        m_loadingPath.clear();
+        m_loadedPath.clear();
+        m_pending = false;
+    }
+
+    void begin(const QString& path)
+    {
+        m_loadingPath = path;
+        m_pending = true;
+    }
+
+    bool complete(const QString& path, bool loaded)
+    {
+        if (!m_pending || path != m_loadingPath) {
+            return false;
+        }
+        m_pending = false;
+        if (loaded) {
+            m_loadedPath = path;
+        } else {
+            // The worker clears its previous embedder on failure, so this
+            // cache must not claim that an older path is still reusable.
+            m_loadedPath.clear();
+        }
+        return true;
+    }
+
+    bool isPending() const { return m_pending; }
+    bool isPending(const QString& path) const { return m_pending && m_loadingPath == path; }
+    bool isLoaded(const QString& path) const { return m_loadedPath == path; }
+
+private:
+    QString m_loadingPath;
+    QString m_loadedPath;
+    bool m_pending = false;
+};
+
+// Wires the Copy Assist panel to the ASR subsystem (RFC #4333, Phase 5). Owns
+// the AsrEngine, the model download manager, and the audio tap, and translates
+// panel intent into the enable → (download model) → load → tap-on flow, routing
+// transcripts and status back to the panel. Lives in the app layer so the panel
+// stays a pure view and aethercore/aetherasr stay decoupled.
+class CopyAssistController : public QObject {
+    Q_OBJECT
+public:
+    CopyAssistController(AudioEngine* audio, CopyAssistPanel* panel, QObject* parent = nullptr);
+    ~CopyAssistController() override;
+
+    PersistentDialog* settingsDialog() const;
+
+    // Clear the transcript and drop any in-progress utterance — used on retune so
+    // the decode window starts fresh for the new frequency.
+    void clearDecode();
+
+    // A retune (or active-slice switch): record the new frequency (MHz), write a
+    // frequency marker to the log (when enabled), and clear the decode window.
+    void onRetune(double freqMhz);
+    // Seed the current frequency without side effects (used right after the
+    // controller is created, before any retune event fires).
+    void setCurrentFrequency(double freqMhz);
+    void setReceiver(RadioModel& radio, SliceModel* slice);
+    void setSelectedSlice(SliceModel* slice);
+
+private slots:
+    void onEnableToggled(bool on);
+    void onTierChanged(const QString& tierId);
+
+private:
+    void startGpuDiscovery();
+    void refreshNativeInput();
+    QString listeningStatus() const;
+    QPointer<RadioModel> m_radio;
+    QPointer<SliceModel> m_selectedSlice;
+    DecoderAudioModel* m_nativeAudio = nullptr;
+    ControlAvailabilityRegistry* m_audioAvailability = nullptr;
+    // Surviving an uncatchable ASR fault (#5190) — see asr/AsrCrashMarker.h.
+    // All settings writes here happen on the GUI thread: CopyAssistSettings'
+    // setValue() is a whole-document read-modify-write.
+    void adoptSurvivingFault();      // ctor: a marker still set = the last run died there
+    void armFaultMarker(const char* stage); // persist "attempt in flight" before a risky stage
+    void clearFaultMarker(const char* stage); // that stage's marker is no longer in flight
+    void loadSettled();              // one queued model load reported ready or failed
+    void applyLastFaultToDevices();  // after discovery: retire the GPU a fault record names
+    void forgetLastFault();          // stale record, or the operator asked for another attempt
+    void standLocalEngineDown(const QString& reason);
+    // By value: reconcileAfterGpuFallback() passes m_gpuDevices back in, and
+    // the first thing this function does is reassign that member — a
+    // reference parameter would alias it.
+    void applyGpuDevices(std::vector<AsrGpuDevice> gpus);
+    // Reconcile after a GPU failed and was latched: relabel the device, move
+    // the resolution off it, walk back an auto-raised GPU-only tier, reload
+    // the model into the rebuilt engine, and say so in the panel status.
+    void reconcileAfterGpuFallback();
+    void buildEngine();  // (re)create the engine+tap for the current backend
+    void applyTuning();  // push saved VAD tuning into the engine
+    void abandonEnable(const QString& reason);
+    void requestEnable(); // defer local Whisper until async GPU discovery finishes
+    void beginEnable();
+    void requestModel(const QString& tierId);
+    bool promptRemoteConfig();  // edit + persist the remote endpoint; true if accepted
+    QString promptCustomModel(); // pick a local ggml/gguf model file (empty if cancelled)
+    QString promptSherpaModel(); // pick a sherpa-onnx model directory (empty if cancelled)
+    void promptLogFile();        // pick + persist the transcript log path
+    void appendToLogFile(const QString& text); // write one utterance if logging is on
+    void promptVadModel();       // pick + persist a custom Silero VAD .onnx (rebuilds)
+    void ensureVadModel();       // use the cached model, else auto-download it
+    void onVadModelReady(const QString& path); // cached/downloaded → persist + rebuild
+    void promptSpeakerModel();   // pick + persist a custom speaker-embedding .onnx
+    void ensureSpeakerModel();   // use the cached model, else auto-download it
+    void onSpeakerModelReady(const QString& path); // cached/downloaded → queue worker load
+    void queueSpeakerModelLoad(const QString& path);
+    void onSpeakerModelLoaded(const QString& path, bool loaded);
+    void replaySpeakerConfiguration();
+    // Put the panel back on its steady-state text after a speaker-model step
+    // left a transient "Preparing…"/"Downloading…" message on screen, replaying
+    // the frequency marker the skipped ready() body owed the log.
+    void restoreListeningStatus();
+    void rebuildEngine();  // rebuild only for backend/VAD/GPU changes
+    static AsrModelTier sileroVadTier();       // default downloadable Silero VAD model
+    static AsrModelTier speakerEmbedderTier(); // default downloadable speaker model
+    void writeFreqMarkerIfNeeded(); // log a "=== <freq> MHz ===" line on start/retune/day-roll
+    bool appendLogRaw(const QString& text); // append verbatim to the dated log; false on error
+    // Which backend a selected tier id maps to (catalog family → backend kind;
+    // the "custom" file and any unknown id default to local Whisper).
+    static AsrBackendKind backendForTier(const QString& tierId);
+    // Switch the active backend + tier, clearing the remote flag when leaving
+    // remote and rebuilding the engine only when the backend kind actually changes.
+    void setBackend(AsrBackendKind kind, const QString& tierId);
+
+    // One place that turns the Sensitivity percentage into a threshold. The
+    // tap applies the tap-point scaling, so what goes in here is unscaled.
+    void applySensitivity(int percent);
+
+    AudioEngine* m_audio = nullptr;
+    CopyAssistPanel* m_panel = nullptr;
+    CopyAssistSettingsDialog* m_settings = nullptr; // modeless model/GPU/options dialog
+    AsrEngine* m_asr = nullptr;
+    AsrModelManager* m_models = nullptr;
+    AsrModelManager* m_vadModels = nullptr; // separate manager for the Silero VAD model
+    AsrModelManager* m_speakerModels = nullptr; // manager for the speaker-embedding model
+    AsrAudioTap* m_tap = nullptr;
+    bool m_constructed = false; // true after the initial buildEngine (guards restore)
+    bool m_useGpuDefaultIfAvailable = false; // cleared by any explicit tier choice
+    // True while m_tierId is the GPU-default tier because device resolution
+    // auto-raised it (not an operator choice). What licenses the walk-back to
+    // the base tier when resolution later falls off the GPU: by then
+    // m_useGpuDefaultIfAvailable is already consumed, so it alone cannot tell
+    // an auto-raised Turbo from an explicitly chosen one.
+    bool m_gpuDefaultTierActive = false;
+    // Fallback explanation parked for the rebuilt engine's ready() handler —
+    // set when reconcileAfterGpuFallback() reloads the model, so the reload's
+    // "Listening…" does not overwrite the reason the decode moved.
+    QString m_gpuFallbackNotice;
+    bool m_gpuDiscoveryPending = true;
+    bool m_enableAfterGpuDiscovery = false;
+    bool m_gpuDeviceExplicit = false; // the operator picked this device themselves
+    AsrAttempt m_lastFault;          // the persisted fault record, if any (AsrLastFault)
+    AsrMarkerState m_markers;        // which markers are persisted, and when each may clear
+    // ggml could not run on this machine last time (a death in discovery, or in
+    // a load already on CPU): the local whisper engine stays off this session.
+    // Remote and sherpa-onnx do not touch ggml and are unaffected.
+    bool m_localEngineStoodDown = false;
+    QString m_standDownReason;
+    int m_gpuDevice = 0; // resolved default or explicit setting; -1 forces CPU
+    // Last device list from discovery, kept so a runtime GPU failure can be
+    // reconciled into the selectors without re-running (and re-probing) it.
+    std::vector<AsrGpuDevice> m_gpuDevices;
+    QString m_tierId;
+    QString m_customModelPath; // user-picked local model (for the "Custom model…" tier)
+    QString m_sherpaModelDir;  // user-picked sherpa-onnx model directory
+    double m_currentFreqMhz = 0.0;  // active-slice frequency, for the log marker
+    QString m_lastFreqMarkerKey;    // (dated-file|freq) last marked — dedups markers
+    bool m_enabled = false;
+    bool m_defaultSpeakerRequestPending = false;
+    QString m_desiredSpeakerModelPath;
+    SpeakerLoadLifecycle m_speakerLoad;
+    AsrBackendKind m_backend = AsrBackendKind::Whisper; // active inference backend
+};
+
+} // namespace AetherSDR

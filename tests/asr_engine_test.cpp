@@ -1,0 +1,979 @@
+// Offline unit test for AsrEngine (RFC #4333, Phase 3). Uses a deterministic
+// fake backend injected via the factory, so the engine's worker-thread
+// orchestration — async load, audio -> segment -> transcribe -> finalText,
+// enabled-gating, and load-failure — is verified without any model or whisper.
+
+#include "asr/AsrEngine.h"
+#include "asr/IAsrBackend.h"
+#include "asr/SpeakerEmbedder.h"
+#include "asr/WhisperAsrBackend.h"
+#include "gui/CopyAssistController.h"
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QSignalSpy>
+#include <QSemaphore>
+#include <QThread>
+#include <QTimer>
+#include <QVector>
+
+#include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <memory>
+
+namespace AetherSDR {
+struct AsrEngineTestAccess {
+    static bool awaitWorker(AsrEngine& engine) {
+        auto done = std::make_shared<QSemaphore>();
+        QMetaObject::invokeMethod(engine.m_worker, [done] { done->release(); }, Qt::QueuedConnection);
+        return done->tryAcquire(1, 5000);
+    }
+};
+}
+
+using namespace AetherSDR;
+
+namespace {
+
+int g_failures = 0;
+
+void expect(bool condition, const char* description)
+{
+    std::printf("%s %s\n", condition ? "[ OK ]" : "[FAIL]", description);
+    if (!condition) {
+        ++g_failures;
+    }
+}
+
+// Deterministic fake: load() succeeds unless constructed to fail; transcribe()
+// returns a fixed phrase for any non-empty utterance.
+class FakeBackend : public IAsrBackend {
+public:
+    explicit FakeBackend(bool loadOk) : m_loadOk(loadOk) {}
+    bool load(const QString&, QString* error) override
+    {
+        if (!m_loadOk) {
+            if (error != nullptr) {
+                *error = QStringLiteral("fake load failure");
+            }
+            return false;
+        }
+        m_loaded = true;
+        return true;
+    }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    {
+        if (pcm.empty()) {
+            return {};
+        }
+        return AsrTranscript{QStringLiteral("OVER"), 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+
+private:
+    bool m_loadOk;
+    bool m_loaded = false;
+};
+
+AsrBackendFactory factory(bool loadOk)
+{
+    return [loadOk] { return std::unique_ptr<IAsrBackend>(new FakeBackend(loadOk)); };
+}
+
+// A scripted line equal to this reports a decode FAILURE instead of text — the
+// error out-param path, which is distinct from an empty decode (RFC #4821).
+const QString kScriptedFailure = QStringLiteral("!fail");
+
+// Returns a scripted phrase per successive transcribe() call (the last phrase
+// repeats once the script runs out). Lets the segment-overlap de-dup test drive
+// deterministic boundary words across consecutive segments (RFC #4821).
+class ScriptedBackend : public IAsrBackend {
+public:
+    explicit ScriptedBackend(std::vector<QString> lines) : m_lines(std::move(lines)) {}
+    bool load(const QString&, QString*) override
+    {
+        m_loaded = true;
+        return true;
+    }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString* error) override
+    {
+        if (pcm.empty() || m_lines.empty()) {
+            return {};
+        }
+        const QString text = m_next < m_lines.size() ? m_lines[m_next] : m_lines.back();
+        ++m_next;
+        if (text == kScriptedFailure) {
+            if (error != nullptr) {
+                *error = QStringLiteral("scripted decode failure");
+            }
+            return {};
+        }
+        return AsrTranscript{text, 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+
+private:
+    std::vector<QString> m_lines;
+    std::size_t m_next = 0;
+    bool m_loaded = false;
+};
+
+AsrBackendFactory scriptedFactory(std::vector<QString> lines)
+{
+    return [lines] { return std::unique_ptr<IAsrBackend>(new ScriptedBackend(lines)); };
+}
+
+// Backend whose transcribe() blocks for a fixed delay — stands in for a real
+// whisper decode or remote HTTP round-trip, so tests can build an actual
+// backlog of queued (not-yet-dequeued) processAudio() calls and verify
+// shutdown/disable don't transcribe all of it (see AsrEngine::~AsrEngine and
+// AsrEngine::setEnabled).
+class SlowBackend : public IAsrBackend {
+public:
+    explicit SlowBackend(int delayMs) : m_delayMs(delayMs) {}
+    bool load(const QString&, QString*) override
+    {
+        m_loaded = true;
+        return true;
+    }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    {
+        QThread::msleep(m_delayMs);
+        if (pcm.empty()) {
+            return {};
+        }
+        return AsrTranscript{QStringLiteral("OVER"), 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+
+private:
+    int m_delayMs;
+    bool m_loaded = false;
+};
+
+AsrBackendFactory slowFactory(int delayMs)
+{
+    return [delayMs] { return std::unique_ptr<IAsrBackend>(new SlowBackend(delayMs)); };
+}
+
+// Records the context-carry control calls so the engine's wiring can be checked
+// from the test thread. Counters are atomic (the backend lives on the worker).
+class ContextFake : public IAsrBackend {
+public:
+    bool load(const QString&, QString*) override { m_loaded = true; return true; }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    {
+        if (pcm.empty()) {
+            return {};
+        }
+        return AsrTranscript{QStringLiteral("OVER"), 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+    void setContextCarryEnabled(bool on) override { carryEnabled.store(on); }
+    void resetContext() override { resets.fetch_add(1); }
+
+    std::atomic<bool> carryEnabled{false};
+    std::atomic<int> resets{0};
+
+private:
+    bool m_loaded = false;
+};
+
+// Factory that also publishes the constructed backend pointer so the test can
+// read its counters. The engine owns the instance; the sink is a non-owning view
+// valid until the engine is destroyed.
+AsrBackendFactory contextFactory(std::atomic<ContextFake*>* sink)
+{
+    return [sink] {
+        auto* b = new ContextFake();
+        sink->store(b, std::memory_order_release);
+        return std::unique_ptr<IAsrBackend>(b);
+    };
+}
+
+// Spin the event loop until pred() holds or the timeout elapses.
+template <typename Pred>
+bool waitUntil(Pred pred, int timeoutMs)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!pred() && t.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(5);
+    }
+    return pred();
+}
+
+// Deterministic stand-in for building the ~24 MB ECAPA session: the sleep is
+// what the caller must not wait on. `succeed` picks which completion branch of
+// AsrWorker::loadSpeakerModel() runs. The success branch hands back a default-
+// constructed SpeakerEmbedder — enough to prove the embedder is installed, the
+// clusterer reset and speakerModelLoaded(path, true) emitted, but NOT that a
+// label comes out the other end: embed() needs a real ONNX model for that, and
+// SpeakerEmbedder is concrete (no seam to fake one). Label emission stays
+// covered by the ONNX-gated fixtures, not here.
+AsrSpeakerEmbedderFactory speakerFactory(bool succeed, int delayMs)
+{
+    return [succeed, delayMs](const QString&) {
+        QThread::msleep(delayMs);
+        return succeed ? std::make_unique<SpeakerEmbedder>() : std::unique_ptr<SpeakerEmbedder>{};
+    };
+}
+
+// Generate at the real RX pipeline rate (24 kHz) so the engine must resample
+// 24k -> 16k on its worker before segmenting.
+constexpr int kSrcRate = 24000;
+
+QVector<float> tone(int ms, float amp = 0.3f)
+{
+    QVector<float> v;
+    const int n = ms * kSrcRate / 1000;
+    for (int i = 0; i < n; ++i) {
+        v.push_back(amp * static_cast<float>(std::sin(2.0 * M_PI * 440.0 * i / kSrcRate)));
+    }
+    return v;
+}
+
+QVector<float> silence(int ms)
+{
+    return QVector<float>(ms * kSrcRate / 1000, 0.0f);
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+
+    // ---- Context-carry confidence gate (RFC #4818) ------------------------
+    // The gate is the whole recovery story: it decides whether a decode's text
+    // seeds the next decode's prompt. Pinned here as a pure function so the three
+    // cases can't regress silently (an inverted comparison or a 0.0 threshold).
+    {
+        expect(asrShouldCarryContext(QStringLiteral("CQ DE K5PTB"), 0.90f),
+               "gate: confident non-empty text carries");
+        expect(!asrShouldCarryContext(QStringLiteral("garbled"), 0.40f),
+               "gate: sub-threshold confidence does not carry (prev prompt stays)");
+        expect(!asrShouldCarryContext(QString(), 0.99f),
+               "gate: empty text never carries, regardless of confidence");
+        // Boundary: kContextCarryMinConfidence itself carries; just under does not.
+        expect(asrShouldCarryContext(QStringLiteral("x"), kContextCarryMinConfidence),
+               "gate: confidence exactly at the floor carries");
+        expect(!asrShouldCarryContext(QStringLiteral("x"),
+                                      kContextCarryMinConfidence - 0.01f),
+               "gate: just below the floor does not carry");
+    }
+
+    // ---- Engine replacement discards only per-engine speaker state --------
+    {
+        SpeakerLoadLifecycle lifecycle;
+        lifecycle.begin(QStringLiteral("/old-engine.onnx"));
+        expect(lifecycle.isPending(QStringLiteral("/old-engine.onnx")),
+               "matching speaker load is recognized as already pending");
+        expect(!lifecycle.isPending(QStringLiteral("/different-model.onnx")),
+               "a different speaker model is not deduplicated");
+        lifecycle.begin(QStringLiteral("/custom-speaker.onnx"));
+        expect(lifecycle.isPending(QStringLiteral("/custom-speaker.onnx")),
+               "custom speaker off/on recognizes the in-flight path for deduplication");
+        lifecycle.resetForEngineReplacement();
+        expect(!lifecycle.isPending(), "engine replacement clears pending speaker load");
+        expect(!lifecycle.isLoaded(QStringLiteral("/old-engine.onnx")),
+               "engine replacement does not carry a stale loaded model");
+
+        lifecycle.begin(QStringLiteral("/replayed-intent.onnx"));
+        expect(!lifecycle.complete(QStringLiteral("/old-engine.onnx"), true),
+               "late old-engine completion cannot settle replayed intent");
+        expect(lifecycle.isPending(), "late old-engine completion leaves replay pending");
+        expect(lifecycle.complete(QStringLiteral("/replayed-intent.onnx"), true),
+               "replayed speaker intent settles on the replacement engine");
+        expect(lifecycle.isLoaded(QStringLiteral("/replayed-intent.onnx")),
+               "replacement engine caches its own loaded speaker model");
+
+        lifecycle.begin(QStringLiteral("/failed-replacement.onnx"));
+        expect(lifecycle.complete(QStringLiteral("/failed-replacement.onnx"), false),
+               "failed replacement settles its pending load");
+        expect(!lifecycle.isLoaded(QStringLiteral("/replayed-intent.onnx")),
+               "failed replacement clears stale cached speaker state");
+    }
+
+    // A real worker finishes inference while main-thread delivery is withheld.
+    // Restarting must suppress the already-queued old transcript as well as audio.
+    {
+        AsrEngine engine(factory(true));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/fixture"));
+        expect(readySpy.wait(5000), "generation fixture loads");
+        engine.setEnabled(true);
+        QSignalSpy texts(&engine, &AsrEngine::finalText);
+        engine.pushAudio(silence(150), kSrcRate);
+        engine.pushAudio(tone(500), kSrcRate);
+        engine.pushAudio(silence(700), kSrcRate);
+        expect(AsrEngineTestAccess::awaitWorker(engine), "old inference and its result are queued");
+        engine.restartSession();
+        engine.restartSession();
+        QCoreApplication::processEvents();
+        expect(texts.isEmpty(), "queued transcript from old generation is suppressed");
+        engine.pushAudio(silence(150), kSrcRate);
+        engine.pushAudio(tone(500), kSrcRate);
+        engine.pushAudio(silence(700), kSrcRate);
+        expect(texts.wait(5000), "fresh generation still transcribes after repeated restart");
+    }
+
+    {
+        AsrEngine engine(factory(true));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/fixture"));
+        expect(readySpy.wait(5000), "native lease fixture loads");
+        engine.setEnabled(true);
+        QSignalSpy texts(&engine, &AsrEngine::finalText);
+        PcmProducer producer;
+        producer.start(PcmPurpose::Slice, 3, {kSrcRate, PcmLayout::Mono});
+        engine.pushNativePcm(*producer.produce(silence(150)));
+        engine.pushNativePcm(*producer.produce(tone(500)));
+        engine.pushNativePcm(*producer.produce(silence(700)));
+        expect(AsrEngineTestAccess::awaitWorker(engine), "native inference result awaits delivery");
+        producer.invalidate();
+        QCoreApplication::processEvents();
+        expect(texts.isEmpty(), "producer retirement suppresses queued native transcript without a reset callback");
+        engine.restartSession();
+        producer.start(PcmPurpose::Slice, 3, {kSrcRate, PcmLayout::Mono});
+        engine.pushNativePcm(*producer.produce(silence(150)));
+        engine.pushNativePcm(*producer.produce(tone(500)));
+        engine.pushNativePcm(*producer.produce(silence(700)));
+        expect(texts.wait(5000), "new native receiver epoch transcribes after retirement");
+    }
+
+    // ---- Async load emits ready() -----------------------------------------
+    {
+        AsrEngine engine(factory(true));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        QSignalSpy failSpy(&engine, &AsrEngine::loadFailed);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "setModelPath -> ready() emitted");
+        expect(failSpy.isEmpty(), "no loadFailed on a good backend");
+        expect(engine.isReady(), "engine reports ready");
+
+        // ---- Audio -> segment -> transcribe -> finalText -------------------
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.setEnabled(true);
+        engine.pushAudio(silence(150), kSrcRate);
+        engine.pushAudio(tone(500), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate); // trailing silence closes the utterance
+        expect(textSpy.wait(5000), "utterance transcribed -> finalText() emitted");
+        if (!textSpy.isEmpty()) {
+            const auto args = textSpy.first();
+            expect(args.at(0).toString() == QStringLiteral("OVER"),
+                   "finalText carries the backend's transcription");
+            expect(std::abs(args.at(1).toFloat() - 0.9f) < 1e-4f,
+                   "finalText carries the backend's confidence");
+        }
+
+        // ---- Disabled engine ignores audio --------------------------------
+        engine.reset();
+        engine.setEnabled(false);
+        const int before = textSpy.count();
+        engine.pushAudio(tone(500), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        QSignalSpy idle(&engine, &AsrEngine::finalText);
+        idle.wait(400); // give the worker a chance; expect nothing
+        expect(textSpy.count() == before, "disabled engine emits no finalText");
+    }
+
+    // ---- Segment overlap: boundary-word de-dup (RFC #4821) -----------------
+    // A small decode-buffer cap force-closes continuous speech into consecutive
+    // segments; with overlap on, each continuation re-transcribes the previous
+    // segment's tail word, which the worker must strip. The scripted backend
+    // makes that duplicated boundary word deterministic (…charlie | charlie…).
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            QStringLiteral("charlie delta echo"),
+            QStringLiteral("echo foxtrot golf"),
+            QStringLiteral("golf hotel india"),
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap dedup: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300); // small cap → continuous speech force-closes
+        engine.setOverlapMs(100);      // carry 100 ms across the cut
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);   // continuous → repeated cap closes
+        engine.pushAudio(silence(400), kSrcRate);  // hangover closes the tail
+        expect(textSpy.wait(5000), "overlap dedup: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain the remaining queued segment transcriptions
+        }
+        expect(textSpy.count() >= 2, "overlap dedup: continuous speech split into >=2 segments");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap dedup: first segment is emitted whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("delta echo"),
+                   "overlap dedup: continuation drops the duplicated boundary word");
+        }
+    }
+
+    // ---- Segment overlap: an empty continuation clears the de-dup tail --------
+    // If a continuation decodes empty (marginal SNR), the tail it would have been
+    // compared against is gone; the NEXT continuation must de-dup against *that*
+    // (now empty) reference, not the segment before it — otherwise a leading word
+    // that coincidentally matches the older tail is wrongly stripped. Here the
+    // 2nd decode is empty and the 3rd begins with "charlie", which also ends the
+    // 1st: it must survive, not be de-dup'd away.
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            QString(),                              // empty decode (skipped, clears tail)
+            QStringLiteral("charlie hotel india"),  // leading "charlie" must NOT be stripped
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap empty-continuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap empty-continuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap empty-continuation: >=2 non-empty emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap empty-continuation: first segment whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("charlie hotel india"),
+                   "overlap empty-continuation: word after an empty decode is not stripped");
+        }
+    }
+
+    // ---- Segment overlap: a FAILED continuation clears the de-dup tail ------
+    // The error out-param path, not the empty-text one: a backend that reports a
+    // decode failure also leaves no tail, so the reference must be dropped for
+    // exactly the same reason. Without the clear, the 3rd segment would de-dup
+    // against the 1st — two segments back — and lose a genuine leading word.
+    // Mutation check: delete the m_prevSegmentText.clear() on the error path and
+    // this case emits "hotel india" instead.
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            kScriptedFailure,                       // decode error (clears the tail)
+            QStringLiteral("charlie hotel india"),  // leading "charlie" must NOT be stripped
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap failed-continuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy errSpy(&engine, &AsrEngine::error);
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap failed-continuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(errSpy.count() >= 1, "overlap failed-continuation: the decode failure is reported");
+        expect(textSpy.count() >= 2, "overlap failed-continuation: >=2 non-empty emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap failed-continuation: first segment whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("charlie hotel india"),
+                   "overlap failed-continuation: word after a failed decode is not stripped");
+        }
+    }
+
+    // ---- Segment overlap: a punctuation-only token is not a boundary match ---
+    // normWord() strips edge punctuation, so a token that is ALL punctuation
+    // normalizes to "". Two such tokens must not compare equal — "" == "" is not
+    // a repeated word, and treating it as one silently eats the continuation's
+    // real first token. Mutation check: drop the isEmpty() guards from the
+    // comparison and this case emits "delta echo".
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo ..."),
+            QStringLiteral("... delta echo"), // the "..." must survive, not match
+            QStringLiteral("echo foxtrot golf"),
+            QStringLiteral("golf hotel india"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap punctuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap punctuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap punctuation: >=2 emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("... delta echo"),
+                   "overlap punctuation: a punctuation-only token is not a boundary match");
+        }
+    }
+
+    // ---- Segment overlap: the strip is bounded by the carried window ---------
+    // The de-dup must not strip the longest match it can find — only about as
+    // many words as the carried audio could actually hold (overlapWordBudget).
+    // Here the boundary is a genuine triple repeat ("one one one" | "one one one
+    // two") but only 100 ms was carried, so exactly ONE word may go; the other
+    // two are real speech the operator said. Mutation check: remove
+    // overlapWordBudget from the cap (or pass a live/large overlapMs instead of
+    // the value captured at close time) and this case emits "two".
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("bravo one one one"),
+            QStringLiteral("one one one two"), // only the first "one" is overlap
+            QStringLiteral("two three four"),
+            QStringLiteral("four five six"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap budget: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100); // 100 ms -> a one-word budget
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap budget: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap budget: >=2 emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("one one two"),
+                   "overlap budget: the strip is bounded by the carried window, "
+                   "not the longest match");
+        }
+    }
+
+    // ---- Destructor returns promptly with a queued backlog ----------------
+    // Note: Qt's own QThread::quit() already stops the worker from starting
+    // any FURTHER queued processAudio() calls once the current one returns —
+    // confirmed by temporarily disabling AsrWorker's cancel check, which still
+    // left this passing (only the one already-in-flight call ran). This test
+    // is a regression guard on that overall property (whichever mechanism
+    // provides it) — shutdown must be bounded by ~one in-flight call, not by
+    // however many segments happen to be backlogged.
+    {
+        constexpr int kDelayMs = 300;      // stand-in for a slow transcribe()
+        constexpr int kBacklogCount = 5;   // would need ~1500 ms if all ran
+        auto* engine = new AsrEngine(slowFactory(kDelayMs));
+        QSignalSpy readySpy(engine, &AsrEngine::ready);
+        engine->setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "shutdown test: engine ready");
+        engine->setEnabled(true);
+
+        // Queue several distinct utterances rapidly so multiple requestProcess
+        // calls back up behind the (slow) one currently being transcribed.
+        for (int i = 0; i < kBacklogCount; ++i) {
+            engine->pushAudio(tone(500), kSrcRate);
+            engine->pushAudio(silence(400), kSrcRate);
+        }
+        QThread::msleep(50); // let the worker start on the first item
+
+        QElapsedTimer timer;
+        timer.start();
+        delete engine; // must not block until the whole backlog finishes
+        expect(timer.elapsed() < kDelayMs * 2,
+               "destructor returns promptly despite a queued backlog");
+    }
+
+    // ---- Speaker preparation stays off the caller thread ------------------
+    {
+        constexpr int kDelayMs = 300;
+        AsrEngine engine(factory(true), AsrSegmenter::Config{}, nullptr,
+                         speakerFactory(false, kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "speaker-load test: engine ready");
+
+        QSignalSpy speakerSpy(&engine, &AsrEngine::speakerModelLoaded);
+        QElapsedTimer timer;
+        timer.start();
+        engine.setSpeakerModelPath(QStringLiteral("/slow-speaker.onnx"));
+        // Half the loader delay, not a small absolute bound: the property is
+        // "did not wait for the load", and a loaded runner must make this test
+        // slower rather than red. The blocking (pre-fix) shape costs >= kDelayMs.
+        expect(timer.elapsed() < kDelayMs / 2,
+               "setSpeakerModelPath returns without waiting for speaker preparation");
+
+        engine.setSpeakerLabelingEnabled(true);
+        engine.setSpeakerLabelingEnabled(false); // latest intent wins behind the slow load
+        expect(!engine.isSpeakerLabelingEnabled(),
+               "speaker labeling disable takes effect immediately on the caller thread");
+
+        bool eventLoopTicked = false;
+        QTimer::singleShot(30, &app, [&eventLoopTicked] { eventLoopTicked = true; });
+        expect(speakerSpy.wait(5000), "slow speaker preparation completes asynchronously");
+        expect(eventLoopTicked,
+               "main event loop remains responsive while speaker preparation is in flight");
+        if (!speakerSpy.isEmpty()) {
+            const QList<QVariant> args = speakerSpy.first();
+            expect(args.at(0).toString() == QStringLiteral("/slow-speaker.onnx"),
+                   "speaker completion identifies the requested model path");
+            expect(!args.at(1).toBool(), "failed injected speaker loader is reported");
+        }
+
+        speakerSpy.clear();
+        engine.setSpeakerLabelingEnabled(true);
+        engine.setSpeakerModelPath(QStringLiteral("/failed-replacement.onnx"));
+        expect(speakerSpy.wait(5000), "failed speaker replacement completes");
+        // The flag is operator intent and nothing but setSpeakerLabelingEnabled()
+        // writes it, so a failed load leaves it alone; the worker dropping its
+        // embedder is what stops labels. Owning that distinction is what lets the
+        // controller decide whether to un-check the box.
+        expect(engine.isSpeakerLabelingEnabled(),
+               "a failed speaker load does not silently rewrite the operator's intent");
+    }
+
+    // ---- A successful speaker load arms labeling and keeps intent ---------
+    {
+        constexpr int kDelayMs = 50;
+        AsrEngine engine(factory(true), AsrSegmenter::Config{}, nullptr,
+                         speakerFactory(true, kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "speaker-success test: engine ready");
+
+        QSignalSpy speakerSpy(&engine, &AsrEngine::speakerModelLoaded);
+        engine.setSpeakerLabelingEnabled(true);
+        engine.setSpeakerModelPath(QStringLiteral("/good-speaker.onnx"));
+        expect(speakerSpy.wait(5000), "successful speaker preparation completes");
+        if (!speakerSpy.isEmpty()) {
+            const QList<QVariant> args = speakerSpy.first();
+            expect(args.at(0).toString() == QStringLiteral("/good-speaker.onnx"),
+                   "successful completion identifies the requested model path");
+            expect(args.at(1).toBool(), "successful speaker load is reported as loaded");
+        }
+        expect(engine.isSpeakerLabelingEnabled(),
+               "a successful speaker load leaves labeling intent on");
+
+        // Replacing a good model with another good one must not disturb intent
+        // either — the cached embedder is swapped, not the operator's choice.
+        speakerSpy.clear();
+        engine.setSpeakerModelPath(QStringLiteral("/second-speaker.onnx"));
+        expect(speakerSpy.wait(5000), "speaker model replacement completes");
+        expect(engine.isSpeakerLabelingEnabled(),
+               "replacing a loaded speaker model keeps labeling intent on");
+
+        // Toggling off keeps the loaded embedder (that is the whole point of
+        // #4737's fix) — only the intent flips, with no engine teardown.
+        engine.setSpeakerLabelingEnabled(false);
+        expect(!engine.isSpeakerLabelingEnabled(),
+               "toggling labeling off flips intent without a reload");
+    }
+
+    // ---- Shutdown skips speaker loads that have not started ---------------
+    // A backend/GPU/language change destroys the engine, and ~AsrEngine() joins
+    // the worker. A speaker session build cannot be aborted once running, so the
+    // bound that matters is "one in-flight stage", not "every queued stage".
+    {
+        constexpr int kDelayMs = 300;
+        auto* engine = new AsrEngine(factory(true), AsrSegmenter::Config{}, nullptr,
+                                     speakerFactory(false, kDelayMs));
+        QSignalSpy readySpy(engine, &AsrEngine::ready);
+        engine->setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "speaker-shutdown test: engine ready");
+
+        engine->setSpeakerModelPath(QStringLiteral("/first.onnx"));
+        engine->setSpeakerModelPath(QStringLiteral("/second.onnx"));
+        engine->setSpeakerModelPath(QStringLiteral("/third.onnx"));
+        QThread::msleep(50); // let the worker start on the first
+
+        QElapsedTimer timer;
+        timer.start();
+        delete engine; // must wait out one load, not all three (~900 ms)
+        expect(timer.elapsed() < kDelayMs * 2,
+               "destructor skips speaker loads that have not started");
+    }
+
+    // ---- Disabling drops a queued backlog instead of transcribing it ------
+    {
+        constexpr int kDelayMs = 300;
+        constexpr int kBacklogCount = 5;
+        AsrEngine engine(slowFactory(kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "disable test: engine ready");
+        engine.setEnabled(true);
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        for (int i = 0; i < kBacklogCount; ++i) {
+            engine.pushAudio(tone(500), kSrcRate);
+            engine.pushAudio(silence(400), kSrcRate);
+        }
+        QThread::msleep(50); // let the worker start on the first item
+        engine.setEnabled(false); // should drop everything still queued
+
+        // Long enough that, without the fix, most/all of the backlog would
+        // have finished transcribing by now.
+        QThread::msleep(kBacklogCount * kDelayMs + 200);
+        QCoreApplication::processEvents(); // deliver any queued finalText
+
+        // At most one item (whichever was already in-flight when disabled)
+        // may complete — the rest of the backlog must be dropped.
+        expect(textSpy.count() <= 1,
+               "disabling drops the backlog instead of transcribing all of it");
+    }
+
+    // ---- Backlog ceiling (#5730): the shape of the bound ------------------
+    // Twice the decode buffer, never below 10 s; pure so the three regimes
+    // (floor, exactly at the knee, scaling above it) can't drift silently.
+    {
+        expect(asrBacklogHighWaterMs(1000) == 10000,
+               "ceiling: a 1 s decode buffer gets the 10 s floor");
+        expect(asrBacklogHighWaterMs(5000) == 10000,
+               "ceiling: a 5 s decode buffer sits exactly at the floor");
+        expect(asrBacklogHighWaterMs(20000) == 40000,
+               "ceiling: the default 20 s decode buffer scales to 40 s");
+        expect(asrBacklogHighWaterMs(0) == 10000,
+               "ceiling: a nonsense buffer still yields the floor");
+    }
+
+    // ---- Backlog ceiling (#5730): pushAudio drops above it, resumes below --
+    // A backend slower than real time with audio arriving faster than it can be
+    // decoded: without the bound every chunk queues and the backlog reads the
+    // whole push. With it, readings plateau at the ceiling, the excess is
+    // counted as dropped, and once the worker drains below half the ceiling a
+    // fresh push is accepted again (after a discontinuity mark to the worker).
+    // Fixtures: CONSTRUCTED synthetic tone/silence pairs — exercise the
+    // accounting only, never a claim about field audio.
+    {
+        constexpr int kDelayMs = 400;   // one transcribe() per 900 ms pair → ~0.44× realtime
+        constexpr int kPairs = 20;      // 18 s pushed at once, against a 10 s ceiling
+        constexpr double kCeilingS = 10.0;
+        AsrEngine engine(slowFactory(kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "ceiling test: engine ready");
+        engine.setDecodeBufferMs(1000); // ceiling = the 10 s floor, resume below 5 s
+        engine.setEnabled(true);
+
+        QSignalSpy backlogSpy(&engine, &AsrEngine::backlogChanged);
+        QSignalSpy droppedSpy(&engine, &AsrEngine::droppedAudioChanged);
+        QSignalSpy gapSpy(&engine, &AsrEngine::requestMarkDiscontinuity);
+        for (int i = 0; i < kPairs; ++i) {
+            engine.pushAudio(tone(500), kSrcRate);
+            engine.pushAudio(silence(400), kSrcRate);
+        }
+        double maxLag = 0.0;
+        for (const auto& args : backlogSpy) {
+            maxLag = std::max(maxLag, args.at(0).toDouble());
+        }
+        // One chunk (≤ 0.5 s) may be admitted just under the ceiling.
+        expect(maxLag <= kCeilingS + 0.5,
+               "ceiling: backlog readings never exceed the ceiling (+ one chunk)");
+        expect(maxLag >= kCeilingS - 1.0,
+               "ceiling: the backlog actually reached the ceiling (test drove it)");
+        expect(!droppedSpy.isEmpty()
+                   && droppedSpy.last().at(0).toDouble() >= 6.0,
+               "ceiling: the audio above the ceiling is counted as dropped");
+        expect(gapSpy.isEmpty(), "ceiling: no discontinuity while still dropping");
+
+        // Hysteresis: inside (half, ceiling) the gate must still be dropping.
+        // Wait for the worker to take the backlog under 9 s (steps are ≥ 0.4 s,
+        // so it then sits in [8.5, 9.0) — well above the 5 s resume point).
+        QElapsedTimer band;
+        band.start();
+        while (band.elapsed() < 15000) {
+            QCoreApplication::processEvents();
+            if (!backlogSpy.isEmpty() && backlogSpy.last().at(0).toDouble() < 9.0) {
+                break;
+            }
+            QThread::msleep(20);
+        }
+        const int droppedInBand = droppedSpy.count();
+        engine.pushAudio(tone(500), kSrcRate); // still above half the ceiling: dropped
+        expect(droppedSpy.count() == droppedInBand + 1,
+               "ceiling: a chunk pushed between half and the ceiling is still dropped");
+        expect(gapSpy.isEmpty(), "ceiling: no resume inside the hysteresis band");
+
+        // Let the worker drain below half the ceiling (≤ ~11 pairs × 400 ms).
+        QElapsedTimer drain;
+        drain.start();
+        while (drain.elapsed() < 15000) {
+            QCoreApplication::processEvents();
+            if (!backlogSpy.isEmpty() && backlogSpy.last().at(0).toDouble() < kCeilingS / 2.0) {
+                break;
+            }
+            QThread::msleep(20);
+        }
+        const int droppedBeforeResume = droppedSpy.count();
+        engine.pushAudio(tone(500), kSrcRate); // first chunk after the drain: accepted
+        QCoreApplication::processEvents();
+        expect(gapSpy.count() == 1,
+               "ceiling: resuming marks a discontinuity to the worker exactly once");
+        expect(droppedSpy.count() == droppedBeforeResume,
+               "ceiling: a chunk pushed after the drain is not dropped");
+        expect(backlogSpy.last().at(0).toDouble() > 0.0,
+               "ceiling: the accepted chunk is counted in the backlog again");
+
+        // reset() clears the ceiling state with the meter it belongs to.
+        engine.reset();
+        expect(droppedSpy.last().at(0).toDouble() == 0.0,
+               "ceiling: reset() zeroes the dropped total");
+    }
+
+    // ---- Backlog ceiling (#5730): reset() with audio still queued ----------
+    // A retune calls reset() while the worker still holds queued chunks; each of
+    // those is reported as processed AFTER the counters were zeroed. Without the
+    // stale-queue accounting that drives processed past pushed, the lag reads
+    // negative, and the ceiling is effectively raised by the stale amount —
+    // the unbounded growth this change exists to remove, back through the side
+    // door. Fixtures: CONSTRUCTED synthetic tone/silence pairs.
+    {
+        constexpr int kDelayMs = 300;
+        constexpr int kStalePairs = 8;  // 7.2 s queued at the reset
+        constexpr int kPairs = 20;      // 18 s pushed afterwards, 10 s ceiling
+        AsrEngine engine(slowFactory(kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "stale-reset test: engine ready");
+        engine.setDecodeBufferMs(1000); // ceiling = 10 s
+        engine.setEnabled(true);
+        for (int i = 0; i < kStalePairs; ++i) {
+            engine.pushAudio(tone(500), kSrcRate);
+            engine.pushAudio(silence(400), kSrcRate);
+        }
+        QThread::msleep(50);   // the worker is inside the first transcribe
+        engine.reset();        // retune: counters zeroed, 7.2 s still queued
+        // Let every stale chunk report back (8 × 300 ms plus slack).
+        QElapsedTimer settle;
+        settle.start();
+        while (settle.elapsed() < kStalePairs * kDelayMs + 1500) {
+            QCoreApplication::processEvents();
+            QThread::msleep(20);
+        }
+
+        // The meter and the gate read the same lag, so a leak would not show
+        // as a higher reading — it shows as the gate firing LATER: with ~7 s
+        // of stale reports mis-credited, only ~0.8 s of the 18 s would be
+        // dropped instead of ~7.6 s.
+        QSignalSpy droppedSpy(&engine, &AsrEngine::droppedAudioChanged);
+        for (int i = 0; i < kPairs; ++i) {
+            engine.pushAudio(tone(500), kSrcRate);
+            engine.pushAudio(silence(400), kSrcRate);
+        }
+        expect(!droppedSpy.isEmpty() && droppedSpy.last().at(0).toDouble() >= 6.0,
+               "stale-reset: the ceiling still bites at 10 s of NEW audio after a reset "
+               "with audio queued (stale reports do not raise it)");
+    }
+
+    // ---- Context-carry control reaches the backend (RFC #4818) ------------
+    // The engine must marshal setContextCarryEnabled() to the backend, flush its
+    // context on a long idle-silence gap, and flush again on clearContext()
+    // (the Copy Assist Clear button). Verified via a fake that counts the calls.
+    {
+        std::atomic<ContextFake*> sink{nullptr};
+        AsrEngine engine(contextFactory(&sink));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "context test: engine ready");
+        expect(waitUntil([&] { return sink.load() != nullptr; }, 2000),
+               "fake backend was constructed on the worker");
+        ContextFake* backend = sink.load();
+
+        engine.setEnabled(true);
+        engine.setContextCarryEnabled(true);
+        expect(waitUntil([&] { return backend->carryEnabled.load(); }, 2000),
+               "setContextCarryEnabled reaches the backend");
+
+        // A real pause (idle silence past longGapMs = 2500) flushes the context.
+        const int resetsBeforeGap = backend->resets.load();
+        engine.pushAudio(tone(400), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);   // hangover closes the utterance
+        engine.pushAudio(silence(3000), kSrcRate);  // > 2500 ms idle -> long gap
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeGap; }, 5000),
+               "a long silence gap flushes the carried context");
+
+        // The Clear button flushes it too.
+        const int resetsBeforeClear = backend->resets.load();
+        engine.clearContext();
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeClear; }, 5000),
+               "clearContext() flushes the carried context");
+    }
+
+    // ---- Load failure surfaces loadFailed(), not ready() ------------------
+    {
+        AsrEngine engine(factory(false));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        QSignalSpy failSpy(&engine, &AsrEngine::loadFailed);
+        engine.setModelPath(QStringLiteral("/bad"));
+        expect(failSpy.wait(5000), "failing backend -> loadFailed() emitted");
+        expect(readySpy.isEmpty(), "no ready() on load failure");
+        expect(!engine.isReady(), "engine not ready after load failure");
+    }
+
+    // ---- restartSession() orders the cancel, the reset and the resume -----
+    // Copy Assist's tap-point switch needs the audio already queued to the
+    // worker dropped, because it came from the other chain. reset() alone
+    // cannot do that — it is queued, so it arrives BEHIND that backlog — which
+    // is why restartSession() raises the worker's cancel flag directly and then
+    // clears it with a THIRD queued call.
+    //
+    // The order of the two queued emissions is the whole mechanism and it fails
+    // silently if reversed: resume-then-reset would clear the flag before the
+    // backlog had been discarded, and the old chain's audio would be
+    // transcribed into the new session anyway. Nothing else pins it.
+    {
+        AsrEngine engine(factory(true));
+        QVector<QString> order;
+        QObject::connect(&engine, &AsrEngine::requestReset,
+                         [&order] { order.append(QStringLiteral("reset")); });
+        QObject::connect(&engine, &AsrEngine::requestResumeAfterCancel,
+                         [&order] { order.append(QStringLiteral("resume")); });
+
+        engine.restartSession();
+        expect(order.size() == 2, "restartSession() emits exactly two worker calls");
+        expect(order.size() == 2 && order[0] == QStringLiteral("reset")
+                   && order[1] == QStringLiteral("resume"),
+               "the reset is queued before the resume that re-enables processing");
+
+        // reset() on its own must stay what it was: no resume, so the
+        // ASR-disable path keeps its cancel flag latched as it always did.
+        order.clear();
+        engine.reset();
+        expect(order.size() == 1 && order[0] == QStringLiteral("reset"),
+               "a plain reset() does not emit a resume");
+    }
+
+    std::printf(g_failures == 0 ? "\nASR engine: ALL PASS\n"
+                                : "\nASR engine: %d FAILURE(S)\n",
+                g_failures);
+    return g_failures == 0 ? 0 : 1;
+}

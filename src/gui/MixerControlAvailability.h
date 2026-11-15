@@ -1,0 +1,66 @@
+#pragma once
+
+// WHICH OF THE RADIO-MIXER CONTROLS EXIST on the connected radio.
+//
+// The title bar's headphone mute and volume, the MIDI "Headphone Volume" and
+// "Master Volume" sliders, and the controller wheel action
+// WheelHeadphoneVolume all drive the RADIO's own lineout/headphone mixer with
+// `mixer headphone|lineout ...` -- FlexLib wire text. RadioModel::sendCmd drops
+// that at hasCommandPlane() on every other family, so on a Hermes-Lite 2 the
+// headphone slider moved, the glyph muted, and nothing happened.
+//
+// HEADPHONE PAIR: such a radio has no headphone output, so the pair is
+// UNAVAILABLE there -- dimmed, never hidden, the reason on its tooltip and
+// accessibleDescription (theme-style-guide.md, Three-state controls) -- and the
+// MIDI knob and wheel action that drive the same mixer channel refuse through
+// the one-shot notice. With no radio connected there is nothing to be honest
+// ABOUT, so the pair is available, as every capability gate here restores on
+// disconnect. A Flex keeps the pair live and its wire text: available the
+// moment a command plane exists.
+//
+// MASTER KNOB: the title bar's master slider already drives this computer's
+// output through MainWindow::applyMasterVolume() when PC Audio is on, and on a
+// radio with no command plane that output is what the operator hears. The MIDI
+// Master Volume knob takes that same path there; with PC Audio off there is no
+// output here and no mixer on the radio, and it refuses.
+//
+// LINE OUT: the radio's own line out exists on a Flex (command plane) and
+// wherever the backend declares RadioCapabilities::lineoutControl (ANAN). The
+// title-bar speaker mutes it beside this computer's output only there (#4665);
+// elsewhere Radio Setup's Line Out row is dimmed with its reason.
+//
+// Pure, no Qt and no engine type, so the test includes it directly; the
+// PanZoomModeGate.h shape.
+
+namespace AetherSDR {
+
+[[nodiscard]] constexpr bool headphoneControlsAvailable(
+    bool connected, bool hasCommandPlane) noexcept
+{
+    return !connected || hasCommandPlane;
+}
+
+// What an unavailable headphone control announces, on its tooltip and its
+// accessibleDescription: one sentence for the level, one for the mute. Every
+// site that dims the pair, and the tests, read them from here. ASCII. The Line
+// Out reason is not one of them: it has one site, in Radio Setup.
+inline constexpr char kHeadphoneLevelUnavailableReason[] =
+    "Unavailable: this radio has no headphone output. Its audio plays on "
+    "this computer; set its level with the master volume slider.";
+inline constexpr char kHeadphoneMuteUnavailableReason[] =
+    "Unavailable: this radio has no headphone output. Its audio plays on "
+    "this computer; mute it with the speaker button.";
+
+[[nodiscard]] constexpr bool lineoutControlsAvailable(
+    bool connected, bool hasCommandPlane, bool declaresLineout) noexcept
+{
+    return !connected || hasCommandPlane || declaresLineout;
+}
+
+[[nodiscard]] constexpr bool masterKnobDrivesLocalOutput(
+    bool connected, bool hasCommandPlane, bool pcAudioEnabled) noexcept
+{
+    return connected && !hasCommandPlane && pcAudioEnabled;
+}
+
+}  // namespace AetherSDR

@@ -1,0 +1,1338 @@
+#include "PanadapterApplet.h"
+#include "PanSliceTitle.h"
+#include "PanadapterHeader.h"
+#include "models/CwRxModel.h"
+#include "RttyDecodeSettings.h"
+#include "RttyDecoderSensitivity.h"
+#ifdef AETHER_ASR_ENABLED
+#include "CopyAssistPanel.h"
+#endif
+#include "models/CwDecodeSettings.h"
+#include "FramelessMoveHelper.h"
+#include "GuardedSlider.h"
+#include "RangeSlider.h"
+#include "SliceLabel.h"
+#include "SpectrumWidget.h"
+#include "Theme.h"
+#include "core/AppSettings.h"
+#include "gui/CopyAssistSettings.h"
+#include "core/SettingsHelpers.h"
+
+#include <QToolButton>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QComboBox>
+#include <QSlider>
+#include <QSignalBlocker>
+#include <QEvent>
+#include <QLabel>
+#include <QDateTime>
+#include <QMenu>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QPushButton>
+#include <QTextEdit>
+#include <QTextCharFormat>
+#include <QTextDocument>
+#include <QWindow>
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QAccessible>
+#include "core/ThemeManager.h"
+
+#include <algorithm>
+#include <array>
+
+namespace AetherSDR {
+
+namespace {
+// The Sens slider's 0-100 as a cost threshold: text whose cost is at or above
+// it is hidden.  0 maps to 1.0 and 100 to 0.1.
+float cwSensCostThreshold(int sens) { return 1.0f - (sens / 100.0f) * 0.9f; }
+
+// fldigi's standard RTTY shifts and mark tones, the RTTY decoder's Shift and
+// Mark lists, in ascending order.
+constexpr int kRttyShiftPresetsHz[] = {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850};
+constexpr int kRttyMarkPresetsHz[] = {500, 850, 915, 1000, 1275, 1700, 2125, 2210};
+
+// Selects hz in a combo listing presets in ascending order, without emitting.
+// A value off the list gets its own entry in numeric order, replacing any
+// earlier one.
+template <std::size_t N>
+void showSliceValue(QComboBox* combo, const int (&presets)[N], int hz)
+{
+    const auto isPreset = [&presets](int v) {
+        return std::find(std::begin(presets), std::end(presets), v) != std::end(presets);
+    };
+    const QSignalBlocker block(combo);
+    for (int i = combo->count() - 1; i >= 0; --i) {
+        const int v = combo->itemData(i).toInt();
+        if (v != hz && !isPreset(v)) { combo->removeItem(i); }
+    }
+    int idx = combo->findData(hz);
+    if (idx < 0) {
+        idx = 0;
+        while (idx < combo->count() && combo->itemData(idx).toInt() < hz) { ++idx; }
+        combo->insertItem(idx, QString::number(hz), hz);
+    }
+    combo->setCurrentIndex(idx);
+}
+
+void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reason,
+                         const QString& accessibleName)
+{
+    const bool textChanged = label->text() != hint;
+    const bool reasonChanged = label->accessibleDescription() != reason;
+    if (!textChanged && !reasonChanged) {
+        return;
+    }
+    label->setText(hint);
+    label->setToolTip(reason);
+    label->setAccessibleName(accessibleName);
+    label->setAccessibleDescription(reason);
+    ThemeManager::instance().applyStyleSheet(label, reason.isEmpty()
+        ? "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; background: transparent; }"
+        : "QLabel { color: {{color.accent.warning}}; font-size: 9px; background: transparent; }");
+    // A reason that changes under an unchanged hint is the whole content of the
+    // update for a screen reader, and NameChanged does not carry it (#4896).
+    if (textChanged) {
+        QAccessibleEvent event(label, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+    if (reasonChanged) {
+        QAccessibleEvent event(label, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+}
+} // namespace
+
+PanadapterApplet::PanadapterApplet(QWidget* parent)
+    : CanonPan(parent)
+{
+    theme::setContainer(this, QStringLiteral("applet/panadapter"));
+    // Everything lives in the canon body, inside the hairline. Children are
+    // created there rather than reparented into it: the GPU SpectrumWidget
+    // (QRhiWidget) must never change parents.
+    QWidget* body = bodyWidget();
+    auto* layout = new QVBoxLayout(body);
+    m_mainLayout = layout;
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    // ── Spectrum widget (FFT + waterfall) ────────────────────────────────
+    // It runs to the top of the pan: the header below lies over its top
+    // PanadapterHeader::kHeight px, and the spectrum moves the overlay menu,
+    // dBm arrows and CW / RIT / XIT labels below it. The slice flags and the
+    // top-right readouts stay at the top and ride over the header.
+    m_spectrum = new SpectrumWidget(body);
+    m_spectrum->installEventFilter(this);  // pan activation; header placement
+    m_spectrum->setTopInset(PanadapterHeader::kHeight);
+    layout->addWidget(m_spectrum, 1);
+
+    // ── Canon header over the spectrum: grip, slice title, pop-out, ─────
+    // ── maximize, close ──────────────────────────────────────────────────
+    // Transparent, so the spectrum renders underneath; see PanadapterHeader.
+    const PanadapterHeader header = PanadapterHeader::build(m_spectrum);
+    m_titleBar = header.titleBar;
+    m_titleBar->installEventFilter(this);  // drag-to-move when floating; placement
+    m_titleLabel = header.title;
+    m_headerButtons = header.buttons;
+    m_headerButtons->installEventFilter(this);  // placement
+    auto* buttonLayout = header.buttonRow;
+
+    m_popOutBtn = header.popOut;  // hidden in single-pan mode
+    connect(m_popOutBtn, &QPushButton::clicked, this, [this]() {
+        if (m_isFloating) {
+            emit dockClicked();
+        } else {
+            emit popOutClicked();
+        }
+    });
+    m_maxBtn = header.maximize;   // hidden in single-pan mode
+    connect(m_maxBtn, &QPushButton::clicked, this, [this]() {
+        emit maximizeRequested(m_panId);
+    });
+
+    // The canon close button, moved into the header at its 18 px (it is
+    // 26 px in a corner); hidden in single-pan mode.
+    placeCloseButtonIn(buttonLayout);
+    closeButton()->setFixedSize(18, 18);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(closeButton(),
+                                                        PanadapterHeader::styleSheet());
+    closeButton()->setAccessibleName(tr("Close panadapter"));
+    closeButton()->setToolTip(tr("Close panadapter"));
+    setCloseButtonVisible(false);
+    connect(this, &CanonSurface::closeRequested, this, [this]() {
+        emit closeRequested(m_panId);
+    });
+    layoutHeader();
+
+    // ── CW decode panel (hidden by default, shown in CW mode) ─────────
+    // Restore persisted display preferences (#3628): font size and panel
+    // height are user-tunable for readability and history depth.
+    m_cwFontPx     = std::clamp(CwDecodeSettings::fontPx(), 8, 32);
+    m_cwPanelHeight = std::clamp(CwDecodeSettings::panelHeight(), 60, 600);
+
+    m_cwPanel = new QWidget(body);
+    m_cwPanel->setObjectName("cwDecodePanel");  // addressable for automation (#3628/#3646)
+    m_cwPanel->setCursor(Qt::ArrowCursor);  // prevent invisible cursor from native-window parent (#1096)
+    m_cwPanel->setFixedHeight(m_cwPanelHeight);
+    m_cwPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_cwPanel, "QWidget { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }");
+
+    auto* cwLayout = new QVBoxLayout(m_cwPanel);
+    cwLayout->setContentsMargins(4, 0, 4, 2);
+    cwLayout->setSpacing(1);
+
+    // Drag-grip along the top edge — drag up/down to resize the panel and
+    // reveal more decoded-text history (#3628).  A thin strip rather than a
+    // QSplitter so the GPU SpectrumWidget (QRhiWidget) is never reparented.
+    m_cwGrip = new QWidget(m_cwPanel);
+    m_cwGrip->setObjectName("cwResizeGrip");
+    m_cwGrip->setFixedHeight(4);
+    m_cwGrip->setCursor(Qt::SizeVerCursor);
+    m_cwGrip->setToolTip("Drag to resize the CW decode panel");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_cwGrip,
+        "QWidget { background: {{color.background.2}}; }");
+    m_cwGrip->installEventFilter(this);
+    cwLayout->addWidget(m_cwGrip);
+
+    // Stats bar: pitch, speed, clear button
+    auto* cwBar = new QHBoxLayout;
+    cwBar->setSpacing(6);
+    auto* cwTitle = new QLabel("CW");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(cwTitle, "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; }");
+    cwBar->addWidget(cwTitle);
+    m_cwInputHint = new QLabel;
+    m_cwInputHint->setObjectName(QStringLiteral("cwInputHint"));
+    setCwInputHint({}, {});
+    cwBar->addWidget(m_cwInputHint);
+
+    m_cwStatsLabel = new QLabel;
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_cwStatsLabel, "QLabel { color: {{color.text.label}}; font-size: 10px; background: transparent; }");
+    m_cwStatsLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_cwStatsLabel->setFixedWidth(m_cwStatsLabel->fontMetrics().horizontalAdvance("1200 Hz  120 WPM"));
+    cwBar->addWidget(m_cwStatsLabel);
+
+    // Sensitivity slider — filters low-confidence decodes
+    auto* sensLabel = new QLabel("Sens:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(sensLabel, "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    cwBar->addWidget(sensLabel);
+    m_cwSensSlider = new GuardedSlider(Qt::Horizontal);
+    m_cwSensSlider->setRange(0, 100);  // 0=show everything, 100=only high confidence
+    int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
+    m_cwSensSlider->setValue(savedSens);
+    m_cwSensSlider->setFixedWidth(60);
+    m_cwSensSlider->setAccessibleName(tr("CW decode sensitivity"));
+    applyPrimarySliderStyle(m_cwSensSlider);
+    // The slider clamps a hand-edited value; the threshold reads it back.
+    m_cwCostThreshold = cwSensCostThreshold(m_cwSensSlider->value());
+    connectSliderSetting(m_cwSensSlider,
+        [this](int v) {
+            m_cwSensUnsaved = true;
+#ifdef HAVE_CW_RX_BACKENDS
+            if (m_cwSensBackend != QLatin1String("ggmorse")) {
+                m_cwNeuralCostThreshold = cwSensCostThreshold(v);
+                return;
+            }
+#endif
+            m_cwCostThreshold = cwSensCostThreshold(v);
+        },
+        [this](int v) { saveCwSens(v); });
+    cwBar->addWidget(m_cwSensSlider);
+
+#ifdef HAVE_CW_RX_BACKENDS
+    m_cwEngineCombo = new GuardedComboBox(this);
+    m_cwEngineCombo->setObjectName("cwRxEngine");
+    m_cwEngineCombo->setAccessibleName(tr("CW receive decoder"));
+    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or a neural decoder for the selected slice"));
+    for (const QString& key : CwRxModel::availableBackends()) {
+        const QString label = key == "deepfist" ? tr("DeepFist")
+                            : key == "deepcw"   ? tr("DeepCW") : key;
+        m_cwEngineCombo->addItem(label, key);
+    }
+    m_cwEngineCombo->setToolTip(tr("Receive decoder; transmit sidetone continues to use ggmorse"));
+    cwBar->addWidget(m_cwEngineCombo);
+    m_cwModelAction = new QPushButton(tr("Cancel"), this);
+    m_cwModelAction->setObjectName("cwModelAction");
+    m_cwModelAction->setAccessibleName(tr("CW model download action"));
+    m_cwModelAction->setFixedHeight(22);
+    m_cwModelAction->hide();
+    cwBar->addWidget(m_cwModelAction);
+    connect(m_cwModelAction, &QPushButton::clicked, this, &PanadapterApplet::cwModelActionRequested);
+    connect(m_cwEngineCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        emit cwEngineChanged(m_cwEngineCombo->itemData(index).toString());
+    });
+#endif
+
+    // Lock Pitch button
+    m_lockPitchBtn = new QPushButton("\xF0\x9F\x94\x92P");  // 🔒P
+    m_lockPitchBtn->setCheckable(true);
+    m_lockPitchBtn->setFixedSize(28, 16);
+    m_lockPitchBtn->setToolTip("Lock decoder pitch to current frequency");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_lockPitchBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.label}}; border: 1px solid {{color.background.1}};"
+        " border-radius: 2px; font-size: 8px; padding: 0; }"
+        "QPushButton:checked { color: {{color.accent}}; border-color: {{color.accent}}; }"
+        "QPushButton:hover { color: {{color.text.primary}}; }");
+    cwBar->addWidget(m_lockPitchBtn);
+
+    // Lock Speed button
+    m_lockSpeedBtn = new QPushButton("\xF0\x9F\x94\x92S");  // 🔒S
+    m_lockSpeedBtn->setCheckable(true);
+    m_lockSpeedBtn->setFixedSize(28, 16);
+    m_lockSpeedBtn->setToolTip("Lock decoder speed to current WPM");
+    m_lockSpeedBtn->setStyleSheet(m_lockPitchBtn->styleSheet());
+    cwBar->addWidget(m_lockSpeedBtn);
+
+    // Pitch range — double-handle slider, label embedded in widget
+    // Both ranges start from the shared saved values and are saved again when a
+    // drag or key press ends (see eventFilter), not on every step of it.
+    const auto pitch = CwDecodeSettings::pitchRange();
+    m_pitchRangeSlider = new RangeSlider(CwDecodeSettings::kPitchSpan.low,
+                                         CwDecodeSettings::kPitchSpan.high,
+                                         pitch.low, pitch.high, "Pitch", {}, this);
+    m_pitchRangeSlider->setFixedWidth(195);
+    m_pitchRangeSlider->setToolTip("Decoder pitch search range (Hz)");
+    m_pitchRangeSlider->installEventFilter(this);
+    cwBar->addWidget(m_pitchRangeSlider);
+    connect(m_pitchRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
+        emit pitchRangeChanged(lo, hi);
+    });
+
+    // WPM range — double-handle slider, label embedded in widget
+    const auto speed = CwDecodeSettings::speedRange();
+    m_speedRangeSlider = new RangeSlider(CwDecodeSettings::kSpeedSpan.low,
+                                         CwDecodeSettings::kSpeedSpan.high,
+                                         speed.low, speed.high, "WPM", {}, this);
+    m_speedRangeSlider->setFixedWidth(195);
+    m_speedRangeSlider->setToolTip("Decoder speed search range (WPM)");
+    m_speedRangeSlider->installEventFilter(this);
+    cwBar->addWidget(m_speedRangeSlider);
+    connect(m_speedRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
+        emit speedRangeChanged(lo, hi);
+    });
+
+    cwBar->addStretch();
+
+    const QString cwBtnStyle =
+        "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #203040;"
+        " border-radius: 2px; font-size: 9px; font-weight: bold;"
+        " padding: 1px 6px; }"
+        "QPushButton:hover { color: #c8d8e8; background: #2a3a4a; }";
+
+    auto* copyAllBtn = new QPushButton("CPY ALL");
+    copyAllBtn->setToolTip("Copy all decoded text to clipboard");
+    copyAllBtn->setStyleSheet(cwBtnStyle);
+    connect(copyAllBtn, &QPushButton::clicked, this, [this] {
+        QGuiApplication::clipboard()->setText(m_cwText->toPlainText());
+    });
+    cwBar->addWidget(copyAllBtn);
+
+    auto* copyVisBtn = new QPushButton("CPY VIS");
+    copyVisBtn->setToolTip("Copy visible text to clipboard");
+    copyVisBtn->setStyleSheet(cwBtnStyle);
+    connect(copyVisBtn, &QPushButton::clicked, this, [this] {
+        QRect visibleRect = m_cwText->viewport()->rect();
+        QTextCursor topCursor = m_cwText->cursorForPosition(visibleRect.topLeft());
+        QTextCursor bottomCursor = m_cwText->cursorForPosition(visibleRect.bottomRight());
+        topCursor.setPosition(bottomCursor.position(), QTextCursor::KeepAnchor);
+        QGuiApplication::clipboard()->setText(topCursor.selectedText().replace(QChar(0x2029), '\n'));
+    });
+    cwBar->addWidget(copyVisBtn);
+
+    // Font-size controls — adjust and persist the decoded-text size (#3628).
+    auto* fontDownBtn = new QPushButton("A-");
+    fontDownBtn->setObjectName("cwFontDown");
+    fontDownBtn->setToolTip("Decrease decoded-text font size");
+    fontDownBtn->setStyleSheet(cwBtnStyle);
+    connect(fontDownBtn, &QPushButton::clicked, this, [this] { adjustCwFont(-1); });
+    cwBar->addWidget(fontDownBtn);
+
+    auto* fontUpBtn = new QPushButton("A+");
+    fontUpBtn->setObjectName("cwFontUp");
+    fontUpBtn->setToolTip("Increase decoded-text font size");
+    fontUpBtn->setStyleSheet(cwBtnStyle);
+    connect(fontUpBtn, &QPushButton::clicked, this, [this] { adjustCwFont(+1); });
+    cwBar->addWidget(fontUpBtn);
+
+    auto* clearBtn = new QPushButton("CLR");
+    clearBtn->setStyleSheet(cwBtnStyle);
+    connect(clearBtn, &QPushButton::clicked, this, &PanadapterApplet::clearCwText);
+    cwBar->addWidget(clearBtn);
+
+    auto* closeBtn = new QPushButton("\u2715");
+    closeBtn->setToolTip("Close CW decoder");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(closeBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}}; border: 1px solid {{color.background.1}};"
+        " border-radius: 2px; font-size: 9px; font-weight: bold;"
+        " padding: 1px 6px; }"
+        "QPushButton:hover { color: #ff6060; background: {{color.background.1}}; }");
+    connect(closeBtn, &QPushButton::clicked, this, [this]() {
+        setCwPanelVisible(false);
+        emit cwPanelCloseRequested();
+    });
+    cwBar->addWidget(closeBtn);
+
+    cwLayout->addLayout(cwBar);
+
+    // Text area
+    m_cwText = new QTextEdit;
+    m_cwText->setReadOnly(true);
+    m_cwText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    applyCwFont();  // font-size driven by persisted m_cwFontPx (#3628)
+    m_cwText->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_cwText->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_cwText->setWordWrapMode(QTextOption::WrapAnywhere);
+    m_cwText->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_cwText, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        QMenu *menu = m_cwText->createStandardContextMenu();
+        menu->addSeparator();
+        menu->addAction(tr("Increase font size"), this, [this] { adjustCwFont(+1); });
+        menu->addAction(tr("Decrease font size"), this, [this] { adjustCwFont(-1); });
+        menu->addSeparator();
+        menu->addAction(tr("Clear"), this, &PanadapterApplet::clearCwText);
+        menu->exec(m_cwText->mapToGlobal(pos));
+        delete menu;
+    });
+    cwLayout->addWidget(m_cwText, 1);
+
+
+    m_cwPanel->hide();
+    layout->addWidget(m_cwPanel);
+
+    // ── RTTY decode panel (hidden by default, shown in RTTY/DIGL mode) ───
+    m_rttyPanel = new QWidget(bodyWidget());
+    m_rttyPanel->setCursor(Qt::ArrowCursor);
+    m_rttyPanel->setFixedHeight(90);
+    m_rttyPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyPanel,
+        "QWidget { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }");
+
+    auto* rttyLayout = new QVBoxLayout(m_rttyPanel);
+    rttyLayout->setContentsMargins(4, 2, 4, 2);
+    rttyLayout->setSpacing(1);
+
+    // ── Controls bar ─────────────────────────────────────────────────────
+    auto* rttyBar = new QHBoxLayout;
+    rttyBar->setSpacing(4);
+
+    auto* rttyTitle = new QLabel("RTTY");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rttyTitle,
+        "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; }");
+    rttyBar->addWidget(rttyTitle);
+    m_rttyInputHint = new QLabel;
+    m_rttyInputHint->setObjectName(QStringLiteral("rttyInputHint"));
+    setRttyInputHint({}, {});
+    rttyBar->addWidget(m_rttyInputHint);
+
+    const QString comboStyle =
+        "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050;"
+        " border-radius: 2px; font-size: 9px; padding: 0 2px; }"
+        "QComboBox::drop-down { width: 10px; }"
+        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8; selection-background-color: #304050; }";
+
+    // Mark frequency
+    auto* markLabel = new QLabel("Mark:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(markLabel,
+        "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(markLabel);
+
+    m_rttyMarkCombo = new QComboBox;
+    m_rttyMarkCombo->setObjectName(QStringLiteral("rttyMarkCombo"));
+    m_rttyMarkCombo->setStyleSheet(comboStyle);
+    m_rttyMarkCombo->setFixedWidth(68);
+    m_rttyMarkCombo->setToolTip("Mark (idle) tone. Sets the slice's RTTY mark on the radio.");
+    m_rttyMarkCombo->setAccessibleName(QStringLiteral("RTTY decoder mark"));
+    for (int hz : kRttyMarkPresetsHz) {
+        m_rttyMarkCombo->addItem(QString::number(hz), hz);
+    }
+    // The slice owns the mark; MainWindow shows its value here once the
+    // decoder runs, and a choice here is sent to the slice.
+    m_rttyMarkCombo->setCurrentIndex(m_rttyMarkCombo->findData(2125));
+    connect(m_rttyMarkCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        emit rttyMarkHzChanged(m_rttyMarkCombo->currentData().toInt());
+    });
+    rttyBar->addWidget(m_rttyMarkCombo);
+
+    // Shift
+    auto* shiftLabel = new QLabel("Shift:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(shiftLabel,
+        "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(shiftLabel);
+
+    m_rttyShiftCombo = new QComboBox;
+    m_rttyShiftCombo->setObjectName(QStringLiteral("rttyShiftCombo"));
+    m_rttyShiftCombo->setStyleSheet(comboStyle);
+    m_rttyShiftCombo->setFixedWidth(52);
+    m_rttyShiftCombo->setToolTip("Mark-to-space shift. Sets the slice's RTTY shift on the radio.");
+    m_rttyShiftCombo->setAccessibleName(QStringLiteral("RTTY decoder shift"));
+    for (int hz : kRttyShiftPresetsHz) {
+        m_rttyShiftCombo->addItem(QString::number(hz), hz);
+    }
+    // The slice owns the shift; MainWindow shows its value here once the
+    // decoder runs, and a choice here is sent to the slice.
+    m_rttyShiftCombo->setCurrentIndex(m_rttyShiftCombo->findData(170));
+    connect(m_rttyShiftCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        emit rttyShiftHzChanged(m_rttyShiftCombo->currentData().toInt());
+    });
+    rttyBar->addWidget(m_rttyShiftCombo);
+
+    // Baud rate
+    auto* baudLabel = new QLabel("Baud:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(baudLabel,
+        "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(baudLabel);
+
+    m_rttyBaudCombo = new QComboBox;
+    m_rttyBaudCombo->setStyleSheet(comboStyle);
+    m_rttyBaudCombo->setFixedWidth(52);
+    m_rttyBaudCombo->setToolTip("Symbol rate (baud)");
+    // fldigi standard baud rates (stored as float * 100 to avoid float key issues)
+    struct { const char* label; float val; } baudRates[] = {
+        {"45.45", 45.45f}, {"50", 50.0f}, {"75", 75.0f}, {"100", 100.0f},
+        {"110", 110.0f}, {"150", 150.0f}, {"300", 300.0f}
+    };
+    for (auto& b : baudRates)
+        m_rttyBaudCombo->addItem(b.label, static_cast<double>(b.val));
+    {
+        const double saved = AppSettings::instance().value("RttyDecoderBaud", "45.45").toDouble();
+        int bestIdx = 0;
+        double bestDiff = 1e9;
+        for (int i = 0; i < m_rttyBaudCombo->count(); ++i) {
+            double diff = std::abs(m_rttyBaudCombo->itemData(i).toDouble() - saved);
+            if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+        }
+        m_rttyBaudCombo->setCurrentIndex(bestIdx);
+    }
+    connect(m_rttyBaudCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        const float baud = static_cast<float>(m_rttyBaudCombo->currentData().toDouble());
+        AppSettings::instance().setValue("RttyDecoderBaud", QString::number(static_cast<double>(baud)));
+        AppSettings::instance().save();
+        emit rttyBaudChanged(baud);
+    });
+    rttyBar->addWidget(m_rttyBaudCombo);
+
+    // Rev toggle
+    m_rttyRevBtn = new QPushButton("REV");
+    m_rttyRevBtn->setCheckable(true);
+    m_rttyRevBtn->setFixedSize(32, 16);
+    m_rttyRevBtn->setToolTip("Reverse polarity: space above mark (LSB / inverted signal)");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyRevBtn,
+        "QPushButton { background: {{color.background.1}}; color: {{color.text.label}};"
+        " border: 1px solid {{color.background.1}}; border-radius: 2px; font-size: 8px; padding: 0; }"
+        "QPushButton:checked { color: {{color.accent}}; border-color: {{color.accent}}; }"
+        "QPushButton:hover   { color: {{color.text.primary}}; }");
+    {
+        const bool saved = AppSettings::instance().value("RttyDecoderReverse", "false").toString() == "true";
+        m_rttyRevBtn->setChecked(saved);
+    }
+    connect(m_rttyRevBtn, &QPushButton::toggled, this, [this](bool rev) {
+        AppSettings::instance().setValue("RttyDecoderReverse", rev ? "true" : "false");
+        AppSettings::instance().save();
+        emit rttyReverseChanged(rev);
+    });
+    rttyBar->addWidget(m_rttyRevBtn);
+
+    // Sensitivity slider — drops low-confidence characters so noise between
+    // transmissions is not rendered (#5028).  Mirrors the CW pane's control.
+    auto* rttySensLabel = new QLabel("Sens:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rttySensLabel, "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(rttySensLabel);
+    m_rttySensSlider = new GuardedSlider(Qt::Horizontal);
+    m_rttySensSlider->setObjectName(QStringLiteral("rttySensSlider"));
+    m_rttySensSlider->setAccessibleName(QStringLiteral("RTTY decoder sensitivity"));
+    m_rttySensSlider->setToolTip(QStringLiteral(
+        "Squelch for the decoded text: drops characters the decoder is not confident\n"
+        "about, so noise between transmissions stops filling the pane with gibberish.\n"
+        "0 (default) shows every decoded character — exactly the behavior before this\n"
+        "control existed. Higher values drop more; ~38 filters what the stats bar\n"
+        "calls UNLOCK; 100 keeps only near-certain copy. Affects display only —\n"
+        "nothing is retuned and no audio changes."));
+    m_rttySensSlider->setRange(0, 100);
+    const int savedRttySens = RttyDecodeSettings::sensitivity();
+    m_rttySensSlider->setValue(savedRttySens);
+    m_rttySensSlider->setFixedWidth(60);
+    applyPrimarySliderStyle(m_rttySensSlider);
+    m_rttyConfThreshold = rttyConfThresholdFor(savedRttySens);
+    connectSliderSetting(m_rttySensSlider,
+        [this](int v) { m_rttyConfThreshold = rttyConfThresholdFor(v); },
+        [](int v) { RttyDecodeSettings::setSensitivity(v); });
+    rttyBar->addWidget(m_rttySensSlider);
+
+    // Stats
+    m_rttyStatsLabel = new QLabel;
+    m_rttyStatsLabel->setTextFormat(Qt::RichText);
+    m_rttyStatsLabel->setFixedWidth(248);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyStatsLabel,
+        "QLabel { background: transparent; }");
+    rttyBar->addWidget(m_rttyStatsLabel);
+
+    rttyBar->addStretch();
+
+    const QString rttBtnStyle =
+        "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #203040;"
+        " border-radius: 2px; font-size: 9px; font-weight: bold; padding: 1px 6px; }"
+        "QPushButton:hover { color: #c8d8e8; background: #2a3a4a; }";
+
+    auto* rttyCopyAllBtn = new QPushButton("CPY ALL");
+    rttyCopyAllBtn->setToolTip("Copy all decoded text to clipboard");
+    rttyCopyAllBtn->setStyleSheet(rttBtnStyle);
+    connect(rttyCopyAllBtn, &QPushButton::clicked, this, [this] {
+        QGuiApplication::clipboard()->setText(m_rttyText->toPlainText());
+    });
+    rttyBar->addWidget(rttyCopyAllBtn);
+
+    auto* clrBtn = new QPushButton("CLR");
+    clrBtn->setStyleSheet(rttBtnStyle);
+    connect(clrBtn, &QPushButton::clicked, this, &PanadapterApplet::clearRttyText);
+    rttyBar->addWidget(clrBtn);
+
+    auto* rttyCloseBtn = new QPushButton("✕");
+    rttyCloseBtn->setToolTip("Close RTTY decoder");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rttyCloseBtn,
+        "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}};"
+        " border: 1px solid {{color.background.1}}; border-radius: 2px; font-size: 9px;"
+        " font-weight: bold; padding: 1px 6px; }"
+        "QPushButton:hover { color: #ff6060; background: {{color.background.1}}; }");
+    connect(rttyCloseBtn, &QPushButton::clicked, this, [this] {
+        m_rttyPanel->hide();
+        emit rttyPanelCloseRequested();
+    });
+    rttyBar->addWidget(rttyCloseBtn);
+
+    rttyLayout->addLayout(rttyBar);
+
+    // ── Text area ─────────────────────────────────────────────────────────
+    m_rttyText = new QTextEdit;
+    m_rttyText->setObjectName(QStringLiteral("rttyDecodeText"));
+    m_rttyText->setAccessibleName(QStringLiteral("RTTY decoded text"));
+    m_rttyText->setReadOnly(true);
+    m_rttyText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyText,
+        "QTextEdit { background: {{color.background.0}}; color: {{color.accent.success}}; border: none;"
+        " font-family: monospace; font-size: 13px; font-weight: bold; }"
+        "QScrollBar:vertical { width: 6px; background: {{color.background.0}}; }"
+        "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+    m_rttyText->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_rttyText->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_rttyText->setWordWrapMode(QTextOption::WrapAnywhere);
+    m_rttyText->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_rttyText, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        QMenu* menu = m_rttyText->createStandardContextMenu();
+        menu->addSeparator();
+        menu->addAction(tr("Clear"), this, &PanadapterApplet::clearRttyText);
+        menu->exec(m_rttyText->mapToGlobal(pos));
+        delete menu;
+    });
+    rttyLayout->addWidget(m_rttyText);
+
+    m_rttyPanel->hide();
+    layout->addWidget(m_rttyPanel);
+}
+
+void PanadapterApplet::setMultiPanMode(bool multi)
+{
+    // In single-pan mode, hide all decorations — nothing to pop out, maximize, or close
+    if (m_popOutBtn) m_popOutBtn->setVisible(multi);
+    if (m_maxBtn) m_maxBtn->setVisible(multi);
+    setCloseButtonVisible(multi);
+}
+
+void PanadapterApplet::setOnCanvas(bool on)
+{
+    m_onCanvas = on;
+    m_canvasPressed  = false;
+    m_canvasDragging = false;
+    if (on && m_popOutBtn) {
+        // A canvas item can always pop out (RFC #4887 decision 1 — pop-out
+        // stays), even as the only pan: the single-pan button hiding is a
+        // stack-mode economy, not a rule about floating.  Off-canvas, the
+        // stack's next setMultiPanMode() re-applies its economy.
+        m_popOutBtn->setVisible(true);
+    }
+}
+
+void PanadapterApplet::setFloatingState(bool floating)
+{
+    m_isFloating = floating;
+    if (m_popOutBtn) {
+        const QString actionName = floating ? tr("Dock panadapter")
+                                            : tr("Pop out panadapter");
+        m_popOutBtn->setText(floating ? "\u21a9" : "\u2b08");  // ↩ or ⬈
+        m_popOutBtn->setAccessibleName(actionName);
+        m_popOutBtn->setToolTip(actionName);
+        m_popOutBtn->setVisible(true);  // always visible when floating
+    }
+    // When floating, always show close (to dock via window close)
+    if (floating) setCloseButtonVisible(true);
+}
+
+void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
+{
+    m_titleSliceId = id;
+    m_titleLabel->setText(
+        QString("Slice %1").arg(SliceLabel::richText(id, perClientLetter)));
+    const QString title =
+        QString("Slice %1").arg(SliceLabel::unicodeForm(id, perClientLetter));
+    if (title != m_sliceTitle) {
+        m_sliceTitle = title;
+        emit sliceTitleChanged();
+    }
+}
+
+void PanadapterApplet::setPanId(const QString& id)
+{
+    if (id == m_panId)
+        return;
+    m_panId = id;
+    if (m_titleSliceId < 0) {
+        m_titleLabel->setText(
+            PanSliceTitle::displayName(QString(), m_panId).toHtmlEscaped());
+        // A pan with no slice is named by its id, so the floating title
+        // follows the id too (the placeholder taking over the first real pan).
+        emit sliceTitleChanged();
+    }
+}
+
+void PanadapterApplet::clearSliceTitle()
+{
+    m_titleSliceId = -1;
+    m_titleLabel->setText(
+        PanSliceTitle::displayName(QString(), m_panId).toHtmlEscaped());
+    if (!m_sliceTitle.isEmpty()) {
+        m_sliceTitle.clear();
+        emit sliceTitleChanged();
+    }
+}
+
+QString PanadapterApplet::sliceTitle() const
+{
+    return m_sliceTitle;
+}
+
+void PanadapterApplet::setCwPanelVisible(bool visible)
+{
+    m_cwPanel->setVisible(visible);
+}
+
+#ifdef AETHER_ASR_ENABLED
+CopyAssistPanel* PanadapterApplet::copyAssistPanel()
+{
+    if (m_copyAssistPanel != nullptr) {
+        return m_copyAssistPanel;
+    }
+
+    m_copyAssistHeight = std::clamp(
+        CopyAssistSettings::value("AsrPanelHeight", "160").toString().toInt(), 60, 600);
+
+    // Dock container styled like the CW decode panel — a top border separating
+    // it from the waterfall, fixed height, resizable via a top grip.
+    m_copyAssistDock = new QWidget(bodyWidget());
+    m_copyAssistDock->setObjectName("copyAssistDock");
+    m_copyAssistDock->setCursor(Qt::ArrowCursor);
+    m_copyAssistDock->setFixedHeight(m_copyAssistHeight);
+    m_copyAssistDock->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_copyAssistDock,
+        "QWidget#copyAssistDock { background: {{color.background.0}};"
+        " border-top: 1px solid {{color.background.1}}; }");
+
+    auto* dockLayout = new QVBoxLayout(m_copyAssistDock);
+    dockLayout->setContentsMargins(0, 0, 0, 0);
+    dockLayout->setSpacing(0);
+
+    m_copyAssistGrip = new QWidget(m_copyAssistDock);
+    m_copyAssistGrip->setObjectName("copyAssistResizeGrip");
+    m_copyAssistGrip->setFixedHeight(4);
+    m_copyAssistGrip->setCursor(Qt::SizeVerCursor);
+    m_copyAssistGrip->setToolTip("Drag to resize the Copy Assist panel");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_copyAssistGrip,
+        "QWidget { background: {{color.background.1}}; }");
+    m_copyAssistGrip->installEventFilter(this);
+    dockLayout->addWidget(m_copyAssistGrip);
+
+    m_copyAssistPanel = new CopyAssistPanel(m_copyAssistDock);
+    dockLayout->addWidget(m_copyAssistPanel, 1);
+    // Shown/hidden via the status-bar "ASR" toggle (setCopyAssistVisible); the
+    // panel has no close button of its own.
+
+    m_copyAssistDock->hide();
+    m_mainLayout->addWidget(m_copyAssistDock);
+    return m_copyAssistPanel;
+}
+
+void PanadapterApplet::setCopyAssistVisible(bool visible)
+{
+    if (visible) {
+        copyAssistPanel(); // ensure built
+    }
+    if (m_copyAssistDock != nullptr) {
+        m_copyAssistDock->setVisible(visible);
+        // Closing the panel (× button, status-bar toggle, menu, or auto-hide on
+        // leaving voice mode) also turns ASR off — unchecking Enable fires
+        // enableToggled(false), which disables the audio tap.
+        if (!visible && m_copyAssistPanel != nullptr) {
+            m_copyAssistPanel->setAsrEnabled(false);
+        }
+    }
+}
+
+bool PanadapterApplet::isCopyAssistVisible() const
+{
+    return m_copyAssistDock != nullptr && m_copyAssistDock->isVisible();
+}
+
+void PanadapterApplet::setCopyAssistHeight(int h)
+{
+    m_copyAssistHeight = std::clamp(h, 60, 600);
+    if (m_copyAssistDock != nullptr) {
+        m_copyAssistDock->setFixedHeight(m_copyAssistHeight);
+    }
+}
+#endif
+
+void PanadapterApplet::applyCwFont()
+{
+    // Re-apply the decoded-text stylesheet with the current font size.  The
+    // inserted runs use colour-only <span>s, so the widget font governs them.
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_cwText,
+        QStringLiteral(
+            "QTextEdit { background: {{color.background.0}}; color: {{color.accent.success}}; border: none;"
+            " font-family: monospace; font-size: %1px; font-weight: bold; }"
+            "QScrollBar:vertical { width: 6px; background: {{color.background.0}}; }"
+            "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+            .arg(m_cwFontPx));
+}
+
+void PanadapterApplet::adjustCwFont(int delta)
+{
+    const int next = std::clamp(m_cwFontPx + delta, 8, 32);
+    if (next == m_cwFontPx)
+        return;
+    m_cwFontPx = next;
+    applyCwFont();
+    CwDecodeSettings::setFontPx(m_cwFontPx);
+}
+
+void PanadapterApplet::setCwPanelHeight(int h)
+{
+    // Live apply only — persistence happens once on grip release to avoid
+    // writing settings on every mouse-move during a drag.
+    m_cwPanelHeight = std::clamp(h, 60, 600);
+    m_cwPanel->setFixedHeight(m_cwPanelHeight);
+}
+
+int PanadapterApplet::speedRangeLow()  const
+{
+    return m_speedRangeSlider ? m_speedRangeSlider->low() : CwDecodeSettings::kSpeedDefault.low;
+}
+
+int PanadapterApplet::speedRangeHigh() const
+{
+    return m_speedRangeSlider ? m_speedRangeSlider->high() : CwDecodeSettings::kSpeedDefault.high;
+}
+
+int PanadapterApplet::pitchRangeLow()  const
+{
+    return m_pitchRangeSlider ? m_pitchRangeSlider->low() : CwDecodeSettings::kPitchDefault.low;
+}
+
+int PanadapterApplet::pitchRangeHigh() const
+{
+    return m_pitchRangeSlider ? m_pitchRangeSlider->high() : CwDecodeSettings::kPitchDefault.high;
+}
+
+namespace {
+// Moves the handle that keeps low <= high first, so neither setter clamps
+// against the slider's previous range.
+void applyRange(RangeSlider* slider, CwDecodeSettings::Range range)
+{
+    if (!slider) { return; }
+    if (range.low > slider->high()) {
+        slider->setHigh(range.high);
+        slider->setLow(range.low);
+    } else {
+        slider->setLow(range.low);
+        slider->setHigh(range.high);
+    }
+}
+} // namespace
+
+void PanadapterApplet::restoreCwRanges()
+{
+    applyRange(m_pitchRangeSlider, CwDecodeSettings::pitchRange());
+    applyRange(m_speedRangeSlider, CwDecodeSettings::speedRange());
+}
+
+QString PanadapterApplet::cwCostColor(float cost)
+{
+    // Color by confidence: lower cost = higher confidence
+    //   < 0.15  green   (high confidence)
+    //   < 0.35  yellow  (medium)
+    //   < 0.60  orange  (meh)
+    //   >= 0.60 red     (low confidence)
+    if (cost < 0.15f) { return QStringLiteral("#00ff88"); }
+    if (cost < 0.35f) { return QStringLiteral("#e0e040"); }
+    if (cost < 0.60f) { return QStringLiteral("#ff9020"); }
+    return QStringLiteral("#ff4040");
+}
+
+void PanadapterApplet::saveCwSens(int value)
+{
+    m_cwSensUnsaved = false;
+    if (m_cwSensBackend != QLatin1String("ggmorse")) {
+        CwDecodeSettings::setSensitivity(m_cwSensBackend, value);
+        return;
+    }
+    auto& settings = AppSettings::instance();
+    settings.setValue("CwDecoderSensitivity", QString::number(value));
+    settings.save();
+}
+
+void PanadapterApplet::appendCwText(const QString& text, float cost)
+{
+#ifdef HAVE_CW_RX_BACKENDS
+    if (neuralEngineSelected()) { return; }
+#endif
+    // Filter by sensitivity threshold — drop low-confidence decodes
+    if (cost >= m_cwCostThreshold) return;
+
+    // Strip newlines — ggmorse inserts them on pitch changes, but we want
+    // continuous flowing text. Replace with space to preserve word boundaries.
+    QString clean = text;
+    clean.replace('\n', ' ');
+
+    const QString color = cwCostColor(cost);
+
+    m_cwText->moveCursor(QTextCursor::End);
+    // Switching back from TX → RX inserts a separator space so the [TX]
+    // burst and the following RX text don't run together (#2417).
+    if (m_lastCwTextSource == CwTextSource::Tx)
+        m_cwText->insertHtml(QStringLiteral(" "));
+    m_lastCwTextSource = CwTextSource::Rx;
+    m_cwText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
+        .arg(color, clean.toHtmlEscaped()));
+    m_cwText->moveCursor(QTextCursor::End);
+
+    emit cwRxTextDisplayed(clean);
+}
+
+#ifdef HAVE_CW_RX_BACKENDS
+bool PanadapterApplet::neuralEngineSelected() const
+{
+    // Every backend other than ggmorse is a neural one with its own text path.
+    // Compare the stored key, never the row: findData() returns -1 for a key
+    // this build does not offer, and the catalog is meant to grow.
+    if (!m_cwEngineCombo || m_cwEngineCombo->currentIndex() < 0) { return false; }
+    return m_cwEngineCombo->itemData(m_cwEngineCombo->currentIndex()).toString()
+           != QLatin1String("ggmorse");
+}
+void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const QString& status,
+    bool preparing, bool canRetry, const QString& detail)
+{
+    const QSignalBlocker blocker(m_cwEngineCombo);
+    m_cwEngineCombo->setCurrentIndex(m_cwEngineCombo->findData(key));
+    const bool selected = !tuning;
+    const QString unavailableReason = tuning ? QString{}
+        : tr("%1 does not support manual decoder tuning.")
+              .arg(m_cwEngineCombo->currentText());
+    // Sens works with every decoder, each on its own saved value.
+    showCwSensFor(key);
+    // A description with no name gives a screen reader nothing to anchor it to
+    // (docs/a11y.md; #4896), so name them here rather than only explaining why
+    // they are unavailable.
+    const std::array<std::pair<QWidget*, QString>, 4> tuningControls{{
+        {m_lockPitchBtn, tr("Lock CW pitch estimate")},
+        {m_lockSpeedBtn, tr("Lock CW speed estimate")},
+        {m_pitchRangeSlider, tr("CW pitch search range")},
+        {m_speedRangeSlider, tr("CW speed search range")}}};
+    for (const auto& [control, name] : tuningControls) {
+        if (control->accessibleName().isEmpty()) { control->setAccessibleName(name); }
+        control->setAccessibleDescription(unavailableReason);
+        control->setEnabled(tuning);
+    }
+    m_cwModelAction->setVisible(selected && (preparing || canRetry));
+    m_cwModelAction->setText(preparing ? tr("Cancel") : tr("Retry"));
+    m_cwModelAction->setToolTip(preparing ? tr("Cancel model preparation") : tr("Retry model preparation"));
+    m_cwStatsLabel->setToolTip(selected
+        ? (detail.isEmpty() ? tr("Decodes the selected slice independently of speaker volume or mute.") : detail)
+        : QString{});
+    if (selected) { m_cwStatsLabel->setText(status); }
+}
+void PanadapterApplet::showCwSensFor(const QString& backend)
+{
+    if (backend == m_cwSensBackend) { return; }
+    // An unsaved slider change belongs to the decoder being left.  Its
+    // debounced save reads the slider when it fires, which by then holds the
+    // incoming decoder's value.
+    if (m_cwSensUnsaved) { saveCwSens(m_cwSensSlider->value()); }
+    m_cwSensBackend = backend;
+    const bool ggmorse = backend == QLatin1String("ggmorse");
+    const int sens = ggmorse
+        ? AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt()
+        : CwDecodeSettings::sensitivity(backend);
+    const QSignalBlocker blocker(m_cwSensSlider);
+    m_cwSensSlider->setValue(sens);
+    // Read back the clamped value: a hand-edited ggmorse key can be out of span.
+    const float threshold = cwSensCostThreshold(m_cwSensSlider->value());
+    if (ggmorse) { m_cwCostThreshold = threshold; }
+    else { m_cwNeuralCostThreshold = threshold; }
+}
+void PanadapterApplet::appendUnscoredCwText(const QString& text)
+{
+    QString clean = text;
+    clean.replace('\n', ' ');
+    m_cwText->moveCursor(QTextCursor::End);
+    if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
+    m_lastCwTextSource = CwTextSource::Rx;
+    QTextCharFormat format;
+    format.setForeground(ThemeManager::instance().color(this, "color.text.primary"));
+    QTextCursor cursor = m_cwText->textCursor();
+    cursor.insertText(clean, format);
+    m_cwText->moveCursor(QTextCursor::End);
+    // For a backend that reports no per-letter score.
+
+    emit cwRxTextDisplayed(clean);
+}
+void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
+{
+    // The cost is 1 - the backend's own posterior (DeepFist per letter, DeepCW
+    // per chunk). It picks the color (ggmorse's four bands, as theme tokens),
+    // and text at or above this decoder's own Sens threshold is not shown.
+    // Text that is only a space is always shown, so hidden DeepFist letters
+    // never join two words, and a hidden DeepCW chunk that held a space
+    // leaves one (CwDecodeSettings::shownNeuralText).
+    QString clean = text;
+    clean.replace('\n', ' ');
+    const QTextDocument* doc = m_cwText->document();
+    // After a TX burst the insert below adds a separator space anyway.
+    const bool paneEndsInSpace = doc->isEmpty() || m_lastCwTextSource == CwTextSource::Tx
+        || doc->characterAt(doc->characterCount() - 2).isSpace();
+    const QString shown = CwDecodeSettings::shownNeuralText(
+        clean, cost, m_cwNeuralCostThreshold, paneEndsInSpace);
+    if (shown.isEmpty() && !clean.isEmpty()) { return; }
+    clean = shown;
+    m_cwText->moveCursor(QTextCursor::End);
+    if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
+    m_lastCwTextSource = CwTextSource::Rx;
+    QTextCharFormat format;
+    const QString band = cost < 0.15f ? QStringLiteral("high")
+        : cost < 0.35f ? QStringLiteral("medium")
+        : cost < 0.60f ? QStringLiteral("fair") : QStringLiteral("low");
+    format.setForeground(AetherSDR::ThemeManager::instance().color(
+        m_cwText, QStringLiteral("color.cw.confidence.") + band));
+    QTextCursor cursor = m_cwText->textCursor();
+    cursor.insertText(clean, format);
+    m_cwText->moveCursor(QTextCursor::End);
+
+    emit cwRxTextDisplayed(clean);
+}
+#endif
+
+void PanadapterApplet::appendCwTextTx(const QString& text, float cost)
+{
+    // TX-side decoded keying (#2417).  Same confidence filter as the RX
+    // path; rendered in a distinct cyan color so the operator can tell
+    // their own sending apart from incoming CW when both directions feed
+    // the same panel.  No textual marker — color alone is the signal.
+    if (cost >= m_cwCostThreshold) return;
+
+    QString clean = text;
+    clean.replace('\n', ' ');
+    if (clean.trimmed().isEmpty()) return;
+
+    constexpr const char* kTxColor = "#5fc8ff";
+    m_cwText->moveCursor(QTextCursor::End);
+    // Separator space on Rx→Tx boundary so the two colored runs don't
+    // visually merge.  None→Tx (panel empty) gets no leading space.
+    if (m_lastCwTextSource == CwTextSource::Rx)
+        m_cwText->insertHtml(QStringLiteral(" "));
+    m_lastCwTextSource = CwTextSource::Tx;
+    m_cwText->insertHtml(
+        QString("<span style=\"color:%1\">%2</span>")
+            .arg(QLatin1String(kTxColor), clean.toHtmlEscaped()));
+    m_cwText->moveCursor(QTextCursor::End);
+}
+
+void PanadapterApplet::setCwInputHint(const QString& hint, const QString& reason)
+{
+    const QString text = hint.isEmpty() ? tr("(selected slice)") : hint;
+    setDecoderInputHint(m_cwInputHint, text, reason, tr("CW receive input: %1").arg(text));
+}
+
+void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
+{
+#ifdef HAVE_CW_RX_BACKENDS
+    // ggmorse may still have queued deliveries after the engine selector changes.
+    if (neuralEngineSelected()) { return; }
+#endif
+    if (pitchHz > 0 && speedWpm > 0)
+        m_cwStatsLabel->setText(QString("%1 Hz  %2 WPM").arg(pitchHz, 0, 'f', 0).arg(speedWpm, 0, 'f', 0));
+    else
+        m_cwStatsLabel->clear();   // decoder stopped — don't show a dead estimate (#5213)
+}
+
+void PanadapterApplet::clearCwText()
+{
+    m_cwText->clear();
+    m_lastCwTextSource = CwTextSource::None;
+}
+
+void PanadapterApplet::layoutHeader()
+{
+    if (!m_titleBar || !m_headerButtons) {
+        return;
+    }
+    const PanadapterHeader header{m_titleBar, m_titleLabel, m_headerButtons,
+                                  static_cast<QHBoxLayout*>(m_headerButtons->layout()),
+                                  m_popOutBtn, m_maxBtn};
+    // The spectrum's top-right readouts ride the top beside the buttons, so
+    // they end where the visible buttons begin. Not raised: built after the
+    // spectrum's overlay menu, the header sits above it, while the slice
+    // flags, created and raised later, ride over the header.
+    m_spectrum->setTopRightReserve(header.place(m_spectrum->width()));
+}
+
+bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
+{
+    // The header pieces size themselves to their content: a new title, or a
+    // button shown or hidden, asks for a layout, and the spectrum's width
+    // places the buttons.
+    if ((obj == m_spectrum && ev->type() == QEvent::Resize)
+        || ((obj == m_titleBar || obj == m_headerButtons)
+            && ev->type() == QEvent::LayoutRequest)) {
+        layoutHeader();
+    }
+    // A decoder range is saved once the drag or key press that set it ends.
+    // Observe only: the slider still handles the event itself.
+    if ((obj == m_pitchRangeSlider || obj == m_speedRangeSlider)
+        && (ev->type() == QEvent::MouseButtonRelease
+            || (ev->type() == QEvent::KeyRelease
+                && !static_cast<QKeyEvent*>(ev)->isAutoRepeat()))) {
+        if (obj == m_pitchRangeSlider) {
+            CwDecodeSettings::setPitchRange(m_pitchRangeSlider->low(), m_pitchRangeSlider->high());
+        } else {
+            CwDecodeSettings::setSpeedRange(m_speedRangeSlider->low(), m_speedRangeSlider->high());
+        }
+    }
+    // CW panel resize grip — drag the top edge to grow/shrink the decode
+    // panel (and reveal more decoded-text history) (#3628).
+    if (obj == m_cwGrip) {
+        if (ev->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            if (me->button() == Qt::LeftButton) {
+                m_cwResizing     = true;
+                m_cwResizeStartY = me->globalPosition().toPoint().y();
+                m_cwResizeStartH = m_cwPanel->height();
+                return true;
+            }
+        } else if (ev->type() == QEvent::MouseMove && m_cwResizing) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            // Dragging up (smaller Y) enlarges the panel.
+            const int dy = m_cwResizeStartY - me->globalPosition().toPoint().y();
+            setCwPanelHeight(m_cwResizeStartH + dy);
+            return true;
+        } else if (ev->type() == QEvent::MouseButtonRelease && m_cwResizing) {
+            m_cwResizing = false;
+            CwDecodeSettings::setPanelHeight(m_cwPanelHeight);
+            return true;
+        }
+    }
+
+#ifdef AETHER_ASR_ENABLED
+    // Copy Assist panel resize grip — same drag-to-resize as the CW grip.
+    if (obj == m_copyAssistGrip) {
+        if (ev->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            if (me->button() == Qt::LeftButton) {
+                m_copyAssistResizing = true;
+                m_copyAssistResizeStartY = me->globalPosition().toPoint().y();
+                m_copyAssistResizeStartH = m_copyAssistDock->height();
+                return true;
+            }
+        } else if (ev->type() == QEvent::MouseMove && m_copyAssistResizing) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            const int dy = m_copyAssistResizeStartY - me->globalPosition().toPoint().y();
+            setCopyAssistHeight(m_copyAssistResizeStartH + dy);
+            return true;
+        } else if (ev->type() == QEvent::MouseButtonRelease && m_copyAssistResizing) {
+            m_copyAssistResizing = false;
+            // setValue() self-persists — no extra AppSettings::save() needed.
+            CopyAssistSettings::setValue("AsrPanelHeight",
+                                         QString::number(m_copyAssistHeight));
+            return true;
+        }
+    }
+#endif
+
+    // Canvas item (RFC #4887 phase 4): the title strip streams a live-move
+    // gesture, mirroring ContainerTitleBar's canvas mode.  A 6 px threshold
+    // separates a click (activate, below) from a drag; everything past it is
+    // consumed so the strip's floating-drag machinery never sees it.
+    if (obj == m_titleBar && m_onCanvas && !m_isFloating
+        && (ev->type() == QEvent::MouseButtonPress
+            || ev->type() == QEvent::MouseMove
+            || ev->type() == QEvent::MouseButtonRelease)) {
+        constexpr int kCanvasDragThresholdPx = 6;
+        auto* me = static_cast<QMouseEvent*>(ev);
+        if (ev->type() == QEvent::MouseButtonPress) {
+            if (me->button() == Qt::LeftButton) {
+                m_canvasPressed  = true;
+                m_canvasDragging = false;
+                m_canvasPressPos = me->globalPosition().toPoint();
+                // Consume the press: the strip's default handler ignores it,
+                // and an ignored press leaves the implicit grab on the applet,
+                // so later moves never reach this filter. Re-emit the press's
+                // side effect here since the filter tail is skipped.
+                emit activated(m_panId);
+                return true;
+            }
+        } else if (ev->type() == QEvent::MouseMove) {
+            if (m_canvasPressed && (me->buttons() & Qt::LeftButton)) {
+                const QPoint g = me->globalPosition().toPoint();
+                if (!m_canvasDragging) {
+                    if ((g - m_canvasPressPos).manhattanLength()
+                        < kCanvasDragThresholdPx) {
+                        return true;
+                    }
+                    m_canvasDragging = true;
+                    emit canvasDragBegan(m_canvasPressPos);
+                }
+                emit canvasDragMoved(g);
+                return true;
+            }
+        } else {   // MouseButtonRelease
+            if (m_canvasDragging) {
+                m_canvasDragging = false;
+                m_canvasPressed  = false;
+                emit canvasDragEnded(me->globalPosition().toPoint());
+                return true;
+            }
+            m_canvasPressed = false;
+        }
+    }
+
+    if (obj == m_titleBar && m_isFloating && ev->type() == QEvent::MouseMove) {
+        return FramelessMoveHelper::move(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+    if (obj == m_titleBar && m_isFloating && ev->type() == QEvent::MouseButtonRelease) {
+        return FramelessMoveHelper::finish(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+
+    // Title-bar drag in floating mode → move the OS window via Qt 6's
+    // cross-platform move helper.  Frameless pop-outs have no native
+    // title bar, so the applet's own title strip becomes the drag handle.
+    if (obj == m_titleBar && m_isFloating
+        && ev->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(ev);
+        return FramelessMoveHelper::start(m_titleBar, me);
+    }
+    if (ev->type() == QEvent::MouseButtonPress)
+        emit activated(m_panId);
+    return CanonPan::eventFilter(obj, ev);
+}
+
+// ── RTTY panel ───────────────────────────────────────────────────────────────
+
+void PanadapterApplet::setRttyPanelVisible(bool visible)
+{
+    m_rttyPanel->setVisible(visible);
+}
+
+void PanadapterApplet::setRttyMarkHz(int hz)
+{
+    if (hz < 0) { return; }
+    showSliceValue(m_rttyMarkCombo, kRttyMarkPresetsHz, hz);
+}
+
+void PanadapterApplet::setRttyShiftHz(int hz)
+{
+    if (hz < 0) { return; }
+    showSliceValue(m_rttyShiftCombo, kRttyShiftPresetsHz, hz);
+}
+
+float PanadapterApplet::rttyBaud() const
+{
+    return static_cast<float>(m_rttyBaudCombo->currentData().toDouble());
+}
+
+bool PanadapterApplet::rttyReverse() const
+{
+    return m_rttyRevBtn->isChecked();
+}
+
+void PanadapterApplet::appendRttyText(const QString& text, float confidence)
+{
+    // Filter by sensitivity threshold — drop low-confidence decodes.  Above
+    // the CR/LF handling on purpose: Baudot CR and LF are ordinary codepoints
+    // that noise hits as often as any other, and a dropped character must
+    // not still spray blank lines down the pane. (#5028)
+    if (confidence < m_rttyConfThreshold) {
+        return;
+    }
+
+    // CR is a no-op in a wrapped text view; LF becomes a line break.
+    // Standard RTTY sends CR+LF pairs — discarding CR and converting LF
+    // to <br> produces exactly one new line per pair.
+    if (text == "\r") return;
+    if (text == "\n") {
+        m_rttyText->moveCursor(QTextCursor::End);
+        m_rttyText->insertHtml(QStringLiteral("<br>"));
+        m_rttyText->moveCursor(QTextCursor::End);
+        return;
+    }
+
+    QString color;
+    if      (confidence > 0.85f) color = "#00ff88";
+    else if (confidence > 0.70f) color = "#e0e040";
+    else if (confidence > 0.60f) color = "#ff9020";
+    else                         color = "#ff4040";
+
+    QString escaped = text.toHtmlEscaped();
+    escaped.replace(' ', "&nbsp;");
+
+    m_rttyText->moveCursor(QTextCursor::End);
+    m_rttyText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
+        .arg(color, escaped));
+    m_rttyText->moveCursor(QTextCursor::End);
+}
+
+void PanadapterApplet::setRttyInputHint(const QString& hint, const QString& reason)
+{
+    const QString text = hint.isEmpty() ? tr("(selected slice)") : hint;
+    setDecoderInputHint(m_rttyInputHint, text, reason, tr("RTTY receive input: %1").arg(text));
+}
+
+void PanadapterApplet::setRttyStats(float markLevel, float /* spaceLevel */, float snrDb, bool locked)
+{
+    const int markSegs = qBound(0, qRound(markLevel * 15.0f), 15);
+
+    // Mark bar: 15 segments, fills left to right
+    QString markBar;
+    for (int i = 0; i < 15; ++i) {
+        markBar += (i < markSegs)
+            ? QStringLiteral("<span style='color:#00cc55'>&#x2588;</span>")
+            : QStringLiteral("<span style='color:#1a3020'>&#x2588;</span>");
+    }
+
+    const QString snrColor   = locked ? QStringLiteral("#00ff88") : QStringLiteral("#ff8c00");
+    const QString lockedText = locked ? QStringLiteral("LOCKED") : QStringLiteral("UNLOCK");
+
+    m_rttyStatsLabel->setText(
+        QStringLiteral("<span style='font-family:monospace;font-size:10px;'>")
+        + markBar
+        + QStringLiteral("</span>&nbsp;&nbsp;"
+                          "<span style='font-size:10px;font-weight:bold;color:")
+        + snrColor + QStringLiteral("'>")
+        + QString::number(static_cast<int>(snrDb))
+        + QStringLiteral("dB&nbsp;")
+        + lockedText
+        + QStringLiteral("</span>"));
+}
+
+void PanadapterApplet::clearRttyText()
+{
+    m_rttyText->clear();
+}
+
+} // namespace AetherSDR

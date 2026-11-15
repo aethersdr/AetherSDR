@@ -1,0 +1,85 @@
+#pragma once
+
+#include "models/MemoryEntry.h"
+
+#include <QByteArray>
+#include <QMap>
+#include <QString>
+#include <QStringList>
+
+namespace AetherSDR {
+
+// Versioned JSON persistence for the CLIENT-side memory bank (local channels and
+// explicitly imported radio snapshots); on a Flex the radio owns active slots
+// (see RadioCapabilities::persistsMemories). Envelope:
+//   {
+//     "format": "aether.memories",
+//     "version": 1 or 2,
+//     "savedAt": "2026-07-29T14:00:00Z",
+//     "savedBy": "AetherSDR",
+//     "memories": [ { "index": 0, ...MemoryEntry... } ]
+//   }
+// Additive evolution: new fields optional, unknown ignored; a NEWER version is
+// an error, not half-read, so a downgrade can't drop channels and write that
+// back. The slot index is stored (sparse banks keep their handles).
+class LocalMemoryStore {
+public:
+    static constexpr int kFormatVersion = 2;
+    // Keep ordinary client memories readable by version-1 builds. Imported
+    // recall state needs version 2: older writers would drop safety metadata.
+    static int formatVersionFor(const QMap<int, MemoryEntry>& memories);
+    static constexpr const char* kFormatId = "aether.memories";
+
+    // The bank's home since RFC #4603 PR 6: ONE shared feature document in
+    // radio_settings — ("local", "", "MemoryBank") — because the bank is
+    // deliberately shared across every memory-less radio (#4590: the
+    // operator's channel list follows them across HL2 / Kiwi / demo, like a
+    // shack's paper log). "local" is the client itself as the owning scope,
+    // not an IRadioBackend family. The document's content is exactly this
+    // store's envelope, so the version/format guards keep working, and the
+    // legacy memories.json becomes a frozen import source.
+    static QString documentFamily() { return QStringLiteral("local"); }
+    static QString documentFeature() { return QStringLiteral("MemoryBank"); }
+
+    struct ParseResult {
+        QMap<int, MemoryEntry> memories;
+        QStringList errors;
+        int version{0};
+        // The file exists but could not be UNDERSTOOD (bad JSON, non-object root, foreign
+        // format, newer version), unlike recoverable `errors`. Decides whether
+        // overwriting is safe: never save over data this build can't represent.
+        bool unreadable{false};
+
+        bool ok() const { return errors.isEmpty(); }
+        // Safe to replace this file wholesale with what we parsed?
+        bool overwritable() const { return !unreadable; }
+    };
+
+    // Serialize to pretty-printed JSON bytes, ordered by slot index so the file
+    // stays diffable across saves. `savedAtIso` is stamped into the envelope —
+    // a parameter rather than a clock read so this stays deterministic and
+    // testable (the same reason NetScheduleStore takes one).
+    static QByteArray serialize(const QMap<int, MemoryEntry>& memories,
+                                const QString& savedAtIso = {});
+
+    static ParseResult parse(const QByteArray& bytes);
+
+    // ~/.config/AetherSDR/memories.json (and the platform equivalents), matching
+    // the GenericConfigLocation base AppSettings uses. Empty only if Qt cannot
+    // resolve a writable config location at all.
+    static QString defaultFilePath();
+
+    // Reads `path`. A missing file is NOT an error — it is an empty bank, which
+    // is what a first run looks like.
+    static ParseResult load(const QString& path);
+
+    // Atomic write via QSaveFile: the bank is only ever replaced wholesale, so a
+    // crash mid-save must leave the previous file intact rather than a truncated
+    // one. Returns false and fills `error` on failure.
+    static bool save(const QString& path,
+                     const QMap<int, MemoryEntry>& memories,
+                     const QString& savedAtIso = {},
+                     QString* error = nullptr);
+};
+
+}  // namespace AetherSDR

@@ -1,0 +1,452 @@
+#include "core/backends/icom/IcomCivScheduler.h"
+
+#include <algorithm>
+#include <utility>
+
+namespace AetherSDR::icom {
+
+void IcomCivScheduler::recordTransaction(const Queued& request,
+                                         Completion completion,
+                                         std::int64_t completedAtMs,
+                                         std::int64_t responseMs)
+{
+    TransactionEvent event;
+    event.eventId = ++m_transactionEventId;
+    event.key = request.request.key;
+    event.priority = request.request.priority;
+    event.generation = request.generation;
+    event.completion = completion;
+    event.completedAtMs = completedAtMs;
+    event.queueWaitMs = request.dispatchedAtMs >= 0
+        ? std::max<std::int64_t>(0, request.dispatchedAtMs - request.enqueuedAtMs)
+        : -1;
+    event.responseMs = responseMs;
+    m_recentTransactions.push_back(std::move(event));
+    while (m_recentTransactions.size() > kTransactionHistoryMax) {
+        m_recentTransactions.pop_front();
+    }
+}
+
+void IcomCivScheduler::noteResponse(const Queued& request, std::int64_t nowMs)
+{
+    if (request.dispatchedAtMs < 0) {
+        return;
+    }
+    const std::int64_t responseMs = std::max<std::int64_t>(0, nowMs - request.dispatchedAtMs);
+    ++m_stats.responseSamples;
+    m_stats.totalResponseMs += responseMs;
+    m_stats.lastResponseMs = responseMs;
+    m_stats.maxResponseMs = std::max(m_stats.maxResponseMs, responseMs);
+    m_stats.lastResponseAtMs = nowMs;
+    m_stats.lastCompletedKey = request.request.key;
+    m_stats.lastCompletedCmd = request.request.frame.size() > 4
+        ? request.request.frame[4] : std::uint8_t{0};
+}
+
+// Two requests are duplicates only if they ask the SAME register the same way.
+//
+// The semantic key is deliberately coarse — 04, 06, 26 and the transceive
+// forms all key on "mode" — because that coarseness is what makes an operator
+// mode write supersede an in-flight mode read of any form.  Coalescing must
+// not inherit it: 04 (mode) and 26 (mode + DATA + filter) are different
+// registers, and sendConnectReadBurst queues both on purpose so 26 can correct
+// 04 when they disagree.  Collapsing them by key alone silently deleted one of
+// the two, and which one survived depended on enqueue order.
+bool IcomCivScheduler::sameReplyShape(const Request& a, const Request& b) noexcept
+{
+    return a.expectsReply == b.expectsReply
+        && a.acceptsGenericReply == b.acceptsGenericReply
+        && a.replyCmd == b.replyCmd
+        && a.replyHasSub == b.replyHasSub
+        && (!a.replyHasSub || a.replySub == b.replySub)
+        && a.replyDataPrefix == b.replyDataPrefix;
+}
+
+std::uint64_t IcomCivScheduler::enqueue(Request request, std::int64_t nowMs)
+{
+    if (request.frame.empty() || request.key.empty()) {
+        return 0;
+    }
+
+    std::uint64_t& currentGeneration = m_generations[request.key];
+    if (currentGeneration == 0) {
+        currentGeneration = 1;
+    }
+    if (request.supersedes) {
+        ++currentGeneration;
+    }
+
+    // Clamp BEFORE coalescing: queued entries hold clamped notBeforeMs, so comparing
+    // against an unclamped 0 makes the "equal-or-better already queued" test fail,
+    // re-pushing the entry and resetting enqueuedAtMs — which effectivePriority()
+    // ages on, so a request re-queued faster than kPriorityAgingMs would never age.
+    if (request.notBeforeMs < nowMs) {
+        request.notBeforeMs = nowMs;
+    }
+
+    if (request.coalesce) {
+        // A duplicate read in flight is already the freshest read for this
+        // generation.  Do not accumulate a second copy behind it.
+        if (!request.supersedes && m_inFlight
+            && m_inFlight->request.key == request.key
+            && m_inFlight->generation == currentGeneration
+            && sameReplyShape(m_inFlight->request, request)) {
+            ++m_stats.coalesced;
+            return 0;
+        }
+
+        for (auto it = m_queue.begin(); it != m_queue.end();) {
+            if (it->request.key != request.key) {
+                ++it;
+                continue;
+            }
+            // A newer write replaces an older queued write.  A confirmation
+            // read must coexist with the write it confirms, so only collapse
+            // requests with the same reply-bearing shape.
+            if (!sameReplyShape(it->request, request)) {
+                ++it;
+                continue;
+            }
+            // A new write generation and its confirmation replace an older
+            // queued generation.  This is what makes a fast slider converge
+            // on its newest value rather than preserving the first unsent one.
+            if (it->generation < currentGeneration) {
+                it = m_queue.erase(it);
+                ++m_stats.coalesced;
+                continue;
+            }
+            if (it->request.priority <= request.priority
+                && it->request.notBeforeMs <= request.notBeforeMs) {
+                ++m_stats.coalesced;
+                return 0;
+            }
+            it = m_queue.erase(it);
+            ++m_stats.coalesced;
+        }
+    }
+
+    m_queue.push_back(Queued{std::move(request), currentGeneration, ++m_sequence, nowMs});
+    ++m_stats.queued;
+    m_stats.queueDepth = m_queue.size();
+    return currentGeneration;
+}
+
+bool IcomCivScheduler::hasPendingKeyPrefix(
+    std::string_view prefix, std::int64_t nowMs) const noexcept
+{
+    const auto matchesPrefix = [prefix](const Queued& queued) {
+        return queued.request.key.starts_with(prefix);
+    };
+    return (m_inFlight && matchesPrefix(*m_inFlight))
+        || std::any_of(m_queue.cbegin(), m_queue.cend(), matchesPrefix)
+        || std::any_of(m_expired.cbegin(), m_expired.cend(),
+                       [matchesPrefix, nowMs](const Expired& expired) {
+                           return expired.forgetAtMs > nowMs
+                               && matchesPrefix(expired.request);
+                       });
+}
+
+void IcomCivScheduler::expireRead(std::int64_t nowMs)
+{
+    if (!m_inFlight) {
+        return;
+    }
+    if (nowMs - m_inFlightAtMs < kReadTimeoutMs) {
+        return;
+    }
+    // A timed-out transaction is no longer in flight, but the radio may still
+    // answer it — a late reply is exactly what kReadTimeoutMs exists to stop
+    // waiting for, not a promise that it will never arrive.  Remember it so
+    // observe() can still recognise the answer and reject it against a newer
+    // generation.  Without this the SAME frame was Stale at 349 ms and
+    // unmatched-therefore-authoritative at 351 ms, which let an obsolete read
+    // overwrite a newer operator write on every register except PTT (which the
+    // backend's separate intent window happens to cover).
+    const Queued expired = *m_inFlight;
+    const std::int64_t responseMs = std::max<std::int64_t>(0, nowMs - m_inFlightAtMs);
+    recordTransaction(expired, Completion::Timeout, nowMs, responseMs);
+    m_stats.lastCompletedKey = expired.request.key;
+    m_stats.lastTimeoutKey = expired.request.key;
+    m_expired.push_back(Expired{expired, nowMs + kLateReplyGraceMs});
+    while (m_expired.size() > kMaxExpiredTracked) {
+        m_expired.pop_front();
+    }
+    m_inFlight.reset();
+    ++m_stats.timeouts;
+}
+
+std::size_t IcomCivScheduler::cancelQueued(std::string_view key) noexcept
+{
+    return std::erase_if(m_queue,
+                         [key](const Queued& queued) { return queued.request.key == key; });
+}
+
+bool IcomCivScheduler::hasQueuedOrInFlight(std::string_view key) const noexcept
+{
+    return (m_inFlight && m_inFlight->request.key == key)
+        || std::any_of(m_queue.cbegin(), m_queue.cend(),
+                       [key](const Queued& queued) { return queued.request.key == key; });
+}
+
+void IcomCivScheduler::dropStaleExpired(std::int64_t nowMs)
+{
+    while (!m_expired.empty() && m_expired.front().forgetAtMs <= nowMs) {
+        m_expired.pop_front();
+    }
+}
+
+std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_t nowMs)
+{
+    // Scheduling uses a session-relative clock; authority deadlines use the
+    // engine's steady clock. A cancelled command never occupies a reply slot.
+    const qint64 authorityNow = TxCoordinator::monotonicMs();
+    std::erase_if(m_queue, [authorityNow](const Queued& queued) {
+        return queued.request.txCommand
+            && !queued.request.txCommand->permitsDispatch(authorityNow);
+    });
+    expireRead(nowMs);
+    if (m_queue.empty()) {
+        return std::nullopt;
+    }
+
+    // meterOverdue: a visible meter has waited past its freshness budget, so
+    // background aging stands down.
+    // backgroundStarved: the ceiling on that stand-down, measured from the LATER of
+    // the request's enqueue and the last background dispatch, so it rate-limits
+    // background work instead of latching on under a backlog.
+    bool meterOverdue = false;
+    bool backgroundStarved = false;
+    for (const Queued& queued : m_queue) {
+        if (queued.request.notBeforeMs > nowMs) {
+            continue;
+        }
+        if (queued.request.priority == Priority::ActiveMeter) {
+            if (nowMs - queued.enqueuedAtMs >= kMeterQueueBudgetMs) {
+                meterOverdue = true;
+            }
+        } else if (queued.request.priority > Priority::ActiveMeter) {
+            const std::int64_t since = nowMs - std::max(queued.enqueuedAtMs,
+                                                        m_lastBackgroundDispatchMs);
+            if (since >= kBackgroundStarvationCeilingMs) {
+                backgroundStarved = true;
+            }
+        }
+    }
+    // One background request is admitted when the ceiling is reached; the
+    // dispatch below re-arms both guards, so the admission is single-shot.
+    const bool yieldToMeters = (m_backgroundSinceMeter || meterOverdue) && !backgroundStarved;
+    auto best = m_queue.end();
+    for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
+        if (it->request.notBeforeMs > nowMs) {
+            continue;
+        }
+        const bool emergency = it->request.priority == Priority::Emergency;
+        if (it->request.expectsReply && m_inFlight && !emergency) {
+            continue;
+        }
+        if (!emergency && m_lastDispatchMs > 0 && nowMs - m_lastDispatchMs < kSlotMs) {
+            continue;
+        }
+        const Priority candidatePriority = effectivePriority(*it, nowMs, yieldToMeters);
+        const Priority bestPriority = best == m_queue.end()
+            ? Priority::Maintenance : effectivePriority(*best, nowMs, yieldToMeters);
+        if (best == m_queue.end()
+            || candidatePriority < bestPriority
+            || (candidatePriority == bestPriority
+                && it->sequence < best->sequence)) {
+            best = it;
+        }
+    }
+    if (best == m_queue.end()) {
+        return std::nullopt;
+    }
+
+    Queued selected = std::move(*best);
+    m_queue.erase(best);
+    if (selected.request.priority == Priority::ActiveMeter) {
+        m_backgroundSinceMeter = false;
+    } else if (selected.request.priority > Priority::ActiveMeter) {
+        m_backgroundSinceMeter = true;
+        m_lastBackgroundDispatchMs = nowMs;
+    }
+    m_lastDispatchMs = nowMs;
+    selected.dispatchedAtMs = nowMs;
+    if (selected.request.expectsReply) {
+        // A fail-safe unkey is the sole command allowed to interrupt an
+        // unanswered transaction.  Displacing that transaction is safe, but it
+        // must not be forgotten outright: the radio can still answer it, and
+        // the answer predates the unkey.  Park it with the timed-out ones so
+        // observe() keeps generation-guarding it instead of treating a late
+        // pre-unkey reading as fresh radio truth.
+        if (selected.request.priority == Priority::Emergency && m_inFlight) {
+            const Queued displaced = *m_inFlight;
+            recordTransaction(displaced, Completion::Displaced, nowMs,
+                              std::max<std::int64_t>(0, nowMs - m_inFlightAtMs));
+            m_stats.lastCompletedKey = displaced.request.key;
+            m_expired.push_back(Expired{*m_inFlight, nowMs + kLateReplyGraceMs});
+            while (m_expired.size() > kMaxExpiredTracked) {
+                m_expired.pop_front();
+            }
+        }
+        m_inFlight = selected;
+        m_inFlightAtMs = nowMs;
+    } else {
+        recordTransaction(selected, Completion::NoReply, nowMs);
+        m_stats.lastCompletedKey = selected.request.key;
+    }
+    ++m_stats.dispatched;
+    m_stats.queueDepth = m_queue.size();
+    m_stats.lastDispatchMs = nowMs;
+    m_stats.readInFlight = m_inFlight.has_value();
+    m_stats.inFlightKey = m_inFlight ? m_inFlight->request.key : std::string{};
+
+    return Dispatch{std::move(selected.request.frame), std::move(selected.request.key),
+                    selected.request.priority, selected.generation,
+                    selected.request.supersedes, selected.request.txCommand};
+}
+
+IcomCivScheduler::Priority
+IcomCivScheduler::effectivePriority(const Queued& request, std::int64_t nowMs,
+                                     bool yieldToMeters) const noexcept
+{
+    // Aging lets background reconciliation progress under meter load, but only one
+    // aged background request may win before the next ready meter (PTT/operator/
+    // emergency dispatches don't consume the meter turn), and an overdue meter stands
+    // aging down. Both are DELAYS, never a hold: takeNext() lifts the floor once
+    // kBackgroundStarvationCeilingMs passes with no background dispatch.
+    const int base = static_cast<int>(request.request.priority);
+    if (base <= static_cast<int>(Priority::ActiveMeter)) {
+        return request.request.priority;
+    }
+    const int floor = static_cast<int>(yieldToMeters
+        ? Priority::Control : Priority::ActiveMeter);
+    const std::int64_t waitedMs = std::max<std::int64_t>(0, nowMs - request.enqueuedAtMs);
+    const int aged = base - static_cast<int>(waitedMs / kPriorityAgingMs);
+    return static_cast<Priority>(std::max(floor, aged));
+}
+
+bool IcomCivScheduler::matches(const CivFrame& frame, const Queued& request) const noexcept
+{
+    // FB/FA is the radio's terminal response even when a queried leaf is not
+    // implemented.  With exactly one ordinary command outstanding, it is
+    // unambiguously the completion for that transaction.  It releases the
+    // slot but carries no state; the backend therefore decodes nothing from
+    // it and remains radio-authoritative.
+    if (frame.isOk() || frame.isNg()) {
+        return true;
+    }
+    if (request.request.acceptsGenericReply) {
+        return false;
+    }
+    if (frame.cmd != request.request.replyCmd
+        || frame.hasSub != request.request.replyHasSub) {
+        return false;
+    }
+    if (frame.hasSub && frame.sub != request.request.replySub) {
+        return false;
+    }
+    return frame.data.size() >= request.request.replyDataPrefix.size()
+        && std::equal(request.request.replyDataPrefix.begin(),
+                      request.request.replyDataPrefix.end(), frame.data.begin());
+}
+
+IcomCivScheduler::Observation IcomCivScheduler::observe(const CivFrame& frame,
+                                                        std::int64_t nowMs)
+{
+    expireRead(nowMs);
+    dropStaleExpired(nowMs);
+
+    // A generic FB/FA only ever completes the live transaction.  Matching it
+    // against a parked one would let one ACK retire two transactions.
+    const bool generic = frame.isOk() || frame.isNg();
+
+    if (!m_inFlight || !matches(frame, *m_inFlight)) {
+        if (generic) {
+            ++m_stats.unmatchedFrames;
+            return Observation::Unmatched;
+        }
+        // Late answer to a transaction we stopped waiting for.  It is only
+        // reportable when a newer intent has since superseded it; otherwise it
+        // is simply a slow reply and the backend should adopt it as usual.
+        for (auto it = m_expired.begin(); it != m_expired.end(); ++it) {
+            if (!matches(frame, it->request)) {
+                continue;
+            }
+            const auto generation = m_generations.find(it->request.request.key);
+            const bool superseded = generation != m_generations.end()
+                && it->request.generation < generation->second;
+            const Queued completed = it->request;
+            m_expired.erase(it);
+            ++m_stats.lateReplies;
+            noteResponse(completed, nowMs);
+            recordTransaction(completed,
+                              superseded ? Completion::LateStaleReply
+                                         : Completion::LateReply,
+                              nowMs,
+                              std::max<std::int64_t>(0,
+                                  nowMs - completed.dispatchedAtMs));
+            if (superseded) {
+                ++m_stats.staleReplies;
+                return Observation::Stale;
+            }
+            return Observation::Unmatched;
+        }
+        ++m_stats.unmatchedFrames;
+        return Observation::Unmatched;
+    }
+
+    const Queued completed = *m_inFlight;
+    m_inFlight.reset();
+    ++m_stats.replies;
+    noteResponse(completed, nowMs);
+    m_stats.readInFlight = false;
+    m_stats.inFlightKey.clear();
+
+    const auto generation = m_generations.find(completed.request.key);
+    if (generation != m_generations.end() && completed.generation < generation->second) {
+        ++m_stats.staleReplies;
+        recordTransaction(completed, Completion::StaleReply, nowMs,
+                          std::max<std::int64_t>(0,
+                              nowMs - completed.dispatchedAtMs));
+        return Observation::Stale;
+    }
+    recordTransaction(completed, Completion::Reply, nowMs,
+                      std::max<std::int64_t>(0, nowMs - completed.dispatchedAtMs));
+    return Observation::Accepted;
+}
+
+IcomCivScheduler::ResetResult IcomCivScheduler::reset(TerminalOutcome outcome) noexcept
+{
+    ResetResult result;
+    result.requests.reserve(m_queue.size() + (m_inFlight ? 1U : 0U));
+    for (const Queued& queued : m_queue) {
+        result.requests.push_back(
+            TerminalRequest{queued.request.key, queued.generation, false, outcome});
+    }
+    if (m_inFlight) {
+        result.requests.push_back(TerminalRequest{
+            m_inFlight->request.key, m_inFlight->generation, true, outcome});
+    }
+    m_queue.clear();
+    m_inFlight.reset();
+    m_expired.clear();
+    m_generations.clear();
+    m_sequence = 0;
+    m_lastDispatchMs = 0;
+    m_inFlightAtMs = 0;
+    m_backgroundSinceMeter = false;
+    m_lastBackgroundDispatchMs = 0;
+    m_stats = Stats{};
+    return result;
+}
+
+IcomCivScheduler::Stats IcomCivScheduler::stats() const
+{
+    Stats out = m_stats;
+    out.queueDepth = m_queue.size();
+    out.readInFlight = m_inFlight.has_value();
+    out.inFlightKey = m_inFlight ? m_inFlight->request.key : std::string{};
+    return out;
+}
+
+}  // namespace AetherSDR::icom

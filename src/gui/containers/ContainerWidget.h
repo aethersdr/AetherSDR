@@ -1,0 +1,185 @@
+#pragma once
+
+#include <QHash>
+#include <QSize>
+#include <QString>
+#include <QWidget>
+
+class QVBoxLayout;
+
+namespace AetherSDR {
+
+class ContainerTitleBar;
+
+// Generic dockable / floatable wrapper widget — the unit the container
+// system operates on.  Exactly one QWidget lives in its body via
+// setContent(); the widget's float/dock/visibility state is managed
+// independently of its content.
+//
+// Phase 1 scope: single-level (no child containers), just the basic
+// header + body + state machine + signals.  Nesting and ContainerManager
+// integration are added in later phases.
+class ContainerWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    enum class DockMode {
+        PanelDocked,   // inside its parent's body layout
+        Floating,      // owned by a FloatingContainerWindow
+        Canvas,        // freely placed on a WorkspaceCanvas (RFC #4887, phase 3)
+    };
+
+    explicit ContainerWidget(const QString& id,
+                             const QString& title,
+                             QWidget* parent = nullptr);
+    ~ContainerWidget() override;
+
+    // Stable identifier used by the manager for path-based lookup
+    // and by persistence to key each container's state.
+    QString id() const { return m_id; }
+
+    // Identifier written into the drag MIME payload when the user
+    // grabs the titlebar.  Defaults to id() so non-composite tiles
+    // are unchanged, but composite tiles whose owning AppletEntry.id
+    // differs from their container id() (e.g. TXDSP wraps "tx_dsp")
+    // can call setDragId() so the AppletPanel drop handler's fast
+    // lookup hits without needing a fallback. (#3057)
+    QString dragId() const { return m_dragId.isEmpty() ? m_id : m_dragId; }
+    void setDragId(const QString& dragId) { m_dragId = dragId; }
+
+    // Human-readable title shown in the header bar.  Changing it
+    // updates the titlebar in place.
+    void setTitle(const QString& title);
+    QString title() const;
+
+    // Install the single primary content widget.  Convenience for
+    // leaf containers that only ever hold one thing.  Internally
+    // this is just addChildWidget() of that widget; the pointer is
+    // cached so content() remains accessible after reparents.  A
+    // second call replaces the first (previous is returned).
+    QWidget* setContent(QWidget* content);
+    QWidget* content() const { return m_content; }
+
+    // Child widgets stack in a QVBoxLayout body in insertion order; leaf widgets
+    // and nested ContainerWidgets are treated alike (ContainerManager tracks the
+    // nesting). index -1 appends; otherwise inserts at the clamped index.
+    void insertChildWidget(int index, QWidget* child);
+    void removeChildWidget(QWidget* child);
+    int  childWidgetCount() const;
+    QWidget* childWidgetAt(int index) const;
+    int  indexOfChildWidget(QWidget* child) const;
+
+    // Dock state.  UI code reads these to render the correct button
+    // labels; programmatic transitions use requestFloat / requestDock.
+    DockMode dockMode() const { return m_dockMode; }
+    bool isFloating() const     { return m_dockMode == DockMode::Floating; }
+    bool isPanelDocked() const  { return m_dockMode == DockMode::PanelDocked; }
+    bool isOnCanvas() const     { return m_dockMode == DockMode::Canvas; }
+
+    // Logical visibility — distinct from QWidget::isVisible, which
+    // reflects the current layout state (a panel-docked container is
+    // "invisible" whenever its parent chooses not to show it).  This
+    // is the user's "show this container" flag, persisted separately.
+    void setContainerVisible(bool visible);
+    bool isContainerVisible() const { return m_visible; }
+
+    // Transient presentation only: unavailable applets retain their logical
+    // open/closed intent and workspace home. Direct show() calls from layout
+    // recall obey this gate too. Floating content stays shown inside its
+    // independently gated outer window. Other containers default available.
+    void setPresentationAvailable(bool available);
+    bool isPresentationAvailable() const { return m_presentationAvailable; }
+    bool isPresentationManaged() const { return m_presentationManaged; }
+    void setVisible(bool visible) override;
+
+    // Access to the titlebar — callers can hide its close button
+    // for root containers or customise the title dynamically.
+    ContainerTitleBar* titleBar() { return m_titleBar; }
+
+    // Hide / show the container's own titlebar.  Useful when a
+    // container is nested inside a legacy AppletPanel wrapper that
+    // already provides an outer titlebar — avoids stacking two.
+    void setTitleBarVisible(bool visible);
+
+    // Optional first-float size for content that needs more room than its
+    // docked size hint. Saved user geometry still wins on later floats.
+    void setDefaultFloatingSize(const QSize& size) { m_defaultFloatingSize = size; }
+    QSize defaultFloatingSize() const { return m_defaultFloatingSize; }
+
+    // Returns the widget that should be inserted into a parent layout
+    // when this container is panel-docked.  Currently that's just
+    // `this` — kept as a separate API so future phases can introduce
+    // intermediate wrappers without breaking callers.
+    QWidget* dockWidget() { return this; }
+
+signals:
+    // Emitted by the titlebar's float/dock button.  The connected
+    // slot (usually ContainerManager) does the actual reparenting
+    // work; the widget itself doesn't know about FloatingContainerWindow.
+    void floatRequested();
+    void dockRequested();
+
+    // Live canvas move, forwarded from the title bar (RFC #4887 phase 5).
+    // The WorkspaceController routes these into the canvas gesture session.
+    void canvasDragBegan(const QPoint& globalPos);
+    void canvasDragMoved(const QPoint& globalPos);
+    void canvasDragEnded(const QPoint& globalPos);
+
+    // Emitted when the user clicks the close (×) button in the
+    // titlebar.  Connected code typically calls setContainerVisible(false)
+    // but may choose to destroy the container instead.
+    void closeRequested();
+
+    // Emitted when the titlebar's pin button toggles.  Only fires
+    // while the container is in floating mode (the pin is hidden
+    // otherwise).  Manager applies the hint and persists the choice.
+    void alwaysOnTopToggled(bool on);
+
+    // Fired after setContainerVisible() changes state.
+    void visibilityChanged(bool visible);
+
+    // Does not emit visibilityChanged: availability is never a user close.
+    void presentationAvailabilityChanged(bool available);
+
+    // Fired after dockMode() changes — manager uses this to keep the
+    // titlebar button label in sync.
+    void dockModeChanged(DockMode mode);
+
+private slots:
+    void onTitleBarFloatToggle();
+    void onTitleBarClose();
+    void onTitleBarDragStart(const QPoint& globalPos);
+
+private:
+    // Internal — ContainerManager flips this when the container
+    // finishes a dock transition.  Emits dockModeChanged.
+    friend class ContainerManager;
+    friend class FloatingContainerWindow;
+    void setDockMode(DockMode mode);
+
+    // Width-capped applets (Antenna Genius, ShackSwitch, RX-DSP) clamp their
+    // own maximumWidth so they sit tidily in the narrow docked strip.  When
+    // the container floats into its own window that cap leaves the content
+    // hugging the left edge with dead space to the right (#3451).  While
+    // floating we lift the cap so the content fills the window; on re-dock we
+    // restore each child's original cap.  m_savedMaxWidths remembers the
+    // docked cap per child for the duration of a float.
+    void applyWidthPolicyTo(QWidget* child);
+    void restoreWidthPolicy(QWidget* child);
+
+    QString            m_id;
+    QString            m_dragId;   // empty → dragId() returns m_id (#3057)
+    ContainerTitleBar* m_titleBar{nullptr};
+    QWidget*           m_body{nullptr};
+    QVBoxLayout*       m_bodyLayout{nullptr};
+    QWidget*           m_content{nullptr};
+    DockMode           m_dockMode{DockMode::PanelDocked};
+    bool               m_visible{true};
+    bool               m_presentationAvailable{true};
+    bool               m_presentationManaged{false};
+    bool               m_requestedVisible{true};
+    QSize              m_defaultFloatingSize;
+    QHash<QWidget*, int> m_savedMaxWidths;  // child → docked maximumWidth (#3451)
+};
+
+} // namespace AetherSDR

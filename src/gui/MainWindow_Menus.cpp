@@ -1,0 +1,2426 @@
+// MainWindow_Menus.cpp — menu-bar construction for MainWindow.
+//
+// Part of the #3351 monolith decomposition (Phase 1b). Holds buildMenuBar():
+// every QMenu/QAction in the menu bar, their enable/disable wiring, and the
+// inline lambdas they trigger (~70 connects).
+//
+// Contributors are recognised in the Contributor Logbook, which the About
+// window links to.
+
+#include "MainWindow.h"
+#include "models/CwDecodeSettings.h"
+#include "AetherBuildIdentity.h"   // generated at build time (#5804)
+
+#include "workspace/WorkspaceController.h"
+
+#ifdef AETHER_ASR_ENABLED
+#include "CopyAssistController.h"
+#include "CopyAssistPanel.h"
+#endif
+#include "AetherialAudioStrip.h"
+#include "AppletPanel.h"
+#include "DaxApplet.h"
+#include "DocsLinks.h"
+#include "ControlAvailabilityRegistry.h"
+#include "PanadapterApplet.h"
+#include "PanadapterStack.h"
+#include "RadioSetupDialog.h"
+#include "TciApplet.h"
+#include "ClientChainApplet.h"
+#include "CwxPanel.h"
+#include "DxClusterDialog.h"
+#include "HelpDialog.h"
+#include "MainWindowHelpers.h"
+#include "MainWindowShortcutState.h"
+#include "PersistentDialog.h"
+#include "RC28MappingDialog.h"
+#include "ShortcutDialog.h"
+#include "RadioHealthDialog.h"
+#include "SliceTroubleshootingDialog.h"
+#include "SpectrumWidget.h"
+#include "SupportDialog.h"
+#include "TitleBar.h"
+#include "UpdatesWindow.h"
+#include "MidiMappingDialog.h"
+#include "ProfileImportExportDialog.h"
+#include "ProfileManagerDialog.h"
+#include "SettingsBrowserDialog.h"
+#include "ThemeEditorDialog.h"
+#include "BandscopeDialog.h"
+#include "TxBandDialog.h"
+#include "TxApplet.h"
+#include "UlanziDialMapperDialog.h"
+#include "VfoWidget.h"
+#include "WaveformsDialog.h"
+#include "WhatsNewDialog.h"
+#include "WindowShowState.h"
+#include "core/UpdateChecker.h"
+#include "core/UpdateController.h"
+#include "core/AppSettings.h"
+#include "core/SpotModeResolver.h"
+#include "core/ThemeManager.h"
+#include "BrandMark.h"
+#include "CanonWindow.h"
+#include "core/TxKeyingMarker.h"
+#include "models/BandPlanManager.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include <QActionGroup>
+#include <QApplication>
+#include <QColor>
+#include <QCoreApplication>
+#include <QCheckBox>
+#include <QDesktopServices>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QJsonObject>
+#include <QKeySequence>
+#include <QLabel>
+#include <QMenuBar>
+#include <QPointer>
+#include <QGridLayout>
+#include <QFontMetricsF>
+#include <QPainter>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QShortcut>
+#include <QTimer>
+#include <QUrl>
+#include <QVBoxLayout>
+#include <QAction>
+#include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QList>
+#include <QVariant>
+#include <QWidgetAction>
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+namespace AetherSDR {
+
+namespace {
+
+// "AetherSDR" at display size, centred: BrandMark's wordmark, without the
+// mark, which the About window shows larger above it.
+class AboutWordmark : public QWidget {
+public:
+    explicit AboutWordmark(QWidget* parent = nullptr) : QWidget(parent)
+    {
+        setAccessibleName(QStringLiteral("AetherSDR"));
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    }
+    QSize sizeHint() const override
+    {
+        const QFontMetricsF fm(wordFont());
+        return QSize(int(BrandMark::wordmarkWidth(wordFont())) + 8, int(fm.height()) + 4);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        const QFont f = wordFont();
+        const QFontMetricsF fm(f);
+        BrandMark::paintWordmark(p, this, f, (width() - BrandMark::wordmarkWidth(f)) / 2.0,
+                                 (height() + fm.capHeight()) / 2.0, height());
+    }
+
+private:
+    QFont wordFont() const
+    {
+        QFont f = font();
+        f.setPixelSize(26);
+        f.setWeight(QFont::Bold);
+        f.setLetterSpacing(QFont::PercentageSpacing, 98);
+        return f;
+    }
+};
+
+QWidget* windowMenuTarget(QWidget* primaryWindow,
+                          const QList<WindowMenuEntry>& entries)
+{
+    QWidget* activeWindow = QApplication::activeWindow();
+    const bool activeIsListed = std::any_of(
+        entries.cbegin(), entries.cend(), [activeWindow](const WindowMenuEntry& entry) {
+            return entry.window == activeWindow;
+        });
+    return activeIsListed ? activeWindow : primaryWindow;
+}
+
+void toggleWindowMaximized(QWidget* window)
+{
+    if (!window) {
+        return;
+    }
+    Qt::WindowStates state = window->windowState() & ~Qt::WindowMinimized;
+    state.setFlag(Qt::WindowMaximized, !state.testFlag(Qt::WindowMaximized));
+    window->setWindowState(state);
+    window->show();
+    window->raise();
+    window->activateWindow();
+}
+
+void toggleWindowFullScreen(QWidget* window)
+{
+    if (!window) {
+        return;
+    }
+    Qt::WindowStates state = window->windowState() & ~Qt::WindowMinimized;
+    state.setFlag(Qt::WindowFullScreen,
+                  !state.testFlag(Qt::WindowFullScreen));
+    window->setWindowState(state);
+    window->show();
+    window->raise();
+    window->activateWindow();
+}
+
+QString menuActionText(const QString& label, const QString& shortcut)
+{
+    return shortcut.isEmpty()
+        ? label
+        : QStringLiteral("%1\t%2").arg(label, shortcut);
+}
+
+void populateWindowMenu(QMenu* menu, QWidget* primaryWindow,
+                        const QString& minimizeShortcut,
+                        const QString& fullScreenShortcut)
+{
+    menu->clear();
+
+    const QList<WindowMenuEntry> entries = windowInventory(primaryWindow);
+    QWidget* target = windowMenuTarget(primaryWindow, entries);
+    QPointer<QWidget> guardedTarget(target);
+
+    QAction* minimize = menu->addAction(menuActionText(
+        QObject::tr("Minimize"), minimizeShortcut));
+    minimize->setObjectName(QStringLiteral("windowMenuMinimize"));
+    minimize->setMenuRole(QAction::NoRole);
+    minimize->setEnabled(target != nullptr);
+    QObject::connect(minimize, &QAction::triggered, menu, [guardedTarget] {
+        if (guardedTarget) {
+            guardedTarget->showMinimized();
+        }
+    });
+
+#ifdef Q_OS_MACOS
+    const QString maximizeLabel = QObject::tr("Zoom");
+#else
+    const QString maximizeLabel = target && target->isMaximized()
+        ? QObject::tr("Restore")
+        : QObject::tr("Maximize");
+#endif
+    QAction* maximize = menu->addAction(maximizeLabel);
+    maximize->setObjectName(QStringLiteral("windowMenuMaximize"));
+    maximize->setMenuRole(QAction::NoRole);
+    maximize->setEnabled(target != nullptr && !target->isFullScreen());
+    QObject::connect(maximize, &QAction::triggered, menu, [guardedTarget] {
+        toggleWindowMaximized(guardedTarget);
+    });
+
+    const bool fullScreen = target && target->isFullScreen();
+    const QString fullScreenLabel = fullScreen
+        ? QObject::tr("Exit Full Screen")
+        : QObject::tr("Enter Full Screen");
+    QAction* fullScreenAction = menu->addAction(menuActionText(
+        fullScreenLabel, fullScreenShortcut));
+    fullScreenAction->setObjectName(QStringLiteral("windowMenuFullScreen"));
+    fullScreenAction->setMenuRole(QAction::NoRole);
+    fullScreenAction->setEnabled(target != nullptr);
+    QObject::connect(fullScreenAction, &QAction::triggered, menu, [guardedTarget] {
+        toggleWindowFullScreen(guardedTarget);
+    });
+
+    menu->addSeparator();
+
+    QAction* bringAll = menu->addAction(QObject::tr("Bring All to Front"));
+    bringAll->setObjectName(QStringLiteral("windowMenuBringAllToFront"));
+    bringAll->setMenuRole(QAction::NoRole);
+    bringAll->setEnabled(!entries.isEmpty());
+
+    QList<QPointer<QWidget>> guardedWindows;
+    guardedWindows.reserve(entries.size());
+    for (const WindowMenuEntry& entry : entries) {
+        guardedWindows.append(QPointer<QWidget>(entry.window));
+    }
+    QObject::connect(bringAll, &QAction::triggered, menu,
+                     [guardedWindows, guardedTarget] {
+        // Raise every other window first, then restore the window that was
+        // active when the menu opened so Bring All preserves the operator's
+        // working window at the top of the application's stack.
+        for (const QPointer<QWidget>& window : guardedWindows) {
+            if (window && window != guardedTarget) {
+                showAndRaiseWindow(window);
+            }
+        }
+        if (guardedTarget) {
+            showAndRaiseWindow(guardedTarget);
+        }
+    });
+
+    menu->addSeparator();
+
+    for (const WindowMenuEntry& entry : entries) {
+        QAction* action = menu->addAction(entry.menuText);
+        action->setObjectName(QStringLiteral("windowMenuWindow"));
+        action->setMenuRole(QAction::NoRole);
+        action->setCheckable(true);
+        // Use the same resolved target as the standard window actions.  Some
+        // platforms temporarily report no active QWidget while the native
+        // menu bar owns focus; in that interval isActiveWindow() would leave
+        // every entry unchecked even though Minimize/Zoom still target one.
+        action->setChecked(entry.window == target);
+        action->setStatusTip(QObject::tr("Bring %1 to the foreground")
+                                 .arg(entry.title));
+        QPointer<QWidget> guardedWindow(entry.window);
+        QObject::connect(action, &QAction::triggered, menu, [guardedWindow] {
+            showAndRaiseWindow(guardedWindow);
+        });
+    }
+}
+} // namespace
+
+void MainWindow::minimizeActiveApplicationWindow()
+{
+    QWidget* target = windowMenuTarget(this, windowInventory(this));
+    if (target) {
+        target->showMinimized();
+    }
+}
+
+void MainWindow::toggleActiveApplicationWindowFullScreen()
+{
+    toggleWindowFullScreen(windowMenuTarget(this, windowInventory(this)));
+}
+
+void MainWindow::buildMenuBar()
+{
+    auto* fileMenu = menuBar()->addMenu("&File");
+
+    auto* chooseRadio = fileMenu->addAction("Connect to Radio...");
+    chooseRadio->setMenuRole(QAction::NoRole);
+    connect(chooseRadio, &QAction::triggered, this, [this] {
+        toggleConnectionDialog();
+    });
+
+    auto* disconnectRadio = fileMenu->addAction("Disconnect");
+    disconnectRadio->setMenuRole(QAction::NoRole);
+    connect(disconnectRadio, &QAction::triggered,
+            this, &MainWindow::disconnectFromRadioByUser);
+
+    connect(fileMenu, &QMenu::aboutToShow, this,
+            [this, disconnectRadio] {
+        disconnectRadio->setEnabled(m_radioModel.isConnected());
+    });
+
+    auto* waveformsAct = new QAction("Waveforms...", this);
+    m_waveformsAction = waveformsAct;   // hidden by applyCapabilitiesToUi()
+                                       // on a radio with no installable waveforms
+    waveformsAct->setMenuRole(QAction::NoRole);
+    connect(waveformsAct, &QAction::triggered, this, [this] {
+        // A CanonWindow (style guide, RFC #6226): it isn't a persistent
+        // dialog, so it's created or raised directly, like About.
+        if (!m_waveformsDialog) {
+            auto* dlg = new WaveformsDialog(&m_radioModel, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_waveformsDialog = dlg;
+        }
+        m_waveformsDialog->show();
+        m_waveformsDialog->raise();
+        m_waveformsDialog->activateWindow();
+    });
+
+    auto* updateAct = fileMenu->addAction("Update...");
+    updateAct->setMenuRole(QAction::NoRole);
+    updateAct->setStatusTip(QStringLiteral(
+        "See whether a newer AetherSDR is available, what is in it, and get it"));
+    connect(updateAct, &QAction::triggered, this, [this] { showUpdatesWindow(false); });
+
+    fileMenu->addSeparator();
+    auto* quitAct = fileMenu->addAction("&Quit");
+    quitAct->setShortcut(QKeySequence::Quit);
+    quitAct->setMenuRole(QAction::QuitRole);
+    connect(quitAct, &QAction::triggered, this, [this]() {
+        if (m_panStack) {
+            m_panStack->setShuttingDown(true);
+        }
+        close();
+    });
+
+    // ── Settings menu ──────────────────────────────────────────────────────
+    auto* settingsMenu = menuBar()->addMenu("&Settings");
+    // QMenu shows per-action tooltips only when the menu opts in, and a
+    // submenu's menuAction() renders on the PARENT, so opt in here too. Needed
+    // for the "Not supported by this radio" reasons on greyed entries (#5546).
+    // Entries without an explicit tooltip stay silent, so this costs nothing.
+    settingsMenu->setToolTipsVisible(true);
+
+    auto* radioSetup = settingsMenu->addAction("Radio Setup...");
+    radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
+    connect(radioSetup, &QAction::triggered, this, [this] {
+        openRadioSetupPage();
+    });
+
+    // Every controller's settings in one submenu, so the Settings menu does
+    // not grow by one entry per supported device.
+    auto* controllersMenu = settingsMenu->addMenu("Controllers");
+    controllersMenu->setToolTipsVisible(true);
+
+    auto* ctr2Action = controllersMenu->addAction("CTR2...");
+    ctr2Action->setMenuRole(QAction::NoRole);
+    ctr2Action->setToolTip(tr("Relay a CTR2-Max or AetherKnob to the radio, and install "
+                              "AetherCTR2 on a CTR2-Max"));
+    connect(ctr2Action, &QAction::triggered, this, &MainWindow::showCtr2Window);
+
+    auto* flexControlAction = controllersMenu->addAction("AetherControl...");
+    m_aetherControlAction = flexControlAction;
+    flexControlAction->setVisible(true); // host controller, independent of radio capabilities
+    flexControlAction->setMenuRole(QAction::NoRole);
+    connect(flexControlAction, &QAction::triggered,
+            this, &MainWindow::showFlexControlDialog);
+
+#ifdef HAVE_SERIALPORT
+    // Primary discoverability entry for #4940 — a Settings-menu shortcut
+    // straight to the FlexControl Tuning Knob group, for the user who
+    // browses Settings looking for it rather than opening AetherControl...
+    // first. Guarded the same as the Serial & Controllers page itself
+    // (RadioSetupDialog.cpp) and the AetherControl "Settings…" button
+    // (MainWindow_Controllers.cpp) that offers the same deep-link from
+    // inside the controller window.
+    auto* flexControlKnobAction = controllersMenu->addAction("FlexControl Knob && Buttons...");
+    m_flexControlKnobAction = flexControlKnobAction;
+    flexControlKnobAction->setVisible(true); // host serial device, never gated (#5778)
+    flexControlKnobAction->setMenuRole(QAction::NoRole);
+    connect(flexControlKnobAction, &QAction::triggered, this, [this] {
+        if (RadioSetupDialog* dlg = openRadioSetupPage())
+            dlg->revealFlexControlSettings();
+    });
+#endif
+
+    auto* networkAction = new QAction("Network Diagnostics...", this);
+    networkAction->setMenuRole(QAction::NoRole);
+    connect(networkAction, &QAction::triggered, this, [this] {
+        showNetworkDiagnosticsDialog();
+    });
+
+    auto* receiveSyncMenu = settingsMenu->addMenu("Receive Sync");
+    auto* receiveSyncEnabledAct =
+        receiveSyncMenu->addAction("Sync Kiwi Audio && Display");
+    receiveSyncEnabledAct->setCheckable(true);
+    receiveSyncEnabledAct->setChecked(receivePresentationSettings().enabled);
+
+    auto* receiveSyncModeGroup = new QActionGroup(receiveSyncMenu);
+    receiveSyncModeGroup->setExclusive(true);
+    auto* receiveSyncManualAct = receiveSyncMenu->addAction("Manual Offset");
+    receiveSyncManualAct->setCheckable(true);
+    receiveSyncModeGroup->addAction(receiveSyncManualAct);
+    auto* receiveSyncAutoAct = receiveSyncMenu->addAction("Auto Assist");
+    receiveSyncAutoAct->setCheckable(true);
+    receiveSyncModeGroup->addAction(receiveSyncAutoAct);
+    receiveSyncMenu->addSeparator();
+
+    auto* receiveSyncOffsetLabel = receiveSyncMenu->addAction(QString());
+    receiveSyncOffsetLabel->setEnabled(false);
+    auto* receiveSyncOffsetMinus =
+        receiveSyncMenu->addAction("Delay KiwiSDR 50 ms");
+    auto* receiveSyncOffsetPlus =
+        receiveSyncMenu->addAction("Delay Flex 50 ms");
+    auto* receiveSyncOffsetReset = receiveSyncMenu->addAction("Reset Offset");
+    receiveSyncMenu->addSeparator();
+
+    auto* receiveSyncLatencyMenu = receiveSyncMenu->addMenu("Latency");
+    auto* receiveSyncLatencyGroup = new QActionGroup(receiveSyncLatencyMenu);
+    receiveSyncLatencyGroup->setExclusive(true);
+    auto* receiveSyncLatencyNormal =
+        receiveSyncLatencyMenu->addAction("Normal (360 ms)");
+    receiveSyncLatencyNormal->setCheckable(true);
+    receiveSyncLatencyGroup->addAction(receiveSyncLatencyNormal);
+    auto* receiveSyncLatencyStable =
+        receiveSyncLatencyMenu->addAction("More Stable (520 ms)");
+    receiveSyncLatencyStable->setCheckable(true);
+    receiveSyncLatencyGroup->addAction(receiveSyncLatencyStable);
+    auto* receiveSyncLatencyHigh =
+        receiveSyncLatencyMenu->addAction("High Jitter (1000 ms)");
+    receiveSyncLatencyHigh->setCheckable(true);
+    receiveSyncLatencyGroup->addAction(receiveSyncLatencyHigh);
+    receiveSyncMenu->addSeparator();
+    auto* receiveSyncStatusLabel = receiveSyncMenu->addAction(QString());
+    receiveSyncStatusLabel->setEnabled(false);
+
+    auto refreshReceiveSyncMenu = [this, receiveSyncEnabledAct,
+                                   receiveSyncManualAct, receiveSyncAutoAct,
+                                   receiveSyncOffsetLabel,
+                                   receiveSyncLatencyNormal,
+                                   receiveSyncLatencyStable,
+                                   receiveSyncLatencyHigh,
+                                   receiveSyncStatusLabel]() {
+        const ReceivePresentationSettings settings =
+            receivePresentationSettings();
+        const ReceiveDelayBreakdown delays =
+            receivePresentationDelayBreakdown();
+        receiveSyncEnabledAct->setChecked(settings.enabled);
+        receiveSyncManualAct->setChecked(settings.mode == ReceiveSyncMode::Manual);
+        receiveSyncAutoAct->setChecked(settings.mode == ReceiveSyncMode::AutoAssist);
+        receiveSyncOffsetLabel->setText(
+            QStringLiteral("Offset: %1%2 ms")
+                .arg(settings.manualOffsetMs >= 0 ? QStringLiteral("+")
+                                                  : QString())
+                .arg(settings.manualOffsetMs));
+        receiveSyncLatencyNormal->setChecked(settings.baseLatencyMs == 360);
+        receiveSyncLatencyStable->setChecked(settings.baseLatencyMs == 520);
+        receiveSyncLatencyHigh->setChecked(settings.baseLatencyMs == 1000);
+        QString status = QStringLiteral("Off");
+        switch (delays.status) {
+        case ReceiveSyncStatus::Off:
+            status = QStringLiteral("Off");
+            break;
+        case ReceiveSyncStatus::Manual:
+            status = QStringLiteral("Manual");
+            break;
+        case ReceiveSyncStatus::Searching:
+            status = QStringLiteral("Searching");
+            break;
+        case ReceiveSyncStatus::Holding:
+            status = QStringLiteral("Coasting");
+            break;
+        case ReceiveSyncStatus::Locked:
+            status = QStringLiteral("Locked");
+            break;
+        case ReceiveSyncStatus::LowConfidence:
+            status = QStringLiteral("Low confidence");
+            break;
+        }
+        QString statusText =
+            QStringLiteral("Status: %1, Flex %2 ms, KiwiSDR %3 ms")
+                .arg(status)
+                .arg(delays.flexDelayMs)
+                .arg(delays.kiwiDelayMs);
+        if (settings.mode == ReceiveSyncMode::AutoAssist
+            && settings.autoEstimate.valid) {
+            statusText += QStringLiteral(", est %1%2 ms, conf %3%, drift %4%5 ppm")
+                              .arg(settings.autoEstimate.offsetMs >= 0
+                                       ? QStringLiteral("+")
+                                       : QString())
+                              .arg(settings.autoEstimate.offsetMs)
+                              .arg(static_cast<int>(std::lround(
+                                  settings.autoEstimate.confidence * 100.0f)))
+                              .arg(settings.autoEstimate.driftPpm >= 0
+                                       ? QStringLiteral("+")
+                                       : QString())
+                              .arg(settings.autoEstimate.driftPpm);
+        }
+        receiveSyncStatusLabel->setText(statusText);
+    };
+    refreshReceiveSyncMenu();
+    connect(receiveSyncMenu, &QMenu::aboutToShow, this, refreshReceiveSyncMenu);
+
+    connect(receiveSyncEnabledAct, &QAction::toggled, this,
+            [this, refreshReceiveSyncMenu](bool enabled) {
+        setReceivePresentationSyncEnabled(enabled);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncManualAct, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationSyncMode(ReceiveSyncMode::Manual);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncAutoAct, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationSyncMode(ReceiveSyncMode::AutoAssist);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncOffsetMinus, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        adjustReceivePresentationManualOffsetMs(-50);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncOffsetPlus, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        adjustReceivePresentationManualOffsetMs(50);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncOffsetReset, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        resetReceivePresentationManualOffset();
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncLatencyNormal, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationLatencyMs(360);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncLatencyStable, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationLatencyMs(520);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncLatencyHigh, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationLatencyMs(1000);
+        refreshReceiveSyncMenu();
+    });
+#ifdef HAVE_MQTT
+    auto* mqttAction = settingsMenu->addAction("MQTT...");
+    mqttAction->setMenuRole(QAction::NoRole);
+    connect(mqttAction, &QAction::triggered,
+            this, &MainWindow::showMqttSettingsDialog);
+#endif
+    auto* memoryAction = new QAction("Memory...", this);
+    connect(memoryAction, &QAction::triggered, this, [this] {
+        showMemoryDialog();
+    });
+    auto* netSchedulerAction = new QAction("Net Scheduler...", this);
+    connect(netSchedulerAction, &QAction::triggered, this, [this] {
+        showNetSchedulerDialog();
+    });
+#ifdef HAVE_MIDI
+    auto* midiAction = controllersMenu->addAction("MIDI Mapping...");
+    connect(midiAction, &QAction::triggered, this, [this] {
+        showOrRaiseCanon(m_midiDialog,
+                         [this] { return new MidiMappingDialog(m_midiControl, this); });
+    });
+#endif
+#ifdef HAVE_HIDAPI
+    auto* rc28Action = controllersMenu->addAction("Icom RC-28 Remote Encoder...");
+    connect(rc28Action, &QAction::triggered, this, [this] {
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_rc28MappingDialog) {
+            auto* dlg = new RC28MappingDialog(m_hidEncoder, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_rc28MappingDialog = dlg;
+            connect(m_rc28MappingDialog, &RC28MappingDialog::mappingFieldChanged,
+                    this, [this](const QString& field, const QString& value) {
+                if (field == "f1Hold" || field == "f2Hold") {
+                    m_hidFastTune = false;
+                    m_hidFineTune = false;
+                    updateRC28Leds();
+                } else if (field == "sensitivity") {
+                    m_hidSensitivity = value.toInt();
+                    if (m_hidSensitivity < 1) m_hidSensitivity = 1;
+                    m_hidPulseAccum = 0;
+                } else if (field == "autoSnap") {
+                    m_hidAutoSnap = (value == "True");
+                    if (!m_hidAutoSnap && m_hidSnapTimer)
+                        m_hidSnapTimer->stop();
+                }
+            });
+        }
+        m_rc28MappingDialog->show();
+        m_rc28MappingDialog->raise();
+        m_rc28MappingDialog->activateWindow();
+    });
+#endif
+    auto* ulanziAction = controllersMenu->addAction("Ulanzi Dial Mapping...");
+    connect(ulanziAction, &QAction::triggered, this, [this] {
+#ifdef HAVE_MIDI
+        MidiControlManager* midi = m_midiControl;
+#else
+        MidiControlManager* midi = nullptr;
+#endif
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_ulanziMapperDialog) {
+            auto* dlg = new UlanziDialMapperDialog(m_dialBackend, &m_shortcutManager,
+                                                   midi, this, &m_controlActions);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_ulanziMapperDialog = dlg;
+        }
+        m_ulanziMapperDialog->show();
+        m_ulanziMapperDialog->raise();
+        m_ulanziMapperDialog->activateWindow();
+    });
+    settingsMenu->addSeparator();
+    auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
+    connect(usbCablesAction, &QAction::triggered, this, [this] {
+        openRadioSetupPage(QStringLiteral("USB Cables"));
+    });
+    settingsMenu->addSeparator();
+
+    m_keyboardShortcutsEnabled = AppSettings::instance()
+        .value("KeyboardShortcutsEnabled", "False").toString() == "True";
+    auto* kbAct = settingsMenu->addAction("Keyboard Shortcuts");
+    kbAct->setCheckable(true);
+    kbAct->setChecked(m_keyboardShortcutsEnabled);
+    connect(kbAct, &QAction::toggled, this, [this](bool on) {
+        m_keyboardShortcutsEnabled = on;
+        s_keyboardShortcutsEnabled = on;
+        syncOperatingShortcutsEnabled();
+        AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+    auto* configShortcutsAct = settingsMenu->addAction("Configure Shortcuts...");
+    configShortcutsAct->setMenuRole(QAction::NoRole);
+    connect(configShortcutsAct, &QAction::triggered, this, [this] {
+        ShortcutDialog dlg(&m_shortcutManager, this);
+        dlg.exec();
+        m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
+    });
+    settingsMenu->addSeparator();
+
+    auto* spotsAction = settingsMenu->addAction("SpotHub...");
+    connect(spotsAction, &QAction::triggered, this, [this] {
+        const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
+            return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
+                                       m_potaClient, m_eibiClient,
+                                       m_n1mmSpotClient, m_wsprFeed,
+#ifdef HAVE_WEBSOCKETS
+                                       m_freedvClient,
+#endif
+                                       &m_radioModel, &m_dxccProvider, this);
+        });
+#ifdef HAVE_WEBSOCKETS
+        // Every open, not just the first: this dialog is a persistent
+        // singleton, so without this the field would only ever show
+        // whatever FreeDvMyMessage was at first construction, silently
+        // reverting anything sent from the FreeDV Reporter panel since
+        // (#4231 review).
+        if (m_spotHubDialog)
+            m_spotHubDialog->reloadFreedvMessage();
+#endif
+        if (!wasFresh || !m_spotHubDialog) return;
+        auto* dlg = m_spotHubDialog.data();
+        dlg->setTotalSpots(m_radioModel.spotModel().spots().size());
+        // Live preview: refresh spots on every display settings change
+        auto refreshSpots = [this]() {
+            auto& s = AppSettings::instance();
+            bool on       = s.value("IsSpotsEnabled", "True").toString() == "True";
+            int fontSize  = s.value("SpotFontSize", "16").toInt();
+            int levels    = s.value("SpotsMaxLevel", "3").toInt();
+            int position  = s.value("SpotsStartingHeightPercentage", "50").toInt();
+            bool override = s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True";
+            QColor spotColor(s.value("SpotsOverrideColor", "#FFFF00").toString());
+            QColor bgColor(s.value("SpotsOverrideBgColor", "#000000").toString());
+            int bgOpacity = s.value("SpotsBackgroundOpacity", 48).toInt();
+            for (auto* a : m_panStack->allApplets()) {
+                auto* sw = a->spectrumWidget();
+                sw->setShowSpots(on);
+                sw->setSpotFontSize(fontSize);
+                sw->setSpotMaxLevels(levels);
+                sw->setSpotStartPct(position);
+                sw->setSpotOverrideColors(override);
+                sw->setSpotOverrideBg(s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True");
+                sw->setSpotColor(spotColor);
+                sw->setSpotBgColor(bgColor);
+                sw->setSpotBgOpacity(bgOpacity);
+                sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
+                sw->setKiwiDxSpotsEnabled(s.value("ShowKiwiDxSpots", "False").toString() == "True");
+                sw->setSHistorySnapToStep(
+                    s.value("SHistorySnapToStep", "False").toString() == "True");
+            }
+            // Rebuild markers so source-level visibility changes, such as the
+            // Memories feed toggle, apply immediately without mutating the cache.
+            m_radioModel.spotModel().refresh();
+        };
+        connect(dlg, &DxClusterDialog::settingsChanged, this, [this, refreshSpots] {
+            refreshSpots();
+            if (m_eibiClient) {
+                QMetaObject::invokeMethod(m_eibiClient, &EibiClient::updateActiveSpots, Qt::QueuedConnection);
+            }
+        });
+        // Signal/QRM History Markers live exclusively on the SpotHub
+        // Display tab (no View-menu duplicate, by design — a single UI
+        // surface with no risk of state drift).
+        connect(dlg, &DxClusterDialog::sHistoryEnabledToggled, this,
+                &MainWindow::applySHistoryEnabled);
+        connect(dlg, &DxClusterDialog::sHistoryQrmToggled, this,
+                &MainWindow::applySHistoryQrmEnabled);
+        connect(dlg, &DxClusterDialog::smartSpotOpacityChanged, this,
+                [this](int pct) {
+            for (auto* a : m_panStack->allApplets())
+                a->spectrumWidget()->setSmartSpotFilterOpacity(pct);
+        });
+        connect(dlg, &DxClusterDialog::smartSpotDelayChanged, this,
+                [this](int seconds) {
+            for (auto* a : m_panStack->allApplets())
+                a->spectrumWidget()->setSmartSpotFilterDelayS(seconds);
+        });
+        connect(dlg, &DxClusterDialog::smartSpotMatchHzChanged, this,
+                [this](int hz) {
+            for (auto* a : m_panStack->allApplets())
+                a->spectrumWidget()->setSmartSpotFilterMatchHz(hz);
+        });
+        connect(dlg, &DxClusterDialog::connectRequested,
+                this, [this](const QString& host, quint16 port, const QString& call) {
+            QMetaObject::invokeMethod(m_dxCluster, [=, this] { m_dxCluster->connectToCluster(host, port, call); });
+        });
+        connect(dlg, &DxClusterDialog::disconnectRequested,
+                this, [this] { QMetaObject::invokeMethod(m_dxCluster, [=, this] { m_dxCluster->disconnect(); }); });
+        connect(dlg, &DxClusterDialog::rbnConnectRequested,
+                this, [this](const QString& host, quint16 port, const QString& call) {
+            QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->connectToCluster(host, port, call); });
+        });
+        connect(dlg, &DxClusterDialog::rbnDisconnectRequested,
+                this, [this] { QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->disconnect(); }); });
+        connect(dlg, &DxClusterDialog::wsjtxStartRequested,
+                this, [this](const QString& addr, quint16 port) {
+            QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(addr, port); });
+        });
+        connect(dlg, &DxClusterDialog::wsjtxStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->stopListening(); }); });
+        connect(dlg, &DxClusterDialog::potaStartRequested,
+                this, [this](int interval) {
+            QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->startPolling(interval); });
+        });
+        connect(dlg, &DxClusterDialog::potaStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); }); });
+        connect(dlg, &DxClusterDialog::eibiStartRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(true); });
+        });
+        connect(dlg, &DxClusterDialog::eibiStopRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(false); });
+        });
+        connect(dlg, &DxClusterDialog::eibiUpdateNowRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, &EibiClient::forceUpdate, Qt::QueuedConnection);
+        });
+        connect(dlg, &DxClusterDialog::n1mmStartRequested,
+                this, [this](quint16 port) {
+            QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->startListening(port); });
+        });
+        connect(dlg, &DxClusterDialog::n1mmStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->stopListening(); }); });
+#ifdef HAVE_WEBSOCKETS
+        connect(dlg, &DxClusterDialog::freedvStartRequested,
+                this, [this] { QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->startConnection(); }); });
+        connect(dlg, &DxClusterDialog::freedvStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); }); });
+        connect(dlg, &DxClusterDialog::freedvMessageChanged,
+                this, [this](const QString& msg) {
+            QMetaObject::invokeMethod(m_freedvClient, [this, msg] { m_freedvClient->updateMessage(msg); });
+        });
+#ifdef HAVE_RADE
+        connect(dlg, &DxClusterDialog::freedvReportingToggled,
+                this, [this](bool on) {
+                    if (on) {
+                        if (m_radeEngine)
+                            startFreeDvReporting(m_radeSliceId);
+                    } else {
+                        stopFreeDvReporting(m_radeSliceId);
+                    }
+                });
+#endif
+#endif
+        connect(dlg, &DxClusterDialog::spotsClearedAll,
+                this, [this] {
+            m_spotDedup.clear();
+            m_radioModel.spotModel().clear();
+            // Also wipe Signal History + QRM marker state so "Clear All
+            // Spots" really does clear every marker shape on the
+            // spectrum, not just the DX cluster spots.
+            m_sHistoryData.clear();
+            m_sHistoryPanState.clear();
+            for (auto* a : m_panStack->allApplets()) {
+                a->spectrumWidget()->setSHistoryMarkers({});
+            }
+        });
+        connect(dlg, &DxClusterDialog::tuneRequested,
+                this, [this](double freqMhz, const QString& spotMode, const QString& comment) {
+            auto* sl = activeSlice();
+            if (!sl) return;
+            applyTuneRequest(sl, freqMhz, TuneIntent::AbsoluteJump, "dx-cluster");
+            // #2298: also auto-switch mode (e.g. SSB→CW) the same way panadapter
+            // spot clicks already do, gated by SpotAutoSwitchMode.
+            if (AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() != "True")
+                return;
+            const QString radioMode = SpotModeResolver::resolveSpotRadioMode(
+                spotMode, comment, freqMhz);
+            if (!radioMode.isEmpty() && radioMode != sl->mode())
+                sl->setMode(radioMode);
+        });
+        connect(dlg, &QDialog::finished, this, refreshSpots);  // refresh on close
+    });
+    auto* multiFlexAction = settingsMenu->addAction("multiFLEX...");
+    m_multiFlexAction = multiFlexAction;   // hidden by applyCapabilitiesToUi()
+                                           // on every non-Flex family
+    connect(multiFlexAction, &QAction::triggered,
+            this, &MainWindow::showMultiFlexDialog);
+    // m_titleBar connect deferred — see after TitleBar creation (~line 2530)
+    m_txBandAction = settingsMenu->addAction("TX Band Settings...");
+    m_txBandAction->setMenuRole(QAction::NoRole);   // prevent macOS auto-reparenting (#883)
+    auto* txBandAct = m_txBandAction;
+    connect(txBandAct, &QAction::triggered, this, [this] {
+        if (!m_radioModel.isConnected()) {
+            statusBar()->showMessage("Not connected to radio", 3000);
+            return;
+        }
+        showOrRaiseCanon(m_txBandDialog, [this] { return new TxBandDialog(&m_radioModel, this); });
+    });
+
+    // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
+    // Uses QWidgetAction with QCheckBox so the menu stays open for multi-select.
+    auto* tuneInhibitMenu = settingsMenu->addMenu("Inhibit during TUNE");
+    tuneInhibitMenu->setObjectName(QStringLiteral("tuneInhibitMenu"));
+    // Kept as a member so applyCapabilitiesToUi can dim it (with TX Band
+    // Settings) on backends with no Flex command plane — doctrine (#5263):
+    // dim, never hide.
+    m_tuneInhibitMenu = tuneInhibitMenu;
+
+    auto& settings = AppSettings::instance();
+    struct InhibitDef { const char* label; const char* key; };
+    static const InhibitDef inhibitDefs[] = {
+        {"None",   "TuneInhibitNone"},
+        {"ACC TX", "TuneInhibitAccTx"},
+        {"TX1",    "TuneInhibitTx1"},
+        {"TX2",    "TuneInhibitTx2"},
+        {"TX3",    "TuneInhibitTx3"},
+    };
+
+    QCheckBox* noneCb = nullptr;
+    QVector<QCheckBox*> outputCbs;
+    QList<QAction*> legacyInhibitActions;
+
+    for (const auto& def : inhibitDefs) {
+        auto* cb = new QCheckBox(def.label);
+        cb->setObjectName(QLatin1String(def.key));
+        cb->setAccessibleName(tr("Inhibit %1 during TUNE").arg(QLatin1String(def.label)));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(cb, "QCheckBox { color: {{color.text.primary}}; padding: 4px 12px; }"
+            "QCheckBox::indicator { width: 14px; height: 14px; }"
+            "QCheckBox::indicator:unchecked { border: 1px solid {{color.background.3}}; background: {{color.background.1}}; border-radius: 2px; }"
+            "QCheckBox::indicator:checked { border: 1px solid {{color.accent}}; background: {{color.accent}}; border-radius: 2px; }");
+        bool on = settings.value(def.key, "False").toString() == "True";
+        cb->setChecked(on);
+
+        auto* wa = new QWidgetAction(tuneInhibitMenu);
+        wa->setDefaultWidget(cb);
+        tuneInhibitMenu->addAction(wa);
+        legacyInhibitActions.append(wa);
+
+        if (QString(def.label) == "None")
+            noneCb = cb;
+        else
+            outputCbs.append(cb);
+    }
+
+    // Migrate old TuneInhibitAmp → TuneInhibitAccTx
+    if (settings.value("TuneInhibitAmp", "").toString() == "True"
+        && settings.value("TuneInhibitAccTx", "").toString().isEmpty()) {
+        settings.setValue("TuneInhibitAccTx", "True");
+        settings.setValue("TuneInhibitNone", "False");
+        outputCbs[0]->setChecked(true);  // ACC TX
+        if (noneCb) noneCb->setChecked(false);
+        settings.save();
+    }
+
+    // If no outputs selected, check None
+    bool anyOutput = false;
+    for (auto* cb : outputCbs) anyOutput |= cb->isChecked();
+    if (noneCb && !anyOutput) noneCb->setChecked(true);
+
+    auto syncNone = [noneCb, outputCbs]() {
+        bool anyOn = false;
+        for (auto* cb : outputCbs) anyOn |= cb->isChecked();
+        if (noneCb) {
+            QSignalBlocker b(noneCb);
+            noneCb->setChecked(!anyOn);
+        }
+    };
+
+    // "None" unchecks all outputs
+    connect(noneCb, &QCheckBox::toggled, this, [noneCb, outputCbs, &settings](bool on) {
+        if (on) {
+            for (auto* cb : outputCbs) {
+                QSignalBlocker b(cb);
+                cb->setChecked(false);
+            }
+            settings.setValue("TuneInhibitAccTx", "False");
+            settings.setValue("TuneInhibitTx1", "False");
+            settings.setValue("TuneInhibitTx2", "False");
+            settings.setValue("TuneInhibitTx3", "False");
+            settings.setValue("TuneInhibitNone", "True");
+            settings.save();
+        } else {
+            QSignalBlocker b(noneCb);
+            bool anyOn = false;
+            for (auto* cb : outputCbs) anyOn |= cb->isChecked();
+            if (!anyOn) noneCb->setChecked(true);
+        }
+    });
+
+    // Each output toggle saves and syncs None
+    for (int i = 0; i < outputCbs.size(); ++i) {
+        connect(outputCbs[i], &QCheckBox::toggled, this,
+                [i, syncNone, &settings](bool on) {
+            static const char* keys[] = {"TuneInhibitAccTx", "TuneInhibitTx1",
+                                         "TuneInhibitTx2", "TuneInhibitTx3"};
+            settings.setValue(keys[i], on ? "True" : "False");
+            if (on)
+                settings.setValue("TuneInhibitNone", "False");
+            syncNone();
+            settings.save();
+        });
+    }
+
+    // A native checkable action avoids embedding/reparenting a QWidget when
+    // macOS first materializes this submenu. The legacy multi-select stays intact.
+    auto* accInhibitAction = new QAction(tr("ACC TX"), tuneInhibitMenu);
+    accInhibitAction->setObjectName(QStringLiteral("tuneInhibitAccTxAction"));
+    accInhibitAction->setMenuRole(QAction::NoRole);
+    accInhibitAction->setCheckable(true);
+    accInhibitAction->setChecked(outputCbs.at(0)->isChecked());
+    accInhibitAction->setToolTip(tr("Suppress the accessory connector's PTT output during TUNE."));
+    accInhibitAction->setStatusTip(accInhibitAction->toolTip());
+    connect(accInhibitAction, &QAction::toggled, outputCbs.at(0), &QCheckBox::setChecked);
+    connect(outputCbs.at(0), &QCheckBox::toggled, accInhibitAction, [accInhibitAction](bool checked) {
+        const QSignalBlocker blocker(accInhibitAction);
+        accInhibitAction->setChecked(checked);
+    });
+
+    auto* configureRcaAction = new QAction(tr("Configure RCA suppression…"), tuneInhibitMenu);
+    configureRcaAction->setObjectName(QStringLiteral("configureTuneRcaSuppression"));
+    configureRcaAction->setMenuRole(QAction::NoRole);
+    configureRcaAction->setToolTip(tr("Open TX Band Settings to configure RCA suppression during TUNE for each band."));
+    configureRcaAction->setStatusTip(configureRcaAction->toolTip());
+    connect(configureRcaAction, &QAction::triggered, m_txBandAction, &QAction::trigger);
+
+    // Firmware replaces the legacy RCA choices with an editor shortcut.
+    // Keep the detached actions alive so saved older-firmware choices survive.
+    const auto syncTuneOutputOwnership = [this, tuneInhibitMenu, legacyInhibitActions, accInhibitAction, configureRcaAction, outputCbs]() {
+        const bool firmwareOwnsRca = m_radioModel.backendCapabilities().tuneOutputSuppression.has_value();
+        const QVariant previous = tuneInhibitMenu->property("firmwareOwnsRca");
+        if (previous.isValid() && previous.toBool() == firmwareOwnsRca) {
+            return;
+        }
+        tuneInhibitMenu->setProperty("firmwareOwnsRca", firmwareOwnsRca);
+        for (QAction* action : legacyInhibitActions) {
+            tuneInhibitMenu->removeAction(action);
+        }
+        tuneInhibitMenu->removeAction(accInhibitAction);
+        tuneInhibitMenu->removeAction(configureRcaAction);
+        if (firmwareOwnsRca) {
+            {
+                const QSignalBlocker blocker(accInhibitAction);
+                accInhibitAction->setChecked(outputCbs.at(0)->isChecked());
+            }
+            tuneInhibitMenu->addAction(accInhibitAction);
+            tuneInhibitMenu->addAction(configureRcaAction);
+        } else {
+            for (QAction* action : legacyInhibitActions) {
+                tuneInhibitMenu->addAction(action);
+            }
+        }
+    };
+    syncTuneOutputOwnership();
+    connect(tuneInhibitMenu, &QMenu::aboutToShow, this, syncTuneOutputOwnership);
+    connect(&m_radioModel, &RadioModel::tuneOutputControlChanged, this,
+            syncTuneOutputOwnership);
+
+    auto* dspAction = settingsMenu->addAction("AetherRX...");
+    dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
+    connect(dspAction, &QAction::triggered, this, [this] {
+        ensureAetherRxDialog();
+    });
+
+    auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
+    settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
+                                                          // title — macOS #883
+    connect(settingsBrowserAction, &QAction::triggered, this, [this] {
+        showOrRaiseCanon(m_settingsBrowserDialog,
+                         [this] { return new SettingsBrowserDialog(this); });
+    });
+    // RX chain DSP tile double-click also opens the full AetherDSP
+    // Settings dialog — same entry point as the Settings menu action.
+    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+        connect(m_appletPanel->clientChainApplet(),
+                &ClientChainApplet::rxDspEditRequested,
+                this, [dspAction]() { dspAction->trigger(); });
+        // Single-click re-enable of NR2 from LastClientNr also runs
+        // through enableNr2WithWisdom (#2275 — direct enable can crash).
+        connect(m_appletPanel->clientChainApplet(),
+                &ClientChainApplet::rxNr2EnableWithWisdomRequested,
+                this, &MainWindow::enableNr2WithWisdom);
+    }
+
+    settingsMenu->addSeparator();
+
+    // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)
+    auto* autoCatAction = settingsMenu->addAction("Autostart CAT with AetherSDR");
+    autoCatAction->setCheckable(true);
+    autoCatAction->setChecked(
+        AppSettings::instance().value("CatEnabled", "False").toString() == "True");
+    connect(autoCatAction, &QAction::toggled, this, [this](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("CatEnabled", on ? "True" : "False");
+        s.save();
+        applyCatPortCount();
+    });
+
+    auto* autoTciAction = settingsMenu->addAction("Autostart TCI with AetherSDR");
+    autoTciAction->setCheckable(true);
+    autoTciAction->setChecked(
+        AppSettings::instance().value("AutoStartTCI", "False").toString() == "True");
+    connect(autoTciAction, &QAction::toggled, this, [this](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("AutoStartTCI", on ? "True" : "False");
+        s.save();
+#ifdef HAVE_WEBSOCKETS
+        if (tciServer()) {
+            if (on && !tciServer()->isRunning()) {
+                int port = s.value("TciPort", "50001").toInt();
+                tciServer()->start(static_cast<quint16>(port));
+            } else if (!on && tciServer()->isRunning()) {
+                tciServer()->stop();
+            }
+            if (m_appletPanel && m_appletPanel->tciApplet())
+                m_appletPanel->tciApplet()->setTciEnabled(on);
+        }
+#endif
+    });
+
+#if !defined(Q_OS_MACOS) && !defined(HAVE_PIPEWIRE)
+    // DAX audio bridge requires macOS CoreAudio or Linux with PipeWire.
+    // Force off and omit the menu entry on platforms without a bridge (#1556).
+    {
+        auto& s = AppSettings::instance();
+        if (s.value("AutoStartDAX", "False").toString() != "False") {
+            s.setValue("AutoStartDAX", "False");
+            s.save();
+        }
+    }
+#else
+    auto* autoDaxAction = settingsMenu->addAction("Autostart DAX with AetherSDR");
+    m_autoDaxAction = autoDaxAction;
+    auto* daxAvailability = new ControlAvailabilityRegistry(m_radioModel, this);
+    daxAvailability->registerAction(autoDaxAction, tr("DAX audio export is unavailable for this receiver in this build."),
+        [](bool connected, const RadioCapabilities& caps) {
+            bool nativeReceive = false;
+#ifdef HAVE_WEBSOCKETS
+            nativeReceive = caps.receiveAudioExport.has_value();
+#endif
+            return !connected || caps.hasDaxStreams || nativeReceive;
+        });
+    autoDaxAction->setCheckable(true);
+    autoDaxAction->setChecked(
+        AppSettings::instance().value("AutoStartDAX", "False").toString() == "True");
+    connect(autoDaxAction, &QAction::toggled, this, [this](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("AutoStartDAX", on ? "True" : "False");
+        s.save();
+        if (m_radioModel.isConnected()) {
+            if (on) {
+                if (startDax() && m_appletPanel && m_appletPanel->daxApplet())
+                    m_appletPanel->daxApplet()->setDaxEnabled(true);
+            } else {
+                stopDax();
+                if (m_appletPanel && m_appletPanel->daxApplet())
+                    m_appletPanel->daxApplet()->setDaxEnabled(false);
+            }
+        }
+    });
+#endif
+
+    // "Low-Latency DAX (FreeDV)" menu retired in v0.8.19 — the toggle
+    // it used to drive is now applied automatically by RADE mode, since
+    // RADE was the only consumer that ever actually wanted that route.
+    // See AudioEngine::setRadeMode().
+
+    // ── Profiles menu ──────────────────────────────────────────────────────
+    m_profilesMenu = menuBar()->addMenu("&Profiles");
+    auto* profileMgrAct = m_profilesMenu->addAction("Profile Manager...");
+    connect(profileMgrAct, &QAction::triggered, this, [this] {
+        showOrRaiseCanon(m_profileManagerDialog,
+                         [this] { return new ProfileManagerDialog(&m_radioModel, this); });
+    });
+    auto* profileImportExportAct = m_profilesMenu->addAction("Import/Export Profiles...");
+    connect(profileImportExportAct, &QAction::triggered, this, [this] {
+        showOrRaiseCanon(m_profileImportExportDialog,
+                         [this] { return new ProfileImportExportDialog(&m_radioModel, this); });
+    });
+    m_profilesMenu->addSeparator();
+
+    // Global profile list (populated on connect).  Rebuilt on every
+    // globalProfilesChanged() — the radio emits that for both the list and the
+    // active-selection ("current") status, so the checkmark tracks the radio's
+    // authoritative selection live on all platforms.
+    connect(&m_radioModel, &RadioModel::globalProfilesChanged, this, [this] {
+        // Delete the old profile actions (after the separator).  Deleting —
+        // rather than removeAction() — frees them; removeAction() leaves each
+        // QAction parented to the menu, so a session's worth of rebuilds would
+        // otherwise accumulate detached actions.
+        const auto actions = m_profilesMenu->actions();
+        for (int i = 3; i < actions.size(); ++i)  // skip Manager, Import/Export, separator
+            delete actions[i];
+
+        // Add the current global profiles.  The radio reports an empty active
+        // ("current") until a global profile is explicitly loaded, in which
+        // case no item is checked — that is the honest state, not a bug.
+        const auto profiles = m_radioModel.globalProfiles();
+        const auto active = m_radioModel.activeGlobalProfile();
+        for (const auto& name : profiles) {
+            auto* act = m_profilesMenu->addAction(name);
+            act->setCheckable(true);
+            act->setChecked(!active.isEmpty() && name == active);
+            connect(act, &QAction::triggered, this, [this, name] {
+                m_radioModel.loadGlobalProfile(name);
+            });
+        }
+    });
+
+    // Tools contains the operator's frequently used actions, so keep it ahead
+    // of the less frequently changed display options in View.
+    auto* toolsMenu = menuBar()->addMenu("&Tools");
+    toolsMenu->setToolTipsVisible(true);
+
+    auto* viewMenu = menuBar()->addMenu("&View");
+    viewMenu->setToolTipsVisible(true);  // see settingsMenu above (#5546)
+
+    // Workspace canvas (RFC #4887). The Enabled state persists in the workspace
+    // document, not a settings key; wireWorkspaceCanvas() re-applies it at
+    // startup and enabledChanged corrects the action if enabling fails. Edit
+    // Layout arms placement and is session-transient; enabled-but-locked is the
+    // operating posture.
+    QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas");
+    m_workspaceCanvasAction = wsMenu->addAction("&Enabled");
+    m_workspaceCanvasAction->setCheckable(true);
+    connect(m_workspaceCanvasAction, &QAction::toggled, this,
+            [this](bool on) { toggleWorkspaceCanvas(on); });
+    m_workspaceEditAction = wsMenu->addAction("Edit &Layout");
+    m_workspaceEditAction->setCheckable(true);
+    m_workspaceEditAction->setEnabled(false);   // armed by enabledChanged
+
+    // The workspace switcher (phase 6): rebuilt on every open so the list,
+    // check states and bindings are never stale.
+    wsMenu->addSeparator();
+    QMenu* switcher = wsMenu->addMenu("&Workspaces");
+    connect(switcher, &QMenu::aboutToShow, this,
+            [this, switcher] { rebuildWorkspaceSwitcherMenu(switcher); });
+
+    // Additional canvas windows (phase 7): rebuilt on every open, same
+    // staleness rule as the switcher.
+    QMenu* canvasWindows = wsMenu->addMenu("Canvas Wi&ndows");
+    connect(canvasWindows, &QMenu::aboutToShow, this,
+            [this, canvasWindows] { rebuildCanvasWindowsMenu(canvasWindows); });
+
+    // Applet-panel show/hide and pop-out are now driven entirely from the
+    // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as
+    // a window-scoped QShortcut so the keystroke survives the View-menu
+    // entries being removed.
+    auto* popOutShortcut = new QShortcut(QKeySequence("Ctrl+Shift+S"), this);
+    connect(popOutShortcut, &QShortcut::activated, this, [this]() {
+        // Not in canvas mode (review m1): the panel is hidden there and its
+        // shell controls are gone — the shortcut popping an invisible panel
+        // out (and persisting the float) bypassed both.
+        if (m_workspaceController && m_workspaceController->isEnabled()) {
+            return;
+        }
+        // Same routing as the title-bar pop-out icon so the keystroke and the
+        // click cannot drift into different states.
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        applyAppletPanelState(!floating, dockedLeft, true);
+    });
+
+    // Restore floating state at startup if the user had it floating last
+    // time.  Delayed to the next event-loop turn so the splitter has
+    // finished its initial layout before we yank the panel out.
+    if (AppSettings::instance().value("AppletPanelFloating", "False").toString() == "True") {
+        QTimer::singleShot(0, this, [this]() {
+            toggleAppletPanelFloating(true);
+        });
+    }
+
+    // Band Plan submenu — Off / Small / Medium / Large / Huge
+    auto* bandPlanMenu = viewMenu->addMenu("Band Plan");
+    // Use contains() to distinguish an explicit "Off" (0) from an absent key.
+    // Without it, .toInt() returns 0 for both cases and the legacy migration
+    // always promotes a saved "Off" back to Small (6) on next launch. (#3358)
+    int savedBpSize;
+    if (!AppSettings::instance().contains("BandPlanFontSize")) {
+        savedBpSize = AppSettings::instance().value("ShowBandPlan", "True").toString() == "True"
+                      ? 6 : 0;  // migrate old boolean → default Small
+    } else {
+        savedBpSize = AppSettings::instance().value("BandPlanFontSize").toInt();
+    }
+    auto* bpGroup = new QActionGroup(bandPlanMenu);
+    struct BpOption { const char* label; int pt; };
+    for (auto [label, pt] : {BpOption{"Off", 0}, {"Small", 6}, {"Medium", 10}, {"Large", 12}, {"Huge", 16}}) {
+        auto* act = bandPlanMenu->addAction(label);
+        act->setCheckable(true);
+        act->setChecked(pt == savedBpSize);
+        bpGroup->addAction(act);
+        connect(act, &QAction::triggered, this, [this, pt] {
+            for (auto* a : m_panStack->allApplets())
+                a->spectrumWidget()->setBandPlanFontSize(pt);
+            AppSettings::instance().setValue("BandPlanFontSize", QString::number(pt));
+            AppSettings::instance().save();
+        });
+    }
+
+    // Spot-marker toggle (#3339) — declutter the strip on dense band plans
+    bandPlanMenu->addSeparator();
+    const bool bpShowSpots =
+        AppSettings::instance().value("BandPlanShowSpots", "True").toString() == "True";
+    auto* spotsAct = bandPlanMenu->addAction("Show Spots");
+    spotsAct->setCheckable(true);
+    spotsAct->setChecked(bpShowSpots);
+    connect(spotsAct, &QAction::toggled, this, [this](bool on) {
+        for (auto* a : m_panStack->allApplets())
+            a->spectrumWidget()->setBandPlanShowSpots(on);
+        AppSettings::instance().setValue("BandPlanShowSpots", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+
+    // Band plan region selector (#425)
+    bandPlanMenu->addSeparator();
+    auto* planGroup = new QActionGroup(bandPlanMenu);
+    const QString activePlan = m_bandPlanMgr->activePlanName();
+    for (const auto& name : m_bandPlanMgr->availablePlans()) {
+        auto* act = bandPlanMenu->addAction(name);
+        act->setCheckable(true);
+        act->setChecked(name == activePlan);
+        planGroup->addAction(act);
+        connect(act, &QAction::triggered, this, [this, name] {
+            m_bandPlanMgr->setActivePlan(name);
+        });
+    }
+
+    // Theme submenu — list every theme ThemeManager discovered in
+    // :/themes/ (built-ins) + ~/.config/AetherSDR/themes/ (user themes).
+    // setActiveTheme() handles persistence + emits themeChanged so every
+    // widget registered through applyStyleSheet re-themes on the next
+    // paint, no app restart required.
+    auto* themeMenu = viewMenu->addMenu("Theme");
+    auto* themeGroup = new QActionGroup(themeMenu);
+    auto rebuildThemeMenu = [themeMenu, themeGroup]() {
+        themeMenu->clear();
+        for (auto* a : themeGroup->actions())
+            themeGroup->removeAction(a);
+        auto& tm = ThemeManager::instance();
+        const QString active = tm.activeTheme();
+        for (const QString& name : tm.availableThemes()) {
+            auto* act = themeMenu->addAction(name);
+            act->setCheckable(true);
+            act->setChecked(name == active);
+            themeGroup->addAction(act);
+            QObject::connect(act, &QAction::triggered, themeMenu, [name] {
+                ThemeManager::instance().setActiveTheme(name);
+            });
+        }
+    };
+    rebuildThemeMenu();
+    // Rebuild whenever the active theme changes (covers in-app theme
+    // switches re-checking the right entry, and Phase-5 user themes
+    // saved from the editor below appearing in the list immediately).
+    QObject::connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                     themeMenu, rebuildThemeMenu);
+
+    // Theme Editor (Phase 5 PR 1) — modeless dialog for live-editing
+    // the active theme's colour tokens.  Sits as a sibling of the
+    // Theme submenu above (which switches between saved themes);
+    // the editor is for authoring a new one.  Open-on-demand; only
+    // one instance at a time, cleaned up via WA_DeleteOnClose.
+    auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
+    connect(themeEditorAct, &QAction::triggered, this, [this] {
+        showOrRaiseCanon(m_themeEditorDialog,
+                         [this] { return new ThemeEditorDialog(this); });
+    });
+
+    // Global defaults for new slices. Existing VFO flag controls remain
+    // per-slice overrides; choosing here also applies to every live slice.
+    auto* markerWidthMenu = viewMenu->addMenu("VFO Marker Size");
+    auto* markerWidthGroup = new QActionGroup(markerWidthMenu);
+    markerWidthGroup->setExclusive(true);
+    // Re-read on every open rather than only at build time: Settings ▸ Reset
+    // Settings… (same menu bar) clears the stored defaults underneath these,
+    // and an exclusive group showing a stale tick offers no way to resync —
+    // re-picking the already-checked entry is a no-op to the operator.
+    connect(markerWidthMenu, &QMenu::aboutToShow, this, [markerWidthGroup] {
+        const int width = VfoWidget::defaultMarkerWidth();
+        for (auto* action : markerWidthGroup->actions())
+            action->setChecked(action->data().toInt() == width);
+    });
+    for (const auto& option : {
+             std::pair<const char*, int>{"Off", 0},
+             {"1 px", 1},
+             {"3 px", 3}}) {
+        auto* action = markerWidthMenu->addAction(option.first);
+        action->setCheckable(true);
+        action->setData(option.second);
+        action->setChecked(option.second == VfoWidget::defaultMarkerWidth());
+        markerWidthGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, width = option.second] {
+            VfoWidget::setDefaultMarkerWidth(width);
+            for (auto* vfo : findChildren<VfoWidget*>()) {
+                vfo->setMarkerWidth(width, /*persist=*/false);
+            }
+        });
+    }
+
+    auto* filterEdgesMenu = viewMenu->addMenu("VFO Filter Edge");
+    auto* filterEdgesGroup = new QActionGroup(filterEdgesMenu);
+    filterEdgesGroup->setExclusive(true);
+    const bool filterEdgesHidden = VfoWidget::defaultFilterEdgesHidden();
+    connect(filterEdgesMenu, &QMenu::aboutToShow, this, [filterEdgesGroup] {
+        const bool hidden = VfoWidget::defaultFilterEdgesHidden();
+        for (auto* action : filterEdgesGroup->actions())
+            action->setChecked(action->data().toBool() == hidden);
+    });
+    for (const auto& option : {
+             std::pair<const char*, bool>{"Show", false},
+             {"Hide", true}}) {
+        auto* action = filterEdgesMenu->addAction(option.first);
+        action->setCheckable(true);
+        action->setData(option.second);
+        action->setChecked(option.second == filterEdgesHidden);
+        filterEdgesGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, hide = option.second] {
+            VfoWidget::setDefaultFilterEdgesHidden(hide);
+            for (auto* vfo : findChildren<VfoWidget*>()) {
+                vfo->setFilterEdgesHidden(hide, /*persist=*/false);
+            }
+        });
+    }
+
+    auto* singleClickTuneAct = viewMenu->addAction("Single-Click to Tune");
+    singleClickTuneAct->setCheckable(true);
+    singleClickTuneAct->setChecked(
+        AppSettings::instance().value("SingleClickTune", "False").toString() == "True");
+    connect(singleClickTuneAct, &QAction::toggled, this, [this](bool on) {
+        for (auto* a : m_panStack->allApplets())
+            a->spectrumWidget()->setSingleClickTune(on);
+        AppSettings::instance().setValue("SingleClickTune", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+
+    auto* panFollowVfoAct = viewMenu->addAction("Pan Follows VFO");
+    panFollowVfoAct->setCheckable(true);
+    panFollowVfoAct->setChecked(
+        AppSettings::instance().value("PanFollowVfo", "True").toString() == "True");
+    connect(panFollowVfoAct, &QAction::toggled, this, [](bool on) {
+        AppSettings::instance().setValue("PanFollowVfo", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+
+    // Signal/QRM History Markers live exclusively on the SpotHub Display
+    // tab — no View-menu duplicate.  Boot-time state is read here; Display
+    // tab toggle signals call applySHistoryEnabled / applySHistoryQrmEnabled
+    // (defined in this file) for the live apply + persistence path.
+    m_sHistoryEnabled =
+        AppSettings::instance().value("SHistoryMarkersEnabled", "False").toString() == "True";
+    m_sHistoryQrmEnabled =
+        AppSettings::instance().value("SHistoryQrmEnabled", "False").toString() == "True";
+
+    // UI Scale submenu — sets QT_SCALE_FACTOR, applies on restart
+    auto* scaleMenu = viewMenu->addMenu("UI Scale");
+    int savedScale = AppSettings::instance().value("UiScalePercent", "100").toInt();
+    auto* scaleGroup = new QActionGroup(scaleMenu);
+    for (int pct : {75, 85, 100, 110, 125, 150, 175, 200}) {
+        auto* act = scaleMenu->addAction(QString("%1%").arg(pct));
+        act->setCheckable(true);
+        act->setChecked(pct == savedScale);
+        scaleGroup->addAction(act);
+        connect(act, &QAction::triggered, this, [this, pct] {
+            applyUiScale(pct);
+        });
+    }
+    scaleMenu->addSeparator();
+    auto* zoomInAct = scaleMenu->addAction("Zoom In");
+    zoomInAct->setShortcut(QKeySequence("Ctrl+="));
+    connect(zoomInAct, &QAction::triggered, this, [this] { stepUiScale(+1); });
+    auto* zoomOutAct = scaleMenu->addAction("Zoom Out");
+    zoomOutAct->setShortcut(QKeySequence("Ctrl+-"));
+    connect(zoomOutAct, &QAction::triggered, this, [this] { stepUiScale(-1); });
+    auto* zoomResetAct = scaleMenu->addAction("Reset (100%)");
+    zoomResetAct->setShortcut(QKeySequence("Ctrl+0"));
+    connect(zoomResetAct, &QAction::triggered, this, [this] { applyUiScale(100); });
+
+    auto* resetOrderAct = viewMenu->addAction("Reset Applet Order");
+    connect(resetOrderAct, &QAction::triggered, this, [this] {
+        m_appletPanel->resetOrder();
+    });
+
+    auto* pskMapAction = viewMenu->addAction("AetherMap...");
+    pskMapAction->setMenuRole(QAction::NoRole);
+    connect(pskMapAction, &QAction::triggered,
+            this, &MainWindow::showPskReporterMapDialog);
+
+    auto* callsignLookupAct = viewMenu->addAction("Callsign Lookup...");
+    callsignLookupAct->setMenuRole(QAction::NoRole);
+    callsignLookupAct->setShortcut(QKeySequence("Ctrl+Shift+L"));
+    callsignLookupAct->setToolTip("Look up a callsign on QRZ.com");
+    connect(callsignLookupAct, &QAction::triggered,
+            this, [this] { showCallsignLookupDialog(); });
+
+#ifdef HAVE_WEBSOCKETS
+    auto* fdvReporterAct = viewMenu->addAction(tr("FreeDV Reporter..."));
+    connect(fdvReporterAct, &QAction::triggered, this, &MainWindow::showFreeDvReporter);
+#endif
+
+    viewMenu->addSeparator();
+    m_minimalModeAction = viewMenu->addAction("Minimal Mode\tCtrl+Shift+M");
+    m_minimalModeAction->setCheckable(true);
+    m_minimalModeAction->setChecked(
+        AppSettings::instance().value("MinimalModeEnabled", "False").toString() == "True");
+    connect(m_minimalModeAction, &QAction::toggled, this, [this](bool on) {
+        toggleMinimalMode(on);
+    });
+
+    auto* framelessAct = viewMenu->addAction("Frameless Window");
+    framelessAct->setCheckable(true);
+    framelessAct->setShortcut(QKeySequence("Ctrl+Shift+F"));
+    framelessAct->setToolTip(
+        "Hide the OS title bar.  Drag the AetherSDR title bar to move,\n"
+        "double-click to maximize, or use the min/max/close buttons on\n"
+        "the right.  Toggle off if your compositor mishandles it.");
+    framelessAct->setChecked(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+    connect(framelessAct, &QAction::toggled, this, [this](bool on) {
+        setFramelessWindow(on);
+    });
+
+    auto* propForecastAct = viewMenu->addAction("Propagation Conditions");
+    propForecastAct->setCheckable(true);
+    propForecastAct->setChecked(
+        AppSettings::instance().value("PropForecastEnabled", "False").toString() == "True");
+    connect(propForecastAct, &QAction::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue("PropForecastEnabled", on ? "True" : "False");
+        AppSettings::instance().save();
+        // Enable/disable the client (timer only runs when on)
+        m_propForecast->setEnabled(on);
+        // Show/hide the overlay on all panadapters immediately
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            applet->spectrumWidget()->setPropForecastVisible(on);
+        }
+        // If turning off, clear the stale values so they don't reappear
+        if (!on) {
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                applet->spectrumWidget()->setPropForecast(-1, -1, -1);
+            }
+        }
+    });
+
+    auto* packetDecoderAction = viewMenu->addAction("AetherModem...");
+    packetDecoderAction->setMenuRole(QAction::NoRole);
+    connect(packetDecoderAction, &QAction::triggered,
+            this, &MainWindow::showAx25HfPacketDecodeDialog);
+
+    // Copy Assist's menu entry lives on Tools; the status-bar "ASR" toggle and
+    // the keyboard shortcut drive the same showCopyAssist() path.
+
+    auto* smartSpotAct = viewMenu->addAction("Smart Spot Filtering");
+    smartSpotAct->setCheckable(true);
+    smartSpotAct->setToolTip(
+        "Dim SSB spots that have no detected voice signal within ±1 kHz.\n"
+        "Spots on active frequencies remain at full brightness;\n"
+        "unoccupied spots fade to 20% opacity (default, adjustable in\n"
+        "SpotHub → Display → Signal History).  CW and digital spots\n"
+        "are unaffected.  Requires Signal History to be enabled.");
+    m_smartSpotFilterEnabled =
+        AppSettings::instance().value("SmartSpotFilterEnabled", "False").toString() == "True";
+    smartSpotAct->setChecked(m_smartSpotFilterEnabled);
+    connect(smartSpotAct, &QAction::toggled, this, [this](bool on) {
+        m_smartSpotFilterEnabled = on;
+        if (on) m_smartSpotFilterEnabledMs = QDateTime::currentMSecsSinceEpoch();
+        for (auto* a : m_panStack->allApplets())
+            a->spectrumWidget()->setSmartSpotFilter(on, m_smartSpotFilterEnabledMs);
+        AppSettings::instance().setValue("SmartSpotFilterEnabled", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+
+    m_liveCwContactsAction = viewMenu->addAction(tr("Show live CW contacts"));
+    m_liveCwContactsAction->setObjectName(QStringLiteral("showLiveCwContacts"));
+    m_liveCwContactsAction->setMenuRole(QAction::NoRole);
+    m_liveCwContactsAction->setCheckable(true);
+    m_liveCwContactsAction->setChecked(CwDecodeSettings::liveContactsEnabled());
+    m_liveCwContactsAction->setToolTip(tr("Show station information heard in CW in a separate window."));
+    m_liveCwContactsAction->setStatusTip(tr("Show live CW contacts without covering decoded text. Close the contacts window to turn this off."));
+    connect(m_liveCwContactsAction, &QAction::toggled,
+            this, &MainWindow::setLiveCwContactsVisible);
+
+    auto* fpsMetersAct = viewMenu->addAction("FPS Meters");
+    fpsMetersAct->setCheckable(true);
+    fpsMetersAct->setShortcut(QKeySequence("Ctrl+F"));
+    fpsMetersAct->setChecked(
+        AppSettings::instance().value("DisplayFpsMeters", "False").toString() == "True");
+    connect(fpsMetersAct, &QAction::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue("DisplayFpsMeters", on ? "True" : "False");
+        AppSettings::instance().save();
+        if (!m_panStack)
+            return;
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (auto* sw = applet->spectrumWidget())
+                sw->setShowFpsMeters(on);
+        }
+    });
+
+    viewMenu->addSeparator();
+    auto* heartbeatBlinkAct = viewMenu->addAction("Blink Status Indicator");
+    heartbeatBlinkAct->setCheckable(true);
+    heartbeatBlinkAct->setChecked(
+        AppSettings::instance().value("HeartbeatBlinkEnabled", "True").toString() == "True");
+    connect(heartbeatBlinkAct, &QAction::toggled, this, [this](bool on) {
+        if (m_titleBar) m_titleBar->setBlinkEnabled(on);
+    });
+    // Keep the menu item in sync when the right-click on the indicator changes the setting
+    if (m_titleBar) {
+        connect(m_titleBar, &TitleBar::blinkEnabledChanged,
+                heartbeatBlinkAct, &QAction::setChecked);
+    }
+
+    // Destructive client-store reset: a Settings action, not a Help one (#5570).
+    // NoRole is required — macOS would otherwise read "Settings" as a
+    // Preferences action and reparent it into the application menu (#883).
+    auto* resetSettingsAction = settingsMenu->addAction("Reset Settings...", this, [this] {
+        SupportDialog::resetSettings(this);
+    });
+    resetSettingsAction->setMenuRole(QAction::NoRole);
+
+    // ── Tools menu ─────────────────────────────────────────────────────────
+    // Operational windows and verbs live here. Reusing the existing QActions
+    // preserves their shortcuts and signal paths while changing only IA.
+    // Ellipsis: this opens PanLayoutDialog rather than creating immediately,
+    // because layout ids are not 1:1 with pan counts (two pans is "2v" or "2h")
+    // and the arrangement is the operator's to pick. Shares one handler with the
+    // status-bar +PAN affordance so PanadapterLayout is written and applied on
+    // both routes instead of only one.
+    auto* addPanAction = toolsMenu->addAction("Add Panadapter...");
+    m_addPanAction = addPanAction;
+    addPanAction->setEnabled(false);
+    connect(addPanAction, &QAction::triggered,
+            this, &MainWindow::showAddPanadapterDialog);
+
+    // The three checkable panel toggles re-read their own state after the
+    // handler runs: triggered() fires *after* Qt has flipped the check mark, and
+    // every one of these handlers can legitimately decline (no active pan, keyer
+    // indicator disabled), which would otherwise leave the menu asserting a
+    // panel is open when it is not.
+    auto* aetherialAction = toolsMenu->addAction("AetherTX...");
+    m_aetherialAction = aetherialAction;
+    aetherialAction->setCheckable(true);
+    connect(aetherialAction, &QAction::triggered, this, [this] {
+        toggleAetherialStrip();
+        updateToolsMenuState();
+    });
+
+    auto* cwKeyerAction = toolsMenu->addAction("CW Keyer");
+    m_cwKeyerAction = cwKeyerAction;
+    cwKeyerAction->setCheckable(true);
+    cwKeyerAction->setEnabled(false);
+    connect(cwKeyerAction, &QAction::triggered, this, [this] {
+        toggleCwKeyerPanel();
+        updateToolsMenuState();
+    });
+
+#ifdef AETHER_ASR_ENABLED
+    auto* copyAssistAction = toolsMenu->addAction("Copy Assist");
+    m_copyAssistAction = copyAssistAction;
+    copyAssistAction->setCheckable(true);
+    copyAssistAction->setEnabled(false);
+    connect(copyAssistAction, &QAction::triggered, this, [this] {
+        showCopyAssist();
+        updateToolsMenuState();
+    });
+#endif
+
+    // Outside the ASR guard: without Copy Assist it follows CW Keyer.
+    auto* voiceKeyerAction = toolsMenu->addAction("Digital Voice Keyer");
+    m_voiceKeyerAction = voiceKeyerAction;
+    voiceKeyerAction->setCheckable(true);
+    voiceKeyerAction->setEnabled(false);
+    connect(voiceKeyerAction, &QAction::triggered, this, [this] {
+        toggleVoiceKeyerPanel();
+        updateToolsMenuState();
+    });
+
+    viewMenu->removeAction(packetDecoderAction);
+    toolsMenu->addAction(packetDecoderAction);
+    auto* kiwiAction = toolsMenu->addAction("Configure KiwiSDR...");
+    kiwiAction->setMenuRole(QAction::NoRole);
+    connect(kiwiAction, &QAction::triggered, this, [this] {
+        openRadioSetupPage(QStringLiteral("Antennas"));
+    });
+
+    toolsMenu->addSeparator();
+    auto* labAction = toolsMenu->addAction(tr("AetherLab…"));
+    labAction->setObjectName(QStringLiteral("aetherLabAction"));
+    labAction->setStatusTip(tr("Open the Stick Pro analyzer workspace; RF isolation is required"));
+    connect(labAction, &QAction::triggered, this, &MainWindow::showAetherLab);
+
+    auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
+    m_swrScanAction = swrScanAction;
+    swrScanAction->setEnabled(false);
+    swrScanAction->setProperty(kTxKeyingProperty, true);
+    connect(swrScanAction, &QAction::triggered, this, [this] {
+        startSwrSweep();
+    });
+    auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
+    m_preTuneAction = preTuneAction;
+    preTuneAction->setEnabled(false);
+    preTuneAction->setProperty(kTxKeyingProperty, true);
+    connect(preTuneAction, &QAction::triggered, this, [this] {
+        if (m_appletPanel && m_appletPanel->txApplet()) {
+            m_appletPanel->txApplet()->openPreTuneDialog();
+        }
+    });
+    auto* clearAtuAction = toolsMenu->addAction("Clear ATU Memories...");
+    m_clearAtuAction = clearAtuAction;
+    clearAtuAction->setEnabled(false);
+    connect(clearAtuAction, &QAction::triggered, this, [this] {
+        if (m_appletPanel && m_appletPanel->txApplet()) {
+            m_appletPanel->txApplet()->confirmAndClearAtuMemories();
+        }
+    });
+    // Discoverability mitigation for AGC-T calibration's right-click-only
+    // entry point (docs/agc-t-calibration-design.md §0 flags this exact
+    // tension and prescribes a mitigation — this is the Tools-menu half of
+    // it, additive to the slider's right-click menu, not a replacement).
+    // Requested by Larry, KE2ET. Targets the active slice, same as the
+    // right-click path (RxApplet.cpp) — "the currently selected panadapter."
+    // No kTxKeyingProperty: calibration listens to the noise floor, it does
+    // not key the transmitter like the two sweeps above it.
+    auto* agcTCalibrationAction = toolsMenu->addAction(
+        "Calibrate AGC-T...", this, [this] {
+        if (auto* s = activeSlice()) {
+            showAgcCalibrationDialog(s->sliceId());
+        }
+    });
+    m_agcTCalibrationMenuAction = agcTCalibrationAction;
+
+    toolsMenu->addSeparator();
+    viewMenu->removeAction(callsignLookupAct);
+    viewMenu->removeAction(pskMapAction);
+    toolsMenu->addAction(callsignLookupAct);
+    toolsMenu->addAction(pskMapAction);
+#ifdef HAVE_WEBSOCKETS
+    viewMenu->removeAction(fdvReporterAct);
+    toolsMenu->addAction(fdvReporterAct);
+#endif
+
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(netSchedulerAction);
+    toolsMenu->addAction(memoryAction);
+    toolsMenu->addAction(waveformsAct);
+
+    // Wideband converter view (docs/HERMES.md §13 item 18), in Tools with the
+    // other instrument windows. Gated on RadioCapabilities::widebandConverterView,
+    // disabled (not hidden, and not permissive while disconnected: no radio, no
+    // converter). QAction has no accessibleDescription, so the reason goes in
+    // the status tip, cleared again when the entry is live.
+    auto* bandscopeAct = toolsMenu->addAction("Wideband Bandscope...");
+    bandscopeAct->setMenuRole(QAction::NoRole);
+    bandscopeAct->setToolTip(
+        "The radio's converter, before tuning and filtering");
+    bandscopeAct->setEnabled(false);
+    bandscopeAct->setStatusTip(
+        "Unavailable: no radio is connected that provides a wideband "
+        "converter view.");
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, bandscopeAct,
+            [bandscopeAct](bool connected, const RadioCapabilities& caps) {
+        const bool on = connected && caps.widebandConverterView.has_value();
+        bandscopeAct->setEnabled(on);
+        bandscopeAct->setStatusTip(on
+            ? QString()
+            : (connected
+                   ? QStringLiteral("Unavailable: this radio does not provide "
+                                    "a wideband converter view.")
+                   : QStringLiteral("Unavailable: no radio is connected.")));
+    });
+    connect(bandscopeAct, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
+    });
+
+    toolsMenu->addSeparator();
+    toolsMenu->addAction("Radio Health...", this, [this] {
+        showOrRaiseCanon(m_radioHealthDialog,
+                         [this] { return new RadioHealthDialog(&m_radioModel, this); });
+    });
+    auto* gpsDashboardAction = toolsMenu->addAction("AetherGPS...", this, [this] {
+        showGpsLocationDialog();
+    });
+    toolsMenu->addAction(networkAction);
+    toolsMenu->addAction("Runtime Monitor...", this, [this] {
+        showSystemInfoDialog();
+    });
+
+    m_gpsDashboardAction = gpsDashboardAction;
+
+    // Both passes call the same function: aboutToShow for the human, and
+    // applyCapabilitiesToUi() for everything that never pops the menu — most of
+    // all the automation bridge, which resolves menu-bar actions in a CLOSED
+    // menu bar and honours only isEnabled().
+    connect(toolsMenu, &QMenu::aboutToShow, this,
+            [this] { updateToolsMenuState(); });
+    updateToolsMenuState();
+
+    auto* windowMenu = menuBar()->addMenu("&Window");
+    const auto refreshWindowMenu = [this, windowMenu] {
+        const auto shortcutText = [this](const QString& id) {
+            const ShortcutManager::Action* action = m_shortcutManager.action(id);
+            return action
+                ? action->currentKey.toString(QKeySequence::NativeText)
+                : QString();
+        };
+        populateWindowMenu(windowMenu, this,
+                           shortcutText(QStringLiteral("window_minimize")),
+                           shortcutText(QStringLiteral("window_fullscreen")));
+    };
+    connect(windowMenu, &QMenu::aboutToShow, this, refreshWindowMenu);
+    // Seed actions for bridge/menu discovery before first open. ShortcutManager
+    // becomes the sole keyboard owner later in MainWindow construction; the
+    // dynamic list and displayed bindings refresh on every aboutToShow edge.
+    refreshWindowMenu();
+
+    auto* helpMenu = menuBar()->addMenu("&Help");
+    helpMenu->setToolTipsVisible(true);  // a dimmed item states its reason on hover
+
+    // ── Documentation ─────────────────────────────────────────────────────
+    // The online manual (docs.aethersdr.com), its printable PDF, and the Log
+    // Analyzer. These open the browser; the bundled guides below work offline.
+    DocsLinks::addHelpMenuActions(helpMenu);
+    helpMenu->addSeparator();
+
+    // ── Learn & news ──────────────────────────────────────────────────────
+    // Orientation first: how to get going, the full manual, and what changed.
+    helpMenu->addAction("Getting Started...", this, [this]() {
+        showHelpGuide(QStringLiteral("Getting Started"), QStringLiteral(":/help/getting-started.md"));
+    });
+    helpMenu->addAction("AetherSDR Help...", this, [this]() {
+        showHelpGuide(QStringLiteral("AetherSDR Help"), QStringLiteral(":/help/aethersdr-help.md"));
+    });
+    helpMenu->addAction("What's New...", this, [this]() {
+        showOrRaiseCanon(m_whatsNewDialog, [this] {
+            return new WhatsNewDialog(QString(), QCoreApplication::applicationVersion(), this,
+                                      false, true);
+        });
+    });
+    helpMenu->addSeparator();
+
+    // ── Feature guides ────────────────────────────────────────────────────
+    // Deeper topic walkthroughs for specific parts of the app.
+    helpMenu->addAction("Understanding Noise Cancellation...", this, [this]() {
+        showHelpGuide(QStringLiteral("Understanding Noise Cancellation"), QStringLiteral(":/help/understanding-noise-cancellation.md"));
+    });
+    auto* controlsHelpAction = helpMenu->addAction("Configuring AetherSDR Controls...", this, [this]() {
+        showHelpGuide(QStringLiteral("Configuring AetherSDR Controls"), QStringLiteral(":/help/configuring-aethersdr-controls.md"));
+    });
+    controlsHelpAction->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
+    auto* dataModesAction = helpMenu->addAction("Configuring Data Modes...", this, [this]() {
+        showHelpGuide(QStringLiteral("Configuring Data Modes"), QStringLiteral(":/help/understanding-data-modes.md"));
+    });
+    dataModesAction->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
+    helpMenu->addSeparator();
+
+    // ── Community & feedback ──────────────────────────────────────────────
+    // Outward-facing links: the website, donations, feature ideas, bug
+    // reports, and how to contribute back.
+    helpMenu->addAction("AetherSDR Website", this, []() {
+        QDesktopServices::openUrl(QUrl("https://www.aethersdr.com"));
+    });
+    helpMenu->addAction("Donate to AetherSDR", this, []() {
+        QDesktopServices::openUrl(QUrl("https://www.aethersdr.com/#sponsor"));
+    });
+    helpMenu->addAction(QString::fromUtf8("Submit your Idea... \xF0\x9F\x92\xA1"),
+                        this, [this]() {
+        if (m_titleBar) m_titleBar->showFeatureRequestDialog();
+    });
+    // "File an Issue" was previously buried inside the Support dialog; surface
+    // it directly so reporting a bug is one click from the Help menu.
+    helpMenu->addAction("File an Issue...", this, [this]() {
+        SupportDialog::fileIssue(this, &m_radioModel);
+    });
+    helpMenu->addAction("Contributing to AetherSDR...", this, [this]() {
+        showHelpGuide(QStringLiteral("Contributing to AetherSDR"), QStringLiteral(":/help/contributing-to-aethersdr.md"));
+    });
+    helpMenu->addSeparator();
+
+    // ── Diagnostics & maintenance ─────────────────────────────────────────
+    // Tools for capturing logs, chasing slice problems, resetting local
+    // settings, and staying up to date.
+    helpMenu->addAction("Support && Diagnostics...", this, [this]() {
+        showOrRaiseCanon(m_supportDialog, [this] {
+            auto* dlg = new SupportDialog(this);
+            dlg->setRadioModel(&m_radioModel);
+            return dlg;
+        });
+    });
+    helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
+        auto* dlg = new SliceTroubleshootingDialog(
+            &m_radioModel, m_audio, this,
+            [this]() { return buildControlDevicesSnapshot(); },
+            [this]() {
+                QJsonObject renderer;
+                renderer["available"] = true;
+                renderer["description"] = spectrum()
+                    ? spectrum()->rendererDescription()
+                    : QStringLiteral("No active pan");
+                return renderer;
+            });
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setWindowModality(Qt::ApplicationModal);
+        trackPersistentDialog(dlg);
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
+    });
+    helpMenu->addAction("Check for Updates...", this, [this]() {
+        showUpdatesWindow(true);
+    });
+    auto* autoUpdateAct = helpMenu->addAction("Check for Updates Automatically");
+    m_autoUpdateAction = autoUpdateAct;
+    autoUpdateAct->setCheckable(true);
+    if (const QString store = UpdateChecker::storeName(); !store.isEmpty()) {
+        // The store owns updates here, so the background check never runs.
+        const QString reason =
+            QStringLiteral("Updates for this copy come from %1.").arg(store);
+        autoUpdateAct->setChecked(false);
+        autoUpdateAct->setEnabled(false);
+        autoUpdateAct->setStatusTip(reason);
+        autoUpdateAct->setToolTip(reason);
+    } else {
+        autoUpdateAct->setChecked(UpdateChecker::checkOnStartup());
+        autoUpdateAct->setStatusTip(QStringLiteral(
+            "Check for a newer release at startup, at most once a day, and show "
+            "UPDATE in the title bar when there is one"));
+        connect(autoUpdateAct, &QAction::toggled, this, &MainWindow::setAutomaticUpdateCheck);
+    }
+    helpMenu->addSeparator();
+    helpMenu->addAction("About AetherSDR", this, [this]{
+        // Styled to the AetherSDR style guide: an ambient ground, the gradient
+        // wordmark, nested build details, and colour only from color.canon.*
+        // and color.brand.* tokens.
+        // One About at a time: a second click brings the open one forward.
+        if (m_aboutWindow) {
+            m_aboutWindow->raise();
+            m_aboutWindow->activateWindow();
+            return;
+        }
+        auto& tm = AetherSDR::ThemeManager::instance();
+        // A CanonWindow: no title bar, rounded corners, the ambient ground,
+        // a corner close button; Escape and OK close it too.
+        auto* dlg = new CanonWindow(QStringLiteral("About AetherSDR"), this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_aboutWindow = dlg;
+        dlg->setFixedWidth(400);
+
+        auto* vbox = new QVBoxLayout(dlg->bodyWidget());
+        vbox->setSpacing(10);
+        vbox->setContentsMargins(24, 26, 24, 22);
+
+        // The mark is dark on a dark ground: a contrast ring and the guide's
+        // spark set it apart. SparkRing scales it for the screen's DPR.
+        auto* logo = new SparkRing(QPixmap(QStringLiteral(":/icon.png")), 88);
+        logo->setAccessibleName(QStringLiteral("AetherSDR logo"));
+        vbox->addWidget(logo, 0, Qt::AlignHCenter);
+        auto* wordmark = new AboutWordmark;
+        tm.applyStyleSheet(wordmark, "background: transparent;");
+        vbox->addWidget(wordmark);
+
+        // The git SHA identifies the build — useful when bug-reporting against
+        // a dev/test build that doesn't correspond to a tagged release. It is
+        // captured at build time; see cmake/AetherBuildIdentity.cmake.
+        auto* version = new QLabel(QStringLiteral("v%1  <span style='font-family:monospace; font-size:11px;'>%2</span>")
+                                       .arg(QCoreApplication::applicationVersion(),
+                                            QStringLiteral(AETHER_BUILD_SHA)));
+        version->setAlignment(Qt::AlignCenter);
+        version->setToolTip(QStringLiteral("Version and the commit this binary was built from."));
+        tm.applyStyleSheet(version, "QLabel { color: {{color.canon.muted}}; font-size: 13px; background: transparent; }");
+        vbox->addWidget(version);
+
+        auto* blurb = new QLabel(QStringLiteral("Cross-platform SmartSDR-compatible client\nfor FlexRadio transceivers."));
+        blurb->setAlignment(Qt::AlignCenter);
+        blurb->setWordWrap(true);
+        tm.applyStyleSheet(blurb, "QLabel { color: {{color.canon.inkSoft}}; font-size: 13px; padding: 2px 0 4px 0; background: transparent; }");
+        vbox->addWidget(blurb);
+
+        // Build details: a nested card of label / value rows.
+        const QString rendererDescription = [this]() {
+            if (SpectrumWidget* sw = spectrum()) {
+                return sw->rendererDescription();
+            }
+            return QStringLiteral("No active pan");
+        }();
+        auto* build = new QFrame;
+        build->setObjectName(QStringLiteral("aboutBuild"));
+        tm.applyStyleSheet(build,
+            "QFrame#aboutBuild { background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}}; border-radius: 12px; }"
+            "QLabel { background: transparent; border: none; font-size: 12px; color: {{color.canon.inkSoft}}; }"
+            "QLabel[role=\"key\"] { color: {{color.canon.muted}}; font-size: 10px; font-weight: bold; }");
+        auto* grid = new QGridLayout(build);
+        grid->setContentsMargins(14, 10, 14, 10);
+        grid->setHorizontalSpacing(12);
+        grid->setVerticalSpacing(5);
+        const QList<QPair<QString, QString>> rows = {
+            {QStringLiteral("BUILT WITH"), QStringLiteral("Qt %1 · C++20").arg(QString::fromLatin1(qVersion()))},
+            {QStringLiteral("COMPILED"), QStringLiteral(__DATE__)},
+            {QStringLiteral("RENDERER"), rendererDescription},
+        };
+        // The body's content width: the window less its hairline inset and
+        // the body margins.
+        const QMargins vm = vbox->contentsMargins();
+        const int contentWidth = dlg->width() - 2 * CanonWindow::kInset - vm.left() - vm.right();
+        QList<QLabel*> values;
+        int keyWidth = 0;
+        for (int i = 0; i < rows.size(); ++i) {
+            auto* k = new QLabel(rows[i].first);
+            k->setProperty("role", QStringLiteral("key"));
+            auto* v = new QLabel(rows[i].second);
+            // Driver and device names are not markup.
+            v->setTextFormat(Qt::PlainText);
+            v->setWordWrap(true);
+            v->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+            v->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            grid->addWidget(k, i, 0, Qt::AlignTop | Qt::AlignRight);
+            grid->addWidget(v, i, 1, Qt::AlignTop);
+            // Measure in the card's stylesheet fonts, not the defaults.
+            k->ensurePolished();
+            keyWidth = std::max(keyWidth, k->sizeHint().width());
+            values.append(v);
+        }
+        grid->setColumnStretch(1, 1);
+        // Wrapped labels under-report their height in a fixed-width window;
+        // reserve it for the value column's width: the content width less the
+        // card's padding and border, the spacing and the measured key column.
+        const QMargins gm = grid->contentsMargins();
+        const int valueWidth = contentWidth - gm.left() - gm.right() - 2 * build->frameWidth()
+                               - grid->horizontalSpacing() - keyWidth;
+        for (QLabel* v : values) {
+            v->ensurePolished();
+            v->setMinimumHeight(v->heightForWidth(valueWidth));
+        }
+        // The renderer line comes from the active pan at dialog-open time,
+        // after Qt has picked a real QRhi backend when the GPU path is active.
+        build->setToolTip(QStringLiteral("Build identity and active pan renderer. The SHA is captured "
+                                         "when the binary is built."));
+        vbox->addWidget(build);
+
+        // Contributors live in the Contributor Logbook (points, weekly
+        // awards, bios); the window links there instead of listing names.
+        auto* logbookButton = new QPushButton(QStringLiteral("Contributor Logbook  ↗"));
+        logbookButton->setAccessibleName(QStringLiteral("Open the AetherSDR Contributor Logbook"));
+        logbookButton->setAccessibleDescription(
+            QStringLiteral("Opens the all-time standings at contributors.aethersdr.com in your browser."));
+        logbookButton->setToolTip(QStringLiteral("contributors.aethersdr.com"));
+        logbookButton->setCursor(Qt::PointingHandCursor);
+        tm.applyStyleSheet(
+            logbookButton,
+            "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}}; "
+            "border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 7px 18px; "
+            "font-weight: bold; font-size: 12px; }"
+            "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }"
+            "QPushButton:focus { border-color: {{color.canon.sparkGold}}; }");
+        // The logbook is where contributors are recognised: the gold spark
+        // circles the button, as it circles the award cards there.
+        vbox->addSpacing(2);
+        vbox->addWidget(new SparkBorder(logbookButton, 4), 0, Qt::AlignCenter);
+        connect(logbookButton, &QPushButton::clicked, dlg, [] {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://contributors.aethersdr.com/#all-time")));
+        });
+
+        auto* sep = new QFrame;
+        sep->setFrameShape(QFrame::HLine);
+        sep->setFixedHeight(1);
+        tm.applyStyleSheet(sep, "QFrame { background: {{color.canon.line}}; border: none; }");
+        vbox->addSpacing(4);
+        vbox->addWidget(sep);
+
+        // Rich-text link colours are baked into the HTML, so the footer is
+        // rewritten when the theme changes while the window is open.
+        auto* footer = new QLabel;
+        auto setFooterText = [footer] {
+            auto& tm = AetherSDR::ThemeManager::instance();
+            footer->setText(QStringLiteral(
+                "<div style='text-align:center;'>"
+                "<p style='margin:0 0 6px 0;'>&copy; 2026 AetherSDR Contributors &middot; Licensed under "
+                "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:%1; text-decoration:none;'>GPLv3</a></p>"
+                "<p style='margin:0 0 8px 0;'><a href='https://github.com/aethersdr/AetherSDR' style='color:%1; text-decoration:none;'>"
+                "github.com/aethersdr/AetherSDR</a></p>"
+                "<p style='font-size:10px; margin:0;'>SmartSDR protocol &copy; FlexRadio Systems<br>"
+                "D-STAR is a registered trademark of Icom Inc.<br>"
+                "AetherSDR is not affiliated with or endorsed by Icom Inc.<br>"
+                "HF propagation forecasts provided by "
+                "<a href='https://www.hamqsl.com/' style='color:%1; text-decoration:none;'>hamqsl.com</a></p>"
+                "</div>").arg(tm.color(footer, QStringLiteral("color.canon.cyan")).name()));
+        };
+        setFooterText();
+        connect(&tm, &AetherSDR::ThemeManager::themeChanged, footer, setFooterText);
+        footer->setAlignment(Qt::AlignCenter);
+        footer->setOpenExternalLinks(true);
+        footer->setWordWrap(true);
+        tm.applyStyleSheet(footer, "QLabel { color: {{color.canon.muted}}; font-size: 11px; background: transparent; }");
+        // A wrapped rich-text label under-reports its height in a fixed-width
+        // dialog; size it for the content width so the last line isn't clipped.
+        footer->ensurePolished();
+        footer->setMinimumHeight(footer->heightForWidth(contentWidth));
+        vbox->addWidget(footer);
+
+        // OK: the primary action, in the brand gradient.
+        auto* okBtn = new QPushButton(QStringLiteral("OK"));
+        okBtn->setDefault(true);
+        tm.applyStyleSheet(okBtn,
+            "QPushButton { background: {{color.brand.gradient}}; color: {{color.canon.onAccent}}; font-weight: bold; "
+            "font-size: 12px; border: 1px solid transparent; border-radius: 4px; padding: 6px 30px; }"
+            "QPushButton:hover { border-color: {{color.canon.aqua}}; }"
+            "QPushButton:focus { border: 2px solid {{color.canon.aqua}}; padding: 5px 29px; }");
+        connect(okBtn, &QPushButton::clicked, dlg, &QDialog::close);
+        vbox->addSpacing(4);
+        vbox->addWidget(okBtn, 0, Qt::AlignCenter);
+
+        dlg->show();
+        okBtn->setFocus(Qt::OtherFocusReason);   // Enter closes; the corner × stays quiet
+    });
+}
+
+#ifdef AETHER_ASR_ENABLED
+void MainWindow::showCopyAssist()
+{
+    // Dock the Copy Assist panel under the waterfall of the active panadapter,
+    // the same way the CW decode panel docks. First open builds the panel and
+    // wires the ASR controller to it; subsequent invocations toggle visibility.
+    if (!m_copyAssistController) {
+        PanadapterApplet* applet = m_panStack ? m_panStack->activeApplet() : nullptr;
+        if (!applet) {
+            return;
+        }
+        m_copyAssistApplet = applet;
+        m_copyAssistController = new CopyAssistController(m_audio, applet->copyAssistPanel(), this);
+        m_copyAssistController->setReceiver(m_radioModel, activeSlice());
+        trackPersistentDialog(m_copyAssistController->settingsDialog());
+        // Seed the current frequency so the first "on start" log marker is correct
+        // even before any retune fires.
+        if (auto* s = activeSlice()) {
+            m_copyAssistController->setCurrentFrequency(s->frequency());
+        }
+    }
+    if (m_copyAssistApplet) {
+        m_copyAssistApplet->setCopyAssistVisible(!m_copyAssistApplet->isCopyAssistVisible());
+    }
+    updateKeyerAvailability(); // keep the status-bar ASR indicator in sync
+}
+#endif
+
+// Right-click on the SPLIT/SWAP badge (#2242, #311): the offsets, Monitor TX,
+// and the remembered split audio arrangement.
+void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
+{
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    const bool paired = splitPairForSlice(sliceId, rx, tx);
+    // With a split, the offsets retune its TX slice; without one, they enter
+    // split on the slice whose badge was clicked (#311). The reason a split
+    // cannot be entered goes on the statusTip, which a screen reader announces
+    // for a disabled QAction where a tooltip is never read.
+    const QString blocker = paired ? QString() : splitEntryBlocker(sliceId);
+
+    const QJsonObject initialQsySettings = m_splitQsySettings.toJson();
+    QMenu menu(this);
+
+    // ── One-touch pileup offsets (#311) ──────────────────────────────────
+    const double offsets[] = {1.0, 5.0, 10.0};
+    for (double khz : offsets) {
+        QAction* a = menu.addAction(tr("Split Up %1 kHz").arg(khz, 0, 'g', 2));
+        a->setEnabled(blocker.isEmpty());
+        if (!blocker.isEmpty())
+            a->setStatusTip(blocker);
+        connect(a, &QAction::triggered, this,
+                [this, khz, sliceId]() { applySplitOffsetKHz(khz, sliceId); });
+    }
+
+    // Keep client-side split-on-QSY policy beside the other split actions.
+    menu.addSeparator();
+    QMenu* splitQsyMenu = menu.addMenu(tr("Split QSY Option"));
+
+    auto* closeSplitCheck = new QCheckBox(
+        tr("Close split on QSY"), splitQsyMenu);
+    closeSplitCheck->setObjectName(QStringLiteral("splitCloseOnQsy"));
+    closeSplitCheck->setAccessibleName(tr("Close split on QSY"));
+    closeSplitCheck->setChecked(m_splitQsySettings.closeSplitOnQsy);
+    auto* closeSplitAction = new QWidgetAction(splitQsyMenu);
+    closeSplitAction->setDefaultWidget(closeSplitCheck);
+    splitQsyMenu->addAction(closeSplitAction);
+
+    QWidget* thresholdRow = new QWidget(splitQsyMenu);
+    auto* thresholdLayout = new QHBoxLayout(thresholdRow);
+    thresholdLayout->setContentsMargins(12, 4, 12, 4);
+    auto* thresholdLabel = new QLabel(
+        tr("QSY change threshold to close split:"), thresholdRow);
+    auto* thresholdSpin = new QSpinBox(thresholdRow);
+    thresholdLabel->setBuddy(thresholdSpin);
+    thresholdLayout->addWidget(thresholdLabel);
+    thresholdSpin->setObjectName(QStringLiteral("splitQsyThresholdHz"));
+    thresholdSpin->setRange(AetherSDR::SplitQsySettings::kMinimumThresholdHz,
+                            AetherSDR::SplitQsySettings::kMaximumThresholdHz);
+    thresholdSpin->setValue(m_splitQsySettings.thresholdHz);
+    thresholdSpin->setSuffix(tr(" Hz"));
+    thresholdSpin->setAccessibleName(
+        tr("QSY change threshold to close split"));
+    thresholdSpin->setAccessibleDescription(
+        tr("Enter a frequency change from 1 to 200000 Hz."));
+    thresholdLayout->addWidget(thresholdSpin);
+    auto* thresholdAction = new QWidgetAction(splitQsyMenu);
+    thresholdAction->setDefaultWidget(thresholdRow);
+    splitQsyMenu->addAction(thresholdAction);
+    thresholdSpin->setEnabled(m_splitQsySettings.closeSplitOnQsy);
+
+    connect(closeSplitCheck, &QCheckBox::toggled, this, [this, thresholdSpin](bool enabled) {
+        m_splitQsySettings.closeSplitOnQsy = enabled;
+        thresholdSpin->setEnabled(enabled);
+    });
+    connect(thresholdSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+            [this](int thresholdHz) {
+        m_splitQsySettings.thresholdHz = thresholdHz;
+    });
+
+    // ── Monitor TX ───────────────────────────────────────────────────────
+    menu.addSeparator();
+    QMenu* monitorMenu = menu.addMenu(tr("Monitor TX"));
+
+    // Surface the binding here rather than only in the shortcut editor: this is
+    // a hold control, so an operator who finds it in this menu still needs to
+    // be told there is nothing to hold until they bind one.
+    QString keyText;
+    if (auto* act = m_shortcutManager.action(QLatin1String(kSplitMonitorActionId)))
+        keyText = act->currentKey.toString(QKeySequence::NativeText);
+    QAction* keyRow = monitorMenu->addAction(
+        keyText.isEmpty() ? tr("Not bound — set a key in Keyboard Shortcuts")
+                          : tr("Hold %1").arg(keyText));
+    keyRow->setEnabled(false);
+    monitorMenu->addSeparator();
+
+    auto profile = loadSplitAudioProfile();
+    using Monitor = AetherSDR::SplitAudioProfile::Monitor;
+    auto* group = new QActionGroup(&menu);
+    struct { Monitor mode; const char* label; } modes[] = {
+        {Monitor::Solo, QT_TR_NOOP("Solo TX frequency")},
+        {Monitor::Both, QT_TR_NOOP("Hear both")},
+    };
+    for (const auto& m : modes) {
+        QAction* a = monitorMenu->addAction(tr(m.label));
+        a->setCheckable(true);
+        a->setChecked(profile.monitor == m.mode);
+        group->addAction(a);
+        const Monitor mode = m.mode;
+        connect(a, &QAction::triggered, this, [this, mode]() {
+            // Read-modify-write: the learned half of the profile is not this
+            // menu's business and must survive a monitor-mode change.
+            auto p = loadSplitAudioProfile();
+            p.monitor = mode;
+            saveSplitAudioProfile(p);
+        });
+    }
+
+    // ── The remembered arrangement ───────────────────────────────────────
+    menu.addSeparator();
+    // Name what is stored, in operating terms. A remembered arrangement the
+    // operator cannot see is the difference between a feature and a haunting.
+    auto panWord = [](int pan) {
+        if (pan <= 33) return tr("left");
+        if (pan >= 67) return tr("right");
+        return tr("centre");
+    };
+    const bool pending = m_splitAudioRecorder.hasPendingLearning();
+    QString summaryText;
+    if (!profile.hasLearnedState()) {
+        summaryText = pending
+            ? tr("This split's changes will be remembered when it ends")
+            : tr("Nothing remembered yet");
+    } else {
+        QStringList parts;
+        if (profile.hasTxMute)
+            parts << (profile.txMuted ? tr("TX muted") : tr("TX unmuted"));
+        if (profile.hasTxPan)  parts << tr("TX %1").arg(panWord(profile.txPan));
+        if (profile.hasTxGain) parts << tr("TX %1%").arg(profile.txGain);
+        if (profile.hasRxPan)  parts << tr("RX %1").arg(panWord(profile.rxPan));
+        summaryText = tr("Remembered: %1").arg(parts.join(tr(", ")));
+    }
+    QAction* summary = menu.addAction(summaryText);
+    summary->setEnabled(false);
+
+    QAction* forget = menu.addAction(tr("Forget remembered audio"));
+    const bool forgettable = profile.hasLearnedState() || pending;
+    forget->setEnabled(forgettable);
+    if (!forgettable)
+        forget->setStatusTip(tr("Nothing is remembered yet."));
+    connect(forget, &QAction::triggered, this, [this]() {
+        auto p = loadSplitAudioProfile();
+        p.forgetLearnedState();   // keeps the chosen monitor mode
+        saveSplitAudioProfile(p);
+        // And this split's edits so far, or the split's end would write them
+        // straight back. The RX pan is still put back at exit.
+        m_splitAudioRecorder.forgetTouched();
+        // Let the notice fire again: after a forget the next restore is news.
+        m_splitAudioNoticeShown = false;
+    });
+
+    menu.exec(globalPos);
+    // Keep edits live while the menu is open, but commit the document once.
+    if (m_splitQsySettings.toJson() != initialQsySettings) {
+        m_splitQsySettings.save();
+    }
+}
+
+
+namespace {
+// Long enough that the update check does not compete with radio discovery
+// and the first connect for the network at launch.
+constexpr int kAutomaticUpdateCheckDelayMs = 15000;
+} // namespace
+
+void MainWindow::wireUpdateChecker()
+{
+    m_updateChecker = new UpdateChecker(this);
+    m_updateController = new UpdateController(UpdateController::forThisApp(), this);
+    // A release staged by an earlier run, before any check (GitHub's latest
+    // is not known yet); each answer re-checks it against the new latest.
+    m_updateController->refreshStaged(QString());
+    connect(m_updateController, &UpdateController::stateChanged, this, [this] {
+        if (m_titleBar) {
+            const UpdateController::State s = m_updateController->state();
+            const bool ready = s == UpdateController::State::Staged || s == UpdateController::State::Installing
+                               || s == UpdateController::State::Handed;
+            m_titleBar->setUpdateStaged(ready ? m_updateController->version() : QString());
+        }
+    });
+    // Restart to update, once the release is handed over: quit, the normal
+    // way, prompts and all.
+    connect(m_updateController, &UpdateController::restartReady, this,
+            [this](bool handed, const QString& problem, const QString& version) {
+                if (handed) {
+                    close();
+                } else if (m_updatesWindow) {
+                    m_updatesWindow->showInstallProblem(problem, version);
+                }
+            });
+    // Install for updates: installed, and it starts once this copy quits.
+    connect(m_updateController, &UpdateController::appImageInstalled, this,
+            [this](bool restart, const QString&) {
+                if (restart) {
+                    close();
+                }
+            });
+    connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
+            [this](const QString& ver) {
+        m_updateController->refreshStaged(ver);
+        if (m_titleBar) {
+            // A release rolled back here is never announced again.
+            m_titleBar->setUpdateAvailable(
+                m_updateController->isRolledBack(ver)
+                    ? QString()
+                    : UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
+        }
+    });
+    connect(m_updateChecker, &UpdateChecker::upToDate, this,
+            [this] {
+        m_updateController->refreshStaged(m_updateChecker->latestRelease().version);
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable({});
+        }
+    });
+    // After the window is up, so the status bar is there to say it.
+    QTimer::singleShot(0, this, &MainWindow::reportLastUpdate);
+    // Results and failures are shown in the Updates window, not in prompts.
+
+    QTimer::singleShot(kAutomaticUpdateCheckDelayMs, m_updateChecker, [checker = m_updateChecker] {
+        checker->checkAutomaticallyIfDue();
+    });
+}
+
+void MainWindow::restoreKnownUpdate()
+{
+    if (m_titleBar && m_updateController
+        && m_updateController->state() == UpdateController::State::Staged) {
+        m_titleBar->setUpdateStaged(m_updateController->version());
+    }
+    // The daily throttle may skip this launch's check, so the badge comes back
+    // from the release the last answer recorded, under the same rules.
+    const QString known = UpdateChecker::knownBadgeVersion();
+    if (known.isEmpty() || !m_titleBar || (m_updateController && m_updateController->isRolledBack(known))) {
+        return;
+    }
+    m_titleBar->setUpdateAvailable(known);
+}
+
+void MainWindow::showUpdatesWindow(bool checkNow)
+{
+    // A CanonWindow (style guide, RFC #6226): created or raised directly.
+    if (!m_updatesWindow) {
+        auto* w = new UpdatesWindow(m_updateChecker, &m_radioModel, this);
+        w->setAttribute(Qt::WA_DeleteOnClose);
+        connect(w, &UpdatesWindow::badgeChanged, this, [this](const QString& version) {
+            if (m_titleBar) {
+                m_titleBar->setUpdateAvailable(version);
+            }
+        });
+        connect(w, &UpdatesWindow::automaticCheckToggled, this, &MainWindow::setAutomaticUpdateCheck);
+        connect(w, &UpdatesWindow::restartRequested, this, &MainWindow::restartToUpdate);
+        w->setController(m_updateController);
+        m_updatesWindow = w;
+    }
+    if (checkNow) {
+        // Through the window, so an open one shows the check starting.
+        m_updatesWindow->checkNow();
+    }
+    m_updatesWindow->show();
+    m_updatesWindow->raise();
+    m_updatesWindow->activateWindow();
+}
+
+void MainWindow::restartToUpdate()
+{
+    // The helper waits for this process to exit, then swaps the release in
+    // and starts it; restartReady closes the window once it has it.
+    QString problem;
+    const QString version = m_updateController->version();
+    if (!m_updateController->restartToUpdate(&problem) && m_updatesWindow) {
+        m_updatesWindow->showInstallProblem(problem, version);
+    }
+}
+
+void MainWindow::reportLastUpdate()
+{
+    // What AetherSDRUpdater did after the last run, read at start (main.cpp).
+    const UpdateController::LastUpdate r = UpdateController::lastUpdate();
+    QString text;
+    if (r.outcome == QLatin1String("Updated")) {
+        text = tr("Updated to AetherSDR %1.").arg(r.version);
+    } else if (r.outcome == QLatin1String("RolledBack")) {
+        text = tr("The update to %1 didn't start, so %2 was restored. It won't be offered again.")
+                   .arg(r.version, QCoreApplication::applicationVersion());
+    } else if (r.outcome == QLatin1String("SwapUndone") || r.outcome == QLatin1String("NotPossible")) {
+        text = tr("The update to %1 couldn't be put in place, so nothing changed.").arg(r.version);
+    } else if (r.outcome == QLatin1String("OldStillRunning")) {
+        text = tr("The update to %1 installs the next time you quit.").arg(r.version);
+    } else if (r.outcome == QLatin1String("Installed")) {
+        text = tr("AetherSDR %1 is installed for updates. It updates itself from File > Update.").arg(r.version);
+    }
+    if (!text.isEmpty()) {
+        statusBar()->showMessage(text, 10000);
+    }
+}
+
+void MainWindow::setAutomaticUpdateCheck(bool on)
+{
+    // One handler for the Help toggle and the window's Check daily box, so
+    // the two never disagree. The toggle governs the badge too: off retires
+    // it, and on brings a known update back at once when the daily wait
+    // skips the request.
+    UpdateChecker::setCheckOnStartup(on);
+    if (m_autoUpdateAction) {
+        const QSignalBlocker block(m_autoUpdateAction);
+        m_autoUpdateAction->setChecked(on);
+    }
+    if (m_updatesWindow) {
+        m_updatesWindow->setAutomaticCheck(on);
+    }
+    if (!on) {
+        if (m_titleBar) {
+            m_titleBar->setUpdateAvailable({});
+        }
+    } else if (!m_updateChecker->checkAutomaticallyIfDue()) {
+        restoreKnownUpdate();
+    }
+}
+// One canon window per guide: a second click on the same Help entry raises
+// the open window rather than stacking another copy on top of it (#7049).
+void MainWindow::showHelpGuide(const QString& title, const QString& resourcePath)
+{
+    QPointer<HelpDialog>& slot = m_helpDialogs[resourcePath];
+    showOrRaiseCanon(slot, [this, title, resourcePath] {
+        return new HelpDialog(title, resourcePath, this);
+    });
+}
+
+} // namespace AetherSDR

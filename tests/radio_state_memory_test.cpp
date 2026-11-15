@@ -1,0 +1,496 @@
+// RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2).
+//
+// The invariants under test:
+//  - engagement is capability-shaped: empty ClientSettingsDomains ⇒ inert
+//    (nothing stored, nothing loaded — the Flex/Sim guarantee)
+//  - the operating-state document round-trips, atomically, per (family, radio)
+//  - load is gated per DECLARED domain, so a capability downgrade cannot
+//    smuggle state past the gate even when an older document carries it
+//  - reads fall back exact-radio → family-wide → empty
+//  - two radios of the same family never share state
+//  - a newer document schema still yields its known fields
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/RadioSettingsScope.h"
+#include "core/RadioStateMemory.h"
+#include "core/SettingsDatabase.h"
+#include "core/SettingsPaths.h"
+
+#include <QCoreApplication>
+#include <QJsonObject>
+
+#include <iostream>
+
+using namespace AetherSDR;
+using Domain = RadioCapabilities::ClientSettingsDomain;
+
+namespace {
+
+int g_failures = 0;
+
+void check(bool condition, const char* label)
+{
+    std::cout << (condition ? "[ OK ] " : "[FAIL] ") << label << '\n';
+    if (!condition) {
+        ++g_failures;
+    }
+}
+
+RadioCapabilities hl2Caps()
+{
+    RadioCapabilities caps;
+    caps.family = QStringLiteral("hl2");
+    caps.clientSettingsDomains = Domain::Tuning | Domain::Passband
+                                 | Domain::SpanRate | Domain::RfGain
+                                 | Domain::TxSetpoints | Domain::Agc
+                                 | Domain::Cw | Domain::ReceiveOutputLevel;
+    caps.hasAgcThreshold = true;   // a writable threshold/off level, as HL2 declares
+    return caps;
+}
+
+RestoredRadioState sampleState()
+{
+    RestoredRadioState state;
+    state.rfFrequencyHz = 7'074'000.0;
+    state.mode = QStringLiteral("USB");
+    state.tuningStepHz = 2'500;
+    state.filterLowHz = 100.0;
+    state.filterHighHz = 2'900.0;
+    state.sampleRateHz = 192'000;
+    state.agcMode = QStringLiteral("slow");
+    state.agcThreshold = 40;
+    state.agcOffLevels = {20, -1, 35};
+    state.cwSpeed = 31;
+    state.cwPitch = 720;
+    state.cwBreakIn = 1;
+    state.cwDelay = 275;
+    state.cwSidetone = 0;
+    state.cwIambic = 0;
+    state.cwIambicMode = 1;
+    state.cwSwapPaddles = 1;
+    state.cwlEnabled = 1;
+    state.monGainCw = 73;
+    state.monPanCw = 22;
+    state.receiveOutputLevelPct = 35;
+    state.extensionSchemaVersion = 1;
+    // The extension's top level is domain sub-objects (the per-domain gate);
+    // each sub-object's contents are backend-owned.
+    state.extension = QJsonObject{
+        {QStringLiteral("rfGain"),
+         QJsonObject{{QStringLiteral("lnaDbByBand"),
+                      QJsonObject{{QStringLiteral("40m"), 19}}}}},
+        {QStringLiteral("txSetpoints"),
+         QJsonObject{{QStringLiteral("driveByBand"),
+                      QJsonObject{{QStringLiteral("40m"), 42}}}}}};
+    return state;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("aether-radio-state-memory-test"));
+    if (!profile.isValid()) {
+        std::cerr << "[FAIL] create temporary home\n";
+        return 1;
+    }
+    QCoreApplication app(argc, argv);
+
+    auto& settings = AppSettings::instance();
+    settings.load();
+
+    const RadioSettingsScope radioA(QStringLiteral("hl2"),
+                                    QStringLiteral("AA:BB:CC:DD:EE:FF"));
+    const RadioSettingsScope radioB(QStringLiteral("hl2"),
+                                    QStringLiteral("AA:BB:CC:DD:EE:00"));
+
+    // ---- inert for an empty declaration (the Flex/Sim guarantee) ----------
+    {
+        RadioCapabilities flexLike;
+        flexLike.family = QStringLiteral("flex");
+        check(!RadioStateMemory::shouldEngage(flexLike),
+              "empty domain declaration does not engage");
+        check(!RadioStateMemory::store(radioA, flexLike, sampleState()),
+              "store with an empty declaration writes nothing");
+        check(RadioStateMemory::load(radioA, flexLike).isEmpty(),
+              "load with an empty declaration restores nothing");
+        check(radioA.feature(RadioStateMemory::featureName()).isEmpty(),
+              "no document exists after the inert store");
+    }
+
+    // ---- round-trip per radio --------------------------------------------
+    {
+        const RadioCapabilities caps = hl2Caps();
+        check(RadioStateMemory::shouldEngage(caps), "declared domains engage");
+        check(RadioStateMemory::store(radioA, caps, sampleState()),
+              "store succeeds for a declared backend");
+
+        const RestoredRadioState restored = RadioStateMemory::load(radioA, caps);
+        check(restored.rfFrequencyHz == 7'074'000.0
+                  && restored.mode == QStringLiteral("USB"),
+              "tuning round-trips");
+        check(restored.tuningStepHz == 2'500, "the client-owned tuning step round-trips");
+        check(restored.filterLowHz == 100.0 && restored.filterHighHz == 2'900.0,
+              "passband round-trips");
+        check(restored.sampleRateHz == 192'000, "span/rate round-trips");
+        check(restored.agcMode == QStringLiteral("slow")
+                  && restored.agcThreshold == 40,
+              "AGC mode and threshold round-trip (#4909)");
+        check(restored.cwSpeed == 31 && restored.cwPitch == 720
+                  && restored.cwBreakIn == 1 && restored.cwDelay == 275
+                  && restored.cwSidetone == 0 && restored.cwIambic == 0
+                  && restored.cwIambicMode == 1
+                  && restored.cwSwapPaddles == 1
+                  && restored.cwlEnabled == 1 && restored.monGainCw == 73
+                  && restored.monPanCw == 22,
+              "the complete client-owned CW surface round-trips");
+        check(restored.receiveOutputLevelPct == 35,
+              "the radio's own output level round-trips");
+        check(restored.extensionSchemaVersion == 1
+                  && restored.extension.value(QStringLiteral("rfGain"))
+                             .toObject()
+                             .value(QStringLiteral("lnaDbByBand"))
+                             .toObject()
+                             .value(QStringLiteral("40m"))
+                             .toInt()
+                         == 19
+                  && restored.extension
+                         .contains(QStringLiteral("txSetpoints")),
+              "the extension document round-trips (contents opaque)");
+    }
+
+    // ---- two radios of one family stay independent ------------------------
+    {
+        const RadioCapabilities caps = hl2Caps();
+        RestoredRadioState other = sampleState();
+        other.rfFrequencyHz = 14'074'000.0;
+        check(RadioStateMemory::store(radioB, caps, other),
+              "second radio stores its own document");
+        check(RadioStateMemory::load(radioA, caps).rfFrequencyHz == 7'074'000.0,
+              "radio A keeps its own frequency");
+        check(RadioStateMemory::load(radioB, caps).rfFrequencyHz == 14'074'000.0,
+              "radio B keeps its own frequency");
+    }
+
+    // ---- per-domain gating on load ----------------------------------------
+    {
+        RadioCapabilities tuningOnly;
+        tuningOnly.family = QStringLiteral("hl2");
+        tuningOnly.clientSettingsDomains = Domain::Tuning;
+        const RestoredRadioState gated = RadioStateMemory::load(radioA, tuningOnly);
+        check(gated.rfFrequencyHz == 7'074'000.0 && gated.mode == "USB"
+                  && gated.tuningStepHz == 2'500,
+              "a declared domain loads, the step with it");
+        RadioCapabilities noTuning;
+        noTuning.family = QStringLiteral("hl2");
+        noTuning.clientSettingsDomains = Domain::Passband;
+        check(RadioStateMemory::load(radioA, noTuning).tuningStepHz == 0,
+              "an undeclared Tuning domain hands over no step");
+        check(gated.filterLowHz == 0.0 && gated.filterHighHz == 0.0
+                  && gated.sampleRateHz == 0 && gated.extension.isEmpty(),
+              "undeclared domains stay 'not restored' even though the stored "
+              "document carries them");
+        // The AGC threshold's "not restored" is -1, not 0: zero is a value the
+        // operator can select, so a gated-out domain must not look like a
+        // deliberate AGC-T of 0.
+        check(gated.agcMode.isEmpty() && gated.agcThreshold == -1,
+              "an undeclared Agc domain is absent, not a threshold of 0");
+        check(gated.agcOffLevels.isEmpty(),
+              "an undeclared Agc domain hands over no AGC-off levels");
+        check(gated.cwSpeed == 0 && gated.cwPitch == 0
+                  && gated.cwBreakIn == -1 && gated.cwDelay == -1
+                  && gated.monGainCw == -1 && gated.monPanCw == -1,
+              "an undeclared CW domain stays absent");
+        // As for the AGC threshold: gated out must not read as a chosen 0.
+        check(gated.receiveOutputLevelPct == -1,
+              "an undeclared ReceiveOutputLevel domain is absent, not a level of 0");
+    }
+
+    // ---- an output level of 0 is a choice, and survives -------------------
+    {
+        RadioCapabilities levelOnly;
+        levelOnly.family = QStringLiteral("hl2");
+        levelOnly.clientSettingsDomains = Domain::ReceiveOutputLevel;
+        const RadioSettingsScope silenced(
+            QStringLiteral("hl2"), QStringLiteral("00:00:00:00:00:D0"));
+        RestoredRadioState zero;
+        zero.receiveOutputLevelPct = 0;
+        check(!zero.isEmpty(),
+              "a stored level of 0 is not an empty state");
+        check(RadioStateMemory::store(silenced, levelOnly, zero),
+              "a level of 0 is written");
+        check(RadioStateMemory::load(silenced, levelOnly).receiveOutputLevelPct == 0,
+              "a level of 0 round-trips as 0, not as not-restored");
+
+        // Out of range reads as absent, not clamped.
+        RestoredRadioState tooLoud;
+        tooLoud.receiveOutputLevelPct = 101;
+        check(RadioStateMemory::store(silenced, levelOnly, tooLoud),
+              "an out-of-range level is written as given");
+        check(RadioStateMemory::load(silenced, levelOnly).receiveOutputLevelPct == -1,
+              "an out-of-range stored level reads back as not restored, not clamped");
+    }
+
+    // ---- deliberate false/zero CW values survive -------------------------
+    // Every boolean and slider can legitimately sit at zero. The absent
+    // sentinel is therefore -1 for those fields, while speed/pitch use zero
+    // because their valid ranges start above it.
+    {
+        RadioCapabilities cwOnly;
+        cwOnly.family = QStringLiteral("hl2");
+        cwOnly.clientSettingsDomains = Domain::Cw;
+        const RadioSettingsScope zeroCwRadio(
+            QStringLiteral("hl2"), QStringLiteral("00:00:00:00:00:C0"));
+        RestoredRadioState state;
+        state.cwSpeed = 5;
+        state.cwPitch = 100;
+        state.cwBreakIn = 0;
+        state.cwDelay = 0;
+        state.cwSidetone = 0;
+        state.cwIambic = 0;
+        state.cwIambicMode = 0;
+        state.cwSwapPaddles = 0;
+        state.cwlEnabled = 0;
+        state.monGainCw = 0;
+        state.monPanCw = 0;
+        check(RadioStateMemory::store(zeroCwRadio, cwOnly, state),
+              "deliberate false/zero CW values store");
+        const RestoredRadioState back =
+            RadioStateMemory::load(zeroCwRadio, cwOnly);
+        check(back.cwSpeed == 5 && back.cwPitch == 100
+                  && back.cwBreakIn == 0 && back.cwDelay == 0
+                  && back.cwSidetone == 0 && back.cwIambic == 0
+                  && back.cwIambicMode == 0 && back.cwSwapPaddles == 0
+                  && back.cwlEnabled == 0 && back.monGainCw == 0
+                  && back.monPanCw == 0,
+              "false/zero CW values are not mistaken for absent");
+    }
+
+    // ---- a threshold of ZERO survives the round-trip -----------------------
+    // The sentinel is -1 precisely so this case works: with 0 as "absent" an
+    // operator who ran the AGC-T at the bottom of the slider would get 65 back.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope zeroRadio(QStringLiteral("hl2"),
+                                           QStringLiteral("00:00:00:00:00:0A"));
+        RestoredRadioState state = sampleState();
+        state.agcMode = QStringLiteral("off");
+        state.agcThreshold = 0;
+        check(RadioStateMemory::store(zeroRadio, caps, state),
+              "a zero AGC threshold stores");
+        const RestoredRadioState back = RadioStateMemory::load(zeroRadio, caps);
+        check(back.agcThreshold == 0 && back.agcMode == QStringLiteral("off"),
+              "a deliberate AGC threshold of 0 is not mistaken for 'absent'");
+    }
+
+    // ---- the AGC-off level per receiver is capability-shaped --------------
+    // Radio A's document carries agcOffLevels (sampleState). It is read and
+    // written only where the Agc domain AND hasAgcThreshold are declared.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RestoredRadioState back = RadioStateMemory::load(radioA, caps);
+        check(back.agcOffLevels == QList<int>({20, -1, 35}),
+              "the per-receiver AGC-off levels round-trip, holes included");
+        const QJsonObject doc = radioA.featureExact(RadioStateMemory::featureName());
+        check(doc.value(QStringLiteral("agcOffLevels")).isArray(),
+              "they are one array in the radio's OperatingState document");
+
+        RadioCapabilities noOffLevel = hl2Caps();
+        noOffLevel.hasAgcThreshold = false;
+        check(RadioStateMemory::load(radioA, noOffLevel).agcOffLevels.isEmpty(),
+              "a backend with no writable off level is handed none");
+        check(RadioStateMemory::load(radioA, noOffLevel).agcMode
+                  == QStringLiteral("slow"),
+              "and still gets the AGC pair its domain declares");
+
+        RadioCapabilities noAgcDomain;
+        noAgcDomain.family = QStringLiteral("anan");
+        noAgcDomain.clientSettingsDomains = Domain::RfGain;
+        noAgcDomain.hasAgcThreshold = true;
+        check(RadioStateMemory::load(radioA, noAgcDomain).agcOffLevels.isEmpty(),
+              "a backend that does not own the AGC is handed none");
+
+        const RadioSettingsScope otherRadio(QStringLiteral("hl2"),
+                                            QStringLiteral("00:00:00:00:00:0F"));
+        check(RadioStateMemory::store(otherRadio, noOffLevel, sampleState()),
+              "a store without the off-level capability succeeds");
+        check(!otherRadio.featureExact(RadioStateMemory::featureName())
+                   .contains(QStringLiteral("agcOffLevels")),
+              "and writes no AGC-off levels");
+
+        const RadioSettingsScope oldRadio(QStringLiteral("hl2"),
+                                          QStringLiteral("00:00:00:00:00:0E"));
+        check(oldRadio.setFeature(
+                  RadioStateMemory::featureName(), RadioStateMemory::kSchemaVersion,
+                  QJsonObject{{QStringLiteral("agcMode"), QStringLiteral("slow")},
+                              {QStringLiteral("agcThreshold"), 40}}),
+              "a document without the field is planted");
+        const RestoredRadioState old = RadioStateMemory::load(oldRadio, caps);
+        check(old.agcOffLevels.isEmpty() && old.agcMode == QStringLiteral("slow"),
+              "a document without the field loads, with no AGC-off levels");
+
+        RestoredRadioState onlyLevels;
+        onlyLevels.agcOffLevels = {44};
+        check(!onlyLevels.isEmpty(),
+              "a state carrying only AGC-off levels is not 'nothing stored'");
+        RestoredRadioState onlyStep;
+        onlyStep.tuningStepHz = 100;
+        check(!onlyStep.isEmpty(), "a state carrying only a step is not 'nothing stored'");
+    }
+
+    // ---- per-domain gating on store ---------------------------------------
+    {
+        RadioCapabilities tuningOnly;
+        tuningOnly.family = QStringLiteral("hl2");
+        tuningOnly.clientSettingsDomains = Domain::Tuning;
+        RestoredRadioState state = sampleState();
+        check(RadioStateMemory::store(radioB, tuningOnly, state),
+              "tuning-only store succeeds");
+        const RestoredRadioState back = RadioStateMemory::load(radioB, hl2Caps());
+        check(back.rfFrequencyHz == 7'074'000.0 && back.sampleRateHz == 0
+                  && back.extension.isEmpty(),
+              "an undeclared domain is never written, so a later full "
+              "declaration finds nothing to restore for it");
+    }
+
+    // ---- family-wide fallback ---------------------------------------------
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope familyWide(QStringLiteral("hl2"), QString());
+        RestoredRadioState familyDefault = sampleState();
+        familyDefault.rfFrequencyHz = 10'000'000.0;
+        check(RadioStateMemory::store(familyWide, caps, familyDefault),
+              "family-wide default document stores");
+        const RadioSettingsScope unseenRadio(QStringLiteral("hl2"),
+                                             QStringLiteral("11:22:33:44:55:66"));
+        check(RadioStateMemory::load(unseenRadio, caps).rfFrequencyHz
+                  == 10'000'000.0,
+              "an unseen radio falls back to the family-wide default");
+        check(RadioStateMemory::load(radioA, caps).rfFrequencyHz == 7'074'000.0,
+              "a radio with its own document is NOT shadowed by the family row");
+    }
+
+    // ---- newer document schema still yields known fields -------------------
+    {
+        const RadioCapabilities caps = hl2Caps();
+        QJsonObject future{{QStringLiteral("rfFrequencyHz"), 21'074'000.0},
+                           {QStringLiteral("mode"), QStringLiteral("DIGU")},
+                           {QStringLiteral("fieldFromTheFuture"), true}};
+        const RadioSettingsScope futureRadio(QStringLiteral("hl2"),
+                                             QStringLiteral("FE:ED:FA:CE:00:01"));
+        check(futureRadio.setFeature(RadioStateMemory::featureName(),
+                                     RadioStateMemory::kSchemaVersion + 1, future),
+              "a newer-schema document can be planted");
+        check(RadioStateMemory::load(futureRadio, caps).rfFrequencyHz
+                  == 21'074'000.0,
+              "known fields load from a newer-schema document");
+    }
+
+    // ---- the extension gate splits per domain (PR #4614 review) -----------
+    // The regression K5PTB specified: RfGain-only declaration, stored ext
+    // carrying both maps — TxSetpoints data must NOT come back.
+    {
+        RadioCapabilities rfGainOnly;
+        rfGainOnly.family = QStringLiteral("hl2");
+        rfGainOnly.clientSettingsDomains = Domain::RfGain;
+        const RestoredRadioState gated = RadioStateMemory::load(radioA, rfGainOnly);
+        check(gated.extension.contains(QStringLiteral("rfGain")),
+              "a declared ext domain's sub-object loads");
+        check(!gated.extension.contains(QStringLiteral("txSetpoints")),
+              "an undeclared ext domain's sub-object is NOT handed over");
+    }
+
+    // ---- store is read-only toward newer documents (PR #4614 review) ------
+    // The load→capture→store cycle against a v2 document must refuse, not
+    // truncate-and-downgrade.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope newerRadio(QStringLiteral("hl2"),
+                                            QStringLiteral("FE:ED:FA:CE:00:02"));
+        QJsonObject future{{QStringLiteral("rfFrequencyHz"), 28'074'000.0},
+                           {QStringLiteral("v2Field"), QStringLiteral("keep")}};
+        check(newerRadio.setFeature(RadioStateMemory::featureName(),
+                                    RadioStateMemory::kSchemaVersion + 1, future),
+              "a newer-schema document is planted");
+        RestoredRadioState captured = RadioStateMemory::load(newerRadio, caps);
+        check(captured.rfFrequencyHz == 28'074'000.0,
+              "the newer document's known fields load");
+        captured.rfFrequencyHz = 28'500'000.0;
+        check(!RadioStateMemory::store(newerRadio, caps, captured),
+              "store REFUSES to overwrite a newer-schema document");
+        int storedVersion = 0;
+        const QJsonObject after =
+            newerRadio.feature(RadioStateMemory::featureName(), &storedVersion);
+        check(storedVersion == RadioStateMemory::kSchemaVersion + 1
+                  && after.value(QStringLiteral("v2Field")).toString()
+                         == QStringLiteral("keep")
+                  && after.value(QStringLiteral("rfFrequencyHz")).toDouble()
+                         == 28'074'000.0,
+              "the newer document survives byte-for-byte — no truncation, no "
+              "version downgrade");
+    }
+
+    // ---- a newer FAMILY-WIDE row never blocks per-radio capture -----------
+    // (PR #4614 re-review, Ozy311): the store guard must judge the exact row
+    // it replaces — the fallback would let a newer family-wide default refuse
+    // every per-radio capture in the family.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope familyWide(QStringLiteral("hl2"), QString());
+        QJsonObject newerFamilyDoc{{QStringLiteral("rfFrequencyHz"), 1'840'000.0}};
+        check(familyWide.setFeature(RadioStateMemory::featureName(),
+                                    RadioStateMemory::kSchemaVersion + 1,
+                                    newerFamilyDoc),
+              "a newer-schema FAMILY-WIDE document is planted");
+        const RadioSettingsScope freshRadio(QStringLiteral("hl2"),
+                                            QStringLiteral("DE:AD:BE:EF:00:03"));
+        RestoredRadioState state = sampleState();
+        check(RadioStateMemory::store(freshRadio, caps, state),
+              "a per-radio capture still succeeds under a newer family row");
+        check(RadioStateMemory::load(freshRadio, caps).rfFrequencyHz
+                  == 7'074'000.0,
+              "the per-radio document was really written");
+        // Clean up the newer family row so later cases keep their semantics.
+        check(familyWide.removeFeature(RadioStateMemory::featureName()),
+              "the planted family row is removed again");
+    }
+
+    // ---- a corrupt document is loud, and falls back (PR #4614 review) -----
+    {
+        auto& s = AppSettings::instance();
+        check(s.setRadioFeature(QStringLiteral("hl2"), QString(),
+                                QStringLiteral("CorruptProbe"), 1,
+                                QJsonObject{{QStringLiteral("fromFamily"), true}}),
+              "family-wide fallback document for the corrupt case stores");
+        // Plant a genuinely corrupt EXACT row underneath the API: the raw
+        // row writer stores any string, simulating on-disk damage.
+        {
+            SettingsDatabase raw;
+            check(raw.open(SettingsPaths::databasePath()),
+                  "a raw handle opens the store");
+            check(raw.upsertRadioFeature(QStringLiteral("hl2"),
+                                         QStringLiteral("CO:RR:UP:TE:D0:01"),
+                                         QStringLiteral("CorruptProbe"), 1,
+                                         QStringLiteral("{not json")),
+                  "a corrupt exact row is planted");
+            raw.close();
+        }
+        const QJsonObject viaFallback = s.radioFeature(
+            QStringLiteral("hl2"), QStringLiteral("CO:RR:UP:TE:D0:01"),
+            QStringLiteral("CorruptProbe"));
+        check(viaFallback.value(QStringLiteral("fromFamily")).toBool(),
+              "a corrupt exact row is logged and falls back to the family "
+              "document instead of reading as 'nothing stored'");
+    }
+
+    // ---- persistence survives a fresh load --------------------------------
+    {
+        settings.reset();
+        settings.load();
+        check(RadioStateMemory::load(radioA, hl2Caps()).rfFrequencyHz
+                  == 7'074'000.0,
+              "operating state survives a store reload");
+    }
+
+    return g_failures == 0 ? 0 : 1;
+}

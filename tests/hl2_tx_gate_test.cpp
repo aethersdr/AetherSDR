@@ -1,0 +1,2601 @@
+// MetisClient used to be incapable of keying a radio, structurally: every C0
+// register-address byte was even, so MOX (C0 bit 0) was always 0. Adding TX
+// destroyed that invariant. This test is what replaces it.
+//
+// The claim under test is not "setMox returns false when refused" -- it is the
+// only one that actually matters on the air: WITH THE GATE CLOSED, NO BYTE THAT
+// WOULD GO OUT ON THE WIRE EVER HAS C0 BIT 0 SET. So it inspects the real EP2
+// packet the client would send, from the same builder the socket path uses,
+// rather than trusting a status flag.
+
+#include "TestSettingsProfile.h"
+#include "core/backends/hl2/MetisClient.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2HardwareOptions.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
+#include "TxTestAuthority.h"
+#include "core/backends/hl2/MetisProtocol.h"
+#include "core/TxChainLatency.h"
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEvent>
+#include <QEventLoop>
+#include <QTimer>
+#include <QLoggingCategory>
+#include <QSemaphore>
+#include <QString>
+#include <QStringList>
+#include <QThread>
+
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <limits>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace AetherSDR::hl2 {
+struct MetisClientTestAccess {
+    // No start(), bind(), peer or datagrams: inject streaming state and inspect
+    // packets using the same builder as the transport.
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+    static void writer(MetisClient& client,
+                       std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> sink)
+    {
+        client.m_packetSinkForTest = std::move(sink);
+    }
+    static void send(MetisClient& client) { client.sendControlPacket(); }
+    // The silence watchdog, driven by hand. No socket exists, so stage 1 (the
+    // run-command resend) is skipped and a stale stream goes straight to stage 2.
+    static void markLinkUp(MetisClient& client)
+    {
+        client.m_linkUp = true;
+        client.m_sinceLastEp6.restart();
+    }
+    static void watchdogTick(MetisClient& client) { client.onWatchdogTick(); }
+    static bool linkUp(const MetisClient& client) { return client.m_linkUp; }
+    static int silenceTimeoutMs() { return MetisClient::kSilenceTimeoutMs; }
+    // The TX NCO register (C&C addr 0x01) as last commanded.
+    static std::uint32_t txRegisterHz(const MetisClient& client)
+    {
+        const Cc& cc = client.m_ccTxFreq;
+        return (static_cast<std::uint32_t>(cc[1]) << 24) | (static_cast<std::uint32_t>(cc[2]) << 16)
+             | (static_cast<std::uint32_t>(cc[3]) << 8) | static_cast<std::uint32_t>(cc[4]);
+    }
+    // kTxQueueMax is private and deliberately stays that way; the overflow
+    // check needs the real bound rather than a retyped copy of it, because a
+    // test that retypes a constant agrees with itself while the code it guards
+    // moves underneath.
+    static constexpr std::size_t queueMax() { return MetisClient::kTxQueueMax; }
+    // Same reason as queueMax(). kEp2AudioRateHz is a private constant of
+    // MetisClient and NOT one of MetisProtocol.h's -- the key-down burst below
+    // is computed from the real EP2 rate, not from a 48000 typed into a test.
+    static constexpr int ep2AudioRateHz() { return MetisClient::kEp2AudioRateHz; }
+    // The gap that ends a starvation EPISODE, read from the production
+    // constant so the drift-shape assertion cannot drift away from it.
+    static constexpr std::uint64_t runQuietPackets()
+    {
+        return MetisClient::kUnderflowRunQuietPackets;
+    }
+    // The prime (#6052), read from the production constants for the same
+    // reason as the three above.
+    static constexpr std::size_t primeTarget() { return MetisClient::kTxPrimeTargetSamples; }
+    static constexpr std::size_t trimMargin() { return MetisClient::kTxTrimMarginSamples; }
+    static constexpr std::size_t primeBlock() { return MetisClient::kTxPrimeBlockSamples; }
+    static constexpr std::uint64_t primeMaxHoldPackets()
+    {
+        return MetisClient::kTxPrimeMaxHoldPackets;
+    }
+};
+
+struct Hl2TxGateTestAccess {
+    // Declare the gateware ATU without going near the settings store, and read
+    // the transmit gate back so a test can state which side of it it is on.
+    static void declareGatewareAtu(Hl2Backend& backend)
+    {
+        Hl2HardwareOptions hw = backend.m_hw;
+        hw.atuGateware = true;
+        backend.m_hw = hw;
+    }
+    // Through the production option path, so its mid-tune re-derivation runs.
+    static void toggleGatewareAtu(Hl2Backend& backend, bool on)
+    {
+        Hl2HardwareOptions hw = backend.m_hw;
+        hw.atuGateware = on;
+        backend.applyHardwareOptions(hw, /*persist=*/false);
+    }
+    static bool txAllowed(const Hl2Backend& backend) { return backend.m_txAllowed; }
+    // Set it explicitly rather than relying on the default. m_txAllowed is
+    // `!automation || automationAllowsTx`, so in a plain test process it is
+    // TRUE — the closed gate is the automation-bridge-without-ALLOW_TX case,
+    // and a test that wants it has to say so.
+    static void setTxAllowed(Hl2Backend& backend, bool allowed) { backend.m_txAllowed = allowed; }
+
+    static void prepare(Hl2Backend& backend)
+    {
+        // Constructed transport only: no connectRadio(), socket, peer or DSP
+        // setup. Exercise the real backend's queued CW/hang paths.
+        backend.m_txAllowed = true;
+        backend.m_txTailHoldMs = 60 * 60 * 1000;   // parked; tests expire it
+        QMetaObject::invokeMethod(backend.m_metis, [metis = backend.m_metis] {
+            metis->enableTransmit(true);
+            // A session, without a socket: MetisClient queues live-control
+            // banks only while running (#4579), so without this the ATU case
+            // below would be refused for being stopped, not for the gate.
+            MetisClientTestAccess::setStreaming(*metis);
+        }, Qt::BlockingQueuedConnection);
+        backend.setSliceMode(0, QStringLiteral("CW"));
+    }
+
+    static std::array<std::uint8_t, kUsbPacketSize> packet(Hl2Backend& backend)
+    {
+        std::array<std::uint8_t, kUsbPacketSize> packet{};
+        QMetaObject::invokeMethod(backend.m_metis, [&packet, metis = backend.m_metis] {
+            packet = metis->buildNextControlPacket();
+        }, Qt::BlockingQueuedConnection);
+        return packet;
+    }
+
+    static MetisClient* metis(Hl2Backend& backend) { return backend.m_metis; }
+    static std::uint32_t txRegisterHz(Hl2Backend& backend)
+    {
+        std::uint32_t hz = 0;
+        QMetaObject::invokeMethod(backend.m_metis, [&hz, metis = backend.m_metis] {
+            hz = MetisClientTestAccess::txRegisterHz(*metis);
+        }, Qt::BlockingQueuedConnection);
+        return hz;
+    }
+    // The radio's transmit tail, driven by hand: a zero-length hold would finish
+    // it inside the unkey, so tests park it and expire it explicitly.
+    static void setTxTailHoldMs(Hl2Backend& backend, int ms) { backend.m_txTailHoldMs = ms; }
+    static bool backendKeyed(const Hl2Backend& backend) { return backend.m_keyed; }
+    static bool backendTuning(const Hl2Backend& backend)
+    {
+        return backend.m_tuning || backend.m_toneFromTune || backend.m_rfDriveOwed;
+    }
+    static bool txTailPending(const Hl2Backend& backend) { return backend.m_txTailPending; }
+    static bool txTailArmed(const Hl2Backend& backend)
+    {
+        return backend.m_txTailTimer && backend.m_txTailTimer->isActive();
+    }
+    static void expireTxTail(Hl2Backend& backend)
+    {
+        backend.m_txTailTimer->stop();
+        backend.finishTxTail();
+    }
+    static int ocFilterByte(const Hl2Backend& backend) { return backend.m_ocFilterByte; }
+    static void declareTxOnlyFilterBoard(Hl2Backend& backend)
+    {
+        Hl2HardwareOptions hw = backend.m_hw;
+        hw.filterBoard = Hl2HardwareOptions::FilterBoard::N2adrTxOnly;
+        hw.n2adrHpf = false;
+        backend.m_hw = hw;
+    }
+    static constexpr int defaultTxTailHoldMs() { return Hl2Backend::kTxTailHoldMs; }
+    static constexpr int unkeyUnmuteHoldMs() { return Hl2Backend::kUnkeyUnmuteHoldMs; }
+    static const TxCoordinator::Operation& tuneOperation(const Hl2Backend& backend)
+    {
+        return backend.m_tuneOperation;
+    }
+
+    static void expireHang(Hl2Backend& backend)
+    {
+        backend.m_cwHangTimer->stop();
+        QMetaObject::invokeMethod(backend.m_cwHangTimer, "timeout", Qt::DirectConnection);
+    }
+
+    // #7216: the modulator, on the I/O thread it lives on (Hl2Backend.cpp:364).
+    static bool configureTxDsp(Hl2Backend& backend)
+    {
+        bool ok = false;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&ok, dsp = backend.m_txDsp] {
+            std::string err;
+            ok = dsp->configure(Hl2TxDsp::Config{}, &err);
+        }, Qt::BlockingQueuedConnection);
+        return ok;
+    }
+    static double txAlcGainDb(Hl2Backend& backend)
+    {
+        double db = 0.0;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&db, dsp = backend.m_txDsp] {
+            db = dsp->alcGainDb();
+        }, Qt::BlockingQueuedConnection);
+        return db;
+    }
+    // Park the I/O thread until `gate` is released, so the calls the backend
+    // posts meanwhile run back-to-back, after the test has moved the coordinator.
+    static void holdIoThread(Hl2Backend& backend, QSemaphore& gate)
+    {
+        QMetaObject::invokeMethod(backend.m_metis, [&gate] { gate.acquire(); },
+                                  Qt::QueuedConnection);
+    }
+};
+}
+
+using namespace AetherSDR::hl2;
+using AetherSDR::IncrementalTuning;
+using AetherSDR::SliceControlRequest;
+
+// ---- THE SEAM THAT GIVES reportTxUnderflowRun() AN ASSERTION ----
+//
+// Without this the function is the one piece of new logic nothing observes:
+// its run members are private, nothing reads the log, and emptying its body
+// plus deleting its call sites leaves every counter assertion in this file
+// green. That is a test agreeing with itself by omission. The repo already has
+// the shape -- tests/tci_server_review_test.cpp installs a qInstallMessageHandler
+// for exactly this reason -- so it is used here rather than invented.
+//
+// The category has to be turned ON explicitly: "aether.hl2.tx" is high-rate and
+// the product disables it by default, which is the whole point of its separate
+// toggle in LogManager.
+static QStringList* g_logSink = nullptr;
+static void captureLogHandler(QtMsgType, const QMessageLogContext&, const QString& msg)
+{
+    if (g_logSink)
+        *g_logSink << msg;
+}
+
+class ScopedTxFifoLog
+{
+public:
+    ScopedTxFifoLog()
+    {
+        g_logSink = &m_lines;
+        m_previous = qInstallMessageHandler(captureLogHandler);
+        QLoggingCategory::setFilterRules(QStringLiteral("aether.hl2.tx.debug=true"));
+    }
+    ~ScopedTxFifoLog()
+    {
+        QLoggingCategory::setFilterRules(QString());
+        qInstallMessageHandler(m_previous);
+        g_logSink = nullptr;
+    }
+    // Only the starvation lines: "aether.hl2.tx" is shared with Hl2Backend's
+    // gateware telemetry and Hl2TxDsp's modulator, on purpose, so the filter
+    // is on the message and not on the category.
+    [[nodiscard]] QStringList starvationLines() const
+    {
+        QStringList out;
+        for (const QString& line : m_lines) {
+            if (line.contains(QStringLiteral("HOST queue starved")))
+                out << line;
+        }
+        return out;
+    }
+    // The once-per-over key-down report (#6052).
+    [[nodiscard]] QStringList keyDownLines() const
+    {
+        QStringList out;
+        for (const QString& line : m_lines) {
+            if (line.contains(QStringLiteral("HL2 tx key-down")))
+                out << line;
+        }
+        return out;
+    }
+
+    // The line the prime writes each time it lets go (#6052).
+    [[nodiscard]] QStringList primeLines() const
+    {
+        QStringList out;
+        for (const QString& line : m_lines) {
+            if (line.contains(QStringLiteral("prime let go")))
+                out << line;
+        }
+        return out;
+    }
+
+private:
+    QStringList m_lines;
+    QtMessageHandler m_previous = nullptr;
+};
+
+static int g_failures = 0;
+static void check(bool ok, const char* what)
+{
+    if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
+}
+
+// Both sub-frames carry C0; keying either one keys the radio, so both are
+// checked. Frame C0 sits at SYNC(3) into each 512-byte frame.
+static bool anyFrameKeyed(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+    for (const std::size_t fs : frameStarts) {
+        if ((pkt[fs + 3] & kC0MoxBit) != 0)
+            return true;
+    }
+    return false;
+}
+
+static bool payloadNonZero(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+    for (const std::size_t fs : frameStarts) {
+        const std::uint8_t* pay = pkt.data() + fs + 8;
+        for (std::size_t k = 0; k < kFramePayload; ++k) {
+            if (pay[k] != 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static std::array<std::uint8_t, 4> firstIqSample(
+    const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    const std::uint8_t* pay = pkt.data() + 8 + 8;
+    return {pay[4], pay[5], pay[6], pay[7]};
+}
+
+// THE WIRE SIGNATURE OF A STARVATION, as opposed to the counter's report of
+// one. A short block leaves a run of zeroed samples at the TAIL of the EP2
+// packet -- which is exactly the shape FIND-23 measured on the captures (48,
+// 18 and 64 trailing zeros, "all pure-trailing, none leading or interior").
+// Asserting this is what keeps the underflow checks from merely recomputing
+// the same arithmetic the production code just performed.
+//
+// LIMIT, because the helper cannot tell them apart: a genuine audio sample
+// that happens to be exactly zero reads as silence here. Every caller below
+// feeds a constant non-zero value for that reason.
+struct Ep2IqShape {
+    int sampleSlots = 0;     // sample slots in the packet (kTxSamplesPerPacket)
+    int carryingIq = 0;      // slots with a non-zero I or Q
+    int firstSilent = -1;    // index of the first all-zero slot, -1 if none
+};
+
+static Ep2IqShape ep2IqShape(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    Ep2IqShape shape;
+    const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+    for (const std::size_t fs : frameStarts) {
+        const std::uint8_t* pay = pkt.data() + fs + 8;
+        for (std::size_t k = 0; k + kTxSampleBytes <= kFramePayload;
+             k += kTxSampleBytes, ++shape.sampleSlots) {
+            const bool nonZero = pay[k + 4] || pay[k + 5] || pay[k + 6] || pay[k + 7];
+            if (nonZero) {
+                ++shape.carryingIq;
+            } else if (shape.firstSilent < 0) {
+                shape.firstSilent = shape.sampleSlots;
+            }
+        }
+    }
+    return shape;
+}
+
+// Bring a keyed client past its prime (#6052): queue the target rounded up to
+// whole EP2 packets and drain it. No packet is short and nothing is counted, so
+// the accounting blocks that follow read the queue mid-over. The prime itself
+// is pinned in "THE PRIME".
+static void pastThePrime(MetisClient& client, const AetherSDR::TxCoordinator::Context& context)
+{
+    const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+    const std::size_t packets = (MetisClientTestAccess::primeTarget() + packet - 1) / packet;
+    const std::vector<std::complex<float>> fill(packets * packet,
+                                                std::complex<float>(0.25f, -0.25f));
+    client.queueTxIq(fill, context);
+    for (std::size_t i = 0; i < packets; ++i)
+        (void)client.buildNextControlPacket();
+}
+
+// THE ATU TUNE REQUEST IS TRANSMIT, AND THE GATE MUST REACH IT. Principle VI.
+//
+// setTune(true) raises 0x09[20] BEFORE the carrier, deliberately. Every step
+// after it — applyDrive(), setTxTestTone(), setKeying() — refuses when the
+// transmit gate is closed. This one did not, and it is not inert: the gateware's
+// tuner state machine leaves IDLE on the BIT ALONE (exttuner.v,
+// `IDLE: if (enable) state_next = DELAY;` — no key in that transition), then
+// asserts `txinhibit` into `tx_en`/`cw_on` and drives `start` low, which is the
+// request that tells an external tuner to begin a tune cycle.
+//
+// So with the bridge active and no AETHER_AUTOMATION_ALLOW_TX, pressing TUNE
+// started a real antenna tuner into whatever was connected. Raised three times
+// by @on8st as a symmetry point on #5867; the gateware says it was a defect.
+static void testAtuTuneHonoursTheTransmitGate(TxTestAuthority& authority)
+{
+    // C2 of the 0x09 bank; the tune request is bit 4 (DATA[20]).
+    const auto tuneRequestedIn = [](const std::array<std::uint8_t, kUsbPacketSize>& pkt) {
+        const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+        for (const std::size_t fs : frameStarts) {
+            if ((pkt[fs + 3] & ~kC0MoxBit) == kC0TxDrive && (pkt[fs + 5] & 0x10) != 0)
+                return true;
+        }
+        return false;
+    };
+
+    const auto sawTuneRequest = [&](Hl2Backend& backend) {
+        // The push to MetisClient is a queued invoke onto its own thread, so let
+        // it land before reading the builder.
+        QCoreApplication::processEvents();
+        for (int i = 0; i < 12; ++i) {
+            if (tuneRequestedIn(Hl2TxGateTestAccess::packet(backend)))
+                return true;
+        }
+        return false;
+    };
+
+    {
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);                  // transport, DSP
+        Hl2TxGateTestAccess::declareGatewareAtu(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, false);      // the bridge case
+        check(!Hl2TxGateTestAccess::txAllowed(backend), "the transmit gate is closed");
+        backend.setTune(true, 10, authority.operation, {});
+        check(!sawTuneRequest(backend),
+              "gate CLOSED: TUNE puts no ATU tune request on the wire — an external "
+              "tuner is not started by a session that may not transmit");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+
+    {
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::declareGatewareAtu(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        check(Hl2TxGateTestAccess::txAllowed(backend), "the transmit gate is open");
+        backend.setTune(true, 10, authority.operation, {});
+        check(sawTuneRequest(backend),
+              "gate OPEN with the gateware ATU declared: the tune request does reach "
+              "the wire — the gate narrows this feature, it does not disable it");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+
+    {   // The gate closes MID-TUNE, then the ATU option is declared: the option
+        // path re-derives the bit, and the gate term must still hold it down.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(true, 10, authority.operation, {});
+        check(!sawTuneRequest(backend), "control: no ATU declared, no tune request");
+        Hl2TxGateTestAccess::setTxAllowed(backend, false);
+        Hl2TxGateTestAccess::toggleGatewareAtu(backend, true);
+        check(!sawTuneRequest(backend),
+              "gate closed mid-tune, then the gateware ATU declared: the re-derived "
+              "tune request stays down");
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(false, 10, authority.operation, {});
+    }
+    {   // Control for the case above: the same toggle with the gate OPEN does
+        // raise the re-derived request, so the case above tests the gate term.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(true, 10, authority.operation, {});
+        Hl2TxGateTestAccess::toggleGatewareAtu(backend, true);
+        check(sawTuneRequest(backend),
+              "control: gate open, gateware ATU declared mid-tune: the request goes up");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+
+    // The CLEARING direction needs no case of its own: applyAtuTuneRequest()
+    // computes `tuning && m_hw.atuGateware && m_txAllowed`, so a false `tuning`
+    // clears the bit whatever the gate says. That ordering is deliberate — a
+    // session that may not transmit must still be able to take a standing
+    // request down — and it is a property of the expression, not of a schedule.
+}
+
+// The 0x09 bank rides sub-frame 1 as a one-shot: C1 is the drive level, C2
+// bit 3 the PA enable.
+struct DriveBank {
+    int level = -1;
+    bool paEnabled = false;
+};
+
+static std::optional<DriveBank> driveBankIn(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    const std::size_t fs = 8 + kFrameSize;
+    if ((pkt[fs + 3] & ~kC0MoxBit) != kC0TxDrive) {
+        return std::nullopt;
+    }
+    return DriveBank{pkt[fs + 4], (pkt[fs + 5] & 0x08) != 0};
+}
+
+// Let the queued invokes land, then drain the one-shot queue: the last 0x09
+// bank is the drive the radio holds.
+struct Drained {
+    std::optional<DriveBank> lastDrive;
+    bool anyKeyed = false;
+};
+
+static Drained drain(Hl2Backend& backend)
+{
+    QCoreApplication::processEvents();
+    Drained out;
+    for (int i = 0; i < 32; ++i) {
+        const auto pkt = Hl2TxGateTestAccess::packet(backend);
+        if (const auto bank = driveBankIn(pkt)) {
+            out.lastDrive = bank;
+        }
+        out.anyKeyed = out.anyKeyed || anyFrameKeyed(pkt);
+    }
+    return out;
+}
+
+// TUNE power applied while TUNE is keyed. setTunePower() moves only the drive
+// register: it never keys, never rewrites the RF power the unkey restores, and
+// does nothing once the carrier is down.
+static void testTunePowerAppliesLiveWhileTuning(TxTestAuthority& authority)
+{
+    const auto driveIs = [](const Drained& d, int level, bool pa) {
+        return d.lastDrive && d.lastDrive->level == level && d.lastDrive->paEnabled == pa;
+    };
+    {
+        Hl2Backend backend;
+        const AetherSDR::RadioCapabilities caps = backend.capabilities();
+        check(caps.transmitDriveControl && caps.transmitDriveControl->tunePowerAppliesLive,
+              "HL2 declares tune power live");
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(40);
+        check(driveIs(drain(backend), 102, true), "premise: RF power 40% drives 102");
+        backend.setTune(true, 10, authority.operation, {});
+        const Drained keyed = drain(backend);
+        check(driveIs(keyed, 25, true) && keyed.anyKeyed,
+              "premise: TUNE keys at the 10% tune drive (25)");
+
+        backend.setTunePower(60);
+        const Drained live = drain(backend);
+        check(driveIs(live, 153, true), "tune power 60% while keyed drives 153, PA on");
+        check(live.anyKeyed, "the carrier stays keyed across a live tune power change");
+        backend.setTunePower(150);
+        check(driveIs(drain(backend), 255, true), "tune power above 100% clamps to 255");
+        backend.setTunePower(-5);
+        check(driveIs(drain(backend), 0, false), "tune power below 0% clamps to 0, PA off");
+
+        check(Hl2TxGateTestAccess::tuneOperation(backend).permitsCleanup(),
+              "premise: the TUNE operation is held while tuning");
+        backend.setTune(false, 10, authority.operation, {});
+        check(!Hl2TxGateTestAccess::tuneOperation(backend).permitsCleanup(),
+              "TUNE release drops the TUNE operation");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        const Drained released = drain(backend);
+        check(driveIs(released, 102, true),
+              "TUNE release restores the operator's 40% RF drive, not the live tune drive");
+        check(!released.anyKeyed, "premise: TUNE released");
+
+        backend.setTunePower(80);
+        const Drained after = drain(backend);
+        check(!after.lastDrive && !after.anyKeyed,
+              "tune power after TUNE is released: no drive bank and no keyed frame");
+    }
+    {
+        // The transmit gate closes mid-tune: drive is asserted off, not applied.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, authority.operation, {});
+        (void)drain(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, false);
+        backend.setTunePower(70);
+        check(driveIs(drain(backend), 0, false),
+              "gate closed while tuning: tune power writes drive 0 with the PA off");
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(false, 10, authority.operation, {});
+    }
+    {
+        // A TUNE whose admission was revoked takes no drive change.
+        TxTestAuthority revoked;
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, revoked.operation, {});
+        (void)drain(backend);
+        revoked.coordinator.emergencyStop();
+        backend.setTunePower(60);
+        check(!drain(backend).lastDrive,
+              "tune power after the TUNE operation was stopped: no drive bank");
+    }
+    {
+        // A stopped client queues nothing (#6014).
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, authority.operation, {});
+        (void)drain(backend);
+        QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), "stop",
+                                  Qt::BlockingQueuedConnection);
+        backend.setTunePower(60);
+        check(!drain(backend).lastDrive, "stopped client: tune power queues no 0x09 bank");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+}
+
+// Runs on the transport thread before each queued call reaches MetisClient and
+// builds the packet a pacer tick would send at that point. Each cross-thread
+// invoke is posted separately, so a tick can fall between any two of them.
+class InterleaveProbe final : public QObject {
+public:
+    explicit InterleaveProbe(MetisClient* metis) : m_metis(metis) {}
+    std::vector<std::array<std::uint8_t, kUsbPacketSize>> packets;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_metis && event->type() == QEvent::MetaCall) {
+            packets.push_back(m_metis->buildNextControlPacket());
+        }
+        return false;
+    }
+
+private:
+    MetisClient* m_metis;
+};
+
+// The unkey itself posts no RF-drive restore: the radio is still draining keyed
+// tune tone from its TX FIFO and holding the last sample (radio.v:934-935,
+// 1036-1047), so no host packet order can make a restore here safe. Walks every
+// packet the unkey's queued calls allow.
+static void testTuneReleasePostsNoDriveRestore(TxTestAuthority& authority)
+{
+    Hl2Backend backend;
+    Hl2TxGateTestAccess::prepare(backend);
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    backend.setTxPower(80);                       // RF drive 204
+    backend.setTune(true, 10, authority.operation, {});
+    const Drained keyed = drain(backend);
+    check(keyed.anyKeyed && keyed.lastDrive && keyed.lastDrive->level == 25,
+          "premise: TUNE keyed at the tune drive (25)");
+
+    MetisClient* metis = Hl2TxGateTestAccess::metis(backend);
+    InterleaveProbe probe(metis);
+    probe.moveToThread(metis->thread());
+    QMetaObject::invokeMethod(metis, [metis, &probe] { metis->installEventFilter(&probe); },
+                              Qt::BlockingQueuedConnection);
+    backend.setTune(false, 10, authority.operation, {});
+    QMetaObject::invokeMethod(metis, [metis, &probe] {
+        metis->removeEventFilter(&probe);
+        probe.moveToThread(QCoreApplication::instance()->thread());
+    }, Qt::BlockingQueuedConnection);
+
+    bool restoredInUnkey = false;
+    for (const auto& pkt : probe.packets) {
+        if (const auto bank = driveBankIn(pkt)) {
+            restoredInUnkey = restoredInUnkey || bank->level == 204;
+        }
+    }
+    check(probe.packets.size() >= 2, "premise: the unkey posted queued calls to the transport");
+    check(!restoredInUnkey, "TUNE release: the unkey posts no RF-drive restore");
+    const Drained after = drain(backend);
+    check(!after.anyKeyed, "premise: TUNE released");
+    check(!(after.lastDrive && after.lastDrive->level == 204),
+          "TUNE release: RF drive still withheld while the transmit tail is pending");
+    check(Hl2TxGateTestAccess::txTailPending(backend) && Hl2TxGateTestAccess::txTailArmed(backend),
+          "TUNE release arms the transmit tail");
+    Hl2TxGateTestAccess::expireTxTail(backend);
+    const Drained restored = drain(backend);
+    check(restored.lastDrive && restored.lastDrive->level == 204 && !restored.anyKeyed,
+          "the transmit tail expiring restores the 80% RF drive (204), unkeyed");
+}
+
+// The tail's edges: a re-key cancels the restore, RF power set during the tail
+// waits for it, a disconnect drops it, and the receive filter waits with it.
+static void testTransmitTailEdges(TxTestAuthority& authority)
+{
+    static_assert(Hl2TxGateTestAccess::defaultTxTailHoldMs()
+                      >= Hl2TxGateTestAccess::unkeyUnmuteHoldMs(),
+                  "the transmit tail never ends before the RX unkey hold");
+    const auto lastDriveIs = [](const Drained& d, int level) {
+        return d.lastDrive && d.lastDrive->level == level;
+    };
+    {
+        // A voice key inside the tail: the restore is cancelled and stays owed,
+        // so it is never applied over the new carrier; the next unkey pays it.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        (void)drain(backend);
+        backend.setKeying(true, authority.operation, {});
+        check(!Hl2TxGateTestAccess::txTailPending(backend)
+                  && !Hl2TxGateTestAccess::txTailArmed(backend),
+              "a re-key inside the tail cancels it");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        const Drained rekeyed = drain(backend);
+        check(rekeyed.anyKeyed && !lastDriveIs(rekeyed, 204),
+              "re-keyed inside the tail: no RF-drive restore under the new carrier");
+        backend.setKeying(false, authority.operation, {});
+        check(!lastDriveIs(drain(backend), 204), "the next unkey withholds the drive too");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 204), "and its tail restores the owed RF drive");
+    }
+    {
+        // TUNE re-keyed inside the tail: the tune drive owns the register.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        backend.setTune(true, 20, authority.operation, {});
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        const Drained d = drain(backend);
+        check(d.anyKeyed && lastDriveIs(d, 51), "TUNE re-keyed inside the tail keeps its 20% drive (51)");
+        backend.setTune(false, 20, authority.operation, {});
+    }
+    {
+        // RF power changed while the tail radiates: applied when the tail ends.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        (void)drain(backend);
+        backend.setTxPower(60);
+        check(!drain(backend).lastDrive, "RF power during the tail writes no drive bank");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 153), "the tail ends at the newest RF power (60% = 153)");
+    }
+    {
+        // TUNE keyed with no tune power of its own: a live change is still owed back.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, -1, authority.operation, {});
+        backend.setTunePower(30);
+        check(lastDriveIs(drain(backend), 76), "premise: live tune power 30% drives 76");
+        backend.setTune(false, -1, authority.operation, {});
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 204), "a live tune drive is restored to RF drive after the tail");
+    }
+    {
+        // A disconnect while the tail is pending drops it.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        backend.disconnectRadio();
+        check(!Hl2TxGateTestAccess::txTailPending(backend)
+                  && !Hl2TxGateTestAccess::txTailArmed(backend),
+              "a disconnect drops the pending tail");
+    }
+    {
+        // The receive filter waits for the tail: keyed and tail use the TX byte.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::declareTxOnlyFilterBoard(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setSliceFrequency(0, 7.1e6);
+        const int rxByte = Hl2TxGateTestAccess::ocFilterByte(backend);
+        backend.setKeying(true, authority.operation, {});
+        const int txByte = Hl2TxGateTestAccess::ocFilterByte(backend);
+        check(txByte != rxByte, "premise: the TX-only board switches its byte when keyed");
+        backend.setKeying(false, authority.operation, {});
+        check(Hl2TxGateTestAccess::ocFilterByte(backend) == txByte,
+              "unkey: the filter stays on the TX byte while the tail is pending");
+        backend.setSliceFrequency(0, 7.15e6);
+        check(Hl2TxGateTestAccess::ocFilterByte(backend) == txByte,
+              "a retune inside the tail does not drop to the RX byte");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(Hl2TxGateTestAccess::ocFilterByte(backend) == rxByte,
+              "the tail ending returns the filter to the RX byte");
+    }
+    {
+        // Per-slice XIT (#6105) composes with TUNE and the tail: an XIT change
+        // moves only the TX NCO register. It keys nothing, leaves the tune
+        // drive alone while tuning, and neither ends nor pays the tail early.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setSliceFrequency(0, 14.074e6);
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        check(lastDriveIs(drain(backend), 25), "premise: TUNE keyed at the tune drive (25)");
+        backend.requestSliceControl(0, {SliceControlRequest::Field::Xit,
+                                       IncrementalTuning{true, -300}});
+        const Drained tuning = drain(backend);
+        check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'073'700u,
+              "XIT -300 while TUNE is keyed: the TX register moves -300 Hz");
+        check(tuning.anyKeyed && !tuning.lastDrive,
+              "XIT while TUNE is keyed: still keyed, no drive bank written");
+        backend.setTune(false, 10, authority.operation, {});
+        (void)drain(backend);
+        check(Hl2TxGateTestAccess::txTailPending(backend), "premise: TUNE release arms the tail");
+        backend.requestSliceControl(0, {SliceControlRequest::Field::Xit,
+                                       IncrementalTuning{true, 200}});
+        const Drained inTail = drain(backend);
+        check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'074'200u,
+              "XIT +200 inside the tail: the TX register follows");
+        check(Hl2TxGateTestAccess::txTailPending(backend) && !inTail.anyKeyed && !inTail.lastDrive,
+              "XIT inside the tail: the tail stays pending, unkeyed, the RF drive still owed");
+        Hl2TxGateTestAccess::expireTxTail(backend);
+        check(lastDriveIs(drain(backend), 204), "the tail then restores the 80% RF drive (204)");
+        backend.requestSliceControl(0, {SliceControlRequest::Field::Xit,
+                                       IncrementalTuning{false, 200}});
+        check(Hl2TxGateTestAccess::txRegisterHz(backend) == 14'074'000u,
+              "XIT off: the TX register back on the dial");
+    }
+    {
+        // The timer, not the test, ends a real tail.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxTailHoldMs(backend, 20);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(80);
+        backend.setTune(true, 10, authority.operation, {});
+        backend.setTune(false, 10, authority.operation, {});
+        QElapsedTimer waited;
+        waited.start();
+        while (Hl2TxGateTestAccess::txTailPending(backend) && waited.elapsed() < 2000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+        check(!Hl2TxGateTestAccess::txTailPending(backend) && waited.elapsed() >= 15,
+              "the tail timer ends the tail after its hold");
+        check(lastDriveIs(drain(backend), 204), "and restores the RF drive");
+    }
+}
+
+// #7216, through the real backend: a re-key whose operation acquires before the
+// I/O thread runs the unkey's posted setMox(false)/reset()/flushTxIq(). All three
+// are skipped (permitsCleanup() is false once B acquired), so the key under B
+// must run them itself, the modulator's reset included.
+static void testRekeyRunsSkippedCleanup()
+{
+    const auto loud = [] {
+        QByteArray pcm(2 * 2048 * static_cast<int>(sizeof(qint16)), Qt::Uninitialized);
+        auto* s = reinterpret_cast<qint16*>(pcm.data());
+        for (int n = 0; n < 2 * 2048; ++n) {
+            s[n] = (n / 2) % 2 ? 32000 : -32000;
+        }
+        return pcm;
+    }();
+    // skipCleanup: park the I/O thread across the unkey and B's acquire, so the
+    // posted cleanup runs only after A's operation is gone (the race).
+    const auto run = [&](bool skipCleanup, const char* premise, const char* claim) {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        if (!Hl2TxGateTestAccess::configureTxDsp(backend)) {
+            check(false, "#7216 premise: the modulator configures");
+            return;
+        }
+        const auto mic = tx.coordinator.registerProducer(true);
+        const auto a = tx.operation;
+        backend.setKeying(true, a, {});
+        backend.submitTxAudio(loud, 24000, AetherSDR::TxAudioSource::Microphone,
+                              tx.coordinator.mediaContext(mic, a));
+        check(Hl2TxGateTestAccess::txAlcGainDb(backend) < -0.5, premise);
+        QSemaphore gate;
+        if (skipCleanup) {
+            Hl2TxGateTestAccess::holdIoThread(backend, gate);
+        }
+        backend.setKeying(false, a, {});
+        if (!skipCleanup) {
+            (void)Hl2TxGateTestAccess::txAlcGainDb(backend);   // the cleanup has run
+        }
+        (void)tx.coordinator.finishLocalIntent(a);
+        const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        backend.setKeying(true, b, {});
+        gate.release();
+        check(Hl2TxGateTestAccess::txAlcGainDb(backend) > -0.01, claim);
+        std::size_t depth = 1;
+        QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+            depth = Hl2TxGateTestAccess::metis(backend)->txQueueDepth();
+        }, Qt::BlockingQueuedConnection);
+        check(depth == 0, skipCleanup ? "#7216: A's queued tail is gone before B's first frame"
+                                      : "#7216 control: the ordinary unkey left nothing queued");
+        backend.setKeying(false, b, {});
+    };
+    run(true, "#7216 premise: A's loud audio drove the ALC below unity",
+        "#7216: a re-key that skipped the unkey's cleanup still resets the modulator");
+    run(false, "#7216 control premise: A's loud audio drove the ALC below unity",
+        "#7216 control: an ordinary unkey/re-key resets the modulator as before");
+}
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("hl2-tx-gate"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "Cannot create isolated settings profile\n");
+        return 1;
+    }
+    QCoreApplication app(argc, argv);
+    TxTestAuthority authority;
+    MetisClient client;
+    MetisClientTestAccess::setStreaming(client);
+
+    testAtuTuneHonoursTheTransmitGate(authority);
+    testTunePowerAppliesLiveWhileTuning(authority);
+    testTuneReleasePostsNoDriveRestore(authority);
+    testTransmitTailEdges(authority);
+    testRekeyRunsSkippedCleanup();
+
+    {
+        MetisClient board;
+        const auto isBoardWrite = [](const auto& packet) {
+            return (packet[8 + kFrameSize + 3] & ~kC0MoxBit) == kC0I2c2;
+        };
+        board.setIoBoardTxFrequencyHz(7'100'000);
+        check(!isBoardWrite(board.buildNextControlPacket()),
+              "disconnected IO-board request queues nothing");
+        MetisClientTestAccess::setStreaming(board);
+        board.setIoBoardTxFrequencyHz(7'100'000);
+        check(isBoardWrite(board.buildNextControlPacket()), "connected IO-board push reaches packet builder");
+        board.stop(); // interrupt after only the MSB: four stale banks remain
+        for (int i = 0; i < 8; ++i) {
+            check(!isBoardWrite(board.buildNextControlPacket()),
+                  "stop discards every unfinished IO-board bank");
+        }
+        MetisClientTestAccess::setStreaming(board);
+        board.setIoBoardTxFrequencyHz(7'100'000);
+        for (int reg = 0; reg < 5; ++reg) {
+            const auto packet = board.buildNextControlPacket();
+            check(isBoardWrite(packet), "same frequency is resent after session reset");
+            check(packet[8 + kFrameSize + 6] == reg, "session restarts at MSB and commits LSB last");
+            check(!anyFrameKeyed(packet), "IO-board writes never key an unkeyed transmitter");
+        }
+        board.enableTransmit(true);
+        board.setMox(true, authority.operation);
+        board.setIoBoardTxFrequencyHz(14'225'000);
+        bool sawBoard = false;
+        for (int i = 0; i < 12; ++i) {
+            const auto packet = board.buildNextControlPacket();
+            sawBoard = sawBoard || isBoardWrite(packet);
+            check(anyFrameKeyed(packet), "IO-board update preserves explicit key state");
+        }
+        check(sawBoard, "IO-board band update is not withheld while keyed");
+        board.setMox(false, authority.operation);
+    }
+
+    check(!client.transmitEnabled(), "transmit is DISABLED by default");
+    check(!client.isKeyed(), "not keyed by default");
+
+    // ---- gate closed ----
+    client.setMox(true, authority.operation);
+    check(!client.isKeyed(), "setMox(true) refused while the gate is closed");
+
+    // Drain enough packets to cover the whole round robin (freq, gain, ADC
+    // assign) plus the config bank, several times over, with a key request
+    // standing the entire time. Any single keyed frame here is a real radio
+    // keyed by accident.
+    for (int i = 0; i < 64; ++i) {
+        client.setMox(true, authority.operation);                       // keep asking, every frame
+        const auto pkt = client.buildNextControlPacket();
+        if (anyFrameKeyed(pkt)) {
+            check(false, "a frame was keyed with the gate CLOSED");
+            break;
+        }
+    }
+
+    // Queuing TX frequency and drive must not key anything either -- those are
+    // setup, and setup happening before the operator keys is the normal order.
+    // #4449: a non-zero drive requested while the gate is CLOSED must also NOT
+    // assert the PA-enable bit (C2 DATA[19] = 0x08) on the wire -- MetisClient
+    // forces drive 0 / PA off, so connecting can never bias the PA on in a
+    // transmit-blocked session.
+    //
+    // Inside a session: a setter called on a stopped client queues nothing
+    // (#4579) -- no drive bank at all, and a PA-enable check with nothing to
+    // look at passes vacuously.
+    MetisClientTestAccess::setStreaming(client);
+    client.setTxFrequencyHz(14'200'000);
+    client.setTxDriveLevel(200);
+    bool sawDriveBank = false, paEnabledWhileClosed = false;
+    for (int i = 0; i < 8; ++i) {   // same packet count as before, to keep the round-robin phase stable
+        const auto pkt = client.buildNextControlPacket();
+        if (anyFrameKeyed(pkt)) {
+            check(false, "TX frequency/drive setup keyed a frame with the gate closed");
+            break;
+        }
+        const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+        for (const std::size_t fs : frameStarts) {
+            if ((pkt[fs + 3] & ~kC0MoxBit) == kC0TxDrive) {
+                sawDriveBank = true;
+                if ((pkt[fs + 5] & 0x08) != 0) paEnabledWhileClosed = true;   // C2 PA-enable
+            }
+        }
+    }
+    check(sawDriveBank, "the drive C&C bank reaches the wire after setTxDriveLevel");
+    check(!paEnabledWhileClosed,
+          "#4449: PA-enable stays clear when drive is set with the gate CLOSED");
+
+    // ---- gate open ----
+    client.enableTransmit(true);
+    check(client.transmitEnabled(), "transmit enabled after explicit opt-in");
+    check(!client.isKeyed(), "opening the gate does not key by itself");
+
+    // Still unkeyed until asked.
+    for (int i = 0; i < 4; ++i) {
+        if (anyFrameKeyed(client.buildNextControlPacket())) {
+            check(false, "an open gate keyed a frame without setMox");
+            break;
+        }
+    }
+
+    client.setMox(true, authority.operation);
+    check(client.isKeyed(), "setMox(true) honoured once the gate is open");
+    {
+        const auto pkt = client.buildNextControlPacket();
+        const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+        // BOTH sub-frames must carry MOX: the radio keys off whichever bank is
+        // in flight, so keying only one is an intermittent, cadence-dependent
+        // half-key -- the worst possible failure mode to debug.
+        for (const std::size_t fs : frameStarts) {
+            check((pkt[fs + 3] & kC0MoxBit) != 0, "both sub-frames carry MOX when keyed");
+            // The address must survive keying, or MOX would corrupt the bank.
+            check((pkt[fs + 3] & ~kC0MoxBit) != 0 || fs == 8,
+                  "register address intact alongside MOX");
+        }
+    }
+
+    // ---- unkey, and revoking the gate ----
+    client.setMox(false, authority.operation);
+    check(!anyFrameKeyed(client.buildNextControlPacket()), "unkeys cleanly");
+
+    // Revoking the gate while keyed must drop the key on the wire immediately,
+    // not merely refuse the next request.
+    client.setMox(true, authority.operation);
+    check(anyFrameKeyed(client.buildNextControlPacket()), "keyed again");
+    client.enableTransmit(false);
+    for (int i = 0; i < 8; ++i) {
+        if (anyFrameKeyed(client.buildNextControlPacket())) {
+            check(false, "revoking the gate did not drop the key on the wire");
+            break;
+        }
+    }
+
+    // ---- transmit IQ reaches the wire only while keyed ----
+    //
+    // The gate has to cover SAMPLES, not just MOX. A radio that is unkeyed but
+    // still being fed IQ is not transmitting, but it is one stray MOX bit away
+    // from doing so with whatever happens to be in the buffer.
+    {
+        MetisClient c2;
+        MetisClientTestAccess::setStreaming(c2);
+        // Sized to the prime target (#6052): below it the prime's hold, not
+        // this gate, would keep the first keyed packet silent.
+        std::vector<std::complex<float>> tone(MetisClientTestAccess::primeTarget(),
+                                              std::complex<float>(0.5f, -0.5f));
+
+        // Gate closed, unkeyed: queued samples must not go out.
+        c2.queueTxIq(tone, authority.context);
+        check(c2.txQueueDepth() == tone.size(), "samples queue regardless of gate state");
+        for (int i = 0; i < 4; ++i) {
+            if (payloadNonZero(c2.buildNextControlPacket())) {
+                check(false, "IQ reached the wire with the gate CLOSED");
+                break;
+            }
+        }
+        check(c2.txQueueDepth() == tone.size(), "an unkeyed frame consumes no samples");
+
+        // Gate open but still unkeyed: still silence.
+        c2.enableTransmit(true);
+        check(!payloadNonZero(c2.buildNextControlPacket()),
+              "an open gate alone does not put IQ on the wire");
+
+        // Keyed: now the samples flow.
+        c2.setMox(true, authority.operation);
+        const auto keyedPkt = c2.buildNextControlPacket();
+        check(payloadNonZero(keyedPkt), "keyed frames carry the queued IQ");
+        check(c2.txQueueDepth() == tone.size() - kTxSamplesPerPacket,
+              "one packet consumes exactly kTxSamplesPerPacket samples");
+        // 0.5 -> 16383 (0x3FFF), -0.5 -> -16383 (0xC001), big-endian.
+        const std::uint8_t* pay = keyedPkt.data() + 8 + 8;
+        check(pay[4] == 0x3F && pay[5] == 0xFF, "I sample encoded big-endian");
+        check(pay[6] == 0xC0 && pay[7] == 0x01, "Q sample encoded big-endian");
+        check(pay[0] == 0 && pay[1] == 0 && pay[2] == 0 && pay[3] == 0,
+              "EADDR still zero with IQ present");
+
+        // Unkey must discard pending audio, not carry it into the next
+        // transmission. Measured on hardware before this existed: a key with no
+        // audio still produced ~1000 counts of forward power for a moment.
+        c2.queueTxIq(tone, authority.context);
+        check(c2.txQueueDepth() > 0, "audio queued");
+        c2.flushTxIq();
+        check(c2.txQueueDepth() == 0, "flushTxIq discards pending transmit audio");
+        check(!payloadNonZero(c2.buildNextControlPacket()),
+              "nothing left to transmit after a flush");
+        c2.queueTxIq(tone, authority.context);
+
+        // Underflow is silence, not a stall and not repeated stale audio.
+        while (c2.txQueueDepth() > 0)
+            c2.buildNextControlPacket();
+        check(!payloadNonZero(c2.buildNextControlPacket()),
+              "an empty queue transmits silence rather than repeating");
+    }
+
+    // ---- PC/MIDI CW is a shaped, packet-paced carrier under MOX ----
+    {
+        MetisClient cw;
+        MetisClientTestAccess::setStreaming(cw);
+        cw.setCwKeyDown(true, authority.operation);
+        check(!cw.cwModeActive(),
+              "CW down is not latched while the transmit gate is closed");
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "a refused CW edge puts no samples on the wire");
+
+        cw.enableTransmit(true);
+        cw.setCwKeyDown(true, authority.operation);
+        check(cw.cwModeActive() && cw.cwKeyDown(),
+              "an allowed CW down edge enters software-CW mode");
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "CW still requires MOX — break-in policy belongs to the backend");
+
+        cw.setMox(true, authority.operation);
+        bool sawCarrier = false;
+        std::array<std::uint8_t, kUsbPacketSize> cwPlateauPkt{};
+        for (int i = 0; i < 5; ++i) {
+            cwPlateauPkt = cw.buildNextControlPacket();
+            sawCarrier |= payloadNonZero(cwPlateauPkt);
+        }
+        check(sawCarrier, "key-down emits the raised-cosine CW carrier under MOX");
+
+        // After the 5 ms rise, the CW plateau must match TUNE's full-scale
+        // zero-offset carrier on the wire. Compare encoded IQ rather than a
+        // magic byte so this protects the invariant without depending on
+        // floating-point rounding details.
+        TxTestAuthority tuneAuthority;
+        MetisClient tune;
+        MetisClientTestAccess::setStreaming(tune);
+        tune.enableTransmit(true);
+        tune.setMox(true, tuneAuthority.operation);
+        tune.setTxTestTone(0.0, kHl2CarrierAmplitude, tuneAuthority.operation);
+        const auto tunePkt = tune.buildNextControlPacket();
+        check(firstIqSample(cwPlateauPkt) == firstIqSample(tunePkt),
+              "CW plateau matches TUNE carrier amplitude (#5610)");
+
+        // Voice queued behind manual PTT must not leak between CW elements.
+        // Sized to the prime target (#6052): leaving CW abandons the queue, so
+        // the voice after it is primed, and must already be at the target to
+        // reach the very next packet.
+        std::vector<std::complex<float>> voice(MetisClientTestAccess::primeTarget(),
+                                               std::complex<float>(0.4f, -0.4f));
+        cw.queueTxIq(voice, authority.context);
+        cw.setCwKeyDown(false, authority.operation);
+        for (int i = 0; i < 6; ++i) {
+            cw.buildNextControlPacket();
+        }
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "key-up finishes its five-ms fall then emits silence, not queued voice");
+
+        cw.clearCwKeying();
+        check(!cw.cwModeActive() && !cw.cwKeyDown(),
+              "ending the CW PTT envelope releases IQ ownership");
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "ending CW drops microphone IQ queued during the element sequence");
+        cw.queueTxIq(voice, authority.context);
+        check(payloadNonZero(cw.buildNextControlPacket()),
+              "normal transmit IQ resumes after CW mode is cleared");
+    }
+
+    {
+        TxTestAuthority media;
+        MetisClient queued;
+        MetisClientTestAccess::setStreaming(queued);
+        queued.enableTransmit(true);
+        queued.setMox(true, media.operation);
+        // Sized to the prime target (#6052): with fewer samples the prime
+        // would hold them anyway, and the check would pass without the fence.
+        const std::vector<std::complex<float>> voice(MetisClientTestAccess::primeTarget(),
+                                                     {0.25f, 0.25f});
+        queued.queueTxIq(voice, media.context);
+        (void)media.coordinator.finishLocalIntent(media.operation);
+        const auto operation = media.coordinator.acquire(media.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        const auto context = media.coordinator.mediaContext(media.producer, operation);
+        check(!payloadNonZero(queued.buildNextControlPacket()) && queued.txQueueDepth() == 0,
+              "a new operation cannot consume old queued HL2 IQ");
+        queued.setMox(true, operation);
+        queued.queueTxIq(voice, context);
+        queued.queueTxIq(voice, media.context);
+        check(queued.txQueueDepth() == voice.size(), "late old IQ cannot append to the new producer queue");
+        media.producer.invalidate();
+        check(!payloadNonZero(queued.buildNextControlPacket()), "producer teardown fences already queued HL2 IQ");
+    }
+
+    {
+        TxTestAuthority tx;
+        MetisClient fenced;
+        MetisClientTestAccess::setStreaming(fenced);
+        fenced.enableTransmit(true);
+        fenced.setMox(true, {});
+        check(!anyFrameKeyed(fenced.buildNextControlPacket()),
+              "opening the transport gate never substitutes for an admitted operation");
+        fenced.setMox(true, tx.operation);
+        fenced.setTxTestTone(0.0, 0.5, tx.operation);
+        check(payloadNonZero(fenced.buildNextControlPacket()), "admitted tune carrier reaches the packet builder");
+        (void)tx.coordinator.finishLocalIntent(tx.operation);
+        const auto fresh = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        fenced.setMox(true, fresh);
+        fenced.setMox(false, tx.operation);
+        fenced.setCwKeyDown(true, tx.operation);
+        fenced.setTxTestTone(0.0, 0.9, tx.operation);
+        const auto voice = fenced.buildNextControlPacket();
+        check(anyFrameKeyed(voice) && !payloadNonZero(voice),
+              "old key-up, CW and tone queues neither unkey nor modulate a fresh voice operation");
+        fenced.setCwKeyDown(true, fresh);
+        check(payloadNonZero(fenced.buildNextControlPacket()), "fresh CW still produces shaped IQ");
+        (void)tx.coordinator.cancel(tx.actor, fresh);
+        const auto stopped = fenced.buildNextControlPacket();
+        check(!anyFrameKeyed(stopped) && !payloadNonZero(stopped),
+              "cancellation fences latched MOX and internally generated CW at the packet builder");
+    }
+
+    {
+        TxTestAuthority tx;
+        MetisClient held;
+        MetisClientTestAccess::setStreaming(held);
+        held.enableTransmit(true);
+        const auto first = tx.coordinator.registerProducer();
+        const auto second = tx.coordinator.registerProducer();
+        const auto a = first.request();
+        const auto b = second.request();
+        const auto aIntent = tx.coordinator.beginRequest(a, tx.operation,
+            AetherSDR::TxCoordinator::Activity::Mox);
+        const auto bIntent = tx.coordinator.beginRequest(b, tx.operation,
+            AetherSDR::TxCoordinator::Activity::Mox);
+        held.setMox(true, tx.coordinator.requestOperation(a));
+        held.setMox(true, tx.coordinator.requestOperation(b));
+        (void)tx.coordinator.endIntent(bIntent);
+        second.invalidate();
+        check(anyFrameKeyed(held.buildNextControlPacket()),
+              "releasing the most recent contributor preserves another live MOX hold");
+        first.invalidate();
+        check(!anyFrameKeyed(held.buildNextControlPacket()),
+              "last producer death immediately fences held MOX before queued cleanup");
+        held.setMox(true, tx.coordinator.requestOperation(b));
+        check(!anyFrameKeyed(held.buildNextControlPacket()),
+              "sustaining an existing latch cannot admit a stale queued key-on");
+        (void)tx.coordinator.endIntent(aIntent);
+    }
+
+    // #7216: B acquires before the I/O thread runs A's unkey. setMox(false, A)
+    // and flushTxIq() are refused/skipped, so B's key finds m_mox unchanged, and
+    // a microphone context is the same across both overs (sameContext()).
+    {
+        const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::vector<std::complex<float>> tail(MetisClientTestAccess::primeTarget(),
+                                                    {0.25f, -0.25f});
+        // unkeyRan: A's setMox(false) ran before B acquired, its flush did not.
+        for (const bool unkeyRan : {false, true}) {
+            TxTestAuthority tx;
+            MetisClient rekey;
+            MetisClientTestAccess::setStreaming(rekey);
+            rekey.enableTransmit(true);
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto a = tx.operation;
+            const auto micA = tx.coordinator.mediaContext(mic, a);
+            check(!rekey.setMox(true, a), "#7216 premise: a first key owes no cleanup");
+            for (int i = 0; i < 3; ++i) {
+                (void)rekey.buildNextControlPacket();   // A's own leading silence
+            }
+            rekey.queueTxIq(tail, micA);
+            if (unkeyRan) {
+                rekey.setMox(false, a);
+            }
+            (void)tx.coordinator.finishLocalIntent(a);
+            const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+            rekey.setMox(false, a);   // the posted unkey, now refused
+            check(rekey.isKeyed() != unkeyRan && rekey.txQueueDepth() == tail.size(),
+                  "#7216 premise: A's tail is still queued when B keys");
+            check(micA.sameContext(tx.coordinator.mediaContext(mic, b)),
+                  "#7216 premise: the microphone context spans both overs");
+            const auto overflow = rekey.txOverflowSamples();
+            check(rekey.setMox(true, b), "#7216: a key under a new operation runs A's skipped cleanup");
+            check(rekey.txQueueDepth() == 0 && rekey.txOverflowSamples() == overflow,
+                  "#7216: A's tail is abandoned, uncounted");
+            const auto first = rekey.buildNextControlPacket();
+            check(anyFrameKeyed(first) && !payloadNonZero(first),
+                  "#7216: B's first keyed frame carries none of A's tail");
+            const auto underflowAtB = rekey.txUnderflowSamples();
+            rekey.queueTxIq(tail, tx.coordinator.mediaContext(mic, b));
+            bool carried = false;
+            for (std::size_t i = 0; i < tail.size() / packet + 8 && !carried; ++i) {
+                carried = payloadNonZero(rekey.buildNextControlPacket());
+            }
+            check(carried, "#7216: B's own audio still reaches the wire");
+            check(rekey.lastKeyDownUnderflowSamples() == rekey.txUnderflowSamples() - underflowAtB + packet,
+                  "#7216: B's key-down report counts from B's key, not A's");
+        }
+
+        // Control: an ordinary key/unkey/key. The unkey's flush ran, so B's key
+        // owes nothing and the client behaves exactly as before.
+        {
+            TxTestAuthority tx;
+            MetisClient ordinary;
+            MetisClientTestAccess::setStreaming(ordinary);
+            ordinary.enableTransmit(true);
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto a = tx.operation;
+            check(!ordinary.setMox(true, a), "#7216 control premise: first key");
+            ordinary.queueTxIq(tail, tx.coordinator.mediaContext(mic, a));
+            check(!ordinary.setMox(false, a), "#7216 control: an ordinary unkey owes no cleanup");
+            ordinary.flushTxIq();                       // what applyKeying posts on unkey
+            (void)tx.coordinator.finishLocalIntent(a);
+            const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+            check(!ordinary.setMox(true, b),
+                  "#7216 control: an ordinary re-key after a completed unkey runs no extra cleanup");
+            check(ordinary.isKeyed(), "#7216 control: and keys");
+        }
+
+        // Control: a repeat key under the SAME operation from a second producer
+        // (the heldKeying re-anchor) is not a new over and keeps the queue.
+        {
+            TxTestAuthority tx;
+            MetisClient repeat;
+            MetisClientTestAccess::setStreaming(repeat);
+            repeat.enableTransmit(true);
+            const auto first = tx.coordinator.registerProducer();
+            const auto second = tx.coordinator.registerProducer();
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto ra = first.request();
+            const auto rb = second.request();
+            const auto aIntent = tx.coordinator.beginRequest(ra, tx.operation,
+                AetherSDR::TxCoordinator::Activity::Mox);
+            const auto bIntent = tx.coordinator.beginRequest(rb, tx.operation,
+                AetherSDR::TxCoordinator::Activity::Mox);
+            repeat.setMox(true, tx.coordinator.requestOperation(ra));
+            repeat.queueTxIq(tail, tx.coordinator.mediaContext(mic, tx.operation));
+            check(!repeat.setMox(true, tx.coordinator.requestOperation(rb)),
+                  "#7216 control: a same-operation repeat key is not a new over");
+            check(repeat.txQueueDepth() == tail.size(),
+                  "#7216 control: a same-operation repeat key keeps the queued audio");
+            check(payloadNonZero(repeat.buildNextControlPacket()),
+                  "#7216 control: and that audio goes out");
+            (void)tx.coordinator.endIntent(bIntent);
+            (void)tx.coordinator.endIntent(aIntent);
+        }
+    }
+
+    {
+        TxTestAuthority tx;
+        Hl2Backend cw;
+        Hl2TxGateTestAccess::prepare(cw);
+        const auto first = tx.coordinator.registerProducer();
+        const auto second = tx.coordinator.registerProducer();
+        const auto a = first.request();
+        const auto b = second.request();
+        const auto aIntent = tx.coordinator.beginRequest(a, tx.operation,
+            AetherSDR::TxCoordinator::Activity::CwKey);
+        const auto bIntent = tx.coordinator.beginRequest(b, tx.operation,
+            AetherSDR::TxCoordinator::Activity::CwKey);
+        cw.setCwKeying(true, true, 500, tx.coordinator.requestOperation(a));
+        cw.setCwKeying(true, true, 500, tx.coordinator.requestOperation(b));
+        check(payloadNonZero(Hl2TxGateTestAccess::packet(cw)), "overlapping CW holds produce a carrier");
+        // RadioModel suppresses the global up while a compatible hold remains.
+        (void)tx.coordinator.closeRequest(b);
+        (void)tx.coordinator.endIntent(bIntent);
+        second.invalidate();
+        const auto remaining = Hl2TxGateTestAccess::packet(cw);
+        check(anyFrameKeyed(remaining) && payloadNonZero(remaining),
+              "ending the latest CW contributor preserves another held element");
+        first.invalidate();
+        const auto stopped = Hl2TxGateTestAccess::packet(cw);
+        check(!anyFrameKeyed(stopped) && !payloadNonZero(stopped),
+              "last CW producer invalidation fences carrier and break-in MOX before cleanup");
+        (void)tx.coordinator.endIntent(aIntent);
+    }
+
+    {
+        TxTestAuthority tx;
+        Hl2Backend cw;
+        Hl2TxGateTestAccess::prepare(cw);
+        const auto producer = tx.coordinator.registerProducer();
+        const auto a = producer.request();
+        const auto aIntent = tx.coordinator.beginRequest(a, tx.operation,
+            AetherSDR::TxCoordinator::Activity::CwKey);
+        const auto aOperation = tx.coordinator.requestOperation(a);
+        cw.setCwKeying(true, true, 500, aOperation);
+        check(payloadNonZero(Hl2TxGateTestAccess::packet(cw)), "first scoped CW element reaches the packet builder");
+        (void)tx.coordinator.closeRequest(a);
+        int completed = 0;
+        cw.setCwKeying(false, true, 500, aOperation,
+            AetherSDR::TxCoordinator::Completion([&] {
+                QMetaObject::invokeMethod(&app, [&] {
+                    (void)tx.coordinator.endIntent(aIntent);
+                    ++completed;
+                }, Qt::AutoConnection);
+            }));
+        (void)Hl2TxGateTestAccess::packet(cw); // consume the queued up; hang retains completion
+        check(completed == 0, "CW release completion waits for its normal break-in hang");
+        const auto b = producer.request();
+        const auto bIntent = tx.coordinator.beginRequest(b, tx.operation,
+            AetherSDR::TxCoordinator::Activity::CwKey);
+        const auto bOperation = tx.coordinator.requestOperation(b);
+        cw.setCwKeying(true, true, 500, bOperation);
+        const auto next = Hl2TxGateTestAccess::packet(cw);
+        check(completed == 1 && anyFrameKeyed(next) && payloadNonZero(next),
+              "a successive scoped CW element survives completion of the preceding hang");
+        (void)tx.coordinator.closeRequest(b);
+        cw.setCwKeying(false, true, 500, bOperation,
+            AetherSDR::TxCoordinator::Completion([&] {
+                QMetaObject::invokeMethod(&app, [&] {
+                    (void)tx.coordinator.endIntent(bIntent);
+                    ++completed;
+                }, Qt::AutoConnection);
+            }));
+        (void)Hl2TxGateTestAccess::packet(cw);
+        Hl2TxGateTestAccess::expireHang(cw);
+        const auto stopped = Hl2TxGateTestAccess::packet(cw);
+        QCoreApplication::sendPostedEvents();
+        check(completed == 2 && !anyFrameKeyed(stopped) && !payloadNonZero(stopped),
+              "the final scoped CW hang still unkeys and clears its carrier");
+    }
+
+    {
+        TxTestAuthority tx;
+        MetisClient independent;
+        MetisClientTestAccess::setStreaming(independent);
+        independent.enableTransmit(true);
+        const auto manual = tx.coordinator.registerProducer();
+        const auto keyer = tx.coordinator.registerProducer();
+        const auto ptt = manual.request();
+        const auto element = keyer.request();
+        const auto pttIntent = tx.coordinator.beginRequest(ptt, tx.operation,
+            AetherSDR::TxCoordinator::Activity::Mox);
+        const auto cwIntent = tx.coordinator.beginRequest(element, tx.operation,
+            AetherSDR::TxCoordinator::Activity::CwKey);
+        independent.setMox(true, tx.coordinator.requestOperation(ptt));
+        independent.setCwKeyDown(true, tx.coordinator.requestOperation(element));
+        check(payloadNonZero(independent.buildNextControlPacket()), "CW can ride separately admitted manual MOX");
+        (void)tx.coordinator.endIntent(pttIntent);
+        const auto released = independent.buildNextControlPacket();
+        check(!anyFrameKeyed(released) && !payloadNonZero(released),
+              "a bare CW element never sustains a released manual MOX hold");
+        (void)tx.coordinator.endIntent(cwIntent);
+        (void)independent.buildNextControlPacket();
+        independent.setCwKeyDown(true, tx.coordinator.requestOperation(element));
+        check(!independent.cwKeyDown(), "an ended CW request cannot relatch its carrier");
+    }
+
+    // #7212: audio queued after the unkey, under a context that still permits
+    // dispatch, must not make an idle frame hold the counter acquire() needs at
+    // zero. MOX is keyed by a separate coordinator, so `tx` sees only the audio.
+    {
+        TxTestAuthority keyer;
+        TxTestAuthority tx;
+        MetisClient idle;
+        MetisClientTestAccess::setStreaming(idle);
+        idle.enableTransmit(true);
+        idle.setMox(true, keyer.operation);
+        idle.setMox(false, keyer.operation);
+        const std::vector<std::complex<float>> late(
+            static_cast<std::size_t>(kTxSamplesPerPacket), std::complex<float>(0.25f, -0.25f));
+        idle.queueTxIq(late, tx.context);
+        check(idle.txQueueDepth() == late.size(), "late audio under a live context is queued");
+        bool wrote = false;
+        MetisClientTestAccess::writer(idle, [&](const auto& packet) -> qint64 {
+            wrote = !anyFrameKeyed(packet);
+            check(!tx.coordinator.hasInFlightDispatches(),
+                  "#7212: an idle frame with queued audio holds no audio dispatch during the write");
+            return packet.size();
+        });
+        MetisClientTestAccess::send(idle);
+        check(wrote, "#7212: the idle frame was written unkeyed");
+        check(idle.txQueueDepth() == 0, "#7212: audio queued while unkeyed is abandoned on the idle frame");
+        check(idle.txOverflowSamples() == 0, "#7212: that abandon is not counted as overflow");
+
+        // A microphone context has no operation, so the next over reuses it
+        // and only the abandon above keeps the stale block out of that over.
+        const auto mic = tx.coordinator.registerProducer(true);
+        const auto micContext = tx.coordinator.mediaContext(mic, tx.operation);
+        check(micContext.sameContext(tx.coordinator.mediaContext(mic, keyer.operation)),
+              "#7212: a microphone context is the same across overs");
+        idle.queueTxIq(late, micContext);
+        check(idle.txQueueDepth() == late.size(), "late microphone audio is queued");
+        MetisClientTestAccess::send(idle);
+        check(idle.txQueueDepth() == 0, "#7212: stale microphone audio is abandoned before the next key");
+
+        // Positive control: a keyed frame carrying queued IQ still holds it.
+        idle.setMox(true, keyer.operation);
+        pastThePrime(idle, tx.context);
+        idle.queueTxIq(late, tx.context);
+        bool held = false;
+        bool carried = false;
+        MetisClientTestAccess::writer(idle, [&](const auto& packet) -> qint64 {
+            held = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            carried = payloadNonZero(packet);
+            return packet.size();
+        });
+        MetisClientTestAccess::send(idle);
+        check(held, "#7212 control: a keyed frame with queued IQ holds the audio dispatch during the write");
+        check(idle.txQueueDepth() == 0, "#7212 control: the keyed frame leaves nothing queued");
+        check(carried, "#7212 control: the keyed frame's payload is the queued block");
+    }
+
+    {
+        TxTestAuthority tx;
+        MetisClient entered;
+        MetisClientTestAccess::setStreaming(entered);
+        entered.enableTransmit(true);
+        entered.setMox(true, tx.operation);
+        bool written = false;
+        MetisClientTestAccess::writer(entered, [&](const auto& packet) -> qint64 {
+            written = anyFrameKeyed(packet);
+            check(tx.coordinator.hasInFlightDispatches(), "Metis terminal control writer holds its dispatch guard");
+            (void)tx.coordinator.cancel(tx.actor, tx.operation);
+            check(!tx.coordinator.acknowledgeStopped(tx.operation),
+                  "reentrant teardown cannot acknowledge an entered Metis write");
+            return packet.size();
+        });
+        MetisClientTestAccess::send(entered);
+        check(written && tx.coordinator.acknowledgeStopped(tx.operation),
+              "Metis writer guard ends only after the terminal writer returns");
+    }
+
+    // The keyed frames and the first OFF frame hold the dispatch fence; the idle
+    // frames after them hold nothing, so the next over's acquire() is not refused.
+    using Refusal = AetherSDR::TxCoordinator::Refusal;
+    using Packet = std::array<std::uint8_t, kUsbPacketSize>;
+    {
+        TxTestAuthority tx;
+        MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
+        over.enableTransmit(true);
+        over.setMox(true, tx.operation);
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(keyedFenced, "a keyed Metis frame holds the dispatch fence");
+        over.setMox(false, tx.operation);
+        bool unkeyFenced = false;
+        Refusal unkeyRefusal = Refusal::None;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            unkeyFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            unkeyRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(unkeyFenced && unkeyRefusal == Refusal::Recovering,
+              "the unkey frame stays fenced: a new operation is refused while it is entered");
+        bool idleFree = false;
+        bool idleAdmits = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            idleFree = !anyFrameKeyed(packet) && !tx.coordinator.hasInFlightDispatches();
+            idleAdmits = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(idleFree, "an idle Metis frame after the unkey frame holds no dispatch guard");
+        check(idleAdmits, "a fresh acquire() during an idle Metis frame is accepted");
+    }
+
+    {
+        // An over ended mid-frame: the next frame drops MOX and is still fenced.
+        TxTestAuthority tx;
+        MetisClient ended;
+        MetisClientTestAccess::setStreaming(ended);
+        ended.enableTransmit(true);
+        ended.setMox(true, tx.operation);
+        Refusal keyedRefusal = Refusal::None;
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            keyedRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(keyedFenced && keyedRefusal == Refusal::Recovering,
+              "a new operation is refused while a keyed Metis frame is entered");
+        bool offFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            offFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(offFenced && !ended.isKeyed(),
+              "the OFF frame after a refused key dispatch is still fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches()
+                && tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(idleFree, "after that OFF frame an idle frame admits the next over");
+    }
+
+    {
+        // A failed write does not retire the unkey: the next OFF frame is fenced
+        // again, and only a written OFF frame releases the operation.
+        TxTestAuthority tx;
+        MetisClient failed;
+        MetisClientTestAccess::setStreaming(failed);
+        failed.enableTransmit(true);
+        failed.setMox(true, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet& packet) -> qint64 { return packet.size(); });
+        MetisClientTestAccess::send(failed);
+        failed.setMox(false, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet&) -> qint64 { return -1; });
+        MetisClientTestAccess::send(failed);
+        bool retryFenced = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            retryFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(retryFenced, "an unkey frame whose write failed leaves the next OFF frame fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(idleFree, "once an OFF frame is written, the idle frame after it holds no guard");
+    }
+
+    // ---- TX IQ FIFO fault accounting (S3 row 3.3) ----
+    //
+    // The FIFO is bounded above at kTxQueueMax and not below. Both ends change
+    // what goes on the air and, until these counters, neither was recorded
+    // anywhere: not a log line, not a reading, and not a test. The radio's own
+    // DSIQ telemetry cannot stand in for them -- an underflow HERE still emits
+    // a full-size EP2 frame on schedule, so the gateware's fill and
+    // pacingFault readings are identical whether it happened or not.
+    //
+    // Every counting assertion below is paired with a NEGATIVE CONTROL on the
+    // same counter, because a counter that only ever goes up is a number nobody
+    // can act on.
+    //
+    // BUT BE PRECISE ABOUT WHAT THESE COUNTERS CAN ANSWER, because the obvious
+    // reading is wrong and the next two blocks are what establish it: they do
+    // NOT answer "was this over clean". A perfectly clean over reads as a
+    // BURST of whole-packet underflows followed, an over later, by one more
+    // short packet -- and neither end is a fault.
+    //
+    // THE FLOOR HAS TWO HALVES and the first published account of it named only
+    // the smaller one. They are measured separately below:
+    //
+    //   TAIL, at key-up. Real audio does not end on a packet boundary, so the
+    //   last packet is short. ONE packet, 1..kTxSamplesPerPacket-1 samples.
+    //
+    //   PRE-ROLL, at key-down, and it is the BIGGER half by an order of
+    //   magnitude. Nothing primes the queue before MOX goes out, so every EP2
+    //   tick between the key edge and the arrival of the transmit chain's FIRST
+    //   block takes the empty-queue arm and counts a WHOLE packet.
+    //
+    // What they answer, therefore, is "how much substituted silence has this
+    // PROCESS put on the air" -- a budget, against a floor that is a fixed cost
+    // per over rather than a per-over verdict.
+    {
+        // ---- THE FLOOR, TAIL HALF: what the END of a clean over reads. Measured. ----
+        //
+        // THIS BLOCK USED TO BE A CONTROL THAT COULD NOT FAIL. It queued an
+        // exact multiple of kTxSamplesPerPacket and asserted that a clean
+        // transmission counts nothing -- which is to say it probed the one
+        // input on which the short-packet branch is never reached, and so the
+        // condition it existed to detect could not occur. Swapping the input
+        // for a realistic over and leaving the assertion alone turned it red
+        // immediately. A control that only ever passes has told nobody
+        // anything, and this one was claiming the strongest property in the
+        // file.
+        //
+        // Real audio does not end on a packet boundary. 500 samples is
+        // 3*126 + 122, so the LAST packet of a perfectly healthy over is short
+        // by 4 and IS COUNTED. Nothing went wrong: the envelope was ending, and
+        // four samples of silence before key-up cost nothing on the air. The
+        // counter cannot tell that from a starvation because at the moment it
+        // counts, "the queue is short" and "the over is over" look identical.
+        //
+        // So the floor is about ONE underflow packet per over, with between 1
+        // and kTxSamplesPerPacket-1 underflow samples riding along. Pinned here
+        // rather than described, so that giving the client an end-of-over
+        // exemption later is a change that makes THIS assertion fail and say
+        // so. That exemption is a design change -- it needs the count deferred
+        // and attributed against key-up -- and is deliberately not made here.
+        //
+        // txUnderflowPackets is the more polluted of the two: its floor is a
+        // fixed +1 per over regardless of length, while the tail contributes at
+        // most 125 samples against the 126-per-packet a real starvation adds.
+        TxTestAuthority tx;
+        MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
+        over.enableTransmit(true);
+        over.setMox(true, tx.operation);
+        pastThePrime(over, tx.context);   // #6052: this block is about the END of the over
+        constexpr std::size_t kOverSamples = 500;   // 3 * 126 + 122
+        const std::vector<std::complex<float>> speech(
+            kOverSamples, std::complex<float>(0.25f, -0.25f));
+        over.queueTxIq(speech, tx.context);
+        Ep2IqShape lastShape;
+        int packets = 0;
+        while (over.txQueueDepth() > 0) {
+            const auto pkt = over.buildNextControlPacket();
+            check(payloadNonZero(pkt), "every packet of a fed over carries IQ");
+            lastShape = ep2IqShape(pkt);
+            ++packets;
+        }
+        check(packets == 4, "500 samples is four EP2 packets, the last one short");
+        check(over.txUnderflowPackets() == 1,
+              "THE FLOOR (TAIL HALF): a CLEAN over that does not end on a packet boundary "
+              "still counts one underflow -- this counter cannot report 'this over was clean'");
+        check(over.txUnderflowSamples()
+                  == static_cast<std::uint64_t>(kTxSamplesPerPacket)
+                         - kOverSamples % static_cast<std::size_t>(kTxSamplesPerPacket),
+              "and the floor in samples is the packet remainder, here 4");
+        // AND THE SAME FACT READ OFF THE WIRE rather than off the counter, so
+        // this is not the test recomputing what the code just computed: the
+        // final packet really does carry 122 slots of IQ and then falls silent.
+        check(lastShape.carryingIq == 122 && lastShape.firstSilent == 122
+                  && lastShape.sampleSlots == kTxSamplesPerPacket,
+              "the tail packet's WIRE shape is 122 IQ slots then trailing silence");
+        check(over.txOverflowSamples() == 0,
+              "NEGATIVE CONTROL: a queue that never reached kTxQueueMax counts no overflow");
+        std::fprintf(stderr,
+            "PROBE  key-up tail: %llu samples (%llu = %d*%d + %llu), drained in %d packets ->"
+            " underflowPackets=%llu underflowSamples=%llu\n",
+            static_cast<unsigned long long>(kOverSamples),
+            static_cast<unsigned long long>(kOverSamples),
+            static_cast<int>(kOverSamples / kTxSamplesPerPacket), kTxSamplesPerPacket,
+            static_cast<unsigned long long>(kOverSamples % kTxSamplesPerPacket),
+            packets,
+            static_cast<unsigned long long>(over.txUnderflowPackets()),
+            static_cast<unsigned long long>(over.txUnderflowSamples()));
+    }
+
+    {
+        // ---- THE FLOOR, PRE-ROLL HALF: what the START of a clean over reads.
+        //      MEASURED, and it is the larger half. ----
+        //
+        // Hl2Backend::applyKeying posts setMox to this client immediately. The
+        // first block of transmit IQ cannot arrive until the transmit chain has
+        // produced one, and Hl2TxDsp::processAudioBlock buffers a whole
+        // Config::dspBlockSize block at Config::inputSampleRateHz before it
+        // emits anything at all -- it returns early while m_inBuffer is short,
+        // and m_inBuffer is empty at key-down twice over (applyKeying posts
+        // reset() on unkey, and a new over carries a new TxCoordinator context
+        // which makes processAudioBlock reset again).
+        //
+        // NOTHING PRIMES m_txIq BEFORE MOX. So every EP2 tick in that window
+        // takes the empty-queue arm and counts a WHOLE packet, and a clean over
+        // OPENS with a burst of them. That is the "missing pre-roll" the
+        // accounting comment in MetisClient.h names -- read here as a FLOOR
+        // rather than as a fault, because it happens on every healthy
+        // transmission and no operator can avoid it.
+        //
+        // THE COUNT IS DERIVED, NOT TYPED. dspBlockSize and inputSampleRateHz
+        // are read off the real Hl2TxDsp::Config, and the EP2 rate off
+        // MetisClient's own constant through the friend, so a test that agrees
+        // with itself is not possible here: change the DSP block size or the
+        // EP2 rate and this figure moves with it.
+        const Hl2TxDsp::Config chain{};
+        const std::uint64_t preRollPackets =
+            (static_cast<std::uint64_t>(chain.dspBlockSize)
+                 * static_cast<std::uint64_t>(MetisClientTestAccess::ep2AudioRateHz()))
+            / (static_cast<std::uint64_t>(chain.inputSampleRateHz)
+                 * static_cast<std::uint64_t>(kTxSamplesPerPacket));
+        // PINNED at the geometry this product actually ships: 256 input samples
+        // at 24 kHz is 10.67 ms, and an EP2 packet is 126 samples at 48 kHz,
+        // which is 2.625 ms. 10.67 / 2.625 = 4.06, so FOUR whole packets --
+        // 504 samples, about 10.5 ms -- of substituted silence open every clean
+        // over, against a tail of at most 125 samples. If the block size or
+        // either rate changes, this assertion is where it says so.
+        check(preRollPackets == 4,
+              "THE FLOOR (PRE-ROLL HALF): one Hl2TxDsp input block is four EP2 packets");
+
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient keydown;
+        MetisClientTestAccess::setStreaming(keydown);
+        keydown.enableTransmit(true);
+        keydown.setMox(true, tx.operation);
+        check(keydown.txQueueDepth() == 0,
+              "the queue is EMPTY at key-down -- nothing pre-rolls it");
+        for (std::uint64_t i = 0; i < preRollPackets; ++i) {
+            const auto pkt = keydown.buildNextControlPacket();
+            check(anyFrameKeyed(pkt), "the pre-roll packets are KEYED -- this is on the air");
+            check(!payloadNonZero(pkt),
+                  "every pre-roll packet is a WHOLE packet of substituted silence");
+        }
+        check(keydown.txUnderflowPackets() == preRollPackets,
+              "THE FLOOR (PRE-ROLL HALF): a CLEAN over OPENS with a burst of whole-packet "
+              "underflows -- the body's 'roughly one underflow packet per over' was the "
+              "tail only, and named the smaller half");
+        check(keydown.txUnderflowSamples()
+                  == preRollPackets * static_cast<std::uint64_t>(kTxSamplesPerPacket),
+              "and in samples the pre-roll is preRollPackets whole packets of silence");
+        // WHICH HALF DOMINATES, asserted rather than asserted-in-prose: the
+        // pre-roll puts more silence on the air than the largest tail a short
+        // packet can possibly contribute.
+        check(keydown.txUnderflowSamples()
+                  > static_cast<std::uint64_t>(kTxSamplesPerPacket) - 1,
+              "the pre-roll outweighs the largest possible tail");
+        // AND IT IS ONE EVENT, not eight. The episode is still open here --
+        // the queue has not recovered -- so nothing has been logged yet.
+        check(log.starvationLines().isEmpty(),
+              "an episode still in progress is not logged per packet");
+        // PRINTED, so the measured floor is in the run output rather than only
+        // in an expectation. This is the figure the body quotes.
+        std::fprintf(stderr,
+            "PROBE  key-down pre-roll: one Hl2TxDsp block is %d samples at %d Hz"
+            " = %.2f ms; an EP2 packet is %d samples at %d Hz = %.3f ms ->"
+            " %llu whole-packet underflows, %llu samples of substituted silence,"
+            " %.2f ms of every clean over\n",
+            chain.dspBlockSize, chain.inputSampleRateHz,
+            1000.0 * chain.dspBlockSize / chain.inputSampleRateHz,
+            kTxSamplesPerPacket, MetisClientTestAccess::ep2AudioRateHz(),
+            1000.0 * kTxSamplesPerPacket / MetisClientTestAccess::ep2AudioRateHz(),
+            static_cast<unsigned long long>(keydown.txUnderflowPackets()),
+            static_cast<unsigned long long>(keydown.txUnderflowSamples()),
+            1000.0 * static_cast<double>(keydown.txUnderflowSamples())
+                / MetisClientTestAccess::ep2AudioRateHz());
+
+        // The first Hl2TxDsp block lands and the queue stays primed. Enough
+        // for the recovery gap plus room to spare, so the episode closes.
+        const std::vector<std::complex<float>> primed(
+            static_cast<std::size_t>(kTxSamplesPerPacket)
+                * static_cast<std::size_t>(MetisClientTestAccess::runQuietPackets() + 2),
+            std::complex<float>(0.25f, -0.25f));
+        keydown.queueTxIq(primed, tx.context);
+        while (keydown.txQueueDepth() >= static_cast<std::size_t>(kTxSamplesPerPacket))
+            (void)keydown.buildNextControlPacket();
+        check(keydown.txUnderflowPackets() == preRollPackets,
+              "a primed queue adds nothing to the count");
+        const QStringList lines = log.starvationLines();
+        check(lines.size() == 1,
+              "ONE log line for the whole key-down burst, not one per EP2 packet");
+        check(!lines.isEmpty()
+                  && lines.first().contains(QString::number(preRollPackets)),
+              "and the line names the length of the episode it is reporting");
+        check(!lines.isEmpty()
+                  && lines.first().contains(QStringLiteral("SINCE PROCESS START")),
+              "the totals are labelled for what they are -- nothing resets them, "
+              "not start(), not a link edge, not flushTxIq()");
+
+        // ---- THE KEY-DOWN REPORT (#6052): the queue's share, per over ----
+        //
+        // The same over, read the way #6052's triage asked for: the empty-queue
+        // silence at the head of the over, as ONE figure, at the moment the
+        // first queued IQ goes out -- next to the voice chain's latency, which
+        // is the other half of what the wire shows as leading zeros. Published
+        // here by hand because AudioEngine is not in this test; 970 is not a
+        // real chain figure, only a value the line must carry through.
+        const QStringList keyDown = log.keyDownLines();
+        check(keyDown.size() == 1, "ONE key-down line per over");
+        check(keydown.lastKeyDownUnderflowSamples()
+                  == preRollPackets * static_cast<std::uint64_t>(kTxSamplesPerPacket),
+              "the key-down figure is the pre-roll: every empty-queue sample "
+              "between MOX-on and the first queued IQ");
+        check(!keyDown.isEmpty()
+                  && keyDown.first().contains(QString::number(
+                         preRollPackets * static_cast<std::uint64_t>(kTxSamplesPerPacket))
+                         + QStringLiteral(" samples")),
+              "and the line carries it");
+    }
+    {
+        // The voice chain's figure rides in the same line, and an unpublished
+        // one says so instead of printing -1 as if it were a delay.
+        //
+        // WITH THE PRIME (#6052) the first queued IQ is no longer the packet
+        // after the first delivery: the queue holds until it is at its target.
+        // So the line is reported when the hold lets go, and it carries the
+        // hold beside the empty-queue silence -- the two are the queue's whole
+        // share of the leading silence and neither is counted in the other.
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
+        over.enableTransmit(true);
+        AetherSDR::TxChainLatency::publishVoiceProcessorFrames(970);
+        over.setMox(true, tx.operation);
+        (void)over.buildNextControlPacket();                // one empty packet
+        const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::vector<std::complex<float>> block(packet, std::complex<float>(0.25f, -0.25f));
+        over.queueTxIq(block, tx.context);
+        const auto held = over.buildNextControlPacket();    // samples waiting, below the target
+        check(!payloadNonZero(held) && log.keyDownLines().isEmpty(),
+              "a packet the prime holds is not the first queued IQ: no key-down line yet");
+        const std::vector<std::complex<float>> rest(
+            MetisClientTestAccess::primeTarget() - packet, std::complex<float>(0.25f, -0.25f));
+        over.queueTxIq(rest, tx.context);
+        check(payloadNonZero(over.buildNextControlPacket()),  // first queued IQ
+              "at the target the first queued IQ goes out");
+        (void)over.buildNextControlPacket();                // same over: no second line
+        QStringList lines = log.keyDownLines();
+        check(lines.size() == 1 && lines.first().contains(QStringLiteral("970 frames")),
+              "the key-down line carries TxVoiceProcessor::latencyFrames() as published");
+        check(over.lastKeyDownUnderflowSamples() == static_cast<std::uint64_t>(packet),
+              "one empty packet before the first IQ is one packet of key-down silence");
+        check(over.lastKeyDownPrimeHoldPackets() == 1
+                  && over.lastKeyDownUnderflowSamples() == over.txUnderflowSamples(),
+              "the packet the prime held is reported as a hold, and not as underflow");
+        check(!lines.isEmpty()
+                  && lines.first().contains(QStringLiteral("126 samples"))
+                  && lines.first().contains(QStringLiteral("and 1 packet(s)")),
+              "and the line carries both: the empty-queue silence and the prime's hold");
+
+        over.setMox(false, tx.operation);
+        over.flushTxIq();                                    // how an over ends
+        AetherSDR::TxChainLatency::publishVoiceProcessorFrames(-1);
+        over.setMox(true, tx.operation);                     // a NEW over re-arms it
+        const std::vector<std::complex<float>> whole(
+            MetisClientTestAccess::primeTarget(), std::complex<float>(0.25f, -0.25f));
+        over.queueTxIq(whole, tx.context);
+        (void)over.buildNextControlPacket();
+        lines = log.keyDownLines();
+        check(lines.size() == 2 && lines.last().contains(QStringLiteral("n/a")),
+              "each over reports once, and an unpublished chain figure reads n/a");
+        check(over.lastKeyDownUnderflowSamples() == 0 && over.lastKeyDownPrimeHoldPackets() == 0,
+              "an over whose queue was at the target at MOX-on reports no key-down "
+              "silence and no hold");
+    }
+
+    {
+        // ---- THE PRIME (#6052): the first samples of an over ----
+        // An empty queue is still the counted pre-roll above. Once a block
+        // lands, keyed packets are silence, consume nothing and count no
+        // underflow until one draining block plus 42.67 ms of margin is queued.
+        // The block is derived from the real Hl2TxDsp::Config; the margin is
+        // the decision, pinned in milliseconds so it does not follow the block.
+        const Hl2TxDsp::Config chain{};
+        const std::size_t block =
+            static_cast<std::size_t>(chain.dspBlockSize)
+            * static_cast<std::size_t>(MetisClientTestAccess::ep2AudioRateHz())
+            / static_cast<std::size_t>(chain.inputSampleRateHz);
+        check(MetisClientTestAccess::primeBlock() == block,
+              "THE PRIME: the block MetisClient primes in is Hl2TxDsp's own, at the EP2 rate");
+        constexpr double kMarginMs = 128.0 / 3.0;   // 42.67 ms, #6052
+        const std::size_t margin = static_cast<std::size_t>(std::lround(
+            kMarginMs * MetisClientTestAccess::ep2AudioRateHz() / 1000.0));
+        check(MetisClientTestAccess::primeTarget() == block + margin,
+              "THE PRIME: the target is one draining block plus 42.67 ms of margin");
+        check(margin % block == 0,
+              "THE PRIME: the margin is a whole number of blocks, so the hold ends on a block");
+        const std::size_t targetBlocks = MetisClientTestAccess::primeTarget() / block;
+        const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
+        const auto packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
+        over.enableTransmit(true);
+        over.setMox(true, tx.operation);
+
+        over.queueTxIq(oneBlock, tx.context);            // block 1
+        const auto held1 = over.buildNextControlPacket();
+        check(anyFrameKeyed(held1) && !payloadNonZero(held1),
+              "THE PRIME: with one block queued the keyed packet is silence");
+        check(over.txQueueDepth() == block, "THE PRIME: and the hold consumes nothing");
+        check(over.txUnderflowPackets() == 0 && over.txUnderflowSamples() == 0,
+              "THE PRIME: a hold is not an underflow -- nothing was missing");
+        check(over.txPrimeHoldPackets() == 1, "THE PRIME: it is counted as a hold instead");
+
+        for (std::size_t k = 2; k < targetBlocks; ++k) {  // blocks 2 .. one short
+            over.queueTxIq(oneBlock, tx.context);
+            check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == k * block,
+                  "THE PRIME: every block short of the target is still held -- one block "
+                  "less margin is not what was chosen");
+        }
+
+        over.queueTxIq(oneBlock, tx.context);            // the target
+        const auto first = over.buildNextControlPacket();
+        const auto firstShape = ep2IqShape(first);
+        check(firstShape.carryingIq == kTxSamplesPerPacket && firstShape.firstSilent < 0,
+              "THE PRIME: at the target the next packet is a FULL packet of IQ");
+        check(over.txQueueDepth() == MetisClientTestAccess::primeTarget() - packet,
+              "THE PRIME: and the queue drains from there");
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && over.txPrimeDeadlineReleases() == 0,
+              "THE PRIME: one packet per short block was held, and the target let it go, "
+              "not the deadline");
+        check(log.primeLines().size() == 1, "THE PRIME: one log line when it lets go");
+
+        // NOT DEFENDED. Below the target again, the queue keeps draining: the
+        // margin is not restored until the queue is abandoned and re-primed.
+        while (over.txQueueDepth() >= packet)
+            check(payloadNonZero(over.buildNextControlPacket()),
+                  "THE PRIME: once let go, a queue below the target still drains");
+        const auto tail = ep2IqShape(over.buildNextControlPacket());
+        check(tail.carryingIq == static_cast<int>(MetisClientTestAccess::primeTarget() % packet),
+              "THE PRIME: down to the last short packet, which is not held either");
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && log.primeLines().size() == 1,
+              "THE PRIME: no second hold and no second line in the same over");
+
+        // THE KEYED EDGE ARMS IT AGAIN. Same context, no flush, queue empty:
+        // nothing but the edge itself can have armed this one.
+        over.setMox(false, tx.operation);
+        (void)over.buildNextControlPacket();
+        over.setMox(true, tx.operation);
+        over.queueTxIq(oneBlock, tx.context);
+        const auto next = over.buildNextControlPacket();
+        check(anyFrameKeyed(next) && !payloadNonZero(next) && over.txQueueDepth() == block,
+              "THE PRIME: the next over's first block is held again -- armed on the keyed edge");
+        std::fprintf(stderr,
+            "PROBE  prime: block %zu samples, target %zu (%.2f ms queued), margin %.2f ms,"
+            " deadline %llu packets (%.2f ms)\n",
+            block, MetisClientTestAccess::primeTarget(),
+            1000.0 * static_cast<double>(MetisClientTestAccess::primeTarget())
+                / MetisClientTestAccess::ep2AudioRateHz(),
+            1000.0 * static_cast<double>(MetisClientTestAccess::primeTarget() - block)
+                / MetisClientTestAccess::ep2AudioRateHz(),
+            static_cast<unsigned long long>(MetisClientTestAccess::primeMaxHoldPackets()),
+            1000.0 * static_cast<double>(MetisClientTestAccess::primeMaxHoldPackets())
+                * kTxSamplesPerPacket / MetisClientTestAccess::ep2AudioRateHz());
+
+        {   // THE DEADLINE: a producer that stops short goes out late, not never
+            TxTestAuthority shortTx;
+            MetisClient stopped;
+            MetisClientTestAccess::setStreaming(stopped);
+            stopped.enableTransmit(true);
+            stopped.setMox(true, shortTx.operation);
+            stopped.queueTxIq(oneBlock, shortTx.context);
+            for (std::uint64_t i = 0; i < MetisClientTestAccess::primeMaxHoldPackets(); ++i) {
+                check(!payloadNonZero(stopped.buildNextControlPacket()),
+                      "THE PRIME: one block alone is held up to the deadline");
+            }
+            check(stopped.txQueueDepth() == block, "THE PRIME: and is still whole when it expires");
+            check(payloadNonZero(stopped.buildNextControlPacket()),
+                  "THE PRIME: at the deadline the held block goes out");
+            check(stopped.txPrimeDeadlineReleases() == 1
+                      && stopped.txPrimeHoldPackets() == MetisClientTestAccess::primeMaxHoldPackets(),
+                  "THE PRIME: and the release is counted as a deadline, not as primed");
+        }
+
+        {   // CW AND THE TEST TONE ARE NOT HELD: they never reach the queue
+            TxTestAuthority toneTx;
+            MetisClient tone;
+            MetisClientTestAccess::setStreaming(tone);
+            tone.enableTransmit(true);
+            tone.setMox(true, toneTx.operation);
+            tone.queueTxIq(oneBlock, toneTx.context);    // armed, and would hold
+            tone.setTxTestTone(0.0, 0.5, toneTx.operation);
+            const auto shape = ep2IqShape(tone.buildNextControlPacket());
+            check(shape.carryingIq == kTxSamplesPerPacket,
+                  "THE PRIME: the test tone fills the FIRST keyed packet, prime armed or not");
+            check(tone.txPrimeHoldPackets() == 0 && tone.txQueueDepth() == block,
+                  "THE PRIME: and a tone packet is neither a hold nor a drain of the queue");
+
+            TxTestAuthority cwTx;
+            MetisClient cw;
+            MetisClientTestAccess::setStreaming(cw);
+            cw.enableTransmit(true);
+            cw.setMox(true, cwTx.operation);
+            cw.setCwKeyDown(true, cwTx.operation);
+            check(payloadNonZero(cw.buildNextControlPacket()) && cw.txPrimeHoldPackets() == 0,
+                  "THE PRIME: the CW carrier starts in the first keyed packet, as before");
+        }
+
+        {   // AN ABANDONED QUEUE IS PRIMED AGAIN, inside the same keyed over
+            TxTestAuthority voiceTx;
+            MetisClient mixed;
+            MetisClientTestAccess::setStreaming(mixed);
+            mixed.enableTransmit(true);
+            mixed.setMox(true, voiceTx.operation);
+            pastThePrime(mixed, voiceTx.context);          // let go: voice is flowing
+            mixed.setCwKeyDown(true, voiceTx.operation);   // CW takes the stream
+            (void)mixed.buildNextControlPacket();
+            mixed.clearCwKeying();                         // and gives it back, MOX still up
+            mixed.queueTxIq(oneBlock, voiceTx.context);
+            const auto resumed = mixed.buildNextControlPacket();
+            check(anyFrameKeyed(resumed) && !payloadNonZero(resumed)
+                      && mixed.txQueueDepth() == block,
+                  "THE PRIME: voice that restarts after CW is held like the start of an over");
+        }
+    }
+
+    {
+        // ---- THE DRIFT SHAPE IS ONE EPISODE, NOT ONE LINE PER PAIR ----
+        //
+        // The other shape this FIFO produces: the EP2 wall clock and the audio
+        // device clock pull apart, so short and full packets ALTERNATE. The
+        // first version of the coalescing flushed the run on the next full
+        // packet, which turns that into one ~400-character line per PAIR -- up
+        // to ~190 a second at the pacer's ~381 frames/s, which is the
+        // per-frame flood the coalescing exists to prevent.
+        //
+        // This is the assertion that makes reportTxUnderflowRun() observable at
+        // all. Empty the function and it goes red; before this block, emptying
+        // it left every check in the file green.
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient drift;
+        MetisClientTestAccess::setStreaming(drift);
+        drift.enableTransmit(true);
+        drift.setMox(true, tx.operation);
+        pastThePrime(drift, tx.context);   // #6052: the drift shape is mid-over
+        constexpr int kPairs = 10;
+        constexpr std::size_t kShort = 40;
+        for (int i = 0; i < kPairs; ++i) {
+            const std::vector<std::complex<float>> ragged(kShort,
+                std::complex<float>(0.25f, -0.25f));
+            drift.queueTxIq(ragged, tx.context);
+            (void)drift.buildNextControlPacket();          // short -> counted
+            const std::vector<std::complex<float>> full(
+                static_cast<std::size_t>(kTxSamplesPerPacket),
+                std::complex<float>(0.25f, -0.25f));
+            drift.queueTxIq(full, tx.context);
+            (void)drift.buildNextControlPacket();          // full  -> a gap, not a flush
+        }
+        check(drift.txUnderflowPackets() == kPairs,
+              "the drift shape counts one underflow per short packet");
+        check(log.starvationLines().isEmpty(),
+              "a SINGLE full packet does not end an episode -- alternating short/full "
+              "must not log once per pair");
+
+        // The queue keeps up for the recovery gap, so the episode closes -- once.
+        const std::vector<std::complex<float>> recovered(
+            static_cast<std::size_t>(kTxSamplesPerPacket)
+                * static_cast<std::size_t>(MetisClientTestAccess::runQuietPackets() + 1),
+            std::complex<float>(0.25f, -0.25f));
+        drift.queueTxIq(recovered, tx.context);
+        while (drift.txQueueDepth() >= static_cast<std::size_t>(kTxSamplesPerPacket))
+            (void)drift.buildNextControlPacket();
+        check(log.starvationLines().size() == 1,
+              "ten short packets spread across twenty are ONE episode and ONE line");
+    }
+
+    {
+        // ---- THE STARVATION TOTALS NAME THE TRIM ----
+        //
+        // A trim drops audio as overflow does, so the one line people read after
+        // a "my audio jumped" report must carry it, or "overflow 0" reads as
+        // nothing dropped. Mid-over starvation, then a backlog above the trim
+        // threshold that outlasts the quiet period: trimmed once, then reported.
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient trim;
+        MetisClientTestAccess::setStreaming(trim);
+        trim.enableTransmit(true);
+        trim.setMox(true, tx.operation);
+        pastThePrime(trim, tx.context);
+        const std::vector<std::complex<float>> ragged(40, std::complex<float>(0.25f, -0.25f));
+        trim.queueTxIq(ragged, tx.context);
+        (void)trim.buildNextControlPacket();     // short, after the prime -> armed
+        const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::vector<std::complex<float>> backlog(
+            MetisClientTestAccess::primeTarget() + MetisClientTestAccess::trimMargin()
+                + packet * static_cast<std::size_t>(MetisClientTestAccess::runQuietPackets() + 4),
+            std::complex<float>(0.25f, -0.25f));
+        trim.queueTxIq(backlog, tx.context);
+        for (std::uint64_t i = 0; i < MetisClientTestAccess::runQuietPackets(); ++i)
+            (void)trim.buildNextControlPacket();
+        const QStringList lines = log.starvationLines();
+        check(trim.txTrimEvents() == 1 && trim.txTrimSamples() > 0,
+              "CONTROL: the backlog after a mid-over starvation is trimmed once");
+        check(lines.size() == 1
+                  && lines.first().contains(QStringLiteral("overflow 0 samples, trim %1 samples)")
+                                                .arg(trim.txTrimSamples())),
+              "the starvation line's totals include the trimmed samples, next to overflow");
+    }
+
+    {
+        // ---- EVERY EXIT FROM THE QUEUED-IQ PATH REPORTS, INCLUDING THE TWO
+        //      THAT DID NOT ----
+        //
+        // MetisClient.h claims the run is reported at every exit. The unkey
+        // backstop and flushTxIq() did that; the CW and test-tone arms did not,
+        // so an episode in progress when the operator hit TUNE while keyed sat
+        // open until key-up and was then timestamped against the wrong moment.
+        constexpr std::size_t kShort = 40;
+
+        {   // TUNE taken mid-over
+            TxTestAuthority tx;
+            ScopedTxFifoLog log;
+            MetisClient tune;
+            MetisClientTestAccess::setStreaming(tune);
+            tune.enableTransmit(true);
+            tune.setMox(true, tx.operation);
+            pastThePrime(tune, tx.context);   // #6052: an episode needs a draining queue
+            const std::vector<std::complex<float>> ragged(kShort,
+                std::complex<float>(0.25f, -0.25f));
+            tune.queueTxIq(ragged, tx.context);
+            (void)tune.buildNextControlPacket();     // short -> episode open
+            check(log.starvationLines().isEmpty(), "episode open, nothing logged yet");
+            tune.setTxTestTone(0.0, 0.5, tx.operation);
+            (void)tune.buildNextControlPacket();     // the TONE arm
+            check(log.starvationLines().size() == 1,
+                  "TUNE while keyed ends the episode WHERE IT HAPPENED, not at key-up");
+        }
+
+        {   // the key going up
+            TxTestAuthority tx;
+            ScopedTxFifoLog log;
+            MetisClient unkey;
+            MetisClientTestAccess::setStreaming(unkey);
+            unkey.enableTransmit(true);
+            unkey.setMox(true, tx.operation);
+            pastThePrime(unkey, tx.context);   // #6052: as above
+            const std::vector<std::complex<float>> ragged(kShort,
+                std::complex<float>(0.25f, -0.25f));
+            unkey.queueTxIq(ragged, tx.context);
+            (void)unkey.buildNextControlPacket();
+            check(log.starvationLines().isEmpty(), "episode open, nothing logged yet");
+            unkey.flushTxIq();                       // what applyKeying posts on unkey
+            check(log.starvationLines().size() == 1,
+                  "the flush that ends an over also ends the episode");
+        }
+    }
+
+    {
+        // ---- A NaN TONE AMPLITUDE MUST NOT DIVERT QUEUED AUDIO INTO THE
+        //      UNKEYED ARM ----
+        //
+        // setTxTestTone's clamp is
+        //     amplitude < 0.0 ? 0.0 : (amplitude > 1.0 ? 1.0 : amplitude)
+        // and BOTH comparisons are false for NaN, so NaN reaches m_toneAmp
+        // intact. The queued-IQ arm used to read
+        //     keyed && !m_cwMode && m_toneAmp <= 0.0
+        // which NaN also fails -- as does the tone arm's m_toneAmp > 0.0. A
+        // keyed client with a full block of audio waiting therefore fell past
+        // BOTH into the UNKEYED backstop and transmitted a whole packet of
+        // silence with nothing counted: the exact fault these counters exist to
+        // record, reintroduced by the guard written to describe it. The arm is
+        // now just `keyed`, which is exact because the two arms above already
+        // consume every keyed input with CW or a positive tone amplitude.
+        TxTestAuthority tx;
+        MetisClient nan;
+        MetisClientTestAccess::setStreaming(nan);
+        nan.enableTransmit(true);
+        nan.setMox(true, tx.operation);
+        nan.setTxTestTone(0.0, std::numeric_limits<double>::quiet_NaN(), tx.operation);
+        // #6052: one packet's worth would be held by the prime, and "the
+        // queued block was consumed" below could not tell that from the fault.
+        // Past the prime, and under the NaN amplitude all the way.
+        pastThePrime(nan, tx.context);
+        const std::vector<std::complex<float>> block(
+            static_cast<std::size_t>(kTxSamplesPerPacket),
+            std::complex<float>(0.25f, -0.25f));
+        nan.queueTxIq(block, tx.context);
+        const auto pkt = nan.buildNextControlPacket();
+        check(anyFrameKeyed(pkt), "the client is keyed");
+        check(payloadNonZero(pkt),
+              "a NaN tone amplitude must not send queued audio to the unkeyed arm -- "
+              "that transmitted silence UNCOUNTED with a full block waiting");
+        check(nan.txQueueDepth() == 0,
+              "the queued block was consumed by the queued-IQ arm, as for any other amplitude");
+        check(nan.txUnderflowPackets() == 0,
+              "NEGATIVE CONTROL: a full block under a NaN amplitude is not an underflow");
+    }
+
+    {
+        // ---- NEGATIVE CONTROL: the packet boundary, narrowly ----
+        //
+        // An exact multiple of kTxSamplesPerPacket drains with every packet
+        // full, so the short-packet branch is never taken. Retained, but it is
+        // presented for what it is -- the ARITHMETIC edge -- and NOT as "a
+        // clean transmission counts nothing", which the block above shows to be
+        // false. What it pins is that a FULL packet is never counted, and that
+        // is a real guard: it is what kills the mutation "count on full packets
+        // as well as short ones" (n <= where the code has n <).
+        TxTestAuthority tx;
+        MetisClient clean;
+        MetisClientTestAccess::setStreaming(clean);
+        clean.enableTransmit(true);
+        clean.setMox(true, tx.operation);
+        pastThePrime(clean, tx.context);   // #6052: four packets alone would be held
+        const std::vector<std::complex<float>> exact(
+            static_cast<std::size_t>(kTxSamplesPerPacket) * 4, std::complex<float>(0.25f, -0.25f));
+        clean.queueTxIq(exact, tx.context);
+        for (int i = 0; i < 4; ++i) {
+            const auto pkt = clean.buildNextControlPacket();
+            check(payloadNonZero(pkt), "a fully fed keyed packet carries IQ");
+            const auto shape = ep2IqShape(pkt);
+            check(shape.carryingIq == kTxSamplesPerPacket && shape.firstSilent < 0,
+                  "a full packet has NO silent slot -- nothing was substituted");
+        }
+        check(clean.txQueueDepth() == 0, "four packets drain four packets' worth");
+        check(clean.txUnderflowPackets() == 0 && clean.txUnderflowSamples() == 0,
+              "NEGATIVE CONTROL: a queue drained on an exact packet boundary counts no underflow");
+    }
+
+    {
+        // ---- NEGATIVE CONTROL: unkeyed silence is not a fault ----
+        //
+        // An unkeyed frame carries transmit silence BY DESIGN. Counting it
+        // would make the counter read a fault on a radio that is receiving,
+        // which is the failure mode the resting state of the gateware's own
+        // txFifoRecovery flag already demonstrates: a reading with a non-zero
+        // idle baseline reports idle as fault.
+        TxTestAuthority tx;
+        MetisClient idle;
+        idle.enableTransmit(true);          // gate OPEN, key UP
+        for (int i = 0; i < 16; ++i) {
+            const auto pkt = idle.buildNextControlPacket();
+            check(!payloadNonZero(pkt), "an unkeyed frame carries silence");
+        }
+        check(idle.txUnderflowPackets() == 0 && idle.txUnderflowSamples() == 0,
+              "NEGATIVE CONTROL: unkeyed silence is the design, not an underflow");
+    }
+
+    {
+        // ---- POSITIVE: a PARTIAL block is counted, in samples of silence ----
+        //
+        // This is the drift case: the audio device clock and the EP2 wall
+        // clock have pulled apart far enough that the queue holds less than
+        // one packet. FIND-23 measured exactly this shape on EP2 captures of
+        // live speech -- one starvation per over, of 18 to 64 samples -- and
+        // measured what it costs: windows with no starvation give 78.6-78.8 dB
+        // opposite-sideband suppression, windows with one give 33.7-35.2 dB.
+        // Those captures ran against hpsdrsim on loopback, not a radio, so the
+        // delta is what they establish and not the on-air magnitude. Nothing in
+        // THIS test depends on either figure; the assertions below are on the
+        // counters.
+        TxTestAuthority tx;
+        MetisClient partial;
+        MetisClientTestAccess::setStreaming(partial);
+        partial.enableTransmit(true);
+        partial.setMox(true, tx.operation);
+        pastThePrime(partial, tx.context);   // #6052: a short packet is a mid-over event
+        constexpr std::size_t kShort = 40;
+        const std::vector<std::complex<float>> ragged(
+            static_cast<std::size_t>(kTxSamplesPerPacket) + kShort,
+            std::complex<float>(0.25f, -0.25f));
+        partial.queueTxIq(ragged, tx.context);
+
+        (void)partial.buildNextControlPacket();   // the full one
+        check(partial.txUnderflowPackets() == 0,
+              "the full packet ahead of the short one is not counted");
+
+        const auto shortPkt = partial.buildNextControlPacket();   // the short one
+        check(partial.txUnderflowPackets() == 1, "one short packet, one underflow packet");
+        check(partial.txUnderflowSamples()
+                  == static_cast<std::uint64_t>(kTxSamplesPerPacket) - kShort,
+              "underflow counts the SILENCE substituted, not the samples supplied");
+        // THE ASSERTION WITH TEETH. The line above computes
+        // kTxSamplesPerPacket - kShort and so does buildNextControlPacket, from
+        // the same input -- both sides agreeing proves only that the arithmetic
+        // was performed twice. This one reads the OTHER thing: the packet that
+        // actually went out carries exactly kShort slots of IQ and is silent
+        // from there to the end, which is the trailing-zero signature FIND-23
+        // measured and the observable the counter stands in for.
+        const auto shortShape = ep2IqShape(shortPkt);
+        check(shortShape.carryingIq == static_cast<int>(kShort)
+                  && shortShape.firstSilent == static_cast<int>(kShort),
+              "the short packet's WIRE shape is kShort IQ slots then trailing silence");
+    }
+
+    {
+        // ---- POSITIVE: an EMPTY queue is the LARGEST underflow, not a no-op ----
+        //
+        // Before the counters this case did not even reach the queued-IQ
+        // branch -- `keyed && !m_txIq.empty()` was false, the chain fell off
+        // the end, and a whole packet of silence went on the air recorded by
+        // nothing. It is the missing pre-roll: at key-down the queue has not
+        // been primed, so the first packets of every over take this path.
+        //
+        // The wire is asserted UNCHANGED here as well. These counters observe;
+        // they must not alter a single byte of what the radio receives.
+        TxTestAuthority tx;
+        MetisClient starved;
+        MetisClientTestAccess::setStreaming(starved);
+        starved.enableTransmit(true);
+        starved.setMox(true, tx.operation);
+        check(starved.txQueueDepth() == 0, "nothing queued");
+        const auto pkt = starved.buildNextControlPacket();
+        check(!payloadNonZero(pkt),
+              "an empty keyed queue still emits a byte-identical silent EP2 payload");
+        check(starved.txUnderflowPackets() == 1
+                  && starved.txUnderflowSamples() == static_cast<std::uint64_t>(kTxSamplesPerPacket),
+              "an empty queue counts a WHOLE packet of substituted silence");
+    }
+
+    {
+        // ---- POSITIVE + NEGATIVE: overflow, against the real bound ----
+        //
+        // Overflow drops the OLDEST, which is the right policy on transmit and
+        // is also a discontinuity in the middle of an envelope. Counted for
+        // the same reason as the underflow: nothing else records it.
+        TxTestAuthority tx;
+        MetisClient over;
+        constexpr std::size_t kPast = 500;
+        const std::vector<std::complex<float>> flood(
+            MetisClientTestAccess::queueMax() + kPast, std::complex<float>(0.1f, 0.1f));
+        over.queueTxIq(flood, tx.context);
+        check(over.txQueueDepth() == MetisClientTestAccess::queueMax(),
+              "the queue is bounded above at kTxQueueMax");
+        check(over.txOverflowSamples() == kPast,
+              "overflow counts exactly the samples dropped past the bound");
+        check(over.txUnderflowPackets() == 0,
+              "NEGATIVE CONTROL: overflowing the queue is not also an underflow");
+    }
+
+    // ---- A key must not survive a stop() and a restart of the stream ----
+    //
+    // stop() drops the latched key, so the next session streams unkeyed until a
+    // fresh setMox(true). start() is stood in for by marking the client
+    // streaming again: it binds a socket, and its body never writes m_mox.
+    {
+        TxTestAuthority tx;
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        std::vector<bool> wire;   // C0 bit 0 of each EP2 frame the sender wrote
+        MetisClientTestAccess::writer(c, [&](const auto& packet) -> qint64 {
+            wire.push_back(anyFrameKeyed(packet));
+            return static_cast<qint64>(packet.size());
+        });
+        c.setMox(true, tx.operation);
+        MetisClientTestAccess::send(c);
+        check(!wire.empty() && wire.back(), "control: a live operation keys the EP2 stream");
+        c.stop();
+        MetisClientTestAccess::setStreaming(c);
+        wire.clear();
+        MetisClientTestAccess::send(c);
+        MetisClientTestAccess::send(c);
+        check(wire.size() == 2 && !wire[0] && !wire[1],
+              "no EP2 frame is keyed after stop() and a restart until a fresh operation keys");
+        (void)tx.coordinator.finishLocalIntent(tx.operation);
+        const auto fresh = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        c.setMox(true, fresh);
+        wire.clear();
+        MetisClientTestAccess::send(c);
+        check(wire.size() == 1 && wire[0], "a fresh operation keys again after the restart");
+    }
+
+    // ---- Silence: the link goes down, then the operation is reset ----
+    //
+    // Stage 2 of the silence watchdog reports linkDown and does not stop the EP2
+    // timer or clear the latched key, so EP2 frames keep carrying C0 bit 0 until
+    // the coordinator is reset. The reset below ends it at the very next packet.
+    {
+        TxTestAuthority tx;
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        MetisClientTestAccess::markLinkUp(c);
+        std::vector<bool> wire;
+        MetisClientTestAccess::writer(c, [&](const auto& packet) -> qint64 {
+            wire.push_back(anyFrameKeyed(packet));
+            return static_cast<qint64>(packet.size());
+        });
+        c.setMox(true, tx.operation);
+        MetisClientTestAccess::send(c);
+        check(!wire.empty() && wire.back(), "control: keyed before the silence");
+        QThread::msleep(static_cast<unsigned long>(MetisClientTestAccess::silenceTimeoutMs() + 100));
+        MetisClientTestAccess::watchdogTick(c);
+        check(!MetisClientTestAccess::linkUp(c), "control: stage 2 declared the link down");
+        tx.coordinator.reset();
+        wire.clear();
+        MetisClientTestAccess::send(c);
+        check(wire.size() == 1 && !wire[0],
+              "after the silence path and a coordinator reset the next EP2 frame is unkeyed");
+    }
+
+    // ---- Refusal table: one row per state, each must leave no keyed frame ----
+    //
+    // Reachable at the client or the backend only. There is no receive-only mode,
+    // first-EP6 requirement or band/filter-validity check in either keying path
+    // (setMoxImpl tests the operation fence, the gate and a running session;
+    // Hl2Backend::applyKeying the fence and the gate), so those rows have nothing
+    // to refuse and are not written.
+    {
+        struct Row {
+            const char* name;
+            bool keyedFrame = false;
+            bool leftover = false;   // transmit state a refused key left behind
+        };
+        std::vector<Row> rows;
+
+        {   // transmit gate closed: key, CW key and CW PTT all refused
+            TxTestAuthority tx;
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            c.enableTransmit(false);
+            c.setMox(true, tx.operation);
+            c.setCwMox(true, tx.operation);
+            c.setCwKeyDown(true, tx.operation);
+            Row r{"gate closed"};
+            r.keyedFrame = anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed() || c.cwModeActive() || c.cwKeyDown();
+            rows.push_back(r);
+        }
+        {   // gate closed AFTER a key, then reopened: the old request must be gone
+            TxTestAuthority tx;
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            c.enableTransmit(true);
+            c.setMox(true, tx.operation);
+            c.enableTransmit(false);
+            Row r{"gate closed while keyed, then reopened"};
+            const bool closedKeyed = anyFrameKeyed(c.buildNextControlPacket());
+            c.enableTransmit(true);
+            r.keyedFrame = closedKeyed || anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed();
+            rows.push_back(r);
+        }
+        {   // session stopped: a key requested while not streaming, then streaming
+            TxTestAuthority tx;
+            MetisClient c;
+            c.enableTransmit(true);
+            c.setMox(true, tx.operation);
+            MetisClientTestAccess::setStreaming(c);
+            Row r{"key requested while the session is stopped"};
+            r.keyedFrame = anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed();
+            rows.push_back(r);
+        }
+        {   // no operation at all, and a cancelled one
+            TxTestAuthority tx;
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            c.enableTransmit(true);
+            c.setMox(true, {});
+            (void)tx.coordinator.cancel(tx.actor, tx.operation);
+            c.setMox(true, tx.operation);
+            Row r{"no operation / cancelled operation"};
+            r.keyedFrame = anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed();
+            rows.push_back(r);
+        }
+        {   // the backend's own gate, independent of the client's
+            TxTestAuthority tx;
+            Hl2Backend backend;
+            Hl2TxGateTestAccess::prepare(backend);
+            Hl2TxGateTestAccess::setTxAllowed(backend, false);
+            backend.setKeying(true, tx.operation, {});
+            Row r{"backend gate closed"};
+            r.keyedFrame = anyFrameKeyed(Hl2TxGateTestAccess::packet(backend));
+            bool keyed = false;
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                keyed = Hl2TxGateTestAccess::metis(backend)->isKeyed();
+            }, Qt::BlockingQueuedConnection);
+            r.leftover = keyed;
+            rows.push_back(r);
+        }
+
+        {   // the backend, with its gate open but no running session
+            TxTestAuthority tx;
+            Hl2Backend backend;
+            Hl2TxGateTestAccess::setTxAllowed(backend, true);
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                Hl2TxGateTestAccess::metis(backend)->enableTransmit(true);
+            }, Qt::BlockingQueuedConnection);
+            backend.setKeying(true, tx.operation, {});
+            Row r{"backend key while the session is stopped"};
+            r.keyedFrame = anyFrameKeyed(Hl2TxGateTestAccess::packet(backend));
+            bool keyed = false;
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                keyed = Hl2TxGateTestAccess::metis(backend)->isKeyed();
+            }, Qt::BlockingQueuedConnection);
+            r.leftover = keyed || Hl2TxGateTestAccess::backendKeyed(backend);
+            rows.push_back(r);
+        }
+
+        {   // TUNE on the backend with no running session: no tune state either
+            TxTestAuthority tx;
+            Hl2Backend backend;
+            Hl2TxGateTestAccess::setTxAllowed(backend, true);
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                Hl2TxGateTestAccess::metis(backend)->enableTransmit(true);
+            }, Qt::BlockingQueuedConnection);
+            backend.setTune(true, 10, tx.operation);
+            Row r{"backend TUNE while the session is stopped"};
+            r.keyedFrame = anyFrameKeyed(Hl2TxGateTestAccess::packet(backend));
+            r.leftover = Hl2TxGateTestAccess::backendKeyed(backend)
+                || Hl2TxGateTestAccess::backendTuning(backend);
+            rows.push_back(r);
+        }
+
+        for (const Row& r : rows) {
+            std::string what = std::string("refusal: ") + r.name + " -> no keyed EP2 frame";
+            check(!r.keyedFrame, what.c_str());
+            what = std::string("refusal: ") + r.name + " -> no transmit state left behind";
+            check(!r.leftover, what.c_str());
+        }
+    }
+
+    // ---- A held key is bounded by its actor's maximum operation time ----
+    //
+    // The bound lives in the actor's policy (maximumOperationMs, copied into the
+    // operation at acquire); the desktop actor registers 0 (unbounded), a
+    // granted client registers a positive one. MetisClient honours it through
+    // the same permitsDispatch() fence, so a held MOX ends by itself.
+    {
+        AetherSDR::TxCoordinator coordinator{[](const auto&, auto) {}};
+        const auto actor = coordinator.registerActor({true, 150});
+        const auto operation = coordinator.acquire(actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        c.setMox(true, operation);
+        check(anyFrameKeyed(c.buildNextControlPacket()), "control: a bounded operation keys inside its bound");
+        QThread::msleep(400);
+        check(!anyFrameKeyed(c.buildNextControlPacket()),
+              "a held MOX stops keying once the actor's maximum operation time has passed");
+    }
+
+    if (g_failures == 0)
+        std::fprintf(stderr, "hl2_tx_gate_test: all checks passed\n");
+    return g_failures == 0 ? 0 : 1;
+}

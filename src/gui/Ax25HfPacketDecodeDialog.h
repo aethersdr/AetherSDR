@@ -1,0 +1,509 @@
+#pragma once
+
+#include "CanonWindow.h"
+#include "models/RadioModel.h"
+#include "models/TxController.h"
+#include <array>
+#include "models/Ax25ReceiveModel.h"
+
+#include <QByteArray>
+#include <QElapsedTimer>
+#include <QJsonObject>
+#include <QMetaObject>
+#include <QPointer>
+#include <QDateTime>
+#include <QQueue>
+#include <QSet>
+#include <QStringList>
+#include <memory>
+
+class QAbstractButton;
+class QCheckBox;
+class QComboBox;
+class QLabel;
+class QLineEdit;
+class QPlainTextEdit;
+class QPushButton;
+class QRadioButton;
+class QSpinBox;
+class QStackedWidget;
+class QTableWidget;
+class QTextEdit;
+class QTimer;
+class QToolButton;
+class QVBoxLayout;
+
+namespace AetherSDR {
+
+class AprsBeacon;
+class AprsDigipeaterModel;
+class AprsMessagesDialog;
+class AprsRateGraph;
+class AprsMessenger;
+class AprsStationList;
+class AudioEngine;
+class DStarModemPage;
+class Data2gMonitorPage;
+class Data2gReceiveModel;
+class HeardList;
+class KissTncServer;
+#ifdef HAVE_MQTT
+class MqttClient;
+#endif
+class PacketActivityWidget;
+class PmsMailbox;
+class RadioModel;
+class SliceModel;
+class TncTerminal;
+
+// Persistence for the AetherModem KISS TNC. Per Constitution Principle V,
+// new feature configuration lives as a nested JSON blob under one root key
+// rather than a stack of flat AppSettings entries. Mirrors the
+// CwDecodeSettings pattern.
+//
+// One-shot migration from the legacy flat keys is in migrateLegacy(); call
+// once at startup before any reader runs.
+class TncSettings {
+public:
+    // Defaults — kept as constants for the spinbox/UI to bound against.
+    static constexpr int kDefaultPort = 8001;  // Dire Wolf convention
+    // Lowest TCP port the spinbox lets the operator pick. Ports below 1024
+    // need root on macOS / Linux; the bind would fail silently into
+    // m_lastError and the listener would stay off. No reason to expose that
+    // foot-gun.
+    static constexpr int kMinPort = 1024;
+    static constexpr int kMaxPort = 65535;
+
+    static bool enabled()         { return readObj().value("enabled").toString("False") == "True"; }
+    static bool startOnStartup()  { return readObj().value("startOnStartup").toString("False") == "True"; }
+    static int  port()
+    {
+        const int p = readObj().value("port").toString(QString::number(kDefaultPort)).toInt();
+        if (p < kMinPort || p > kMaxPort) return kDefaultPort;
+        return p;
+    }
+
+    static void setEnabled(bool on);
+    static void setStartOnStartup(bool on);
+    static void setPort(int p);
+
+    // One-shot migration from the three legacy flat keys
+    // (AetherModemKissTncEnabled / AetherModemKissTncStartOnStartup /
+    // AetherModemKissTncPort) into the nested blob. Safe to call repeatedly;
+    // returns immediately if the nested blob already exists.
+    static void migrateLegacy();
+
+private:
+    static QJsonObject readObj();
+    static void write(const QJsonObject& o);
+};
+
+// The connected-mode terminal's configuration, owned as ONE object under the
+// nested key "AetherModemTerminal" (Constitution Principle V — each feature owns
+// its configuration as a single object; and Principle XIV — persist atomically).
+//
+// These lived as seven separate flat AppSettings keys. Principle V grandfathers
+// the existing ones but forbids adding to them, and this group needed an eighth
+// (TXDELAY), so the group moved rather than growing. Loading and saving the
+// whole struct also means a settings write is one atomic replacement instead of
+// seven independent ones that can interleave halfway through.
+struct TerminalSettings {
+    // 0 means "derive it from the air interface" for the three timing fields —
+    // see Ax25LinkTiming.h. A non-zero value is an explicit operator override.
+    static constexpr int kAuto = 0;
+    static constexpr int kDefaultMaxTries = 8;
+    static constexpr int kDefaultTxTailMs = 150;
+
+    QString myCall;
+    QString lastCall;              // last station dialled, restored into the UI
+    int retrySecs{kAuto};          // T1; 0 = derived
+    int maxTries{kDefaultMaxTries};// N2
+    int paclen{kAuto};             // 0 = derived (64 on HF 300, 128 on VHF 1200)
+    int txTailMs{kDefaultTxTailMs};
+    int txPreambleFlags{kAuto};    // TXDELAY; 0 = profile default
+    bool logEnabled{false};
+
+    static TerminalSettings load();
+    void save() const;             // one write, one AppSettings::save()
+
+    // One-shot hop from the seven legacy flat keys (AetherModemTerminal*).
+    // Safe to call repeatedly; returns immediately once the nested blob exists.
+    static void migrateLegacy();
+};
+
+// AetherModem: a CanonWindow workspace (style guide, RFC #6226), and a service
+// host as much as a window. MainWindow keeps one alive for the session, since
+// it owns the KISS TCP server and the APRS modem; closing it only hides it.
+class Ax25HfPacketDecodeDialog : public CanonWindow {
+    Q_OBJECT
+
+public:
+    explicit Ax25HfPacketDecodeDialog(AudioEngine* audio,
+                                      RadioModel* radio,
+                                      SliceModel* initialSlice = nullptr,
+                                      QWidget* parent = nullptr);
+    ~Ax25HfPacketDecodeDialog() override;
+
+    void setAttachedSlice(SliceModel* slice);
+#ifdef HAVE_MQTT
+    void setMqttClient(MqttClient* mqtt);
+#endif
+
+    // Agent automation bridge (`modem` and `link` verbs). Drives the same
+    // widgets a human would — the profile radio buttons, the modem enable
+    // checkbox, the terminal's own command parser — so a bridge test exercises
+    // the shipping path rather than a parallel one. `verb` is "modem" or "link";
+    // `action` is already lowercased and trimmed by the server.
+    QJsonObject automationCommand(const QString& verb, const QString& action,
+                                  const QString& value,
+                                  const std::shared_ptr<TxController>& controller,
+                                  const TxController::Input& input);
+
+    // D-STAR in AetherModem is a SmartSDR waveform surface (ThumbDV helper +
+    // radio-side D-STAR waveform). Hide the tab when the connected radio
+    // cannot load waveforms, or when this build has no helper. True on
+    // disconnect (permissive) and when RadioCapabilities::hasWaveforms is
+    // true. Hiding also stops a running helper so it is not orphaned.
+    void setDstarTabAvailable(bool connected, bool hasWaveforms);
+
+protected:
+    // Command history (Up/Down) on the terminal input line.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    void setModemProfile(Ax25ModemProfile profile, bool persist);
+    enum class TxProgram { Receive, Beacon, Digi, Pms, Terminal, Count };
+    struct ProgramInput {
+        std::shared_ptr<TxController> controller;
+        TxController::Input root;
+    };
+    bool m_tncNativeAuthority{true};
+    ProgramInput m_tncAuthority;
+    std::array<ProgramInput, static_cast<std::size_t>(TxProgram::Count)> m_txPrograms;
+    bool setTxProgram(TxProgram program, bool enabled,
+                      const std::shared_ptr<TxController>& controller = {},
+                      const TxController::Input& input = {});
+    void configureTxActions();
+    void setDigiEnabled(bool enabled, const std::shared_ptr<TxController>& controller = {},
+                        const TxController::Input& input = {});
+    void syncBaudRadios(Ax25ModemProfile profile);
+    QJsonObject digiAutomationStatus() const;
+    void setDecodeEnabled(bool enabled);
+    void setDecodeEnabledForAutomation(bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input);
+    void applyDecodeEnabled(bool enabled);
+    void enableDecodeForProgram(TxProgram program);
+    // True when the backend runs the modulator on this host (HL2) rather than
+    // taking modulator input from a Flex DAX stream. Such a radio has no DAX
+    // TX stream to wait for and no `transmit dax` setting to change.
+    // True when transmit audio reaches the radio WITHOUT a DAX stream —
+    // either the host modulates (HL2) or the audio leaves over the seam
+    // (Icom). Both skip the DAX-stream wait; see the definition.
+    bool txAudioBypassesDax() const;
+    // Fail a TX that is waiting on a DAX stream which never arrives. The
+    // `stream create` reply is asynchronous and its failure path only logs, so
+    // without this a backend that drops the command leaves the TX — and every
+    // frame queued behind it — hung until the window closes.
+    void armTxStreamWaitTimeout();
+    void handleDecodedFrame(const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context);
+    void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate,
+                       const Ax25ReceiveContext& context);
+    void startAudioCapture();
+    void finishAudioCapture(bool save);
+    void captureGeneratedTxAudio(const Ax25TransmitResult& tx);
+    void finishIcomPostResampleCapture();
+    void startTransmitFromUi();
+    void startTransmit(const QString& text);
+    void startTransmit(const QString& text, TxCoordinator::Request input);
+    void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss,
+                           TxCoordinator::Request input);
+    void beginTransmitWhenReady();
+    void startTransmitAudioAfterPtt();
+    void paceTransmitAudio();
+    void disconnectPttConfirmation();
+    void handleTxAudioFinished(quint64 token, int drainMs);
+    void finishTransmit(bool aborted, const QString& reason, bool preserveQueue = false);
+
+    // APRS client (APRS tab): station table, timed beacon, messaging.
+    void buildAprsUi(QWidget* page, QVBoxLayout* pageLayout);
+    void applyAprsConfigFromUi(bool persist);
+    void refreshAprsStationTable();
+    void refreshAprsStationAges();
+    void refreshAprsPositionLabel();
+    void handleAprsStationMenu(const QPoint& pos);
+    void showAprsStationInfo(const QString& call);
+    void openAprsMessagesDialog();
+    void sendAprsMessageFromUi();
+    // APRS message-services picker (#3569): seed the To/text fields from a
+    // well-known gateway service (SMS, email, Winlink, weather), or just show a
+    // routing hint for ISS/satellite work. Empty addressee → hint only.
+    void seedAprsService(const QString& addressee, const QString& body,
+                         const QString& hint);
+    void updateAprsEnvelopeButton();
+    void handleGpsUpdate();
+
+    // Fill-in digipeater (Digi tab).
+    QWidget* buildDigiPage();
+    void applyDigiConfigFromUi(bool persist);
+    void appendDigiLog(const QString& kind, const QString& line);
+    void refreshDigiStatus();
+
+    // Personal Mailbox System (PMS) tab + service wiring.
+    QWidget* buildMailboxPage();
+    void setPmsEnabled(bool enabled, bool persist,
+                       const std::shared_ptr<TxController>& controller = {},
+                       const TxController::Input& input = {});
+    void applyPmsConfigFromUi(bool persist);
+    void refreshPmsStatus();
+
+    // TNC Terminal tab: connected-mode AX.25 client (call out to a packet BBS).
+    QWidget* buildTerminalPage();
+    void submitTerminalInput();
+    void submitTerminalLine(const QString& line);
+    void refreshTerminalStatus();
+    void applyTerminalConfigFromUi(bool persist);
+    // Push the active modem profile's air-interface timing into the terminal and
+    // the mailbox, so T1/T2/T3 and paclen track the baud rate instead of being
+    // hardcoded for VHF. See Ax25LinkTiming.h and docs/HFMODEM.md §1.
+    void applyLinkTimingProfile();
+    // Reset a persisted T1 that cannot work on the active profile back to Auto,
+    // explaining why in the system log. Only touches values that are physically
+    // impossible (shorter than the modelled round trip) — a deliberate override
+    // that is merely aggressive is left alone.
+    void overrideImpossibleT1ForProfile();
+    void refreshTerminalHeardCombo();
+    // Hide the shared log panel and grow the tab stack on the Terminal tab so the
+    // transcript gets the full viewport; restore the chrome on the other tabs.
+    void updateTabChrome(int index);
+
+    // KISS TNC tab + TCP server wiring.
+    QWidget* buildKissTncPage();
+    void setTncEnabled(bool enabled, bool persist);
+    void configureTncAuthority(bool native,
+        const std::shared_ptr<TxController>& controller = {}, const TxController::Input& input = {});
+    void applyTncStartOnStartup();
+    void handleKissFrameFromClient(const QByteArray& ax25NoFcs,
+                                  const TxCoordinator::Request& input);
+    void maybeStartNextKissTx();
+    void refreshTncStatus();
+    void appendFrame(const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context);
+    void updateDiagnostics(const Ax25DecoderDiagnostics& diagnostics,
+                           const Ax25ReceiveContext& context);
+    void updateHeartbeat();
+    void refreshStatus();
+    void refreshTransmitControls();
+    void setDiagnosticsDebugEnabled(bool enabled, bool persist);
+    void logAttachedSliceState(const QString& reason);
+    void appendSystemLine(const QString& text);
+    void appendTransmitLine(const Ax25TransmitFrame& frame);
+    void appendDiagnosticsLine(const Ax25DecoderDiagnostics& diagnostics,
+                               const Ax25ReceiveContext& context);
+    QString formatTerminalLine(const Ax25DecodedFrame& frame) const;
+    QString defaultTransmitSource() const;
+    QString transmitSliceSummary() const;
+#ifdef HAVE_MQTT
+    void publishFrameMqtt(const Ax25DecodedFrame& frame);
+    void handleMqttMessage(const QString& topic, const QByteArray& payload);
+#endif
+
+    AudioEngine* m_audio{nullptr};
+    RadioModel* m_radio{nullptr};
+    std::unique_ptr<Ax25ReceiveModel> m_receive;
+    Ax25DemodConfig m_shimConfig;
+    QStackedWidget* m_tabStack{nullptr};
+    QAbstractButton* m_ax25Tab{nullptr};
+    QAbstractButton* m_digiTab{nullptr};
+    QAbstractButton* m_kissTab{nullptr};
+    QAbstractButton* m_dstarTab{nullptr};
+    QWidget* m_aprsPage{nullptr};
+    QWidget* m_digiPage{nullptr};
+    QWidget* m_terminalPage{nullptr};
+    DStarModemPage* m_dstarPage{nullptr};
+    // HF Data (RFC #7159): a receive-only Data2G monitor fed from m_receive's
+    // tap. Both stay null in a build without the Data2G core.
+    std::unique_ptr<Data2gReceiveModel> m_data2g;
+    Data2gMonitorPage* m_data2gPage{nullptr};
+    QPushButton* m_data2gTab{nullptr};
+#ifdef HAVE_MQTT
+    QPointer<MqttClient> m_mqtt;
+#endif
+    QRadioButton* m_hf300Profile{nullptr};
+    QRadioButton* m_vhf1200Profile{nullptr};
+    QCheckBox* m_enableDecode{nullptr};
+    QCheckBox* m_modemAutostart{nullptr};
+    QLineEdit* m_txText{nullptr};
+    QPushButton* m_txButton{nullptr};
+    QWidget* m_txFrame{nullptr};
+    QTextEdit* m_log{nullptr};
+    QWidget* m_logFrame{nullptr};
+    QWidget* m_statusBar{nullptr};
+    QLabel* m_modemStatusDot{nullptr};
+    QLabel* m_modemStatusValue{nullptr};
+    QLabel* m_gainStageDot{nullptr};
+    QLabel* m_gainStageValue{nullptr};
+    QLabel* m_packetActivityTitle{nullptr};
+    PacketActivityWidget* m_packetActivity{nullptr};
+    QPushButton* m_clearButton{nullptr};
+    QPushButton* m_captureButton{nullptr};
+    QTimer* m_heartbeatTimer{nullptr};
+    QTimer* m_txPaceTimer{nullptr};
+    QPointer<SliceModel> m_attachedSlice;
+    QMetaObject::Connection m_sliceSquelchConnection;
+    QMetaObject::Connection m_sliceModeConnection;
+    int m_attachedSliceId{-1};
+    int m_frameCount{0};
+    QDateTime m_enabledUtc;
+    QDateTime m_lastDecodeUtc;
+    QDateTime m_lastDiagnosticsUtc;
+    QDateTime m_lastNoAudioNoticeUtc;
+    Ax25DecoderDiagnostics m_lastDiagnostics;
+    quint64 m_lastActivityHdlc{0};
+    quint64 m_lastActivityAccepted{0};
+    QByteArray m_capturePcm;
+    QString m_captureId;
+    int m_captureSampleRate{0};
+    qsizetype m_captureTargetBytes{0};
+    int m_captureTxSequence{0};
+    bool m_captureActive{false};
+    bool m_captureIcomPostResampleActive{false};
+    bool m_diagnosticsDebugEnabled{false};
+    QByteArray m_txPcm;
+    Ax25TransmitResult m_pendingTx;
+    qsizetype m_txOffsetBytes{0};
+    int m_txChunkIndex{0};
+    int m_txChunkCount{0};
+    // TX pacing health: detects GUI-thread stalls starving the 20 ms pacer.
+    QElapsedTimer m_txPaceClock;
+    QElapsedTimer m_txPttClock;
+    qint64 m_txPaceLastChunkMs{-1};
+    qint64 m_txPaceMaxGapMs{0};
+    int m_txPaceLateChunks{0};
+    bool m_txActive{false};
+    bool m_txAudioStartArmed{false};
+    bool m_txAwaitingAudioFinish{false};
+    bool m_txPendingStream{false};
+    bool m_txRestoreAudioDaxMode{false};
+    bool m_txPreviousAudioDaxMode{false};
+    bool m_txFromKiss{false};
+    // Identifies the current transmission so deferred work armed on its behalf
+    // (the DAX stream-wait timeout) cannot act on a later one.
+    quint64 m_txGeneration{0};
+    TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Request m_txRequest;
+    TxCoordinator::Context m_txContext;
+    QMetaObject::Connection m_txPttConfirmConnection;
+    QMetaObject::Connection m_txPttConfirmedConnection;
+
+    // KISS TNC server (TCP) and its controls.
+    KissTncServer* m_kissServer{nullptr};
+    QCheckBox* m_tncEnable{nullptr};
+    QCheckBox* m_tncStartOnStartup{nullptr};
+    QSpinBox* m_tncPort{nullptr};
+    QLabel* m_tncStatusDot{nullptr};
+    QLabel* m_tncStatusValue{nullptr};
+    bool m_txFromDigi{false};
+    // Number of 250 ms radio-busy retries currently elapsed on the head-of-
+    // queue frame. Capped (kMaxKissTxBusyRetries) so a stuck-transmitting
+    // radio can't spin maybeStartNextKissTx() forever and starve later
+    // frames behind it. Reset on each new dequeue.
+    int m_kissTxBusyRetries{0};
+    quint64 m_kissTxCount{0};
+    quint64 m_kissRxCount{0};
+
+    // Shared station-heard log (feeds the terminal MHEARD + quick-connect).
+    HeardList* m_heard{nullptr};
+
+    // APRS client services (APRS tab) and its controls.
+    AprsStationList* m_aprsStations{nullptr};
+    AprsMessenger* m_aprsMessenger{nullptr};
+    AprsBeacon* m_aprsBeacon{nullptr};
+    QPointer<AprsMessagesDialog> m_aprsMessagesDialog;
+    QTableWidget* m_aprsTable{nullptr};
+    QLineEdit* m_aprsMyCall{nullptr};
+    QComboBox* m_aprsSymbol{nullptr};
+    QLineEdit* m_aprsPath{nullptr};
+    QCheckBox* m_aprsBeaconEnable{nullptr};
+    QSpinBox* m_aprsBeaconInterval{nullptr};
+    QLineEdit* m_aprsBeaconText{nullptr};
+    QPushButton* m_aprsBeaconNow{nullptr};
+    QLabel* m_aprsPositionValue{nullptr};
+    QLineEdit* m_aprsManualGrid{nullptr};
+    QLineEdit* m_aprsManualLat{nullptr};
+    QLineEdit* m_aprsManualLon{nullptr};
+    QLineEdit* m_aprsMsgTo{nullptr};
+    QToolButton* m_aprsServiceButton{nullptr};
+    QLineEdit* m_aprsMsgText{nullptr};
+    QPushButton* m_aprsMsgSend{nullptr};
+    QPushButton* m_aprsEnvelope{nullptr};
+
+    // Fill-in digipeater (Digi tab).
+    AprsDigipeaterModel* m_digi{nullptr};
+    QRadioButton* m_digiHf300{nullptr};
+    QRadioButton* m_digiVhf1200{nullptr};
+    QCheckBox* m_digiEnable{nullptr};
+    QLineEdit* m_digiCall{nullptr};
+    QLineEdit* m_digiAlias{nullptr};
+    QCheckBox* m_digiAlsoMyCall{nullptr};
+    QCheckBox* m_digiAlsoRelay{nullptr};
+    QSpinBox* m_digiDupeSecs{nullptr};
+    QCheckBox* m_digiBeaconEnable{nullptr};
+    QSpinBox* m_digiBeaconInterval{nullptr};
+    QLineEdit* m_digiBeaconText{nullptr};
+    QLineEdit* m_digiBeaconPath{nullptr};
+    QComboBox* m_digiBeaconSymbol{nullptr};
+    QPushButton* m_digiBeaconNow{nullptr};
+    QComboBox* m_digiWindow{nullptr};
+    AprsRateGraph* m_digiHeardGraph{nullptr};
+    AprsRateGraph* m_digiRepeatGraph{nullptr};
+    AprsRateGraph* m_digiDropGraph{nullptr};
+    QPlainTextEdit* m_digiLog{nullptr};
+    QLabel* m_digiStatusValue{nullptr};
+    QSet<QString> m_digiUniqueSources;
+    QDateTime m_digiLastRepeatUtc;
+
+    // TNC Terminal service (connected-mode AX.25 client) and its controls.
+    TncTerminal* m_terminal{nullptr};
+    QAbstractButton* m_terminalTab{nullptr};
+    QSpinBox* m_terminalTxPreamble{nullptr}; // TXDELAY flags; 0 = profile default
+    QLineEdit* m_terminalMyCall{nullptr};
+    QLineEdit* m_terminalTarget{nullptr};
+    QComboBox* m_terminalHeardCombo{nullptr};
+    QPushButton* m_terminalConnectButton{nullptr};
+    QPushButton* m_terminalCmdButton{nullptr};
+    QPushButton* m_terminalMheardButton{nullptr};
+    QSpinBox* m_terminalRetrySecs{nullptr};
+    QSpinBox* m_terminalMaxTries{nullptr};
+    QSpinBox* m_terminalPaclen{nullptr};
+    QSpinBox* m_terminalTxTail{nullptr};
+    // PTT tail (ms) after TX audio, before unkey. Operator-tunable to shrink the
+    // half-duplex turnaround so we hear the peer's next frame sooner.
+    int m_txTailMs{150};
+    QCheckBox* m_terminalLogEnable{nullptr};
+    QTextEdit* m_terminalView{nullptr};
+    QLineEdit* m_terminalInput{nullptr};
+    QPushButton* m_terminalSendButton{nullptr};
+    QLabel* m_terminalStatusDot{nullptr};
+    QLabel* m_terminalStatusValue{nullptr};
+    QStringList m_terminalHistory;
+    int m_terminalHistoryIndex{0};
+    QString m_lastDialedCall; // persisted across restarts (last BBS connected)
+
+    // Personal Mailbox System (PMS) service and its controls.
+    PmsMailbox* m_pms{nullptr};
+    // Last link-timing line written to the system log, so repeated config
+    // applies (every spinbox edit) don't repeat an unchanged message.
+    QString m_lastLinkTimingSummary;
+    QAbstractButton* m_mailboxTab{nullptr};
+    QCheckBox* m_pmsEnable{nullptr};
+    QLineEdit* m_pmsListenCall{nullptr};
+    QLineEdit* m_pmsAliasCall{nullptr};
+    QLineEdit* m_pmsWelcome{nullptr};
+    QCheckBox* m_pmsBeaconEnable{nullptr};
+    QLineEdit* m_pmsBeaconText{nullptr};
+    QLabel* m_pmsStatusDot{nullptr};
+    QLabel* m_pmsStatusValue{nullptr};
+    QLabel* m_pmsCallersValue{nullptr};
+    QLabel* m_pmsStatsValue{nullptr};
+};
+
+} // namespace AetherSDR

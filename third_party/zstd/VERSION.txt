@@ -1,0 +1,8 @@
+1.5.7 (https://github.com/facebook/zstd, release tarball zstd-1.5.7.tar.gz,
+sha256 eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3)
+
+Decompressor only: lib/zstd.h, lib/zstd_errors.h, lib/common (headers and
+the six .c files decompression needs) and lib/decompress without
+huf_decompress_amd64.S, built with ZSTD_DISABLE_ASM so MSVC and every arch
+compile the same C. Used under the BSD licence (LICENSE); zstd is dual
+BSD / GPLv2 (COPYING). Unmodified.

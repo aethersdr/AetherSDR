@@ -1,0 +1,130 @@
+name: Build CI Docker Image
+
+on:
+  push:
+    paths:
+      - '.github/docker/Dockerfile'
+      - '.github/docker/Dockerfile.tsan'
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: publishing the image is all this workflow does. It used to
+# also open a PR pinning the consumers to the new digest, which needed
+# contents: WRITE and pull-requests: write — see the note below for why that
+# was removed. contents drops to read rather than disappearing: naming any
+# permission sets every unnamed one to `none`, and actions/checkout needs to
+# read the repo.
+permissions:
+  contents: read        # actions/checkout
+  packages: write       # docker/build-push-action: push the image
+
+# Serialize concurrent runs so a Dockerfile push landing during a manual
+# workflow_dispatch doesn't race another run to publish the tag.
+# cancel-in-progress: false — never kill a run that may already be mid-publish
+# to the registry; let the second run queue and republish over it.
+concurrency:
+  group: docker-ci-image
+  cancel-in-progress: false
+
+# CONSUMERS TRACK `:latest` DELIBERATELY.
+#
+# This workflow used to rewrite ci.yml / codeql.yml / sanitizers.yml to
+# reference the image by immutable digest and open a "digest bump" PR. That
+# never worked once: pushing a branch whose diff touches .github/workflows/*
+# is forbidden to GITHUB_TOKEN outright —
+#
+#   refusing to allow a GitHub App to create or update workflow
+#   `.github/workflows/ci.yml` without `workflows` permission
+#
+# — and it is not a `permissions:` setting that can be granted, so every run
+# reported failure even when the image published cleanly. A workflow that is
+# always red is a signal nobody reads, which is worse than the pinning was
+# ever worth.
+#
+# Tracking `:latest` also happens to be the behaviour we want: a republished
+# image reaches every open PR immediately, instead of waiting on a bump PR to
+# be reviewed. The cost is that `:latest` is mutable, so a run is not bound to
+# one exact image — the resolved digest is still recorded in each run's log if
+# you need to know what a given build used.
+#
+# If immutable pinning is wanted back, it needs a PAT with repo+workflow scope
+# (or a GitHub App token) wired to create-pull-request's `token:` input. Do
+# that deliberately; don't reinstate a step that cannot succeed.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .github/docker
+          push: true
+          # Consumers track :latest (see the note above), but every build also
+          # gets an immutable sha- tag. That restores the part of digest
+          # pinning that was actually worth having — a way to name and go back
+          # to one exact image — without the auto-PR machinery that could never
+          # work. To bisect a toolchain regression, point a job at
+          # :sha-<commit> temporarily.
+          tags: |
+            ghcr.io/aethersdr/aethersdr-ci:latest
+            ghcr.io/aethersdr/aethersdr-ci:sha-${{ github.sha }}
+
+      - name: Report published digest
+        run: |
+          echo "Published ghcr.io/aethersdr/aethersdr-ci"
+          echo "  tags:   latest, sha-${{ github.sha }}"
+          echo "  digest: ${{ steps.build.outputs.digest }}"
+
+  # The TSan variant (Qt built -sanitize thread; see Dockerfile.tsan). Runs
+  # AFTER the base image so it layers on the :latest just published, and
+  # regardless of whether the base build was needed (a Dockerfile.tsan-only
+  # push still rebuilds it on the existing :latest). A Qt source build on a
+  # hosted runner is a couple of hours; the timeout is a backstop, not a
+  # budget.
+  build-tsan:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result != 'failure' }}
+    # Pinned, not ubuntu-latest: Dockerfile.tsan runs the TSan-built Qt
+    # tools while it builds, and the 26.04 runner image's host
+    # vm.mmap_rnd_bits is higher than their GCC 13 TSan runtime supports
+    # (#6911).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (tsan)
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .github/docker
+          file: .github/docker/Dockerfile.tsan
+          push: true
+          tags: |
+            ghcr.io/aethersdr/aethersdr-ci:tsan
+            ghcr.io/aethersdr/aethersdr-ci:tsan-sha-${{ github.sha }}
+
+      - name: Report published digest
+        run: |
+          echo "Published ghcr.io/aethersdr/aethersdr-ci"
+          echo "  tags:   tsan, tsan-sha-${{ github.sha }}"
+          echo "  digest: ${{ steps.build.outputs.digest }}"

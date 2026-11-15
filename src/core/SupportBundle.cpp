@@ -1,0 +1,368 @@
+#include "SupportBundle.h"
+#include "AppSettings.h"
+#include "SettingsSanitizer.h"
+#include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
+#include "LogManager.h"
+#include "SystemInventory.h"
+#include "GpuSelector.h"
+#include "ZipArchive.h"
+#include "models/RadioModel.h"
+#include "core/backends/IRadioBackend.h"
+
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QObject>
+#include <QVariant>
+#include <QSaveFile>
+#include <QStringList>
+#include <QSysInfo>
+#include <QTemporaryDir>
+
+namespace AetherSDR {
+
+namespace {
+
+QList<ZipEntryData> collectSupportBundleEntries(const QString& dirPath)
+{
+    QList<ZipEntryData> entries;
+    const QDir dir(dirPath);
+    const QFileInfoList files = dir.entryInfoList(QDir::Files, QDir::Name);
+    for (const QFileInfo& fileInfo : files) {
+        QFile file(fileInfo.absoluteFilePath());
+        if (!file.open(QIODevice::ReadOnly))
+            return {};
+        entries.append({fileInfo.fileName(), file.readAll()});
+    }
+    return entries;
+}
+
+bool writeSupportBundleZip(const QString& sourceDir, const QString& archivePath)
+{
+    const QList<ZipEntryData> entries = collectSupportBundleEntries(sourceDir);
+    if (entries.isEmpty())
+        return false;
+
+    // Deflate: support bundles are log-dominated and compress ~5-10x (#3218).
+    const QByteArray zip = writeDeflatedZip(entries);
+    if (zip.isEmpty())
+        return false;
+
+    QSaveFile archive(archivePath);
+    if (!archive.open(QIODevice::WriteOnly))
+        return false;
+    if (archive.write(zip) != zip.size())
+        return false;
+    return archive.commit();
+}
+
+} // namespace
+
+SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
+{
+    return {
+        QCoreApplication::applicationVersion(),
+        QString::fromLatin1(qVersion()),
+        QSysInfo::prettyProductName(),
+        QSysInfo::kernelVersion(),
+        QSysInfo::currentCpuArchitecture(),
+        QString::fromLatin1(__DATE__),
+        SystemInventory::cpuSummary(),
+        SystemInventory::ramSummary(),
+        GpuSelector::appliedSummary()
+    };
+}
+
+SupportBundle::RadioInfo SupportBundle::collectRadioInfo(const RadioModel* model)
+{
+    RadioInfo info;
+    if (!model || !model->isConnected()) {
+        info.connected = false;
+        return info;
+    }
+    info.connected       = true;
+    info.model           = model->model();
+    info.serial          = model->serial();
+    info.firmware        = model->softwareVersion();
+    info.protocolVersion = model->protocolVersion();
+    info.callsign        = model->callsign();
+    info.ip              = model->ip();
+    return info;
+}
+
+SupportBundle::Hl2Info SupportBundle::collectHl2Info(RadioModel* model)
+{
+    Hl2Info info;
+    if (!model || !model->isConnected()
+        || !model->backendDeclaresExtension(QStringLiteral("hl2"))) {
+        return info;
+    }
+    IRadioBackend* backend = model->backend();
+    if (!backend) {
+        return info;
+    }
+    info.present = true;
+
+    // Board variant: the operator's declared board, through hw.get like the
+    // Radio Setup page (the vendor header stays below the seam). hw.get
+    // completes synchronously, so the handler is armed before the invoke and
+    // dies with `guard`.
+    QVariantMap hw;
+    {
+        // 0x03.. is Radio Setup's hw.get, 0x04.. its calibration read, 0x05.. its
+        // calibration set: a fourth decade, so a report made with the dialog open
+        // cannot answer, or be answered by, one of its requests.
+        constexpr quint64 kRequestId = 0x0600000000000000ull;
+        QObject guard;
+        QObject::connect(backend, &IRadioBackend::extensionResult, &guard,
+                         [&hw](quint64 id, const QVariant& result) {
+                             if (id == kRequestId) {
+                                 hw = result.toMap();
+                             }
+                         });
+        model->invokeBackendExtension(QStringLiteral("hl2"),
+                                      QStringLiteral("hw.get"), kRequestId);
+    }
+    if (hw.contains(QStringLiteral("codec"))) {
+        switch (hw.value(QStringLiteral("codec")).toInt()) {
+        case 0: info.boardVariant = QStringLiteral("plain Hermes-Lite 2"); break;
+        case 1: info.boardVariant = QStringLiteral("AK4951 (HL2+ companion board)"); break;
+        case 2: info.boardVariant = QStringLiteral("SquareSDR 2"); break;
+        default: break;
+        }
+    }
+
+    const IRadioBackend::HealthSnapshot h = backend->healthSnapshot();
+    info.sampleRateHz = h.values.value(QStringLiteral("sampleRateHz")).toInt();
+    info.receivers    = h.values.value(QStringLiteral("receivers")).toInt();
+    if (h.values.contains(QStringLiteral("droppedPackets"))) {
+        info.droppedPackets = h.values.value(QStringLiteral("droppedPackets")).toLongLong();
+    }
+    if (h.values.contains(QStringLiteral("ep4Drops"))) {
+        info.ep4Drops = h.values.value(QStringLiteral("ep4Drops")).toLongLong();
+    }
+    if (h.values.contains(QStringLiteral("txFifoRecovery"))) {
+        info.txFifoFault = h.values.value(QStringLiteral("txFifoRecovery")).toBool() ? 1 : 0;
+    }
+    // Per-receiver rows are keyed dspUnderruns<N> / dspFaultCount<N>; sum them,
+    // and leave the total unreported when no receiver has reported at all.
+    for (auto it = h.values.constBegin(); it != h.values.constEnd(); ++it) {
+        if (it.key().startsWith(QLatin1String("dspUnderruns"))) {
+            info.dspUnderruns = qMax<qlonglong>(info.dspUnderruns, 0) + it.value().toLongLong();
+        } else if (it.key().startsWith(QLatin1String("dspFaultCount"))) {
+            info.dspFaults = qMax<qlonglong>(info.dspFaults, 0) + it.value().toLongLong();
+        }
+    }
+
+    // Which TX modulator this build carries, and the blocks it could not place.
+    const QVariantList chains = backend->dspChains();
+    for (const QVariant& c : chains) {
+        const QVariantMap m = c.toMap();
+        if (m.value(QStringLiteral("chain")).toString() != QLatin1String("hl2-tx")) {
+            continue;
+        }
+        info.txModulator = m.value(QStringLiteral("modulator")).toString();
+        if (m.contains(QStringLiteral("modulatorFaultBlocks"))) {
+            info.txModulatorFaultBlocks =
+                m.value(QStringLiteral("modulatorFaultBlocks")).toLongLong();
+        }
+    }
+
+    QStringList modes;
+    for (const SliceModel* slice : model->slices()) {
+        if (slice && !slice->mode().isEmpty() && !modes.contains(slice->mode())) {
+            modes << slice->mode();
+        }
+    }
+    info.mode = modes.join(QStringLiteral(", "));
+    return info;
+}
+
+namespace {
+
+// Stream a log file through redactPii() line by line. Bounded memory: a log
+// can be tens of megabytes and the bundle is generated on the GUI thread.
+bool copyLogRedacted(const QString& from, const QString& to)
+{
+    QFile in(from);
+    if (!in.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+    QFile out(to);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    while (!in.atEnd()) {
+        const QByteArray raw = in.readLine();
+        const QString line = QString::fromUtf8(raw);
+        const QByteArray scrubbed = redactPii(line).toUtf8();
+        // A short write leaves a TRUNCATED log in the bundle that reads as a
+        // short log rather than a failed copy, which is the worst of both: the
+        // recipient draws conclusions from an incomplete file without knowing
+        // it is incomplete. Fail the copy and remove the partial destination so
+        // the caller's `continue` skips it entirely.
+        if (out.write(scrubbed) != scrubbed.size()) {
+            qWarning() << "support bundle: log copy failed for" << from << out.errorString();
+            out.close();
+            out.remove();
+            return false;
+        }
+    }
+    out.close();
+    if (out.error() != QFileDevice::NoError) {
+        qWarning() << "support bundle: log flush failed for" << from << out.errorString();
+        out.remove();
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+QString SupportBundle::createBundle(const RadioInfo& radio)
+{
+    auto& logMgr = LogManager::instance();
+    logMgr.flushLog();
+
+    // Create temp directory for bundle contents
+    QTemporaryDir tmpDir;
+    if (!tmpDir.isValid()) return {};
+    tmpDir.setAutoRemove(false);
+    const QString tmp = tmpDir.path();
+
+    // 1. Copy log files — grab the 3 most recent timestamped logs.
+    // Scan timestamped files so stale aliases from older Windows builds
+    // cannot be copied as binary shortcut content.
+    {
+        QDir logDir(QFileInfo(logMgr.logFilePath()).absolutePath());
+        QStringList logs = logDir.entryList(
+            {"aethersdr-*.log"}, QDir::Files, QDir::Time);
+        int copied = 0;
+        for (const auto& name : logs) {
+            if (copied >= 3) break;
+            QFileInfo fi(logDir.absoluteFilePath(name));
+            // Skip shortcuts and tiny files
+            if (fi.isSymLink() || fi.size() < 100) continue;
+            QString dest = (copied == 0) ? "aethersdr.log"
+                                         : QString("aethersdr-%1.log").arg(copied);
+            // Re-scrub on copy, don't QFile::copy (#5480): logs from older builds used
+            // older redactors. Redaction is idempotent. The source log is left untouched;
+            // only the copy that leaves the machine is scrubbed.
+            if (!copyLogRedacted(fi.absoluteFilePath(), tmp + "/" + dest))
+                continue;
+            ++copied;
+        }
+    }
+
+    // 2. System info JSON — field set defined (and regression-pinned) via
+    // systemInfoJson() in the header.
+    {
+        QFile f(tmp + "/system-info.json");
+        if (f.open(QIODevice::WriteOnly))
+            f.write(QJsonDocument(systemInfoJson(collectSystemInfo()))
+                        .toJson(QJsonDocument::Indented));
+    }
+
+    // 3. Radio info JSON
+    {
+        QJsonObject obj;
+        obj["connected"] = radio.connected;
+        if (radio.connected) {
+            obj["model"]           = radio.model;
+            // Serial and IP are PII per project policy — redact to match
+            // the form used in logs (****-****-****-XXXX, *.*.*. XXX) so
+            // support recipients can correlate but never see the cleartext
+            // values.  Callsign is FCC public record; leave as-is.
+            // See GHSA-ccrg-j8cp-qhc4.
+            obj["serial"]          = redactPii(radio.serial);
+            obj["firmware"]        = radio.firmware;
+            obj["protocolVersion"] = radio.protocolVersion;
+            obj["callsign"]        = radio.callsign;
+            obj["ip"]              = redactPii(radio.ip);
+        }
+        QFile f(tmp + "/radio-info.json");
+        if (f.open(QIODevice::WriteOnly))
+            f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+    }
+
+    // 4. Sanitized settings — dumped from the store through the recursive
+    // redactor (a secret-shaped field nested inside a JSON document value is
+    // redacted too, not just secret-named rows). Store metadata (migration
+    // stamps, backup history) rides along for upgrade diagnostics.
+    {
+        QFile dst(tmp + "/settings.txt");
+        if (dst.open(QIODevice::WriteOnly)) {
+            dst.write(SettingsSanitizer::dump().toUtf8());
+            const QString notice = AppSettings::instance().loadNotice();
+            if (!notice.isEmpty()) {
+                dst.write("\n## load notice\n");
+                dst.write(notice.toUtf8());
+                dst.write("\n");
+            }
+        }
+    }
+
+    // 5. Enabled logging categories
+    {
+        QFile f(tmp + "/enabled-categories.txt");
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            for (const auto& cat : logMgr.categories()) {
+                f.write(QString("%1: %2\n")
+                    .arg(cat.id, cat.enabled ? "ENABLED" : "disabled")
+                    .toUtf8());
+            }
+        }
+    }
+
+    // 6. Create archive in a dedicated support/ subdirectory
+    const QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+    const QString configDir = QFileInfo(logMgr.logFilePath()).absolutePath();
+    const QString supportDir = configDir + "/support";
+    QDir().mkpath(supportDir);
+
+    const QString archivePath = supportDir + "/support-bundle-" + timestamp + ".zip";
+    const bool archived = writeSupportBundleZip(tmp, archivePath);
+    tmpDir.setAutoRemove(true);  // clean up temp files
+
+    if (!archived || !QFile::exists(archivePath))
+        return {};
+
+    return archivePath;
+}
+
+QString SupportBundle::recentLogTail(int lines)
+{
+    if (lines <= 0)
+        return {};
+
+    auto& logMgr = LogManager::instance();
+    logMgr.flushLog();
+
+    QFile f(logMgr.logFilePath());
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+
+    // Read a bounded tail; ~200KB comfortably holds kIssueLogTailLines worth
+    // of formatted lines without loading a large log in full.
+    constexpr qint64 kMaxRead = 200 * 1024;
+    const qint64 size = f.size();
+    const bool seeked = size > kMaxRead;
+    if (seeked)
+        f.seek(size - kMaxRead);
+    const QString text = QString::fromUtf8(f.readAll());
+    f.close();
+
+    QStringList all = text.split('\n');
+    // A mid-line seek can leave a partial first line; drop it so the tail
+    // starts on a clean line boundary.
+    if (seeked && !all.isEmpty())
+        all.removeFirst();
+
+    if (all.size() > lines)
+        all = all.mid(all.size() - lines);
+    return all.join('\n').trimmed();
+}
+
+} // namespace AetherSDR

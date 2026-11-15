@@ -1,0 +1,266 @@
+# flex-tailnet-shim
+
+Prototype. Not built by CMake, not shipped, and pending an RFC.
+
+`flex-tailnet-shim` runs inside a FLEX-8000-series or Aurora radio as a Docker
+waveform container. It joins a Tailscale tailnet with
+[`tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and relays AetherSDR's
+SmartSDR session to the radio. Both ends make only outbound connections, so it
+works when the radio and the operator are both behind CGNAT. In that case
+traffic goes through Tailscale's DERP relays.
+
+Remote connections need no new AetherSDR code: run Tailscale on the operator's
+machine and use the existing manual/routed connect with the shim's tailnet IP.
+AetherSDR's only addition is the Configure… dialog that provisions the
+container over the LAN (see "Setup from AetherSDR").
+
+```text
+AetherSDR (tailnet peer)                       radio container (host network namespace)
+  TCP  -> 100.x:4992  ----tailnet---->  shim  -> 172.30.1.1:4992   radio API
+  UDP  -> 100.x:4991 (TX VITA-49) ---->  shim  -> host socket P -> 172.30.1.1:4991
+  UDP <-  100.x:4993 (RX VITA-49) <----  shim  <- host socket P <- radio (from :4993)
+```
+
+## What it does
+
+- **Control:** each tailnet connection to `:4992` gets a fresh TCP connection
+  to the radio API. Bytes pass through unchanged, except two lines:
+  - `client udpport N` is rewritten to the session's host UDP port P, so the
+    radio sends VITA-49 to the shim. The shim remembers N, so it can forward to
+    the client's real port.
+  - `network_mtu=` is clamped to `-max-mtu` (default 1200), so VITA-49
+    datagrams fit Tailscale's 1280-byte path MTU.
+- **UDP:** VITA-49 from the radio is forwarded to the client's registered
+  tailnet address. Client datagrams (TX audio, DAX TX, netcw, primes) leave
+  from the same host socket P, so the radio sees one address per client, as on
+  a LAN. Datagrams from unregistered senders are dropped.
+  - Host socket P is bound to the address the shim's own radio connection
+    comes from (normally 172.30.1.1), where the radio sends VITA-49, so it
+    doesn't listen on the radio's LAN address. Linux still delivers a
+    datagram a LAN host deliberately routes to 172.30.1.1.
+  - So P also relays only datagrams from the radio: `SSDR_RADIO_ADDRESS` or
+    another of the host's own addresses. Others are dropped and counted (see
+    Link telemetry).
+- **Identity:** every connection is checked with Tailscale `WhoIs`. `-allow`
+  limits access to listed logins or tags, on the radio, station devices and
+  side channels alike. Each announced side channel admits one connection,
+  from the computer whose transfer opened it. Saving a narrower list ends the
+  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports and on
+  ports an app on the radio published (see Published ports), so the radio's
+  other services, such as its SSH, are not exposed, and a shared route never
+  splices into the radio's own addresses.
+- **Teardown (Principle VI):** when either side ends, the shim closes the radio
+  connection at once. The radio drops the GUI client and unkeys anything that
+  client owned. The shim never keeps a radio session alive for a client it
+  can't hear.
+
+## Measured on a FLEX-8600, firmware 4.2.20 (2026-10-07)
+
+| Check | Result |
+|---|---|
+| GUI client from inside the container | Accepted. `client udpport N` alone delivers VITA-49, sent from 172.30.1.1:4993. The radio creates a default pan and waterfall per GUI client and removes them on disconnect. |
+| Container after `radio reboot` | Auto-started ~22 s after kernel boot, before the radio API was listening. The writable layer (tsnet state) persisted. The clock reads ~5 h wrong until NTP syncs, under 82 s after boot. |
+| Tailnet join | ~6 s from container start, with a one-time ephemeral auth key |
+| Path | Forced DERP (`TS_DEBUG_ALWAYS_USE_DERP=true`), Seattle relay |
+| AetherSDR connect via `connect ip` | Connected in 0.64–0.74 s; pan, waterfall, meters and RX audio rendered (12.4 FFT frames/s, 6.2 waterfall rows/s) |
+| API `ping` round trip | 56 / 67 / 84 ms (min / median / max) |
+| Radio → client | ≈ 3.5 Mbit/s with uncompressed RX audio, ≈ 1.9 Mbit/s with Opus |
+| Shim footprint on the radio | 19–23 % of one Cortex-A72 core, 34 MB RSS, 20.8 MB binary |
+| Clean disconnect | The shim closed the radio connection in the same second |
+| Client goes silent (process frozen) | The radio's keepalive dropped the client after ~15 s, and the shim closed in the same second |
+
+## Setup from AetherSDR
+
+The image is generic and contains no secret.
+
+1. **Install:** in AetherSDR, open File → Waveforms → Install… and pick
+   `flex-tailnet-shim-<version>.tar.gz`. The radio starts the container. It
+   stays unprovisioned until it is signed in to a tailnet.
+2. **Provision:** the container's row in the Waveforms list has a
+   **Configure…** button. Choose a machine name and, optionally, who may
+   connect, then sign in with a QR code: scan it with a phone, sign in to
+   Tailscale and approve the radio, and the dialog turns to connected. Under
+   Advanced, a single-use Tailscale auth key works instead; AetherSDR sends it
+   to the container over the LAN and does not keep it. Either way the
+   container returns an admin token, which AetherSDR stores in the OS
+   keychain, one entry per radio.
+3. **Connect remotely:** from anywhere on the tailnet, use Connect → Manual
+   with the address shown in the dialog.
+
+The node's tailnet state survives radio reboots, so the sign-in is needed
+only once. Removing or reinstalling the container wipes that state.
+
+**Sign-in by URL** (version 0.5.0): without an auth key, tsnet starts an
+interactive login and the control plane sends a sign-in URL, which AetherSDR
+draws as a QR code. Whoever opens that URL first claims the radio for their
+tailnet, so it goes only to the caller that started the join or holds the
+admin token: the provision reply and `GET /v1/login`, never `/v1/status` or a
+log. The join then waits for the sign-in without a timeout, since starting
+over would mint a new URL under the code being scanned. A node signed in this
+way belongs to the user, not a tag, and its key expires (180 days by default)
+unless key expiry is turned off for it in the admin console; `key_expiry` in
+the status says when. Once expired, the shim asks the control plane for a new
+URL, and the dialog shows it as a new QR code (from the LAN only, since the
+expired node is off the tailnet). A tagged auth key, under Advanced, makes a
+node that never expires.
+
+**Access** (0.5.0): who may connect is decided by the tailnet's own access
+rules. Versions before 0.5.0 kept a Who may connect list and enforced it;
+0.5.0 drops a saved list at start-up (and logs it), ignores one sent with a
+provision, and refuses to set one.
+
+## Provisioning API
+
+The API is plain HTTP on the radio's LAN address, TCP 48992. It is never on
+the tailnet: tsnet's listeners are in their own network stack. Callers on the
+radio's internal container network (172.30.0.0/16) and non-private addresses
+are refused.
+
+| Method | Path | Token needed | Does |
+|---|---|---|---|
+| GET | `/v1/status` | no | State (`needs_login` and `needs_approval` while waiting on a person), tailnet IP and DNS name, allowlist, session count, version, key expiry, last error. Never a secret. |
+| POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}`. Without `auth_key` it signs in by URL and also returns `auth_url` once the control plane sends it (within 30 s); the join goes on in the background |
+| GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
+| PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
+| POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
+
+### Published ports
+
+An app running on the radio itself, such as another container or a legacy
+waveform, can make one of its TCP ports reachable on the tailnet:
+`POST /v1/local/expose {"port": 48995, "name": "AetherWSPR"}` on TCP 48992.
+This is the one path open to callers the table above refuses, and only to
+them: loopback and the radio's own addresses. An 8000-series container
+shares the radio's network, so it calls from these too. Anyone else,
+including other 172.30.x hosts, gets 403.
+
+- Only a port bound where the LAN could reach it can be published (400
+  otherwise), read from `/proc/net/tcp`: the wildcard, or a LAN address. On
+  an 8000-series radio that excludes 172.30.0.0/16, its internal container
+  network; on a FLEX-6000 that range is plain LAN and any address but
+  loopback qualifies. The shim reads binds, not firewall rules, so a wildcard
+  listener a firewall keeps from the LAN qualifies too.
+- This is checked again for each connection, against the socket the app
+  registered. If the service goes away, or anything else takes the port, new
+  callers are refused until the app that owns the name renews, and a renewal
+  that finds nothing listening withdraws the publication.
+- The shim listens on that port on its own tailnet addresses, IPv4 and IPv6,
+  and splices each caller the tailnet admits (the same `WhoIs` check as the
+  radio) to the app's listener, at most 32 at a time per port. A wildcard
+  listener is dialed at the radio's LAN address, so callers reach the app as
+  a LAN caller does, never as loopback. The reply's `listening` is false while the tailnet
+  node is down; the port opens when it comes up. If the shim can't listen
+  (for example, a radio file transfer holds the port), the reply is 503.
+  Each port has one owner: a transfer the radio announces on a published
+  port fails the same way, until the publication ends.
+- The registration is a 10-minute lease (`expires_in_s`), renewed by posting
+  again. The app's `name` owns the port: the same name renews it, another
+  gets 409. When the lease lapses, the port and its open connections close.
+- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992 or 48993, and at
+  most 8. `/v1/status` lists them as `exposed_ports`. They survive the
+  tailnet node restarting, but not the shim.
+- Anything running on the radio is trusted to publish: names are
+  self-asserted, and any wildcard listener can be published. That matches a
+  radio that lets any LAN host install containers.
+
+**Trust model:** the first provisioning is open to the LAN. That matches the
+radio itself: its API on 4992 and its image upload on 42607 are
+unauthenticated on the LAN, so any LAN host could already install or remove
+containers. After the first use, every change needs the admin token issued
+then. Only its SHA-256 is stored in the container. A lost token means removing
+and reinstalling the container, which is visible in the Waveforms list. The
+auth key crosses the LAN in the clear, but it is single-use and spent by the
+tailnet login within seconds; it is never stored or logged.
+
+Keys are changed in-process (logout, then a new tsnet server with the same
+state directory). Nothing is known to restart a container whose process exits.
+
+## FLEX-6000: the native build (experimental)
+
+FLEX-6000 radios have no container feature, so `native/` packages the same
+shim as a legacy waveform, `AetherTailnet.ssdr_waveform`, for their ARMv7
+CPU. `-run-dir` / `SHIM_RUN_DIR` keeps tsnet's logs and caches on volatile
+storage while the node's identity stays in the state directory: the
+FLEX-6300 we measured persists only to a 60 MB flash
+partition (19 MB on a FLEX-6700), so the shim ships gzipped and a small
+unpacker (`native/unpack`) puts it in `/tmp` at each start. `native/TESTING.md` is the test protocol, with a prompt for a
+tester's AI assistant; `native/tool.py` installs, provisions and watches it
+from the LAN.
+
+## Build
+
+```sh
+./build.sh          # static linux/arm64 binary, LICENSES, and flex-tailnet-shim-<version>.tar.gz
+go test -race .
+```
+
+`build.sh` assembles the OCI image itself (`mkimage.py`), byte-for-byte
+reproducibly: no Docker daemon, no base image, fixed timestamps, owners and
+file order, and a binary built with `-trimpath -buildvcs=false`, so it records
+neither the build path nor the commit. AetherSDR pins the image's SHA-256
+(`src/core/TailnetShimRelease.h`, RFC #6271 ruling D2); running `build.sh` at
+the `flex-tailnet-shim-v<version>` tag reproduces that hash, given the same
+toolchain: gzip output differs between zlib builds, so the pinned hash was made
+with Go 1.27.1 (from `go.mod`) and CPython 3.14 with zlib 1.3.2. The image's
+`diff_id`, the SHA-256 of the uncompressed layer, does not depend on zlib.
+
+The image is `FROM scratch`: the static binary, the `LICENSES` bundle and the
+two radio labels (`com.flexradio.waveform.name`,
+`com.flexradio.waveform.version`). It has no shell and no BusyBox, so it
+carries no GPLv2 source obligation, and it has no CA bundle, because the
+Mozilla roots are compiled in. It is about 8 MB compressed.
+
+## Link telemetry
+
+Each AetherSDR client reached over the tailnet can ask the shim how its link
+looks from the radio side: `GET /v1/session` on the shim's tailnet address,
+TCP 48993. This listener is on the tailnet only, applies the same allowlist
+as the relay (403 otherwise), and answers each caller with only its own
+sessions. AetherSDR polls it every 2 s for the Network Diagnostics window.
+
+| Field | Meaning |
+|---|---|
+| `path`, `endpoint`, `relay` | `direct` (with the client's address), `peer-relay`, `relay` (with the DERP region) or `unknown` |
+| `path_changes`, `path_since_s` | How often the path has changed, and how long it has held |
+| `rtt_ms`, `rtt_via`, `rtt_age_s` | The shim's own disco ping to the client, every 4 s; `-1` until one succeeds |
+| `to_client_kbps`, `from_client_kbps`, `last_handshake_s` | WireGuard throughput and handshake age for this peer |
+| `shim_cpu_pct`, `shim_rss_kb`, `mtu_clamp` | The container's own load, and the `network_mtu` it injects |
+| `sessions[].streams[]` | Per VITA-49 stream, counted as datagrams leave the radio, before the tunnel: `packets`, `gaps` (missed packets) and `breaks` (sequence discontinuities, the unit AetherSDR's own stream counters use) |
+| `sessions[].to_client_failures` | Datagrams the shim could not send into the tunnel |
+| `sessions[].from_other_sources` | Datagrams that reached the session's radio-side socket from anything but the radio, dropped. Nonzero on a session with no VITA-49 means the radio's own source address went unrecognised. AetherSDR doesn't display it; read it from this report or `/v1/status`, which on the LAN also names a recent sender (`last_rejected_source`) |
+
+AetherSDR subtracts the radio-side break rate from the rate it sees itself,
+so the remainder is what the tunnel added.
+
+## Configuration
+
+| Flag / environment | Default | Meaning |
+|---|---|---|
+| `-state` / `SHIM_STATE_DIR` | `/var/lib/flex-tailnet-shim` | Settings, token hash and tsnet state; survives reboots, lost on reinstall |
+| `-api` / `SHIM_API_ADDR` | `:48992` | Provisioning API listen address |
+| `-max-mtu` | 1200 | Clamp for `network_mtu=` |
+| `SSDR_RADIO_ADDRESS` | set by the radio | Radio API address, normally 172.30.1.1 |
+| `SHIM_LOG_URL` | unset | Development only: POST recent log lines to a listener every 15 s (the radio gives containers no log channel) |
+
+## Open items
+
+- Behaviour with two simultaneous AetherSDR clients, which uses both of the
+  radio's GUI slots.
+- FLEX-8400 and Aurora have not been tested.
+
+## Vendored modules
+
+Every Go module the shim links is vendored in `vendor/` (RFC #6271 ruling D1),
+so the image builds from this tree with no module downloads; only the Go
+toolchain (≥ 1.27.1, Tailscale's minimum) is needed. Go requires the vendor
+tree beside `go.mod`, which is why it is here rather than under `third_party/`.
+To update a dependency: `go get <module>@<version> && go mod tidy && go mod vendor`,
+then refresh section 27 of `THIRD_PARTY_LICENSES`.
+
+## Proving a remote path: `cmd/tailnet-probe`
+
+`go run ./cmd/tailnet-probe -authkey-file key.txt 100.x.y.z:4992 192.168.50.103:9007`
+joins the tailnet as an ephemeral node with its own userspace network stack,
+accepts subnet routes, reports which peer routes each LAN target, and dials
+every target. Its traffic can only cross the tailnet, so it gives an honest
+answer even when run on the radio's own LAN.

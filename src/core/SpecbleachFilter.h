@@ -1,0 +1,83 @@
+#pragma once
+
+#ifdef HAVE_SPECBLEACH
+
+#include <QByteArray>
+#include <array>
+#include <atomic>
+#include <vector>
+
+typedef void* SpectralBleachHandle;
+
+namespace AetherSDR {
+
+// SpecbleachFilter - wrapper around libspecbleach for NR4 noise reduction.
+// Processes stereo float32 audio at an immutable 24 or 48 kHz sample rate.
+// Each channel has its own libspecbleach instance and so its own noise
+// profile, as RN2 runs one RNNoise state per channel: the two sides of a
+// diversity pair are different antennas with different noise.
+// Thread-safe parameter setters (main thread writes, audio thread reads).
+class SpecbleachFilter {
+public:
+    explicit SpecbleachFilter(int sampleRate = 24000);
+    ~SpecbleachFilter();
+
+    SpecbleachFilter(const SpecbleachFilter&) = delete;
+    SpecbleachFilter& operator=(const SpecbleachFilter&) = delete;
+
+    // Process stereo float32 PCM at the configured sample rate. Returns processed audio.
+    QByteArray process(const QByteArray& pcmStereo);
+
+    bool isValid() const { return m_handles[0] != nullptr && m_handles[1] != nullptr; }
+    // Reset both noise profiles. Recreate on a new source or discontinuity to
+    // also discard libspecbleach's internal overlap state.
+    void reset();
+
+    // User-adjustable parameters (thread-safe)
+    void setReductionAmount(float dB);   // 0–40 dB
+    void setSmoothingFactor(float pct);  // 0–100 %
+    void setWhiteningFactor(float pct);  // 0–100 %
+    void setAdaptiveNoise(bool on);
+    void setNoiseEstimationMethod(int method); // 0=SPP-MMSE, 1=Brandt, 2=Martin
+    void setMaskingDepth(float v);       // 0.0–1.0
+    void setSuppressionStrength(float v); // 0.0–1.0
+
+    float reductionAmount() const  { return m_reduction.load(); }
+    float smoothingFactor() const  { return m_smoothing.load(); }
+    float whiteningFactor() const  { return m_whitening.load(); }
+    bool adaptiveNoise() const { return m_adaptive.load(); }
+    int noiseEstimationMethod() const { return m_noiseMethod.load(); }
+    float maskingDepth() const { return m_maskingDepth.load(); }
+    float suppressionStrength() const { return m_suppression.load(); }
+
+    int sampleRate() const { return m_sampleRate; }
+
+private:
+    const int m_sampleRate;
+    void applyParams();
+
+    std::array<SpectralBleachHandle, 2> m_handles{};
+
+    // Param atomics
+    std::atomic<float> m_reduction{10.0f};
+    std::atomic<float> m_smoothing{0.0f};
+    std::atomic<float> m_whitening{0.0f};
+    std::atomic<bool>  m_adaptive{true};
+    std::atomic<int>   m_noiseMethod{0};
+    std::atomic<float> m_maskingDepth{0.5f};
+    std::atomic<float> m_suppression{0.5f};
+    std::atomic<bool>  m_paramsDirty{true};
+
+    // Frame counter for noise profile learning period — pass audio through
+    // unprocessed during the first ~1 second to avoid silence (#827)
+    int m_frameCount{0};
+    static constexpr int kLearningFrames = 25;  // ~1 sec at 40ms/frame
+
+    // De-interleaved per-channel buffers
+    std::array<std::vector<float>, 2> m_channelIn;
+    std::array<std::vector<float>, 2> m_channelOut;
+};
+
+} // namespace AetherSDR
+
+#endif // HAVE_SPECBLEACH

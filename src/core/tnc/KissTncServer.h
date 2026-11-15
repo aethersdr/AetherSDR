@@ -1,0 +1,105 @@
+#pragma once
+
+#include "core/tnc/KissFraming.h"
+#include "models/TxController.h"
+
+#include <QByteArray>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QObject>
+#include <QString>
+
+class QTcpServer;
+class QTcpSocket;
+class QTimer;
+
+namespace AetherSDR {
+
+// KISS-over-TCP TNC server: host apps exchange raw AX.25 frames in KISS
+// framing over AetherModem's AFSK. Multiple clients, each with a resync-safe
+// KISS decoder; TCP keepalive plus slow-consumer and optional idle timeouts
+// reap stuck clients. Activity logs on aether.ax25 with a "KISS" prefix.
+class KissTncServer : public QObject {
+    Q_OBJECT
+
+public:
+    explicit KissTncServer(QObject* parent = nullptr);
+    ~KissTncServer() override;
+
+    // Start listening on the given TCP port (all interfaces). Returns true on
+    // success; on failure lastError() explains why and listeningChanged stays
+    // false. Restarting on a new port is a stop() + start().
+    bool start(quint16 port);
+    void stop();
+
+    bool isListening() const;
+    quint16 port() const { return m_port; }
+    int clientCount() const { return m_clients.size(); }
+    QString lastError() const { return m_lastError; }
+
+    quint64 framesToClients() const { return m_framesToClients; }
+    quint64 framesFromClients() const { return m_framesFromClients; }
+
+    // Max simultaneous clients; further connections are refused. Default 8.
+    void setMaxClients(int n) { m_maxClients = n; }
+    void setTxControllerFactory(std::function<std::shared_ptr<TxController>()> factory)
+    { m_txControllerFactory = std::move(factory); }
+
+public slots:
+    // RX path: an AX.25 frame (address..info, no FCS) was decoded off the air;
+    // fan it out to every connected client as a KISS data frame.
+    void broadcastAx25Frame(const QByteArray& ax25NoFcs);
+
+signals:
+    // TX path: a client sent a KISS data frame; payload is the raw AX.25 frame
+    // (no FCS) to key onto the air.
+    void ax25FrameFromClient(const QByteArray& ax25NoFcs,
+                             const AetherSDR::TxCoordinator::Request& input);
+
+    // A non-data KISS command (TXDELAY, persistence, etc.) arrived.
+    void kissParameterReceived(quint8 command, const QByteArray& value);
+
+    void listeningChanged(bool listening);
+    void clientCountChanged(int count);
+
+    // Human-readable lifecycle line for the AetherModem window terminal.
+    void activity(const QString& message);
+
+private slots:
+    void onNewConnection();
+    void onReadyRead();
+    void onDisconnected();
+    void onSweepTimer();
+
+private:
+    struct Client {
+        kiss::Decoder decoder;
+        QElapsedTimer lastActivity;
+        QString peer;
+        std::shared_ptr<TxController> controller;
+    };
+
+    void closeClient(QTcpSocket* socket, const QString& reason);
+    void emitClientCount();
+
+    QTcpServer* m_server = nullptr;
+    QHash<QTcpSocket*, Client> m_clients;
+    std::function<std::shared_ptr<TxController>()> m_txControllerFactory;
+    QTimer* m_sweepTimer = nullptr;
+    quint16 m_port = 8001;
+    int m_maxClients = 8;
+    QString m_lastError;
+    bool m_stopping{false};
+    quint64 m_framesToClients = 0;
+    quint64 m_framesFromClients = 0;
+
+    // Drop a client whose unsent backlog exceeds this (slow/stuck consumer).
+    static constexpr qint64 kMaxWriteBacklogBytes = 256 * 1024;
+    // Drop a client idle (no bytes received) longer than this. Generous because
+    // a legitimate KISS client may sit quiet for long stretches; TCP keepalive
+    // is the primary dead-peer detector.
+    static constexpr qint64 kIdleTimeoutMs = 30 * 60 * 1000;
+    static constexpr int kSweepIntervalMs = 30 * 1000;
+};
+
+} // namespace AetherSDR

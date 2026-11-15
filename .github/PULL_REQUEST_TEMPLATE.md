@@ -1,0 +1,53 @@
+<!--
+Thanks for contributing to AetherSDR!
+
+Before opening the PR, please:
+- Read AGENTS.md if this is your first contribution (or your AI tool's
+  first contribution) — it has the conventions every contributor agent
+  is expected to follow.
+- Read CONTRIBUTING.md for contribution policy and the review tiers, and
+  docs/DEVELOPER-GUIDE.md for the commit-signing and branch-protection
+  rules.
+- If you're an AI agent: claim the originating issue first by assigning
+  yourself via `gh issue edit <N> --add-assignee <handle>`. Double-
+  assigning alongside the @aethersdr-agent triage bot is fine.
+-->
+
+## Summary
+
+<!-- One-paragraph description of what changes and why.  If this fixes
+an issue, lead with "Fixes #N" or "Closes #N". -->
+
+## Intent
+
+<!-- What will be true after this merges that is not true now, in one or two
+sentences, and anything deliberately left out of scope.  Review starts here:
+the diff is judged against this before it is read line by line, so a correct
+diff for the wrong goal is caught first. -->
+
+## Constitution principle honored
+
+<!-- Cite the principle by Roman numeral when relevant.  E.g.
+"Principle V — new feature uses nested-JSON persistence."
+"Principle IV — code is clean-room, not derived from decompiled sources."
+See CONSTITUTION.md for the full list. -->
+
+## Test plan
+
+- [ ] Local build passes (`cmake --build build`)
+- [ ] Behavior verified on a real radio if applicable
+- [ ] Existing tests pass (CI)
+- [ ] Reproduction steps documented if user-reported bug
+
+## Checklist
+
+- [ ] Commits are signed (`docs/COMMIT-SIGNING.md`)
+- [ ] No new flat-key `AppSettings` calls — use nested-JSON-under-one-key
+      (Principle V)
+- [ ] Code is clean-room — not decompiled, disassembled, or
+      reverse-engineered from a proprietary binary (Principle IV)
+- [ ] All meter UI uses `MeterSmoother` (AGENTS.md convention)
+- [ ] Documentation updated if user-visible behavior changed — `docs/` and the
+      affected READMEs. **Not `CHANGELOG.md`**, which is a release-prep file a
+      PR must not add to (AGENTS.md); describe it in the Summary above instead
+- [ ] Security-sensitive changes reference a GHSA if applicable

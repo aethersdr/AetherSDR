@@ -1,0 +1,117 @@
+#pragma once
+
+#include "TxCoordinator.h"
+#include <QObject>
+#include <QByteArray>
+#include <QString>
+#include <memory>
+
+#ifdef HAVE_RADE
+struct rade;
+struct LPCNetEncState;
+// FARGANState is defined in fargan.h (opus), included only in .cpp
+// Use void* here to avoid pulling in opus headers
+// rade_text_t is typedef void* in the C header — mirror it here to avoid pulling in C headers
+using rade_text_t = void*;
+#endif
+
+namespace AetherSDR {
+
+class Resampler;
+
+// Wraps the RADE v1 (Radio Autoencoder) codec for FreeDV digital voice.
+// The radio is set to DIGU (SSB passthrough). RADE handles the encoding
+// and decoding locally:
+//
+// TX: Mic(24kHz stereo) → 16kHz mono → LPCNet features → rade_tx() → RADE_COMP(8kHz) → 24kHz stereo → DAX TX
+// RX: DAX RX(24kHz stereo) → 8kHz mono → RADE_COMP → rade_rx() → features → FARGAN → 16kHz mono → 24kHz stereo
+//
+class RADEEngine : public QObject {
+    Q_OBJECT
+
+public:
+    explicit RADEEngine(QObject* parent = nullptr);
+    ~RADEEngine() override;
+
+    bool start();
+    void stop();
+    bool isActive() const;
+    bool isSynced() const;
+
+    // EOO timing constants referenced by MainWindow's post-eooFinished PTT-release timer.
+    // kEooPlaybackMs (below) = kEooFrameMs + kEooSilenceTailMs + kEooTransportMarginMs
+    static constexpr int kEooFrameMs          = 144; // Duration of one rade_tx_eoo() output block
+    static constexpr int kEooSilenceTailMs    = 60;  // Silence appended to flush upsampler FIR through DAX
+    static constexpr int kEooTransportMarginMs = 50; // DAX UDP pipeline margin before set_mox=0
+
+    // Returns "RADE vN" where N is the integer from rade_version(), or empty if RADE not compiled in.
+    static QString versionString();
+
+public slots:
+    // Feed DAX RX audio (24kHz stereo int16) for decoding.
+    // channel is the DAX channel number (1-8), only processes channel 1.
+    void feedRxAudio(int channel, const QByteArray& pcm);
+
+    // Feed mic audio (24kHz stereo float32) for encoding.
+    void feedTxAudio(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
+
+    // Request End-of-Over (EOO) transmission. Once requested, the engine
+    // will finish processing any queued voice audio, then append the EOO
+    // frame and a short silence tail before stopping.
+    void setEooRequested(bool requested, quint64 requestId = 0);
+
+    // Set the operator callsign to embed in the EOO frame. Must be called
+    // before the first PTT press. Thread-safe: may be called from any thread.
+    void setTxCallsign(const QString& callsign);
+
+    // Flush TX encoder state (call on MOX release to prevent stale audio)
+    void resetTx(const AetherSDR::TxCoordinator::Context& context = {});
+
+signals:
+    void rxSpeechReady(const QByteArray& pcm);   // Decoded speech, 24kHz stereo int16
+    void txModemReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
+    void eooFinished(quint64 requestId); // original request, after EOO and silence tail
+    void syncChanged(bool synced);
+    void snrChanged(float snrDb);
+    void freqOffsetChanged(float hz);
+    void eooCallsignReceived(const QString& callsign);
+
+private:
+    TxCoordinator::Context m_txContext;
+#ifdef HAVE_RADE
+    struct rade*         m_rade{nullptr};
+    LPCNetEncState*      m_lpcnetEnc{nullptr};
+    void*                m_fargan{nullptr};  // actually FARGANState*, opaque here
+    rade_text_t          m_radeText{nullptr}; // EOO callsign encoder/decoder
+    bool                 m_synced{false};
+
+    bool                 m_eooRequested{false};
+    quint64              m_eooRequestId{0};
+    bool                 m_eooSent{false};
+    bool                 m_eooFinished{false};
+
+    // TX accumulation: 12 frames of NB_TOTAL_FEATURES = 432 floats
+    QByteArray m_txAccum;
+    QByteArray m_txFeatAccum;
+
+    // RX accumulation: rade_nin() RADE_COMP samples
+    QByteArray m_rxAccum;
+    QByteArray m_rxFeatAccum;
+    QByteArray m_rxOutAccum;
+
+    bool m_farganWarmedUp{false};
+
+#ifdef RADE_WAV_TAP
+    QByteArray m_tapVoiceAccum;     // 24kHz stereo voice frames accumulated per-PTT for Tap E
+    QByteArray m_tap8kVoiceAccum;   // 8kHz mono voice frames accumulated per-PTT for Tap F
+#endif
+
+    // Resamplers (r8brain)
+    std::unique_ptr<Resampler> m_down24to8;   // 24k→8k (modem RX input)
+    std::unique_ptr<Resampler> m_up8to24;     // 8k→24k (modem TX output)
+    std::unique_ptr<Resampler> m_down24to16;  // 24k→16k (LPCNet TX input)
+    std::unique_ptr<Resampler> m_up16to24;    // 16k→24k (FARGAN RX output)
+#endif
+};
+
+} // namespace AetherSDR

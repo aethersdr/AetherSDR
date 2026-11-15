@@ -1,0 +1,398 @@
+#pragma once
+
+#include <QWidget>
+#include "DeferredSettingsWrites.h"
+#include <QVector>
+#include <QTimer>
+
+#include "core/backends/RadioCapabilities.h"
+#include "core/RadioSettingsScope.h"
+#include <optional>
+
+class ScrollableLabel;
+namespace AetherSDR { class FilterPassbandWidget; }
+
+class QButtonGroup;
+class QHBoxLayout;
+class QVBoxLayout;
+class QGridLayout;
+class QPushButton;
+class QSlider;
+class QLabel;
+class QLineEdit;
+class QStackedWidget;
+class QComboBox;
+class QDoubleSpinBox;
+class QToolButton;
+
+namespace AetherSDR {
+
+class SliceModel;
+class RadioModel;
+class ControlAvailabilityRegistry;
+class KiwiSdrManager;
+
+// RX Applet: controls for one receive slice (antenna, filter presets, AGC,
+// AF/RF gain, squelch, NB/NR/ANF, RIT/XIT).
+class RxApplet : public QWidget {
+    friend struct RxAppletSquelchTestAccess;
+    Q_OBJECT
+
+public:
+    // 3-way squelch state.  Off → Manual → Auto cycle on SQL button click.
+    // Mirrored by VfoWidget's SQL button via the sqlModeChanged signal so
+    // both UI surfaces present the same state and value.
+    enum class SqlMode : uint8_t { Off, Manual, Auto };
+
+    explicit RxApplet(QWidget* parent = nullptr);
+
+    // Attach to a slice; pass nullptr to detach.
+    void setSlice(SliceModel* slice);
+    void setAfGain(int pct);
+
+    // Cross-widget access for the bidirectional SQL sync with VfoWidget.
+    // VfoWidget mirrors mode + value via these methods; RxApplet stays the
+    // presentation owner for the attached slice's mode and thresholds.
+    SqlMode sqlMode() const { return m_sqlMode; }
+    bool    isAttachedToSlice(const SliceModel* slice) const { return m_slice == slice; }
+    int     sqlManualLevel() const;
+    int     sqlManualMaximum() const;
+    int     autoSqlMarginDb() const;
+    // Externally cycle the mode (Off → Manual → Auto → Off) — same path the
+    // RxApplet's own SQL button takes.  Emits sqlModeChanged.
+    void    cycleSqlModeExternal();
+    // Programmatic slider drag from another UI surface.  Branches by mode
+    // exactly like the in-applet slider does: Manual writes the current
+    // receive surface; Flex persists the level on the attached SliceModel
+    // (per-slice, #3326) plus AppSettings as the seed for future new
+    // slices, while Kiwi keeps its replacement-source level independent.
+    // Auto retains this slice's margin, seeds new slices through the existing
+    // AutoSqlMarginDb setting, and emits autoSqlMarginDbChanged. Off is a no-op.
+    void    setSqlSliderValueExternal(int v);
+    // Whether Auto SQL can drive this slice's level, and if not, why
+    // (RadioCapabilities::squelchLevelScale). Kiwi external receive keeps its
+    // own Auto. Unavailable: the cycle skips Auto, a slice in Auto drops to
+    // Manual, and the reason goes on the button's accessible description.
+    // Before attachment, reconcile=false updates the gate without changing
+    // the previously attached slice's intent.
+    void    setAutoSqlAvailability(bool available, const QString& reason, bool reconcile = true);
+    bool    autoSqlAvailable() const;
+    QString autoSqlUnavailableReason() const;
+    // The SQL button's accessible description; VfoWidget's mirror reads it too.
+    QString sqlButtonAccessibleDescription() const;
+    void syncStepFromSlice(int stepHz, const QVector<int>& stepList);
+    void cycleStepUp();
+    void cycleStepDown();
+
+    // Step the active slice's RX passband through the per-mode filter preset
+    // list by index offset: +steps moves forward, -steps backward, scaled by
+    // magnitude and clamped at the ends. The shipped preset tables are all
+    // ascending, so + widens and - narrows (what filter_widen/filter_narrow
+    // rely on); a hand-edited FilterPresets_<mode> row is not guaranteed to be
+    // sorted, so the stepping is defined on index order, not on width. Routes
+    // through applyFilterPreset so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get
+    // mode-correct edge geometry.
+    void stepFilterWidth(int steps);
+    // Set the passband to the reachable width nearest widthHz: the radio's own
+    // list when it declared one, else widthHz itself, placed for the mode.
+    // False when there is no slice or the mode refuses those edges.
+    bool applyNearestFilterWidth(int widthHz);
+    // The antenna choices the RX/TX antenna menus offer, and a pick from them
+    // through the same path as the menu. False when there is no slice or the
+    // token is not offered.
+    QStringList rxAntennaChoices() const { return rxAntennaOptions(); }
+    QStringList txAntennaChoices() const { return txAntennaOptions(); }
+    bool selectRxAntenna(const QString& token);
+    bool selectTxAntenna(const QString& token);
+
+    // Connect to transmit model for QSK (break_in) indicator.
+    void setTransmitModel(class TransmitModel* txModel);
+    void setRadioModel(class RadioModel* radioModel);
+    void setKiwiSdrManager(KiwiSdrManager* manager);
+
+    // Set the available antenna list (from ant_list in panadapter status).
+    void setAntennaList(const QStringList& ants);
+
+    // Slice tab toggle — create N buttons (A..H) capped at hardware max.
+    // If maxSlices <= 1, the row is hidden.
+    void setMaxSlices(int maxSlices);
+    void clearSliceButtons();
+
+    // Enable/disable buttons based on which slices are open, and check the
+    // button for the currently active slice.
+    void updateSliceButtons(const QList<SliceModel*>& slices, int activeSliceId);
+
+signals:
+    // Emitted when the user clicks a slice tab button.
+    void sliceActivationRequested(int sliceId);
+    // Emitted when the user requests the AGC-T noise calibration panel
+    // (right-click on the AGC-T slider). Carries the active slice id.
+    void calibrateAgcTRequested(int sliceId);
+    // Emitted when the user adjusts the AF gain slider (0–100).
+    void afGainChanged(int value);
+    // Emitted whenever the tuning step size changes (Hz), from ANY source —
+    // including radio-driven syncs via syncStepFromSlice() (memory recall,
+    // band crossing). Connect source-agnostic UI sync here (e.g. SpectrumWidget
+    // scroll-to-tune step), but NOT command echoes or user-facing toasts.
+    void stepSizeChanged(int hz);
+    // Emitted only when the operator deliberately changes the step (STEP
+    // buttons/scroll, cycle shortcuts, encoder push). Use this for actions
+    // that should not fire on radio-driven syncs: pushing to the radio,
+    // persisting, and the "Step: …" status-bar toast.
+    void stepSizeChangedByUser(int hz);
+    void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
+    void flexRxAntennaSelected(int sliceId);
+    // The radio published no antenna port to choose and there is no virtual
+    // (Kiwi) receiver on offer, so the RX (tx=false) or TX (tx=true) antenna
+    // pick was refused rather than offering invented ANT1/ANT2
+    // (AntennaChoiceGate.h). MainWindow announces it.
+    void antennaChoiceRefused(bool tx);
+    // Emitted when Auto SQL tracking is toggled.
+    void sqlAutoChanged(bool on);
+    // Emitted on every SQL mode transition (Off / Manual / Auto), so any
+    // mirroring UI (e.g. VfoWidget's SQL button + slider) can refresh its
+    // label, color, and slider role.  Carries the new SqlMode value as an
+    // int so the header doesn't need to leak the enum to listeners that
+    // don't care about the symbolic names.
+    void sqlModeChanged(int mode);
+    // Auto SQL availability or its reason changed; see setAutoSqlAvailability().
+    void sqlAutoAvailabilityChanged();
+    // Emitted when the user adjusts the SQL slider while SQL mode is Auto.
+    // Carries the new dB margin above the measured noise floor.  Routes to
+    // every SpectrumWidget's setAutoSqlMarginDb().  Replaces the standalone
+    // "Auto SQL ∆" slider that used to live in the Display overlay menu.
+    void autoSqlMarginDbChanged(int dB);
+    // Emitted when the radio reports a squelch state change (for spectrum line).
+    void squelchStateChanged(bool on, int level);
+    void directEntryCommitted(double mhz, const QString& source);
+    // Emitted when the user presses the Mute All button.
+    // Logic lives in MainWindow::onMuteAllSlicesToggle() which has RADE context.
+    void muteAllToggled();
+
+#ifdef HAVE_RADE
+    // Emitted when user selects/deselects RADE digital voice mode
+    void radeActivated(bool on, int sliceId);
+#endif
+    void wfmActivated(bool on, int sliceId);
+
+public:
+    void setInitialStepSize(int hz);
+
+    // Mode-aware filter width formatter, shared with VfoWidget so the two
+    // filter readouts stay in sync (#794, #1225, #2197).
+    static QString formatFilterWidth(int lo, int hi, const QString& mode = QString());
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* ev) override;
+
+private:
+    void buildUI();
+    void connectSlice(SliceModel* s);
+    void disconnectSlice(SliceModel* s);
+    void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
+    void updateAntennaButtons();
+    void updateFreqLabel();
+    void scheduleFrequencyAnnouncement(const QString& text);
+    QStringList rxAntennaOptions() const;
+    QStringList txAntennaOptions() const;
+    QString antennaMenuLabel(const QString& token, const QStringList& options) const;
+
+    void applyFilterPreset(int widthHz);
+    void updateFilterButtons();
+    void refreshFilterWidth();   // "AUTO" while adaptive is live, else the width
+    void updateModeSettings(const QString& mode);
+    bool squelchAvailableInMode(const QString& mode) const;
+    void rebuildFilterButtons();
+    QVector<int> defaultFilterWidths(const QString& mode) const;
+    bool acceptsFilterEdges(int low, int high) const;
+public:
+    // Narrow the filter buttons to the widths a radio can actually reach.
+    // An EMPTY list restores the operator's own configurable set, so this is
+    // reversible on disconnect rather than a one-way edit of their settings.
+    void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
+private:
+    // The list actually in force: the radio's when it declared one, else the
+    // operator's configurable set. Every site that indexes filter buttons must
+    // go through this, or the custom-edge arrays desynchronise from the buttons.
+    const QVector<int>& effectiveFilterWidths() const
+    {
+        return m_radioFilterWidths.isEmpty() ? m_filterWidths : m_radioFilterWidths;
+    }
+    void saveFilterPresets();
+    void rebuildStepSizes();
+    void updateAgcCombo();
+    void updateOffsetDirButtons();
+    void applyOffsetDir(const QString& dir);
+    static QString formatHz(int hz);
+    static QString formatStepLabel(int hz);
+
+    // Keeps slice-tab styling on the normal slice identity palette. The
+    // speaker button owns mute feedback; slice letters must not grey out and
+    // read as disabled after mute-all or Kiwi receive routing changes.
+    void refreshAllMutedDim();
+    void setSliceButtonsDimmed(bool dim);
+
+    SliceModel* m_slice{nullptr};
+    TransmitModel* m_txModel{nullptr};
+    RadioModel* m_radioModel{nullptr};
+    ControlAvailabilityRegistry* m_filterAvailability{nullptr};
+    QPushButton* m_autoAgcTButton{nullptr};
+    std::optional<ReceiveFilterControl> m_receiveFilterControl;
+    // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
+    std::optional<SquelchLevelScale> m_exclusiveSquelch;
+    QPushButton* m_filterUnavailable{nullptr};
+    KiwiSdrManager* m_kiwiSdrManager{nullptr};
+    QStringList m_antList{"ANT1", "ANT2"};   // populated from ant_list key
+
+    // Step sizes (Hz) — per-mode, swapped on mode change
+    QVector<int> m_stepSizes{10, 50, 100, 250, 500, 1000, 2500, 5000, 10000};
+    int          m_stepIdx{2};          // index into m_stepSizes, default 100 Hz
+    QPushButton* m_stepDown{nullptr};   // "<" button
+    ScrollableLabel* m_stepLabel{nullptr};  // current step value display
+    QPushButton* m_stepUp{nullptr};     // ">" button
+
+    // ── Slice tab toggle row ─────────────────────────────────────────────
+    QWidget*                m_sliceTabRow{nullptr};
+    QButtonGroup*           m_sliceGroup{nullptr};
+    QVector<QToolButton*>   m_sliceBtns;
+    bool                    m_sliceButtonClicksConnected{false};
+
+    // Mute button click handling — single click toggles this slice (timer-
+    // deferred by the platform double-click interval, typically 400 ms),
+    // double click toggles all owned slices (handled in eventFilter, which
+    // cancels the timer and emits muteAllToggled).
+    QTimer*                 m_muteClickTimer{nullptr};
+
+    // ── Header row ────────────────────────────────────────────────────────
+    QLabel*      m_sliceBadge{nullptr};   // "A" / "B" / "C" / "D"
+    QHBoxLayout* m_headerRow{nullptr};
+    QPushButton* m_lockBtn{nullptr};      // tune-lock toggle
+    QPushButton* m_rxAntBtn{nullptr};     // RX antenna dropdown (blue)
+    QPushButton* m_txAntBtn{nullptr};     // TX antenna dropdown (red)
+    QLabel*      m_filterWidthLbl{nullptr}; // current filter width e.g. "2.7K"
+    QPushButton* m_qskBtn{nullptr};       // QSK toggle
+    QHBoxLayout* m_freqRow{nullptr};       // frequency display row
+    QPushButton* m_txBadge{nullptr};       // TX slice indicator (click to set as TX slice)
+    QComboBox*   m_modeCombo{nullptr};     // mode selector (USB, LSB, CW, etc.)
+    QLabel*      m_freqLabel{nullptr};     // frequency readout e.g. "14.289.510"
+    QLineEdit*   m_freqEdit{nullptr};
+    QStackedWidget* m_freqStack{nullptr};
+    QTimer       m_accessibleFrequencyTimer;
+    QString      m_pendingAccessibleFrequencyText;
+    QString      m_lastAccessibleFrequencyText;
+
+    // Filter presets (Hz widths) — per-mode, swapped on mode change
+    QVector<int>            m_filterWidths{1800, 2100, 2400, 2700, 3300, 6000};
+    // Non-empty while a radio has declared a fixed filter set. Held separately
+    // so the settings-driven list is not overwritten — reconnecting to a radio
+    // with continuous filters must give the operator their own list back.
+    QVector<int>            m_radioFilterWidths;
+    RxFilterControl         m_radioFilterControl;
+    // Parallel "custom edges" — INT_MIN sentinel = use mode rules. (#2259)
+    QVector<int>            m_filterCustomLo;
+    QVector<int>            m_filterCustomHi;
+    QVector<QPushButton*>   m_filterBtns;
+    QGridLayout*            m_filterGrid{nullptr};
+    QWidget*                m_filterContainer{nullptr};
+    AetherSDR::FilterPassbandWidget* m_filterPassband{nullptr};
+
+    // FM duplex/repeater controls (shown only in FM/NFM/DFM modes)
+    QWidget*        m_fmContainer{nullptr};
+    QVBoxLayout*    m_fmLayout{nullptr};
+    QComboBox*      m_toneModeCmb{nullptr};
+    QComboBox*      m_toneValueCmb{nullptr};
+    QComboBox*      m_toneRxValueCmb{nullptr};
+    QComboBox*      m_dtcsCodeCmb{nullptr};
+    QComboBox*      m_dtcsPolarityCmb{nullptr};
+    QWidget*        m_dtcsContainer{nullptr};
+    QDoubleSpinBox* m_offsetSpin{nullptr};
+    QPushButton*    m_offsetDown{nullptr};
+    QPushButton*    m_simplexBtn{nullptr};
+    QPushButton*    m_offsetUp{nullptr};
+    QPushButton*    m_revBtn{nullptr};
+    bool            m_xfcHeldByThisControl{false};
+
+    // Containers for show/hide on mode change
+    QWidget*     m_agcContainer{nullptr};
+    QWidget*     m_ritContainer{nullptr};
+    QWidget*     m_xitContainer{nullptr};
+
+    // AGC
+    static constexpr const char* AGC_MODES[4] = {"off", "slow", "med", "fast"};
+    QComboBox*   m_agcCombo{nullptr};
+    QSlider*     m_agcTSlider{nullptr};
+
+    // AF gain + audio pan
+    QPushButton* m_muteBtn{nullptr};
+    QSlider*     m_afSlider{nullptr};
+    QSlider*     m_panSlider{nullptr};
+
+    // Squelch — 3-way cycle: Off → Manual → Auto → Off.
+    // Click m_sqlBtn cycles through the modes; the button label and style
+    // change with the mode ("SQL"/"AUTO"; base/green/amber).  Auto mode
+    // emits sqlAutoChanged(true) so MainWindow's spectrum-side algorithm
+    // takes over driving the squelch level; Manual mode uses the slider.
+    // SqlMode is declared in the public section above so VfoWidget can mirror.
+    QPushButton* m_sqlBtn{nullptr};
+    QSlider*     m_sqlSlider{nullptr};
+    SqlMode      m_sqlMode{SqlMode::Off};
+    // Fallback only, for the rare case no slice is attached (#3326): Auto
+    // mode overwrites the slice's squelchLevel with algorithm-suggested
+    // values every FFT tick, so the manual value needs to be cached
+    // separately to restore when the user comes back to Manual — but that
+    // cache now lives per-slice on SliceModel::manualSquelchLevel(), seeded
+    // when a slice is first created (RadioModel.cpp) from the radio's own
+    // squelch_level when the status frame carries one, else from AppSettings,
+    // so switching the active slice doesn't pull in another slice's threshold.
+    int          m_sqlManualLevel{20};
+    bool         m_autoSqlAvailable{true};
+    QString      m_autoSqlUnavailableReason;
+
+    // Icom has no separate SQL enable register: Off writes threshold zero.
+    // Only client intent is retained, never a live threshold to replay at attach.
+    RadioSettingsScope m_clientSquelchScope;
+    QString m_clientSquelchFeature{QStringLiteral("SquelchIntent")};
+    std::optional<int> m_clientManualSqlLevel;
+    bool m_restoreAutoSql{false};
+    bool m_clientSqlAwaitingReport{false};
+    void loadClientSquelchIntent();
+    void saveClientSquelchIntent();
+    AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
+    QMetaObject::Connection m_squelchDisconnectConnection;
+    void applySqlModeVisuals();
+    void applySqlButtonDescription();
+    void cycleSqlMode();
+    void setSqlMode(SqlMode m, bool propagateToRadio);
+    bool usingExternalReceiveSquelch() const;
+    bool usingEngineAutoSquelch() const;
+    int clampManualSqlLevelForCurrentSurface(int level) const;
+    void setManualSqlLevelForCurrentSurface(int level);
+    int agcThresholdMinimum() const;
+    int agcThresholdMaximum() const;
+    void syncAgcSliderFromSlice();
+    void syncAutoAgcThreshold();
+    bool usesTransmitFrequencyCheck() const;
+    void configureRepeaterReverseControl();
+    void configureFmToneControls();
+    void releaseTransmitFrequencyCheck();
+
+
+    // RIT
+    QPushButton* m_ritOnBtn{nullptr};
+    QPushButton* m_ritZero{nullptr};
+    QPushButton* m_ritMinus{nullptr};
+    ScrollableLabel* m_ritLabel{nullptr};
+    QPushButton* m_ritPlus{nullptr};
+
+    // XIT
+    QPushButton* m_xitOnBtn{nullptr};
+    QPushButton* m_xitZero{nullptr};
+    QPushButton* m_xitMinus{nullptr};
+    ScrollableLabel* m_xitLabel{nullptr};
+    QPushButton* m_xitPlus{nullptr};
+
+    static constexpr int RIT_STEP_HZ = 10;
+};
+
+} // namespace AetherSDR

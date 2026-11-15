@@ -1,0 +1,216 @@
+#pragma once
+#include "core/TxCoordinator.h"
+
+#include <QElapsedTimer>
+#include <QHostAddress>
+#include <QObject>
+#include <QSet>
+#include <QString>
+#include <QVariantMap>
+
+#include <cstdint>
+#include <span>
+#include <vector>
+
+#include "core/backends/icom/CivCodec.h"
+#include "core/backends/icom/IcomAudio.h"
+#include "core/backends/icom/IcomProtocol.h"
+#include "core/backends/icom/IcomStream.h"
+
+class QTimer;
+
+namespace AetherSDR::icom {
+
+// The RS-BA1 session: login, authentication, token renewal, and the three
+// streams it brings up — the layer that owns the protocol's ORDERING.
+// IcomStream/IcomProtocol below it are mechanism. Knows nothing of the seam: it
+// emits parsed CI-V frames and decoded audio for IcomCivBackend, so it can be
+// tested against a fake radio on localhost.
+class IcomSession : public QObject {
+    Q_OBJECT
+
+public:
+    // Live IC-705 validation in #4799 matched kappanhang at 300 ms. Keep the
+    // session default and every drain calculation on this one source.
+    static constexpr quint16 kDefaultTxBufferMs = 300;
+
+    struct Params {
+        QHostAddress host;
+        quint16 controlPort = kControlPort;
+        quint16 serialPort  = kSerialPort;
+        quint16 audioPort   = kAudioPort;
+        QString username;
+        QString password;
+        quint32 sampleRateHz = 48000;
+        AudioCodec codec = AudioCodec::Lpcm1ch16;
+        // Whether to negotiate a transmit channel at all. False leaves the
+        // radio with no TX codec, which is a stronger guarantee than simply
+        // not sending audio — a receive-only session cannot key by accident.
+        bool enableTx = true;
+        quint16 txBufferMs = kDefaultTxBufferMs;
+        // Production lease timing. Tests override these values to exercise the
+        // renewal watchdog without waiting more than a minute.
+        int tokenRenewalMs = 60000;
+        int tokenAckGraceMs = 3000;
+        int tokenDeadMs = 80000;
+        // The one-time early renewal that covers a reconnect grant's shorter
+        // first window. Overridable so a test can prove the early renewal
+        // actually fires ahead of the steady cadence, rather than only that
+        // the flag was set.
+        int initialMaintenanceMs = 30000;
+        // Zero selects a fresh random nonzero ID. Tests may override it to
+        // prove reconnect correlation deterministically.
+        quint16 tokenRequestId = 0;
+        // The radio's CI-V address. Seeded from settings and CORRECTED from the
+        // 0x19 0x00 reply once the session is up — never assumed, because the
+        // address is user-changeable and other Icoms speak this same transport.
+        std::uint8_t civAddress = 0xA4;
+    };
+
+    explicit IcomSession(QObject* parent = nullptr);
+    ~IcomSession() override;
+
+    Q_INVOKABLE bool start(const AetherSDR::icom::IcomSession::Params& params);
+    Q_INVOKABLE void stop();
+
+    [[nodiscard]] bool isConnected() const noexcept { return m_connected; }
+    [[nodiscard]] std::uint8_t advertisedCivAddress() const noexcept { return m_advertisedCivAddress; }
+    [[nodiscard]] QString deviceName() const { return m_deviceName; }
+    [[nodiscard]] const RadioId& radioId() const noexcept { return m_radioId; }
+    [[nodiscard]] std::uint8_t civAddress() const noexcept { return m_params.civAddress; }
+
+    // RETARGET the session at a different CI-V address mid-session. The opening
+    // address is a seed from settings; the source address of the radio's 19 00
+    // reply corrects it. The echo filter in onSerialPayload() reads this value, so
+    // retarget BEFORE the connect-edge read burst so its echoes are recognised.
+    void setCivAddress(std::uint8_t address) noexcept { m_params.civAddress = address; }
+
+    // Send one CI-V frame. Frames are built by CivCodec's cmd* helpers.
+    void sendCiv(std::span<const std::uint8_t> frame,
+                 const std::optional<TxCoordinator::Command>& command = {});
+    // Re-open only the RS-BA1 CI-V data pipe while retaining the authenticated
+    // control and audio streams. The backend owns the bounded retry policy.
+    [[nodiscard]] bool reopenCivPipe();
+    // Queue transmit audio (mono float). Nothing leaves until a full 20 ms
+    // frame is available — the radio's jitter buffer reads a short packet as a
+    // discontinuity.
+    void sendAudio(std::span<const float> mono, const TxCoordinator::Context& context);
+    // Complete the last 20 ms transport frame with silence. Returns bytes
+    // appended; the normal TX pump still sends the completed frame on cadence.
+    [[nodiscard]] std::size_t padTxAudioToFrame(const TxCoordinator::Context& context);
+    // Milliseconds of already-queued transmit audio still to be played: the
+    // host queue at wire cadence, plus the TX buffer the radio was asked to
+    // hold before its modulator. Measured from what is pending NOW, so a
+    // finite-stream caller holds PTT for what is actually queued.
+    [[nodiscard]] int txAudioDrainMs() const;
+    // Discard queued transmit audio. Call on unkey.
+    void flushTxAudio();
+
+    struct Stats {
+        IcomStream::Counters control;
+        IcomStream::Counters serial;
+        IcomStream::Counters audio;
+    };
+    [[nodiscard]] Stats stats() const;
+    // Credential-free RS-BA1 lease state for health and automation diagnostics.
+    [[nodiscard]] QVariantMap leaseDiagnostics() const;
+    // Per-stream packet activity and socket health. Contains no endpoint,
+    // session id, credential, or payload data, so it is safe in support logs.
+    [[nodiscard]] QVariantMap transportDiagnostics() const;
+
+signals:
+    void connected(const QString& deviceName);
+    void disconnected(const QString& reason);
+    // One decoded CI-V frame from the radio. Echoes of our own commands are
+    // already filtered out — see onSerialPayload().
+    void civFrameReady(const AetherSDR::icom::CivFrame& frame);
+    void audioReady(const std::vector<float>& mono);
+    void audioLost(int packets);
+
+private slots:
+    void onControlReady();
+    void onControlPayload(const QByteArray& packet);
+    void onSerialReady();
+    void onSerialPayload(const QByteArray& packet);
+    void onAudioReady();
+    void onAudioPayload(const QByteArray& packet);
+    void onTokenRenew();
+    void onTxPump();
+    void onCivFrameTimeout();
+
+private:
+    void fail(const QString& reason);
+    void sendRenewal(const QString& reason);
+    [[nodiscard]] bool isCurrentControlPacket(std::span<const std::uint8_t> packet) const;
+    void requestStreamsIfReady();
+    void openMediaStreams();
+
+    Params m_params;
+
+    IcomStream* m_control = nullptr;
+    IcomStream* m_serial  = nullptr;
+    IcomStream* m_audio   = nullptr;
+
+    QTimer* m_tokenTimer = nullptr;
+    QTimer* m_txTimer = nullptr;
+    QTimer* m_civTimeout = nullptr;
+    // Re-sends the CI-V data-stream open until the radio actually starts
+    // streaming. One open is not reliably enough — see onSerialReady().
+    QTimer* m_civOpenRetry = nullptr;
+    bool    m_civDataSeen = false;
+    int     m_civOpenAttempts = 0;
+
+    // Auth state. A grant may replace the auth ID, but only after its header
+    // IDs prove it belongs to this control session.
+    AuthId m_authId{};
+    friend struct IcomCivBackendTestAccess;
+    std::uint8_t m_advertisedCivAddress = 0;
+    RadioId m_radioId{};
+    QString m_radioName;
+    QString m_deviceName;
+    std::uint16_t m_innerSeq = 0;
+    std::uint16_t m_tokenRequestId = 0;
+    bool m_authOk = false;
+    // Token-renewal watchdog. References renew at 60 s; a live IC-7300MK2
+    // expired a reconnect grant around 45 s and an established lease about
+    // 90 s after its last accepted token, both in silence.
+    qint64 m_lastAuthOkMs = 0;   // when the radio last acknowledged an auth
+    bool   m_renewUnacked = false;
+    bool   m_initialMaintenancePending = false;
+    int    m_renewRetries = 0;
+    static constexpr int kTokenRenewMaxRetries = 4;
+    QSet<quint16> m_pendingRenewals;
+    quint16 m_lastRenewalSeq = 0;
+    QString m_lastRenewalResult = QStringLiteral("not sent");
+    quint32 m_lastRenewalResponse = 0;
+    quint64 m_renewAcceptedCount = 0;
+    quint64 m_tokenReissuedCount = 0;
+    quint64 m_renewRejectedCount = 0;
+    quint64 m_ignoredAuthReplies = 0;
+    quint64 m_ignoredControlPackets = 0;
+    bool m_haveRadioId = false;
+    bool m_streamsRequested = false;
+    bool m_streamGranted = false;
+    bool m_connected = false;
+    // Re-entrancy guard: a teardown makes several streams fail at once, and
+    // each one calling stop() again would delete objects mid-signal.
+    bool m_failing = false;
+
+    std::uint16_t m_serialSendSeq = 0;
+    std::uint16_t m_audioSendSeq = 1;
+    // Wire clock for the transmit pump: frames owed since the current stream
+    // started flowing, so a late or coalesced tick can pay back what it missed
+    // (bounded) instead of leaving a permanent backlog. Invalid while idle.
+    QElapsedTimer m_txPumpClock;
+    qint64 m_txFramesSent = 0;
+
+    CivReassembler m_civ;
+    TxPacketizer m_tx;
+    TxCoordinator::Context m_txContext;
+    RxAssembler m_rx;
+};
+
+}  // namespace AetherSDR::icom
+
+Q_DECLARE_METATYPE(AetherSDR::icom::IcomSession::Params)
+Q_DECLARE_METATYPE(AetherSDR::icom::CivFrame)

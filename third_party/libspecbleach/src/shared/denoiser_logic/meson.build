@@ -1,0 +1,17 @@
+shared_sources += files([
+  'core/denoiser_profile_core.c',
+  'core/denoiser_post_process.c',
+  'core/noise_profile.c',
+  'core/noise_floor_manager.c',
+  'estimators/noise_estimator.c',
+  'estimators/adaptive_noise_estimator.c',
+  'estimators/brandt_noise_estimator.c',
+  'estimators/martin_noise_estimator.c',
+  'estimators/spp_mmse_noise_estimator.c',
+  'processing/suppression_engine.c',
+  'processing/tonal_reducer.c',
+  'processing/spectral_whitening.c',
+  'processing/nlm_filter.c',
+  'processing/gain_calculator.c',
+  'processing/masking_veto.c',
+])

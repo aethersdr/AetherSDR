@@ -1,0 +1,149 @@
+#pragma once
+
+#include <QObject>
+#include <QByteArray>
+#include <QKeyEvent>
+#include <QKeySequence>
+#include <QShortcut>
+#include <QString>
+#include <QStringList>
+#include <QVector>
+#include <functional>
+#include "models/TxController.h"
+
+namespace AetherSDR {
+
+struct ShortcutImportResult {
+    int importedCount{0};
+    QStringList unknownActions;
+    // Local (non-imported) actions whose binding this import displaced by a
+    // colliding customized incoming key — the caller should surface these so
+    // the user notices customizations they didn't intend to overwrite.
+    QStringList displacedActions;
+    QStringList errors;
+
+    bool ok() const { return errors.isEmpty(); }
+};
+
+struct ShortcutExportResult {
+    int exportedCount{0};
+    QString error;
+
+    bool ok() const { return error.isEmpty(); }
+};
+
+// The key sequence a key event resolves to for binding lookup: the key plus
+// Shift/Ctrl/Alt/Meta only. Shared by every resolver so they match alike.
+inline QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
+{
+    if (!ev || ev->key() == Qt::Key_unknown)
+        return {};
+
+    const Qt::KeyboardModifiers modifiers =
+        ev->modifiers() & (Qt::ShiftModifier
+                           | Qt::ControlModifier
+                           | Qt::AltModifier
+                           | Qt::MetaModifier);
+    return QKeySequence(static_cast<int>(modifiers) | ev->key());
+}
+
+class ShortcutManager : public QObject {
+    Q_OBJECT
+public:
+    enum class ShortcutPolicy { Operating, WindowManagement };
+
+    struct Action {
+        QString id;
+        QString displayName;
+        QString category;
+        QKeySequence defaultKey;
+        QKeySequence currentKey;
+        std::function<void()> handler;
+        bool autoRepeat{false};   // allow key-hold repeat (e.g. tuning)
+        bool persisted{false};    // explicit user intent (set/cleared) → written to settings
+        bool keysTx{false};       // keys the transmitter — declared at the
+                                  // registration site (like markTxKeying for
+                                  // widgets) so TX gates read one source of
+                                  // truth, not a hand-maintained id list that
+                                  // drifts (#4057 review: atu_start was missed).
+        TxController::Activity txActivity{TxController::Activity::Mox};
+        std::function<void(const TxController::Input&)> txHandler;
+        ShortcutPolicy policy{ShortcutPolicy::Operating};
+    };
+
+    explicit ShortcutManager(QObject* parent = nullptr);
+
+    // Register an action with its default key binding and handler. Pass
+    // keysTx=true for any action that keys the transmitter (MOX, TUNE, ATU,
+    // two-tone, PTT, CW keying) — automation gates honor the flag.
+    void registerAction(const QString& id, const QString& displayName,
+                        const QString& category, const QKeySequence& defaultKey,
+                        std::function<void()> handler,
+                        bool autoRepeat = false,
+                        bool keysTx = false,
+                        ShortcutPolicy policy = ShortcutPolicy::Operating);
+
+    // Binding management
+    void setBinding(const QString& actionId, const QKeySequence& key);
+    void clearBinding(const QString& actionId);
+    void resetToDefaults();
+
+    // Persistence
+    void loadBindings();
+    void saveBindings();
+
+    // Portable backup format. Rows identify actions by stable id and also carry
+    // their human-readable names so imports can fall back across an id rename.
+    // QKeySequence::PortableText keeps modifier names cross-platform.
+    QByteArray exportBindingsCsv() const;
+    ShortcutImportResult importBindingsCsv(const QByteArray& bytes);
+
+    // File I/O for the portable backup — atomic write via QSaveFile, size-gated
+    // and error-string-surfacing read. Kept on the manager itself so the gui
+    // never learns about QFile/QSaveFile (matches ThemeManager's precedent).
+    ShortcutExportResult exportToFile(const QString& path) const;
+    ShortcutImportResult importFromFile(const QString& path);
+
+    // Create/destroy QShortcuts on the target widget.
+    // Operating actions are window-scoped and consult guardFn. WindowManagement
+    // actions are application-scoped and remain available while operating input
+    // is disabled/captured. TX actions always retain the operating policy.
+    void rebuildShortcuts(QWidget* parent,
+                          std::function<bool()> guardFn = nullptr);
+
+    // Enable or disable the operating QShortcuts, so their keys reach the
+    // focused widget (a slider's arrows, or every bound key with keyboard
+    // shortcuts off, #5483). Remembered: rebuildShortcuts() applies it, so a
+    // rebuild cannot re-arm yielded keys.
+    void setShortcutsEnabled(bool enabled);
+    bool shortcutsEnabled() const { return m_shortcutsEnabled; }
+
+    // Query
+    const QVector<Action>& actions() const { return m_actions; }
+    Action* action(const QString& id);
+    const Action* actionForKey(const QKeySequence& key) const;
+    // The action bound to `key` that the keyboard-shortcut master switch
+    // governs; nullptr for an unbound key or a window-management action,
+    // which runs whatever the switch says.
+    const Action* operatingActionForKey(const QKeySequence& key) const;
+    // A window-management exemption never widens a keying action.
+    static bool isWindowManagement(const Action& a);
+    QString conflictCheck(const QKeySequence& key,
+                          const QString& excludeId = {}) const;
+
+    // Categories (ordered for legend display)
+    static QStringList categories();
+
+signals:
+    void bindingsChanged();
+
+private:
+    void normalizeDuplicateBindings();
+
+    QVector<Action> m_actions;
+    QVector<QShortcut*> m_shortcuts;
+    QVector<QShortcut*> m_windowShortcuts;
+    bool m_shortcutsEnabled{true};
+};
+
+} // namespace AetherSDR

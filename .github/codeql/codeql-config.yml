@@ -1,0 +1,22 @@
+name: AetherSDR CodeQL configuration
+
+# Restrict analysis to AetherSDR's own first-party C++ sources.  Vendored
+# upstream deps and build-time-extracted source trees are out of scope —
+# their security posture is the responsibility of upstream, and scanning
+# them inflates alert noise that masks signal in our own code.
+
+paths-ignore:
+  # ExternalProject extracts upstream sources here at build time
+  # (Opus 1.5.2 from xiph.org, etc.).  Not committed, not ours.
+  - 'build/**'
+
+  # Vendored dependencies — opus-rade, mosquitto, ggmorse, libmspack,
+  # rnnoise, deepfilter, fftw3, libspecbleach, r8brain, radae, rtmidi.
+  # Treat as binary-equivalent black boxes for security analysis.
+  - 'third_party/**'
+
+  # Test harnesses — not shipped, run locally + in CI.
+  - 'tests/**'
+
+  # Auto-generated source from CHANGELOG.md by scripts/gen_whatsnew.py.
+  - 'src/generated/**'

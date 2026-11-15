@@ -1,0 +1,632 @@
+# In-App Update Manifest — Schema 1
+
+**Status:** RFC #5304 Phase 2. The CI side writes and publishes this; the
+app's `UpdateStager` (`src/core/UpdateStager.{h,cpp}`) reads and applies it
+into a staging copy. Swapping the staged tree in is the platform phases'.
+
+Each release publishes one signed manifest that names, for each updatable
+payload, every file of the new tree and the patch bundles that turn each of
+the last four releases' trees into it. `tools/build_update_manifest.py`
+writes it and `.github/workflows/update-manifest.yml` signs and publishes it.
+
+## Where it lives
+
+| Object | Location |
+|---|---|
+| Manifest, newest release | `https://updates.aethersdr.com/latest/manifest.json` |
+| Its signature | `https://updates.aethersdr.com/latest/manifest.json.sig` |
+| Manifest, any release | `https://updates.aethersdr.com/releases/<tag>/manifest.json` (and `.sig`) |
+| Patch bundles, full payloads | GitHub release assets of the new release |
+
+The R2 bucket behind `updates.aethersdr.com` is written only by the release
+workflow's `publish` job (`tools/publish_update_manifest.py`), with a token
+scoped to that bucket.
+
+A release counts as **published** only when everything a client reads is
+served and verifies: `releases/<tag>/` holds the manifest and a signature that
+checks against the committed key, and, when the tag is GitHub's latest
+release, `latest/` holds a verifying pair naming that release or a newer one.
+A run that finds anything less publishes again, which repairs a partial
+upload. `latest/` is promoted only over an older release, re-read just before
+the write, and the publish job runs one at a time across tags, so an older
+release's run can never roll it back.
+
+Bundles and full payloads stay on GitHub Releases, so every URL the manifest
+names is under `https://github.com/aethersdr/AetherSDR/releases/download/<tag>/`,
+inside the prefix the app's download allowlist already enforces
+(`UpdateChecker::isTrustedDownloadUrl`). The publish job refuses to sign a
+manifest that names anything else, or another release.
+
+**Telemetry boundary.** RFC #5304 asked that no project-owned endpoint see
+clients. The update check still goes only to `api.github.com`; this host is
+the one exception, ruled in Phase 2. `updates.aethersdr.com` sees a client's
+IP address when, and only when, the client fetches a manifest to install an
+update. Nothing else is sent: the request carries no identifier, and the
+client sends nothing back.
+
+## Signature
+
+`manifest.json.sig` is the raw 64-byte Ed25519 signature over the exact bytes
+of `manifest.json` (no canonicalisation: verify the bytes as downloaded,
+then parse). The app embeds the public key from
+`packaging/update-signing.pub` and refuses a manifest that does not verify.
+`key_id` is the first 16 hex digits of the SHA-256 of the raw 32-byte public
+key; it lets a client tell a rotated key apart, never chooses which key to
+trust.
+
+A valid signature proves the manifest came from the release workflow. It
+does not prove it is the newest one. Whoever can serve bytes at this host
+could **replay** an older signed manifest (rolling clients back) or **freeze**
+`latest/` on an old one (holding clients on an old build forever, signature
+valid). The client must:
+
+- refuse a manifest whose `version` is not newer than the running build;
+- refuse one whose `generated_at` is older than the newest it has accepted;
+- require `tag` to equal the `tag_name` of GitHub's latest release, which the
+  update check already fetches. A `latest/` that disagrees with GitHub is
+  stale or frozen, and the client offers the release page instead.
+
+## Top level
+
+```json
+{
+ "schema": 1,
+ "product": "AetherSDR",
+ "tag": "v26.10.4",
+ "version": "26.10.4",
+ "generated_at": "2026-11-01T18:04:11Z",
+ "key_id": "3fa1c2…",
+ "payloads": [ … ]
+}
+```
+
+A client refuses any `schema` it does not know. Versions compare as four
+numbers, `YY.M.patch.hotfix`, with an absent hotfix counting as 0 (a hotfix
+release is `"version": "26.7.4.1"`).
+
+## Payload
+
+```json
+{
+ "platform": "windows",
+ "arch": "x86_64",
+ "full": {"asset": "AetherSDR-v26.10.4-Windows-x64-portable.zip",
+          "url": "https://github.com/…/v26.10.4/AetherSDR-v26.10.4-Windows-x64-portable.zip",
+          "sha256": "…", "size": 157145703},
+ "files": [ {"path": "AetherSDR.exe", "type": "file", "size": 151234567,
+             "sha256": "…", "executable": false},
+            {"path": "AppRun", "type": "symlink", "target": "usr/bin/AetherSDR"} ],
+ "patches": [ … ]
+}
+```
+
+- `platform` / `arch`: `windows`, `linux` or `macos`; `x86_64` or `arm64`, as
+  `QSysInfo::buildCpuArchitecture()` names them.
+- **Windows** is the tree inside the portable zip, which is the `deploy\` tree
+  `setup.exe` installs. **Linux** is the tree inside the AppImage's squashfs,
+  which `AetherSDR --install` installs (see
+  [The Linux install](#the-linux-install-phase-5)). **macOS** is the signed
+  `AetherSDR.app` bundle, its paths starting at `Contents/` (see
+  [The macOS install](#the-macos-install-phase-4)). Its release asset is the
+  app tarball `AetherSDR-<tag>-macOS-<apple-silicon|intel>.app.tar.zst`, which
+  is both the payload and its `full`.
+- `dax_driver` (macOS only, optional): `{"source": "<40 hex>"}`, the git tree
+  hash of `hal-plugin/` at the tag. The DAX driver carries the same hash,
+  stamped into its `Info.plist` as `AetherSDRDAXSource` when it is built
+  (`hal-plugin/CMakeLists.txt`); the app compares the installed driver's stamp
+  with this to tell the user a release changes the driver. Anything but a
+  40-digit lowercase hash rejects the manifest.
+- `full`: the whole payload, the fallback when no patch applies or anything
+  fails to verify. Its `sha256` and `size` are as binding as a bundle's: release
+  assets can be replaced by anyone with write access, and the signed manifest
+  is what pins them. For Linux, `full` is the release's `.tar.zst` (see
+  [The full release in-app (Linux)](#the-full-release-in-app-linux)). A
+  manifest whose Linux `full` is still the AppImage, a container the app
+  cannot unpack, sends a Linux client that cannot patch to the browser.
+- `files`: the complete new tree. Paths use `/`, are relative and never contain
+  `..`. Directories are implied. A symlink's `target` is relative and resolves
+  inside the tree: the builder refuses any other link, and the client must too.
+
+## Patch
+
+```json
+{
+ "from": "26.10.3",
+ "bundle": {"asset": "AetherSDR-v26.10.4-Windows-x64-from-v26.10.3.update.tar",
+            "url": "…", "sha256": "…", "size": 5755368},
+ "unchanged": 1206,
+ "ops": [
+  {"op": "patch", "path": "AetherSDR.exe", "from_sha256": "…", "member": "000000.zst",
+   "window_log": 28, "sha256": "…", "size": 151234567, "executable": false},
+  {"op": "add", "path": "plugins/new.dll", "member": "000001.zst",
+   "window_log": 13, "sha256": "…", "size": 5000, "executable": false},
+  {"op": "remove", "path": "old.dll"},
+  {"op": "symlink", "path": "AppRun", "target": "usr/bin/AetherSDR"}
+ ]
+}
+```
+
+The bundle is a plain tar of zstd frames, one per `patch` or `add` op, named
+by `member`. Its bytes depend only on its contents.
+
+Ops are applied **in order**. Every `remove` comes first; after the removals,
+remove each directory they left empty (deepest first). That is what lets a
+path change kind between releases: a file that becomes a directory, a
+directory that becomes a file, a directory that becomes a symlink.
+
+- `patch`: decompress `member` with the current file as the zstd dictionary
+  (`--patch-from`), with the decoder's window limit raised to `window_log`.
+- `add`: decompress `member` on its own, with the same window limit. A changed
+  file is shipped this way when that is smaller than its delta.
+- `remove`: delete the file.
+- `symlink`: create or replace the link. Never write through a link: a path
+  with a symlink component is refused.
+
+A file in `files` with no op is unchanged from the `from` release.
+
+## Applying (the contract the app-side PR implements)
+
+1. Verify the signature, then `schema`, `version` and `generated_at`, as above.
+2. Pick the payload for this build's platform and arch, and the patch whose
+   `from` is the running version. With none, use `full`.
+3. Download the bundle (or `full`), check its `sha256` and `size`, and unpack
+   it into a staging copy of the install. Never patch the running install in
+   place (Principle XIV). Resolve every write against the staging root as a
+   boundary.
+4. Decompress each member with the decoder's output capped at the op's
+   `size`, and its window limit at `window_log` (at most 31). Output beyond
+   `size` is a hard fail. The window limit bounds the decoder's memory when
+   it streams; a frame small enough to decode in one pass allocates no window
+   at all, so the output cap is the check that always applies.
+5. For each `patch` op, check the current file against `from_sha256` before
+   using it. A mismatch is a hard fail, not a best effort (Principle VII).
+6. After all ops, check every entry in `files` against the staged tree. Any
+   mismatch abandons the staged tree and falls back to `full` (below).
+7. Files in the install that are not in `files` are left alone. That covers
+   the installer's own `unins000.*` on Windows.
+8. Swap on quit, keeping the previous tree for rollback.
+
+### The full release in-app (Windows)
+
+When no patch applies, or the patch fails anywhere (download, hash, a
+drifted install, a result that does not match), a request with
+`fullFallback` stages `full` instead of sending the user to the browser.
+That needs `full` to be a `.zip` of at most 512 MiB here; Linux's `.tar.zst` is below.
+
+- Its `sha256` and `size` are checked like a bundle's.
+- The zip must hold exactly the files in `files`: no others, none missing,
+  and no more bytes in all than `files` adds up to. Entry names written
+  with `\` (as `Compress-Archive` writes them) are read as `/`. Folder
+  entries are allowed; a link is not, since a zip cannot carry one.
+- The staged tree is those files plus the installer's own top-level
+  `unins*` files, copied from the install, so `setup.exe`'s uninstaller
+  still works after the swap. Nothing else comes from the install.
+- Every file is then checked against `files`, as in step 6.
+
+If the full release fails too, the browser fallback is offered, once.
+
+The Windows zip is unpacked in memory: the download and its unpacked
+files are held at once, on a worker thread. For v26.10.3 that measured
+548 MiB peak (a 157 MB zip, 344 MB of files). The caps above are hard
+ceilings, so this is footprint, not safety.
+
+### The full release in-app (Linux)
+
+The client stages `full` in-app when its name ends in `.tar.zst` (and in
+`.zip`, Windows above); anything else, the AppImage, goes to the browser.
+The tarball is the payload tree itself, built from `files`, so it is the
+same tree the patches produce. The AppImage workflow writes it as
+`AetherSDR-<tag>-<arch>.tar.zst` from the image it just built
+(`tools/build_update_manifest.py --tarball`: unsquashfs, never run) and
+attaches it beside the AppImage, where Sign Release Artifacts GPG-signs it
+and lists it in `SHA256SUMS.txt`. Update Manifest then reads it back with a
+reader written from this contract and names it `full` only if it holds
+exactly the payload's `files`, exec bits included (the app takes them from
+`files`, but a user's `tar` from the archive); a release whose tarball is
+missing or differs gets no manifest. A release is expected to carry tarballs
+when its own tag's AppImage workflow builds them, so a release cut before
+then (re-run to repair it) keeps the AppImage as Linux's `full`.
+
+- A zstd stream (one frame or several) of a POSIX ustar archive, with a
+  window of at most 2^27 (zstd's default levels use 2^23 and less, `--long`
+  2^27). Its `sha256` and `size` are checked first, so nothing unsigned is
+  ever decompressed.
+- Exactly the entries in `files`: each file (type `0`) once, with the size
+  `files` gives, and each link (type `2`) once, to its signed `target`.
+  Folder entries (type `5`) are allowed only for folders that hold one of
+  them, so the AppImage's empty folders are left out. Names are relative,
+  `/`-separated, and may use ustar's `prefix` field. Hard links, devices,
+  GNU long names, pax headers, anything after the end-of-archive blocks
+  except zeros, and a missing end are all refused.
+- File modes in the archive are ignored: each file's executable bit comes
+  from `files`.
+- It is unpacked as it is decompressed, straight into the staging folder,
+  so only the download is held in memory (134 MB for v26.10.4 x86_64, from
+  a 348 MB tree). Every file is then checked against `files`, as in step 6.
+  Nothing comes from the install.
+
+### What stays staged
+
+The staging root holds at most the one staged release waiting to be
+swapped in (`<stagingRoot>/<version>`), with its record beside it, never
+in it:
+
+| File | What |
+|---|---|
+| `<version>.json` | `version`, the `from` version it was staged for, and the `install` it was staged from. No tag: the release's tag is `v<version>`, which the signed manifest binds |
+| `<version>.manifest.json`, `.sig` | The signed manifest and signature that vouch for every file |
+
+The record is written after the tree is in place, so a tree without a
+complete record is never used. Each attempt works in its own `.work-*`
+folder, removed on failure or cancel.
+
+At startup `UpdateStager::stagedRelease` keeps the staged release only if
+it is still the one to install: staged for the running version and this
+install, GitHub's latest (when that is known yet), and not the release
+that was rolled back. GitHub's latest is compared with `v<version>`: the
+record is unsigned and keeps no tag of its own, and `revalidate` binds the
+version to the signed manifest. Everything else staging wrote is removed: other versions,
+half-written records, and work folders a crashed run left. The staging
+root is the helper's state folder too, so only staging's own names are
+swept (`.work-*`, `<version>`, its three record files, and a record
+`QSaveFile` left half written as `<record>.XXXXXX`); the helper's
+journal, result, repair plan, log and copy are left alone.
+
+Before the swap, `revalidate` checks the stored signature with the
+built-in key and every file in `files` against the stored manifest, so a
+release file changed or removed on disk since it was staged is never
+swapped in. A file added since is not caught: the patch path keeps the
+install's own files (`unins*`, anything a portable user put there), so the
+tree is never exactly `files`. Both trees are the user's own, at the same
+level, so no boundary is crossed.
+
+### Testing an update before there is a release
+
+A build configured with `AETHER_UPDATE_DEV_OVERRIDES` (`BUILD-OPTIONS.md`;
+`windows-installer.yml`'s `dev_overrides` dispatch input builds one, never
+on a tag and never for the Store flight) honors four environment variables, each logged when used:
+
+| Variable | Effect |
+|---|---|
+| `AETHER_UPDATE_MANIFEST_URL` | Fetch the manifest (and `.sig`) from here |
+| `AETHER_UPDATE_TRUST_KEYS` | Also trust these Ed25519 keys (64 hex digits each, comma-separated) |
+| `AETHER_UPDATE_DOWNLOAD_BASE` | Fetch release files from `<base>/<tag>/<asset>`. The URLs the manifest names are still checked as signed. |
+| `AETHER_UPDATE_PRETEND_VERSION` | Run as this version, so the build's own release is an update. It is removed from the environment at startup, so the self-test and a restarted app are the real version. |
+
+The freeze and replay checks are unchanged.
+
+The release workflow applies every bundle to the real earlier release, by
+this contract, before anything is signed, so a bundle that does not rebuild
+its release never ships. The tests add a reference applier written from this
+document. The client PR owns the negative cases and must test each: a bad signature, a replayed older manifest, a source
+file that fails `from_sha256`, a corrupted bundle or member, a result that
+fails its `sha256` or exceeds its `size`, a `latest/` that disagrees with
+GitHub, and paths or symlink targets that escape the install (absolute, `..`,
+a write through a link, or a link pointing outside it).
+
+## Swapping it in (Windows, Phase 3)
+
+`AetherSDRUpdater.exe` (`src/updater/`) does the swap after AetherSDR
+exits. It is built with the static MSVC runtime and no Qt, and the app
+copies it into the state folder before starting it
+(`UpdateInstaller::launchHelper`, called by `UpdateController` below),
+because it renames the folder it was installed in. Its
+command line is versioned (`--protocol 1`), and anything else is refused.
+
+In-place updates are per-user. `launchHelper` refuses while AetherSDR runs
+elevated across a UAC boundary (the split token's full half): the helper
+would run from a user-writable folder at the elevated level, and a
+swapped-in tree would keep that folder's permissions inside Program
+Files. With UAC off, or as the built-in Administrator, there is no lower
+level to escape from, and it runs. A per-machine install run normally fails the
+helper's writable-parent check and is left alone (`NotPossible`); either
+way the answer is to run the installer.
+
+1. It waits for AetherSDR to exit, up to five minutes, and never kills it.
+2. It checks first: the install and the staged release each hold
+   `AetherSDR.exe`, the install's parent folder is writable, and no
+   `<install>.new` it did not create is in the way.
+3. It moves the staged release to `<install>.new`. Across volumes it copies
+   instead, so the swap is a same-volume rename.
+4. It renames `<install>` to `<install>.previous`, then `.new` to `<install>`.
+   A brief lock is retried for up to 30 s; one that persists is undone.
+   Only one `.previous` is kept.
+5. It runs `AetherSDR.exe --update-selftest <marker>` from the new tree.
+   The new version starts Qt, writes its version to the marker and exits,
+   with no window, no settings and no radio. A missing or wrong marker, or
+   no exit within 60 s, restores `.previous` and keeps the failed release as
+   `<install>.failed`.
+6. Restart to update then starts the app; a swap on quit does not.
+
+A journal (`swap-journal.txt`) records each step before it is taken, and
+a step is taken only once its record reached the disk: it is flushed
+(`FlushFileBuffers`) and moved into place with `MOVEFILE_WRITE_THROUGH`, so
+a power cut leaves the old record or the new one whole. If a record can't
+be written, the step is skipped and the swap undone, so the last record on
+disk always matches the folders. A helper that dies mid-swap is repaired by
+the next run, but only after AetherSDR has exited, never while it runs. The
+install is restored from `.previous`, and a release that was in place but
+never passed its self-test (the journal at `swap-2`, `selftest` or
+`rollback`) is rolled back. The journal is kept while a repair is still
+owed: after a failed rollback, or when the app never exited. Windows has
+no atomic folder swap; between step 4's two renames nothing runnable is at
+`<install>` for a moment, so nothing could start AetherSDR to start the
+helper again. Before the first rename the helper therefore arms a repair:
+`repair-plan.txt` in the state folder (the install and the version) and an
+`HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce` entry that runs
+`AetherSDRUpdater.exe --protocol 1 --repair --state-dir <dir>` at the next
+logon. If the repair cannot be armed (or its command line would pass
+RunOnce's 260 characters), nothing is renamed.
+
+The repair runs `recover()` alone. Windows deletes a RunOnce value before
+running it, so the repair arms itself again first, and one cut short runs
+at the following logon. While an `AetherSDR.exe` runs from the install it
+renames nothing and waits for the next logon. It records `SwapUndone`,
+never `RolledBack`, since the release was never tested, and only when it
+moved a folder. One with nothing owed only disarms. The helper disarms it
+whenever it removes the journal.
+
+The journal names the file the swap left at `<install>`: the volume serial
+and NTFS file ID of the new release's `AetherSDR.exe`, which a rename keeps
+and a file written again does not. `recover()` rolls back only that tree,
+so a release reinstalled after the Broken message (below) is never
+replaced by the stale `.previous`. The outcome goes to `swap-result.txt`, which the app reads once
+at its next start and checks before believing (a known outcome and a
+plain version, or nothing is logged or kept). A rolled-back release is
+remembered as `Updates.rolledBackVersion`, which `UpdateController` uses to
+never stage or offer it again.
+
+### The self-test is a permanent contract
+
+The helper that runs is the old install's, and it tests every later
+release. So `AetherSDR.exe --update-selftest <marker>` is frozen: one
+marker path argument, read from the Unicode command line, and a marker
+holding exactly the version (`26.10.4`, no newline), written before any
+window, settings write or radio. A release may add a new self-test beside
+it, never rename, drop or change this one: an old helper would otherwise
+start the full app, stop it after 60 s and roll back a good release.
+
+If a rollback rename itself fails, the helper shows a message naming the
+three folders and the log (`updater.log`), rather than failing silently.
+
+## The Linux install (Phase 5)
+
+There is no helper on Linux. Each release has its own folder, and a link
+names the one to run:
+
+```
+~/.local/share/AetherSDR/install/<version>/   the payload tree (AppRun, usr/...)
+~/.local/share/AetherSDR/install/current      -> <version>
+~/.local/bin/aethersdr                         -> .../install/current/AppRun
+~/.local/share/applications/AetherSDR.desktop  Exec/TryExec .../install/current/AppRun
+```
+
+(`~/.local/share` is `$XDG_DATA_HOME`.) The install has a folder of its own
+because `~/.local/share/AetherSDR` already holds user data. `LinuxInstall`
+(`src/core`) does all of it.
+
+- **`AetherSDR --install`**, run from the unpacked tarball or from the
+  AppImage (whose mount is the same tree), copies the tree into
+  `install/<version>`, makes it `current`, writes the menu entry from the
+  tree's own `usr/share/applications/AetherSDR.desktop` with `Exec` and
+  `TryExec` naming `current/AppRun`, links the tree's hicolor icons and the
+  command through `current`, and starts it. A file of the user's own at a
+  link's place is left alone. If the menu entry or `current` can't be
+  written, a release folder it has just copied is removed again, so a
+  failed install leaves nothing behind. It runs before `QApplication` and
+  writes no settings. The copy is made writable by its owner folder by folder, since
+  the AppImage's mount is read-only and its modes would otherwise follow.
+- **Install for updates** (RFC #5304 Phase 6) is the same install from the
+  AppImage's Updates window, offered only when the running binary is the
+  AppImage's own (`$APPDIR/usr/bin`, with `$APPIMAGE` set; the variables
+  alone are inherited by anything another AppImage starts), it is not
+  already in an install, and no installed release is current: an
+  existing install is never replaced from an AppImage, which could be older.
+  That holds against an install made while the copy runs, too:
+  `LinuxInstall::install` takes `Current::KeepExisting`, which makes the
+  link with a plain `symlink()` at `current` instead of renaming one over
+  it, so it fails if anything is there by then. The copy is removed again,
+  and the window points to the install that won. A `current` naming no
+  installed release (its folder gone, or a target outside the install)
+  does not count as an install: it is moved aside in one rename, judged,
+  and removed, or put back with `RENAME_NOREPLACE` if it names a release
+  after all. `--install` keeps `Current::Replace`, so an older AppImage's
+  `--install` deliberately replaces a newer install.
+  `UpdateController::installAppImage` runs `LinuxInstall::install` on the
+  running tree on a worker thread, then, if the operator ticked it in the
+  confirmation (off by default, a maintainer ruling), moves the AppImage to
+  the trash with `QFile::moveToTrash`. Only when both succeed does it start
+  `current/AppRun` after this process exits and close the window; a failed
+  trash leaves the install in place and says so instead of restarting. The
+  started copy, and the one `--install` starts, run without the AppImage
+  runtime's variables (`APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`), whose mount
+  is gone by then and which would make the installed copy take itself for
+  the AppImage, and without any inherited descriptor: the runtime leaves
+  one open on its mount, which would keep the mount and the AppImage file
+  alive for as long as the installed copy runs. Before it restarts, the version goes in
+  `Updates.installedFromAppImage`; the installed copy's next start reports
+  it in the status bar once (`UpdateController::lastUpdate`, outcome
+  `Installed`) and clears it, a maintainer ruling. The AppImage never
+  reports it.
+- **The switch** is what the helper's hand-over is on Windows, done by the
+  app itself in `UpdateInstaller::launchHelper`: the staged tree is renamed
+  into `install/<version>`, that folder's `AppRun --update-selftest` must
+  pass (the same frozen contract, 60 s), and only then is a new link renamed
+  over `current`. Every other version folder is then removed, except the one
+  running, the one `current` named and any another AetherSDR runs from
+  (found through `/proc/<pid>/exe`). A rename over a link is atomic, and the
+  running tree is never touched, so there is no window with nothing
+  runnable, no journal and no repair. `--install` of a version already
+  installed copies the new tree beside it and trades the two in one step
+  (`renameat2(RENAME_EXCHANGE)`), so `current` never dangles, even if the
+  installer is killed mid-copy; the old copy is removed once nothing runs
+  from it.
+- If the self-test fails on **Restart to update**, the new folder is
+  removed, `current` is unchanged and the release is remembered as rolled
+  back; the window says so at once. As AetherSDR **quits**, a failure may be
+  the session's rather than the release's (a logout takes the display away
+  first), so the tree goes back to staging and is tried again at the next
+  quit or Restart (a maintainer ruling), counted in
+  `Updates.quitSwitchTries`. The third failure at quit is final: the
+  release is removed and rolled back, and `RolledBack <version>` is written
+  to `swap-result.txt` for the next start (a maintainer ruling). If
+  `current` cannot be changed, the tree goes back to staging too. Success
+  writes `Updated <version>`.
+- If `current` already names that release or a newer one (installed by hand
+  meanwhile), the staged tree is dropped and nothing is switched: never a
+  step back. Cleanup never removes the folder `current` named.
+- **Restart to update** then starts `current/AppRun` once this process has
+  exited (a `/bin/sh` loop polling the pid, two minutes at most), so two
+  instances never overlap.
+- Install update is offered only when the running binary
+  (`/proc/self/exe`: Qt reports the link's folder when started through
+  `AppRun` or `current`) is `install/<version>/usr/bin/AetherSDR` and the
+  install folder is writable. The AppImage, distribution packages and build
+  folders keep **Get AetherSDR**; the AppImage also offers Install for
+  updates.
+
+## The macOS install (Phase 4)
+
+macOS uses this updater, not Sparkle, and needs no helper (maintainer
+rulings on #5304). The install is the `AetherSDR.app` bundle wherever the
+user put it; `MacInstall` (`src/core`) does the work.
+
+- **Offered** (`UpdateInstaller::canInstallInPlace`) when the running binary
+  is `<bundle>/Contents/MacOS/AetherSDR`, the bundle was not translocated (a
+  quarantined app started from where it was downloaded runs from a read-only
+  `…/AppTranslocation/…` copy), and both the bundle's folder and the bundle
+  itself are writable: the swap moves it. A copy running from the DMG fails
+  the folder probe. The staging root is the per-user state folder.
+- **The hand-over checks, the exit swaps.** At Restart to update (on the
+  worker thread) or as AetherSDR quits, `UpdateInstaller::prepareSwap` runs
+  `MacInstall::prepare`: a staged bundle on another volume than the app is
+  copied beside it under a hidden `.AetherSDR-incoming-<pid>-*` name, so the
+  swap is still one rename (copies whose process is gone are removed first;
+  another live instance's copy stays);
+  then `codesign --verify --deep --strict` and the frozen
+  `--update-selftest`. The swap waits for `UpdateInstaller::finishSwapOnExit`,
+  which `main()` calls after the event loop returns and the window is gone
+  (and which first waits, bounded, for Restart to update's checks if the
+  user quit while they ran):
+  after the swap, the bundle's path holds the new release, so nothing the
+  running process loads late may come after it. A UI-scale restart, which
+  opens the bundle again as this process exits, drops the readied swap; the
+  release stays staged.
+- **The swap** is one `renamex_np(RENAME_SWAP)` of the readied bundle and the
+  installed one, so nothing at the bundle's path is ever half in place. The
+  bundle swapped out is moved to `update/previous`, replacing the one there,
+  when that is on the same volume, and removed otherwise (a maintainer
+  ruling: `/Applications` shows one AetherSDR). Success writes
+  `Updated <version>` to `swap-result.txt`. While another AetherSDR runs the
+  bundle's binary (`open -n`; found through `proc_pidpath`), the swap waits
+  as the Windows helper does: `OldStillRunning`, the release stays staged
+  (a maintainer ruling). A swap that cannot be made writes `NotPossible`
+  and, at quit, counts as a failed try with the self-test's; the third is
+  final (`RolledBack`): the release is dropped and never offered again, so a
+  rename macOS keeps refusing is not retried at every quit. A refusal on
+  Restart to update, which the user asked for, is not counted. Restart to
+  update then runs
+  `open -n <bundle>` once this process has exited.
+- **The code signature backs up the manifest; it is not the trust boundary.**
+  The manifest's Ed25519 signature decides what is installed; codesign
+  catches a staged tree that does not match what was signed, before it can
+  replace a working app. When the running app has a team, the staged bundle
+  must carry a Developer ID Application signature of that same team
+  (`codesign -R` with `anchor apple generic and certificate
+  leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] =
+  "<team>"`, a maintainer ruling), so a tree re-signed by another process in
+  the user-writable staging folder between the manifest re-check and the
+  swap is refused. An ad-hoc signed local build (`TeamIdentifier=not set`)
+  checks the signature alone.
+- A bad signature is final at once. A check that could not run (codesign
+  missing or timing out, or the running app's team unreadable) refuses
+  nothing and rolls nothing back: the release stays staged for the next
+  try. A failed self-test is final on Restart to update and retried at the
+  next quit up to the third, as on Linux; a final failure is remembered as
+  rolled back.
+- The bundle carries no signatures in extended attributes (no
+  `com.apple.cs.*`), so the payload is its bytes and its symlinks (the
+  frameworks' `Versions/Current` and the links through it). A copy with
+  every extended attribute stripped, as the stager writes it, passes
+  `codesign --verify --deep --strict` and `spctl --assess` (checked on
+  v26.5.3). The notarization ticket is stapled to the DMG, not the app;
+  Gatekeeper accepts the app through the online check, and a bundle the
+  updater writes carries no quarantine flag.
+- Names compare case-insensitively on macOS, as on Windows: APFS's default
+  ignores case.
+- The DAX driver is not part of the payload (a maintainer ruling); it stays
+  an install from the DMG. While a release is staged whose `dax_driver.source`
+  differs from the installed driver's stamp
+  (`/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver`, read by
+  `MacInstall::daxDriverSourceOf`; a driver from before the stamp counts as
+  different), the Updates window says the release also updates the DAX audio
+  driver and to install it from the release's disk image
+  (`UpdateController::daxDriverChanges`, read once per staged version). That
+  note comes ahead of the offline notes. The driver's `CFBundleShortVersionString`
+  is not used: it has never been bumped (maintainer rulings: the source hash,
+  compared with the installed driver).
+- **CI** (the Phase 4 CI half): the macOS DMG workflow's `app-tarball` job
+  takes `AetherSDR.app` out of that leg's own signed, notarized DMG (one leg
+  failing to sign holds back only its own tarball; on a tag, a leg without a
+  signed DMG fails rather than fall back to the unsigned bundle), checks it with
+  `codesign --verify --deep --strict`, and writes the app tarball with
+  `tools/build_update_manifest.py --app-tarball` (ustar with the framework
+  links and exec bits, read back against the bundle's own file list). The
+  signing job, which holds the Apple identities, checks out nothing; this
+  job holds none. Sign Release Artifacts and Update Manifest are both also
+  triggered by the macOS DMG build. Signing GPG-signs the app tarballs, which
+  join `SHA256SUMS.txt`; Update Manifest checks each with
+  `check_release_tarball` (the app's own strict reader, as for Linux) and
+  passes `--dax-driver-source` from the tag. Both wait for the app tarballs
+  only while the tag's macOS DMG build can still attach them: once it has
+  finished without them, Linux and Windows are signed and published without
+  them, and the manifest leaves macOS out until it is dispatched again (a
+  maintainer ruling: macOS never blocks the other platforms). All of this
+  applies only when the tag's own `macos-dmg.yml` makes app tarballs (it
+  names `--app-tarball`): a tag cut before that leaves macOS out of the
+  manifest (`--no-macos-payloads`).
+
+## Install update (the app's side)
+
+`UpdateController` (`src/core`) is the one place the app installs from.
+MainWindow owns it, so a staged release outlives the Updates window that
+started it; the window and the title-bar badge show its state:
+**Idle**, **Staging** (with progress), **Staged**, and **Handed** (the
+helper has it and waits for AetherSDR to exit).
+
+- Install update is offered only when `UpdateInstaller::canInstallInPlace`
+  says so. Windows: not a store install, no split elevated token,
+  `AetherSDRUpdater.exe` beside the app, and the install's parent writable.
+  Linux: an install `--install` made (see above).
+  Otherwise, or once a release falls back from the full download, the
+  window keeps **Get AetherSDR** in the browser. Beside Install update, a
+  **Download release** link keeps the browser route (a maintainer ruling).
+- Staging requests `fullFallback`, with GitHub's latest as the freeze
+  check's tag. Closing the window while it stages cancels it (a maintainer
+  ruling); a staged release stays.
+- At startup, before any check, `stagedRelease()` restores what an earlier
+  run staged. Each answer from the update check runs it again with the new
+  latest, so a superseded release is discarded. It never runs while
+  staging.
+- Skip this version discards a staged (or staging) release of that
+  version. A rolled-back version is never staged.
+- **Restart to update** runs `revalidate()` and then hands the release to
+  the helper with `--restart` on a worker thread (on Linux the switch and
+  its self-test run there too, a maintainer ruling), in the state
+  `Installing`; `restartReady` then closes the window, and AetherSDR quits
+  normally. If the files changed since staging, the release is discarded
+  and the window says to install again.
+- As AetherSDR quits (the end of `MainWindow::closeEvent`), a staged
+  release is revalidated and handed over without `--restart`, unless radio
+  firmware is being written. Revalidating hashes the whole tree, so the
+  quit waits for it.
+- At the next start the status bar reports the helper's result for about
+  10 seconds (`UpdateInstaller::lastSwapResult()`, read once in `main.cpp`).
+
+## Bundle naming
+
+`AetherSDR-<tag>-<label>-from-<from tag>.update.tar`, where `<label>` is
+`Windows-x64`, `x86_64` or `aarch64`. The `.update.tar` suffix keeps bundles
+out of `sign-release.yml`'s download patterns, so they are not in
+`SHA256SUMS.txt`. The signed manifest, not `SHA256SUMS.txt`, is what covers
+them.

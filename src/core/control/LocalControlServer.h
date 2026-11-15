@@ -1,0 +1,96 @@
+#pragma once
+
+#include "ControlEngine.h"
+#include "ControlService.h"
+
+#include <QJsonObject>
+#include <QLocalServer>
+#include <QObject>
+#include <QString>
+
+#include <memory>
+#include <unordered_map>
+
+class QLockFile;
+class QLocalSocket;
+
+namespace AetherSDR::control {
+
+class LocalControlServer final : public QObject {
+    Q_OBJECT
+
+public:
+    static constexpr int kMaxClients = 8;
+    static constexpr int kHandshakeTimeoutMs = 5000;
+    static constexpr qint64 kMaxQueuedOutputBytes = 4 * 1024 * 1024;
+
+    struct Limits {
+        int maxClients{kMaxClients};
+        int handshakeTimeoutMs{kHandshakeTimeoutMs};
+        qint64 maxQueuedOutputBytes{kMaxQueuedOutputBytes};
+    };
+
+    enum class ListenMode { Serve, ReserveEndpoint };
+
+    explicit LocalControlServer(QObject* parent = nullptr);
+    LocalControlServer(QObject* parent, Limits limits,
+                       RadioConnectionTarget* connectionTarget = nullptr,
+                       bool allowLocalControl = false);
+    // Serves sessions of a shared engine (aetherd: the same engine as the
+    // network listener). Targets are bound through bind*() as usual.
+    LocalControlServer(ControlEngine& engine, QObject* parent, Limits limits,
+                       bool allowLocalControl);
+    ~LocalControlServer() override;
+
+    // ReserveEndpoint claims the private endpoint but closes early arrivals.
+    // Startup code must finish binding targets before calling startServing().
+    [[nodiscard]] bool listen(const QString& name, ListenMode mode = ListenMode::Serve);
+    // Why the last listen() failed when the endpoint path is too long for a
+    // Unix socket; empty for every other failure.
+    [[nodiscard]] QString listenError() const { return m_listenError; }
+    [[nodiscard]] bool startServing();
+    // Startup-only binding; never changes grants or replaces a lost target.
+    [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
+    [[nodiscard]] bool bindFrequencyTarget(SliceFrequencyTarget* target);
+    [[nodiscard]] bool bindReceiveTarget(ReceiveControlTarget* target);
+    [[nodiscard]] bool bindCredentials(ControlCredentials* credentials);
+    [[nodiscard]] bool bindTransmitTarget(TransmitControlTarget* target);
+    // Current-user lock only (no additional listener), shared by serving and
+    // offline provisioning across socket names. Hold through daemon shutdown.
+    [[nodiscard]] static std::unique_ptr<QLockFile> reserveCredentialAuthority(const QString& authorityId);
+    // Empty when the endpoint cannot be resolved or is too long for a Unix
+    // socket; in the second case *pathError says why.
+    [[nodiscard]] static QString clientEndpoint(const QString& logicalName, QString* pathError = nullptr);
+    void close();
+    [[nodiscard]] bool isListening() const { return m_server.isListening(); }
+    [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }
+    [[nodiscard]] ControlResourceStore& resourceStore() { return m_resources; }
+
+private:
+    struct Client;
+
+    void init();
+    void acceptConnections();
+    void readClient(QLocalSocket* socket);
+    void dropClient(QLocalSocket* socket);
+    [[nodiscard]] bool send(QLocalSocket* socket, const QJsonObject& message);
+    // Writes a frame the session already encoded, so an event is serialized
+    // exactly once between ControlSession and the socket.
+    [[nodiscard]] bool sendFrame(QLocalSocket* socket, const QByteArray& frame);
+    [[nodiscard]] static bool resolveEndpoint(
+        const QString& logicalName, QString* endpointName, QString* lockPath);
+
+    QLocalServer m_server;
+    std::unique_ptr<ControlEngine> m_ownedEngine;   // null when the engine is shared
+    ControlResourceStore& m_resources;
+    ControlService& m_service;
+    Limits m_limits;
+    const SessionAuthorization m_localAuthorization;
+    std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;
+    std::unique_ptr<QLockFile> m_lock;
+    QString m_listenError;
+    bool m_serving{false};
+    bool m_closing{false};
+};
+
+} // namespace AetherSDR::control

@@ -1,0 +1,385 @@
+#pragma once
+
+#include <QColor>
+#include <QImage>
+#include <QPointF>
+#include <QSize>
+#include <QVector>
+#include <QtCore/qfloat16.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <functional>
+
+// Perspective stacked-trace spectrum stream: FFT history rows drawn
+// back-to-front as a receding trapezoid, newest full-width at the front, each
+// ridge filled to the plot floor so nearer traces occlude. Fill follows an
+// injected palette, dimmed with depth. The QImage is rebuilt only on a new row,
+// size change, or mapping/palette change, so it can be CPU-painted and
+// composited through the QRhi overlay. Knows nothing of SpectrumWidget or QRhi.
+class DssRenderer
+{
+public:
+    static constexpr int kVisibleRows = 96;    // front → back display depth
+    // Outgoing rows kept during scroll. Must cover the largest row distance
+    // passed to SpectrumWidget::startWaterfallScrollAnimation(); the current
+    // Flex, Kiwi, and fallback producers append at most one row per update.
+    static constexpr int kTransitionRows = 8;
+    static constexpr int kRows = kVisibleRows + kTransitionRows;
+    static constexpr int kCols = 768;  // resampled columns per row
+
+    // Perspective geometry of the surface, shared by this CPU renderer and the
+    // GPU mesh UBO (SpectrumWidget::renderGpuFrame). dss_mesh.vert applies the
+    // SAME formulas with these values passed as uniforms — single source of
+    // truth so the CPU fallback and the GPU mesh can't drift apart.
+    static constexpr float kBackWidthFrac     = 0.60f;  // back row width / front
+    static constexpr float kDepthSpanFrac     = 0.58f;  // baseline rise to the back
+    static constexpr float kFrontMaxRidgeFrac = 0.46f;  // front ridge height / plot H
+    static constexpr float kHaze              = 0.16f;  // fade toward bg with depth
+    // Colour uses a stable signal aperture independent of the Ref-level height
+    // span. Otherwise a high Ref level compresses every real signal into blue.
+    static constexpr float kColorSpanDb        = 45.0f;
+
+    // ── Wedge-closing row span ──────────────────────────────────────────────
+    // Because every row covers the SAME frequency span while the far rows
+    // narrow to kBackWidthFrac, the surface leaves two empty triangles beside
+    // it. Widen the span each row covers instead: the near rows then run off
+    // both edges of the plot and the existing perspective narrowing walks them
+    // back in, closing the wedge from the front. The projection below is
+    // untouched, so the converging slant, the frequency ruler and every marker
+    // stay put. dss_mesh.vert applies the SAME formulas.
+
+    // Span at which the DEEPEST row lands exactly on the plot edge. Beyond this
+    // the surface only overhangs further without revealing more of the plot.
+    static constexpr float kMaxRowSpanFactor = 1.0f / kBackWidthFrac;
+
+    // Mesh columns per row for the GPU path. The mesh spans rowSpanFactor x the
+    // viewport, while the height texture holds kCols texels ACROSS THE VIEWPORT
+    // — so a kCols-wide mesh would leave (span-1)/span of those texels unread.
+    // That is not shimmer: the mesh-column-to-frequency mapping is static, so
+    // the same texels are missed every frame and a narrow carrier landing on one
+    // is permanently invisible at a fixed screen position. Size the mesh for the
+    // widest span instead, so the on-screen region is never sparser than the
+    // texture it samples. Below the widest span it merely oversamples, which
+    // Nearest filtering absorbs by repeating texels.
+    static constexpr int kMeshCols =
+        static_cast<int>(kCols * kMaxRowSpanFactor) + 1;
+    // The invariant dss_mesh.vert's Nearest height sampler depends on: at the
+    // widest span the on-screen columns (kMeshCols / kMaxRowSpanFactor) must
+    // still be at least kCols, or bins fall between samples and vanish.
+    static_assert(static_cast<float>(kMeshCols) >= kCols * kMaxRowSpanFactor,
+                  "kMeshCols must keep the on-screen grid at texel density "
+                  "at kMaxRowSpanFactor");
+
+    // Perspective narrowing with depth — the only thing that places a frequency.
+    static float depthScale(float depth)
+    {
+        return 1.0f - std::clamp(depth, 0.0f, 1.0f) * (1.0f - kBackWidthFrac);
+    }
+
+    // Mesh column (0..1 across the drawn row) -> frequency in viewport units,
+    // where 0..1 spans the on-screen bandwidth. Depth-independent by design.
+    static float rowFrequencyUnit(float meshUnit, float rowSpanFactor)
+    {
+        return 0.5f + (meshUnit - 0.5f) * rowSpanFactor;
+    }
+
+    // Fraction of the plot width a row at `depth` covers. >= 1 means that row
+    // reaches both edges and leaves no wedge; the front row is the widest.
+    static float rowScreenCoverage(float depth, float rowSpanFactor)
+    {
+        return depthScale(depth) * rowSpanFactor;
+    }
+
+    // Shallowest depth still leaving a wedge, or 1 when the surface is closed
+    // all the way to the back. Lets the host report how much a given overhang
+    // actually bought.
+    static float wedgeFreeDepth(float rowSpanFactor)
+    {
+        if (rowSpanFactor <= 1.0f) {
+            return 0.0f;
+        }
+        if (rowSpanFactor >= kMaxRowSpanFactor) {
+            return 1.0f;
+        }
+        return (1.0f - 1.0f / rowSpanFactor) / (1.0f - kBackWidthFrac);
+    }
+
+    // Usable span for an overhang of `spanFactor` x the viewport bandwidth.
+    // Clamped at kMaxRowSpanFactor: past it the extra data is off-plot anyway.
+    static float rowSpanFactorForOverhang(float spanFactor)
+    {
+        if (!(spanFactor > 1.0f) || !std::isfinite(spanFactor)) {
+            return 1.0f;
+        }
+        return std::min(spanFactor, kMaxRowSpanFactor);
+    }
+
+    // Row span for a calibrated overhang of supplementalBandwidthMhz against a
+    // targetBandwidthMhz viewport, scaled by a 0-100 setting. Untrustworthy
+    // input (non-positive/non-finite, or no wider than the viewport) yields 1.0.
+    // The percentage scales the AVAILABLE span, so a ~1.15x tile still uses the
+    // whole control travel.
+    static float rowSpanFactorFor(double supplementalBandwidthMhz,
+                                  double targetBandwidthMhz,
+                                  int spanPercent)
+    {
+        if (!std::isfinite(targetBandwidthMhz) || targetBandwidthMhz <= 0.0
+            || !std::isfinite(supplementalBandwidthMhz)
+            || supplementalBandwidthMhz <= targetBandwidthMhz) {
+            return 1.0f;
+        }
+        const float available = rowSpanFactorForOverhang(
+            static_cast<float>(
+                supplementalBandwidthMhz / targetBandwidthMhz));
+        const float fraction =
+            static_cast<float>(std::clamp(spanPercent, 0, 100)) / 100.0f;
+        return 1.0f + fraction * (available - 1.0f);
+    }
+
+    // Project a normalized frequency coordinate onto the same perspective
+    // plane used by both DSS renderers. depth=0 is the full-width front edge;
+    // depth=1 is the narrowed back edge. Slice overlays use this helper so
+    // their apparent angle cannot drift from the FFT surface.
+    //
+    // Frequency-in / screen-out, and independent of rowSpanFactor: widening a
+    // row extends the frequency range it covers, never where a frequency lands.
+    static QPointF projectPerspective(float frequencyUnit, float depth)
+    {
+        const float d = std::clamp(depth, 0.0f, 1.0f);
+        const float width = depthScale(d);
+        return QPointF(0.5f + (frequencyUnit - 0.5f) * width,
+                       1.0f - d * kDepthSpanFrac);
+    }
+
+    // Project a point onto the visible top of a DSS ridge. This is the CPU
+    // equivalent of dss_mesh.vert's height mapping and is used by overlays
+    // that must stay attached to the surface when the 3D floor moves.
+    static QPointF projectSurface(float frequencyUnit, float depth, float dbm,
+                                  float floorDbm, float rangeDb, float zCurve)
+    {
+        const float d = std::clamp(depth, 0.0f, 1.0f);
+        const float width = depthScale(d);
+        const float finiteDbm = std::isfinite(dbm) ? dbm : floorDbm;
+        const float strengthLinear = std::clamp(
+            (finiteDbm - floorDbm) / std::max(rangeDb, 1.0f),
+            0.0f, 1.0f);
+        const float strengthHeight = std::pow(
+            strengthLinear, std::max(zCurve, 0.05f));
+        QPointF point = projectPerspective(frequencyUnit, d);
+        point.ry() -= static_cast<double>(strengthHeight) * kFrontMaxRidgeFrac * width;
+        return point;
+    }
+
+    // Maps a dBm value to an RGB colour using the host's panadapter palette.
+    using PaletteFn = std::function<QRgb(float dbm)>;
+
+    struct RowStats {
+        float minDbm{0.0f};
+        float maxDbm{0.0f};
+        int finiteBins{0};
+        int minValueBins{0};
+        int longestFlatRunBins{0};
+    };
+
+    // Push one freshly-decoded FFT row (any bin count, dBm). Peak-preserving
+    // downsample to kCols and store it as the newest (front) trace.
+    void pushRow(const QVector<float>& binsDbm,
+                 double centerMhz = 0.0,
+                 double bandwidthMhz = 0.0);
+    void pushRowWithSupplemental(
+        const QVector<float>& binsDbm,
+        double centerMhz,
+        double bandwidthMhz,
+        const QVector<float>& supplementalBinsDbm,
+        double supplementalCenterMhz,
+        double supplementalBandwidthMhz, bool preserveInput = false);
+    // preserveInput keeps final backend observations through this renderer:
+    // spatial resampling remains, but no median/IIR is applied a second time.
+    // Supplied retained coverage has its own frame and never replaces primary
+    // close-view samples. Existing callers retain their old smoothing/storage.
+    void setHistoryCapacityRows(int rows);
+    int historyCapacityRows() const { return m_historyCapacityRows; }
+    int historyRowCount() const { return m_historyRowCount; }
+    quint64 fixedStorageBytes() const;
+    quint64 historyStorageBytes() const;
+    quint64 cacheStorageBytes() const;
+    quint64 allocatedBytes() const;
+    void appendHistoryRow(const QVector<float>& binsDbm,
+                          double centerMhz, double bandwidthMhz,
+                          float fallbackDbm,
+                          const QVector<float>& supplementalBinsDbm = {},
+                          double supplementalCenterMhz = 0,
+                          double supplementalBandwidthMhz = 0,
+                          bool preserveInput = false);
+    void rebuildVisibleFromHistory(int offsetRows,
+                                   double centerMhz, double bandwidthMhz,
+                                   float fallbackDbm);
+    // Remap the visible live viewport to a new frequency frame. Prefer an
+    // in-place refresh from retained, frame-stamped rows so ring topology and
+    // scroll phase remain intact; fall back to direct visible-ring reprojection
+    // when no matching retained history is available.
+    void reprojectFrequencyFrame(double oldCenterMhz, double oldBandwidthMhz,
+                                 double newCenterMhz, double newBandwidthMhz,
+                                 float fallbackDbm,
+                                 bool refreshFromRetainedHistory = false);
+
+    // Cached surface sized to px. The plot region (above the bottom
+    // scaleStripPx) is opaque over bgFill; the strip stays transparent. Height:
+    // strength = clamp((dbm - floorDbm) / rangeDb, 0, 1). Colour is palette(dbm);
+    // paletteToken signals palette changes. zCurve (<1) matches dss_mesh.vert's
+    // pow(s, zCurve) so the CPU fallback matches the GPU path.
+    const QImage& image(const QSize& px, int scaleStripPx,
+                        float floorDbm, float rangeDb, float zCurve,
+                        const PaletteFn& palette, quint64 paletteToken,
+                        const QColor& bgFill);
+
+    void invalidate() { m_dirty = true; }
+    bool hasData() const { return m_count > 0; }
+    // Forget temporal filter inputs without discarding already-decoded dBm
+    // rows. Used when the upstream raw-pixel scale changes.
+    void resetInputSmoothing();
+    void clear();
+
+    // ── Data-model accessors for the GPU mesh path ──────────────────────────
+    // The renderer doubles as the smoothed dBm ring store that the GPU height-map
+    // mesh uploads from (one new row per frame). Indices are RING indices.
+    int cols() const { return kCols; }
+    int rows() const { return kRows; }
+    int rowCount() const { return m_count; }     // valid rows (0..kRows)
+    int visibleRowCount() const
+    {
+        return std::min(m_count, kVisibleRows);
+    }
+    int headRing() const { return m_head; }       // ring index of the newest row
+    const float* rowDataRing(int ringIndex) const { return m_rows[ringIndex].data(); }
+    const quint8* rowCoverageRing(int ringIndex) const
+    {
+        return m_rowCoverage[ringIndex].data();
+    }
+    const float* rowSupplementalDataRing(int ringIndex) const
+    {
+        return m_rowSupplemental[ringIndex].data();
+    }
+    const quint8* rowSupplementalCoverageRing(int ringIndex) const
+    {
+        return m_rowSupplementalCoverage[ringIndex].data();
+    }
+    double rowCenterMhzAtAge(int age) const;
+    double rowBandwidthMhzAtAge(int age) const;
+    double rowSupplementalCenterMhzAtAge(int age) const;
+    double rowSupplementalBandwidthMhzAtAge(int age) const;
+    // Bandwidth of the newest VISIBLE row carrying a calibrated overhang wider
+    // than targetBandwidthMhz, or 0 when no such row is on screen.
+    //
+    // The front row is deliberately not authoritative: the FFT-derived producer
+    // that paces rows during TX and during the RX stale-native fallback appends
+    // with no supplemental at all, so keying up would otherwise drop the
+    // overhang to nothing while 90-odd rows of it are still on screen. Once the
+    // last covered row scrolls out, returning 0 is the correct answer.
+    double newestSupplementalBandwidthMhz(double targetBandwidthMhz) const;
+
+    RowStats rowStats(int age, float epsilonDb = 0.01f) const;
+    quint64 rowGeneration() const { return m_rowGeneration; }
+
+    // Increments on every cache rebuild — lets the GPU path upload the texture
+    // only when the surface actually changed.
+    quint64 generation() const { return m_generation; }
+
+private:
+    bool historyStorageMatchesCapacity() const;
+    void restoreHistorySupplemental(int historyRing, int visibleRing);
+    void resetHistorySmoothing();
+    void rebuild(const QSize& px, int scaleStripPx, float floorDbm,
+                 float rangeDb, float zCurve, const PaletteFn& palette,
+                 const QColor& bgFill);
+
+    // Returns the dBm row at the given age (0 = newest/front).
+    const std::array<float, kCols>& rowAt(int age) const;
+
+    // Circular store: m_head indexes the newest row.
+    std::array<std::array<float, kCols>, kRows> m_rows{};
+    // One byte per bin records whether that frequency existed in the captured
+    // row. Reprojection-created gaps remain drawable floor lines, but the
+    // marker lets both renderers keep their height/colour independent of later
+    // zoom and dBm-range changes.
+    std::array<std::array<quint8, kCols>, kRows> m_rowCoverage{};
+    // Native FLEX waterfall tiles cover more spectrum than the FFT viewport.
+    // Keep that calibrated overhang in separate channels so it can fill only
+    // frequencies the exact FFT row never captured; it must never resample or
+    // replace the working FFT trace.
+    std::array<std::array<float, kCols>, kRows> m_rowSupplemental{};
+    std::array<std::array<quint8, kCols>, kRows>
+        m_rowSupplementalCoverage{};
+    // Each live row keeps the frequency frame in which its bins were captured.
+    // The GPU maps rows independently during pan previews, allowing retained
+    // off-screen data and newly received radio coverage to coexist.
+    std::array<double, kRows> m_rowCenterMhz{};
+    std::array<double, kRows> m_rowBandwidthMhz{};
+    std::array<double, kRows> m_rowSupplementalCenterMhz{};
+    std::array<double, kRows> m_rowSupplementalBandwidthMhz{};
+    std::array<bool, kRows> m_preserveSupplementalFrame{};
+    int     m_head  = 0;         // index of the newest row
+    int     m_count = 0;         // number of valid rows (0..kRows)
+    bool    m_dirty = true;
+    quint64 m_generation = 0;    // bumped on each rebuild
+    quint64 m_rowGeneration = 0; // bumped whenever stored row contents change
+
+    // Last two RAW (pre-smoothing) resampled rows, for temporal median-of-3
+    // impulse rejection of broadband interference bursts.
+    std::array<float, kCols> m_rawPrev1{};
+    std::array<float, kCols> m_rawPrev2{};
+    int m_rawHistCount = 0;
+    // The calibrated native-tile overhang needs an independent copy of the
+    // same smoothing chain. Sharing FFT history would blend different
+    // frequency frames; storing it raw exaggerates isolated tile maxima until
+    // exact FFT coverage replaces them.
+    std::array<float, kCols> m_supplementalRawPrev1{};
+    std::array<float, kCols> m_supplementalRawPrev2{};
+    int m_supplementalRawHistCount = 0;
+
+    // One-shot flags: after resetInputSmoothing() the next pushed row must not
+    // blend against the retained row that preceded the reset (it was decoded
+    // under the old raw-pixel scale). Cleared once each path consumes it. See
+    // resetInputSmoothing() — the median-of-3 raw history is not enough on its
+    // own; the temporal IIR term against the previous smoothed row also carries
+    // pre-reset data.
+    bool m_skipLiveTemporalBlendOnce = false;
+    bool m_skipSupplementalTemporalBlendOnce = false;
+    bool m_skipHistoryTemporalBlendOnce = false;
+
+    // Retained scrollback store. This is intentionally separate from the
+    // 96-row visible surface above: waterfall history can be much deeper, and
+    // the visible 3D mesh is rebuilt from this ring only while viewing history.
+    QVector<qfloat16> m_historyRows;      // flat [history row][kCols]
+    QVector<double> m_historyRowCenterMhz;
+    QVector<double> m_historyRowBandwidthMhz;
+    // Allocated only when a producer actually supplies retained wider data.
+    // Capacity and lifetime are the same bounded ring as the primary history.
+    QVector<qfloat16> m_historySupplementalRows;
+    QVector<double> m_historySupplementalCenterMhz;
+    QVector<double> m_historySupplementalBandwidthMhz;
+    int m_historyCapacityRows = 0;
+    int m_historyWriteRow = 0;            // ring index of newest retained row
+    int m_historyRowCount = 0;
+    std::array<float, kCols> m_historyRawPrev1{};
+    std::array<float, kCols> m_historyRawPrev2{};
+    int m_historyRawHistCount = 0;
+
+    // Cache + the parameters it was built for (rebuild on any change).
+    QImage  m_cache;
+    QSize   m_cacheSize;
+    int     m_cacheScaleStrip   = -1;
+    float   m_cacheFloor        = 0.0f;
+    float   m_cacheRange        = 0.0f;
+    float   m_cacheZCurve       = 0.0f;
+    quint64 m_cachePaletteToken = ~0ull;
+};
+
+// Occlusion for the CPU depth-shadow overlay. `yFrontToBack` is one column's
+// projected y per depth step, nearest first; a point is hidden once it is
+// lower (larger y) than the topmost ridge in front of it. Returns N-1 segment
+// flags (empty for N < 2), true when either endpoint clears the silhouette;
+// half-pixel slack stops grazing ridges flickering.
+QVector<bool> dssDepthVisibleSegments(const QVector<qreal>& yFrontToBack);

@@ -1,0 +1,621 @@
+# AetherSDR Help
+
+Full documentation: [docs.aethersdr.com](https://docs.aethersdr.com/)
+
+## The Main Window at a Glance
+
+If you only remember one mental map of AetherSDR, make it this:
+
+- The title bar is the station-status strip.
+- The center is the live radio workspace.
+- The right side is the deep control stack.
+- The status bar is the quick sanity check row.
+
+Everything else in the program supports those four ideas.
+
+## Title Bar and Top Controls
+
+The title bar is a single 52 px strip that carries the application menu, the
+radio you are connected to, and the quick audio controls.
+
+### What you can read there quickly
+
+- Which radio you are on: each radio has its own tab, and the active tab's
+  status dot doubles as the discovery heartbeat. It turns amber while
+  discovering and red after three missed discovery beats.
+- An `EXPERIMENTAL` badge when the connected radio family is still
+  experimental
+- multiFLEX presence
+- Whether another client currently owns transmit
+- The transmit timer while you are keyed
+- Whether `PC Audio` is enabled
+- Speaker and headphone levels
+
+### What you can do there quickly
+
+- Open the application menu (the ☰ button at the left end on Windows and
+  Linux; macOS keeps its menus in the system menu bar)
+- Switch radios by clicking a tab, or use the `+` button to see discovered
+  radios and connect manually
+- Right-click a radio tab to turn the status-dot blink on or off
+- Toggle `PC Audio`
+- Mute or unmute line out
+- Mute or unmute headphones
+- Change local output levels
+- Dock the applet panel left or right of the panadapter, or pop it out into
+  its own window
+- Double-click empty space in the bar to maximize or restore the window
+
+`Minimal Mode` is in the `View` menu, or press `Ctrl+Shift+M`. While it is
+on, the maximize button or a double-click on the bar leaves it. Feature
+requests and AI-assisted bug reports start from `Help -> Submit your Idea...`
+and `Help -> File an Issue...`.
+
+This is the best place to look when you want to answer, "Is this a station problem, an audio problem, or simply the wrong client state?"
+
+## Menu Reference
+
+### `File`
+
+- `Connect to Radio...` opens the radio connection dialog.
+- `Disconnect` ends the current radio session without closing AetherSDR.
+- `Quit` closes the application.
+
+### `Settings`
+
+This menu contains configuration that changes station behavior, control surfaces, and external integrations.
+
+- `Radio Setup...` opens the main multi-page radio configuration dialog on Windows and Linux. On macOS, the same action appears as `AetherSDR -> Preferences...` in the application menu.
+- `AetherControl...` opens the controller window.
+- `FlexControl Knob & Buttons...` jumps directly to FlexControl setup when serial support is available.
+- `Receive Sync` configures timing alignment between Flex and KiwiSDR presentation.
+- `MQTT...` configures MQTT integration when it is available in the build.
+- `MIDI Mapping...`: opens controller mapping when MIDI support is available.
+- `USB Cables...` jumps to cable definitions and USB cable behavior in Radio Setup.
+- Encoder mapping entries configure supported HID and Ulanzi controllers when available.
+- `SpotHub...`: opens the unified spots and spotting workflow dialog.
+- `multiFLEX...`: opens the multi-operator dashboard.
+- `TX Band Settings...`: opens band-specific transmit settings such as RF power, tune power, and inhibit or interlock choices.
+- `Inhibit during TUNE` selects which integrations are held while the radio is tuning.
+- `AetherRX...` opens the receive chain: noise reduction, gate, EQ, compressor, tube, voice processor and output.
+- `Settings Browser...` exposes the stored application settings.
+- Autostart items for CAT, TCI, and DAX let you decide which services should come up automatically.
+- `Keyboard Shortcuts` enables or disables shortcut handling, and `Configure Shortcuts...` opens the shortcut editor.
+- `Reset Settings...` restores application settings after confirmation.
+
+### `Profiles`
+
+This menu manages operating profiles.
+
+- `Profile Manager...` is the main profile dialog.
+- `Import/Export Profiles...` creates and restores SmartSDR-compatible `.ssdr_cfg` radio database packages. Export defaults to Global, TX, and MIC profiles, with optional Memories, Preferences, TNF, XVTR, and USB Cables. Import can replace same-name profiles, including defaults; export a backup first before restoring a package.
+- `.ssdr_cfg` packages are firmware-sensitive. Avoid importing packages from newer firmware into older radio firmware. Packages that include Preferences may close or reopen slices, panadapters, and other persisted radio resources.
+- Profile database transfer requires a direct LAN connection in this build; SmartLink/WAN import/export is disabled with an explanatory message.
+- Below the separator, global profiles are listed dynamically and can be loaded directly.
+
+### `Tools`
+
+This is the everyday operations menu. Items appear or enable themselves according to the connected radio and features included in the build.
+
+- `Add Panadapter` creates another display when the connected radio has capacity.
+- `AetherTX...`, `CW Keyer`, and `Copy Assist` show their operating panels when available.
+- `AetherModem...` opens the packet-decoder workspace, while `Configure KiwiSDR...` jumps to KiwiSDR configuration.
+- `Start SWR Scan...`, `Pre-tune ATU Bands...`, and `Clear ATU Memories...` provide guarded tuner operations on supported radios.
+- `Callsign Lookup...`, `PSK Reporter...`, and `FreeDV Reporter...` open lookup and reporting tools.
+- `Net Scheduler...`, `Memory...`, and `Waveforms...` open their operating managers.
+- `Radio Health...`, `AetherGPS...`, `Network Diagnostics...`, and `Runtime Monitor...` expose live station and application diagnostics.
+
+### `View`
+
+This menu changes how the operator workspace is presented.
+
+- `Workspace Canvas` controls the optional canvas layout and additional canvas windows.
+- `Band Plan` controls band-plan overlays and region selection.
+- `Theme` and `Theme Editor...` select or customize the application theme.
+- `VFO Marker Size` and `VFO Filter Edge` set the defaults used by VFO markers.
+- `Single-Click to Tune` changes tuning behavior on the spectrum.
+- `Pan Follows VFO` keeps the active slice visible while tuning.
+- `UI Scale` changes the overall application scale and requires a restart.
+- `Reset Applet Order` restores the default applet arrangement.
+- `Minimal Mode` removes visual clutter for a compact operating view.
+- `Frameless Window` controls custom window chrome.
+- `Propagation Conditions`, `Smart Spot Filtering`, and `FPS Meters` control optional display overlays.
+- `Show live CW contacts`, below `Smart Spot Filtering`, opens a separate station window and is off by default. `Close live contacts` closes the window and turns the option off. The CW decoder keeps its full text area.
+- `Blink Status Indicator` controls the discovery heartbeat animation.
+
+### `Help`
+
+This menu gives you both offline guidance and troubleshooting tools.
+
+- `Getting Started...`
+- `AetherSDR Help...`
+- `What's New...`
+- `Understanding Noise Cancellation...`
+- `Configuring AetherSDR Controls...`
+- `Configuring Data Modes...`
+- `AetherSDR Website`
+- `Donate to AetherSDR`
+- `Submit your Idea...`
+- `File an Issue...`
+- `Contributing to AetherSDR...`
+- `Support & Diagnostics...`
+- `Slice Troubleshooting...`
+- `Check for Updates...`
+- `About AetherSDR`
+
+The bundled help guides are intentionally separate windows so you can keep one open while continuing to operate.
+
+## Center Workspace
+
+### Panadapter stack
+
+The center column is a vertical stack of panadapters. AetherSDR supports multiple panadapters, so this area is meant to be watched, not hidden behind dialogs.
+
+Each panadapter contains:
+
+- FFT spectrum
+- Waterfall
+- Slice markers and VFO overlays
+- Tracking notch filters
+- Optional CW decode panel when CW decoding is in use
+
+### Spectrum overlay menu
+
+The floating left-side overlay is a fast operator menu for the currently focused panadapter. Its buttons are:
+
+- `+RX`: add a new receive slice on that panadapter
+- `+TNF`: add a tracking notch filter
+- `Band`: jump by band and open XVTR setup
+- `ANT`: receive antenna, RF gain, and WNB controls
+- `Display`: FFT, waterfall, color, averaging, and background presentation
+- `Memory`: browse, recall, and add memories
+- `DAX`: DAX channel and IQ channel choices for that panadapter or slice context
+
+This overlay is important because it keeps the most common "I need to adjust the picture or slice quickly" controls next to the spectrum instead of burying them in a large dialog.
+
+## VFO and Slice Controls
+
+Each slice has a VFO overlay that acts as a compact operating head.
+
+### What the VFO area shows
+
+- Slice letter
+- Frequency
+- Mode
+- Filter width
+- RX antenna
+- TX antenna
+- TX assignment
+- split status
+- signal level
+
+### What the VFO area lets you do
+
+- Tune directly on the frequency display
+- Change antennas
+- Lock or unlock tuning
+- Close a slice
+- Work with AF, SQL, AGC, diversity, ESC, APF, digital offsets, FM options, RIT, XIT, DAX, and mode-specific functions
+
+The exact controls change with mode. For example:
+
+- FM adds offset and simplex or reverse controls.
+- DIGU and DIGL expose digital offset controls.
+- CW adds APF and CW-specific handling.
+- diversity-capable contexts expose ESC controls.
+
+That is why it is better to think of the VFO as a live mode-sensitive operating surface, not just a frequency label.
+
+### Split operation
+
+Clicking `SPLIT` on a slice makes it the receive slice and creates a transmit
+slice on the same panadapter, 1 kHz up in CW and 5 kHz up in other modes. The
+receive slice's badge turns red; the transmit slice's badge becomes `SWAP`,
+which exchanges the two frequencies without changing which one transmits.
+Clicking the red `SPLIT` badge again ends the split and removes the transmit
+slice.
+
+**Right-click either badge** for the controls that go with split operation:
+
+- `Split Up 1 / 5 / 10 kHz` — move the transmit slice that far above the
+  receive slice. The receive frequency stays where it is. With no split
+  running, the same choice starts one at that offset.
+- `Split QSY Option` — opt in to closing an AetherSDR-created split when an
+  external client moves its receive Slice A by more than the threshold
+  (2 kHz by default). The intended workflow is CAT `FA` / `ZZFA` sent through
+  a separate client directly controlling the radio. Matching echoes of
+  AetherSDR's own tunes, including SWAP, keep split open. Other unmatched
+  Slice A changes are indistinguishable from that external CAT workflow.
+  Changes at or below the threshold keep split open and advance the reference.
+  Closing split removes its transmit slice and returns TX selection to Slice A;
+  this option does not defer that cleanup while transmitting.
+- `Monitor TX` — choose what the `Monitor TX (Hold)` key does while you hold
+  it: `Solo TX frequency` silences the receive slice so you hear only where you
+  are about to transmit, as `XFC`, `TF-SET` or `TXW` does on a conventional
+  transceiver; `Hear both` makes both slices audible for the hold, the way a
+  second receiver would. Releasing the key puts both mutes back as they were. Bind the key in `Settings → Keyboard Shortcuts`, or put it on
+  a FlexControl, RC-28 or HID controller, where it toggles rather than holds.
+- `Forget remembered audio` — clear the arrangement described below.
+
+**AetherSDR remembers how you set up the audio.** The transmit slice starts
+muted, as it always has. If you change that — unmute it, set its level, pan it
+to one ear and the receive slice to the other — the next split you start comes
+back the same way, with no clicks, and keeps coming back until you change it.
+Only the transmit slice's mute, level and pan are remembered, plus the receive
+slice's pan if you moved it; the receive slice's own volume and mute are never
+touched, and its original pan is restored when the split ends. If you mute the
+transmit slice yourself before ending a split, what was remembered is cleared,
+so muting it once is enough to go back to the original behaviour.
+Splits started by a logging program or another client over
+CAT, Hamlib or TCI are left alone.
+
+## The Applet Panel
+
+The applet panel is a persistent right-side control column. It has two always-visible toggle rows, a separate S-meter section, and a reorderable vertical stack of applets below.
+
+Default applet order is:
+
+- `PWR` — Power & SWR
+- `RX` — RX Controls
+- `WFM` — WFM
+- `TUN` — TGXL
+- `AMP` — PGXL
+- `TX` — TX Controls
+- `PHNE` — Phone (tray button `PHN`)
+- `P/CW` — Phone/CW
+- `EQ` — Equalizer
+- `WAVE` — Waveform (tray button `WAV`)
+- `TXDSP` — Aetherial Audio (tray button `VUDU`)
+- `CAT` — CAT Control
+- `DAX` — DAX Audio
+- `TCI` — TCI Server
+- `IQ` — DAX IQ
+- `MTR` — Radio Vitals
+- `PROF` — Profile Switcher
+- `KSDR` — KiwiSDR
+- `HLTH` — Antenna Health
+- `AG` — Antenna Genius
+- `SS` — ShackSwitch
+- `GHE` — Green Heron
+- `CLOCK` — AetherClock (tray button `CLK`)
+
+Not every applet is on screen at once: some appear only when the radio or the
+station accessory they control is present, and several start hidden until you
+turn them on from the applet tray. `View -> Reset Applet Order` restores this
+order.
+
+### `VU`
+
+The meter section is separate from the main stack and is useful for constant visibility. It can show receive and transmit meter selections without forcing the rest of the applet panel to remain expanded.
+
+### `RX`
+
+The RX applet is the slice-centric receive control surface. It repeats the most important slice identity information at the top, then exposes receive controls such as step size, filter, mute, pan, and offset-related functions. Use this when you want more detail than the compact VFO overlay offers.
+
+### `TUN`
+
+This applet appears when tuner hardware or tuner support is relevant. Use it to manage tuning state, watch SWR and power behavior, and confirm that the RF path is behaving as expected before staying on the air.
+
+While a tune is running, `TUNE` becomes `STOP`, and pressing it stops that tune. The tuner stays in operate — stopping a tune does not put it into bypass or standby, so you are left where you started.
+
+Messages from the tuner appear across the applet for as long as the tuner shows them: a successful tune reports the SWR it settled on, and a tune that could not run reports why — `LOW RF POWER` means there was too little drive for the tuner to measure against, so raise drive and tune again.
+
+Popped out into its own window, or placed on the workspace canvas, the applet lays itself out the way the tuner's own front panel does: the two meters, a status strip for each RF port showing what is feeding it and where it is tuned, the C1/L/C2 relay positions as dials, and separate `STBY`, `BYP` and `TUNE` keys. Docked in the rail it stays the compact tile — the same tuner, fewer things on screen.
+
+Port detail needs the direct connection to the tuner (Radio Setup, peripherals), which is also what makes the relay positions adjustable by scrolling over them. Without it the applet still works from what the radio relays.
+
+### `AMP`
+
+This applet is for amplifier integration when available. It is part of the station-status side of the app rather than the slice side, so always confirm whether you are making a station-wide change or a single-slice change.
+
+Docked in the rail it is the compact tile: forward power, SWR and drain current as bargraphs, with the PA temperatures, drain voltage and mains voltage beside the fan-speed pull-down and the operate/standby button.
+
+Popped out into its own window, or placed on the workspace canvas, it lays itself out the way the amplifier's own front panel does: the same three meters, larger, and a status strip for each RF port showing the band it is on, the bias profile it is set to, and the radio feeding it, with the fan and standby keys beside them and the temperatures, drain and mains voltages along the bottom. The port carrying transmit is outlined. In standby a single banner replaces both strips — with the amplifier out of circuit there is no per-port reading left to show — and the `STBY` key lights to say so; pressing it there puts the amplifier back into operate.
+
+`Vdd` reads `0.0 V` most of the time the amplifier is switched on. That is the amplifier, not a missing reading — it keeps its drain rail down while idle and brings it up when it enters operate. A dash there means there is no direct connection at all.
+
+A port strip names a state only when there is one to act on. Operating is the normal condition and keying is already on the `PTT` lamp, so neither puts a word on the strip; `FAULT` does.
+
+A port with no band reads `N/A`. That is the amplifier saying nothing is driving it, not a reading that failed to arrive — the radio name beside it describes how the port is wired, not that RF is flowing through it.
+
+Fan speed is a key on the panel and a pull-down on the rail — the same three modes either way. The key shows the mode's initial: `S` standard, `C` contest, `B` broadcast, cycling on each press; the full name is on its tooltip.
+
+Port detail needs the direct connection to the amplifier (Radio Setup, peripherals), which is also what supplies the fan-speed control and the drain and mains voltages. Without it the applet still works from what the radio relays, and the source indicator at the end of the readout row says which path it is on.
+
+### `TX`
+
+The TX applet is the main transmit command surface. It includes:
+
+- forward power and SWR gauges
+- RF power
+- tune power
+- TX profile selection
+- TUNE
+- MOX
+- ATU
+- MEM
+- APD state
+
+Before transmitting, this is the applet that should match your intention.
+
+While TUNE is active, CW keying is held off: a paddle, straight key, keyboard CW shortcut, or CWX text does not transmit until TUNE is pressed off, and TUNE will not start while a key or paddle is held or CWX text is being sent. (The radio would otherwise key CW at the tune power setting and stay in transmit with no carrier afterwards.)
+
+### `PHN`
+
+The Phone applet is focused on voice-mode shaping and behavior:
+
+- AM carrier level
+- VOX
+- VOX level
+- VOX delay
+- DEXP
+- TX low-cut and high-cut filters
+
+Use it when you want to shape the transmit voice path without opening the larger setup dialog.
+
+### `P/CW`
+
+This applet is mode-sensitive. In phone-oriented modes it exposes microphone-oriented controls such as mic source, level, processing, monitor, and DAX. In CW modes it switches to keyer-oriented controls such as delay, speed, sidetone, break-in, iambic mode, and pitch.
+
+### `EQ`
+
+The EQ applet is for transmit and receive equalization. Small moves are best. Shape the audio, then listen and measure before making another large adjustment.
+
+### `CAT`, `DAX`, `TCI`, `IQ` (data mode tiles)
+
+The bridge between AetherSDR and external software is split across four
+independent, drag-reorderable tiles. Each one is toggled from its own button
+in the applet tray:
+
+- **`CAT`** — CAT Control tile: rigctld TCP servers + virtual TTY/PTY ports
+  for any application that speaks Hamlib rigctld
+- **`DAX`** — DAX Audio tile: virtual audio devices for the four RX channels
+  and the TX channel, with per-channel gain and level meters
+- **`TCI`** — TCI Server tile: WebSocket server speaking the TCI v2.0
+  protocol (CAT + audio + IQ + CW + spots in one connection)
+- **`IQ`** — DAX IQ tile: raw I/Q streams at 24/48/96/192 kHz for SDR
+  applications
+
+If you use computer-driven digital modes, the relevant tiles deserve a
+permanent place in your operating layout. See **Configuring Data Modes** in
+the help topics for the full setup walkthrough.
+
+### `MTR`
+
+The meter applet provides additional visibility into operating state when the dedicated VU area is not enough.
+
+### `AG`
+
+The Antenna Genius applet appears when that station accessory is present. Use it to confirm band and port routing at a glance.
+
+### `MQTT`
+
+The MQTT applet connects AetherSDR to your station automation system via MQTT,
+the lightweight messaging protocol used by Node-RED, Home Assistant, and many
+ham shack automation tools.
+
+#### Quick Start
+
+1. Open `Settings -> MQTT...`.
+2. Enter your MQTT broker's **Host** and **Port** (default: `localhost:1883`).
+3. Add subscription topics as rows on the **Subscriptions** tab.
+   Enable **Display** for any topic that should show its latest value on the
+   panadapter overlay.
+4. Open the MQTT applet and click **On** to connect.
+
+The applet remembers the On/Off state. If MQTT was On when AetherSDR closed,
+it reconnects automatically on the next start after the saved password has
+loaded from the keychain.
+
+#### Publish Buttons
+
+You can create custom buttons that publish MQTT messages when clicked:
+
+1. Open `Settings -> MQTT...`.
+2. Use the **Publish Buttons** tab to add a new button.
+3. Enter a **Label** (what the button shows), **Topic** (where to publish),
+   and **Payload** (the message body).
+4. Click any button in the MQTT applet to send its message to the broker.
+
+Buttons are saved across restarts. Up to 12 publish buttons can be configured.
+
+#### Panadapter Overlay
+
+Topics with **Display** enabled in `Settings -> MQTT...` show their last
+received value in the top-right corner of the spectrum, below the propagation
+and WNB indicators. Existing settings that use the legacy `*topic` convention
+are loaded as display-enabled rows.
+
+#### Antenna Display Names
+
+AetherSDR can update its local antenna display names from MQTT. The AetherSDR
+antenna alias topics are subscribed automatically whenever MQTT connects, so
+they do not need to be added to your user topic rows. Retained broker messages
+work well when they arrive after AetherSDR has identified the connected radio.
+
+- Per-port topic: `aethersdr/antenna/name/ANT1` with payload `80m Dipole`
+- Bulk topic: `aethersdr/antenna/names` with payload
+  `{"ANT1":"80m Dipole","ANT2":"Hexbeam","RX_A":"Beverage NE"}`
+- Empty per-port payload clears that port's local name.
+- In bulk JSON, an empty string or `null` clears that port's local name.
+
+These are display names only. AetherSDR still sends canonical radio antenna
+tokens such as `ANT1`, `ANT2`, `RX_A`, and `XVTA` to the radio.
+
+#### Use Case: Rotator Control via Node-RED
+
+Many operators use Node-RED to control rotators via serial, USB, or IP.
+A typical setup:
+
+- Node-RED publishes `rotator/pos` with the current heading (e.g., `240`)
+- Node-RED subscribes to `rotator/cmd` for control commands
+- In AetherSDR, add `rotator/pos` as a subscription row and enable **Display**
+- Create publish buttons: **CW** (topic `rotator/cmd`, payload `CW`),
+  **CCW** (payload `CCW`), **Stop** (payload `STOP`)
+
+Now you can see your beam heading on the spectrum and send rotator commands
+without switching windows.
+
+#### Use Case: Antenna Switching
+
+If you use an MQTT-connected antenna switch (via Node-RED, ESP32, etc.):
+
+- Add `ant/selected` as a subscription row and enable **Display** to see the
+  active antenna on the panadapter
+- Publish local antenna display names to `aethersdr/antenna/name/+` or
+  `aethersdr/antenna/names`; AetherSDR subscribes to those topics automatically
+- Create buttons for each antenna: **Hexbeam** (topic `ant/select`, payload `1`),
+  **Vertical** (payload `2`), **Wire** (payload `3`)
+
+#### Use Case: SteppIR Controller
+
+For SteppIR antennas controlled via MQTT:
+
+- Add `steppir/band` and `steppir/direction` as subscription rows and enable
+  **Display**
+- Create buttons: **Normal** (topic `steppir/cmd`, payload `normal`),
+  **180°** (payload `reverse`), **Bi-Dir** (payload `bidir`)
+
+#### Notes
+
+- MQTT uses QoS 0 (fire-and-forget) for both subscribe and publish.
+- The broker connection auto-reconnects with exponential backoff (5s–60s).
+- Username and password are optional; leave blank for unauthenticated brokers.
+- Enable the `TLS` checkbox to encrypt the connection. The port will switch automatically to 8883. Leave `CA cert` blank to use the system certificate bundle, or enter a path to a custom CA file for self-signed broker certificates.
+- User topics are operator-configurable; AetherSDR-owned antenna alias topics
+  are stable internal API topics and are subscribed automatically.
+
+## Status Bar
+
+The status bar is easy to underestimate. It carries both fast actions and live telemetry.
+
+### Left side
+
+- Add panadapter
+- TNF
+- CWX
+- ASR
+- DVK
+- FDX
+- radio and station context
+
+### Center
+
+- station label or station name
+
+### Right side
+
+- GPS state
+- PA temperature
+- supply voltage
+- network quality
+- TGXL or PGXL accessory state
+- transmit indicator
+- grid
+- date and time
+
+If you are operating quickly, this row helps prevent "silent failures" where the radio is connected but not in the state you assume.
+
+## Connection and Station Management Windows
+
+### Connection panel
+
+The `Connect to Radio` dialog is the gateway to the radio. It includes:
+
+- `On This Network` for beginner-friendly LAN discovery
+- `Remote with SmartLink` for internet-connected stations
+- `Connect by IP` for VPN or routed access when you already know the radio IP
+- contextual `Low Bandwidth` mode for SmartLink or VPN links
+- diagnostics and recovery actions when discovery does not find a radio
+
+The dialog is meant to keep the novice path obvious while still exposing manual routing controls only when a station actually needs them.
+
+### multiFLEX dashboard
+
+The multiFLEX dialog shows connected stations and highlights local PTT control. Use it whenever more than one client may be affecting the shared radio environment.
+
+### Memory dialog
+
+The Memory dialog is an editable table for storing and recalling operating setups. It includes columns for frequency, mode, offsets, tones, filters, and digital details. It is useful for repeaters, nets, digital working frequencies, and recurring field-operation setups.
+
+### Profile manager
+
+The Profile Manager is where operating profiles become reusable station setups. Use it when you want repeatable combinations of settings instead of rebuilding a session manually.
+
+### SpotHub
+
+SpotHub brings spot sources together in one place so you can compare cluster information with the live panadapter. It is not just a list window; it is part of the tune-and-find workflow.
+
+## `Radio Setup...` Tab Guide
+
+On Windows and Linux, `Settings -> Radio Setup...` opens the main radio-configuration dialog. On macOS, use `AetherSDR -> Preferences...`; it opens the same dialog. It currently contains these pages:
+
+- `Radio`: radio information, identification, firmware update, remote-on, multiFLEX, and station identity
+- `Network`: network parameters, advanced options, and IP configuration
+- `GPS`: GPS-related status and configuration
+- `Audio`: radio outputs, SmartLink audio compression, local PC audio devices, and optional NVIDIA BNR
+- `TX`: timings, interlocks, max power, tune behavior, and TX-follow rules
+- `Phone/CW`: microphone, CW, and digital-specific setup
+- `RX`: frequency offset, 10 MHz reference, and receive-related global settings
+- `Filters`: filter behavior and low-latency digital choices
+- `XVTR`: transverter definitions and management
+- `USB Cables`: CAT, BCD, bit, and passthrough cable definitions
+- `Serial`: serial port behavior, pin assignments, and FlexControl tuning knob setup when serial support is built in
+
+This dialog affects radio-wide behavior more often than slice-local behavior, so change settings carefully and intentionally.
+
+## Operating Advice by Area
+
+### Before transmitting
+
+Check these three places in order:
+
+1. Slice or VFO `TX` assignment
+2. TX applet power and antenna context
+3. status bar and title bar warnings
+
+### When receive audio sounds wrong
+
+Work outward from the slice:
+
+1. confirm the active slice and mode
+2. confirm AF, mute, and AGC behavior
+3. check `PC Audio`
+4. check local output device selection in `Radio Setup -> Audio`
+5. if using Opus compression (SmartLink/WAN), disable client-side spectral
+   noise reduction (NR2). NR2's noise estimator cannot distinguish Opus
+   codec artifacts from real noise, which causes rasping distortion.
+   Use RNNoise (RN2), NR4 (specbleach), MNR, BNR, or DFNR instead —
+   these neural/spectral filters handle lossy audio gracefully.
+
+### When the display feels cluttered
+
+Use:
+
+- `View -> Minimal Mode`
+- the Applet Panel dock control in the title bar
+- reordered applets
+- fewer panadapters
+- the spectrum overlay instead of opening larger dialogs
+
+### When tuning becomes confusing
+
+Focus on:
+
+- which slice is active
+- which slice owns transmit
+- whether single-click tuning is enabled
+- whether you are acting on the VFO, the RX applet, or the spectrum overlay
+
+## Keyboard and External Controls
+
+Keyboard shortcuts exist for tuning, mode changes, TX actions, filter control, display work, and more. Enable them from `Settings -> Keyboard Shortcuts`, then use `Settings -> Configure Shortcuts...` to tailor the bindings.
+
+External control surfaces are also supported:
+
+- FlexControl-style tuning knobs
+- MIDI controllers
+- Stream Deck layouts
+- serial PTT or CW devices
+
+These devices are powerful once they are set up, but the simplest approach is still best: map one function, test it immediately, then add the next one.

@@ -1,0 +1,574 @@
+name: Static Checks
+
+# One runner for every stdlib-only Python gate (#4655). Replaces a11y-check.yml,
+# engine-boundary.yml and theme-seed-check.yml, which were three separate
+# workflows each doing ubuntu-latest -> checkout -> setup-python -> run one
+# script. Combined they were ~2.7 runner-minutes, so this is not a cost fix:
+# it is three copies of the same pin/concurrency/permissions boilerplate
+# collapsed into one, and three status rows collapsed into one.
+#
+# Adding a gate here is a `run:` step, not a new file. Keep that property —
+# #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
+# deleted, rather than left as a fourth near-identical workflow.
+#
+# `Static checks` IS a required status check (flipped 2026-09-12). The required
+# contexts are build / check-windows / check-macos / Static checks, so a red run
+# here blocks a merge — the frozen per-PR test gate
+# (tools/check_ci_test_gate.py) included, which is what the #5405 rollout was
+# for.
+#
+# WHAT THAT DOES AND DOES NOT MAKE ENFORCING. A step only blocks if it can fail
+# the job, so "required" promotes the --strict steps and nothing else. Still
+# advisory by design, and unchanged by the flip:
+#   * the accessibility step below — warnings only, never fails the job
+#     (docs/a11y.md);
+#   * EB2/EB3 findings against TRACKED baselines — those warn; only a new
+#     violation or a grown baseline errors. 102 warnings currently ride on a
+#     green run.
+#
+# This was the LAST action of the #5405 rollout and it sat undone from
+# 2026-09-04 to 2026-09-12: for eight days the gate that PR existed to enforce
+# was itself unenforced. The lesson for the next rollout ending in a manual
+# step is the durable part — nothing in CI can tell you the step was skipped,
+# and this file asserted "NOT yet required" throughout with nothing checking
+# whether that was still true.
+#
+# The `paths:` filter is gone, and that ordering is deliberate: a required
+# check a PR never triggers blocks that PR forever, so the filter has to go
+# BEFORE the flip, not with it. (Making it required first is what briefly
+# blocked eleven open PRs.) Every step is stdlib Python in seconds, so running
+# on every pull request costs less than one blocked docs-only PR. That ordering
+# held: at the flip every open PR had already run this workflow, so none was
+# stranded on a check it could not trigger.
+
+on:
+  pull_request:
+    branches: ["**"]
+
+# Auto-cancel superseded runs when a newer commit lands on the same PR. PR-only
+# workflow: the run_id suffix and the main guard never trigger here (ref is
+# always refs/pull/N/merge), kept identical to ci.yml/codeql.yml for uniformity.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# contents: read for checkout; pull-requests: write only for the a11y summary
+# comment (which is continue-on-error — fork PRs get a read-only token and the
+# inline annotations appear either way). Declaring contents explicitly matters:
+# per GitHub's "specify any -> unspecified default to none" rule, the old
+# a11y-check.yml's lone `pull-requests: write` silently dropped contents to
+# none, and only worked because the repo is public.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # Configure-only gate for the tree-wide sanitizer switch (#5406, #5419).
+  #
+  # Nothing else in CI exercises AETHERSDR_SANITIZER in either state: the
+  # sanitizer lane injects flags through CFLAGS/CXXFLAGS/LDFLAGS and never
+  # passes -D, and every other job builds with the option off. So the one
+  # thing that could silently rot is the option itself.
+  #
+  # Configure-only, deliberately. Every assertion below is decided during
+  # cmake's configure step, which is seconds; building anything would cost
+  # tens of minutes and prove nothing extra about the switch.
+  #
+  # A separate job rather than a step in static-checks: this needs the CI
+  # image for Qt and the rest of the dependency set, and that job is a
+  # containerless stdlib-Python runner. NOTE for branch protection: this is
+  # its own check context, so it does not gate a merge until it is added to
+  # the required list alongside `Static checks`.
+  sanitizer-option:
+    name: Sanitizer option configures
+    runs-on: ubuntu-latest
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: A valid sanitizer configures, an impossible one is refused
+        shell: bash
+        run: |
+          set -u
+          fail=0
+
+          # 1. thread — the configuration that was IMPOSSIBLE before #5419,
+          #    because Debug hardcoded -fsanitize=address onto four targets and
+          #    address cannot coexist with thread. This is the whole point.
+          if cmake -B /tmp/cfg-thread -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=thread > /tmp/thread.log 2>&1; then
+            grep -q 'sanitizer = thread' /tmp/thread.log \
+              || { echo "::error::configure succeeded but did not report the sanitizer"; fail=1; }
+          else
+            echo "::error::-DAETHERSDR_SANITIZER=thread failed to configure"
+            tail -30 /tmp/thread.log
+            fail=1
+          fi
+
+          # 2. The digital-voice opt-in must STAND DOWN under thread. This is
+          #    the regression #5419 introduced and caught by hand: the guard
+          #    reads CMAKE_{C,CXX}_FLAGS, add_compile_options never lands
+          #    there, and without the third source 77 translation units got
+          #    both -fsanitize=thread and -fsanitize=address,undefined — a
+          #    COMPILE error, invisible to a configure that succeeds. Assert on
+          #    the generated ninja file, not on the log line, so a reworded
+          #    message cannot make this pass vacuously.
+          if [ -f /tmp/cfg-thread/build.ninja ]; then
+            both=$(grep 'fsanitize=address' /tmp/cfg-thread/build.ninja | grep -c 'fsanitize=thread' || true)
+            if [ "${both:-0}" -ne 0 ]; then
+              echo "::error::$both translation units carry BOTH thread and address sanitizers (#4360 shape)"
+              fail=1
+            fi
+          fi
+
+          # 3. address+thread must be refused AT CONFIGURE, with the reason.
+          #    Discovering it at link is what cost five weeks in #4360.
+          if cmake -B /tmp/cfg-both -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=address,thread > /tmp/both.log 2>&1; then
+            echo "::error::address,thread configured successfully; it must be refused"
+            fail=1
+          else
+            grep -q 'cannot be combined' /tmp/both.log \
+              || { echo "::error::address,thread was refused, but not with the expected reason"; tail -20 /tmp/both.log; fail=1; }
+          fi
+
+          # 4. An unknown value must be refused too, so a typo is not silently
+          #    passed to the compiler.
+          if cmake -B /tmp/cfg-bogus -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=bogus > /tmp/bogus.log 2>&1; then
+            echo "::error::an unknown sanitizer name configured successfully"
+            fail=1
+          fi
+
+          # 5. AETHER_SHARED_CORE=ON (the ASan lane's link mode) must produce a
+          #    shared core, and the default must stay static. The sanitizer
+          #    lane is weekly, so this is the only per-PR check of the option.
+          #    Asserted on the generated ninja file, like case 2.
+          if cmake -B /tmp/cfg-shared -S . -G Ninja \
+                   -DAETHER_SHARED_CORE=ON > /tmp/shared.log 2>&1; then
+            grep -q '^build libaethercore\.so' /tmp/cfg-shared/build.ninja \
+              || { echo "::error::AETHER_SHARED_CORE=ON configured, but no libaethercore.so rule"; fail=1; }
+          else
+            echo "::error::-DAETHER_SHARED_CORE=ON failed to configure"
+            tail -30 /tmp/shared.log
+            fail=1
+          fi
+          if [ -f /tmp/cfg-thread/build.ninja ] \
+             && ! grep -q '^build libaethercore\.a' /tmp/cfg-thread/build.ninja; then
+            echo "::error::the default configure no longer builds a static libaethercore.a"
+            fail=1
+          fi
+
+          exit "$fail"
+
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Required by the a11y step's `git diff origin/<base>...HEAD`.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: RTL release requirement combinations
+        run: python tools/test_require_rtl.py
+
+      # ── aetherd-migration ratchet (docs/aetherd-headless-engine-design.md §10)
+      #   EB1/EB2 — the engine (src/core/ + src/models/) must never depend on
+      #             the UI: no gui/ header includes, no QtWidgets.
+      #   EB3     — no file ABOVE the radio seam (src/gui/ + src/core/ +
+      #             src/models/ + root app-shell files, excluding the backend
+      #             tree) may include a family-specific VENDOR header; the wire
+      #             is reached only through IRadioBackend (RFC step 2.4).
+      # Known legacy offenders are tracked in tools/check_engine_boundary.py and
+      # warn without blocking; NEW violations fail (--strict). Baselines only
+      # shrink. Full-tree scan, stdlib-only.
+      - name: Engine/UI dependency direction
+        run: python tools/check_engine_boundary.py --strict
+
+      # The aetherd burndown table is generated from live gui→engine includes
+      # plus its tag/status sidecars. Keep the committed catalogue synchronized
+      # and require every live touchpoint to carry a valid semantic tag so the
+      # EB3 vendor vocabulary cannot acquire an unclassified blind spot.
+      - name: aetherd touchpoint manifest
+        if: ${{ !cancelled() }}
+        run: python tools/gen_touchpoint_manifest.py --check
+
+      # ── The seam-probe table (tests/SeamSignalProbeTable.inc) is generated
+      # from IRadioBackend.h's signals: section. #5868.
+      #
+      # backend_seam_affinity_test already asserts this, against the
+      # meta-object — but at RUNTIME, and no PR lane runs it: ci-test-gate.txt
+      # is frozen so it cannot join the per-PR allow-list, and ci.yml's Linux
+      # job runs no ctest at all. It therefore first executes in
+      # full-suite.yml, post-merge on main. Detection was late, not absent:
+      # #5825 added autoRfGainArmSettled without the probe line, was green on
+      # every PR check, and went red on the merge with "51 probed, 52
+      # declared" (#5865 repaired it).
+      #
+      # This is that assertion restated as a static check, where it can block
+      # the PR — stdlib Python, seconds, no build, no Qt. Generating the table
+      # rather than only auditing it is the other half: a checker keeps two
+      # lists honest, a generator leaves one.
+      - name: Seam probe table covers every IRadioBackend signal
+        if: ${{ !cancelled() }}
+        run: python tools/gen_seam_probe_table.py --check
+
+      # The scanner behind that table, run here and not only as a ctest.
+      # --check compares the committed table against the SAME parser that
+      # generates it, so a parser that under-reads produces a table that is
+      # short in exactly the matching way and --check reports "up to date".
+      # The generator refuses rather than under-reads (residue()), and these
+      # tests are what hold it to that — which makes them load-bearing for
+      # the step above, unlike the other tools/test_*.py that are ctest-only.
+      - name: Seam probe scanner
+        if: ${{ !cancelled() }}
+        run: python tools/test_gen_seam_probe_table.py
+
+      # ── The user docs' Generated Reference pages (docs/user/docs/generated/)
+      # are parsed from the C++ source: shortcuts, MIDI/FlexControl/Ulanzi/HID
+      # actions, log categories, TCI commands. docs.yml only runs on PRs that
+      # touch docs/user/, so a source change that renames an action would
+      # leave the page stale with no signal; this step is that signal. The fix
+      # is to re-run the generator and commit the pages with the change.
+      - name: User docs generated reference
+        if: ${{ !cancelled() }}
+        run: python tools/docs/gen_reference.py --check
+
+      # ── The docs site's Log Analyzer rules each cite the source line that
+      # writes the log message they match. A reworded or moved message fails
+      # here, for the same reason as the step above. Node is preinstalled on
+      # ubuntu-latest; the test is stdlib-only.
+      - name: Log Analyzer rules cite live log messages
+        if: ${{ !cancelled() }}
+        run: node tools/docs/test_log_rules.mjs
+
+      # ── full-suite.yml's red-main attribution only runs when main is red, so
+      # a regression in it would surface as a wrong verdict on a red main.
+      # This runs that step's script against stubbed GitHub data, plus the
+      # failed-list producer against a CTest summary. Stdlib-only, no network.
+      - name: Red-main attribution
+        if: ${{ !cancelled() }}
+        run: node tools/test_full_suite_attribution.mjs
+
+      # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
+      # was 6,357 lines, over half of it 300+ test-target declarations; the split
+      # cut it to ~2,780. tests/tests.cmake fails the CONFIGURE step if a test
+      # target reappears in the root file, which is the fast feedback path — this
+      # is the second line, for what a configure-time check cannot see: a reviewer
+      # reading the diff on GitHub, and a stale build tree that never re-runs
+      # cmake. Cheap and stdlib-only, so it costs nothing to keep both.
+      - name: Test registration location
+        if: ${{ !cancelled() }}
+        run: python tools/check_test_registration.py --strict
+
+      # Tests reach WDSP only through core/dsp/WdspChannel.h: no test source
+      # includes a WDSP header and no test links aether_wdsp, bar a commented
+      # allowlist of pure WDSP unit tests. With AETHER_SHARED_CORE=ON (the
+      # sanitizer lanes) libaethercore.so keeps WDSP's symbols hidden, so a
+      # direct call only links in the static build every PR uses (#6283/#6284),
+      # and linking aether_wdsp gives the test a second WDSP the core never
+      # touches. Stdlib-only, sub-second.
+      - name: WDSP test links
+        if: ${{ !cancelled() }}
+        run: python tools/check_wdsp_test_links.py --strict
+
+      - name: WDSP test-links checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_wdsp_test_links.py
+
+      # ── #5262 M2: the capability descriptor's boolean population is FROZEN.
+      # A new capability lands as a per-feature record (std::optional<Record>:
+      # engaged = present, fields = shape), not another loose bool. Booleans
+      # fission when the second radio family arrives (hasRadioSideDsp became
+      # four tiers, hostModulates became two fields), and one a backend simply
+      # forgot to set reports a definite "no" indistinguishable from a
+      # considered one.
+      #
+      # This is a ratchet rather than a convention because the convention was
+      # written down and did not hold: #5299 alone added seven bools after M2
+      # was recorded. The count only falls; converting one means lowering
+      # FROZEN_BOOL_COUNT in the same commit.
+      - name: Capability record convention
+        if: ${{ !cancelled() }}
+        run: python tools/check_capability_records.py --strict
+
+      # ── The step above is only as good as its PARSER, and #5727 showed the
+      # parser losing fields silently: an accessor declared beside a capability
+      # deleted the NEXT bool from the count, and a bool added after one was
+      # never seen — so the population could grow past the freeze with the
+      # count flat and the step above green. The `std::optional<Record>` +
+      # accessor shape the ratchet asks for is the shape that broke it.
+      #
+      # tools/test_check_capability_records.py is also declared in
+      # tests/tests.cmake, so it runs unfiltered post-merge in full-suite.yml
+      # and weekly under the sanitizers. This second line is deliberate and is
+      # the same argument the "Test registration location" step above makes:
+      # the thing under test is a PR gate, so its regression test has to run on
+      # the same PR, not minutes after the merge that broke it. Stdlib-only and
+      # sub-second, like every other step here — it costs nothing to keep both.
+      # (Not a `ctest -R` step, so it does not touch the frozen per-PR test
+      # gate in .github/ci-test-gate.txt; that freeze is about ci.yml's build.)
+      - name: Capability record parser
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_capability_records.py
+
+      # ── #5262 M4: raw Flex wire text above the seam is FROZEN per file.
+      # Models emitting commandReady and widgets calling sendCommand hand
+      # RadioModel::sendCmd() a wire string that is SILENTLY DROPPED on
+      # HL2/Icom/ANAN/RTL — so every unconverted control is a live-looking dead
+      # control there. M0 (#5265) made the drop loud; this stops the backlog
+      # growing while the by-subsystem conversion works through it.
+      #
+      # Per file, not a total: a total would let one subsystem's conversion pay
+      # for another's regression, and a file absent from the baseline must stay
+      # at zero so a NEW control on the old plane fails even mid-migration.
+      # Growth under src/core/backends/flex/ is deliberately not counted — that
+      # is where the encode is supposed to end up.
+      - name: Command plane above the seam
+        if: ${{ !cancelled() }}
+        run: python tools/check_command_plane.py --strict
+
+      # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs no Linux tests
+      # and a short allow-list of platform-toolchain tests behind `ctest -R`
+      # steps; the full suite runs unfiltered on every push to main
+      # (full-suite.yml) and again weekly under the sanitizers
+      # (sanitizers.yml), and every add_test() in tests/tests.cmake that the
+      # default configure builds joins both the moment it is declared. This
+      # resolves every -R pattern in every pull-request workflow against the
+      # registered names the way ctest does and fails if the result is not
+      # exactly .github/ci-test-gate.txt. Removing a test from the gate: run
+      # `python tools/check_ci_test_gate.py --update` and commit. Adding one is
+      # a diff to that maintainer-owned file, on purpose.
+      - name: Per-PR test gate is frozen
+        if: ${{ !cancelled() }}
+        run: python tools/check_ci_test_gate.py --strict
+
+      # ── Network transfer-timeout ratchet (#4688 §6). A QNetworkAccessManager
+      # with no transfer timeout turns a half-open connection into a reply that
+      # never finishes and never errors — the surface that issued it just stops,
+      # with no error and no way to tell "slow" from "gone". #4698 swept the
+      # eleven clients that had drifted, but the sweep is not the durable part:
+      # seven call sites had set a per-request timeout for years while eleven
+      # more never got the memo, which is what an unenforced convention looks
+      # like after enough merges. This fails the NEXT one instead (--strict).
+      #
+      # `!cancelled()` so a failure above still lets this one report — seeing
+      # every gate's verdict in one run is the point of sharing a job.
+      - name: Network transfer timeouts
+        if: ${{ !cancelled() }}
+        run: python tools/check_network_timeouts.py --strict
+
+      # Settings go through AppSettings, never QSettings; only the files listed
+      # in the checker's ALLOWED table may use it, and that list only shrinks.
+      - name: QSettings ratchet
+        if: ${{ !cancelled() }}
+        run: python tools/check_qsettings.py --strict
+
+      # Qt 6.12 deprecates Q_OS_MAC (#6354); Q_OS_MACOS is the spelling for
+      # macOS-only code. Only a macOS build warns, so without this a re-added
+      # Q_OS_MAC goes unseen by the Linux and Windows lanes. Source files only.
+      - name: No deprecated Q_OS_MAC
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          hits=$(git grep -nw Q_OS_MAC -- '*.cpp' '*.h' '*.hpp' '*.mm' '*.m' ':!third_party') || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "$hits" | awk -F: '{print "::error file="$1",line="$2"::Q_OS_MAC is deprecated in Qt 6.12; use Q_OS_MACOS"}'
+            exit 1
+          fi
+          [ "$rc" -eq 1 ] || { echo "::error::git grep failed (exit $rc)"; exit "$rc"; }
+
+      # ── ThemeManager::seedBuiltinDefaults() compiles a copy of the default
+      # theme into the binary. It is GENERATED (tools/gen_theme_seed.py emits
+      # src/core/ThemeSeedGenerated.cpp from resources/themes/default-dark.json),
+      # so the two can no longer drift apart — but someone can still edit the
+      # bundled theme without regenerating, or hand-edit the "DO NOT EDIT" file.
+      # This fails on either (--strict).
+      #
+      # `!cancelled()` so a failure in the step above still lets this one report:
+      # seeing every gate's verdict in one run is the point of sharing a job.
+      - name: Theme seed vs bundled JSON
+        if: ${{ !cancelled() }}
+        run: python tools/check_theme_seed.py --strict
+
+      # ── Shader/GLSL-dialect ratchet (#4746). qt_add_shaders bakes one slice
+      # per target dialect and QRhi picks the highest slice <= what the driver
+      # reports. A shader using an interpolation qualifier that some baked slice
+      # cannot express still BAKES — qsb emits the illegal text and exits 0 — so
+      # the build is green, the .qsb is produced, and the only symptom is a
+      # driver rejecting it at runtime. #4746 was exactly that: `flat` (#4539)
+      # baked into a GLSL 120 slice, invisible on every GL 3.2+ desktop GPU and
+      # on CI, and a dead 3D FFT on the Raspberry Pi's GL 3.1 v3d driver.
+      #
+      # This is the one class of shader bug CI structurally cannot catch by
+      # building, so it gets a source gate instead (--strict). Matches only
+      # interpolation qualifiers, which SPIRV-Cross passes through verbatim —
+      # everything else it lowers, and a gate with false positives gets ignored.
+      - name: Shader GLSL dialects
+        if: ${{ !cancelled() }}
+        run: python tools/check_shader_dialects.py --strict
+
+      # ── Qt pin consistency (#5487). cmake/qt-pin.env states the Qt every
+      # artifact ships and every CI leg builds, and scripts/setup/setup-qt.sh
+      # installs it for source builders. The workflows and the CI Dockerfile
+      # cannot read that file — `env:` is evaluated before any step runs — so
+      # each still spells the values out, and a bump that misses one ships a
+      # Qt nothing else tested. This fails on any disagreement, and on a Qt
+      # version literal in a workflow that is neither the pin nor the floor
+      # (--strict). The self-test breaks each site on purpose and requires a
+      # finding, so the gate cannot silently stop matching.
+      - name: Qt pin consistency
+        if: ${{ !cancelled() }}
+        run: python tools/check_qt_pin.py --strict
+
+      - name: Qt pin checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_qt_pin.py
+
+      # BUILD-OPTIONS.md is the catalog of project CMake options (#6097), and
+      # options arrive in PRs that have no reason to open it. Fails on an option
+      # or cache setting with no row, a row with no definition, or a literal
+      # ON/OFF default that differs. The self-test breaks each on purpose.
+      - name: Build options reference
+        if: ${{ !cancelled() }}
+        run: python tools/check_build_options.py --strict
+
+      - name: Build options checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_build_options.py
+
+      # The release workflow's update-manifest builder (RFC #5304), tested
+      # here because a release is its only other run. A reference applier
+      # written from docs/architecture/update-manifest.md must rebuild the new
+      # tree from the old one and each bundle. Needs zstd, which the runner
+      # image ships.
+      - name: Update manifest builder
+        if: ${{ !cancelled() }}
+        run: python tools/test_build_update_manifest.py
+
+      # Its publisher: a partial upload is not a publication, and latest/
+      # never moves to an older release (in-memory store, ephemeral key).
+      - name: Update manifest publisher
+        if: ${{ !cancelled() }}
+        run: python tools/test_publish_update_manifest.py
+
+      # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
+      # above the PR's base. The gate is a DELTA rather than a stored constant:
+      # main gains colours from unrelated UI merges, so a frozen baseline goes
+      # stale within hours, and an absolute ceiling fails every src/-touching PR
+      # once main drifts past it — including PRs that REMOVE colours.
+      #
+      # Folded in from colour-ratchet.yml per #4657. It relies on this job's
+      # fetch-depth: 0 to materialise the base commit, which the a11y step below
+      # already required — so sharing the runner costs one step and saves a
+      # whole checkout. A worktree rather than a second actions/checkout: the
+      # base tree is only ever read by a text scanner.
+      #
+      # The base is the MERGE BASE of what was actually checked out, not live
+      # origin/<base_ref> (#4956). For a pull_request event github.sha is frozen
+      # when the run is CREATED, so the PR side is main-as-of-then while
+      # origin/<base_ref> resolves when the job RUNS. When main LOSES colours in
+      # between, the drop is billed to whichever PR happens to be running: #4895
+      # — a five-line C++ comment edit, which strip_comments() makes invisible to
+      # the scanner by construction — failed +5 setstylesheet off a 22h-old
+      # pinned tree, reporting #4866's cleanup sign-flipped. Re-resolving
+      # refs/pull/N/merge is not the fix: it races the ref and would scan a
+      # different tree than the SHA this run reports. The merge base asks the
+      # delta question against the tree the PR was actually written on, and is
+      # insensitive to how long the run sat queued — which is why fork PRs, held
+      # for workflow approval, were the most exposed. The a11y step below is
+      # already merge-base correct via its three-dot diff.
+      #
+      # Captured into a variable, not inlined: `bash -e` does not abort on a
+      # failed command substitution used as an argument, so an inline form would
+      # silently pass an empty base to `git worktree add`.
+      - name: Hardcoded-colour ratchet
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          BASE=$(git merge-base HEAD "origin/${BASE_REF}")
+          git worktree add /tmp/colour-base "$BASE"
+          python tools/audit_colours.py \
+            --src src \
+            --compare-src /tmp/colour-base/src \
+            --summary-only \
+            --strict
+
+      # ── Accessibility: warnings only, never fails the job (see docs/a11y.md).
+      # Scoped to src/gui/ files changed by this PR rather than the whole tree.
+      - name: Get changed src/gui/ files
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff --name-only "origin/${BASE_REF}...HEAD" \
+            | grep -E '^src/gui/.*\.(cpp|h)$' \
+            > /tmp/changed_gui_files.txt || true
+          echo "Changed src/gui files:"
+          cat /tmp/changed_gui_files.txt || echo "(none)"
+
+      - name: Qt accessibility static analysis
+        id: a11y
+        if: ${{ !cancelled() }}
+        run: |
+          FILES=()
+          while IFS= read -r f; do FILES+=("$f"); done < /tmp/changed_gui_files.txt
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "No src/gui/ files changed -- skipping."
+            echo "findings=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          python tools/check_a11y.py "${FILES[@]}" | tee /tmp/a11y_output.txt
+          COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || true)
+          echo "findings=$COUNT" >> $GITHUB_OUTPUT
+
+      # Post a summary comment so the finding count is visible at the PR top
+      # level (the per-line annotations appear on the diff itself).
+      # continue-on-error: true because fork PRs have a read-only GITHUB_TOKEN
+      # and the comment step would otherwise fail -- the inline annotations
+      # appear on the diff regardless.
+      #
+      # NOTE: this workflow intentionally does NOT auto-apply the
+      # aetherclaude-eligible label. Per AGENTS.md and CONSTITUTION.md
+      # (Principle X), that label is the issue-level claim mechanism that
+      # gates AetherClaude implementation work — applying it to PRs would
+      # repurpose the label off-spec and trigger AetherClaude to write
+      # remediation patches on community contributors' open PRs without
+      # their consent. Accessibility remediation should be picked up via a
+      # follow-up issue (e.g. #3288), not by side-effect of opening a PR.
+      - name: Comment with accessibility summary
+        if: ${{ !cancelled() && steps.a11y.outputs.findings != '0' && steps.a11y.outputs.findings != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SUMMARY=$(grep -E "(Files scanned|Files with findings|Total findings)" \
+            /tmp/a11y_output.txt | sed 's/^/> /' || echo "")
+          cat > /tmp/a11y_comment.md << COMMENTEOF
+          ## Accessibility check findings
+
+          This PR touches \`src/gui/\` files with **${{ steps.a11y.outputs.findings }}** accessibility issue(s).
+          Full details appear as inline annotations on the diff above.
+
+          ${SUMMARY}
+
+          See [\`docs/a11y.md\`](docs/a11y.md) for the canonical
+          Qt patterns (\`setAccessibleName\`, \`QAccessibleValueChangeEvent\`,
+          \`QAccessibleInterface\` subclasses, etc.). Structural remediation
+          (keyboard navigation, custom \`QAccessibleInterface\` subclasses)
+          is tracked in #3288.
+
+          *Findings are warnings only — the build is not blocked.*
+          COMMENTEOF
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body-file /tmp/a11y_comment.md

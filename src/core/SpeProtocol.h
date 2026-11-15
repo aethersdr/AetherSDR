@@ -1,0 +1,320 @@
+#pragma once
+
+#include <functional>
+#include <optional>
+
+#include <QByteArray>
+#include <QChar>
+#include <QMetaType>
+#include <QString>
+#include <QStringList>
+
+namespace AetherSDR {
+
+// SPE Expert amplifier serial protocol (1.3K-FA / 1.5K-FA / 2K-FA).
+// Authority: SPE "Application Programmer's Guide", Rev 1.1 (2015-10-15); see
+// docs/architecture/spe-expert-amplifier-design.md.
+//
+//   host -> amp:  | 0x55 0x55 0x55 | CNT | DATA... | CHK |
+//   amp  -> host: | 0xAA 0xAA 0xAA | CNT | DATA... | CHK... |
+//
+// CNT counts DATA bytes; CHK = sum(DATA) mod 256 (single-byte commands repeat
+// the command byte). Replies: the ACK echoes the command with a 1-byte
+// checksum; the 67-byte Status has a 16-bit checksum (lo = sum%256, hi =
+// sum/256) then CR LF. Every command is a front-panel keystroke; settings and
+// firmware updates are reserved for SPE's KTerm and out of scope.
+namespace Spe {
+
+constexpr quint8 kHostSync = 0x55;  // host -> amplifier sync byte (x3)
+constexpr quint8 kAmpSync  = 0xAA;  // amplifier -> host sync byte (x3)
+
+// The Status string is fixed at 67 data characters (spec §5). Nothing the
+// amplifier sends is longer, so any CNT beyond this small ceiling is noise
+// (or a corrupted byte) rather than a real frame length.
+constexpr quint8 kStatusDataLength = 67;
+constexpr quint8 kMaxDataLength    = 72;
+
+// Front-panel keystroke codes (spec §4). Supported from firmware
+// 15_05_15_A_3s (2K-FA) / 15_05_15_A_15s (1.3K-FA) onward.
+enum class Key : quint8 {
+    Input      = 0x01,  // toggle input port 1/2
+    BandDown   = 0x02,
+    BandUp     = 0x03,
+    Antenna    = 0x04,
+    LMinus     = 0x05,  // manual ATU inductance — floating LCD presentation only
+    LPlus      = 0x06,
+    CMinus     = 0x07,  // manual ATU capacitance — floating LCD presentation only
+    CPlus      = 0x08,
+    Tune       = 0x09,
+    SwitchOff  = 0x0A,  // powers the amplifier down
+    Power      = 0x0B,  // cycles the output power level (see Status::powerLevel)
+    Display    = 0x0C,
+    Operate    = 0x0D,  // toggles STANDBY <-> OPERATE
+    Cat        = 0x0E,
+    LeftArrow  = 0x0F,
+    RightArrow = 0x10,
+    Set        = 0x11,
+};
+
+constexpr quint8 kBacklightOn    = 0x82;
+constexpr quint8 kBacklightOff   = 0x83;
+constexpr quint8 kStatusRequest  = 0x90;
+
+// ── Framing (host -> amp) ────────────────────────────────────────────────
+
+// Builds a complete host->amp packet: 0x55 x3, CNT, data..., checksum,
+// CR LF. The trailing CR LF is not in the spec's packet diagram, but the
+// spec's own Node-RED-era reference traffic and the working Python
+// implementation this module was validated against both required it on
+// real 1.5K-FA hardware (commands without it were intermittently ignored
+// over a ser2net link). Two extra bytes outside the framed packet are
+// harmless to a parser keyed on the sync sequence, so they are always sent.
+QByteArray buildPacket(const QByteArray& data);
+
+QByteArray buildKeyCommand(Key key);
+QByteArray buildStatusRequest();
+QByteArray buildBacklightCommand(bool on);
+
+// ── Framing (amp -> host) ────────────────────────────────────────────────
+
+// A decoded amplifier->host frame. `data` excludes sync/CNT/checksum.
+// The single-byte ACK (CNT == 1, 1-byte checksum) and the Status string
+// (CNT == 67, 2-byte checksum + CR LF) are the only reply shapes the spec
+// defines; both surface here and the caller dispatches on data size.
+struct Frame {
+    QByteArray data;
+    bool isAck() const { return data.size() == 1; }
+};
+
+// Streaming byte-oriented parser for the amplifier->host direction. Feed it
+// raw bytes from any transport (QSerialPort or QTcpSocket — same bytes
+// either way); it resyncs on the 0xAA 0xAA 0xAA sync sequence whenever a
+// candidate frame fails validation, so garbage or partial data self-heals
+// rather than desyncing permanently. Deliberately has zero Qt-networking
+// dependency so it's unit-testable against captured byte sequences.
+class FrameParser {
+public:
+    void setFrameCallback(std::function<void(const Frame&)> cb) { m_onFrame = std::move(cb); }
+    // Raw LCD display frames (see the Lcd namespace below) use a different
+    // header shape than ACK/Status — the parser recognises them by their
+    // payload-length + type-marker bytes and hands the complete raw frame
+    // here instead of misreading the length field as a CNT byte.
+    void setDisplayCallback(std::function<void(const QByteArray&)> cb) { m_onDisplay = std::move(cb); }
+    // Fires when a complete display-shaped frame fails validation in both
+    // its raw and telnet-escaped readings and is dropped. A display reply
+    // is 371 bytes against Status's ~76, so under the same bit-error rate
+    // (strong RF near the serial run mid-transmit is the field case) it is
+    // ~5x as likely to die — and unlike Status, nothing re-polls it for
+    // most of a poll gap. The owner uses this to schedule a prompt retry.
+    void setDisplayRejectCallback(std::function<void()> cb) { m_onDisplayReject = std::move(cb); }
+    void feed(const QByteArray& bytes);
+    void reset() { m_buf.clear(); }
+
+private:
+    // Drops the rejected sync candidate at buffer position 0 and shifts to
+    // the next 0xAA in a single pass. Returns false and empties the buffer
+    // when no further sync byte remains.
+    bool resyncToNextSync();
+
+    QByteArray m_buf;
+    std::function<void(const Frame&)> m_onFrame;
+    std::function<void(const QByteArray&)> m_onDisplay;
+    std::function<void()> m_onDisplayReject;
+};
+
+// ── Status string decode (spec §5) ───────────────────────────────────────
+
+// The 67-character Status payload is ASCII CSV: a leading marker character
+// ("C" on all firmware observed), then 19 fixed-length fields. All values
+// decoded to native types; raw characters kept where the spec enumerates
+// single-letter codes.
+struct Status {
+    QString id;              // "13K" (1.3K-FA), "15K" (1.5K-FA), "20K" (2K-FA), "10K" (1K-FA, synthetic)
+    bool    operate{false};      // O = OPERATE, S = STANDBY
+    bool    transmitting{false}; // T = TX, R = RX
+    QChar   bank{u'x'};          // A/B on 1.3K/1.5K-FA; 2K-FA always reads x
+    int     input{1};            // selected input port, 1 or 2
+    int     bandIndex{0};        // 00 (160m) .. 11 (4m)
+    int     txAntenna{0};        // 0..4 (1.3K/1.5K) or 0..6 (2K)
+    QChar   atuState{};          // t = tunable, b = ATU bypassed, a = ATU enabled
+    QString rxAntenna;           // "0r" when no RX-only antenna is set
+    QChar   powerLevel{};        // L / M / H
+    float   outputPowerW{0.0f};  // 0 in RX
+    float   swrAtu{0.0f};        // VSWR before the ATU (TX only)
+    float   swrAnt{0.0f};        // VSWR at the antenna (TX only)
+    float   paVoltageV{0.0f};    // supply voltage (0.0 in RX)
+    float   paCurrentA{0.0f};    // absorbed current on TX
+    int     tempUpper{0};        // heatsink degC/degF (upper on 2K-FA)
+    int     tempLower{0};        // 2K-FA lower heatsink; 1.3K-FA always 0
+    int     tempCombiner{0};     // 2K-FA combiner; 1.3K-FA always 0
+    QChar   warning{u'N'};       // N = none; see warningText()
+    QChar   alarm{u'N'};         // N = none; see alarmText()
+    // Plain-text faults from a protocol without letter codes (the original
+    // 1K-FA); when set they replace warningText()/alarmText() of the codes.
+    QString warningDetail;
+    QString alarmDetail;
+    // swrAnt was derived from forward/reverse power rather than reported by
+    // the amplifier's own meter; such a ratio typically reads low (#4436).
+    bool    swrEstimated{false};
+};
+
+// Decodes a Status frame's 67-character payload. Tolerates the payload
+// arriving with or without the leading marker character (19 or 20
+// comma-separated tokens), so a firmware that drops the marker still
+// parses. Returns nullopt when the field count is short.
+std::optional<Status> parseStatus(const QByteArray& payload);
+
+// Band name for Status::bandIndex — 00 (160m) through 11 (4m); the 2K-FA
+// tops out at 10 (6m). Out-of-range indices return "?m".
+QString bandName(int index);
+
+// Human-readable text for the WARNINGS / ALARMS single-letter codes
+// (spec §5's two tables). Unknown codes echo the raw letter rather than
+// pretending to know.
+QString warningText(QChar code);
+QString alarmText(QChar code);
+
+QString powerLevelName(QChar code);  // L/M/H -> LOW/MID/HIGH
+
+// Remote LCD display (request code 0x80). Undocumented by the spec; decode
+// from a field-proven 1.5K-FA control application. Reply frame (371 bytes):
+//   AA AA AA | 6A 01 (payload length, LE) | 95 FE |
+//   2-byte inverted flag word | 320 character bytes (8 rows x 40 cols) |
+//   40 attribute bytes (one per column, bit N = inverse video on row N) |
+//   2-byte little-endian payload checksum
+// The 362-byte payload runs flag word..attributes; characters start at offset
+// 9 (pinned to a captured frame in spe_protocol_test). Font ROM: 0x00 blank,
+// 0x01..0x7E and 0x80..0xDF pass through, all else blanks.
+namespace Lcd {
+
+constexpr int kRows = 8;
+constexpr int kCols = 40;
+constexpr quint8 kRequestCode = 0x80;
+constexpr int kPayloadOffset = 7;     // sync + length + 95 FE type marker
+constexpr int kPayloadLength = 362;   // flags + characters + attributes
+constexpr int kFlagLength = 2;
+constexpr int kDataOffset = kPayloadOffset + kFlagLength;
+constexpr int kAttributeOffset = kDataOffset + kRows * kCols;
+constexpr int kChecksumOffset = kPayloadOffset + kPayloadLength;
+constexpr int kFrameLength = kChecksumOffset + 2;
+
+QByteArray buildRequest();
+
+// One decoded display refresh: font-ROM indices plus the per-cell
+// inverse-video attribute. Plain aggregate so it can cross a queued signal.
+struct Frame {
+    quint8 chars[kRows][kCols] = {};
+    bool   inverse[kRows][kCols] = {};
+};
+
+// Decodes one complete, checksum-valid logical display frame (header
+// included). Returns nullopt for a wrong header, length, checksum, or size.
+std::optional<Frame> decode(const QByteArray& raw);
+
+}  // namespace Lcd
+
+// ── Remote power-ON (RFC 2217 Telnet COM-port control) ───────────────────
+
+// The Expert powers ON via a pulse on a hardware line of its serial
+// connector — not a protocol command. Over a ser2net telnet-mode proxy that
+// pulse is expressible with RFC 2217 SET-CONTROL messages driving the
+// proxy's DTR/RTS lines. The exact sequence below (500 ms after announcing
+// WILL COM-PORT-OPTION: DTR on, 100 ms, DTR off + RTS on, 1000 ms, DTR on +
+// RTS off) is carried verbatim from the field-proven reference application
+// for the 1.5K-FA — see the design note §4. SpeConnection owns the timing;
+// these helpers just build the byte sequences (kept here so they are
+// unit-testable against RFC 2217's literal framing).
+namespace Rfc2217 {
+
+constexpr quint8 kDtrOn  = 0x08;
+constexpr quint8 kDtrOff = 0x09;
+constexpr quint8 kRtsOn  = 0x0B;
+constexpr quint8 kRtsOff = 0x0C;
+
+// IAC WILL COM-PORT-OPTION — asks the proxy to interpret RFC 2217 frames.
+QByteArray buildWillComPortOption();
+// IAC SB COM-PORT-OPTION SET-CONTROL <ctrl> IAC SE
+QByteArray buildSetControl(quint8 ctrl);
+
+// The peer's answer to buildWillComPortOption(). ser2net replies
+// IAC DO COM-PORT-OPTION when the port is configured
+// `accepter: telnet(rfc2217=true),<port>`, and IAC DONT for a plain-telnet
+// port. A raw port never answers at all — it forwards the negotiation into
+// the amplifier's UART as payload, where it lands as junk. Distinguishing
+// those three is the difference between driving the power line and silently
+// doing nothing, so powerOn() reads this rather than assuming success.
+enum class OptionReply { None, Accepted, Refused };
+
+// Scans a raw inbound chunk for that answer, returning the last one present.
+// Doubled IAC bytes (FF FF) are escaped binary data, not a negotiation verb.
+// SpeConnection only scans while an explicit WILL request is outstanding, so
+// an unescaped raw-mode LCD payload cannot mutate the cached result later.
+OptionReply scanComPortOptionReply(const QByteArray& bytes);
+
+}  // namespace Rfc2217
+
+// ── Per-model display scaling ────────────────────────────────────────────
+
+// The Status ID field identifies the model directly on every response, so —
+// unlike the ACOM family — no auto-ranging heuristics are needed; the gauge
+// scale simply follows the reported ID.
+struct ModelSpec {
+    QString id;            // Status ID value this spec matches
+    QString displayName;   // "1.5K-FA"
+    float   nominalPowerW{0};  // rated output at HIGH — gauge red threshold
+    float   maxPowerW{0};      // gauge ceiling at HIGH
+    float   warnPowerW{0};     // gauge yellow zone start at HIGH
+    float   lowNominalW{0};    // rated output at the LOW power level
+    float   midNominalW{0};    // rated output at the MID power level
+    bool    hasMemoryBanks{false};  // A/B bank field is meaningful
+    bool    hasCombiner{false};     // lower/combiner temperatures are real
+    bool    reportsAtuSwr{true};    // Status carries the before-ATU SWR
+    bool    hasLcdMirror{true};     // answers the 0x80 display request
+    bool    powerOnHoldsDtr{false}; // ON holds DTR high (else: RTS pulse)
+    bool    halfFullLevels{false};  // panel says HALF/FULL, not LOW/MID/HIGH
+};
+
+// 1.5K-FA is the entry validated against real hardware by this project
+// (its gauge thresholds mirror a field-proven control application for that
+// model). 1.3K-FA and 2K-FA figures come from SPE's published rated output
+// with the same +100 W gauge-ceiling convention. Unknown IDs fall back to
+// the 1.5K-FA entry.
+const ModelSpec& modelSpec(const QString& id);
+QStringList modelIds();
+
+// Which wire protocol a configured amplifier speaks. The 1.3K/1.5K/2K-FA
+// identify themselves in every Status; the original 1K-FA speaks an older,
+// incompatible protocol and cannot be detected, so the operator picks it.
+enum class Variant { Expert, Legacy1k };
+
+// Persisted spelling of a Variant (PeripheralSettings "SpeExpert"/"Model").
+// Anything unrecognised reads as Expert, the pre-existing behaviour.
+QString variantKey(Variant v);
+Variant variantFromKey(const QString& key);
+// Serial line settings the variant mandates, for display ("115200 8N1").
+int serialBaud(Variant v);
+
+// Model-aware variant: the original 1K-FA's panel names its two levels
+// HALF/FULL, so L/H read that way there; every other model as powerLevelName(QChar).
+QString powerLevelName(QChar code, const ModelSpec& spec);
+
+// Rated output for the currently selected power level (Status::powerLevel).
+// H (or an unknown letter) is the model's full nominalPowerW.
+float levelNominalW(const ModelSpec& spec, QChar level);
+
+// Power-gauge axis for a level, so the bar rescales on LOW/MID/HIGH like the
+// amp's display. HIGH returns the model row verbatim (the table is the single
+// source of truth). LOW/MID use the 1.5K-FA shape: yellow from nominal−50 W,
+// red from nominal, ceiling nominal+100 W.
+struct GaugeRange {
+    float nominalW{0};  // gauge red threshold
+    float warnW{0};     // gauge yellow zone start
+    float maxW{0};      // gauge ceiling
+};
+GaugeRange levelGaugeRange(const ModelSpec& spec, QChar level);
+
+}  // namespace Spe
+}  // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::Spe::Status)
+Q_DECLARE_METATYPE(AetherSDR::Spe::Lcd::Frame)

@@ -1,0 +1,303 @@
+#pragma once
+
+#include "core/backends/FileTransferRequest.h"
+
+#include <QObject>
+#include <QByteArray>
+#include <QList>
+#include <QPointer>
+#include <QRegularExpression>
+#include <QString>
+#include <QStringList>
+#include <QVersionNumber>
+
+#include <optional>
+#include <functional>
+#include <utility>
+
+class QFile;
+class QTemporaryFile;
+class QTcpServer;
+class QTcpSocket;
+class QTimer;
+
+namespace AetherSDR {
+
+class RadioModel;
+class ProfileTransferTestAccess;
+
+struct MemoryGroupSelection {
+    QString owner;
+    QString group;
+};
+
+struct ExportSelection {
+    bool globalProfiles{true};
+    bool txProfiles{true};
+    bool micProfiles{true};
+    bool memories{false};
+    bool preferences{false};
+    bool tnf{false};
+    bool xvtr{false};
+    bool usbCables{false};
+
+    QStringList globalProfileNames;
+    QStringList txProfileNames;
+    QStringList micProfileNames;
+    QList<MemoryGroupSelection> memoryGroups;
+
+    bool anySelected() const
+    {
+        return globalProfiles || txProfiles || micProfiles || memories
+            || preferences || tnf || xvtr || usbCables;
+    }
+};
+
+inline QString cleanMetaSubsetToken(QString token)
+{
+    token.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    token.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    token.replace(QLatin1Char('^'), QLatin1Char(' '));
+    return token.trimmed();
+}
+
+inline QString cleanMemoryToken(QString token)
+{
+    token = cleanMetaSubsetToken(std::move(token));
+    token.replace(QLatin1Char(' '), QChar(0x7f));
+    return token;
+}
+
+inline void appendProfileSubsetLine(QByteArray& out, const char* tag, const QStringList& names)
+{
+    out += tag;
+    out += '^';
+    for (const QString& rawName : names) {
+        const QString name = cleanMetaSubsetToken(rawName);
+        if (name.isEmpty())
+            continue;
+        out += name.toUtf8();
+        out += '^';
+    }
+    out += "\r\n";
+}
+
+inline QByteArray buildMetaSubset(const ExportSelection& selection)
+{
+    QByteArray out;
+
+    if (selection.globalProfiles)
+        appendProfileSubsetLine(out, "GLOBAL_PROFILES", selection.globalProfileNames);
+    if (selection.txProfiles)
+        appendProfileSubsetLine(out, "HW_PROFILES", selection.txProfileNames);
+    if (selection.micProfiles)
+        appendProfileSubsetLine(out, "MIC_PROFILES", selection.micProfileNames);
+    if (selection.memories) {
+        out += "MEMORIES^";
+        for (const MemoryGroupSelection& memory : selection.memoryGroups) {
+            const QString owner = cleanMemoryToken(memory.owner);
+            const QString group = cleanMemoryToken(memory.group);
+            if (owner.isEmpty() && group.isEmpty())
+                continue;
+            out += owner.toUtf8();
+            out += '|';
+            out += group.toUtf8();
+            out += '^';
+        }
+        out += "\r\n";
+    }
+    if (selection.preferences) {
+        out += "BAND_PERSISTENCE^\r\n";
+        out += "MODE_PERSISTENCE^\r\n";
+        out += "GLOBAL_PERSISTENCE^\r\n";
+    }
+    if (selection.tnf)
+        out += "TNFS^\r\n";
+    if (selection.xvtr)
+        out += "XVTRS^\r\n";
+    if (selection.usbCables)
+        out += "USB_CABLES^\r\n";
+
+    return out;
+}
+
+inline QVersionNumber parseSmartSdrVersionFromFilename(const QString& fileName)
+{
+    static const QRegularExpression re(
+        QStringLiteral(R"((?:ASDR|SSDR)_Config_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_v(\d+(?:\.\d+){1,3})\.ssdr_cfg$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto match = re.match(fileName);
+    if (!match.hasMatch())
+        return {};
+    return QVersionNumber::fromString(match.captured(1));
+}
+
+inline QVersionNumber parseFirmwareVersion(const QString& text)
+{
+    static const QRegularExpression re(QStringLiteral(R"((\d+(?:\.\d+){0,3}))"));
+    const auto match = re.match(text);
+    if (!match.hasMatch())
+        return {};
+    return QVersionNumber::fromString(match.captured(1));
+}
+
+inline int compareFirmwareVersions(const QString& lhs, const QString& rhs)
+{
+    const QVersionNumber left = parseFirmwareVersion(lhs);
+    const QVersionNumber right = parseFirmwareVersion(rhs);
+    if (left.isNull() || right.isNull())
+        return 0;
+
+    const int cmp = QVersionNumber::compare(left.normalized(), right.normalized());
+    if (cmp < 0)
+        return -1;
+    if (cmp > 0)
+        return 1;
+    return 0;
+}
+
+class ProfileTransfer : public QObject {
+    Q_OBJECT
+
+    friend class ProfileTransferTestAccess;
+
+public:
+    enum class Operation {
+        ExportDatabase,
+        ImportDatabase
+    };
+
+    explicit ProfileTransfer(RadioModel* model, QObject* parent = nullptr);
+    ~ProfileTransfer() override;
+
+    bool isBusy() const { return m_busy || m_cleaningUp; }
+
+    void exportDatabase(const ExportSelection& selection, const QString& destinationPath,
+                        std::optional<RadioControlSession> session = {});
+    void importDatabase(const QString& ssdrCfgPath, std::optional<RadioControlSession> session = {});
+    void cancel();
+
+signals:
+    void started(AetherSDR::ProfileTransfer::Operation operation);
+    void progress(QString status, qint64 bytesDone, qint64 bytesTotal);
+    void finished(AetherSDR::ProfileTransfer::Operation operation, QString path);
+    void failed(AetherSDR::ProfileTransfer::Operation operation, QString error);
+
+private:
+    bool m_uploadConnected{false};
+    enum class Phase {
+        Idle,
+        UploadMetaSubset,
+        DownloadPackage,
+        UploadImport,
+        WaitingForImport
+    };
+
+    bool isCurrent(quint64 generation, Phase expectedPhase) const;
+    bool isCurrentSocket(quint64 generation, Phase expectedPhase,
+                         const QTcpSocket* expectedSocket) const;
+    quint64 nextAsyncId();
+    void invalidateOperation();
+    void startCommandTimeout(int timeoutMs, Phase expectedPhase);
+    void stopCommandTimeout();
+    void startIdleTimeout(Phase expectedPhase);
+    void stopIdleTimeout();
+
+    quint64 begin(Operation operation, Phase phase);
+    void fail(const QString& error);
+    void finish(QString path);
+    void cleanup();
+    void destroySocket(bool abortConnection);
+    void destroyServer();
+
+    ExportSelection expandSelection(ExportSelection selection) const;
+    bool validateCommonPreconditions(Operation operation, QString* error) const;
+    bool validateExportSelection(const ExportSelection& selection, QString* error) const;
+    bool validateExportDestination(const QString& path, QString* error) const;
+    bool validateImportFile(const QString& path, QString* error) const;
+
+    void requestUploadPort(const QByteArray& payload, FileTransferPurpose purpose);
+    FileTransferCompletion makeUploadPortCallback(
+        quint64 generation, Phase expectedPhase, quint64 requestId);
+    void handleUploadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
+                                  const FileTransferReply& reply);
+    void connectUploadSocket(quint16 port);
+    std::function<void()> makeUploadConnectCallback(quint64 generation, Phase expectedPhase,
+                                                    QTcpSocket* socket,
+                                                    std::function<void()> connectAction);
+    void tryFallbackUploadPort();
+    void handleUploadConnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void sendNextUploadChunk(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void handleUploadBytesWritten(quint64 generation, Phase expectedPhase, QTcpSocket* socket,
+                                  qint64 bytes);
+    void handleUploadDisconnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    std::function<void()> makeMetadataSettleCallback(quint64 generation, Phase expectedPhase,
+                                                     std::function<void()> settleAction);
+    void handleUploadError(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+
+    void requestPackageDownload();
+    FileTransferCompletion makeDownloadPortCallback(
+        quint64 generation, Phase expectedPhase, quint64 requestId);
+    void handleDownloadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
+                                    const FileTransferReply& reply);
+    void startDownloadServer(quint16 port);
+    void handleDownloadConnection(quint64 generation, Phase expectedPhase, QTcpServer* server);
+    void handleDownloadReadyRead(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void handleDownloadDisconnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void handleDownloadError(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+
+    void waitForImportCompletion();
+    void scheduleImportCompletion();
+    void completeImport();
+    void resetIdleTimer();
+    void handleTimeout();
+    bool commitExportFile(QString* error);
+
+    QPointer<RadioModel> m_model;
+    FileTransferHandle m_transfer;
+    Operation m_operation{Operation::ExportDatabase};
+    Phase m_phase{Phase::Idle};
+    quint64 m_operationGeneration{0};
+    quint64 m_nextAsyncId{0};
+    quint64 m_uploadPortRequestId{0};
+    quint64 m_downloadPortRequestId{0};
+    quint64 m_commandTimeoutGeneration{0};
+    quint64 m_idleTimeoutGeneration{0};
+    quint64 m_overallTimeoutGeneration{0};
+    Phase m_commandTimeoutPhase{Phase::Idle};
+    Phase m_idleTimeoutPhase{Phase::Idle};
+    bool m_busy{false};
+    bool m_cleaningUp{false};
+    bool m_cancelled{false};
+    bool m_usedFallbackPort{false};
+    bool m_downloadFinalized{false};
+    bool m_importCompletionScheduled{false};
+
+    QByteArray m_uploadPayload;
+    QString m_path;
+    qint64 m_bytesDone{0};
+    qint64 m_bytesQueued{0};
+    qint64 m_bytesTotal{0};
+    quint16 m_uploadPort{0};
+
+    QTcpSocket* m_socket{nullptr};
+    QTcpServer* m_server{nullptr};
+    QTemporaryFile* m_saveFile{nullptr};
+    QTimer* m_timeout{nullptr};
+    QTimer* m_idleTimer{nullptr};
+    QTimer* m_overallTimer{nullptr};
+    QMetaObject::Connection m_importingChangedConnection;
+
+    static constexpr int kUploadChunkSize = 64 * 1024;
+    static constexpr int kCommandTimeoutMs = 10000;
+    static constexpr int kConnectTimeoutMs = 10000;
+    static constexpr int kIdleTimeoutMs = 30000;
+    static constexpr int kOverallTimeoutMs = 180000;
+    static constexpr int kMetaSubsetSettleMs = 5000;
+    static constexpr int kImportSettleMs = 5000;
+    static constexpr quint16 kDefaultUploadPort = 4995;
+    static constexpr quint16 kFallbackTransferPort = 42607;
+    static constexpr qint64 kMaxImportSize = 250LL * 1024LL * 1024LL;
+};
+
+} // namespace AetherSDR

@@ -1,0 +1,1641 @@
+#include "SmartCatProtocol.h"
+#include "LogManager.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+#include "models/CwxModel.h"
+
+#include <algorithm>
+
+namespace AetherSDR {
+
+// Max RIT/XIT offset the radio accepts (±Hz). Declared here so it's visible to
+// all RIT/XIT handlers in this file.
+static constexpr int kRitMaxHz = 9999;
+
+// ── Mode conversion tables ──────────────────────────────────────────────────
+//
+// SmartSDR mode strings verified against FLEX-8600 fw v1.4.0.0.
+// Kenwood 1-digit codes: 1=LSB 2=USB 3=CW 4=FM 5=AM 6=DIGL 9=DIGU
+// ZZ 2-digit codes from SmartSDR CAT User Guide Rev. v4.1.5:
+//   00=LSB 01=USB 03=CWL 04=CWU(CW) 05=FM 06=AM 07=DIGU 09=DIGL
+//   10=SAM 11=NFM 12=DFM 20=FDV 30=RTTY 40=DSTR
+// SmartSDR 4.3 splits FDV into FDVU/FDVL (FlexLib v4.3.16 Slice.cs:799,825).
+// Both report ZZ 20, and the Kenwood digital code for their sideband.
+
+QString SmartCatProtocol::modeToKenwood(const QString& ssdrMode)
+{
+    if (ssdrMode == "LSB")  return "1";
+    if (ssdrMode == "USB")  return "2";
+    if (ssdrMode == "CW")   return "3";
+    if (ssdrMode == "CWL")  return "3";
+    if (ssdrMode == "FM")   return "4";
+    if (ssdrMode == "NFM")  return "4";
+    if (ssdrMode == "AM")   return "5";
+    if (ssdrMode == "SAM")  return "5";
+    if (ssdrMode == "DIGL") return "6";
+    if (ssdrMode == "FDVL") return "6";
+    if (ssdrMode == "RTTY") return "6";
+    if (ssdrMode == "DIGU") return "9";
+    if (ssdrMode == "FDV")  return "9";
+    if (ssdrMode == "FDVU") return "9";
+    return "2";
+}
+
+QString SmartCatProtocol::modeToZZ(const QString& ssdrMode)
+{
+    if (ssdrMode == "LSB")  return "00";
+    if (ssdrMode == "USB")  return "01";
+    if (ssdrMode == "CWL")  return "03";
+    if (ssdrMode == "CW")   return "04";
+    if (ssdrMode == "FM")   return "05";
+    if (ssdrMode == "AM")   return "06";
+    if (ssdrMode == "DIGU") return "07";
+    if (ssdrMode == "DIGL") return "09";
+    if (ssdrMode == "SAM")  return "10";
+    if (ssdrMode == "NFM")  return "11";
+    if (ssdrMode == "DFM")  return "12";
+    if (ssdrMode == "FDV")  return "20";
+    if (ssdrMode == "FDVU") return "20";
+    if (ssdrMode == "FDVL") return "20";
+    if (ssdrMode == "RTTY") return "30";
+    if (ssdrMode == "DSTR") return "40";
+    return "01";
+}
+
+QString SmartCatProtocol::kenwoodToSSDR(QChar c)
+{
+    switch (c.toLatin1()) {
+        case '1': return "LSB";
+        case '2': return "USB";
+        case '3': return "CW";
+        case '4': return "FM";
+        case '5': return "AM";
+        case '6': return "DIGL";
+        case '9': return "DIGU";
+        default:  return "USB";
+    }
+}
+
+QString SmartCatProtocol::zzToSSDR(const QString& two)
+{
+    if (two == "00") return "LSB";
+    if (two == "01") return "USB";
+    if (two == "03") return "CWL";
+    if (two == "04") return "CW";
+    if (two == "05") return "FM";
+    if (two == "06") return "AM";
+    if (two == "07") return "DIGU";
+    if (two == "09") return "DIGL";
+    if (two == "10") return "SAM";
+    if (two == "11") return "NFM";
+    if (two == "12") return "DFM";
+    if (two == "20") return "FDV";
+    if (two == "30") return "RTTY";
+    if (two == "40") return "DSTR";
+    return "USB";
+}
+
+QString SmartCatProtocol::freeDvModeFor(const QString& currentMode,
+                                        const QStringList& modeList)
+{
+    // ZZ 20 names FreeDV without a sideband. A slice already in a FreeDV mode
+    // keeps it; otherwise use the token this radio's mode_list offers.
+    if (currentMode == "FDV" || currentMode == "FDVU" || currentMode == "FDVL")
+        return currentMode;
+    if (modeList.contains("FDV"))  return "FDV";
+    if (modeList.contains("FDVU")) return "FDVU";
+    return "FDV";
+}
+
+QString SmartCatProtocol::freqField(double mhz)
+{
+    quint64 hz = static_cast<quint64>(mhz * 1e6 + 0.5);
+    return QString::number(hz).rightJustified(11, '0');
+}
+
+// ── Constructor ─────────────────────────────────────────────────────────────
+
+SmartCatProtocol::SmartCatProtocol(RadioModel* model, int vfoA, int vfoB,
+                                   bool flexExtensions)
+    : m_model(model)
+    , m_txProducer(model ? model->registerTxProducer() : TxCoordinator::Producer{})
+    , m_vfoA(vfoA)
+    , m_vfoB(vfoB)
+    , m_flexExtensions(flexExtensions)
+{}
+
+SmartCatProtocol::~SmartCatProtocol()
+{
+    m_txProducer.invalidate();
+    releasePtt();
+    // Client disconnect: undo a split ONLY if WE engaged it (moved TX to VFO B).
+    // A split set up by the operator or another client must survive our disconnect.
+    if (m_weEngagedSplit)
+        teardownSplit();
+}
+
+// ── Slice accessors ─────────────────────────────────────────────────────────
+
+SliceModel* SmartCatProtocol::sliceA() const
+{
+    if (!m_model) return nullptr;
+    for (auto* s : m_model->slices()) {
+        if (s->sliceId() == m_vfoA) return s;
+    }
+    const auto& slices = m_model->slices();
+    return slices.isEmpty() ? nullptr : slices.first();
+}
+
+SliceModel* SmartCatProtocol::sliceB() const
+{
+    if (m_vfoB < 0 || !m_model) return nullptr;
+    for (auto* s : m_model->slices()) {
+        if (s->sliceId() == m_vfoB) return s;
+    }
+    return nullptr;
+}
+
+// ── Command dispatcher ──────────────────────────────────────────────────────
+
+QString SmartCatProtocol::processCommand(const QString& cmd)
+{
+    if (!cmd.isEmpty())
+        qCDebug(lcCat).noquote() << "CAT ←" << cmd;
+    const QString resp = processCommandImpl(cmd);
+    if (!resp.isEmpty())
+        qCDebug(lcCat).noquote() << "CAT →" << resp.trimmed();
+    return resp;
+}
+
+QString SmartCatProtocol::processCommandImpl(const QString& cmd)
+{
+    if (cmd.isEmpty()) return {};
+
+    const QString upper = cmd.toUpper();
+
+    if (m_flexExtensions && upper.startsWith("ZZ") && upper.size() >= 4) {
+        const QString name = upper.left(4);
+        const QString arg  = cmd.mid(4);
+        if (name == "ZZFA") {
+            // cmdFA returns "FA...;"; prepend "ZZ" so the response matches the command prefix.
+            // Set commands and errors (?;) pass through unchanged.
+            QString r = cmdFA(arg);
+            return r.startsWith(QLatin1String("FA")) ? QStringLiteral("ZZ") + r : r;
+        }
+        if (name == "ZZFB") {
+            QString r = cmdFB(arg);
+            return r.startsWith(QLatin1String("FB")) ? QStringLiteral("ZZ") + r : r;
+        }
+        if (name == "ZZMD") return cmdZZMD(arg);
+        if (name == "ZZME") return cmdZZME(arg);
+        if (name == "ZZIF") return cmdZZIF();
+        if (name == "ZZAI") {
+            // AI query — the session handles enable/disable; we just report state
+            if (arg.isEmpty() || arg == "?")
+                return QString("ZZAI%1;").arg(m_aiEnabled ? "01" : "00");
+            return {};  // set handled by session
+        }
+        if (name == "ZZSW") return cmdZZSW(arg);
+        if (name == "ZZTX") {
+            // Bare "ZZTX;" (no parameter) is a READ of the transmit state, not a
+            // command to key. External apps poll TX status this way; treating the
+            // read as a set keyed the radio on every poll (uncommanded transmit).
+            // Only ZZTX0/1/2 reach cmdTX() to change state.
+            if (arg.isEmpty() || arg == "?")
+                return QString("ZZTX%1;").arg(m_model->isRadioTransmitting() ? "1" : "0");
+            return cmdTX(arg);
+        }
+        if (name == "ZZRX") return cmdRX();
+        if (name == "ZZSM") return cmdZZSM(arg);
+        // ── Tier-2 ZZ commands ──────────────────────────────────────────────
+        if (name == "ZZAG") return cmdZZAG(arg);
+        if (name == "ZZAR") return cmdZZAR(arg);
+        if (name == "ZZAS") return cmdZZAS(arg);
+        if (name == "ZZBI") return cmdZZBI(arg);
+        if (name == "ZZDE") return cmdZZDE(arg);
+        if (name == "ZZFI") return cmdZZFI(arg);
+        if (name == "ZZFJ") return cmdZZFJ(arg);
+        if (name == "ZZFR") return cmdZZFR(arg);
+        if (name == "ZZFT") return splitCommand(QStringLiteral("ZZFT"), arg);
+        if (name == "ZZGT") return cmdZZGT(arg);
+        if (name == "ZZLE") return cmdZZLE(arg);
+        if (name == "ZZLB") return cmdZZLB(arg);
+        if (name == "ZZLF") return cmdZZLF(arg);
+        if (name == "ZZMA") return cmdZZMA(arg);
+        if (name == "ZZMB") return cmdZZMB(arg);
+        if (name == "ZZMG") return cmdZZMG(arg);
+        if (name == "ZZNL") return cmdZZNL(arg);
+        if (name == "ZZNR") return cmdZZNR(arg);
+        if (name == "ZZPC") return cmdZZPC(arg);
+        if (name == "ZZRC") return cmdZZRC();
+        if (name == "ZZRD") return cmdZZRD(arg);
+        if (name == "ZZRG") return cmdZZRG(arg);
+        if (name == "ZZRT") return cmdZZRT(arg);
+        if (name == "ZZRU") return cmdZZRU(arg);
+        if (name == "ZZRW") return cmdZZRW(arg);
+        if (name == "ZZRY") return cmdZZRY(arg);
+        if (name == "ZZXC") return cmdZZXC();
+        if (name == "ZZXG") return cmdZZXG(arg);
+        if (name == "ZZXS") return cmdZZXS(arg);
+        return "?;";
+    }
+
+    if (upper.size() >= 2) {
+        const QString name = upper.left(2);
+        const QString arg  = cmd.mid(2);
+        if (name == "BY") return cmdBY(arg);
+        if (name == "DN") return cmdDN(arg);
+        if (name == "FA") return cmdFA(arg);
+        if (name == "FB") return cmdFB(arg);
+        if (name == "FW") return cmdFW(arg);
+        if (name == "MD") return cmdMD(arg);
+        if (name == "IF") return cmdIF();
+        if (name == "AI") {
+            // AI query — report state; session handles wiring
+            if (arg.isEmpty())
+                return QString("AI%1;").arg(m_aiEnabled ? 1 : 0);
+            return {};  // set handled by session
+        }
+        if (name == "FT") return cmdFT(arg);
+        if (name == "FR") return cmdFR(arg);
+        if (name == "SA") {
+            // Satellite mode (TS-2000). We are never in satellite mode. Hamlib's
+            // TS-2000 backend queries SA; before VFO ops (set_vfo, reached via
+            // set_split_mode), and treats the generic unknown-command "?;" as a
+            // fatal rejection (-9) — which aborts WSJT-X's set_split_freq_mode in
+            // TS-2000 mode. Report satellite OFF so it proceeds. (First empirical
+            // form: P1=0. If Hamlib's parser needs the full fixed-width SA answer,
+            // widen this.)
+            if (arg.isEmpty() || arg == "?")
+                return QStringLiteral("SA0;");
+            return {};   // accept any SA set as a no-op
+        }
+        if (name == "LK") return cmdLK(arg);
+        if (name == "MG") return cmdMG(arg);
+        if (name == "NB") return cmdNB(arg);
+        if (name == "NL") return cmdNL(arg);
+        if (name == "NR") return cmdNR(arg);
+        if (name == "NT") return cmdNT(arg);
+        if (name == "OI") return cmdOI();
+        if (name == "PA") return cmdPA(arg);
+        if (name == "TX") return cmdTX(arg);
+        if (name == "RX") return cmdRX();
+        if (name == "ID") return cmdID();
+        if (name == "PS") return cmdPS();
+        if (name == "RA") return cmdRA(arg);
+        if (name == "RL") return cmdRL(arg);
+        if (name == "RM") return cmdRM(arg);
+        if (name == "SM") return cmdSM(arg);
+        if (name == "SQ") return cmdSQ(arg);
+        if (name == "TY") return cmdTY(arg);
+        if (name == "UP") return cmdUP(arg);
+        // ── Tier-2 base commands ─────────────────────────────────────────────
+        if (name == "AG") return cmdAG(arg);
+        if (name == "GT") return cmdGT(arg);
+        if (name == "KS") return cmdKS(arg);
+        if (name == "KY") return cmdKY(arg);
+        if (name == "PC") return cmdPC(arg);
+        if (name == "PT") return cmdPT(arg);
+        if (name == "RC") return cmdRC();
+        if (name == "RD") return cmdRD(arg);
+        if (name == "RG") return cmdRG(arg);
+        if (name == "RT") return cmdRT(arg);
+        if (name == "RU") return cmdRU(arg);
+        if (name == "SL") return cmdSL(arg);
+        if (name == "SH") return cmdSH(arg);
+        if (name == "VX") {
+            // VOX enable/disable — stub; report VOX off, accept set silently.
+            if (arg.isEmpty()) return QStringLiteral("VX0;");
+            return {};
+        }
+        if (name == "XT") return cmdXT(arg);
+        return "?;";
+    }
+
+    return "?;";
+}
+
+// ── FA / ZZFA — VFO A frequency ─────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdFA(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "FA" + freqField(a->frequency()) + ";";
+    bool ok;
+    double hz = arg.toDouble(&ok);
+    if (!ok) return "?;";
+    // Cross-band-aware: tuneSliceForCat() applies the recenter policy so a band
+    // change makes the panadapter follow (in-span keeps autopan=0; out-of-span
+    // recenters) instead of leaving it behind until a manual GUI action. CatPort
+    // runs on the GUI thread, so this is a direct, synchronous call. It returns
+    // false for a rejected target (non-positive/non-finite, or a locked slice the
+    // radio refuses) — answer "?;" rather than acknowledge a tune that never
+    // happened. CatPort observes this bool directly, unlike rigctld's queued call.
+    if (!m_model || !m_model->tuneSliceForCat(a, hz / 1e6)) return "?;";
+    return {};
+}
+
+// ── FB / ZZFB — VFO B frequency ─────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdFB(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    // No VFO B → "?;" (do NOT fall back to VFO A). The old VFO-A fallback reported
+    // VFO A's frequency for FB while ZZME returned "?;"; that contradiction broke
+    // controllers' VFO sync (#3633).
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return "FB" + freqField(b->frequency()) + ";";
+    bool ok;
+    double hz = arg.toDouble(&ok);
+    if (!ok) return "?;";
+    // VFO B is the split TX VFO. Route through tuneSliceForCat so it behaves
+    // exactly as TCI does for a split-TX tune (TciServer::tuneSliceAndConfirm
+    // tunes the TX slice on channel 1 with this same in-span/out-of-span policy,
+    // no TX special-casing): an in-span TX (WSJT-X Rig / Fake It — a small audio
+    // offset from RX) keeps autopan=0 and does NOT yank; only a genuinely
+    // cross-band TX recenters. TCI is the reference behavior we mirror. Answer
+    // "?;" if the target is rejected rather than acknowledge a dropped tune.
+    if (!m_model || !m_model->tuneSliceForCat(b, hz / 1e6)) return "?;";
+    return {};
+}
+
+// ── MD — mode get/set (Kenwood 1-digit) ──────────────────────────────────────
+
+QString SmartCatProtocol::cmdMD(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "MD" + modeToKenwood(a->mode()) + ";";
+    if (arg.size() != 1) return "?;";
+    QString mode = kenwoodToSSDR(arg[0]);
+    // A FreeDV slice reports its sideband's digital code; the same code coming
+    // back must not switch the slice out of FreeDV.
+    if (a->mode().startsWith("FDV") && modeToKenwood(a->mode()) == arg)
+        mode = a->mode();
+    a->setMode(mode);
+    return {};
+}
+
+// ── ZZMD — mode get/set (ZZ 2-digit) ─────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZMD(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "ZZMD" + modeToZZ(a->mode()) + ";";
+    if (arg.size() != 2) return "?;";
+    QString mode = zzToSSDR(arg);
+    if (mode == "FDV")
+        mode = freeDvModeFor(a->mode(), a->modeList());
+    a->setMode(mode);
+    return {};
+}
+
+// ── ZZME — VFO B mode get/set ────────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZME(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return "ZZME" + modeToZZ(b->mode()) + ";";
+    if (arg.size() != 2) return "?;";
+    QString mode = zzToSSDR(arg);
+    if (mode == "FDV")
+        mode = freeDvModeFor(b->mode(), b->modeList());
+    b->setMode(mode);
+    return {};
+}
+
+// ── IF — composite Kenwood TS-2000 status (35-char body) ─────────────────────
+//
+// P1[0-10]  11-digit VFO-A Hz    P2[11-15] step 5 digits
+// P3[16-21] RIT+sign+5            P4[22] RIT  P5[23] XIT
+// P6[24-25] memory                P7[26] TX/RX  P8[27] mode
+// P9[28] function  P10[29] scan   P11[30] split
+// P12[31] tone  P13[32-33] CTCSS  P14[34] DCS
+
+QString SmartCatProtocol::cmdIF()
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+
+    QString body;
+    body += freqField(a->frequency());
+    body += QStringLiteral("00010");
+    body += QStringLiteral("+00000");
+    body += '0';
+    body += '0';
+    body += QStringLiteral("00");
+    body += m_model->isRadioTransmitting() ? '1' : '0';
+    body += modeToKenwood(a->mode());
+    body += '0';
+    body += '0';
+    body += m_splitEnabled ? '1' : '0';
+    body += '0';
+    body += QStringLiteral("00");
+    body += '0';
+
+    return "IF" + body + ";";
+}
+
+// ── ZZIF — SmartSDR extended IF ───────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZIF()
+{
+    QString resp = cmdIF();
+    if (resp == "?;") return "?;";
+    return "ZZ" + resp;
+}
+
+// ── FT / ZZSW — split enable ─────────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdFT(const QString& arg)   { return splitCommand(QStringLiteral("FT"), arg); }
+QString SmartCatProtocol::cmdZZSW(const QString& arg) { return splitCommand(QStringLiteral("ZZSW"), arg); }
+
+// Shared read/set for the FT / ZZSW / ZZFT split toggles.
+QString SmartCatProtocol::splitCommand(const QString& prefix, const QString& arg)
+{
+    if (arg.isEmpty() || arg == "?")
+        return prefix + (m_splitEnabled ? "1" : "0") + ";";
+    if (arg == "1") return enableSplit();
+    if (arg == "0") return disableSplit();
+    return "?;";   // malformed arg → reject; never silently disable split
+}
+
+// ── Split mechanism (manager-free: reuse the operator's VFO B, else NOT_ENABLED) ─
+QString SmartCatProtocol::enableSplit()
+{
+    if (m_splitEnabled) return {};   // idempotent — already split for this client
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    SliceModel* b = sliceB();
+    // No usable VFO B slice → NOT_ENABLED, matching SmartSDR-for-Mac (covers both a
+    // VFO B configured-but-absent and a genuine single-VFO port). SmartSDR-for-
+    // Windows would create a dedicated TX slice here; that create-on-demand path is
+    // deferred to the slice-management consolidation.
+    if (!b) return "?;";
+    // Engage split by reusing the operator's VFO B as the TX slice. Claim ownership
+    // (so teardown-on-disconnect undoes it) ONLY if B wasn't already TX — i.e. don't
+    // adopt an operator's/another client's pre-existing split.
+    if (!b->isTxSlice()) {
+        b->setTxSlice(true);
+        m_weEngagedSplit = true;
+    }
+    // m_splitEnabled is the reported split state and is set SYNCHRONOUSLY: setTxSlice()
+    // only updates the slice's TX flag asynchronously (on the radio's status echo), so
+    // a read derived from isTxSlice() would report OFF in the window between enable and
+    // that echo. (Cross-consumer reconciliation — split changed via GUI/rigctld — is
+    // RFC #3715 territory.)
+    m_splitEnabled = true;
+    return {};
+}
+
+QString SmartCatProtocol::disableSplit()
+{
+    // Explicit client command (FT0/ZZSW0/ZZFT0): hand TX back to the RX slice.
+    teardownSplit();
+    return {};
+}
+
+void SmartCatProtocol::teardownSplit()
+{
+    // Hand TX back to the RX slice (slice A); it was on the operator's VFO B.
+    // No slice is removed — split never created one (reuse only).
+    if (SliceModel* a = sliceA()) a->setTxSlice(true);
+    m_splitEnabled = false;
+    m_weEngagedSplit = false;
+    m_rxVfoB = false;   // clear the RX-VFO selector along with split
+}
+
+// ── FR — RX VFO select ───────────────────────────────────────────────────────
+
+// FR — RX VFO select (TS-2000). FR0 = VFO A, FR1 = VFO B. Per SmartSDR-for-Mac:
+// FR1 is accepted only when a real second VFO exists (a configured VFO B with a
+// present slice), else "?;". FA always reports VFO A (no A/B swap); FR; reports
+// the current selector.
+QString SmartCatProtocol::cmdFR(const QString& arg)
+{
+    if (arg.isEmpty() || arg == "?")
+        return QString("FR%1;").arg(m_rxVfoB ? 1 : 0);
+    if (arg == "0") { m_rxVfoB = false; return {}; }
+    if (arg == "1") {
+        if (m_vfoB >= 0 && sliceB()) { m_rxVfoB = true; return {}; }
+        return "?;";   // no real VFO B defined → cannot select it
+    }
+    return "?;";       // FR2 (memory) and other values unsupported
+}
+
+// ── TX / ZZTX — PTT on ───────────────────────────────────────────────────────
+// P1: 0 = PTT off (alias for RX;), 1/2 = PTT on selecting mic source.
+// Use PttSource::Dax to match rigctld: CAT callers must bypass local voice-mode
+// interlocks so the radio itself is authoritative.
+
+QString SmartCatProtocol::cmdTX(const QString& arg)
+{
+    if (arg == "0") return cmdRX();
+    if (!m_pttRequest.valid()) {
+        m_pttRequest = m_txProducer.request();
+    }
+    (void)m_model->setProducerTransmit(m_pttRequest, true, TransmitModel::PttSource::Dax);
+    return {};
+}
+
+// ── RX / ZZRX — PTT off ──────────────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdRX()
+{
+    const TxCoordinator::Request request = m_pttRequest;
+    m_pttRequest = {};
+    (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
+    return {};
+}
+
+// ── PTT safety release ───────────────────────────────────────────────────────
+
+void SmartCatProtocol::releasePtt()
+{
+    // SmartCatSession calls this at disconnect, before QObject destruction.
+    // Invalidate now so a terminal queue cannot key during deleteLater's gap.
+    m_txProducer.invalidate();
+    const TxCoordinator::Request request = m_pttRequest;
+    m_pttRequest = {};
+    if (m_model) {
+        (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
+        m_model->abortProducerCwx(m_cwxRequest);
+    }
+    m_cwxRequest = {};
+}
+
+// ── ID — rig identification ───────────────────────────────────────────────────
+// Table from SmartSDR CAT User Guide Rev. v4.1.5:
+//   904=FLEX-6700  905=FLEX-6500  906=FLEX-6700R  907=FLEX-6300
+//   908=FLEX-6400/M  909=FLEX-6600/M  910=FLEX-8400/M  911=FLEX-8600/M
+//   930=AU-510/M  931=AU-520/M
+
+QString SmartCatProtocol::cmdID()
+{
+    // TS-2000 dialect: identify as Kenwood TS-2000 (ID019 per Kenwood CAT spec)
+    if (!m_flexExtensions)
+        return QStringLiteral("ID019;");
+
+    const QString m = m_model->model();
+    if (m.contains("6700R")) return QStringLiteral("ID906;");
+    if (m.contains("6700"))  return QStringLiteral("ID904;");
+    if (m.contains("6500"))  return QStringLiteral("ID905;");
+    if (m.contains("6300"))  return QStringLiteral("ID907;");
+    if (m.contains("6400"))  return QStringLiteral("ID908;");
+    if (m.contains("6600"))  return QStringLiteral("ID909;");
+    if (m.contains("8400"))  return QStringLiteral("ID910;");
+    if (m.contains("8600"))  return QStringLiteral("ID911;");
+    if (m.contains("AU-510")) return QStringLiteral("ID930;");
+    if (m.contains("AU-520")) return QStringLiteral("ID931;");
+    return QStringLiteral("ID919;");
+}
+
+// ── PS — power status ────────────────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdPS()
+{
+    return QStringLiteral("PS1;");
+}
+
+// ── SM / ZZSM — S-meter (Tier 1: always 0) ──────────────────────────────────
+
+QString SmartCatProtocol::cmdSM(const QString& /*arg*/)
+{
+    return QStringLiteral("SM00000;");
+}
+
+QString SmartCatProtocol::cmdZZSM(const QString& /*arg*/)
+{
+    return QStringLiteral("ZZSM0000;");
+}
+
+// ── Tier-2 helpers (file-scope) ──────────────────────────────────────────────
+
+static QString fmt3(int v)
+{
+    return QString::number(v).rightJustified(3, '0');
+}
+
+static QString ritField(int hz)
+{
+    return (hz >= 0 ? QStringLiteral("+") : QStringLiteral("-"))
+           + QString::number(qAbs(hz)).rightJustified(5, '0');
+}
+
+static int agcModeToZZ(const QString& mode)
+{
+    if (mode == "off")  return 0;
+    if (mode == "slow") return 2;
+    if (mode == "med")  return 3;
+    if (mode == "fast") return 4;
+    return 3;
+}
+
+static QString zzToAgcMode(const QString& code)
+{
+    if (code == "0") return "off";
+    if (code == "2") return "slow";
+    if (code == "3") return "med";
+    if (code == "4") return "fast";
+    return "med";
+}
+
+// ── AG / ZZAG — VFO A audio gain (0-100, 3-digit) ───────────────────────────
+
+QString SmartCatProtocol::cmdAG(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "AG" + fmt3(static_cast<int>(a->audioGain() + 0.5f)) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    a->setAudioGain(static_cast<float>(v));
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZAG(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "ZZAG" + fmt3(static_cast<int>(a->audioGain() + 0.5f)) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    a->setAudioGain(static_cast<float>(v));
+    return {};
+}
+
+// ── ZZLE — VFO B audio gain (0-100, 3-digit) ────────────────────────────────
+
+QString SmartCatProtocol::cmdZZLE(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return "ZZLE" + fmt3(static_cast<int>(b->audioGain() + 0.5f)) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    b->setAudioGain(static_cast<float>(v));
+    return {};
+}
+
+// ── ZZLB — VFO A audio pan (0-100, 3-digit; 0=full left, 50=center) ─────────
+
+QString SmartCatProtocol::cmdZZLB(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "ZZLB" + fmt3(a->audioPan()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    a->setAudioPan(v);
+    return {};
+}
+
+// ── ZZLF — VFO B audio pan ───────────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZLF(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return "ZZLF" + fmt3(b->audioPan()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    b->setAudioPan(v);
+    return {};
+}
+
+// ── ZZMA — VFO A mute (0/1) ─────────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZMA(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZMA%1;").arg(a->audioMute() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    a->setAudioMute(arg == "1");
+    return {};
+}
+
+// ── ZZMB — VFO B mute (0/1) ─────────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZMB(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZMB%1;").arg(b->audioMute() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    b->setAudioMute(arg == "1");
+    return {};
+}
+
+// ── GT / ZZGT — AGC mode (0=Off, 2=Slow, 3=Med, 4=Fast) ────────────────────
+
+QString SmartCatProtocol::cmdGT(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("GT%1;").arg(agcModeToZZ(a->agcMode()));
+    a->setAgcMode(zzToAgcMode(arg));
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZGT(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZGT%1;").arg(agcModeToZZ(a->agcMode()));
+    a->setAgcMode(zzToAgcMode(arg));
+    return {};
+}
+
+// ── ZZAR — VFO A AGC threshold (0-100, 3-digit) ─────────────────────────────
+
+QString SmartCatProtocol::cmdZZAR(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "ZZAR" + fmt3(a->agcThreshold()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    a->setAgcThreshold(v);
+    return {};
+}
+
+// ── ZZAS — VFO B AGC threshold (0-100, 3-digit) ─────────────────────────────
+
+QString SmartCatProtocol::cmdZZAS(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return "ZZAS" + fmt3(b->agcThreshold()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    b->setAgcThreshold(v);
+    return {};
+}
+
+// ── PC / ZZPC — RF power drive level (0-100, 3-digit) ───────────────────────
+
+QString SmartCatProtocol::cmdPC(const QString& arg)
+{
+    TransmitModel& tx = m_model->transmitModel();
+    if (arg.isEmpty())
+        return "PC" + fmt3(tx.rfPower()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    tx.setRfPower(v);
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZPC(const QString& arg)
+{
+    TransmitModel& tx = m_model->transmitModel();
+    if (arg.isEmpty())
+        return "ZZPC" + fmt3(tx.rfPower()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    tx.setRfPower(v);
+    return {};
+}
+
+// ── ZZMG — Transmitter mic gain (0-100, 3-digit) ────────────────────────────
+
+QString SmartCatProtocol::cmdZZMG(const QString& arg)
+{
+    TransmitModel& tx = m_model->transmitModel();
+    if (arg.isEmpty())
+        return "ZZMG" + fmt3(tx.micLevel()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    tx.setMicLevel(v);
+    return {};
+}
+
+// ── RG / ZZRG — VFO A RIT frequency get/set (±NNNNN Hz) ─────────────────────
+
+QString SmartCatProtocol::cmdRG(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "RG" + ritField(a->ritFreq()) + ";";
+    bool ok;
+    int hz = arg.toInt(&ok);
+    if (!ok) return "?;";
+    a->setRit(a->ritOn(), std::clamp(hz, -kRitMaxHz, kRitMaxHz));
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZRG(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "ZZRG" + ritField(a->ritFreq()) + ";";
+    bool ok;
+    int hz = arg.toInt(&ok);
+    if (!ok) return "?;";
+    a->setRit(a->ritOn(), std::clamp(hz, -kRitMaxHz, kRitMaxHz));
+    return {};
+}
+
+// ── RC / ZZRC — clear VFO A RIT frequency to 0 ──────────────────────────────
+
+QString SmartCatProtocol::cmdRC()
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    a->setRit(a->ritOn(), 0);
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZRC()
+{
+    return cmdRC();
+}
+
+// ── RD / ZZRD — decrement VFO A RIT frequency ───────────────────────────────
+
+QString SmartCatProtocol::cmdRD(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    int step = arg.isEmpty() ? 10 : qAbs(arg.toInt());
+    a->setRit(a->ritOn(), std::clamp(a->ritFreq() - step, -kRitMaxHz, kRitMaxHz));
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZRD(const QString& arg)
+{
+    return cmdRD(arg);
+}
+
+// ── RU / ZZRU — increment VFO A RIT frequency ───────────────────────────────
+
+QString SmartCatProtocol::cmdRU(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    int step = arg.isEmpty() ? 10 : qAbs(arg.toInt());
+    a->setRit(a->ritOn(), std::clamp(a->ritFreq() + step, -kRitMaxHz, kRitMaxHz));
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZRU(const QString& arg)
+{
+    return cmdRU(arg);
+}
+
+// ── RT / ZZRT — VFO A RIT state (0/1) ───────────────────────────────────────
+
+QString SmartCatProtocol::cmdRT(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("RT%1;").arg(a->ritOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    a->setRit(arg == "1", a->ritFreq());
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZRT(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZRT%1;").arg(a->ritOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    a->setRit(arg == "1", a->ritFreq());
+    return {};
+}
+
+// ── ZZRW — VFO B RIT frequency get/set ──────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZRW(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return "ZZRW" + ritField(b->ritFreq()) + ";";
+    bool ok;
+    int hz = arg.toInt(&ok);
+    if (!ok) return "?;";
+    b->setRit(b->ritOn(), std::clamp(hz, -kRitMaxHz, kRitMaxHz));
+    return {};
+}
+
+// ── ZZRY — VFO B RIT state (0/1) ────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZRY(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (!b) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZRY%1;").arg(b->ritOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    b->setRit(arg == "1", b->ritFreq());
+    return {};
+}
+
+// ── ZZXG — VFO A XIT frequency get/set ──────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZXG(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "ZZXG" + ritField(a->xitFreq()) + ";";
+    bool ok;
+    int hz = arg.toInt(&ok);
+    if (!ok) return "?;";
+    a->setXit(a->xitOn(), std::clamp(hz, -kRitMaxHz, kRitMaxHz));
+    return {};
+}
+
+// ── ZZXC — clear VFO A XIT frequency to 0 ───────────────────────────────────
+
+QString SmartCatProtocol::cmdZZXC()
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    a->setXit(a->xitOn(), 0);
+    return {};
+}
+
+// ── XT / ZZXS — VFO A XIT state (0/1) ───────────────────────────────────────
+
+QString SmartCatProtocol::cmdXT(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("XT%1;").arg(a->xitOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    a->setXit(arg == "1", a->xitFreq());
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZXS(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZXS%1;").arg(a->xitOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    a->setXit(arg == "1", a->xitFreq());
+    return {};
+}
+
+// ── KS — CW keying speed (005-100 WPM, 3-digit) ─────────────────────────────
+
+QString SmartCatProtocol::cmdKS(const QString& arg)
+{
+    TransmitModel& tx = m_model->transmitModel();
+    if (arg.isEmpty())
+        return "KS" + fmt3(tx.cwSpeed()) + ";";
+    bool ok;
+    int wpm = arg.toInt(&ok);
+    if (!ok || wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) {
+        return "?;";
+    }
+    tx.setCwSpeed(wpm);
+    return {};
+}
+
+// ── PT — CW pitch frequency (100-999 Hz, 3-digit; values < 100 silently ignored)
+
+QString SmartCatProtocol::cmdPT(const QString& arg)
+{
+    TransmitModel& tx = m_model->transmitModel();
+    if (arg.isEmpty())
+        return "PT" + fmt3(tx.cwPitch()) + ";";
+    bool ok;
+    int hz = arg.toInt(&ok);
+    if (!ok) return "?;";
+    if (hz < 100) return {};   // silently ignored per guide
+    tx.setCwPitch(hz);
+    return {};
+}
+
+// ── KY — send text to CWX keyer ──────────────────────────────────────────────
+// Set:   "KY<sp><text>;" — P1 is 1 space byte, P2 is up to 24 chars of text
+// Query: "KY;"           → "KY0;" (buffer empty) or "KY1;" (transmitting)
+
+QString SmartCatProtocol::cmdKY(const QString& arg)
+{
+    // A radio with no radio-side CW text buffer has no KY to answer. Both forms
+    // report the Kenwood error token rather than an honest-looking "KY0;" and a
+    // silent accept — the query would otherwise say "buffer empty" forever
+    // while every set went nowhere. Direct read on the CAT thread, the same
+    // posture as the cwxActive() read this replaces.
+    if (!m_model->hasRadioSideCwKeyer()) return "?;";
+    if (arg.isEmpty()) {
+        if (!m_model->hasCwTextProgress()) {
+            return "?;";
+        }
+        return QString("KY%1;").arg(m_model->cwxActive() ? 1 : 0);
+    }
+    if (arg.size() < 2) return "?;";
+    // arg[0] is the fixed P1 space; text starts at arg[1], max 24 chars
+    const QString text = arg.mid(1).left(24);
+    if (!m_model->cwTextValidationError(text).isEmpty()) {
+        return "?;";
+    }
+    if (!text.isEmpty()) {
+        if (!m_cwxRequest.valid()) {
+            m_cwxRequest = m_txProducer.request();
+        }
+        m_model->requestProducerCwx(m_cwxRequest, text);
+    }
+    return {};
+}
+
+// ── NB — Wide Noise Blanker state (0/1) ──────────────────────────────────────
+
+QString SmartCatProtocol::cmdNB(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("NB%1;").arg(a->nbOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    a->setNb(arg == "1");
+    return {};
+}
+
+// ── ZZNL — Wide Noise Blanker level (0-100, 3-digit) ────────────────────────
+
+QString SmartCatProtocol::cmdZZNL(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return "ZZNL" + fmt3(a->nbLevel()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    a->setNbLevel(v);
+    return {};
+}
+
+// ── ZZNR — Noise Reduction state (0/1) ───────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZNR(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZNR%1;").arg(a->nrOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    // No radio-side NR (HL2, ANAN): ON is refused like any unsupported set.
+    if (arg == "1" && m_model && !m_model->radioSideNoiseReductionAvailable())
+        return "?;";
+    a->setNr(arg == "1");
+    return {};
+}
+
+// ── ZZBI — Binaural receive (0/1) ────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZBI(const QString& arg)
+{
+    if (!m_model) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZBI%1;").arg(m_model->binauralRx() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    m_model->setBinauralRx(arg == "1");
+    return {};
+}
+
+// ── ZZDE — Diversity Receive (FLEX-6700) ─────────────────────────────────────
+
+QString SmartCatProtocol::cmdZZDE(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("ZZDE%1;").arg(a->diversity() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    a->setDiversity(arg == "1");
+    return {};
+}
+
+// SL / SH — DSP filter low/high cutoff (Kenwood). Kenwood sends an index into
+// a fixed Hz table; map the slice's signed filterLow/filterHigh to the nearest
+// entry and back on set.
+
+static const int kSLHz[] = { 10, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000 };
+static const int kSHHz[] = { 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3400, 4000, 5000 };
+static constexpr int kSLCount = 12;
+static constexpr int kSHCount = 12;
+
+static int nearestIndex(const int* table, int count, int hz)
+{
+    int best = 0;
+    int bestDist = qAbs(table[0] - hz);
+    for (int i = 1; i < count; ++i) {
+        int d = qAbs(table[i] - hz);
+        if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return best;
+}
+
+QString SmartCatProtocol::cmdSL(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty()) {
+        int sl_hz = qMin(qAbs(a->filterLow()), qAbs(a->filterHigh()));
+        int code  = nearestIndex(kSLHz, kSLCount, sl_hz);
+        return QString("SL%1;").arg(code, 2, 10, QChar('0'));
+    }
+    bool ok;
+    int code = arg.toInt(&ok);
+    if (!ok || code < 0 || code >= kSLCount) return "?;";
+    int sl_hz = kSLHz[code];
+    // preserve the sign: low edge is negative for LSB, positive for USB
+    int sh_hz = qMax(qAbs(a->filterLow()), qAbs(a->filterHigh()));
+    if (a->filterLow() < 0)
+        a->setFilterWidth(-sh_hz, -sl_hz);
+    else
+        a->setFilterWidth(sl_hz, sh_hz);
+    return {};
+}
+
+QString SmartCatProtocol::cmdSH(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty()) {
+        int sh_hz = qMax(qAbs(a->filterLow()), qAbs(a->filterHigh()));
+        int code  = nearestIndex(kSHHz, kSHCount, sh_hz);
+        return QString("SH%1;").arg(code, 2, 10, QChar('0'));
+    }
+    bool ok;
+    int code = arg.toInt(&ok);
+    if (!ok || code < 0 || code >= kSHCount) return "?;";
+    int sh_hz = kSHHz[code];
+    int sl_hz = qMin(qAbs(a->filterLow()), qAbs(a->filterHigh()));
+    if (a->filterLow() < 0)
+        a->setFilterWidth(-sh_hz, -sl_hz);
+    else
+        a->setFilterWidth(sl_hz, sh_hz);
+    return {};
+}
+
+// ── ZZFR — RX VFO select (0 = VFO A, 1 = VFO B) ─────────────────────────────
+//
+// FR selects the receive VFO. A bare "ZZFR;" is a READ and must not mutate
+// state — polling it previously swapped VFO A↔B on every call (same defect
+// class as ZZTX). Selecting the non-active VFO swaps the A/B slice mapping;
+// re-selecting the active VFO is a no-op (idempotent).
+
+QString SmartCatProtocol::cmdZZFR(const QString& /*arg*/)
+{
+    // ZZFR is not part of the SmartSDR CAT command set — it is unsupported.
+    // (RX-VFO selection is done via the Kenwood FR command; see cmdFR.) The old
+    // implementation swapped m_vfoA/m_vfoB, an invented behavior with no SmartSDR
+    // equivalent that corrupted the VFO mapping — removed.
+    return "?;";
+}
+
+// ── SQ — squelch level (P1=main/sub selector, P2=000-255) ────────────────────
+//
+// MacLoggerDX polls SQ0; to detect squelch state.
+// P1: 0=main, 1=sub.  We only support main (slice A).
+// P2: 000-255 squelch level.
+
+QString SmartCatProtocol::cmdSQ(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    // Read: SQ; or SQ0; (P1 channel selector only)
+    if (arg.isEmpty() || arg.size() == 1)
+        return QString("SQ0%1;").arg(a->squelchLevel(), 3, 10, QChar('0'));
+    // Set: SQP1LLL; — P1 is 1 char (0=main, 1=sub), LLL is 3-digit level
+    if (arg.size() < 4) return "?;";
+    // arg[0] is the P1 channel selector (ignore, we only have main)
+    bool ok;
+    int level = arg.mid(1).toInt(&ok);
+    if (!ok || level < 0 || level > 255) return "?;";
+    a->setSquelch(a->squelchOn(), level);
+    return {};
+}
+
+// ── NR — Noise Reduction ON/OFF (0=off, 1=NR1, 2=NR2) ──────────────────────
+//
+// Kenwood TS-2000 NR command maps 0/1/2. SmartSDR only has a binary NR
+// on/off via nrOn()/setNr(). Treat 0=off, 1 or 2 = on.
+
+QString SmartCatProtocol::cmdNR(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("NR%1;").arg(a->nrOn() ? 1 : 0);
+    if (arg != "0" && arg != "1" && arg != "2") return "?;";
+    if (arg != "0" && m_model && !m_model->radioSideNoiseReductionAvailable())
+        return "?;";   // no radio-side NR, as ZZNR
+    a->setNr(arg != "0");
+    return {};
+}
+
+// ── NL — Noise Blanker level (001-010 per TS-2000 spec) ──────────────────────
+//
+// SmartSDR stores NB level 0-100.  We scale: NB level 1-10 maps to 0-100
+// linearly (each TS-2000 step ≈ 10 SmartSDR units).
+
+QString SmartCatProtocol::cmdNL(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty()) {
+        // Map SmartSDR 0-100 → TS-2000 001-010
+        int ssdr = a->nbLevel();                        // 0-100
+        int ts   = qBound(1, (ssdr + 5) / 10, 10);    // round to 1-10
+        return QString("NL%1;").arg(ts, 3, 10, QChar('0'));
+    }
+    bool ok;
+    int ts = arg.toInt(&ok);
+    if (!ok || ts < 0 || ts > 10) return "?;";
+    // Map TS-2000 0-10 → SmartSDR 0-100
+    int ssdr = qBound(0, ts * 10, 100);
+    a->setNbLevel(ssdr);
+    return {};
+}
+
+// ── NT — Auto Notch (ANF) ON/OFF ─────────────────────────────────────────────
+
+QString SmartCatProtocol::cmdNT(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty())
+        return QString("NT%1;").arg(a->anfOn() ? 1 : 0);
+    if (arg != "0" && arg != "1") return "?;";
+    if (arg == "1" && m_model && !m_model->radioSideAutoNotchAvailable())
+        return "?;";   // no auto notch on this radio
+    a->setAnf(arg == "1");
+    return {};
+}
+
+// ── RA — Attenuator (00=off, 01-99=on) ───────────────────────────────────────
+//
+// SmartSDR FlexRadios do not expose a discrete attenuator switch via the
+// model layer. RF gain is a separate continuous control (RG / rfGain).
+// Return a fixed "ATT off" (RA00) and silently accept sets to avoid ?; errors
+// from logging software that queries RA.
+
+QString SmartCatProtocol::cmdRA(const QString& arg)
+{
+    if (arg.isEmpty()) return QStringLiteral("RA0000;");
+    // Accept set silently (P1 is 2 digits, P2 is 2 digits for sub — total 4)
+    return {};
+}
+
+// ── PA — Pre-amplifier ON/OFF ─────────────────────────────────────────────────
+//
+// SmartSDR does not expose a dedicated pre-amplifier enable flag via the
+// CAT-accessible model. Return fixed "preamp off" and accept sets silently.
+// PA answer format: P1=main preamp, P2=sub preamp.
+
+QString SmartCatProtocol::cmdPA(const QString& arg)
+{
+    if (arg.isEmpty()) return QStringLiteral("PA00;");
+    return {};
+}
+
+// ── MG — Microphone gain (000-100, 3-digit) ─────────────────────────────────
+//
+// Same data as ZZMG but without the ZZ prefix (plain Kenwood command).
+
+QString SmartCatProtocol::cmdMG(const QString& arg)
+{
+    TransmitModel& tx = m_model->transmitModel();
+    if (arg.isEmpty())
+        return "MG" + fmt3(tx.micLevel()) + ";";
+    bool ok;
+    int v = arg.toInt(&ok);
+    if (!ok || v < 0 || v > 100) return "?;";
+    tx.setMicLevel(v);
+    return {};
+}
+
+// ── RL — Noise Reduction level (00-09 per TS-2000 spec) ──────────────────────
+//
+// SmartSDR stores NR level 0-100.  TS-2000 uses 00 (AUTO/0ms) through 09.
+// We map linearly: TS-2000 00-09 ↔ SmartSDR 0-100.
+
+QString SmartCatProtocol::cmdRL(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    if (arg.isEmpty()) {
+        int ssdr = a->nrLevel();                      // 0-100
+        int ts   = qBound(0, (ssdr + 5) / 10, 9);   // round to 0-9
+        return QString("RL%1;").arg(ts, 2, 10, QChar('0'));
+    }
+    bool ok;
+    int ts = arg.toInt(&ok);
+    if (!ok || ts < 0 || ts > 9) return "?;";
+    int ssdr = qBound(0, ts * 11, 100);   // 9*11=99 ≈ 100
+    a->setNrLevel(ssdr);
+    return {};
+}
+
+// ── RM — Meter reading (stub) ─────────────────────────────────────────────────
+//
+// P1 selects meter: 0=unselected, 1=SWR, 2=COMP, 3=ALC.
+// P2 is the dot-count reading 0000-0030.
+// The CAT protocol layer has no access to live meter telemetry; return a
+// fixed zero-dots value and silently accept set commands.
+
+QString SmartCatProtocol::cmdRM(const QString& arg)
+{
+    // Query: RM; or RM P1; — return zero reading; no live meter data.
+    if (arg.isEmpty() || arg.size() == 1)
+        return QString("RM%1%2;").arg(arg.isEmpty() ? QChar('0') : arg[0])
+                                  .arg(0, 4, 10, QChar('0'));
+    return {};
+}
+
+// ── LK — Key lock status (stub) ──────────────────────────────────────────────
+//
+// SDRs have no front-panel key lock. Return "unlocked" (LK00) and accept sets.
+
+QString SmartCatProtocol::cmdLK(const QString& arg)
+{
+    if (arg.isEmpty()) return QStringLiteral("LK00;");
+    return {};
+}
+
+// ── TY — Firmware type (stub) ────────────────────────────────────────────────
+//
+// P1 is reserved (space), P2: 0=overseas, 1=JP100W, 2=JP20W.
+// We always report overseas type.
+
+QString SmartCatProtocol::cmdTY(const QString& arg)
+{
+    if (arg.isEmpty()) return QStringLiteral("TY  0;");
+    return {};
+}
+
+// ── BY — Busy indicator (squelch open) ───────────────────────────────────────
+//
+// P1=main busy (0=not busy/squelch closed, 1=busy/squelch open).
+// P2=sub busy (0 — no sub-receiver in SDR mode).
+// We treat the squelch state as the "busy" indicator.
+
+QString SmartCatProtocol::cmdBY(const QString& /*arg*/)
+{
+    SliceModel* a = sliceA();
+    // If no slice or squelch is off (always open), report busy=1.
+    // If squelch is on and active (signal present), report busy=1, else 0.
+    // SmartSDR doesn't directly expose squelch-open state, only the
+    // threshold. Return 0 (not busy) as a safe default.
+    int busy = 0;
+    if (a && a->squelchOn() && a->squelchLevel() == 0)
+        busy = 1;  // squelch at 0 means always open = busy
+    return QStringLiteral("BY") + QChar('0' + busy) + "0;";
+}
+
+// ── OI — Opposite IF (VFO B composite status, same format as IF) ─────────────
+//
+// OI returns the same 37-character body as IF but for the "opposite" VFO (B).
+// Used by some logging apps to read split TX frequency without switching VFOs.
+
+QString SmartCatProtocol::cmdOI()
+{
+    // OI is a composite STATUS block (like IF) and must always return a body, so
+    // with no VFO B it falls back to VFO A rather than "?;". (The #3633 "?;"-when-
+    // no-VFO-B rule applies to the FB/ZZME value reads, not this status block; a
+    // client polling OI expects a 35-char body, never an error — see CAT test 15.15.)
+    SliceModel* b = sliceB();
+    SliceModel* a = sliceA();
+    SliceModel* s = b ? b : a;
+    if (!s) return "?;";
+
+    QString body;
+    body += freqField(s->frequency());
+    body += QStringLiteral("00010");
+    body += QStringLiteral("+00000");
+    body += '0';
+    body += '0';
+    body += QStringLiteral("00");
+    body += m_model->isRadioTransmitting() ? '1' : '0';
+    body += modeToKenwood(s->mode());
+    body += '0';
+    body += '0';
+    body += m_splitEnabled ? '1' : '0';
+    body += '0';
+    body += QStringLiteral("00");
+    body += '0';
+
+    return "OI" + body + ";";
+}
+
+// ── UP — VFO frequency step up ────────────────────────────────────────────────
+//
+// Emulates the microphone UP key — steps the VFO A frequency up by one step.
+// P1 is 2-digit step count (optional; default 1 step).
+// Uses the slice's stepHz() for the step size.
+
+QString SmartCatProtocol::cmdUP(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    int steps = 1;
+    if (!arg.isEmpty()) {
+        bool ok;
+        int n = arg.toInt(&ok);
+        if (ok && n > 0) steps = n;
+    }
+    double stepMhz = static_cast<double>(a->stepHz()) / 1e6;
+    // Cross-band-aware (see cmdFA): a multi-step move can leave the pan span, so
+    // route through the recenter policy rather than a bare autopan=0 setFrequency.
+    // Answer "?;" if the target is rejected rather than acknowledge a dropped tune.
+    // No upper bound applies here, unlike the DN underflow below: TS-2000 spells
+    // P1 as a 2-digit step count, but this parses any int, and even INT_MAX steps
+    // at the usual 100 Hz lands ~215 GHz — under isPlausibleCatTuneMhz's ceiling,
+    // which has to clear the 250 GHz top allocation. A runaway UP is refused by
+    // the radio, not here. See kMaxCatTuneMhz in RadioModel.cpp.
+    if (!m_model || !m_model->tuneSliceForCat(a, a->frequency() + stepMhz * steps))
+        return "?;";
+    return {};
+}
+
+// ── DN — VFO frequency step down ─────────────────────────────────────────────
+//
+// Emulates the microphone DN key — steps the VFO A frequency down by one step.
+
+QString SmartCatProtocol::cmdDN(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+    int steps = 1;
+    if (!arg.isEmpty()) {
+        bool ok;
+        int n = arg.toInt(&ok);
+        if (ok && n > 0) steps = n;
+    }
+    double stepMhz = static_cast<double>(a->stepHz()) / 1e6;
+    // Cross-band-aware (see cmdFA). A large multi-step DN can underflow the target
+    // past 0; tuneSliceForCat rejects a non-positive frequency at the boundary and
+    // returns false, so answer "?;" rather than acknowledge a tune that never ran.
+    if (!m_model || !m_model->tuneSliceForCat(a, a->frequency() - stepMhz * steps))
+        return "?;";
+    return {};
+}
+
+// ── FW — DSP filter width ─────────────────────────────────────────────────────
+//
+// TS-2000 FW command sets the DSP receive filter width in Hz.
+// Valid only in CW (50-2000 Hz) and FM/AM (0=narrow, 1=wide) modes.
+// In SSB mode the spec says to use SL/SH instead — we return ?; for SSB.
+// CW: we map the supplied Hz to filter edges ±(hz/2) around the carrier.
+// FM/AM: 0=narrow (±2500 Hz), 1=wide (±5000 Hz).
+
+static const int kFwCwValues[] = { 50, 80, 100, 150, 200, 300, 400, 500, 600, 1000, 2000 };
+static constexpr int kFwCwCount = 11;
+
+static int nearestCwFw(int hz)
+{
+    int best = kFwCwValues[0];
+    int bestDist = qAbs(best - hz);
+    for (int i = 1; i < kFwCwCount; ++i) {
+        int d = qAbs(kFwCwValues[i] - hz);
+        if (d < bestDist) { bestDist = d; best = kFwCwValues[i]; }
+    }
+    return best;
+}
+
+QString SmartCatProtocol::cmdFW(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+
+    const QString mode = a->mode();
+    const bool isCw   = (mode == "CW" || mode == "CWL");
+    const bool isFm   = (mode == "FM" || mode == "NFM" || mode == "DFM");
+    const bool isAm   = (mode == "AM" || mode == "SAM");
+
+    // SSB and digital modes: FW is not valid
+    if (!isCw && !isFm && !isAm) return "?;";
+
+    if (arg.isEmpty()) {
+        if (isCw) {
+            // Compute current filter width in Hz
+            int bw = qAbs(a->filterHigh()) + qAbs(a->filterLow());
+            int nearest = nearestCwFw(bw);
+            return QString("FW%1;").arg(nearest, 4, 10, QChar('0'));
+        } else {
+            // FM/AM: 0=narrow (filter width ≤ 5000), 1=wide
+            int bw = qAbs(a->filterHigh()) + qAbs(a->filterLow());
+            return QString("FW%1;").arg(bw <= 5000 ? "0000" : "0001");
+        }
+    }
+
+    bool ok;
+    int hz = arg.toInt(&ok);
+    if (!ok || hz < 0) return "?;";
+
+    if (isCw) {
+        int bw = nearestCwFw(hz);
+        // Symmetric filter around 0 Hz: low = -bw/2, high = +bw/2
+        a->setFilterWidth(-(bw / 2), bw / 2);
+    } else {
+        // FM/AM: 0=narrow, 1=wide
+        if (hz == 0)
+            a->setFilterWidth(-2500, 2500);
+        else
+            a->setFilterWidth(-5000, 5000);
+    }
+    return {};
+}
+
+// ── ZZFI / ZZFJ — VFO A/B DSP Filter Index ──────────────────────────────────
+// Index 00 = widest, 07 = narrowest. Boundaries from CAT guide v4.1.5 §3.3.9.
+
+static const int kZZFIThresh[] = { 3300, 2900, 2700, 2400, 2100, 1800, 1500 };
+static const int kZZFIRepBw[]  = { 3600, 3100, 2800, 2550, 2250, 1950, 1650, 1200 };
+static constexpr int kZZFICount = 8;
+
+static int bwToZZFIIndex(int bwHz)
+{
+    for (int i = 0; i < kZZFICount - 1; ++i)
+        if (bwHz > kZZFIThresh[i])
+            return i;
+    return kZZFICount - 1;
+}
+
+static QString zzfiQuery(SliceModel* s)
+{
+    if (!s) return "?;";
+    int bw = s->filterHigh() - s->filterLow();
+    return QString("ZZFI%1;").arg(bwToZZFIIndex(qAbs(bw)), 2, 10, QChar('0'));
+}
+
+static QString zzfijSet(SliceModel* s, const QString& arg, const QString& prefix)
+{
+    if (!s) return "?;";
+    bool ok;
+    int idx = arg.toInt(&ok);
+    if (!ok || idx < 0 || idx >= kZZFICount) return "?;";
+    int newBw  = kZZFIRepBw[idx];
+    int center = (s->filterLow() + s->filterHigh()) / 2;
+    s->setFilterWidth(center - newBw / 2, center + newBw / 2);
+    Q_UNUSED(prefix)
+    return {};
+}
+
+QString SmartCatProtocol::cmdZZFI(const QString& arg)
+{
+    SliceModel* a = sliceA();
+    if (arg.isEmpty()) {
+        QString r = zzfiQuery(a);
+        return r;
+    }
+    return zzfijSet(a, arg, "ZZFI");
+}
+
+QString SmartCatProtocol::cmdZZFJ(const QString& arg)
+{
+    SliceModel* b = sliceB();
+    if (arg.isEmpty()) {
+        if (!b) return zzfiQuery(sliceA()).replace("ZZFI", "ZZFJ");
+        QString r = zzfiQuery(b);
+        return r.replace("ZZFI", "ZZFJ");
+    }
+    return zzfijSet(b ? b : sliceA(), arg, "ZZFJ");
+}
+
+} // namespace AetherSDR

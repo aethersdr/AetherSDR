@@ -1,0 +1,62 @@
+#pragma once
+
+#include <QString>
+#include <QStringList>
+
+namespace AetherSDR {
+
+// Owner of the Ulanzi Dial's pill→action bindings: one JSON document under the
+// app-global `UlanziDialMappings` key (peripheral, not per-radio). After
+// migrateLegacyKeys() it is the sole authority: a missing pill means the
+// built-in default (also after the operator clears one), and the pre-#4611 flat
+// keys are never read. GUI-free for ulanzi_mapping_migration_test.
+class UlanziDialMappings {
+public:
+    // AppSettings key holding the whole JSON document.
+    static QString rootSettingsKey();
+
+    // Whether AetherSDR claims a Ulanzi Dial it detects. On by default: a dial
+    // is auto-detected and used with no setup. An operator who wants the OS to
+    // keep the dial's media keys turns it off in Radio Setup → Serial &
+    // Controllers, and an explicit "False" saved before this default flipped
+    // is honoured. (The key predates this document, hence a separate flat key.)
+    static QString enabledSettingsKey();
+    static bool enabled();
+    // Persist and verify on disk; false (and a warning) if it did not commit.
+    static bool setEnabled(bool on);
+
+    // Bound action for a pill, or an empty string when the document has no
+    // entry (the caller supplies its own built-in default).
+    static QString actionForPill(const QString& pillId);
+
+    // Bind an action and persist immediately.  Writes the whole document —
+    // a whole-document write IS the atomic feature update.  Returns false and
+    // logs when the value did not reach the database FILE (a failed save()
+    // keeps the change in memory for retry, so only a disk read proves it).
+    static bool setActionForPill(const QString& pillId, const QString& actionId);
+
+    // One-shot claim-and-freeze of the pre-#4611 flat keys, run once at
+    // feature startup rather than on every access (AGENTS.md "Settings
+    // Migration").  For each pill the document does not already describe, a
+    // legacy value is adopted into the document; every legacy key is then
+    // removed. Returns the number of bindings adopted.
+    static int migrateLegacyKeys(const QStringList& pillIds);
+
+    // Bound rotary action for the dial wheel, or "WheelFrequency" by default.
+    static QString rotaryAction();
+
+    // Bind rotary action and persist immediately inside the UlanziDialMappings root document.
+    static bool setRotaryAction(const QString& actionId);
+
+    // Returns the complete list of wheel action IDs handled by the wheel dispatch chain.
+    static const QStringList& knownWheelActions();
+
+    // True if actionId is a recognized wheel action handled by the wheel dispatch chain.
+    static bool isKnownWheelAction(const QString& actionId);
+
+    // Pre-#4611 per-pill key names, retained only as migration sources.
+    static QString legacyUnderscoreKey(const QString& pillId);
+    static QString legacySlashKey(const QString& pillId);
+};
+
+}  // namespace AetherSDR

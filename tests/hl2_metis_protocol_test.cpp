@@ -1,0 +1,1387 @@
+// aetherd HL2 Phase 1a — MetisProtocol unit test. Pins the HPSDR Protocol 1
+// wire encoding/decoding ported from the live-validated tools/hl2 spike:
+// C&C register encoding, discovery, EP2
+// framing, and the 24-bit signed big-endian IQ decode (with sign-extension).
+// Pure protocol — no sockets, no hardware.
+
+#include "core/backends/hl2/MetisProtocol.h"
+
+#include <array>
+#include <complex>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <algorithm>
+#include <vector>
+#include <limits>
+#include <optional>
+#include <span>
+#include <string>
+
+using namespace AetherSDR::hl2;
+
+static int g_failures = 0;
+static void check(bool cond, const char* what)
+{
+    if (!cond) {
+        std::fprintf(stderr, "FAIL: %s\n", what);
+        ++g_failures;
+    }
+}
+
+static bool approx(float a, float b) { return std::fabs(a - b) < 1e-6f; }
+
+// Encode a 24-bit signed value big-endian into three bytes.
+static void put24be(std::uint8_t* p, std::int32_t v)
+{
+    p[0] = static_cast<std::uint8_t>((v >> 16) & 0xFF);
+    p[1] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
+    p[2] = static_cast<std::uint8_t>(v & 0xFF);
+}
+
+// Build a synthetic EP6 packet whose sample n has I = 100*n, Q = -(100*n + 1).
+static std::vector<std::uint8_t> makeEp6(std::uint32_t seq)
+{
+    std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
+    pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
+    pkt[4] = static_cast<std::uint8_t>((seq >> 24) & 0xFF);
+    pkt[5] = static_cast<std::uint8_t>((seq >> 16) & 0xFF);
+    pkt[6] = static_cast<std::uint8_t>((seq >> 8) & 0xFF);
+    pkt[7] = static_cast<std::uint8_t>(seq & 0xFF);
+    int n = 0;
+    for (std::size_t fs : {std::size_t{8}, std::size_t{8 + kFrameSize}}) {
+        pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;        // SYNC
+        std::uint8_t* payload = pkt.data() + fs + 8;       // after SYNC(3)+C&C(5)
+        const std::size_t rb = ep6RoundBytes(1);
+        for (std::size_t k = 0; k + rb <= kFramePayload; k += rb, ++n) {
+            put24be(payload + k, 100 * n);                 // I
+            put24be(payload + k + 3, -(100 * n + 1));      // Q
+        }
+    }
+    return pkt;
+}
+
+// Build a synthetic EP6 packet for `numRx` receivers. Round r of receiver rx
+// carries I = 1000*rx + r, Q = -(1000*rx + r) — so a demux that slips by one
+// receiver, or that walks the zero padding, produces values from the wrong
+// stream rather than something that merely looks plausible.
+static std::vector<std::uint8_t> makeEp6Multi(int numRx)
+{
+    std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
+    pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
+    const std::size_t rb = ep6RoundBytes(numRx);
+    int round = 0;
+    for (std::size_t fs : {std::size_t{8}, std::size_t{8 + kFrameSize}}) {
+        pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;        // SYNC
+        std::uint8_t* payload = pkt.data() + fs + 8;
+        for (std::size_t k = 0; k + rb <= kFramePayload; k += rb, ++round) {
+            for (int rx = 0; rx < numRx; ++rx) {
+                std::uint8_t* s = payload + k + static_cast<std::size_t>(rx) * kRxIqBytes;
+                put24be(s, 1000 * rx + round);
+                put24be(s + 3, -(1000 * rx + round));
+            }
+            // The 2 mic bytes closing the round get a non-zero marker: if the
+            // decoder ever mistook them for IQ the values would show up.
+            payload[k + rb - 2] = 0x5A;
+            payload[k + rb - 1] = 0xA5;
+        }
+    }
+    return pkt;
+}
+
+int main()
+{
+    // ---- config register: rate + #RX (+ the openHPSDR-only Mercury/duplex
+    //      bits, which HL2 ignores but we still send) ----
+    {
+        const Cc c = ccConfig(SampleRate::R96k, 1);
+        check(c[0] == 0x00, "config C0 is register 0x00");
+        check(c[1] == (0x40 | 0x01), "config C1 = Mercury bit | speed(96k=1)");
+        check(c[2] == 0x00 && c[3] == 0x00, "config C2/C3 zero");
+        check(c[4] == 0x04, "config C4 = duplex, 1 RX");
+        check(ccConfig(SampleRate::R48k, 2)[4] == (0x04 | (1 << 3)), "config C4 encodes #RX-1");
+        check((c[0] & 0x01) == 0, "config C0 is even (MOX=0, cannot key)");
+    }
+
+    // ---- J16 open-collector filter byte: DATA[23:17] == C2[7:1] ----
+    //
+    // The SHIFT is the whole point. DATA[16] is not part of the field, so an
+    // unshifted byte would put every selection one relay too low — 80 m would
+    // engage the 160 m filter. Asserted on the encoder, not inferred.
+    {
+        const Cc c = ccConfig(SampleRate::R48k, 1, kOcLpf160);
+        check(c[2] == 0x02, "oc 0x01 (160m) lands in C2 bit 1, not bit 0");
+        check(ccConfig(SampleRate::R48k, 1, kOcHpfAmBc | kOcLpf12_10)[2] == 0xC0,
+              "oc 0x60 (HPF|12/10m) -> C2 0xC0");
+        // Bit 7 is the RX-antenna bit and lives at DATA[13], not in this field.
+        // Passing a full I2C byte must not shift it into DATA[24] (the sample
+        // rate's low bit lives at [24] — this would change the DDC rate).
+        check(ccConfig(SampleRate::R48k, 1, 0xFF)[2] == 0xFE,
+              "oc bit 7 masked off (it is the RX antenna bit, not a filter)");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone)[2] == 0x00,
+              "oc none releases every relay");
+        // The filter byte must not disturb what shares this register.
+        check(c[1] == (0x40 | 0x00) && c[4] == 0x04,
+              "oc byte leaves sample rate and #RX untouched");
+    }
+
+    // ---- band -> filter selection ----
+    //
+    // Every value below is Quisk's Hermes_BandDict for that band
+    // (quisk_conf_defaults.py), which is the reference client's own table for
+    // the N2ADR companion board. Checking against it is what makes the
+    // frequency RANGES in ocFilterByteForHz() verifiable rather than plausible:
+    // the ranges are ours, the answers are not.
+    {
+        struct { double mhz; std::uint8_t oc; const char* what; } cases[] = {
+            {  1.900, 0b0000001, "160m -> 160 LPF, HPF out" },
+            {  3.800, 0b1000010, "80m  -> HPF + 80 LPF" },
+            {  5.357, 0b1000100, "60m  -> HPF + 60/40 LPF" },
+            {  7.200, 0b1000100, "40m  -> HPF + 60/40 LPF" },
+            { 10.125, 0b1001000, "30m  -> HPF + 30/20 LPF" },
+            { 14.225, 0b1001000, "20m  -> HPF + 30/20 LPF" },
+            { 18.130, 0b1010000, "17m  -> HPF + 17/15 LPF" },
+            { 21.300, 0b1010000, "15m  -> HPF + 17/15 LPF" },
+            { 24.950, 0b1100000, "12m  -> HPF + 12/10 LPF" },
+            { 28.400, 0b1100000, "10m  -> HPF + 12/10 LPF" },
+        };
+        for (const auto& c : cases)
+            check(ocFilterByteForHz(c.mhz * 1.0e6) == c.oc, c.what);
+
+        // Band EDGES, not just the button's default frequency: a range boundary
+        // that fell inside a band would filter one end of it correctly and the
+        // other end through the neighbouring low-pass.
+        check(ocFilterByteForHz(1.800e6) == ocFilterByteForHz(2.000e6),
+              "160m band edges share one filter");
+        check(ocFilterByteForHz(3.500e6) == ocFilterByteForHz(4.000e6),
+              "80m band edges share one filter");
+        check(ocFilterByteForHz(7.000e6) == ocFilterByteForHz(7.300e6),
+              "40m band edges share one filter");
+        check(ocFilterByteForHz(14.000e6) == ocFilterByteForHz(14.350e6),
+              "20m band edges share one filter");
+        check(ocFilterByteForHz(28.000e6) == ocFilterByteForHz(29.700e6),
+              "10m band edges share one filter");
+
+        // Outside the board's coverage nothing is engaged — a low-pass chosen
+        // for a band that is not there would only attenuate.
+        check(ocFilterByteForHz(0.600e6) == kOcNone,
+              "AM broadcast: no filter, and specifically not the AM-blocking HPF");
+        check(ocFilterByteForHz(50.150e6) == kOcNone, "6m: no filter fitted");
+        // Never the RX-antenna bit, whatever the frequency.
+        check((ocFilterByteForHz(14.2e6) & 0x80) == 0, "filter byte never sets bit 7");
+    }
+
+    // ---- RX1 NCO frequency: 32-bit big-endian ----
+    {
+        const Cc f = ccRx1Freq(10'000'000);               // 0x00989680
+        check(f[0] == 0x04, "rx1freq C0 = 0x04 (RX1 NCO, not TX 0x02)");
+        check(f[1] == 0x00 && f[2] == 0x98 && f[3] == 0x96 && f[4] == 0x80, "rx1freq BE bytes");
+        check((f[0] & 0x01) == 0, "rx1freq C0 even (MOX=0)");
+    }
+
+    // ---- LNA gain: C4 = 0x40 | (dB+12), clamped to [-12,+48] ----
+    {
+        check(ccRxGain(20)[4] == (0x40 | 32), "gain +20 dB -> code 32");
+        check(ccRxGain(-12)[4] == (0x40 | 0), "gain -12 dB -> code 0 (min)");
+        check(ccRxGain(48)[4] == (0x40 | 60), "gain +48 dB -> code 60 (max)");
+        check(ccRxGain(999)[4] == (0x40 | 60), "gain clamps high");
+        check(ccRxGain(-999)[4] == (0x40 | 0), "gain clamps low");
+        check(ccRxGain(std::numeric_limits<int>::max())[4] == (0x40 | 60),
+              "INT_MAX clamps before adding the gain bias");
+        check(ccRxGain(std::numeric_limits<int>::min())[4] == 0x40,
+              "INT_MIN clamps to the minimum native gain code");
+        check(ccRxGain(19)[4] == (0x40 | 31), "native code 31 remains available");
+        check(ccRxGain(21)[4] == (0x40 | 33), "native code 33 is not folded");
+        check(ccRxGain(20)[0] == 0x14, "gain C0 = 0x14 (register 0x0a)");
+    }
+
+    // ---- metis command + discovery request ----
+    {
+        const auto start = metisStart();
+        check(start.size() == 64, "metis command padded to 64 B");
+        check(start[0] == 0xEF && start[1] == 0xFE && start[2] == 0x04 && start[3] == 0x01,
+              "metis start = EF FE 04 01");
+        check(metisStop()[3] == 0x00, "metis stop cmd = 0x00");
+
+        // ---- the mid-stream run byte (PR #5650 review, blocker 1) ----
+        //
+        // THE MOST DANGEROUS BYTE IN THE BANDSCOPE WORK. It leaves the host
+        // twice a second for the whole session while the operator is
+        // listening, and bit 0 is `run`: clear it by accident and the HL2's IQ
+        // stream stops mid-QSO, silently, twice a second. Asserted here on the
+        // pure function rather than re-derived from the same constants in a
+        // test body, which is an assertion about two constexprs and would agree
+        // with a wrong implementation.
+        check(metisRunCommand(true)[3] == 0x03,
+              "bandscope ON: run high AND wide_spectrum high");
+        check(metisRunCommand(false)[3] == 0x01,
+              "bandscope OFF: wide_spectrum clear, run STILL HIGH");
+        check((metisRunCommand(true)[3] & 0x01) != 0 && (metisRunCommand(false)[3] & 0x01) != 0,
+              "run is never cleared to move the bandscope bit");
+        // The watchdog-disable leg, untested in any form before this.
+        check(metisRunCommand(true, false)[3] == 0x83,
+              "bandscope ON with the watchdog disabled = 0x83");
+        check(metisRunCommand(false, false)[3] == 0x81,
+              "bandscope OFF with the watchdog disabled = 0x81");
+        // And connect is NOT widened: metisStart stays the byte three
+        // fake-radio fixtures sniff, which is why this is a separate function.
+        check(metisStart()[3] == 0x01 && metisStart(false)[3] == 0x81,
+              "metisStart() is not widened by the bandscope");
+        check(metisRunCommand(true)[0] == 0xEF && metisRunCommand(true)[1] == 0xFE
+                  && metisRunCommand(true)[2] == 0x04 && metisRunCommand(true).size() == 64,
+              "the run byte is framed and padded like every other metis command");
+
+        const auto disc = discoveryRequest();
+        check(disc.size() == 63 && disc[0] == 0xEF && disc[1] == 0xFE && disc[2] == 0x02,
+              "discovery request = EF FE 02 + pad");
+    }
+
+    // ---- discovery reply parse ----
+    {
+        std::array<std::uint8_t, 60> reply{};
+        reply[0] = 0xEF; reply[1] = 0xFE; reply[2] = 0x02;             // idle
+        for (std::size_t i = 0; i < 6; ++i)
+            reply[3 + i] = static_cast<std::uint8_t>(0x10 + i);       // MAC
+        reply[9] = 0x4A;                                              // gateware
+        reply[10] = 0x06;                                            // board id: HL2
+        // Receiver count is at offset 0x13 = 19. The two neighbours are filled
+        // with DIFFERENT, plausible values on purpose: this assertion used to
+        // write the count at 20 and read it back from 20, so it agreed with an
+        // implementation that was off by one and could never have caught it.
+        //
+        // Offset 20 is {BANDSCOPE_BITS, BOARD[5:0]} — 0x45 is a build-5 board
+        // with the wideband bits set, which is exactly the kind of value that
+        // reads as a believable receiver count.
+        reply[19] = 0x04;                                          // receiver count (0x13)
+        reply[20] = 0x45;                                          // NOT the count
+        reply[18] = 0x77;                                          // NOT the count
+        const auto r = parseDiscoveryReply(reply);
+        check(r.has_value(), "valid discovery reply parses");
+        check(r && r->isHermesLite2(), "board 0x06 -> Hermes-Lite 2");
+        check(r && r->mac[0] == 0x10 && r->mac[5] == 0x15, "MAC parsed");
+        check(r && r->gatewareVersion == 0x4A, "gateware byte parsed");
+        check(r && r->gatewareMinor == std::optional<std::uint8_t>(0),
+              "minor version read from offset 0x15 (zero here)");
+        check(r && r->numRx == 0x04, "receiver count read from offset 0x13 (19)");
+        check(r && r->numRx != 0x45, "not offset 20 — that is the board/bandscope byte");
+        check(r && r->numRx != 0x77, "not offset 18");
+        check(r && !r->streaming, "status 0x02 -> not streaming");
+        reply[2] = 0x03;
+        check(parseDiscoveryReply(reply)->streaming, "status 0x03 -> streaming (busy)");
+        // A reply that stops before offset 19 must fall back to 0, not read OOB.
+        std::array<std::uint8_t, 11> shortReply{};
+        shortReply[0] = 0xEF; shortReply[1] = 0xFE; shortReply[2] = 0x02;
+        shortReply[10] = 0x06;
+        const auto sr = parseDiscoveryReply(shortReply);
+        check(sr && sr->numRx == 0, "short reply -> numRx defaults to 0 (no OOB read)");
+        check(sr && !sr->gatewareMinor, "short reply -> no minor version (no OOB read)");
+        // The gateware minor version is VERSION_MINOR at offset 0x15
+        // (usopenhpsdr1.v:286, offset = 0x3B - 0x26). Neighbors carry other
+        // values so a read one byte off is caught. SQUARE SDR 2 reports 52 (#6806).
+        reply[2] = 0x02;
+        reply[0x14] = 0x7F;                                        // BANDSCOPE_BITS and BOARD
+        reply[0x15] = 52;                                          // VERSION_MINOR
+        reply[0x16] = 0x11;                                        // unused/zero upstream
+        const auto sq = parseDiscoveryReply(reply);
+        check(sq && sq->gatewareMinor == std::optional<std::uint8_t>(52),
+              "minor version 52 read from offset 0x15, not its neighbors");
+        check(sq && gatewareVersionText(*sq) == "74.52", "version text is major.minor, decimal");
+        reply[0x15] = 3;
+        check(gatewareVersionText(*parseDiscoveryReply(reply)) == "74.3", "stock HL2 reads 74.3");
+        // 0x15 is the last byte a reply must carry to report a minor version.
+        check(parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x16))->gatewareMinor
+                  == std::optional<std::uint8_t>(3), "a reply ending at offset 0x15 still carries it");
+        const auto cut = parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x15));
+        check(cut && !cut->gatewareMinor && gatewareVersionText(*cut) == "74",
+              "a reply ending before 0x15 shows the major version alone");
+        reply[0x15] = 52;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "SQUARE SDR 2 gateware",
+              "minor 52 labels the version with the board's name");
+        reply[0x15] = 3;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "Gateware",
+              "stock minor 3 keeps the plain label");
+        check(gatewareVersionLabel(*cut) == "Gateware", "no minor keeps the plain label");
+        // The connect path recovers the minor from the version text.
+        check(gatewareMinorFromVersionText("75.52") == std::optional<std::uint8_t>(52),
+              "\"75.52\" -> minor 52");
+        check(!gatewareMinorFromVersionText("74"), "\"74\" -> no minor");
+        check(!gatewareMinorFromVersionText(""), "empty version -> no minor");
+        check(!gatewareMinorFromVersionText("74.256"), "minor above 255 rejected");
+        check(!gatewareMinorFromVersionText("74."), "empty minor rejected");
+        check(!gatewareMinorFromVersionText("74.5x"), "non-digit minor rejected");
+        check(!gatewareMinorFromVersionText("4.2.20.41343"), "a Flex version is not a minor");
+        bool roundTrips = true;
+        for (int m = 0; m <= 0xFF; ++m) {
+            reply[0x15] = static_cast<std::uint8_t>(m);
+            const auto parsed = parseDiscoveryReply(reply);
+            roundTrips = roundTrips
+                && gatewareMinorFromVersionText(gatewareVersionText(*parsed)) == parsed->gatewareMinor;
+        }
+        check(roundTrips, "every minor 0..255 round-trips through the version text");
+        std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
+        check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
+    }
+
+    // ---- discovery reply: the telemetry it has always carried ----
+    //
+    // The 60 bytes the radio already sends at every discovery carry PA
+    // temperature, forward and reverse power, PA bias, PTT, ADC clip and the TX
+    // FIFO — and this parser has been reading offsets 0-10 and 19 and throwing
+    // the rest away. It is the same information the EP6 cycle carries, in the
+    // same raw units, but obtainable WITHOUT a stream: the only route that
+    // answers while another client holds the radio, and the only one that
+    // answers when the stream is broken. That is roadmap item #15, and settling
+    // that it needs nothing from item #13 is docs/gating.md in the lab.
+    //
+    // OFFSETS ARE PINNED TO THE GATEWARE, NOT TO A TOOL. usopenhpsdr1.v:261-307
+    // emits the reply from a DOWN-counting state, so
+    //
+    //     packet offset = 0x3B - dbyte_no
+    //
+    // anchored on two knowns this file already asserts: `6'h32: VERSION_MAJOR`
+    // is offset 9 and `6'h31: idhermeslite ? 8'h06 : 8'h01` is offset 10. The
+    // same arithmetic puts `6'h28: NR` at 0x13, which is the receiver-count
+    // offset the block above already pins independently.
+    //
+    // hermeslite.py (KF7O/N2ADR) decodes the same packet and agrees field for
+    // field — including composing the gateware version as r[0x09].r[0x15],
+    // which is `6'h32` and `6'h26`. It is the CROSS-CHECK, not the source: two
+    // decoders that share no code landing on the same map is evidence; one
+    // decoder copied into another is not.
+    {
+        auto put16 = [](std::uint8_t* p, std::uint16_t v) {
+            p[0] = static_cast<std::uint8_t>(v >> 8);
+            p[1] = static_cast<std::uint8_t>(v & 0xFF);
+        };
+
+        std::array<std::uint8_t, 60> t{};
+        t[0] = 0xEF; t[1] = 0xFE; t[2] = 0x02;
+        t[10] = 0x06;
+        t[19] = 0x04;
+
+        // 6'h24..6'h21 -> 0x17-0x1a: resp_data, the port-1025 command response.
+        t[0x17] = 0xDE; t[0x18] = 0xAD; t[0x19] = 0xBE; t[0x1a] = 0xEF;
+        // 6'h20 -> 0x1b: resp_control, assigned combinationally at control.v:899
+        // as {ext_cwkey, ptt_resp, pa_exttr, pa_inttr, tx_on, cw_on, clip_cnt}.
+        // 0xC9 = 1100 1001: ext_cwkey, ptt, no pa_exttr, no pa_inttr, tx_on,
+        // no cw_on, clip_cnt = 1.
+        t[0x1b] = 0xC9;
+        put16(&t[0x1c], 0x0ABC);      // temperature, 12 bits: top nibble is zero
+        put16(&t[0x1e], 0x0123);      // forward power
+        put16(&t[0x20], 0x0456);      // reverse power
+        put16(&t[0x22], 0x0789);      // PA bias current
+        t[0x24] = 0xC0;               // dsiq_status: recovery set, fill 0x40
+        t[0x25] = 0x5A;               // pkt_cnt
+        t[0x26] = 0x0A;               // {1'b0, tx_buffer_latency[6:0]} = 10 ms
+        t[0x27] = 0x00;               // cw_hang_time[7:0]
+        t[0x28] = 0x1F;               // {cw_hang[9:8], 1'b0, ptt_hang_time[4:0]}
+        t[0x29] = 0x44;               // {sample_rate, cmd_ptt, tx_wait, receivers}
+
+        const auto d = parseDiscoveryReply(t);
+        check(d.has_value(), "60-byte telemetry reply parses");
+
+        check(d && d->temperatureRaw.value_or(-1) == 0x0ABC,
+              "temperature from 0x1c-0x1d (gateware 6'h1f,6'h1e)");
+        check(d && d->forwardPowerRaw.value_or(-1) == 0x0123,
+              "forward power from 0x1e-0x1f (6'h1d,6'h1c)");
+        check(d && d->reversePowerRaw.value_or(-1) == 0x0456,
+              "reverse power from 0x20-0x21 (6'h1b,6'h1a)");
+        check(d && d->biasCurrentRaw.value_or(-1) == 0x0789,
+              "PA bias current from 0x22-0x23 (6'h19,6'h18)");
+
+        // Each of the four analogue fields is 12 bits with a zero top nibble,
+        // so a decode that read one byte too early or too late would pick up a
+        // neighbour's low byte and still look like a plausible reading. The
+        // four distinct values above are what makes that visible.
+        check(d && d->temperatureRaw != d->forwardPowerRaw
+                && d->forwardPowerRaw != d->reversePowerRaw
+                && d->reversePowerRaw != d->biasCurrentRaw,
+              "the four analogue fields do not alias each other");
+
+        check(d && d->ptt.value_or(false), "PTT from resp_control bit 6");
+        check(d && d->txOn.value_or(false), "tx_on from resp_control bit 3");
+        check(d && d->cwOn.value_or(true) == false, "cw_on clear from bit 2");
+        check(d && d->extCwKey.value_or(false), "ext_cwkey from bit 7");
+        check(d && d->paExtTr.value_or(true) == false, "pa_exttr clear from bit 5");
+        check(d && d->paIntTr.value_or(true) == false, "pa_inttr clear from bit 4");
+        check(d && d->adcClipCount.value_or(-1) == 1, "clip count from bits [1:0]");
+
+        // Same word, same layout, same meaning as the EP6 path decodes — so the
+        // stream-free reading and the in-band reading are the same quantity and
+        // can be compared without a conversion.
+        check(d && d->txFifoFillMsbs.value_or(-1) == 0x40,
+              "TX FIFO fill from 0x24[6:0], not the whole byte");
+        check(d && d->txFifoRecovery.value_or(false),
+              "TX FIFO recovery flag from 0x24[7]");
+
+        check(d && d->txBufferLatencyMs.value_or(-1) == 0x0A,
+              "tx_buffer_latency from 0x26[6:0]");
+        // ptt_hang_time = 31 is the value that DISABLES the gateware's PTT
+        // auto-unkey (softerhardware/Hermes-Lite2 #178), so it is exactly the
+        // one an application must be able to read. It must come from [4:0] and
+        // not swallow the cw_hang_time bits sharing the byte.
+        check(d && d->pttHangTimeMs.value_or(-1) == 31,
+              "ptt_hang_time from 0x28[4:0] — the value that disables auto-unkey");
+        t[0x28] = 0xC4;               // cw_hang_time[9:8] = 3, ptt_hang_time = 4
+        check(parseDiscoveryReply(t)->pttHangTimeMs.value_or(-1) == 4,
+              "ptt_hang_time ignores the cw_hang_time bits in the same byte");
+        t[0x28] = 0x1F;
+
+        check(d && d->responseData.value_or(0) == 0xDEADBEEFu,
+              "resp_data from 0x17-0x1a, big-endian");
+
+        // A short reply carries none of it, and must say so rather than read
+        // out of bounds or report zeros as readings. This is the distinction
+        // the whole struct is optional for: "the radio did not tell us" and
+        // "the radio told us zero" are different claims, and only one of them
+        // is a measurement.
+        std::array<std::uint8_t, 20> shortT{};
+        shortT[0] = 0xEF; shortT[1] = 0xFE; shortT[2] = 0x02; shortT[10] = 0x06;
+        const auto s = parseDiscoveryReply(shortT);
+        check(s.has_value(), "short reply still parses its header");
+        check(s && !s->temperatureRaw.has_value() && !s->forwardPowerRaw.has_value()
+                && !s->ptt.has_value() && !s->txFifoFillMsbs.has_value()
+                && !s->pttHangTimeMs.has_value(),
+              "short reply: telemetry is ABSENT, not zero");
+    }
+
+    // ---- EP2 packet framing ----
+    {
+        const auto pkt = ep2Packet(0x01020304, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
+        check(pkt.size() == 1032, "EP2 packet is 1032 B");
+        check(pkt[0] == 0xEF && pkt[1] == 0xFE && pkt[2] == 0x01 && pkt[3] == 0x02, "EP2 header");
+        check(pkt[4] == 0x01 && pkt[5] == 0x02 && pkt[6] == 0x03 && pkt[7] == 0x04, "EP2 seq BE");
+        check(pkt[8] == 0x7F && pkt[9] == 0x7F && pkt[10] == 0x7F, "frame A SYNC");
+        check(pkt[11] == 0x00, "frame A C&C = config C0");            // ccConfig C0
+        check(pkt[8 + 512] == 0x7F && pkt[8 + 512 + 3] == 0x04, "frame B SYNC + rx1freq C0");
+    }
+
+    // ---- EP6 decode: seq, 126 samples, exact 24-bit BE IQ + sign-extension ----
+    {
+        const auto pkt = makeEp6(0xDEADBEEF);
+        const auto seq = ep6Seq(pkt);
+        check(seq.has_value() && *seq == 0xDEADBEEF, "ep6Seq reads header seq");
+
+        std::vector<std::complex<float>> iq;
+        const int n = ep6Samples(pkt, iq);
+        check(n == ep6SamplesPerPacket(1) && iq.size() == 126, "EP6 yields 126 samples (2x63)");
+        const float s = 1.0f / static_cast<float>(kFullScale);
+        check(approx(iq[0].real(), 0.0f) && approx(iq[0].imag(), -1.0f * s), "sample 0 I/Q");
+        check(approx(iq[5].real(), 500.0f * s) && approx(iq[5].imag(), -501.0f * s), "sample 5 I/Q");
+        check(approx(iq[125].real(), 12500.0f * s), "last sample I decoded");
+    }
+
+    // ---- EP6 payload geometry at N receivers ----
+    //
+    // These numbers come from the gateware, not from us: usopenhpsdr1.v emits
+    // whole rounds while another fits and then zero-PADS the rest of the frame
+    // (MIC0 -> `(byte_no[8:0] > round_bytes) ? RXDATA2 : PAD`). So the count is
+    // a floor division, and only N=1 and N=2 happen to divide 504 exactly.
+    // Getting this wrong does not fail loudly — it decodes padding as samples.
+    {
+        check(ep6RoundBytes(1) == 8 && ep6RoundBytes(2) == 14
+              && ep6RoundBytes(3) == 20 && ep6RoundBytes(4) == 26,
+              "round is 6*numRx + 2 bytes");
+        check(ep6RoundsPerFrame(1) == 63, "1 RX: 63 rounds, 504 bytes, no padding");
+        check(ep6RoundsPerFrame(2) == 36, "2 RX: 36 rounds, 504 bytes, no padding");
+        check(ep6RoundsPerFrame(3) == 25, "3 RX: 25 rounds, 500 bytes, 4 padding");
+        check(ep6RoundsPerFrame(4) == 19, "4 RX: 19 rounds, 494 bytes, 10 padding");
+        check(ep6SamplesPerPacket(4) == 38, "4 RX: 38 samples per receiver per packet");
+        // The per-receiver sample count FALLS as receivers are added; a caller
+        // that keeps treating 126 as a constant overruns its own buffers.
+        check(ep6SamplesPerPacket(4) < ep6SamplesPerPacket(1),
+              "samples per receiver fall as receivers are added");
+        // numRx = 0 must not divide by zero or return something enormous.
+        check(ep6RoundBytes(0) == ep6RoundBytes(1), "numRx < 1 clamps to 1");
+    }
+
+    // ---- link budget: which (rate, receiver-count) pairs are deliverable ----
+    //
+    // The HL2's ethernet is 100BASE-T and BOTH axes cost bandwidth: adding a
+    // receiver shrinks the per-receiver payload of a fixed-size packet, so the
+    // radio sends more packets. Four receivers at 384 kHz is ~89 Mbit/s of wire
+    // traffic, which does not fail cleanly — it drops, and a dropped EP6 packet
+    // is a gap in every panadapter at once.
+    {
+        check(ep6BitsPerSecond(48000, 1) < 4.0e6, "1 RX at 48k is ~3.3 Mbit/s");
+        check(ep6BitsPerSecond(384000, 4) > 85.0e6, "4 RX at 384k exceeds 85 Mbit/s");
+        check(ep6BitsPerSecond(384000, 4) > ep6BitsPerSecond(384000, 1),
+              "receivers cost bandwidth even at a fixed sample rate");
+
+        check(maxReceiversAtRate(48000, 4) == 4, "48k carries 4 receivers");
+        check(maxReceiversAtRate(96000, 4) == 4, "96k carries 4 receivers");
+        check(maxReceiversAtRate(192000, 4) == 4, "192k carries 4 receivers");
+        check(maxReceiversAtRate(384000, 4) == 3, "384k carries only 3 receivers");
+        check(maxReceiversAtRate(384000, 1) == 1, "hardMax is respected");
+        // Never returns zero: a rate too fast for even one receiver must still
+        // give a runnable radio rather than a configuration with no receivers.
+        check(maxReceiversAtRate(10'000'000, 4) >= 1, "always admits at least one receiver");
+    }
+
+    // ---- EP6 demux across N receivers ----
+    {
+        for (const int numRx : {1, 2, 3, 4}) {
+            const auto pkt = makeEp6Multi(numRx);
+            std::vector<std::vector<std::complex<float>>> out(static_cast<std::size_t>(numRx));
+            const int n = ep6SamplesMulti(pkt, out);
+            check(n == ep6SamplesPerPacket(numRx), "demux returns samples per receiver");
+
+            const float s = 1.0f / static_cast<float>(kFullScale);
+            bool allOk = true;
+            for (int rx = 0; rx < numRx && allOk; ++rx) {
+                const auto& v = out[static_cast<std::size_t>(rx)];
+                if (static_cast<int>(v.size()) != n) { allOk = false; break; }
+                for (int r = 0; r < n; ++r) {
+                    // Round index restarts per frame in the builder's `round`
+                    // counter only across the whole packet, so expected value is
+                    // simply the running round number.
+                    const float want = static_cast<float>(1000 * rx + r) * s;
+                    if (!approx(v[static_cast<std::size_t>(r)].real(), want)
+                        || !approx(v[static_cast<std::size_t>(r)].imag(), -want)) {
+                        allOk = false;
+                        break;
+                    }
+                }
+            }
+            check(allOk, "every receiver's samples decode to its own stream");
+        }
+    }
+
+    // ---- demux refuses a receiver count it cannot honour ----
+    {
+        const auto pkt = makeEp6Multi(2);
+        std::vector<std::vector<std::complex<float>>> none;
+        check(ep6SamplesMulti(pkt, none) == -1, "empty output span is rejected");
+        std::vector<std::vector<std::complex<float>>> tooMany(kMaxReceivers + 1);
+        check(ep6SamplesMulti(pkt, tooMany) == -1, "more than kMaxReceivers is rejected");
+    }
+
+    // ---- per-receiver NCO registers ----
+    //
+    // RX1..RX7 are registers 0x02..0x08, and C0 is the address shifted left one
+    // because C0 bit 0 is MOX. An encoder that forgot the shift would write the
+    // TX NCO (0x01) when asked for RX1.
+    {
+        check(ccRxFreq(0, 7'200'000)[0] == kC0Rx1Freq, "RX1 -> C0 0x04 (addr 0x02)");
+        check(ccRxFreq(1, 7'200'000)[0] == 0x06, "RX2 -> C0 0x06 (addr 0x03)");
+        check(ccRxFreq(2, 7'200'000)[0] == 0x08, "RX3 -> C0 0x08 (addr 0x04)");
+        check(ccRxFreq(3, 7'200'000)[0] == 0x0A, "RX4 -> C0 0x0A (addr 0x05)");
+        check(ccRxFreq(6, 7'200'000)[0] == 0x10, "RX7 -> C0 0x10 (addr 0x08)");
+        for (int rx = 0; rx <= 6; ++rx) {
+            check((ccRxFreq(rx, 7'200'000)[0] & 0x01) == 0,
+                  "every RX NCO C0 is even (MOX=0, cannot key)");
+            check(ccRxFreq(rx, 7'200'000)[0] != kC0TxFreq,
+                  "no RX NCO collides with the TX NCO register");
+        }
+        // The payload is plain Hz, big-endian, and identical across receivers.
+        const Cc a = ccRxFreq(0, 14'074'000);
+        const Cc b = ccRxFreq(3, 14'074'000);
+        check(a[1] == b[1] && a[2] == b[2] && a[3] == b[3] && a[4] == b[4],
+              "frequency payload does not depend on the receiver index");
+        check(ccRx1Freq(14'074'000)[0] == a[0] && ccRx1Freq(14'074'000)[4] == a[4],
+              "ccRx1Freq is ccRxFreq(0, ...)");
+        // Out of range clamps into the encodable run rather than walking off it.
+        check(ccRxFreq(99, 1)[0] == ccRxFreq(6, 1)[0], "rxIndex clamps at RX7");
+        check(ccRxFreq(-1, 1)[0] == ccRxFreq(0, 1)[0], "negative rxIndex clamps at RX1");
+    }
+
+    // ---- receiver count is a FOUR-bit field at DATA[6:3] ----
+    {
+        check(ccConfig(SampleRate::R48k, 4)[4] == (0x04 | (3 << 3)), "4 RX encodes as 3");
+        check(ccConfig(SampleRate::R48k, 8)[4] == (0x04 | (7 << 3)), "8 RX encodes as 7");
+        // The old 3-bit mask wrapped here: 9 RX (code 8) became code 0, i.e. ONE
+        // receiver, and the radio would have streamed a layout nobody expected.
+        check(ccConfig(SampleRate::R48k, 9)[4] == (0x04 | (8 << 3)), "9 RX encodes as 8, not 0");
+        check(ccConfig(SampleRate::R48k, 12)[4] == (0x04 | (11 << 3)), "12 RX encodes as 11");
+        check(ccConfig(SampleRate::R48k, 99)[4] == (0x04 | (11 << 3)), "over-max clamps to 12");
+        check(ccConfig(SampleRate::R48k, 0)[4] == 0x04, "under-min clamps to 1");
+        // The count must not bleed into the sample rate, which shares C1/C4.
+        check(ccConfig(SampleRate::R384k, 12)[1] == (0x40 | 0x03),
+              "receiver count leaves the sample rate untouched");
+    }
+
+    // ---- negative / sign-extension edge: I = -8388608 (24-bit min) ----
+    {
+        std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
+        pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
+        pkt[8] = pkt[9] = pkt[10] = 0x7F;                             // frame A SYNC
+        pkt[8 + 512] = pkt[9 + 512] = pkt[10 + 512] = 0x7F;          // frame B SYNC
+        std::uint8_t* p = pkt.data() + 8 + 8;                         // first sample I
+        p[0] = 0x80; p[1] = 0x00; p[2] = 0x00;                        // -2^23
+        std::vector<std::complex<float>> iq;
+        ep6Samples(pkt, iq);
+        check(approx(iq[0].real(), -1.0f), "24-bit min sign-extends to -1.0 full scale");
+    }
+
+    // ---- reject non-EP6 packets ----
+    {
+        std::vector<std::uint8_t> shortPkt(100, 0);
+        std::vector<std::complex<float>> scratch;
+        check(ep6Samples(shortPkt, scratch) == -1, "short packet rejected");
+        std::vector<std::uint8_t> wrongEp(kUsbPacketSize, 0);
+        wrongEp[0] = 0xEF; wrongEp[1] = 0xFE; wrongEp[2] = 0x01; wrongEp[3] = 0x02;  // EP2, not EP6
+        check(!ep6Seq(wrongEp).has_value(), "EP2 packet not read as EP6");
+    }
+
+    // ---- full scale normalises to exactly +-1.0 ----
+    //
+    // The largest magnitude a 24-bit two's-complement sample can take is
+    // 0x7FFFFF = 8388607, so that is the divisor. Dividing by 1<<23 instead
+    // leaves full scale reading 0.99999988 and every dBFS figure fractionally
+    // low -- tiny, but it is the reference point the S-meter, the spectrum
+    // floor, and the clip detector are all quoted against, so it should be the
+    // same reference pihpsdr uses rather than one count adrift.
+    {
+        std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
+        pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
+        for (const std::size_t fs : {std::size_t(8), std::size_t(8 + kFrameSize)}) {
+            pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;
+            std::uint8_t* pay = pkt.data() + fs + 8;
+            pay[0] = 0x7F; pay[1] = 0xFF; pay[2] = 0xFF;     // I = +full scale
+            pay[3] = 0x80; pay[4] = 0x00; pay[5] = 0x00;     // Q = -full scale
+        }
+        std::vector<std::complex<float>> out;
+        check(ep6Samples(pkt, out) == ep6SamplesPerPacket(1), "full-scale packet decodes");
+        check(out[0].real() == 1.0f, "0x7FFFFF normalises to exactly +1.0");
+        // -0x800000 is one count larger in magnitude than +0x7FFFFF, so it maps
+        // just past -1.0. That asymmetry is inherent to two's complement.
+        check(out[0].imag() < -1.0f && out[0].imag() > -1.0001f,
+              "0x800000 normalises to just past -1.0 (two's-complement asymmetry)");
+    }
+
+    // ---- one-shot pipeline reset (ENCODER ONLY -- nothing sends this) ----
+    //
+    // Kept because the byte layout is verified and worth not re-deriving. The
+    // radio-facing use of it wedged a board; see MetisProtocol.h kC0Sync.
+    {
+        const Cc r = ccPipelineReset();
+        check(r[0] == kC0Sync, "reset targets addr 0x39 (C0 = 0x72)");
+        check((r[0] & 0x01) == 0, "reset bank keeps MOX clear");
+        check(r[4] == 0x80, "DATA[7:4] = 0x8 requests a filter-pipeline reset");
+        check(r[1] == 0 && r[2] == 0 && r[3] == 0,
+              "every other command nibble left at no-action");
+    }
+
+    // ---- TX encoders ----
+    {
+        const Cc f = ccTxFreq(14'200'000);
+        check(f[0] == kC0TxFreq, "TX freq targets addr 0x01 (C0 = 0x02)");
+        check(f[1] == 0x00 && f[2] == 0xD8 && f[3] == 0xAC && f[4] == 0xC0,
+              "TX freq is 32-bit big-endian Hz (14.2 MHz = 0x00D8ACC0)");
+        check((f[0] & kC0MoxBit) == 0, "TX freq bank is not keyed by itself");
+
+        const Cc d = ccTxDrive(200);
+        check(d[0] == kC0TxDrive, "TX drive targets addr 0x09 (C0 = 0x12)");
+        check(d[1] == 200, "drive level lands in C1 (DATA[31:24])");
+        check(d[2] == 0 && d[3] == 0 && d[4] == 0,
+              "PA stays OFF unless explicitly asked for");
+        const Cc dpa = ccTxDrive(200, true);
+        check(dpa[2] == 0x08, "PA enable is DATA[19] = C2 bit 3");
+        check(dpa[3] == 0 && dpa[4] == 0,
+              "enabling the PA does not set ATU tune or Alex bits");
+        check(ccTxDrive(-5)[1] == 0 && ccTxDrive(9999)[1] == kTxDriveMax,
+              "drive level clamps to 0..255");
+    }
+
+    // ---- MOX is a property of the FRAME, not a register ----
+    {
+        const Cc keyed = withMox(ccRx1Freq(7'000'000), true);
+        check((keyed[0] & kC0MoxBit) != 0, "withMox sets C0 bit 0");
+        check((keyed[0] & ~kC0MoxBit) == kC0Rx1Freq,
+              "withMox leaves the register address intact");
+        check((withMox(keyed, false)[0] & kC0MoxBit) == 0, "withMox clears again");
+        // Any bank can carry MOX -- the radio reads it from whatever is in flight.
+        check((withMox(ccConfig(SampleRate::R48k, 1), true)[0] & kC0MoxBit) != 0,
+              "the config bank can carry MOX too");
+    }
+
+    // ---- TX IQ payload, and the EADDR trap ----
+    {
+        auto pkt = ep2Packet(0, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
+        std::vector<std::complex<float>> iq;
+        iq.emplace_back(1.0f, -1.0f);            // full scale both rails
+        iq.emplace_back(0.0f, 0.5f);
+        ep2WriteTxIq(pkt, iq);
+
+        const std::uint8_t* pay = pkt.data() + 8 + 8;    // frame 0, after SYNC + C&C
+        // Sample 0: I = +32767, Q = -32767.
+        check(pay[4] == 0x7F && pay[5] == 0xFF, "full-scale I clamps to +32767, big-endian");
+        check(pay[6] == 0x80 && pay[7] == 0x01,
+              "full-scale -1.0 clamps to -32767, NOT -32768 (no wrap to the far rail)");
+
+        // THE TRAP: the first 32-bit word of each frame's payload is EADDR, the
+        // extended-address register -- not headphone audio. A memcpy'd Hermes TX
+        // layout writes garbage there. It must stay zero.
+        check(pay[0] == 0 && pay[1] == 0 && pay[2] == 0 && pay[3] == 0,
+              "EADDR (first 32-bit word after C&C) left zero");
+        const std::uint8_t* pay1 = pkt.data() + 8 + kFrameSize + 8;
+        check(pay1[0] == 0 && pay1[1] == 0 && pay1[2] == 0 && pay1[3] == 0,
+              "second frame's EADDR left zero as well");
+
+        // Sample 1 lands in the next 8-byte slot; the rest is transmit silence.
+        check(pay[12] == 0x00 && pay[13] == 0x00, "sample 1 I = 0");
+        check(pay[14] == 0x3F && pay[15] == 0xFF, "sample 1 Q = 0.5 -> 16383");
+        // KEPT AS AN ASSERTION, deliberately, against the reading that it
+        // "pins a defect as correct". ep2WriteTxIq is a pure function over a
+        // span: zero-filling the slots the span does not reach is the only
+        // thing it can do, it is what makes the EP2 frame a fixed 1032 bytes
+        // at a fixed cadence, and changing it here would change every unkeyed
+        // frame too.
+        //
+        // The defect S3 row 3.3 names is one layer UP -- MetisClient::
+        // buildNextControlPacket choosing to hand this function a short span
+        // when the TX IQ FIFO has starved, and nothing recording that it did.
+        // That is where the amendment belongs and where it was made:
+        // MetisClient::txUnderflowPackets / ::txUnderflowSamples, asserted in
+        // hl2_tx_gate_test with a negative control on a clean transmission.
+        check(pay[20] == 0 && pay[21] == 0 && pay[22] == 0 && pay[23] == 0,
+              "unsupplied samples are transmit silence");
+    }
+
+    // ---- TX IQ: a non-finite sample is transmit silence ----
+    {
+        // NaN fails both clamp comparisons; an infinity would clamp to a
+        // full-scale rail. Either one must reach the wire as zero.
+        constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        auto pkt = ep2Packet(0, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
+        std::vector<std::complex<float>> iq;
+        iq.emplace_back(nan, inf);
+        iq.emplace_back(-inf, 0.5f);
+        ep2WriteTxIq(pkt, iq);
+        const std::uint8_t* pay = pkt.data() + 8 + 8;
+        check(pay[4] == 0 && pay[5] == 0, "a NaN I sample is transmit silence");
+        check(pay[6] == 0 && pay[7] == 0, "an infinite Q sample is silence, not a full-scale rail");
+        check(pay[12] == 0 && pay[13] == 0, "a negative infinity is silence too");
+        check(pay[14] == 0x3F && pay[15] == 0xFF, "a finite neighbour is untouched");
+    }
+
+    // ---- EP6 C&C response decoding (telemetry) ----
+    {
+        auto frame = [](std::uint8_t c0, std::uint32_t data) {
+            std::array<std::uint8_t, 8> f{};
+            f[0] = f[1] = f[2] = 0x7F;
+            f[3] = c0;
+            f[4] = static_cast<std::uint8_t>((data >> 24) & 0xFF);
+            f[5] = static_cast<std::uint8_t>((data >> 16) & 0xFF);
+            f[6] = static_cast<std::uint8_t>((data >> 8) & 0xFF);
+            f[7] = static_cast<std::uint8_t>(data & 0xFF);
+            return f;
+        };
+
+        // Classic cycle: C0 = 0, 8, 16 -> RADDR 0, 1, 2 (hpsdrsim's own sequence).
+        auto r0 = parseEp6Response(frame(0x00, 0).data());
+        check(r0.has_value() && !r0->ack && r0->raddr == 0, "C0=0x00 -> RADDR 0, ACK clear");
+        auto r1 = parseEp6Response(frame(0x08, 0).data());
+        check(r1.has_value() && r1->raddr == 1, "C0=0x08 -> RADDR 1");
+        auto r2 = parseEp6Response(frame(0x10, 0).data());
+        check(r2.has_value() && r2->raddr == 2, "C0=0x10 -> RADDR 2");
+
+        // ACK changes how C0 is read: 6 address bits instead of 4.
+        auto ra = parseEp6Response(frame(0x80 | (0x2A << 1), 0).data());
+        check(ra.has_value() && ra->ack && ra->raddr == 0x2A,
+              "ACK=1 -> RADDR is C0[6:1], all six bits");
+
+        // PTT and Dot ride in C0 regardless.
+        auto rp = parseEp6Response(frame(0x08 | 0x01, 0).data());
+        check(rp.has_value() && rp->ptt, "PTT decoded from C0[0]");
+        auto rd = parseEp6Response(frame(0x08 | 0x04, 0).data());
+        check(rd.has_value() && rd->dot, "Dot decoded from C0[2]");
+
+        check(!parseEp6Response(std::array<std::uint8_t,8>{}.data()).has_value(),
+              "unsynced frame rejected");
+
+        Hl2Telemetry t;
+        check(!t.forwardPowerRaw.has_value(), "telemetry starts unknown, not zero");
+
+        // RADDR 0: firmware 0x15, ADC overload set, TX PERMITTED (bit 25 high).
+        t.apply(*parseEp6Response(frame(0x00, (1u<<25) | (1u<<24) | 0x15).data()));
+        check(t.firmwareVersion.value_or(-1) == 0x15, "firmware version from DATA[7:0]");
+        check(t.adcOverload.value_or(false), "ADC overload from bit 24");
+        check(t.txInhibited.value_or(true) == false,
+              "bit 25 SET means transmit permitted (active low, inverted here)");
+        t.apply(*parseEp6Response(frame(0x00, 0).data()));
+        check(t.txInhibited.value_or(false) == true, "bit 25 clear means INHIBITED");
+
+        // RADDR 1: temperature high half, forward power low half.
+        t.apply(*parseEp6Response(frame(0x08, (1234u << 16) | 5678u).data()));
+        check(t.temperatureRaw.value_or(-1) == 1234, "temperature from DATA[31:16]");
+        check(t.forwardPowerRaw.value_or(-1) == 5678, "forward power from DATA[15:0]");
+
+        // RADDR 2: reverse power and bias.
+        t.apply(*parseEp6Response(frame(0x10, (100u << 16) | 42u).data()));
+        check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
+        check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
+
+        // Forward power: the window keeps the loudest non-ACK RADDR 1, not the
+        // last. The peak lands mid-window and the window ends on a trough; a
+        // RADDR 2 word or an ACK's echo is not forward power.
+        {
+            ForwardPowerWindow w;
+            check(!w.peak.has_value() && w.samples == 0,
+                  "an empty window has no peak, not a zero");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (4000u << 16) | 4000u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x01 << 1), 0x0FFFu).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 450u).data()));
+            check(w.peak.value_or(-1) == 3200,
+                  "window peak is the loudest RADDR 1 sample, not the last (450)");
+            check(w.samples == 3,
+                  "only non-ACK RADDR 1 counts toward the denominator");
+            w.clear();
+            check(!w.peak.has_value() && w.samples == 0,
+                  "clear() leaves no stale peak for the next window");
+        }
+
+        // Reverse power: the same window keeps the loudest non-ACK RADDR 2
+        // DATA[31:16]. Bias (DATA[15:0]), RADDR 1 and an ACK's echo are not it,
+        // and it does not count toward the forward denominator.
+        {
+            ForwardPowerWindow w;
+            check(!w.reversePeak.has_value(), "an empty window has no reverse peak");
+            w.observe(*parseEp6Response(frame(0x10, (40u << 16) | 900u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (220u << 16) | 5u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3000u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x02 << 1), 0xFFFF0000u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (60u << 16) | 900u).data()));
+            check(w.reversePeak.value_or(-1) == 220,
+                  "reverse peak is the loudest RADDR 2 upper word, not the last (60)");
+            check(w.peak.value_or(-1) == 3000 && w.samples == 1,
+                  "RADDR 2 leaves the forward peak and its count alone");
+            w.clear();
+            check(!w.reversePeak.has_value(), "clear() drops the reverse peak too");
+        }
+
+        // Keyed SWR gate: the key-on windows are dropped, a steady carrier
+        // then passes, a speech pause is dropped, and the next syllable passes.
+        {
+            KeyedSwrGate g;
+            for (int i = 0; i < KeyedSwrGate::kKeyOnWindows; ++i)
+                check(!g.accept(2000), "a key-on window is dropped");
+            check(g.accept(2000), "the window after the key-on windows passes");
+            for (int i = 0; i < 20; ++i)
+                g.accept(2000);
+            check(g.accept(1990), "a steady carrier keeps passing");
+            check(!g.accept(800), "a pause window well below the envelope is dropped");
+            check(!g.accept(700), "the pause stays dropped while the envelope remembers");
+            check(g.accept(1900), "the next syllable passes again");
+            g.reset();
+            check(!g.accept(400), "reset() starts a new over with its key-on windows");
+            g.accept(400);
+            check(g.accept(400), "and a quieter over then passes on its own envelope");
+            KeyedSwrGate slow;
+            for (int i = 0; i <= KeyedSwrGate::kKeyOnWindows; ++i)
+                slow.accept(2000);
+            bool passedAgain = false;
+            for (int i = 0; i < 30 && !passedAgain; ++i)
+                passedAgain = slow.accept(1000);
+            check(passedAgain, "a lasting lower level passes once the envelope has decayed");
+        }
+
+        // A RADDR-1 response whose temperature word is 0 is not a measurement:
+        // its forward word is neither the peak nor counted. Nothing else is
+        // dropped: not the response after it, and not a lone high sample.
+        {
+            ForwardPowerWindow w;
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            check(w.peak.value_or(-1) == 300 && w.samples == 1,
+                  "a forward word beside a temperature word of 0 is not the peak, nor counted");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            check(w.peak.value_or(-1) == 3200 && w.samples == 2,
+                  "the response right after a marked one is kept");
+            w.clear();
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 5u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 5u).data()));
+            check(w.peak.value_or(-1) == 3200 && w.samples == 3,
+                  "a lone sample far above both neighbours is kept: it may be a real peak");
+            w.observe(*parseEp6Response(frame(0x08, (1u << 16) | 3300u).data()));
+            check(w.peak.value_or(-1) == 3300,
+                  "only a temperature word of exactly 0 marks a response");
+            w.clear();
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            check(!w.peak.has_value() && w.samples == 0,
+                  "a window of marked responses only has no peak, so the last value is used");
+        }
+
+        // The skipped count rises on a marked response and on nothing else.
+        {
+            ForwardPowerWindow w;
+            check(w.skipped == 0, "skipped count: an empty window has skipped nothing");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1u << 16) | 3300u).data()));
+            w.observe(*parseEp6Response(frame(0x10, 4095u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x01 << 1), 0x0FFFu).data()));
+            w.observe(*parseEp6Response(frame(0x00, 0x15u).data()));
+            check(w.skipped == 0 && w.samples == 2,
+                  "skipped count: kept responses, RADDR 0 and 2 and an ACK do not raise it");
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 0u).data()));
+            check(w.skipped == 2 && w.samples == 2 && w.peak.value_or(-1) == 3300,
+                  "skipped count: each marked response raises it by one and leaves the rest alone");
+            w.clear();
+            check(w.skipped == 0, "skipped count: clear() zeroes it for the next window");
+            w.observe(*parseEp6Response(frame(0x08, 2944u).data()));
+            w.observe(*parseEp6Response(frame(0x08, 7u).data()));
+            check(w.skipped == 2 && !w.peak.has_value() && w.samples == 0,
+                  "skipped count: a window of marked responses only shows a count and no peak");
+        }
+
+        // The rule itself, without the window: non-ACK, RADDR 1, DATA[31:16]
+        // exactly 0. An ACK's echo and the other response addresses are never
+        // marked, whatever their upper half holds.
+        {
+            static_assert(isNonMeasurementRaddr1(Ep6Response{false, 0x01, false, false, 2944u}));
+            static_assert(!isNonMeasurementRaddr1(Ep6Response{false, 0x01, false, false, 1u << 16}));
+            const auto marked = [&](std::uint8_t c0, std::uint32_t data) {
+                return isNonMeasurementRaddr1(*parseEp6Response(frame(c0, data).data()));
+            };
+            check(marked(0x08, 2944u),
+                  "non-measurement rule: RADDR 1 with a temperature word of 0 is marked");
+            check(marked(0x08, 0u) && marked(0x08 | 0x01, 0xFFFFu),
+                  "non-measurement rule: whatever the forward word or the PTT bit");
+            check(!marked(0x08, (1u << 16) | 2944u) && !marked(0x08, (1234u << 16) | 2944u)
+                      && !marked(0x08, 0x8000u << 16),
+                  "non-measurement rule: any non-zero temperature word is a measurement");
+            check(!marked(0x80 | (0x01 << 1), 2944u),
+                  "non-measurement rule: an ACK on command address 1 is not marked");
+            check(!marked(0x00, 0x15u) && !marked(0x10, 4095u) && !marked(0x18, 0u),
+                  "non-measurement rule: RADDR 0, 2 and 3 are not marked by a zero upper half");
+        }
+
+        // ---- TX FIFO status: RADDR 0, DATA[15:8] ----
+        //
+        // This is the check MetisProtocol.cpp's own comment above txFifoCount
+        // asked someone to do ("The gateware RTL is the authority and this has
+        // NOT been checked against it"). Done, against the gateware at
+        // 883a338, and the pre-fix decode was wrong on all three fields.
+        //
+        // control.v:472 builds slot RADDR 0 as
+        //
+        //   data = {6'b000111, ~ext_txinhibit, (&clip_cnt), 8'h00,
+        //    bits    31:26     25              24           23:16
+        //           dsiq_status, VERSION_MAJOR}
+        //           15:8         7:0
+        //
+        // so the whole FIFO field is DATA[15:8] — eight bits, not fifteen. The
+        // reason the old decode was not obviously wrong is that DATA[23:16] is
+        // a constant zero, so (data >> 8) & 0x7FFF happens to come out equal to
+        // dsiq_status. It reads the right number under a name that claims it is
+        // something else, which is why no reading of it ever looked absurd.
+        //
+        // dsiq_fifo composes dsiq_status at fifos.v:100-110:
+        //
+        //   rd_count <= rd_tlength[(rdbits-1):(rdbits-7)];   // TOP 7 bits
+        //   ...
+        //   end else if (rd_tvalidn | ~allow_push) recovery_flag <= 1'b1;
+        //   assign rd_status = {recovery_flag_d1, rd_count};
+        //
+        // Two facts follow, and the old decode contradicts both:
+        //
+        //   [6:0] is the TOP 7 bits of the read-side fill level — a coarse
+        //   occupancy, not a count of samples. Nothing in this word is a
+        //   15-bit depth.
+        //
+        //   [7] is ONE flag covering BOTH "the FIFO ran empty" (rd_tvalidn)
+        //   and "writes were blocked because it filled" (~allow_push,
+        //   fifos.v:55-61). The gateware does not distinguish underflow from
+        //   overflow anywhere. Two booleans cannot be decoded from a
+        //   distinction the wire does not carry.
+        //
+        // NOT established, and deliberately not asserted here: what one unit of
+        // [6:0] is worth in samples or milliseconds. rdbits is 12 for this
+        // board's DSIQ_FIFO_DEPTH of 16384 (hermeslite_core.v:136, not
+        // overridden by variants/hl2b5up_main/hermeslite.v), which makes the
+        // unit 32 read-side words — but the words-to-samples mapping is an
+        // inference, not a read. #17's pacing servo needs that number; this
+        // decode does not, and must not pretend to it.
+        auto raddr0 = [&](std::uint8_t dsiqStatus) {
+            return frame(0x00, (1u << 25) | (std::uint32_t(dsiqStatus) << 8) | 0x15u);
+        };
+
+        Hl2Telemetry f;
+        check(!f.txFifoFillMsbs.has_value() && !f.txFifoRecovery.has_value(),
+              "FIFO status starts unknown, not empty-and-healthy");
+
+        // Recovery flag set, FIFO empty. The old decode reported a depth of 128
+        // for an empty FIFO, because it read the flag as bit 7 of a count.
+        f.apply(*parseEp6Response(raddr0(0x80).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x00,
+              "dsiq_status 0x80: fill level is 0 — the set bit is the flag, not a count");
+        check(f.txFifoRecovery.value_or(false), "dsiq_status 0x80: recovery flag from bit 7");
+
+        // Same flag, a fill level with bit 6 set. The old decode flipped its
+        // verdict from 'underflow' to 'overflow' purely on this fill-level bit
+        // — two opposite diagnoses of one recovery event, chosen by how full
+        // the FIFO happened to be. Now it is one flag either way, and the fill
+        // level is read separately from it.
+        f.apply(*parseEp6Response(raddr0(0xC0).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x40,
+              "dsiq_status 0xC0: fill level is 0x40, not 0xC0");
+        check(f.txFifoRecovery.value_or(false),
+              "dsiq_status 0xC0: same recovery flag as 0x80, not a different fault");
+
+        // Flag clear across the full range of the fill field.
+        f.apply(*parseEp6Response(raddr0(0x7F).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x7F, "dsiq_status 0x7F: fill saturates at 127");
+        check(f.txFifoRecovery.value_or(true) == false,
+              "dsiq_status 0x7F: a full FIFO is not by itself a recovery event");
+        f.apply(*parseEp6Response(raddr0(0x00).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x00, "dsiq_status 0x00: empty");
+        check(f.txFifoRecovery.value_or(true) == false, "dsiq_status 0x00: no recovery");
+
+        // The fill level must not borrow bits from its neighbours. RADDR 0
+        // carries the ADC-overload bit at 24 and the TX-inhibit bit at 25
+        // directly above the constant zero byte; a decode that widened past
+        // DATA[15:8] again would pick them up here.
+        f.apply(*parseEp6Response(frame(0x00, 0xFFFFFFFFu).data()));
+        check(f.txFifoFillMsbs.value_or(-1) == 0x7F,
+              "all-ones DATA: fill level still 7 bits, not widened into DATA[23:16]");
+        check(f.txFifoRecovery.value_or(false), "all-ones DATA: recovery flag set");
+    }
+
+    // ---- SWR ----
+    {
+        check(!swrFromRaw(0, 0).has_value(),
+              "no forward power -> SWR is unknown, NOT 1.0");
+        const auto flat = swrFromRaw(1000, 0);
+        check(flat.has_value() && std::fabs(*flat - 1.0) < 1e-9,
+              "no reflection -> 1.0:1");
+
+        // The voltage form, restated on counts that mean something.
+        //
+        // This assertion used to be swrFromRaw(3000, 1000) == 2.0 exactly: a
+        // RAW-COUNT ratio of 1/3, asserted to be SWR 2.0. That locked in #4578's
+        // bug — it asserted that the detector is linear, which it is not, and
+        // any correct implementation had to fail it. What is being pinned here
+        // is the voltage form itself, so the case is now written in counts that
+        // correspond to a known true SWR THROUGH the calibration curve:
+        //
+        //   forward 1000 counts -> directionalWatts 0.504594 W -> V 0.710348
+        //   true SWR 2.0 -> rho 1/3 -> V_rev 0.236782 -> 0.056066 W -> 277.9 counts
+        //
+        // so 1000/278 is a true 2.0:1, and the voltage form must return it.
+        // The POWER form would give 1/(1-sqrt(1/3)) ~= 2.37 from the same rho,
+        // i.e. a different and wrong number — that is what the original
+        // assertion was really protecting and it is still protected.
+        const auto two = swrFromRaw(1000, 278);
+        check(two.has_value() && std::fabs(*two - 2.0) < 0.01,
+              "1000/278 counts is a true 2.0:1 through the curve (voltage form, no square root)");
+
+        const auto bad = swrFromRaw(100, 500);
+        check(bad.has_value() && *bad > 100.0,
+              "reverse above forward clamps to a very high SWR, not negative");
+
+        // ---- #4578 half A: the knee, where the raw-count ratio reads low ----
+        //
+        // 265 forward counts (~50 mW) with a TRUE 2.0:1 puts 48 counts on the
+        // reverse channel — derived through the same curve as above. The raw
+        // ratio (265+48)/(265-48) is 1.442: a 28% under-read, in the direction
+        // that hides a mismatch. Linearizing both channels first recovers 1.99.
+        const auto knee = swrFromRaw(265, 48);
+        check(knee.has_value() && std::fabs(*knee - 2.0) < 0.05,
+              "knee: 265/48 counts is a true 2.0:1 and must not read 1.44");
+        check(knee.has_value() && *knee > 1.9,
+              "knee: the reading must not be OPTIMISTIC — that is the unsafe direction");
+
+        // ---- above the knee the change is inert ----
+        //
+        // 4953 forward counts is the top of the calibration table, where k has
+        // flattened. A true 2.0:1 there is 1623 reverse counts; the raw ratio
+        // already gives 1.975. The linearized form must land within a few
+        // hundredths of that, so this change is provably a LOW-END correction
+        // and not a rescaling of every reading an operator has ever seen.
+        const auto high = swrFromRaw(4953, 1623);
+        const double rawRatioHigh = (4953.0 + 1623.0) / (4953.0 - 1623.0);   // 1.9748
+        check(high.has_value() && std::fabs(*high - 2.0) < 0.01,
+              "above the knee: 4953/1623 counts is a true 2.0:1");
+        check(high.has_value() && std::fabs(*high - rawRatioHigh) < 0.05,
+              "above the knee: linearized and raw-ratio forms agree — a low-end correction only");
+
+        // ---- #4578 half B: linearizing does NOT rescue near-equal counts ----
+        //
+        // Reported independently by nigelfenton with a RigExpert AA-170
+        // cross-check: a TX Cal sweep aborted on its first step at SWR 256.00
+        // where the analyser and a real carrier both read 1.50.
+        //
+        // Two counts one LSB apart are two nearly-equal numbers before AND
+        // after the curve, so the ratio still runs away. It in fact runs away
+        // HARDER: at 20/19 the raw ratio gives 39.0 and the linearized form
+        // gives 78.0, because the knee's slope amplifies the reverse channel
+        // relative to the forward one down here. Whatever the computation does,
+        // the number is refused by the publish gate, not repaired by the maths.
+        const auto lsb = swrFromRaw(20, 19);
+        check(lsb.has_value() && *lsb > 30.0,
+              "one LSB apart at 20 counts still runs away — linearization does not subsume the gate");
+        check(20 < kMinForwardCountsForSwr,
+              "20 forward counts is below the publish gate: nothing is published from there");
+        const auto equal = swrFromRaw(20, 20);
+        check(equal.has_value() && *equal > 100.0,
+              "equal counts hit the clamp and saturate — the 255.99 the meter shows");
+        check(20 < kMinForwardCountsForSwr,
+              "equal counts at 20 forward are below the publish gate too");
+
+        // ---- the gate value is derived from the curve, and this is the
+        //      derivation, run ----
+        //
+        // CRITERION: one count of quantisation on EITHER channel must not move
+        // the reported SWR by more than 0.25 — half the finest distinction any
+        // consumer of this number makes (1.5 vs 2.0 vs 2.5, and the 3.0 abort a
+        // TX Cal sweep uses) — for every true SWR from 1.0 to 3.0. Above 3.0 the
+        // exact value stops mattering: every consumer has already aborted.
+        //
+        // DERIVED ANALYTICALLY FROM THE REFERENCE CURVE, NOT MEASURED ON
+        // HARDWARE. It assumes the channel-to-channel disagreement is one count.
+        // The real noise amplitude on this radio's reverse channel has never
+        // been measured; if it is larger than one count the gate is too low.
+        //
+        // At the old value of 16 the same criterion gives 0.85 SWR units of
+        // error — a reading that cannot tell 1.5 from 2.35.
+        {
+            constexpr double kTol = 0.25;
+            // Integer reverse count nearest a given true SWR at a given forward
+            // count, by bisection on the shipped detectorVolts() — so this
+            // inverts the curve the code actually uses rather than restating it.
+            auto revCountsFor = [](int fwd, double trueSwr) {
+                const double rho = (trueSwr - 1.0) / (trueSwr + 1.0);
+                const double want = rho * detectorVolts(fwd);
+                int lo = 0, hi = fwd;
+                while (lo < hi) {
+                    const int mid = lo + (hi - lo) / 2;
+                    if (detectorVolts(mid) < want) lo = mid + 1; else hi = mid;
+                }
+                if (lo > 0 && std::fabs(detectorVolts(lo - 1) - want)
+                            < std::fabs(detectorVolts(lo) - want))
+                    --lo;
+                return lo;
+            };
+            auto worstErrorAt = [&](int fwd) {
+                double worst = 0.0;
+                for (int i = 0; i <= 40; ++i) {
+                    const double t = 1.0 + 0.05 * i;
+                    const int rev = revCountsFor(fwd, t);
+                    for (int df = -1; df <= 1; ++df) {
+                        for (int dr = -1; dr <= 1; ++dr) {
+                            const auto v = swrFromRaw(fwd + df, rev + dr < 0 ? 0 : rev + dr);
+                            if (v) worst = std::max(worst, std::fabs(*v - t));
+                        }
+                    }
+                }
+                return worst;
+            };
+            // Smallest forward count at or above which the criterion holds for
+            // EVERY higher count too — scanned downward so a local dip below
+            // the tolerance cannot be mistaken for the crossing.
+            int firstUsable = 9;
+            for (int c = 1200; c > 8; --c) {
+                if (worstErrorAt(c) >= kTol) { firstUsable = c + 1; break; }
+            }
+            check(kMinForwardCountsForSwr >= firstUsable,
+                  "the publish gate is at or above the count the quantisation criterion requires");
+            check(worstErrorAt(kMinForwardCountsForSwr) < kTol,
+                  "at the publish gate, one count of quantisation is worth less than 0.25 SWR");
+            if (kMinForwardCountsForSwr < firstUsable)
+                std::fprintf(stderr,
+                             "      gate is %d, criterion needs %d (worst error at the gate: %.3f)\n",
+                             kMinForwardCountsForSwr, firstUsable,
+                             worstErrorAt(kMinForwardCountsForSwr));
+
+            // ---- the OFFSET criterion, which the bench added (#4578, D89) ----
+            //
+            // The sweep above perturbs both channels symmetrically about a
+            // reverse count that is CORRECT for the true SWR being tested. That
+            // is the right question about quantisation and it cannot see a
+            // BIAS: a reverse channel that reads ~3.4 counts with no reflected
+            // power at all shifts every reading one way, and no symmetric
+            // perturbation of a correct value expresses that.
+            //
+            // So this is a second, independent criterion on the same constant,
+            // and it is the one the measurement produced. Into a load whose
+            // true SWR is 1.0, with the reverse channel sitting at its measured
+            // floor, the gate must not admit a reading further than the same
+            // 0.25 from the truth.
+            //
+            // It is RUN, not restated: it reads kMeasuredReverseFloorCounts and
+            // calls the shipped swrFromRaw, so replacing the calibration curve
+            // or lowering the gate re-derives it. At the previous value of 96
+            // this fails at 1.40 — which is how the bench found that 96, itself
+            // a six-fold raise from 16, was still not enough.
+            {
+                const auto atGate = swrFromRaw(
+                    kMinForwardCountsForSwr,
+                    static_cast<int>(kMeasuredReverseFloorCounts + 0.5));
+                check(atGate.has_value(),
+                      "the gate's own forward count must produce a reading at all");
+                check(atGate && std::fabs(*atGate - 1.0) < kTol,
+                      "at the publish gate, a MATCHED load with the measured "
+                      "reverse-channel floor reads within 0.25 of 1.0");
+                if (atGate && std::fabs(*atGate - 1.0) >= kTol)
+                    std::fprintf(stderr,
+                                 "      gate is %d; a matched load with the measured "
+                                 "reverse floor %.2f counts reads %.3f, off by %.3f\n",
+                                 kMinForwardCountsForSwr,
+                                 kMeasuredReverseFloorCounts, *atGate,
+                                 std::fabs(*atGate - 1.0));
+
+                // AND THE DIRECTION, because it decides whether this is a
+                // safety problem or a nuisance: the offset makes the reading
+                // read HIGH on a matched load, which is the SAFE direction for
+                // a mismatch warning and the opposite of half A's under-read.
+                // Pinning it stops a future "fix" from turning an over-read
+                // into an under-read while still satisfying the bound above.
+                check(!atGate || *atGate >= 1.0,
+                      "the reverse-channel offset makes a matched load read "
+                      "HIGH, never low — the safe direction");
+            }
+        }
+    }
+
+    // ---- Direct I2C writes on the external bus (I2C2 / addr 0x3d) ----
+    {
+        const Cc w = ccI2c2Write(0x1D, 4, 0xAB);
+        // C0 is the bus address SHIFTED LEFT ONE, like every other C0 constant:
+        // 0x3d << 1 == 0x7A. Bit 0 stays clear so withMox() owns keying, and
+        // bit 7 (RQST) stays clear so the radio sends no reply.
+        check(w[0] == 0x7A, "I2C2 write C0 is addr 0x3d << 1");
+        check((w[0] & 0x01) == 0, "I2C2 write leaves MOX to withMox()");
+        check((w[0] & 0x80) == 0, "I2C2 write does NOT set RQST (no reply wanted)");
+        check(w[1] == 0x06, "I2C2 write cookie is 0x06");
+        check(w[2] == 0x9D, "C2 is stop-bit | 7-bit chip address");
+        check(w[3] == 4, "C3 is the register number");
+        check(w[4] == 0xAB, "C4 is the data byte");
+
+        // A caller who passes an already-shifted 8-bit I2C address must not be
+        // able to clear the stop bit.
+        check(ccI2c2Write(0x9D, 0, 0)[2] == 0x9D, "chip address masked to 7 bits");
+    }
+
+    // ---- IO board transmit-frequency batch ----
+    {
+        // 14.074 MHz = 0x00_00_D6_C0_90. Five bytes, MSB (always 0 on HF) first.
+        const auto banks = ccIoBoardTxFrequency(14'074'000ull);
+        check(banks.size() == 5, "five banks, one per frequency register");
+        const std::uint8_t wantReg[5]  = {0, 1, 2, 3, 4};
+        const std::uint8_t wantData[5] = {0x00, 0x00, 0xD6, 0xC0, 0x90};
+        for (std::size_t i = 0; i < 5; ++i) {
+            check(banks[i][3] == wantReg[i], "register order ascends 0..4");
+            check(banks[i][4] == wantData[i], "big-endian byte split");
+            check(banks[i][0] == 0x7A && banks[i][1] == 0x06 && banks[i][2] == 0x9D,
+                  "every bank addresses the IO board on I2C2");
+        }
+        // The LSB register COMMITS on the board, so it must be sent last. If
+        // this ever flips, the board latches a frequency built from four new
+        // bytes and one stale one.
+        check(banks[4][3] == 4, "LSB register is written LAST (it commits)");
+
+        // Reassembling the way the Pico firmware does must return the input.
+        std::uint64_t rebuilt = 0;
+        for (std::size_t i = 0; i < 5; ++i)
+            rebuilt = (rebuilt << 8) | banks[i][4];
+        check(rebuilt == 14'074'000ull, "round-trips through the firmware's assembly");
+
+        // Top byte is real: a value above 32 bits must not be truncated.
+        const auto high = ccIoBoardTxFrequency(0x11'22'33'44'55ull);
+        check(high[0][4] == 0x11 && high[4][4] == 0x55,
+              "all 40 bits reach the wire");
+    }
+
+    // ---- IO board status read (REG_INPUT_PINS..REG_FIRMWARE_MAJOR) ----
+    {
+        // The DATA word is what i2c_bus2.v decodes at 0x3d: cmd_data[31:25] ==
+        // 7'h03 with cmd_data[24] set selects STATE_READ_CMDADDR, [22:16] is the
+        // chip and [15:8] the register the read starts from.
+        const std::uint32_t d = kIoBoardStatusReadData;
+        check(((d >> 25) & 0x7F) == 0x03, "status read carries the I2C cookie 7'h03");
+        check(((d >> 24) & 0x01) == 1, "and cmd_data[24], which makes it a READ");
+        check(((d >> 23) & 0x01) == 1, "stop bit set");
+        check(((d >> 16) & 0x7F) == kIoBoardI2cAddr, "addressed to the IO board chip");
+        check(((d >> 8) & 0xFF) == kIoBoardRegInputPins, "starting at REG_INPUT_PINS");
+        check((d & 0xFF) == 0, "C4 carries no data byte: a read writes only the pointer");
+        check(kIoBoardRegInputPins == 6, "REG_INPUT_PINS is register 6 (i2c_registers.h)");
+
+        // The reply: four bytes read from register 6 upwards, the FIRST into
+        // resp_data[7:0] (STATE_READ_DATA1), the last into [31:24].
+        const IoBoardStatus s = decodeIoBoardStatus(0x07'00'EE'2Bu);
+        check(s.inputPins == 0x2B, "DATA[7:0] is REG_INPUT_PINS");
+        check(s.antennaTuner == 0xEE, "DATA[15:8] is REG_ANTENNA_TUNER");
+        check(s.fault == 0x00, "DATA[23:16] is REG_FAULT");
+        check(s.firmwareMajor == 0x07, "DATA[31:24] is REG_FIRMWARE_MAJOR");
+        // 0x2B = 0b101011: EXTTR, In1, In3, In5.
+        check(s.receiving(), "bit 0 is EXTTR, and 1 means RECEIVE");
+        check(s.input(1) && !s.input(2) && s.input(3) && !s.input(4) && s.input(5),
+              "bits 1..5 are In1..In5");
+        check(!s.input(0) && !s.input(6), "there is no In0 and no In6");
+        check(!decodeIoBoardStatus(0x07'00'00'2Au).receiving(),
+              "EXTTR low is transmit");
+
+        // A reply read from a real board on firmware 2.11. Its bytes are not
+        // symmetric, so it pins the order the synthetic vector above assumes.
+        const IoBoardStatus board = decodeIoBoardStatus(0x02'00'00'01u);
+        check(board.inputPins == 0x01 && board.receiving(), "a board's EXTTR is in DATA[7:0]");
+        check(board.firmwareMajor == 2, "and its firmware major in DATA[31:24]");
+
+        // An empty bus reads as 0xFF; bits 6..7 of REG_INPUT_PINS are never set
+        // by a board.
+        check(s.fromBoard() && board.fromBoard(), "a board's reply is from a board");
+        check(!decodeIoBoardStatus(0xFF'FF'FF'FFu).fromBoard(), "an all-ones reply is not");
+        check(!decodeIoBoardStatus(0x02'00'00'41u).fromBoard()
+                  && !decodeIoBoardStatus(0x02'00'00'81u).fromBoard(),
+              "nor is any reply with bit 6 or 7 of REG_INPUT_PINS set");
+        check(!decodeIoBoardStatus(0x00'00'00'00u).fromBoard()
+                  && !decodeIoBoardStatus(0x00'00'00'01u).fromBoard(),
+              "nor one reporting firmware 0, which no board does");
+    }
+
+    // ---- adcClipRatePercent: NULL AND ZERO ARE DIFFERENT FACTS ------------
+    //
+    // The clip evidence is one bit sampled ~190 times a second and coalesced to
+    // ~10 Hz, so what a consumer gets is a numerator over a denominator that
+    // varies with the sample rate, the receiver count and whether the
+    // application happens to be issuing commands. The denominator is therefore
+    // not something a reader may assume, and a window that did not carry enough
+    // of it has NO RATE -- not a rate of zero, and not a rate of one hundred.
+    //
+    // Getting that wrong in either direction is the worst thing this row can
+    // do: "three of three railed" rendered as 100 % is the most alarming
+    // reading available, produced by three observations; "none of two" rendered
+    // as 0 % is a clean converter reported from nothing at all.
+    {
+        check(!adcClipRatePercent(0, 0).has_value(),
+              "an empty window has no clip rate");
+        check(!adcClipRatePercent(3, 3).has_value(),
+              "three of three is NOT 100 % -- it is three observations");
+        check(!adcClipRatePercent(2, 0).has_value(),
+              "none of two is NOT 0 % -- it is two observations");
+        check(adcClipRatePercent(4, 0).value_or(-1) == 0,
+              "at the minimum denominator a clean window really is 0 %");
+        check(adcClipRatePercent(4, 4).value_or(-1) == 100,
+              "and a fully railed one really is 100 %");
+        check(adcClipRatePercent(19, 0).value_or(-1) == 0,
+              "0 of 19 is 0 %");
+        check(adcClipRatePercent(19, 19).value_or(-1) == 100,
+              "19 of 19 is 100 %");
+        // Rounded to nearest whole percent: this observation does not have two
+        // significant figures in it, and a nearest-integer rule is one a reader
+        // can reproduce in their head.
+        check(adcClipRatePercent(19, 9).value_or(-1) == 47, "9 of 19 rounds to 47 %");
+        check(adcClipRatePercent(19, 10).value_or(-1) == 53, "10 of 19 rounds to 53 %");
+        check(adcClipRatePercent(7, 6).value_or(-1) == 86,
+              "6 of 7 is 86 % -- the figure ON8ST's own sweep reports at 0 dB LNA");
+        // Nonsense in, bounded out: a numerator above its own denominator is a
+        // decode fault, and 100 % is the honest reading of it rather than a
+        // number above full scale.
+        check(adcClipRatePercent(10, 50).value_or(-1) == 100,
+              "a numerator above its denominator clamps at 100 rather than exceeding it");
+        check(adcClipRatePercent(10, -3).value_or(-1) == 0,
+              "and a negative one clamps at 0");
+        // The gate is settable, because the denominator is not a constant.
+        check(!adcClipRatePercent(19, 19, 20).has_value(),
+              "a caller with a stricter minimum gets nothing rather than a rate");
+    }
+
+    if (g_failures == 0)
+        std::fprintf(stderr, "hl2_metis_protocol_test: all checks passed\n");
+    return g_failures == 0 ? 0 : 1;
+}

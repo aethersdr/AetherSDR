@@ -1,0 +1,132 @@
+#pragma once
+#include "FlexSetupStatusTestSupport.h"
+
+#include "core/backends/flex/CommandParser.h"
+#include "core/backends/flex/FlexBackend.h"
+#include "models/RadioModel.h"
+
+#include <QStringList>
+#include <memory>
+#include <vector>
+
+namespace AetherSDR {
+class RadioSetupControlTestAccess {
+public:
+    static void observe(RadioModel& radio, const RadioDelta& observation)
+    { radio.applyRadioChanges(observation); }
+    static void band(RadioModel& radio, int id)
+    {
+        radio.handleStatusForTest(QStringLiteral("transmit band %1").arg(id),
+            {{QStringLiteral("band_name"), QStringLiteral("20m")},
+             {QStringLiteral("rfpower"), QStringLiteral("37")}});
+    }
+    static void transverter(RadioModel& radio, int id)
+    {
+        FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("xvtr %1").arg(id),
+            {{QStringLiteral("name"), QStringLiteral("2m")},
+             {QStringLiteral("rf_freq"), QStringLiteral("144")},
+             {QStringLiteral("if_freq"), QStringLiteral("28")}});
+    }
+    static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& kvs)
+    { radio.handleStatusForTest(object, kvs); }
+    // A raw radio line through the real parser and the status ingress.
+    static void line(RadioModel& radio, const QString& raw)
+    { radio.deliverLineForTest(CommandParser::parseLine(raw)); }
+    static void disconnected(RadioModel& radio) { radio.onDisconnected(); }
+    static void replaceConnectionGeneration(RadioModel& radio) { ++radio.m_sessionGeneration; }
+    static auto productionSetupSink(RadioModel& radio, const RadioModel::SetupCommandWriter& writer)
+    { return radio.setupCommandSink(writer); }
+    static auto productionTransferSink(RadioModel& radio, const RadioModel::TransferCommandWriter& writer)
+    { return radio.transferCommandSink(writer); }
+    static void transmitting(RadioModel& radio, bool active) { radio.m_radioTransmitting = active; }
+    static void peer(RadioModel& radio, const QHostAddress& address) { radio.m_lastInfo.address = address; }
+    static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
+    static void expiring(RadioModel& radio, bool value) { radio.m_expiringPendingCallbacks = value; }
+    static void retireBackend(RadioModel& radio) { radio.teardownBackend(); }
+    static PanadapterModel* addPan(RadioModel& radio, const QString& id)
+    {
+        PanadapterModel* pan = new PanadapterModel(id, &radio);
+        radio.m_panadapters[id] = pan;
+        return pan;
+    }
+    static SliceModel* addSlice(RadioModel& radio, int id)
+    {
+        SliceModel* slice = new SliceModel(id, &radio);
+        // Keep retired fixtures parent-owned so stale-object guards can be tested.
+        if (SliceModel* old = radio.slice(id)) { radio.m_slices.removeOne(old); }
+        radio.m_slices.append(slice);
+        return slice;
+    }
+    static void pendingDisconnectState(RadioModel& radio)
+    {
+        radio.m_multiFlexContinuation = [] {};
+        radio.m_pendingProfileLoadPanWrites.deferCenter(QStringLiteral("0x40000000"), 14.1);
+    }
+    static bool disconnectStateRetired(const RadioModel& radio)
+    { return !radio.m_multiFlexContinuation && radio.m_pendingProfileLoadPanWrites.isEmpty(); }
+};
+
+// Recording injection, never a radio peer or an opened transport.
+class RadioSetupTestBackend final : public FlexBackend {
+public:
+    bool live{true};
+    bool accept{true};
+    QStringList commands;
+    std::vector<RadioSetupCompletion> replies;
+    std::shared_ptr<bool> retired;
+    bool isConnected() const override { return live; }
+    ~RadioSetupTestBackend() override
+    {
+        if (retired) { *retired = true; }
+    }
+    void replyLast(const RadioSetupReply& reply)
+    {
+        if (replies.empty()) { return; }
+        const RadioSetupCompletion callback = replies.back();
+        callback(reply);
+    }
+    void acceptCalibrationPrelude()
+    {
+        replyLast({RadioSetupReply::Kind::Accepted, 0, {}});
+        replyLast({RadioSetupReply::Kind::Accepted, 0, {}});
+    }
+    RadioSetupTestBackend()
+    {
+        setAdministrationCommandSink([this](const QString& command,
+            const RadioControlCompletion& completion, const RadioControlFence& current,
+            const std::function<void()>& written) {
+            if (!live || !accept || !current || !current()) { return false; }
+            commands.append(command);
+            if (completion) { replies.push_back(completion); }
+            if (written) { written(); }
+            return true;
+        });
+        setModelProvider([] { return QStringLiteral("FLEX-6700"); });
+        setServiceCommandSink([this](const QString& command, const RadioControlFence& current, CommandReply completion) {
+            if (!live || !accept || (current && !current())) { return false; }
+            commands.append(command);
+            if (completion) {
+                replies.push_back([completion](const RadioSetupReply& reply) { completion(reply.code, reply.message); });
+            }
+            return true;
+        });
+        setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& completion) {
+            if (!live || !accept) { return false; }
+            commands.append(command);
+            if (completion) { replies.push_back(completion); }
+            return true;
+        });
+    }
+};
+
+inline RadioSetupTestBackend* installRadioSetupBackend(RadioModel& radio)
+{
+    auto owned = std::make_unique<RadioSetupTestBackend>();
+    RadioSetupTestBackend* backend = owned.get();
+    radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
+    QObject::connect(backend, &IRadioBackend::radioChanged, &radio,
+        [&radio](const RadioDelta& delta) { RadioSetupControlTestAccess::observe(radio, delta); });
+    return backend;
+}
+
+} // namespace AetherSDR

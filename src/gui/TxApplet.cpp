@@ -1,0 +1,1162 @@
+#include "TxApplet.h"
+#include "AtuPreTuneDialog.h"
+#include "ScopedChildWidget.h"
+#include "GuardedSlider.h"
+#include "ComboStyle.h"
+#include "HGauge.h"
+#include "Theme.h"
+#include "TwoToneTuneGate.h"
+#include "TxOutputMetering.h"
+#include "core/TxKeyingMarker.h"
+#include "models/RadioModel.h"
+#include "models/TransmitModel.h"
+#include "models/TunerModel.h"
+
+#include <QAction>
+#include <QPushButton>
+#include <QLabel>
+#include <QMenu>
+#include <QMessageBox>
+#include <QSlider>
+#include <QComboBox>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QSignalBlocker>
+#include <cmath>
+#include <utility>
+#include "core/ThemeManager.h"
+
+namespace AetherSDR {
+
+// MOX idle "this is the transmit button" accent — amber border/text, distinct
+// from the neutral btnStyle of its TUNE/ATU/MEM neighbors (#3663).  Tokenized
+// (color.tx.mox.*) so the accent is editable in the Theme Editor, mirroring the
+// waterfall LIVE chip (#3761).  Shared between construction and the moxChanged
+// return-to-idle branch so the two can't drift; background / hover-background /
+// disabled colors stay literal (structural, shared with the neighbor buttons).
+static const char* const kMoxIdleStyle =
+    "QPushButton { background: #1a3a5a; border: 1px solid {{color.tx.mox.border}}; "
+    "border-radius: 3px; color: {{color.tx.mox.text}}; font-size: 10px; font-weight: bold; "
+    "padding: 2px; }"
+    "QPushButton:hover { background: #204060; border: 1px solid {{color.tx.mox.border.hover}}; "
+    "color: {{color.tx.mox.text.hover}}; }"
+    "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
+    "border: 1px solid #2a3040; }";
+
+
+
+// ── Styled indicator label (small coloured-dot + text) ──────────────────────
+
+static QLabel* makeIndicator(const QString& text)
+{
+    auto* lbl = new QLabel(text);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
+    lbl->setAlignment(Qt::AlignCenter);
+    return lbl;
+}
+
+enum class IndicatorState {
+    Unavailable,
+    Inactive,
+    Active,
+};
+
+static IndicatorState indicatorState(bool available, bool active)
+{
+    if (!available) {
+        return IndicatorState::Unavailable;
+    }
+    return active ? IndicatorState::Active : IndicatorState::Inactive;
+}
+
+static void setIndicatorState(QLabel* lbl, IndicatorState state,
+                              const QColor& color = QColor(0x00, 0xc0, 0x40))
+{
+    lbl->setEnabled(state != IndicatorState::Unavailable);
+    switch (state) {
+    case IndicatorState::Unavailable:
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            lbl,
+            "QLabel { color: {{color.text.disabled}}; font-size: 9px; font-weight: bold; }");
+        break;
+    case IndicatorState::Inactive:
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            lbl,
+            "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
+        break;
+    case IndicatorState::Active:
+        lbl->setStyleSheet(
+            QString("QLabel { color: %1; font-size: 9px; font-weight: bold; }").arg(color.name()));
+        break;
+    }
+}
+
+// ── Compact slider row: "Label:  [slider] value" ────────────────────────────
+
+static QString percentText(int value)
+{
+    return QStringLiteral("%1%").arg(value);
+}
+
+// ── TxApplet ────────────────────────────────────────────────────────────────
+
+namespace {
+// The gauges' own texts, restored when the TX output is metered again.
+const QString kFwdGaugeLabel = QStringLiteral("RF Pwr");
+const QString kFwdGaugeName = QStringLiteral("Forward power gauge");
+const QString kFwdGaugeDescription = QStringLiteral("RF forward power in watts");
+const QString kSwrGaugeLabel = QStringLiteral("SWR");
+const QString kSwrGaugeName = QStringLiteral("SWR gauge");
+const QString kSwrGaugeDescription = QStringLiteral("Standing wave ratio");
+
+// Unavailable state of one gauge (theme-style-guide "Three-state controls"):
+// dimmed, the reason in the bar, the tooltip and accessibleDescription. The
+// gauge keeps drawing what the meter sends.
+void presentGaugeMetering(HGauge* gauge, bool metered, const QString& output,
+                          const QString& label, const QString& name,
+                          const QString& description)
+{
+    if (metered) {
+        gauge->setLabel(label);
+        gauge->setAccessibleName(name);
+        gauge->setAccessibleDescription(description);
+        gauge->setToolTip(QString());
+        gauge->setEnabled(true);
+        return;
+    }
+    const QString reason = txOutputNotMeteredReason(output);
+    gauge->setLabel(txOutputNotMeteredLabel(label, output));
+    gauge->setAccessibleName(QStringLiteral("%1, not measured on %2").arg(name, output));
+    gauge->setAccessibleDescription(reason);
+    gauge->setToolTip(reason);
+    gauge->setEnabled(false);
+}
+} // namespace
+
+TxApplet::TxApplet(QWidget* parent)
+    : QWidget(parent)
+{
+    theme::setContainer(this, QStringLiteral("applet/tx"));
+    // Slider fill at applet/tx scope — the scope override gets applied
+    // via this applet-level stylesheet (Qt QSS cascades to descendants;
+    // resolveFor() picks up applet/tx → applet → root and finds the
+    // {color.red.500} alias).
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this,
+        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; }"
+        "QSlider::sub-page:vertical   { background: {{color.slider.foreground}}; }");
+    hide();
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    buildUI();
+
+}
+
+void TxApplet::buildUI()
+{
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    // Body with margins
+    auto* body = new QWidget;
+    auto* vbox = new QVBoxLayout(body);
+    vbox->setContentsMargins(4, 2, 8, 2);
+    vbox->setSpacing(2);
+
+    // ── Forward Power gauge (0–120 W, red > 100 W) ─────────────────────────
+    m_fwdGauge = new HGauge(0.0f, 120.0f, 100.0f, kFwdGaugeLabel, "W",
+        {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}},
+        this, 80.0f);
+    m_fwdGauge->setAccessibleName(kFwdGaugeName);
+    m_fwdGauge->setAccessibleDescription(kFwdGaugeDescription);
+    // Mouse-over readout: exact watts, so the operator isn't left estimating
+    // between the 40 W tick marks while transmitting. (#3936) Not a reading on
+    // an output the radio cannot meter (#4954).
+    static_cast<HGauge*>(m_fwdGauge)->setHoverValueFormatter([this](float v) {
+        if (!m_txOutputMetered) {
+            return QStringLiteral("Not measured on %1").arg(m_unmeteredTxOutput);
+        }
+        return QStringLiteral("%1 W").arg(QString::number(std::lround(v)));
+    });
+    static_cast<HGauge*>(m_fwdGauge)->setHoverValuePopupEnabled(true);
+    vbox->addWidget(m_fwdGauge);
+
+    // ── SWR gauge (1.0–3.0, red > 2.5) ─────────────────────────────────────
+    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, kSwrGaugeLabel, "",
+        {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
+        this, 2.0f);
+    m_swrGauge->setAccessibleName(kSwrGaugeName);
+    m_swrGauge->setAccessibleDescription(kSwrGaugeDescription);
+    // Mouse-over readout: exact ratio in the conventional N.N:1 form.
+    static_cast<HGauge*>(m_swrGauge)->setHoverValueFormatter([this](float v) {
+        if (!m_txOutputMetered) {
+            return QStringLiteral("Not measured on %1").arg(m_unmeteredTxOutput);
+        }
+        return QStringLiteral("%1:1").arg(QString::number(v, 'f', 2));
+    });
+    static_cast<HGauge*>(m_swrGauge)->setHoverValuePopupEnabled(true);
+    vbox->addWidget(m_swrGauge);
+
+    // ── RF Power slider ─────────────────────────────────────────────────────
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+        auto* label = new QLabel("RF Power:");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+        label->setFixedWidth(62);
+        row->addWidget(label);
+
+        m_rfPowerSlider = new GuardedSlider(Qt::Horizontal);
+        m_rfPowerSlider->setRange(0, 100);
+        m_rfPowerSlider->setDragValueFormatter(percentText);
+        applyPrimarySliderStyle(m_rfPowerSlider);
+        m_rfPowerSlider->setAccessibleName("RF power");
+        m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 percent of maximum");
+        row->addWidget(m_rfPowerSlider, 1);
+
+        m_rfPowerLabel = new QLabel("100%");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rfPowerLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
+        m_rfPowerLabel->setFixedWidth(30);
+        m_rfPowerLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(m_rfPowerLabel);
+        vbox->addLayout(row);
+    }
+
+    // ── Tune Power slider ───────────────────────────────────────────────────
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+        auto* label = new QLabel("Tune Pwr:");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+        label->setFixedWidth(62);
+        row->addWidget(label);
+
+        m_tunePowerSlider = new GuardedSlider(Qt::Horizontal);
+        m_tunePowerSlider->setRange(0, 100);
+        m_tunePowerSlider->setDragValueFormatter(percentText);
+        applyPrimarySliderStyle(m_tunePowerSlider);
+        m_tunePowerSlider->setAccessibleName("Tune power");
+        m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 percent of maximum");
+        row->addWidget(m_tunePowerSlider, 1);
+
+        m_tunePowerLabel = new QLabel("10%");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_tunePowerLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
+        m_tunePowerLabel->setFixedWidth(30);
+        m_tunePowerLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(m_tunePowerLabel);
+        vbox->addLayout(row);
+    }
+
+    // ── Profile dropdown + Success/Byp/Mem indicators (same row) ────────────
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_profileCombo = new GuardedComboBox;
+        AetherSDR::applyComboStyle(m_profileCombo);
+        m_profileCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_profileCombo->setAccessibleName("TX profile");
+        m_profileCombo->setAccessibleDescription("Select transmit profile");
+        row->addWidget(m_profileCombo, 1);  // 1 out of 2 = 50%
+
+        m_successInd = makeIndicator("Success");
+        m_bypInd     = makeIndicator("Byp");
+        m_memInd     = makeIndicator("Mem");
+        auto* indRow = new QHBoxLayout;
+        indRow->setSpacing(0);
+        indRow->addWidget(m_successInd);
+        indRow->addWidget(m_bypInd);
+        indRow->addWidget(m_memInd);
+        row->addLayout(indRow, 1);  // 1 out of 2 = 50%
+        vbox->addLayout(row);
+    }
+
+    // ── TUNE / MOX / ATU / MEM buttons ──────────────────────────────────────
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(2);
+
+        const char* btnStyle =
+            "QPushButton { background: #1a3a5a; border: 1px solid #205070; "
+            "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; "
+            "padding: 2px; }"
+            "QPushButton:hover { background: #204060; }"
+            "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
+            "border: 1px solid #2a3040; }";
+        m_tuneBtn = new QPushButton("TUNE");
+        markTxKeying(m_tuneBtn);   // emits a tune carrier — keys TX (#3646)
+        m_tuneBtn->setStyleSheet(btnStyle);
+        m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_tuneBtn->setFixedHeight(22);
+        m_tuneBtn->setAccessibleName("Tune");
+        m_tuneBtn->setAccessibleDescription("Start or stop tune carrier");
+        // Right-click picks the carrier shape (Mono Tone / Two Tone) for
+        // the next tune cycle.  Transient one-shot — no AppSettings write.
+        m_tuneBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_tuneBtn, &QPushButton::customContextMenuRequested,
+                this, &TxApplet::showTuneContextMenu);
+        row->addWidget(m_tuneBtn);
+
+        m_moxBtn = new QPushButton("MOX");
+        markTxKeying(m_moxBtn);    // manual transmit (PTT) — keys TX (#3646)
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_moxBtn, kMoxIdleStyle);
+        m_moxBtn->setCheckable(true);
+        m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_moxBtn->setFixedHeight(22);
+        m_moxBtn->setAccessibleName("MOX transmit");
+        m_moxBtn->setAccessibleDescription("Toggle manual transmit on or off");
+        row->addWidget(m_moxBtn);
+
+        m_atuBtn = new QPushButton("ATU");
+        markTxKeying(m_atuBtn);    // starts ATU tune — keys TX (#3646)
+        m_atuBtn->setStyleSheet(btnStyle);
+        m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_atuBtn->setFixedHeight(22);
+        m_atuBtn->setAccessibleName("ATU tune");
+        m_atuBtn->setAccessibleDescription("Start automatic antenna tuner");
+        // Right-click on the ATU button exposes the pre-tune sweep and
+        // Clear ATU Memories actions. Matches SmartSDR Windows's hidden
+        // right-click menu on this button. (#2624)
+        m_atuBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_atuBtn, &QPushButton::customContextMenuRequested,
+                this, &TxApplet::showAtuContextMenu);
+        row->addWidget(m_atuBtn);
+
+        m_memBtn = new QPushButton("MEM");
+        m_memBtn->setStyleSheet(btnStyle);
+        m_memBtn->setCheckable(true);
+        m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_memBtn->setFixedHeight(22);
+        m_memBtn->setAccessibleName("ATU memories");
+        m_memBtn->setAccessibleDescription("Toggle ATU memory recall");
+        row->addWidget(m_memBtn);
+
+        vbox->addLayout(row);
+    }
+
+    // ── APD button + Active / Cal / Avail indicators ────────────────────────
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_apdBtn = new QPushButton("APD");
+        m_apdBtn->setCheckable(true);
+        m_apdBtn->setFixedHeight(22);
+        m_apdBtn->setAccessibleName("APD pre-distortion");
+        m_apdBtn->setAccessibleDescription("Toggle adaptive pre-distortion");
+        m_apdBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_apdBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+            "QPushButton:checked { background: #006030; border: 1px solid #008040; color: {{color.text.primary}}; }"
+            "QPushButton:hover { background: {{color.background.1}}; }");
+        row->addWidget(m_apdBtn, 2);  // 40%
+
+        // Inset container for ATU status words (styled like RIT/XIT readout)
+        auto* inset = new QWidget;
+        inset->setFixedHeight(22);
+        inset->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        inset->setObjectName("atuInset");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(inset, "#atuInset { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
+            "#atuInset QLabel { border: none; background: transparent; }");
+        auto* insetLayout = new QHBoxLayout(inset);
+        insetLayout->setContentsMargins(4, 0, 4, 0);
+        insetLayout->setSpacing(2);
+
+        m_activeInd = makeIndicator("Active");
+        m_calInd    = makeIndicator("Cal");
+        m_availInd  = makeIndicator("Avail");
+        // Larger font for status words inside the inset
+        const QString indStyle =
+            "QLabel { color: #405060; font-size: 11px; font-weight: bold; background: transparent; }";
+        m_activeInd->setStyleSheet(indStyle);
+        m_calInd->setStyleSheet(indStyle);
+        m_availInd->setStyleSheet(indStyle);
+
+        insetLayout->addWidget(m_activeInd);
+        insetLayout->addWidget(m_calInd);
+        insetLayout->addWidget(m_availInd);
+
+        row->addWidget(inset, 3);  // 60%
+
+        m_apdRow = new QWidget;
+        m_apdRow->setLayout(row);
+        vbox->addWidget(m_apdRow);
+        // Apply the initial state instead of leaving the row in QWidget's
+        // default-visible state. m_apdConfigurable starts false — no radio has
+        // said otherwise — and until this call neither of updateApdVisibility()'s
+        // two inputs had fired, so a cold launch showed a live-looking APD button
+        // and Active/Cal/Avail indicators with nothing behind them. That also made
+        // cold start disagree with post-disconnect, where resetState() clears
+        // apdConfigurable and the row correctly goes away.
+        updateApdVisibility();
+    }
+
+    outer->addWidget(body);
+
+    // ── Slider → label + command connections ────────────────────────────────
+    connect(m_rfPowerSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_rfPowerLabel->setText(percentText(v));
+        if (!m_updatingFromModel && m_model)
+            m_model->setRfPower(v);
+    });
+    connect(m_rfPowerSlider, &QSlider::sliderReleased,
+            this, &TxApplet::syncFromModel);
+    connect(m_tunePowerSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_tunePowerLabel->setText(percentText(v));
+        if (!m_updatingFromModel && m_model)
+            m_model->setTunePower(v);
+    });
+    connect(m_tunePowerSlider, &QSlider::sliderReleased,
+            this, &TxApplet::syncFromModel);
+
+    // Profile dropdown → load command
+    connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int /*idx*/) {
+        if (!m_updatingFromModel && m_model) {
+            const QString name = m_profileCombo->currentText();
+            if (!name.isEmpty())
+                m_model->loadProfile(name);
+        }
+    });
+
+    // TUNE button — toggle tune
+    connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_model) return;
+        requestTune(!m_model->isTuning(), localTxInput(TxController::Activity::Tune));
+    });
+
+    // MOX button — toggle transmit.  Routes through requestPttOn/Off so
+    // the Quindar tone coordinator (#2262) can run intro/outro tones on
+    // phone modes when enabled.  Falls through to setMox() when Quindar
+    // is disabled or the active TX slice isn't on a phone mode.
+    connect(m_moxBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_updatingFromModel || !m_model) return;
+        requestMox(on, localTxInput(TxController::Activity::Mox));
+    });
+
+    // ATU button — toggle between tune and bypass.
+    //   First click on a fresh slice → start tune cycle
+    //   Second click while tuner holds a Successful/OK match at the SAME
+    //     freq we tuned at → switch to bypass
+    //   Click after any freq change → start a fresh tune cycle even if the
+    //     prior status was Successful/OK
+    // Mirrors SmartSDR's per-frequency toggle. (#1993)
+    connect(m_atuBtn, &QPushButton::clicked, this, [this]() {
+        requestAtu(localTxInput(TxController::Activity::Atu));
+    });
+
+    // MEM requests a change; its checked state follows radio readback. Any
+    // toggle (click or programmatic) asks for the inverse of the last reported
+    // state and is undone while waiting for the status echo (#5545). The
+    // readback sync sets the check under a QSignalBlocker, so it never lands
+    // here.
+    connect(m_memBtn, &QPushButton::toggled, this, [this] {
+        {
+            const QSignalBlocker blocker(m_memBtn);
+            m_memBtn->setChecked(m_model && m_model->memoriesEnabled());
+        }
+        if (!m_model) {
+            return;
+        }
+        m_model->setAtuMemories(!m_model->memoriesEnabled());
+    });
+    configureTxActions();
+}
+
+TxController::Input TxApplet::localTxInput(TxController::Activity activity)
+{
+    if (!m_radioModel) {
+        return {};
+    }
+    if (!m_txController || !m_txController->valid()) {
+        m_txController = m_radioModel->localTxController();
+    }
+    return m_txController->capture(activity);
+}
+
+void TxApplet::requestTune(bool on, const TxController::Input& input)
+{
+    if (!m_model) {
+        return;
+    }
+    if (m_radioModel) {
+        if (!input.belongsTo(m_radioModel)) {
+            return;
+        }
+        if (on) {
+            (void)input.start();
+        } else {
+            input.stop();
+        }
+    } else if (on) {
+        m_model->startTune();
+    } else {
+        m_model->stopTune();
+    }
+}
+
+void TxApplet::requestMox(bool on, const TxController::Input& input)
+{
+    if (!m_model) {
+        return;
+    }
+    if (m_radioModel) {
+        if (!input.belongsTo(m_radioModel)) {
+            return;
+        }
+        if (on) {
+            (void)input.start();
+        } else {
+            input.stop();
+        }
+    } else if (on) {
+        m_model->requestPttOn(TransmitModel::PttSource::Mox);
+    } else {
+        m_model->requestPttOff(TransmitModel::PttSource::Mox);
+    }
+}
+
+void TxApplet::requestAtu(const TxController::Input& input)
+{
+    if (!m_model) {
+        return;
+    }
+    const ATUStatus status = m_model->atuStatus();
+    const bool tuned = status == ATUStatus::Successful || status == ATUStatus::OK;
+    const bool sameFreq = m_atuTunedFreqMhz > 0.0
+        && std::abs(m_model->transmitFreq() - m_atuTunedFreqMhz) < 1e-6;
+    if (m_radioModel) {
+        if (!input.belongsTo(m_radioModel)) {
+            return;
+        }
+        if (tuned && sameFreq) {
+            (void)input.bypassAtu();
+        } else {
+            (void)input.start();
+        }
+    } else if (tuned && sameFreq) {
+        m_model->atuBypass();
+    } else {
+        m_model->atuStart();
+    }
+}
+
+void TxApplet::configureTxActions()
+{
+    registerTxKeyingAction(m_tuneBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (!m_model || !controller->belongsTo(m_radioModel)
+            || (action != QLatin1String("click") && action != QLatin1String("toggle"))) {
+            return {};
+        }
+        const TxController::Input input = controller->capture(TxController::Activity::Tune);
+        const bool on = !m_model->isTuning();
+        return [this, input, on] { requestTune(on, input); };
+    });
+    registerTxKeyingAction(m_moxBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString& value) -> TxKeyingAction::Prepared {
+        if (!m_model || !controller->belongsTo(m_radioModel)
+            || (action != QLatin1String("click") && action != QLatin1String("toggle")
+                && action != QLatin1String("setChecked"))) {
+            return {};
+        }
+        const QString normalized = value.trimmed().toLower();
+        const bool on = action == QLatin1String("setChecked")
+            ? normalized == QLatin1String("true") || normalized == QLatin1String("1")
+                || normalized == QLatin1String("on") || normalized == QLatin1String("yes")
+            : !m_moxBtn->isChecked();
+        const TxController::Input input = controller->capture(TxController::Activity::Mox);
+        return [this, input, on] { requestMox(on, input); };
+    });
+    registerTxKeyingAction(m_atuBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (!m_model || !controller->belongsTo(m_radioModel)
+            || (action != QLatin1String("click") && action != QLatin1String("toggle"))) {
+            return {};
+        }
+        const TxController::Input input = controller->capture(TxController::Activity::Atu);
+        return [this, input] { requestAtu(input); };
+    });
+}
+
+void TxApplet::setTransmitModel(TransmitModel* model)
+{
+    if (m_model == model) return;
+    m_model = model;
+    if (!m_model) return;
+    m_lastAtuStatus = ATUStatus::None;
+    m_atuTunedFreqMhz = -1.0;
+
+    // Transmit state changes → update sliders, tune button
+    connect(m_model, &TransmitModel::stateChanged, this, &TxApplet::syncFromModel);
+
+    const auto updateTuneAvailability = [this]() {
+        const bool available = m_model->tuneAvailable() || m_model->isTuning();
+        m_tuneBtn->setEnabled(available);
+        m_tuneBtn->setToolTip(available ? tr("Start or stop tune carrier")
+            : tr("Tune carrier is unavailable in this mode through the current radio backend"));
+    };
+    connect(m_model, &TransmitModel::tuneAvailabilityChanged, this, updateTuneAvailability);
+    connect(m_model, &TransmitModel::tuneChanged, this, updateTuneAvailability);
+    updateTuneAvailability();
+
+    // Tune state → red button
+    connect(m_model, &TransmitModel::tuneChanged, this, [this](bool tuning) {
+        if (tuning) {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
+                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; "
+                "padding: 2px; }");
+            m_tuneBtn->setText("TUNING...");
+        } else {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; "
+                "padding: 2px; }"
+                "QPushButton:hover { background: {{color.background.1}}; }");
+            m_tuneBtn->setText("TUNE");
+        }
+    });
+
+    // MOX / transmit state → red button
+    connect(m_model, &TransmitModel::moxChanged, this, [this](bool tx) {
+        m_updatingFromModel = true;
+        m_moxBtn->setChecked(tx);
+        // Both branches go through applyStyleSheet so the tracked template
+        // matches the current visual state — otherwise a Theme Editor change
+        // mid-transmit would re-resolve the stale idle template over the red.
+        // Active red stays literal (byte-identical to the prior appearance).
+        if (tx) {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_moxBtn,
+                "QPushButton { background: #cc2222; border: 1px solid #ff4444; "
+                "border-radius: 3px; color: #ffffff; font-size: 10px; font-weight: bold; "
+                "padding: 2px; }");
+        } else {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_moxBtn, kMoxIdleStyle);
+        }
+        m_updatingFromModel = false;
+    });
+
+    // ATU state changes → indicators
+    connect(m_model, &TransmitModel::atuStateChanged, this, &TxApplet::syncAtuState);
+
+    // APD button + indicators
+    connect(m_apdBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel && m_model)
+            m_model->setApdEnabled(on);
+    });
+    connect(m_model, &TransmitModel::apdStateChanged, this, [this] {
+        m_updatingFromModel = true;
+        m_apdBtn->setChecked(m_model->apdEnabled());
+        m_updatingFromModel = false;
+        syncAtuState();  // resetState also clears ATU state through this signal
+    });
+
+    // Profile list changes → populate combo
+    connect(m_model, &TransmitModel::profileListChanged, this, [this]() {
+        m_updatingFromModel = true;
+        const QSignalBlocker blocker(m_profileCombo);
+        m_profileCombo->clear();
+        m_profileCombo->addItems(m_model->profileList());
+        // Select current profile if known
+        if (!m_model->activeProfile().isEmpty()) {
+            int idx = m_profileCombo->findText(m_model->activeProfile());
+            if (idx >= 0) m_profileCombo->setCurrentIndex(idx);
+        }
+        m_updatingFromModel = false;
+    });
+
+    // Whether this radio has an ATU at all. A Hermes-Lite 2 does not, and a
+    // live-looking ATU button on a radio with no tuner is worse than a missing
+    // one: pressing it KEYS THE TRANSMITTER (markTxKeying above) to run a tune
+    // cycle that nothing will answer.
+    connect(m_model, &TransmitModel::hasTunerChanged, this, [this](bool present) {
+        m_radioHasTuner = present;
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
+    m_radioHasTuner = m_model->hasTuner();
+    connect(m_model, &TransmitModel::hasTunerMemoriesChanged, this, [this](bool present) {
+        m_radioHasTunerMemories = present;
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
+    m_radioHasTunerMemories = m_model->hasTunerMemories();
+    connect(m_model, &TransmitModel::atuAvailabilityChanged, this, [this] {
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
+
+    syncFromModel();
+    syncAtuState();
+    updateAtuAvailability();
+}
+
+void TxApplet::updateAtuAvailability()
+{
+    if (!m_atuBtn || !m_memBtn) {
+        return;
+    }
+    const bool pathAvailable = !m_model || m_model->atuAvailable();
+    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate && pathAvailable;
+    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate && pathAvailable;
+    m_atuBtn->setEnabled(atuEnabled);
+    m_memBtn->setEnabled(memoriesEnabled);
+    // The ATU context menu contains only memory operations. Keep the shared
+    // ATU button visible, but do not expose Flex-only actions on other radios.
+    m_atuBtn->setContextMenuPolicy(m_radioHasTunerMemories
+                                       ? Qt::CustomContextMenu
+                                       : Qt::NoContextMenu);
+
+    // The radio-has-no-tuner reason is checked FIRST because it is the more
+    // fundamental one: with no ATU fitted, what the TGXL is doing is beside the
+    // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
+    // looking at the wrong box.
+    QString tip;
+    if (!m_radioHasTuner) {
+        tip = tr("Antenna tuner controls are unavailable for this radio");
+    } else if (m_tgxlOperate) {
+        tip = tr("Disabled — TGXL is in OPERATE mode");
+    } else if (!pathAvailable) {
+        tip = tr("Disabled — the internal ATU is not in the transverter TX path");
+    }
+    m_atuBtn->setToolTip(tip);
+    m_atuBtn->setAccessibleDescription(tip);
+    if (!m_radioHasTunerMemories) {
+        m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else {
+        m_memBtn->setToolTip(tip);
+    }
+    m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
+}
+
+void TxApplet::setTunerModel(TunerModel* tuner)
+{
+    if (!tuner) return;
+
+    auto updateButtons = [this, tuner]() {
+        // When TGXL is in Operate, disable only the internal ATU controls.
+        // TUNE stays enabled — it sends a carrier through the TGXL for
+        // power/SWR checks, matching SmartSDR behavior (#443).
+        m_tgxlOperate = tuner->isPresent() && tuner->isOperate() && !tuner->isBypass();
+        updateAtuAvailability();
+    };
+
+    connect(tuner, &TunerModel::stateChanged, this, updateButtons);
+    connect(tuner, &TunerModel::presenceChanged, this, updateButtons);
+    updateButtons();
+}
+
+void TxApplet::syncFromModel()
+{
+    if (!m_model) return;
+
+    m_updatingFromModel = true;
+
+    if (!m_rfPowerSlider->isSliderDown()
+        && m_rfPowerSlider->value() != m_model->rfPower()) {
+        m_rfPowerSlider->setValue(m_model->rfPower());
+    }
+    m_rfPowerLabel->setText(percentText(m_model->rfPower()));
+
+    if (!m_tunePowerSlider->isSliderDown()
+        && m_tunePowerSlider->value() != m_model->tunePower()) {
+        m_tunePowerSlider->setValue(m_model->tunePower());
+    }
+    m_tunePowerLabel->setText(percentText(m_model->tunePower()));
+
+    // Active profile — update combo selection
+    if (!m_model->activeProfile().isEmpty()) {
+        int idx = m_profileCombo->findText(m_model->activeProfile());
+        if (idx >= 0 && m_profileCombo->currentIndex() != idx) {
+            const QSignalBlocker blocker(m_profileCombo);
+            m_profileCombo->setCurrentIndex(idx);
+        }
+    }
+
+    m_updatingFromModel = false;
+}
+
+void TxApplet::syncAtuState()
+{
+    if (!m_model) {
+        return;
+    }
+    const ATUStatus status = m_model->atuStatus();
+    // Only a new result can pin a match; memory/APD changes are not a tune.
+    if (status != m_lastAtuStatus) {
+        if (status == ATUStatus::Successful || status == ATUStatus::OK) {
+            m_atuTunedFreqMhz = m_model->transmitFreq();
+        } else if (status == ATUStatus::Bypass || status == ATUStatus::ManualBypass
+                   || status == ATUStatus::None) {
+            m_atuTunedFreqMhz = -1.0;
+        }
+        m_lastAtuStatus = status;
+    }
+    syncAtuIndicators();
+}
+
+void TxApplet::syncAtuIndicators()
+{
+    if (!m_model) {
+        return;
+    }
+    const ATUStatus status = m_model->atuStatus();
+
+    const bool pathAvailable = m_model->atuAvailable();
+    // Success — green when tune was successful
+    setIndicatorState(m_successInd,
+        indicatorState(m_radioHasTuner && pathAvailable,
+                       status == ATUStatus::Successful || status == ATUStatus::OK));
+
+    // Byp — orange when in bypass
+    setIndicatorState(m_bypInd,
+        indicatorState(m_radioHasTuner && pathAvailable,
+                       status == ATUStatus::Bypass
+                           || status == ATUStatus::ManualBypass),
+        QColor(0xd0, 0x90, 0x00));
+
+    // Mem — green when using memory
+    setIndicatorState(m_memInd,
+        indicatorState(m_radioHasTunerMemories && pathAvailable, m_model->usingMemory()));
+
+    // APD indicators — mutually exclusive states, all off when APD disabled
+    // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
+    const bool apdOn  = m_model->apdEnabled();
+    const bool eqActv = m_model->apdEqualizerActive();
+    const bool config = m_model->apdConfigurable();
+    setIndicatorState(m_activeInd, indicatorState(true, apdOn && eqActv));
+    setIndicatorState(m_availInd,
+        indicatorState(true, apdOn && !eqActv && config));
+    setIndicatorState(m_calInd,
+        indicatorState(true, apdOn && !eqActv && !config));
+
+    // ATU / MEM buttons — active styling follows radio readback only.
+    {
+        m_updatingFromModel = true;
+        const QSignalBlocker blocker(m_memBtn);
+        m_memBtn->setChecked(m_model->memoriesEnabled());
+        m_updatingFromModel = false;
+    }
+}
+
+void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
+{
+    if (!m_transmitting) {
+        static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
+        static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
+        return;
+    }
+    HGauge* powerGauge = static_cast<HGauge*>(m_fwdGauge);
+    if (m_forwardPowerRequiresSmoothing) {
+        powerGauge->setValue(fwdPower);
+    } else {
+        powerGauge->setValueImmediate(fwdPower);
+    }
+    // Absent SWR parks the gauge at its 1.0 rest position; a raw 0.0 would
+    // read as an off-scale value, and holding the last ratio is exactly the
+    // stale display #4533 removed.
+    static_cast<HGauge*>(m_swrGauge)->setValue(swrValid ? swr : 1.0f);
+}
+
+void TxApplet::updatePeakPower(float fwdPowerInstant)
+{
+    if (!m_transmitting) {
+        return;
+    }
+    // This is a raw FWDPWR sample, not a separately measured peak. Feed the
+    // gauge's sliding window without changing the already-smoothed bar; the
+    // window derives the readable PEP marker from the instantaneous stream.
+    static_cast<HGauge*>(m_fwdGauge)->recordWindowPeakSample(fwdPowerInstant);
+}
+
+void TxApplet::setTransmitting(bool tx)
+{
+    m_transmitting = tx;
+    if (!tx) {
+        // Clear BOTH the live readings and peak-hold immediately. Merely
+        // stopping meter polling leaves the last power sample painted forever,
+        // and an already-in-flight reply may still arrive after this edge.
+        static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
+        // clearPeak() drops the gauge's sliding window as well, so nothing
+        // survives the unkey edge to be glided back into view.
+        static_cast<HGauge*>(m_fwdGauge)->clearPeak();
+        static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
+    }
+}
+
+void TxApplet::setRadioModel(RadioModel* radio)
+{
+    if (m_radioModel == radio) {
+        return;
+    }
+    if (m_capabilitiesConnection) {
+        disconnect(m_capabilitiesConnection);
+        m_capabilitiesConnection = {};
+    }
+    for (const QMetaObject::Connection& c : std::as_const(m_txOutputConnections)) {
+        disconnect(c);
+    }
+    m_txOutputConnections.clear();
+    m_txController.reset();
+    m_radioModel = radio;
+    m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
+        || radio->backendCapabilities().forwardPowerRequiresSmoothing;
+    m_forwardPowerScaleFollowsBandRating = radio && radio->isConnected()
+        && !radio->backendCapabilities().txPowerBands.isEmpty();
+    if (radio) {
+        m_capabilitiesConnection = connect(
+            radio, &RadioModel::capabilitiesChanged, this,
+            [this](bool connected, const RadioCapabilities& caps) {
+                m_forwardPowerRequiresSmoothing = !connected
+                    || caps.forwardPowerRequiresSmoothing;
+                const bool followsBandRating = connected
+                    && !caps.txPowerBands.isEmpty();
+                if (followsBandRating != m_forwardPowerScaleFollowsBandRating) {
+                    m_forwardPowerScaleFollowsBandRating = followsBandRating;
+                    if (m_havePowerScale) {
+                        const int maxWatts = m_lastMaxWatts;
+                        const bool hasAmplifier = m_lastHasAmplifier;
+                        m_havePowerScale = false;
+                        setPowerScale(maxWatts, hasAmplifier);
+                    }
+                }
+                refreshTxOutputMetering(connected, caps);
+            });
+        m_txOutputConnections << connect(radio, &RadioModel::sliceAdded, this,
+            [this](SliceModel* slice) {
+                watchSliceTxOutput(slice);
+                refreshTxOutputMeteringFromModel();
+            });
+        m_txOutputConnections << connect(radio, &RadioModel::sliceRemoved, this,
+            [this](int) { refreshTxOutputMeteringFromModel(); });
+        for (SliceModel* slice : radio->slices()) {
+            watchSliceTxOutput(slice);
+        }
+    }
+    refreshTxOutputMeteringFromModel();
+}
+
+void TxApplet::watchSliceTxOutput(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    m_txOutputConnections << connect(slice, &SliceModel::txSliceChanged, this,
+        [this](bool) { refreshTxOutputMeteringFromModel(); });
+    m_txOutputConnections << connect(slice, &SliceModel::txAntennaChanged, this,
+        [this](const QString&) { refreshTxOutputMeteringFromModel(); });
+}
+
+void TxApplet::refreshTxOutputMeteringFromModel()
+{
+    if (!m_radioModel) {
+        refreshTxOutputMetering(false, RadioCapabilities{});
+        return;
+    }
+    refreshTxOutputMetering(m_radioModel->isConnected(),
+                            m_radioModel->backendCapabilities());
+}
+
+void TxApplet::refreshTxOutputMetering(bool connected, const RadioCapabilities& caps)
+{
+    const SliceModel* tx = m_radioModel ? m_radioModel->txSlice() : nullptr;
+    const QString output = tx ? tx->txAntenna() : QString();
+    const bool metered = txOutputIsMetered(connected, caps, output);
+    if (metered == m_txOutputMetered && (metered || output == m_unmeteredTxOutput)) {
+        return;
+    }
+    m_txOutputMetered = metered;
+    m_unmeteredTxOutput = metered ? QString() : output;
+    presentGaugeMetering(static_cast<HGauge*>(m_fwdGauge), metered, output,
+                         kFwdGaugeLabel, kFwdGaugeName, kFwdGaugeDescription);
+    presentGaugeMetering(static_cast<HGauge*>(m_swrGauge), metered, output,
+                         kSwrGaugeLabel, kSwrGaugeName, kSwrGaugeDescription);
+}
+
+void TxApplet::setBandPlanManager(BandPlanManager* bandPlan)
+{
+    m_bandPlanMgr = bandPlan;
+}
+
+void TxApplet::buildAtuContextMenu(QMenu& menu)
+{
+    // Qt has suppressed per-action tooltips since 5.1 unless the menu opts in,
+    // so the "why is this disabled" text below never reached the operator: a
+    // correctly-greyed Pre-tune item read as a dead control, because a disabled
+    // QAction also does not highlight on hover. (#5510)
+    menu.setToolTipsVisible(true);
+
+    auto* preTune = menu.addAction(QString::fromUtf8("Pre-tune bands\xE2\x80\xA6"));
+    const bool memOn = m_model && m_model->memoriesEnabled();
+    const bool pathAvailable = !m_model || m_model->atuAvailable();
+    preTune->setEnabled(m_radioHasTunerMemories && pathAvailable && memOn);
+    if (!m_radioHasTunerMemories) {
+        preTune->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else if (!pathAvailable) {
+        preTune->setToolTip(tr("Disabled — the internal ATU is not in the transverter TX path"));
+    } else if (!memOn) {
+        preTune->setToolTip(tr("Enable MEM before running the pre-tune sweep"));
+    }
+    preTune->setStatusTip(preTune->toolTip());
+    connect(preTune, &QAction::triggered, this, &TxApplet::openPreTuneDialog);
+
+    auto* clearMem = menu.addAction(QString::fromUtf8("Clear ATU memories\xE2\x80\xA6"));
+    clearMem->setEnabled(m_radioHasTunerMemories && pathAvailable);
+    if (!m_radioHasTunerMemories) {
+        clearMem->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else if (!pathAvailable) {
+        clearMem->setToolTip(tr("Disabled — the internal ATU is not in the transverter TX path"));
+    }
+    clearMem->setStatusTip(clearMem->toolTip());
+    connect(clearMem, &QAction::triggered,
+            this, &TxApplet::confirmAndClearAtuMemories);
+}
+
+void TxApplet::showAtuContextMenu(const QPoint& pos)
+{
+    QMenu menu(m_atuBtn);
+    buildAtuContextMenu(menu);
+    menu.exec(m_atuBtn->mapToGlobal(pos));
+}
+
+void TxApplet::buildTuneContextMenu(QMenu& menu)
+{
+    if (!m_model) return;
+
+    // Same opt-in as the ATU menu: without it these entries' tooltips, which
+    // say what the next Tune press will actually transmit, never render.
+    menu.setToolTipsVisible(true);
+
+    // Reflect the radio's current tune_mode in the check marks so the user
+    // can see what the next Tune press will do.  Selecting either entry is
+    // a one-shot — the radio's tune_mode lives in volatile state and reverts
+    // to single_tone on its own across power cycles; AetherSDR does not
+    // persist the choice in AppSettings.
+    const QString current = m_model->tuneMode();
+
+    // A radio with no two-tone generator keys a single carrier for "Two Tone":
+    // dim the entry with its reason (accessibleDescription is not available on
+    // a QAction, so statusTip carries it, per the three-state doctrine).
+    const bool twoToneOk = !m_radioModel
+        || twoToneTuneAvailable(m_radioModel->isConnected(),
+                                m_radioModel->backendCapabilities());
+
+    auto* mono = menu.addAction("Mono Tone");
+    mono->setCheckable(true);
+    mono->setChecked(!(twoToneOk && current == QStringLiteral("two_tone")));
+    mono->setToolTip("Next Tune press transmits a single carrier (normal Tune).");
+    connect(mono, &QAction::triggered, this, [this]() {
+        if (m_model)
+            m_model->setTuneMode(QStringLiteral("single_tone"));
+    });
+
+    auto* two = menu.addAction("Two Tone");
+    two->setCheckable(true);
+    two->setChecked(twoToneOk && current == QStringLiteral("two_tone"));
+    two->setToolTip("Next Tune press transmits a two-tone test signal\n"
+                    "(for IMD / linearity measurement).");
+    if (!twoToneOk) {
+        two->setEnabled(false);
+        two->setToolTip(twoToneTuneUnavailableReason());
+        two->setStatusTip(twoToneTuneUnavailableReason());
+    }
+    connect(two, &QAction::triggered, this, [this]() {
+        if (m_model)
+            m_model->setTuneMode(QStringLiteral("two_tone"));
+    });
+}
+
+void TxApplet::showTuneContextMenu(const QPoint& pos)
+{
+    if (!m_model) return;
+
+    QMenu menu(m_tuneBtn);
+    buildTuneContextMenu(menu);
+    menu.exec(m_tuneBtn->mapToGlobal(pos));
+}
+
+void TxApplet::openPreTuneDialog()
+{
+    if (!m_radioModel || !m_bandPlanMgr || !m_model) return;
+    if (!m_model->memoriesEnabled()) return;
+
+    if (!m_preTuneDialog) {
+        m_preTuneDialog = new AtuPreTuneDialog(m_radioModel, m_bandPlanMgr,
+                                               this->window());
+        connect(m_preTuneDialog, &QObject::destroyed,
+                this, [this]() { m_preTuneDialog = nullptr; });
+        m_preTuneDialog->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    m_preTuneDialog->show();
+    m_preTuneDialog->raise();
+    m_preTuneDialog->activateWindow();
+}
+
+void TxApplet::confirmAndClearAtuMemories()
+{
+    if (!m_model) return;
+    const QPointer<TxApplet> self(this);
+    const QPointer<TransmitModel> model(m_model);
+    ScopedChildWidget<QMessageBox> boxOwner(this->window());
+    QMessageBox& box = *boxOwner.get();
+    box.setWindowTitle("Clear ATU memories");
+    box.setIcon(QMessageBox::Warning);
+    box.setText("Clear the radio's entire ATU memory database?");
+    box.setInformativeText(
+        "This removes every stored ATU tune for every band on every antenna. "
+        "The next transmission on any untuned frequency will require a live "
+        "tune cycle.\n\n"
+        "FlexLib has no per-band clear; this is an all-or-nothing operation.");
+    auto* clearBtn = box.addButton("Clear all bands", QMessageBox::DestructiveRole);
+    box.addButton("Cancel", QMessageBox::RejectRole);
+    box.exec();
+    if (self && boxOwner && model && self->m_model == model.data()
+        && box.clickedButton() == clearBtn) {
+        model->atuClearMemories();
+    }
+}
+
+void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
+{
+    if (m_havePowerScale && maxWatts == m_lastMaxWatts && hasAmplifier == m_lastHasAmplifier) {
+        return;
+    }
+    m_havePowerScale = true;
+    m_lastMaxWatts = maxWatts;
+    m_lastHasAmplifier = hasAmplifier;
+
+    // TX applet always shows exciter (barefoot) power regardless of
+    // hasAmplifier — cached above only so a redundant call can be detected.
+    // Amplified output power is shown in the AMP applet.
+    auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+    float gaugeFullScaleW = 0.0f;
+    if (maxWatts > 100) {
+        // Aurora (500 W): 0–600 W, red > 500 W
+        gauge->setRange(0.0f, 600.0f, 500.0f,
+            {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
+             {400, "400"}, {500, "500"}, {600, "600"}});
+        gaugeFullScaleW = 600.0f;
+    } else if (!m_forwardPowerScaleFollowsBandRating
+               || maxWatts <= 0 || maxWatts == 100) {
+        // Preserve the established 100 W barefoot face exactly. In particular,
+        // this is the ordinary FlexRadio path. A lower-power face is an
+        // explicit per-band capability, not something inferred from one number.
+        gauge->setRange(0.0f, 120.0f, 100.0f,
+            {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
+        gaugeFullScaleW = 120.0f;
+    } else {
+        // A capability may declare a lower active-band PA ceiling (the
+        // IC-9700 publishes 75 W on 430 MHz and 10 W on 1240 MHz). Honour the
+        // supplied ceiling instead of silently replacing every <=100 W radio
+        // with the 100 W face. Keep the established 20% headroom and the same
+        // 0/40/80/100/120-percent tick rhythm as the barefoot scale.
+        const float ratedW = static_cast<float>(maxWatts);
+        gaugeFullScaleW = ratedW * 1.2f;
+        const auto tick = [](float watts) {
+            return HGauge::Tick{watts, QString::number(watts, 'g', 3)};
+        };
+        gauge->setRange(0.0f, gaugeFullScaleW, ratedW,
+            {tick(0.0f), tick(ratedW * 0.4f), tick(ratedW * 0.8f),
+             tick(ratedW), tick(gaugeFullScaleW)});
+    }
+}
+
+} // namespace AetherSDR

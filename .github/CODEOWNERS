@@ -1,0 +1,336 @@
+# AetherSDR CODEOWNERS
+#
+# Three tiers, last-matching-pattern wins. Numbered by exclusivity, not by
+# file position — Tier 1 is the smallest, most-exclusive owner set; Tier 3
+# is the broadest. The file is laid out broad → specific so the more
+# restrictive tiers override the broader defaults via CODEOWNERS'
+# last-match-wins semantics:
+#
+#   Tier 3 (source code, broad default)   — top of file (the `*` line)
+#   Tier 2 (project infrastructure)       — middle (specific paths)
+#   Tier 3 (docs/, resources/, tests/)    — just below the *.md glob
+#   Tier 1 (governance, security)         — bottom (most specific paths)
+#
+# The one place that layout is not strictly broad → specific is the
+# reclaimed-directory block: docs/, resources/ and tests/ are Tier 3, but all
+# three lines have to sit BELOW Tier 2's `*.md` glob rather than up with the
+# `*` default. See the Tier 3 note below for why.
+#
+# MATCHING SEMANTICS, since three comments below depend on them: CODEOWNERS
+# uses gitignore-style patterns. A pattern with no slash (`*.md`,
+# `CMakeLists.txt`) or with only a TRAILING slash (`docs/`, `tests/`) matches
+# at ANY depth. Only a LEADING slash anchors to the repository root — so
+# `docs/` also claims `third_party/crdv/docs/`, and `/docs/` would not. The
+# patterns here are deliberately left unanchored; see the Tier 3 note.
+#
+# Tier 1 — @aethersdr/maintainers (currently: @ten9876).
+#         The RULES OF THE PROJECT and the paths that can compromise a
+#         signed release — nothing else. Governance (CONSTITUTION — both
+#         the canonical .specify copy and the root mirror — GOVERNANCE,
+#         CONTRIBUTING, CODE_OF_CONDUCT, LICENSE) and security controls
+#         (SECURITY*, signing keys, CODEOWNERS itself, CodeQL config,
+#         and the security-sensitive workflows: those that hold release
+#         secrets, feed bytes into a signed artifact, or form part of
+#         the scanner's trust chain).
+#         Deliberately narrow: a path belongs here only if a wrong
+#         change to it alters who decides things or what gets signed.
+# Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat,
+#         @rfoust, @NF0T).
+#         Project infrastructure: CI/CD configuration — the ROUTINE
+#         workflow definitions (.github/workflows/ except the sensitive
+#         ones carved to Tier 1), dependabot, docker, issue templates —
+#         plus the *.md catchall for markdown that is NOT in one of the
+#         directories reclaimed to Tier 3 below (README/CHANGELOG/
+#         SUPPORT/ROADMAP and the AI-instruction files fall through
+#         here), build configuration (CMakeLists.txt), and
+#         legal/compliance tracking (THIRD_PARTY_LICENSES).
+#         NOT tests/ — that is source code and sits at Tier 3.
+#         ALSO the AI-instruction files (AGENTS.md, CLAUDE.md,
+#         GEMINI.md, .github/copilot-instructions.md, .claude/commands/).
+#         Those are operational documentation — architecture, build
+#         steps, style guide, protocol notes — not policy. The policy
+#         they must not contradict is CONSTITUTION.md / GOVERNANCE.md,
+#         which stay at Tier 1 and outrank them; a conflict is a bug in
+#         the instruction file, not a governance change. Keeping them
+#         maintainer-gated bottlenecked ~173 commits a year on a
+#         single-member team for no governance gain.
+#         AND the two release skills (.claude/skills/release-prep/,
+#         .claude/skills/tag-release/), claimed whole. Those arrive from
+#         the other direction — up from Tier 3, where their scripts fell
+#         through `*` — for the reason given at their lines below.
+#         Narrower owner set than Tier 3 because infrastructure changes
+#         need deeper repo context than routine source review.
+# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T,
+#         @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton, @w5jwp).
+#         AetherSDR source code and anything else not enumerated
+#         above (src/ — including the whole of MainWindow —
+#         third_party/, hal-plugin/, resources/, packaging/,
+#         scripts/), PLUS three directories claimed in full, markdown
+#         included: docs/, resources/, and tests/. Broadest collaborator
+#         roster because routine source review benefits from more eyes —
+#         and so does routine review of the tests and documentation that
+#         travel with that source.
+#         CAUTION: *.md has no slash, so it matches at ANY depth. That
+#         is why the docs/, resources/ and tests/ lines are placed BELOW
+#         Tier 2's *.md glob instead of up here with the `*` default: put
+#         any of the three above it and last-match-wins pulls every
+#         markdown file under it (resources/help/*.md, docs/PR-WORKFLOW.md,
+#         tests/README.md, …) straight back to Tier 2, silently, while the
+#         directory around it stays Tier 3. Markdown OUTSIDE all three
+#         still matches *.md and is still Tier 2 — README.md,
+#         CHANGELOG.md, ROADMAP.md, AGENTS.md.
+#         Those three lines are themselves unanchored (trailing slash
+#         only), so each matches its directory name at any depth: docs/
+#         also claims third_party/crdv/docs/, tests/ also claims
+#         third_party/crdv/tests/. That is intended — a vendored tree's
+#         own docs and tests belong with the vendored code, which is
+#         already Tier 3 via `*`. Anchoring them (/docs/) would drop that
+#         markdown back onto *.md, i.e. Tier 2, recreating the split this
+#         block exists to close.
+#
+# Team rosters are managed in the GitHub org settings:
+#   https://github.com/orgs/aethersdr/teams
+# Adding or removing a code owner is a single team-membership change
+# rather than an edit to this file. The roster lists above are
+# documentation only — the live source of truth is the org team.
+#
+# All approvals are human-only. @AetherClaude (the project's machine
+# user) is intentionally NOT a member of any team — bot-generated PRs
+# still need a human reviewer regardless of which paths they touch.
+#
+# CODEOWNERS has no permission hierarchy — each path matches exactly one
+# line (last wins) and that line's owners completely replace any earlier
+# match. The numbering above is documentary; the operative semantics
+# come from the file's pattern order plus last-match-wins.
+#
+# Self-approval is hard-blocked by GitHub regardless of CODEOWNERS
+# membership, so a contributor cannot approve their own PR even on
+# paths they own.
+
+# ── Tier 3: source code, broad default — catches anything not enumerated ───
+*                            @aethersdr/reviewers
+
+# ── Tier 2: project infrastructure — narrower owner set than Tier 3 ────────
+# CI/CD configuration (workflows + tooling), stray markdown, build config.
+# (The CodeQL config stays Tier 1 under Security below — a security control.)
+
+# Markdown that is not in one of the directories reclaimed to Tier 3 below.
+*.md                         @aethersdr/infrastructure
+
+# ── Tier 3: whole directories — reclaimed from the *.md glob ──────────────
+# Each of these directories goes to the broad reviewer roster in full,
+# markdown included. ORDER IS LOAD-BEARING: all three must stay BELOW the
+# *.md line above. *.md has no slash, so it matches at any depth; move any
+# of them up and every .md under it silently reverts to Tier 2 while the
+# directory around it stays Tier 3.
+#
+# docs/ and resources/ — documentation. A guide under docs/ or a help topic
+# under resources/help/ is best reviewed by the people who review the code
+# it describes, and that is the broader roster. resources/ already landed on
+# @aethersdr/reviewers via the `*` default for everything that is not
+# markdown, so its line moves exactly the 7 markdown files under it: the 6
+# help topics in resources/help/ plus resources/meterfaces/README.md.
+#
+# tests/ — source code, not infrastructure: ~90k lines of C++ across 305
+# test TUs, against 3 files of actual harness glue. It sat at Tier 2 from
+# the original CODEOWNERS (#2029), where Tier 2 meant "mechanical/safe
+# paths, the bot may also approve" — a LOW-RISK, widen-approval framing.
+# #3053 rebuilt the tiers and Tier 2 came to mean "narrower roster, because
+# infrastructure needs deeper repo context than routine source review",
+# which is close to the opposite; tests/ was carried along rather than
+# re-argued. A unit test for the HL2 decoder does not need deeper context
+# than the decoder — it needs context on that subsystem, which is what the
+# Tier 3 roster has. 182 of the last 300 commits touched src/ and tests/
+# together, so the old split cut through the middle of most code PRs.
+# Nobody loses authority: @aethersdr/infrastructure is a strict subset of
+# @aethersdr/reviewers, so this only ADDS eligible approvers.
+#
+# docs/RELEASE-SIGNING-KEY.pub.asc is carved back to Tier 1 further below —
+# it lives under docs/ but it is a signing key, not documentation.
+docs/                        @aethersdr/reviewers
+resources/                   @aethersdr/reviewers
+tests/                       @aethersdr/reviewers
+
+# AI-instruction files. AGENTS.md / CLAUDE.md / GEMINI.md /
+# .github/copilot-instructions.md all land here via the *.md glob above —
+# they are listed in the Tier 2 header comment rather than repeated as
+# patterns. .claude/commands/ DOES need its own line: without it only the
+# *.md files inside it match Tier 2, and any future non-markdown file there
+# would fall through to the `*` line — i.e. Tier 3, which is BROADER than
+# where it started. Keep this line even if the directory only holds .md today.
+.claude/commands/            @aethersdr/infrastructure
+
+# AGENTS.md's path-scoped sub-docs are part of the same agent guide, so they
+# take its tier. Without this line the `docs/` rule above would route them to
+# Tier 3.
+docs/agents/                 @aethersdr/infrastructure
+
+# Release skills. /release-prep edits the six release files (all of them
+# *.md or CMakeLists.txt — Tier 2) and lands the prep PR; /tag-release tags
+# the merged commit, publishes the release, watches the signing and Store
+# workflows and verifies the asset set. A wrong step in either changes what
+# ships under the project's name. Each directory is claimed WHOLE, scripts
+# and agent stanza included, so the roster matches the files the skills act
+# on instead of the SKILL.md landing at Tier 2 via *.md while its scripts
+# and agents/openai.yaml fall through to `*`. NOTE the direction: that
+# fall-through is Tier 3, so this NARROWS the roster on those non-markdown
+# files from the reviewer team to infrastructure — the opposite of the
+# tests/ move above, and intended.
+#
+# Tier 2, not Tier 1, even though the risk argument reads like Tier 1's
+# criterion: a skill is instructions an operator runs interactively and
+# supervises through its decision gate, not a control that signs or
+# publishes on its own. Everything that actually does — the signing key,
+# sign-release.yml, the artifact workflows — stays Tier 1 below, and both
+# skills are barred by their own rules from pushing to main, editing
+# .github/workflows/, or touching the Store. If a skill ever gains
+# credentials or an unattended path to a release, it belongs back at Tier 1.
+# The other skills under .claude/skills/ (fb, papercuts, pr-review, pr-land)
+# are deliberately NOT here: they open PRs, they do not publish anything.
+.claude/skills/release-prep/ @aethersdr/infrastructure
+.claude/skills/tag-release/  @aethersdr/infrastructure
+
+# GitHub-specific tooling
+# Routine CI workflow definitions live at Tier 2 to unblock day-to-day CI
+# iteration. NOTE the residual risk: a workflow runs with repo secrets /
+# GITHUB_TOKEN scopes, so a Tier-2 owner can approve a change that exfiltrates a
+# secret or alters CI behaviour. The SECURITY-SENSITIVE workflows — those that
+# hold release secrets, feed bytes into a signed artifact, or form part of the
+# CodeQL scanner's trust chain — are carved back to Tier 1 individually in the
+# Security section below (last-match-wins), because CodeQL is NOT a required
+# status check (a Tier-2 edit could silently disable it) and the release
+# workflows consume the signing secret at run time. Everything else here (ci,
+# static-checks, sanitizers, system-libs-canary, mirror-aether-gate,
+# update-rnnoise, build-sherpa-onnx-aarch64) stays Tier 2.
+.github/workflows/           @aethersdr/infrastructure
+.github/dependabot.yml       @aethersdr/infrastructure
+.github/docker/              @aethersdr/infrastructure
+.github/ISSUE_TEMPLATE/      @aethersdr/infrastructure
+
+# Build configuration.
+# NOTE the same at-any-depth behaviour as *.md: `CMakeLists.txt` has no slash,
+# so it matches a CMakeLists.txt in ANY directory, and it sits below the Tier 3
+# block above. Test registration lives in tests/tests.cmake, which does NOT
+# match this pattern and so stays Tier 3 with the tests it declares — that is
+# one reason it is named tests.cmake rather than tests/CMakeLists.txt. If a
+# real tests/CMakeLists.txt is ever added, this line silently claims it for
+# Tier 2 and undoes half the point of putting tests/ at Tier 3; add an explicit
+# `tests/CMakeLists.txt @aethersdr/reviewers` line below this one if so.
+CMakeLists.txt               @aethersdr/infrastructure
+THIRD_PARTY_LICENSES         @aethersdr/infrastructure
+
+# ── Tier 1: governance and security — maintainer-only ─────────────────────
+# Project governance. These define who decides what and under which rules;
+# everything that merely DESCRIBES how to build the software is Tier 2.
+# ROADMAP.md is not here: it is a statement of intent, not a rule, and
+# GOVERNANCE.md §Project Direction already reserves direction to the
+# maintainer independently of who can approve a roadmap edit.
+CODE_OF_CONDUCT.md           @aethersdr/maintainers
+CONSTITUTION.md              @aethersdr/maintainers
+CONTRIBUTING.md              @aethersdr/maintainers
+GOVERNANCE.md                @aethersdr/maintainers
+LICENSE                      @aethersdr/maintainers
+
+# The Constitution's CANONICAL copy. The root CONSTITUTION.md above is the
+# byte-identical mirror kept for discoverability — the closing note in that
+# file, CONTRIBUTING.md, AGENTS.md, and .github/copilot-instructions.md all
+# name this path as the source. Gating only the mirror would leave the
+# canonical text editable at Tier 2, which is the same failure this file's
+# Tier 1 test is meant to catch. Both are gated because the two are synced
+# BY HAND until a pre-commit check enforces byte-equality.
+.specify/memory/constitution.md   @aethersdr/maintainers
+
+# Security & compliance
+# SECURITY* rather than SECURITY.md: the glob is a no-op on today's tree
+# (SECURITY.md is the only match) but keeps a future SECURITY-AUDIT.md or
+# SECURITY-ADVISORIES.md from falling through *.md to Tier 2. Same reasoning
+# as the .claude/commands/ line above — do not narrow it back to a literal.
+SECURITY*                    @aethersdr/maintainers
+.github/CODEOWNERS           @aethersdr/maintainers
+# The per-PR test gate's frozen allow-list. Tier 1, not Tier 2, on purpose:
+# the file exists so that GROWING the gate is a visible, maintainer-reviewed
+# diff rather than one more "rides along" step in ci.yml (which is Tier 2).
+# See tools/check_ci_test_gate.py.
+.github/ci-test-gate.txt     @aethersdr/maintainers
+.github/codeql/              @aethersdr/maintainers
+docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
+
+# The key's human-readable twin. docs/VERIFYING-RELEASES.md publishes the
+# release fingerprint (B765 6E6B … 3D59 18F3) and the `curl … | gpg --import`
+# line users follow, so it is the anchor an operator compares an artifact
+# against. A wrong fingerprint here cannot forge a signature, but it can talk
+# someone into accepting one — which is the "can compromise a signed release"
+# limb, reached through the operator rather than the pipeline. Gating the .asc
+# while leaving its published fingerprint a tier below was the carve-out
+# stopping one file short.
+docs/VERIFYING-RELEASES.md   @aethersdr/maintainers
+
+# Security-sensitive workflows — carved back to Tier 1 (last-match-wins) out of
+# the Tier-2 .github/workflows/ default above. The release signing/publish
+# pipeline runs with the signing secret, and codeql.yml invokes the security
+# scan (which is NOT a required status check, so a Tier-2 edit could disable it
+# undetected). Routine CI workflows stay Tier 2. Keep the list below in sync
+# with .github/workflows/ as workflows are added/renamed.
+#
+# The criterion has three limbs — a workflow is Tier 1 if it holds release
+# secrets, feeds bytes into a signed artifact, or forms part of the CodeQL
+# scanner's trust chain. The second limb covers producer workflows whose output
+# a Tier-1 release step consumes, even if the producer itself holds no secret:
+# poisoning the input defeats the consumer's gate. The third exists because a
+# scan is only as trustworthy as what it runs inside. Specifically:
+#   - docker-ci-image.yml builds ghcr.io/aethersdr/aethersdr-ci, and codeql.yml
+#     runs INSIDE that image. A Tier-2 edit to the image could subvert the scan
+#     without touching codeql.yml. It holds no release secret and produces no
+#     release artifact, so only the third limb catches it — which is why the
+#     criterion is stated as three limbs rather than the release one alone.
+#
+# build-macos-qt.yml was listed here for the same reason — it published the
+# deps-qt-* Qt tarball that macos-dmg.yml baked into the signed DMG. That
+# workflow is retired: both macOS legs now take Qt from aqtinstall, as Windows
+# and both AppImages already did. Worth naming what that does to the supply
+# chain rather than treating it as a pure win — it drops a build input we
+# produced ourselves and could audit, in favour of prebuilt binaries from Qt's
+# CDN. The trade is deliberate: it is the same trust boundary every other
+# release artifact already sits behind, and it retires a ~2 h from-source build
+# nobody was reviewing the output of.
+.github/workflows/codeql.yml             @aethersdr/maintainers
+.github/workflows/sign-release.yml       @aethersdr/maintainers
+.github/workflows/macos-dmg.yml          @aethersdr/maintainers
+.github/workflows/windows-installer.yml  @aethersdr/maintainers
+.github/workflows/appimage.yml           @aethersdr/maintainers
+.github/workflows/docker-ci-image.yml    @aethersdr/maintainers
+
+# In-app updates (RFC #5304). update-manifest.yml holds the Ed25519 update
+# signing key and the updates.aethersdr.com upload credential (first limb).
+# The two tools it runs are carved back with it: build_update_manifest.py
+# writes the bytes that key signs and publish_update_manifest.py runs with the
+# upload credential (second limb: poisoning either defeats the signing step's
+# gate). update-signing.pub is the trust anchor every client will embed, the
+# counterpart of docs/RELEASE-SIGNING-KEY.pub.asc above.
+.github/workflows/update-manifest.yml    @aethersdr/maintainers
+tools/build_update_manifest.py           @aethersdr/maintainers
+tools/publish_update_manifest.py         @aethersdr/maintainers
+packaging/update-signing.pub             @aethersdr/maintainers
+
+# NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
+# .github/copilot-instructions.md, .claude/commands/) and the two release
+# skills (.claude/skills/release-prep/, .claude/skills/tag-release/) are
+# intentionally NOT gated here — they sit at Tier 2.
+# See the Tier 2 section above for the reasoning. Do NOT re-add them.
+#
+# What makes that safe is that the one genuinely normative rule about agent
+# behaviour — the may/may-not-autonomously-change list — is DEFINED in
+# GOVERNANCE.md §AI Contributors (Tier 1), not in AGENTS.md. AGENTS.md
+# §"Autonomous Agent Boundaries" elaborates it with examples and is explicitly
+# barred from widening it; relaxing those limits is a GOVERNANCE.md amendment
+# and lands in a Tier-1 PR. If a future change moves a rule the other way —
+# out of GOVERNANCE.md and into an instruction file — this carve-out breaks
+# and the file in question belongs back at Tier 1.
+
+# NOTE: MainWindow.cpp/.h are intentionally NOT gated here — they sit on the
+# Tier 3 reviewer default (the `*` line), same as the #3351 decomposition's
+# MainWindow_*.cpp sibling TUs. The core files were formerly Tier 1, but that
+# gate turned every MainWindow change into a maintainer-only (in practice,
+# single-owner) review; with the decomposition complete the whole MainWindow
+# surface now shares the broad reviewer roster. Do NOT re-add a
+# `src/gui/MainWindow*` gate. See docs/architecture/mainwindow-decomposition.md.

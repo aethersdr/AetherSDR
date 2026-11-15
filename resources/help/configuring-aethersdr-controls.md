@@ -1,0 +1,762 @@
+# Configuring AetherSDR Controls
+
+Full documentation: [docs.aethersdr.com/keyboard-shortcuts](https://docs.aethersdr.com/keyboard-shortcuts)
+
+AetherSDR can be operated in several different ways. You can click and drag with a mouse, tune with a trackpad, use the built-in keyboard shortcuts, and add external control hardware such as FlexControl, MIDI controllers, USB tuning knobs, Stream Deck buttons, and serial PTT or CW accessories.
+
+The good news is that you do **not** need to learn everything at once. Most operators start with the mouse and a few shortcuts, then add one external controller later when they know what they want to do more quickly.
+
+This guide explains the control options AetherSDR supports today, how the built-in shortcuts work, how to customize them, how to use the panadapter and VFO with a trackpad, and what to expect from each supported USB knob or control surface.
+
+## A few ideas that make every control method easier
+
+Before you add any controller, it helps to know four basic ideas:
+
+- **The active slice is the one that moves.** If a knob or shortcut changes the wrong slice, click the slice you want first.
+- **The current step size matters.** A one-step tune command moves by the step size shown in the receiver controls.
+- **Tune Lock stops frequency changes.** If tuning seems dead, check whether the active slice is locked.
+- **Most controls need a live radio connection.** If AetherSDR is not connected, many control actions will not do anything yet.
+
+## The control systems AetherSDR supports
+
+AetherSDR currently supports these control paths:
+
+- **Mouse and trackpad control** for the panadapter, waterfall, and on-screen VFO controls.
+- **Built-in keyboard shortcuts** for tuning, audio, transmit, and other common actions.
+- **Custom keyboard bindings** through the shortcut editor.
+- **FlexControl USB tuning knob** through the serial-control path.
+- **MIDI controllers** with learn mode, manual mapping entry, profiles you can import and export, and relative-encoder support.
+- **USB HID encoder devices** including:
+  - Icom RC-28
+  - Griffin PowerMate
+  - Contour ShuttleXpress
+  - Contour ShuttlePro v2
+  - Elgato Stream Deck+ (dials, LCD keys and touchscreen)
+- **Stream Deck integration**, built in for the Stream Deck+ and over TCI for other models.
+- **Serial PTT and CW accessories** such as foot switches, straight keys, paddles, and amplifier keying lines through USB-serial adapters.
+
+Some of these features only appear when the build includes the needed support. If a menu item is missing, your build may not include that feature.
+
+## Keyboard shortcuts
+
+### Important: the shortcut system is off until you enable it
+
+AetherSDR separates **operating shortcuts** from ordinary menu shortcuts.
+
+To turn on operating shortcuts, use:
+
+`Settings > Keyboard Shortcuts`
+
+This setting is **off by default**. If the shortcuts below do nothing, this is the first place to check.
+
+### Built-in default operating shortcuts
+
+These are the default shortcut bindings that ship with AetherSDR:
+
+- `Right Arrow` — tune up 1 step
+- `Left Arrow` — tune down 1 step
+- `Shift + Right Arrow` — tune up 10 steps
+- `Shift + Left Arrow` — tune down 10 steps
+- `G` — go to frequency entry on the active slice
+- `T` — toggle MOX
+- `Space` — hold PTT while the key is held down
+- `Up Arrow` — AF gain up
+- `Down Arrow` — AF gain down
+- `M` — mute toggle
+- `]` — step size up
+- `[` — step size down
+- `L` — tune lock toggle
+
+### Other shortcut actions you can assign
+
+The shortcut editor also includes many actions that ship **unassigned** until you bind them yourself. Examples include:
+
+- Band jumps for `160m`, `80m`, `60m`, `40m`, `30m`, `20m`, `17m`, `15m`, `12m`, `10m`, `6m`, and `2m`
+- Mode changes such as `USB`, `LSB`, `CW`, `CWL`, `AM`, `SAM`, `FM`, `NFM`, `DFM`, `DIGU`, `DIGL`, and `RTTY`
+- `TUNE` toggle
+- `Two-Tone Tune`
+- Next or previous slice
+- Split toggle
+- `Monitor TX (Hold)` — while held, listen on the transmit frequency of a split,
+  the way `XFC`, `TF-SET` or `TXW` works on a conventional transceiver. Hold it
+  before you call to hear whether the frequency is clear and where the DX is
+  listening. Whether it silences the receive slice or leaves both audible is set
+  from the `Monitor TX` submenu when you right-click the `SPLIT` badge.
+- `Split Up 1 kHz`, `Split Up 5 kHz`, `Split Up 10 kHz` — move the **transmit**
+  slice that far above the receive slice. The receive frequency does not move.
+  With no split running, the key starts one on the active slice at that offset.
+- Filter widen and narrow
+- DSP actions such as `NB`, `NR`, and `ANF`
+- AGC mode cycle
+- Band zoom and segment zoom
+- `RIT` and `XIT` toggles
+
+### Other built-in application shortcuts
+
+The Window menu manages the active AetherSDR window. Full Screen uses `F11`
+on Windows/Linux and `Command+Control+F` on macOS; Minimize uses `Command+M`
+on macOS and is unassigned elsewhere. Both bindings can be changed in
+Configure Shortcuts. They work in secondary windows, with Keyboard Shortcuts
+turned off, and while a text field or slider has focus.
+
+AetherSDR also has a few ordinary menu shortcuts that are separate from the operating-shortcut system:
+
+- `Ctrl+Shift+M` — toggle Minimal Mode
+- `Ctrl+=` — increase UI scale
+- `Ctrl+-` — decrease UI scale
+- `Ctrl+0` — reset UI scale to 100%
+
+The exact key labels shown in the menus may vary slightly by platform.
+
+### Helpful shortcut behavior
+
+A few shortcut details are easy to miss:
+
+- `Space` only acts as press-to-talk when **Keyboard Shortcuts** is enabled.
+- While you are typing in a text field, AetherSDR backs off so your typing does not accidentally trigger radio actions.
+- If the radio is disconnected, transmit and tuning shortcuts do not perform radio actions.
+- If the active slice is locked, tune shortcuts will not move it.
+
+## Customizing keyboard shortcuts
+
+To customize shortcuts, open:
+
+`Settings > Configure Shortcuts...`
+
+The shortcut editor is designed to be beginner friendly:
+
+1. Click a key on the on-screen keyboard map.
+2. Pick the action you want for that key.
+3. If the key is already in use, AetherSDR will ask before reassigning it.
+4. Use **Clear** to remove the selected key's action.
+5. Use **Reset to Default** to put one shortcut back.
+6. Use **Reset All to Defaults** if you want to start over.
+
+### Backing up or cloning shortcuts
+
+Use **Export...** to save the complete shortcut setup as a CSV file, then use
+**Import...** on another AetherSDR machine to apply it. The file identifies
+each capability with both a stable action ID and its readable action name, and
+stores key combinations in a cross-platform form.
+
+Shortcut backups are release-tolerant:
+
+- An older release imports every action it recognizes and reports newer,
+  unavailable actions as skipped.
+- A newer release leaves actions that did not exist in an older backup alone.
+- Actions that were using defaults adopt the importing release's defaults,
+  while the source's customized and explicitly cleared bindings are restored
+  exactly. Local explicit clears are preserved when an imported row for the
+  same action is not customized.
+- If an imported customized shortcut takes a key you had bound to a different
+  local action, that local binding is cleared and reported so you can notice
+  the displacement — use **Reset to Default** to restore it.
+- A malformed backup is rejected before any shortcuts are changed.
+
+Keep the original exported file if you move temporarily to an older release;
+the skipped rows remain in that file for use when you return to a release that
+supports them.
+
+### Good first customizations
+
+If you are new to keyboard control, these are good first shortcuts to add:
+
+- A favorite band jump such as `20m` or `40m`
+- `Next Slice` and `Previous Slice`
+- `TUNE` toggle
+- `RIT` toggle
+- `NB` or `NR` toggle
+
+### Current editor limitation
+
+The current shortcut editor is centered on selecting keys from the on-screen keyboard map, so it is easiest to think of it as a **one-key-at-a-time** editor. The built-in shifted arrow shortcuts still work, but the editing experience is currently most natural for simple single-key bindings.
+
+## Using a mouse or trackpad on the panadapter
+
+You can do a great deal of operating without any external hardware at all.
+
+### Panadapter and waterfall actions
+
+On the main spectrum display:
+
+- **Drag in the spectrum or waterfall** to pan left or right.
+- **Double-click in the spectrum or waterfall** to tune to that frequency.
+- **Single-click to tune** is available if you turn on `View > Single-Click to Tune`.
+- **Drag the frequency scale bar** to change the displayed bandwidth.
+- **Drag the divider between the spectrum and waterfall** to change how much height each one uses.
+- **Scroll vertically** over the spectrum or waterfall to tune the active slice by the current step size. If your pointer's natural scroll direction feels inverted (common on trackballs), enable **Radio Setup → UI Enhancements → Reverse mouse-wheel tuning direction**.
+- **Drag the dBm scale on the right edge** to pan the reference level up or down.
+- **Ctrl-drag the dBm scale** (⌘-drag on macOS) to zoom the visible dB span; the bottom of the scale stays anchored.
+- **Click the ▲ / ▼ arrows at the top of the dBm scale** to step the reference level by 10 dB.
+
+### Trackpad notes
+
+Trackpads usually work very well in AetherSDR:
+
+- Vertical scrolling tunes the active slice.
+- Horizontal-dominant swipe gestures are ignored for tuning so accidental side-swipes do not move the radio.
+- On systems that provide a native zoom gesture, **pinch to zoom** changes panadapter bandwidth.
+
+In practice, pinch-to-zoom is most commonly reliable on macOS trackpads. On Windows and Linux, it depends on whether the operating system, desktop environment, and Qt input stack deliver a native zoom gesture to the application.
+
+### Off-screen slice indicators
+
+If a slice is currently outside the visible spectrum window:
+
+- **Single-click** its edge indicator to make that slice active and recenter
+  the panadapter on it.
+- **Right-click** its edge indicator for that slice's context menu.
+
+## Using the built-in VFO and native controls
+
+The on-screen VFO controls are also part of the control system.
+
+### Frequency entry and wheel tuning
+
+On the VFO display:
+
+- **Scroll over the frequency display** to tune by the current step size. The **Reverse mouse-wheel tuning direction** option in Radio Setup → UI Enhancements flips this direction for trackballs and other pointers with inverted-feeling scroll.
+- **Double-click the frequency display** to open direct frequency entry.
+- Press `G` to open direct frequency entry from the keyboard.
+- **Right-click the frequency display** to add a spot at the current slice frequency.
+
+### Expanded and collapsed VFO behavior
+
+AetherSDR has slightly different behavior depending on whether the VFO is expanded or collapsed:
+
+- In **expanded** mode, scrolling only tunes when the pointer is over the frequency display. This helps avoid accidental changes.
+- In **collapsed** mode, scrolling anywhere over the collapsed VFO tunes by the current step size.
+- Clicking the **slice badge** collapses the VFO.
+- Clicking the **collapsed VFO** expands it again.
+- Clicking the **collapsed TX badge** toggles TX assignment for that slice.
+
+### Audio and quick controls
+
+A few useful native controls are easy to miss:
+
+- Right-click the speaker tab to toggle mute quickly.
+- Many tabs in the VFO open mode-specific controls such as AF, SQL, AGC, RIT, XIT, digital offsets, and FM options.
+- If tuning does not respond, check whether Tune Lock is enabled for that slice.
+
+## FlexControl USB tuning knob
+
+For many operators, FlexControl is the easiest external tuning knob to start with.
+
+### What AetherSDR uses it for
+
+AetherSDR treats FlexControl as a serial device and uses it for:
+
+- Rotary tuning with acceleration
+- Automatic device detection
+- Optional inverted tuning direction
+- Configurable button actions
+
+### Where to configure it
+
+Open:
+
+`Settings > FlexControl Knob & Buttons...`
+
+This jumps to the **Serial** tab of the Radio Setup dialog.
+
+### How to set it up
+
+1. Plug in the FlexControl.
+2. Open `Settings > FlexControl Knob & Buttons...`.
+3. In the **FlexControl Tuning Knob** section, click **Detect**.
+4. If the device is found, AetherSDR stores the port and marks it to open.
+5. Turn on **Auto-detect on startup** if you want AetherSDR to find it automatically next time.
+6. Turn on **Invert tuning direction** if the knob feels backwards for your operating style.
+
+### Default button actions
+
+The standard setup page exposes **Tap** and **Double** actions for each of the three FlexControl buttons.
+
+The defaults are:
+
+- **Button 1**
+  - Tap — `StepUp`
+  - Double — `StepDown`
+- **Button 2**
+  - Tap — `ToggleMox`
+  - Double — `ToggleTune`
+- **Button 3**
+  - Tap — `ToggleMute`
+  - Double — `ToggleLock`
+
+### Actions you can choose
+
+Each FlexControl button action can be set to one of these choices:
+
+- `None`
+- `StepUp`
+- `StepDown`
+- `ToggleMox`
+- `ToggleTune`
+- `ToggleMute`
+- `ToggleLock`
+- `NextSlice`
+- `PrevSlice`
+- `ToggleAgc`
+- `VolumeUp`
+- `VolumeDown`
+
+### Current limitation
+
+The underlying FlexControl protocol supports long-press style events, but the current standard setup page only exposes **Tap** and **Double** choices in the UI.
+
+### Platform notes
+
+- **Windows:** if the FlexControl is not detected, make sure Windows sees it as a serial COM port first. FlexRadio documents a Windows FlexControl driver path for SmartSDR systems, so this is the first thing to check if the knob never appears.
+- **Linux and macOS:** the AetherSDR repository does not document a separate vendor driver for FlexControl. The main requirement is that the operating system presents the device as a serial port.
+
+### If FlexControl tunes nothing
+
+If the knob turns but frequency does not move, check these items in order:
+
+- Is AetherSDR connected to a radio?
+- Is the correct slice active?
+- Is Tune Lock turned on for that slice?
+- Did the device detect correctly?
+- On Windows, does the FlexControl appear as a COM port in Device Manager?
+
+## USB tuning knobs and HID control devices
+
+AetherSDR also supports several USB HID tuning devices.
+
+### Currently supported HID devices
+
+These devices are explicitly recognized:
+
+- **Icom RC-28**
+- **Griffin PowerMate**
+- **Contour ShuttleXpress**
+- **Contour ShuttlePro v2**
+
+### How AetherSDR uses them today
+
+When one of these devices is recognized:
+
+- Turning the control tunes the active slice.
+- Tuning uses the current step size.
+- If the active slice is locked, tuning will not move it.
+- The device is auto-detected when HID support is present in the build.
+- Hot-plugging is watched automatically, so reconnecting the device should be picked up.
+
+### Device-by-device notes
+
+#### Icom RC-28
+
+AetherSDR recognizes:
+
+- The main rotary encoder
+- The encoder push button
+- One secondary button
+
+#### Griffin PowerMate
+
+AetherSDR recognizes:
+
+- Rotary movement
+- The main push button
+
+This makes the PowerMate a simple, compact tune-and-press controller.
+
+#### Contour ShuttleXpress
+
+AetherSDR recognizes:
+
+- The jog wheel
+- The spring-loaded shuttle ring
+- Five buttons
+
+The **jog wheel** tunes step by step. The **shuttle ring** tunes continuously while you hold it. Turning it moves one step almost at once (after about 60 ms, so the spring's bounce on release cannot step backwards), like a jog detent. After that, a small turn creeps (about 20 Hz per second) and full deflection sweeps the band (about 100 kHz per second). Letting go stops tuning. The top speed is the same whatever step size is selected. With a large step, the first positions still move at least a couple of steps per second.
+
+Set the ring up in `Settings > Radio Setup... > Serial & Controllers`, in the **Shuttle Ring** group:
+
+- **Action:** Tune Slice (default), RIT, XIT, or None.
+- **Speed:** Slow, Normal, or Fast.
+
+If the active slice is locked, the ring does not move it. You get one lock notice per turn of the ring.
+
+Assign the five buttons in the **StreamDeck+ LCD Button Actions** group: Key 1–5 are the ShuttleXpress buttons from left to right.
+
+#### Contour ShuttlePro v2
+
+AetherSDR recognizes:
+
+- The jog wheel
+- The spring-loaded shuttle ring
+- Fifteen buttons
+
+The jog wheel and shuttle ring work exactly as on the ShuttleXpress.
+
+Buttons 1–8 use **StreamDeck+ LCD Button Actions**; buttons 9–12 use **StreamDeck+ Encoder Push Actions**. Buttons 13–15 have no action mapping.
+
+### Current limitation for HID knobs
+
+AetherSDR's HID encoder support is currently more automatic than the FlexControl or MIDI paths. In plain language, that means:
+
+- The supported HID knobs are detected automatically.
+- Rotation works when the device is recognized.
+- There is **not currently a dedicated polished in-app setup page** just for these HID encoder devices.
+- If you want easy, visible, per-control mapping, **MIDI** is usually the easier path today.
+
+## MIDI controllers
+
+MIDI support is the most flexible way to build a custom control surface.
+
+### Where to configure it
+
+Open:
+
+`Settings > MIDI Mapping...`
+
+If this menu item is missing, the build you are using may not include MIDI support.
+
+### What the MIDI mapping dialog does
+
+The MIDI dialog lets you:
+
+- Choose a MIDI port
+- Connect and disconnect
+- Refresh the port list
+- Turn on **Auto-connect on startup**
+- Use **Learn** mode to bind a control by moving it
+- Use **Manual…** to type in a binding yourself
+- Edit any existing binding with the **✎** button on its row
+- Save named profiles
+- Load saved profiles
+- Use **Import…** to bring in a profile file, including a mapping supplied by your controller's vendor
+- Use **Export…** to write the current bindings out as a file you can keep or share
+- Clear all bindings if you want to start over
+
+### What kinds of parameters you can control
+
+AetherSDR groups MIDI targets into these categories:
+
+- **RX**
+- **TX**
+- **Phone/CW**
+- **EQ**
+- **Global**
+
+Examples include:
+
+- AF gain
+- Squelch
+- AGC threshold
+- Audio pan
+- Noise blanker and noise reduction toggles
+- Tune lock
+- RIT and XIT
+- RF power and tune power
+- MOX and TUNE
+- Mic level and monitor level
+- VOX
+- CW speed
+- TX and RX EQ bands
+- Master and headphone volume
+- RADE modem on/off on the active slice (switches it to DIGU/DIGL and makes it the TX slice)
+- Next and previous slice
+
+### The best way to map knobs
+
+For endless rotary encoders, turn on the **Relative** checkbox for that binding. This is especially useful for the `VFO Tune Knob` target.
+
+When you use **Learn** on `VFO Tune Knob` with a MIDI CC control, AetherSDR enables relative mode automatically. Older bindings still work if they were saved before this behavior was added.
+
+For `VFO Tune Knob`, each relative encoder pulse maps to one selected radio step. Use the radio step-size control for coarse or fine tuning.
+
+For slider and knob targets, Learn ignores touch-only NoteOn messages and waits for movement data.
+
+For sliders, leave **Relative** off and use normal absolute mode.
+
+Use **Invert** if the control moves the opposite way from what feels natural.
+
+### Entering a binding manually
+
+Learn is the easiest path, but sometimes typing the binding in directly is better:
+
+- Some controllers send **more than one MIDI message for a single press**. Learn
+  captures whichever message arrives first, which may not be the one you want.
+- You may want to set up bindings from the controller's manual **before the
+  device is connected**.
+- A binding Learn captured may simply need a small correction.
+
+To add a binding by hand, select the parameter as usual and click **Manual…**
+instead of Learn. Enter the channel, the message type (**Note On**,
+**Control Change**, or **Pitch Bend**), and the note or CC number from your
+controller's documentation, then click **OK**. The binding behaves exactly like
+a learned one and is saved immediately.
+
+To correct an existing binding, click the **✎** button on its row. The same form
+opens with the current values filled in — change what you need and click **OK**.
+
+A few details worth knowing:
+
+- **Channel "Any"** matches the message on every MIDI channel. Learn always binds
+  the specific channel it heard, so "Any" is available only through manual entry.
+- If the source you enter is **already bound to another parameter**, AetherSDR
+  asks before replacing it. Two bindings on the same source cannot both respond,
+  so the dialog never lets one silently disable the other.
+- For key and button targets there is no separate Note Off entry: a **Note On**
+  binding automatically follows the release too.
+- **Pitch Bend** messages carry no number, so that field is disabled.
+- The **Relative** checkbox is only meaningful for Control Change bindings, and
+  it is pre-checked for you when you bind the `VFO Tune Knob` to a CC.
+
+### CW and PTT from MIDI
+
+MIDI can do more than knobs and sliders. It can also be used for:
+
+- Straight-key style CW gating
+- Separate **dit** and **dah** paddle inputs
+- Hold-style PTT
+
+This makes MIDI a practical option for custom operating panels, not just audio mixers.
+
+### MIDI profiles
+
+Profiles are useful when you want one controller for different jobs. For example:
+
+- A contest profile
+- A casual ragchew profile
+- A digital-mode profile
+- A CW profile
+
+Save the profile after you finish a layout so you can return to it quickly later.
+
+### Importing and exporting profiles
+
+Profiles are ordinary files, so a finished mapping can move between machines —
+or come ready-made from the people who built your controller.
+
+**Import…** reads a profile file and stores it under the file's name. Two kinds
+of file are accepted, and AetherSDR works out which one it is by looking inside:
+
+- An **AetherSDR profile** written by **Export…** on this or another machine.
+- A **SmartSDR ".map" file**, the mapping format the SmartSDR iOS and Mac apps
+  use. Controller vendors publish these for their own devices, so a supported
+  controller can be set up by importing the vendor's file instead of binding
+  every control by hand.
+
+Importing never overwrites a profile you already have: a name that is already
+taken gets a numbered suffix. Importing also does not change your current
+bindings — the imported profile is stored and selected in the list, and you
+click **Load** to actually apply it.
+
+A vendor file usually describes more controls than AetherSDR has parameters
+for. Nothing is dropped quietly: the summary after an import tells you how many
+bindings came in, and lists by name every control that was skipped — controls
+with no AetherSDR equivalent, rows with values out of range, and duplicates
+where two controls asked for the same parameter. Expand the details to see the
+individual names.
+
+**Export…** writes your current bindings to a file you choose. That file
+imports back into AetherSDR unchanged, which makes it a convenient backup
+before you rework a layout, and an easy way to hand a working setup to someone
+running the same controller.
+
+## Stream Deck integration
+
+AetherSDR supports Stream Deck hardware in one of two ways, depending on the model.
+
+### Stream Deck+ — built in, no plugin needed
+
+The **Elgato Stream Deck+** is driven directly by AetherSDR over USB HID. Nothing
+to download and nothing to install: plug it in, enable HID encoder support, and
+AetherSDR talks to the device itself.
+
+`Settings > FlexControl...` → enable HID encoders
+
+AetherSDR drives:
+
+- The **four encoder dials**, with a separate action for turning and for pushing
+- The **eight LCD keys**, including the button labels it draws on them
+- The **touchscreen strip** above the dials
+
+Dial, dial-push and LCD-key actions are all assignable — see the HID encoder
+sections earlier in this page for how mapping works.
+
+This path needs a build with **hidapi** support. If the HID encoder settings are
+missing, your build does not include it.
+
+### Other Stream Deck models — through TCI
+
+Every other Stream Deck (original, MK.2, XL, Mini, and Stream Deck hardware on
+Linux) is not spoken to directly. Those models are driven through AetherSDR's
+**TCI WebSocket server** by whatever control-surface software you prefer, using
+the host app for your platform — the Elgato Stream Deck software, StreamController
+on Linux, OpenDeck, or anything else that can send TCI.
+
+AetherSDR does not ship a plugin for any of these. It provides the protocol; the
+button layer is yours to choose or build.
+
+To make the radio reachable, turn on:
+
+`Settings > Autostart TCI with AetherSDR`
+
+That starts the TCI server with AetherSDR so a control surface has something to
+connect to. If you prefer not to autostart it, start the TCI server yourself
+before using the surface.
+
+The TCI surface covers TX, band and frequency changes, modes, audio, DSP, slice
+controls and DVK. AetherSDR's **automation bridge** is the other option, and is
+the richer of the two — it reaches the whole application rather than the radio
+model alone.
+
+#### Which slice a TCI control acts on
+
+Slice-aware TCI commands address **TRX0**, the first slice, unless the surface
+you are using says otherwise.
+
+**PTT, MOX and TUNE are different: they always key whichever slice already holds
+transmit.** AetherSDR decides that itself. A control surface cannot pick the slice
+it transmits on, by design, so that a button press can never move you to another
+band or antenna mid-transmission.
+
+### Stream Deck troubleshooting
+
+If a Stream Deck+ dial or key does nothing:
+
+- Confirm your build includes hidapi and HID encoders are enabled
+- Unplug and reconnect the device
+- Confirm the operating system sees the device
+
+If a button on any other Stream Deck model does nothing:
+
+- Is AetherSDR connected to a radio?
+- Is TCI running?
+- Is your control surface pointed at the same TCI port AetherSDR is using?
+
+## Serial PTT, CW keying, foot switches, and paddles
+
+Not every control device is a knob. AetherSDR also supports practical station-control wiring through a USB-serial adapter.
+
+### Where to configure serial control
+
+Open:
+
+`Settings > FlexControl Knob & Buttons...`
+
+This opens the **Serial** tab, which includes the general serial-port controls in addition to FlexControl.
+
+### Port configuration
+
+The Serial tab lets you configure:
+
+- Port selection from the detected list
+- A `Custom...` entry for manual port paths
+- Baud rate
+- Data bits
+- Parity
+- Stop bits
+- Auto-open on startup
+
+This is useful when your device does not appear in the automatic list or when you need a specific serial path.
+
+### Pin assignments
+
+AetherSDR can drive and read the serial handshake pins for station control.
+
+#### Output pins
+
+You can assign **DTR** and **RTS** as:
+
+- `PTT`
+- `CW Key`
+- `CW PTT`
+- `None`
+
+This is useful for:
+
+- Foot-switch transmit control
+- Amplifier keying
+- External sequencers
+- Simple CW keying interfaces
+
+#### Input pins
+
+You can assign **CTS** and **DSR** as:
+
+- `PTT Input`
+- `CW Key Input`
+- `CW Dit Input`
+- `CW Dah Input`
+- `None`
+
+This is useful for:
+
+- External PTT switches
+- Straight keys
+- Iambic paddles
+
+There is also a **Paddle Swap** option if your dit and dah wiring feels reversed.
+
+### Platform notes for serial devices
+
+- On **Windows**, serial devices usually appear as `COM` ports such as `COM3` or `COM8`.
+- On **Linux**, they often appear as `/dev/ttyUSB*` or `/dev/ttyACM*`.
+- On **macOS**, they often appear as `/dev/cu.*` device names.
+
+If the automatic list does not show your device, use the `Custom...` option and enter the path manually.
+
+## Build requirements and feature availability
+
+If you are using an official prebuilt AetherSDR release, you usually do not need to think about build dependencies.
+
+If you are **building AetherSDR from source**, the repository currently calls out these control-related dependencies:
+
+- **Qt SerialPort** support enables:
+  - FlexControl
+  - serial PTT and CW
+  - MIDI controllers
+- **hidapi** support enables:
+  - USB HID encoder support in the main application
+  - other HID-based control paths that are compiled into that build
+
+For a Stream Deck+ the relevant requirement is **hidapi**. For any other Stream Deck model, driven over TCI as described earlier, the requirement is instead that **TCI is available and running**.
+
+If these pieces were not present when the program was built, the related menus or controller paths may be missing.
+
+## Quick troubleshooting checklist
+
+When a control does not behave the way you expect, use this order:
+
+### Keyboard problem
+
+- Turn on `Settings > Keyboard Shortcuts`
+- Make sure you are not typing into a text field
+- Make sure the radio is connected
+
+### Tuning problem
+
+- Click the slice you want to tune
+- Check Tune Lock
+- Check the current step size
+- Try the mouse wheel on the panadapter to confirm the slice itself can tune
+
+### External knob problem
+
+- Unplug and reconnect the device
+- Restart AetherSDR
+- Confirm the operating system sees the device
+- Confirm your build includes the needed support
+- On Windows FlexControl, verify the COM port and driver status first
+
+### Stream Deck problem
+
+- On a Stream Deck+, confirm your build includes hidapi and HID encoders are enabled
+- On any other model, confirm TCI is running and the TCI port matches
+
+## A good beginner path
+
+If you are just getting started, this sequence usually feels easiest:
+
+1. Learn mouse tuning and direct frequency entry first.
+2. Turn on the built-in keyboard shortcuts and use only a few of them.
+3. Add either FlexControl **or** MIDI next, not both at the same time.
+4. Add Stream Deck later if you want large labeled buttons for repeatable operating tasks.
+
+That approach keeps the station simple while you learn what each control method is best at.

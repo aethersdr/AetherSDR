@@ -1,0 +1,435 @@
+#include "StripPuduPanel.h"
+#include "ClientCompKnob.h"
+#include "EditorFramelessTitleBar.h"
+#include "PooDooLogo.h"
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/ClientPudu.h"
+
+#include <QButtonGroup>
+#include <QCloseEvent>
+#include <QFrame>
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QHideEvent>
+#include <QLabel>
+#include <QMoveEvent>
+#include <QPushButton>
+#include <QResizeEvent>
+#include <QShowEvent>
+#include <QSignalBlocker>
+#include <QVBoxLayout>
+#include <cmath>
+#include "core/ThemeManager.h"
+
+namespace AetherSDR {
+
+namespace {
+
+constexpr int kDefaultWidth  = 640;
+constexpr int kDefaultHeight = 360;
+
+constexpr const char* kWindowStyle =
+    "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    "QLabel  { background: transparent; color: {{color.text.secondary}}; font-size: 11px; }";
+
+const QString kModeStyle = QStringLiteral(
+    "QPushButton {"
+    "  background: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 3px;"
+    "  color: {{color.text.secondary}}; font-size: 12px; font-weight: bold;"
+    "  padding: 4px 20px; min-width: 34px;"
+    "}"
+    "QPushButton:hover { background: {{color.background.2}}; }"
+    "QPushButton:checked {"
+    "  background: {{color.background.tx}}; color: {{color.meter.gainReduction}}; border: 1px solid {{color.meter.gainReduction}};"
+    "}");
+
+// "|─── text ───|" group label: horizontal line, centred text, horizontal line.
+QWidget* makeBracketLabel(const QString& text)
+{
+    auto* w = new QWidget;
+    // The label inside is a QLabel, whose vertical policy is Preferred with no
+    // maximum, so this wrapper grew to 116 px on a tall page and left "Body"
+    // floating in the middle of an empty box with its rules drawn across the
+    // centreline. It needs only the height of its own text.
+    w->setMaximumHeight(20);
+    auto* h = new QHBoxLayout(w);
+    h->setContentsMargins(0, 0, 0, 0);
+    h->setSpacing(6);
+
+    auto* leftLine = new QFrame;
+    leftLine->setFrameShape(QFrame::HLine);
+    leftLine->setFrameShadow(QFrame::Plain);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(leftLine, "QFrame { color: {{color.border.strong}}; }");
+
+    auto* lbl = new QLabel(text);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.primary}}; font-weight: bold; "
+                       "font-size: 13px; letter-spacing: 2px; }");
+    lbl->setAlignment(Qt::AlignCenter);
+
+    auto* rightLine = new QFrame;
+    rightLine->setFrameShape(QFrame::HLine);
+    rightLine->setFrameShadow(QFrame::Plain);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rightLine, "QFrame { color: {{color.border.strong}}; }");
+
+    h->addWidget(leftLine, 1);
+    h->addWidget(lbl);
+    h->addWidget(rightLine, 1);
+    return w;
+}
+
+} // namespace
+
+StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
+    : QWidget(parent)
+    , m_audio(engine)
+{
+    setWindowTitle(QStringLiteral("Aetherial Voice Processor"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, kWindowStyle);
+    resize(kDefaultWidth, kDefaultHeight);
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(12, 0, 12, 10);
+    root->setSpacing(8);
+
+    auto* titleBar = new EditorFramelessTitleBar;
+    m_titleBar = titleBar;
+    root->addWidget(titleBar);
+
+    // ── Logo (big in the editor) ────────────────────────────────
+    m_logo = new PooDooLogo;
+    // The tab calls this stage what it is — an Exciter — and the mark keeps
+    // the name the product goes by. They are not in competition: one says
+    // where you are in the chain, the other is the badge on the panel.
+    m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
+    m_logo->setMinimumHeight(80);
+    // ...and a ceiling. Nothing else in this column can grow — the mode
+    // buttons and the knobs are all fixed — so without one the logo took
+    // every pixel the page had spare and drew itself at two and a half times
+    // its designed size.
+    m_logo->setMaximumHeight(200);
+    // Two equal stretches: one above the logo, one at the very foot of the
+    // column (added after the knob grid below). Whatever height is left over
+    // once the logo reaches its ceiling is split evenly between them, rather
+    // than being handed to whichever widget happens to lack a maximum.
+    root->addStretch(1);
+    // A stretch factor far above the buffers' own, so the logo takes height
+    // first and only what it cannot use — because it has hit the ceiling
+    // above — reaches them. Give it the same factor as the buffers and it
+    // shares the surplus three ways instead, landing well short of 200.
+    root->addWidget(m_logo, 100);
+
+    // ── Even / Odd mode toggle — centred in the gap between the
+    // PooDoo™ wordmark and the Poo/Doo knob row.  Aphex generates
+    // even harmonics (asymmetric shape), Behringer generates odd
+    // harmonics (symmetric tanh); labelling by harmonic content is
+    // more descriptive than A/B.
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(6);
+        row->addStretch();
+
+        auto* group = new QButtonGroup(this);
+        group->setExclusive(true);
+        m_modeA = new QPushButton("Even");
+        m_modeA->setCheckable(true);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_modeA, kModeStyle);
+        m_modeA->setFixedHeight(24);
+        m_modeA->setToolTip(
+            "Aphex-lineage asymmetric shaping — predominantly even "
+            "harmonics, warmer, diode-style character with Big Bottom "
+            "LF saturation.");
+        group->addButton(m_modeA, 0);
+        row->addWidget(m_modeA);
+
+        m_modeB = new QPushButton("Odd");
+        m_modeB->setCheckable(true);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_modeB, kModeStyle);
+        m_modeB->setFixedHeight(24);
+        m_modeB->setToolTip(
+            "Behringer-lineage symmetric tanh shaping — pure odd "
+            "harmonics, brighter / edgier, paired with a feed-forward "
+            "bass compressor.");
+        group->addButton(m_modeB, 1);
+        row->addWidget(m_modeB);
+
+        connect(group, &QButtonGroup::idToggled, this,
+                [this](int id, bool checked) {
+            if (checked) onModeToggled(id);
+        });
+
+        row->addStretch();
+        root->addLayout(row);
+    }
+
+    // Tight 4 px gap between the Even/Odd row and the Poo/Doo bracket
+    // labels below.
+    root->addSpacing(4);
+
+    // ── Knob row: all 6 on one line with Poo | gap | Doo grouping ──
+    //
+    // Grid: row 0 = bracket group labels (|─Poo─| and |─Doo─|),
+    // row 1 = knobs.  Columns 0-2 host Poo; column 3 is a fixed
+    // spacer separating the two groups; columns 4-6 host Doo.
+    {
+        auto* grid = new QGridLayout;
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setHorizontalSpacing(12);
+        grid->setVerticalSpacing(4);
+        grid->setColumnMinimumWidth(3, 32);   // gap between Poo and Doo
+
+        grid->addWidget(makeBracketLabel("Body"),    0, 0, 1, 3);
+        grid->addWidget(makeBracketLabel("Clarity"), 0, 4, 1, 3);
+
+        auto makeKnob = [](const QString& label) {
+            auto* k = new ClientCompKnob;
+            k->setLabel(label);
+            k->setCenterLabelMode(true);
+            // Tighter vertical footprint in center-label mode since
+            // the label sits inside the ring now.  Ring + value row.
+            k->setFixedSize(76, 76);
+            return k;
+        };
+
+        m_pooDrive = makeKnob("Drive");
+        m_pooDrive->setRange(0.0f, 24.0f);
+        m_pooDrive->setDefault(6.0f);
+        m_pooDrive->setValueFromNorm([](float n) { return n * 24.0f; });
+        m_pooDrive->setNormFromValue([](float v) { return v / 24.0f; });
+        m_pooDrive->setLabelFormat([](float v) {
+            return QString::number(v, 'f', 1) + " dB";
+        });
+        connect(m_pooDrive, &ClientCompKnob::valueChanged,
+                this, &StripPuduPanel::applyPooDrive);
+        grid->addWidget(m_pooDrive, 1, 0, Qt::AlignHCenter);
+
+        m_pooTune = makeKnob("Tune");
+        m_pooTune->setRange(50.0f, 160.0f);
+        m_pooTune->setDefault(100.0f);
+        m_pooTune->setValueFromNorm([](float n) { return 50.0f + n * 110.0f; });
+        m_pooTune->setNormFromValue([](float v) { return (v - 50.0f) / 110.0f; });
+        m_pooTune->setLabelFormat([](float v) {
+            return QString::number(v, 'f', 0) + " Hz";
+        });
+        connect(m_pooTune, &ClientCompKnob::valueChanged,
+                this, &StripPuduPanel::applyPooTune);
+        grid->addWidget(m_pooTune, 1, 1, Qt::AlignHCenter);
+
+        m_pooMix = makeKnob("Mix");
+        m_pooMix->setRange(0.0f, 1.0f);
+        m_pooMix->setDefault(0.3f);
+        m_pooMix->setValueFromNorm([](float n) { return n; });
+        m_pooMix->setNormFromValue([](float v) { return v; });
+        m_pooMix->setLabelFormat([](float v) {
+            return QString::number(static_cast<int>(v * 100.0f + 0.5f)) + " %";
+        });
+        connect(m_pooMix, &ClientCompKnob::valueChanged,
+                this, &StripPuduPanel::applyPooMix);
+        grid->addWidget(m_pooMix, 1, 2, Qt::AlignHCenter);
+
+        m_dooTune = makeKnob("Tune");
+        m_dooTune->setRange(1000.0f, 10000.0f);
+        m_dooTune->setDefault(5000.0f);
+        m_dooTune->setValueFromNorm([](float n) {
+            return 1000.0f * std::pow(10.0f, n);
+        });
+        m_dooTune->setNormFromValue([](float v) {
+            return std::log10(std::max(1000.0f, v) / 1000.0f);
+        });
+        m_dooTune->setLabelFormat([](float v) {
+            return (v >= 1000.0f)
+                ? QString::number(v / 1000.0f, 'f', 1) + " kHz"
+                : QString::number(v, 'f', 0) + " Hz";
+        });
+        connect(m_dooTune, &ClientCompKnob::valueChanged,
+                this, &StripPuduPanel::applyDooTune);
+        grid->addWidget(m_dooTune, 1, 4, Qt::AlignHCenter);
+
+        m_dooHarmonics = makeKnob("Air");
+        m_dooHarmonics->setRange(0.0f, 24.0f);
+        m_dooHarmonics->setDefault(6.0f);
+        m_dooHarmonics->setValueFromNorm([](float n) { return n * 24.0f; });
+        m_dooHarmonics->setNormFromValue([](float v) { return v / 24.0f; });
+        m_dooHarmonics->setLabelFormat([](float v) {
+            return QString::number(v, 'f', 1) + " dB";
+        });
+        connect(m_dooHarmonics, &ClientCompKnob::valueChanged,
+                this, &StripPuduPanel::applyDooHarmonics);
+        grid->addWidget(m_dooHarmonics, 1, 5, Qt::AlignHCenter);
+
+        m_dooMix = makeKnob("Mix");
+        m_dooMix->setRange(0.0f, 1.0f);
+        m_dooMix->setDefault(0.3f);
+        m_dooMix->setValueFromNorm([](float n) { return n; });
+        m_dooMix->setNormFromValue([](float v) { return v; });
+        m_dooMix->setLabelFormat([](float v) {
+            return QString::number(static_cast<int>(v * 100.0f + 0.5f)) + " %";
+        });
+        connect(m_dooMix, &ClientCompKnob::valueChanged,
+                this, &StripPuduPanel::applyDooMix);
+        grid->addWidget(m_dooMix, 1, 6, Qt::AlignHCenter);
+
+        root->addLayout(grid);
+    }
+
+    // The second of the pair, under the controls rather than under the logo.
+    // A stretch item's own size hint is zero, so this does not change what the
+    // panel asks for — the strip cell still sizes to the natural content
+    // height it always did. It only decides where surplus goes when a host
+    // gives the panel more room than that, which is the AetherRX page.
+    root->addStretch(1);
+
+    if (m_audio && pudu()) {
+        m_logo->setPudu(pudu());
+    }
+
+    syncControlsFromEngine();
+}
+
+StripPuduPanel::~StripPuduPanel() = default;
+
+ClientPudu* StripPuduPanel::pudu() const
+{
+    if (!m_audio) return nullptr;
+    return m_side == Side::Rx ? m_audio->clientPuduRx()
+                              : m_audio->clientPuduTx();
+}
+
+void StripPuduPanel::savePuduSettings() const
+{
+    if (!m_audio) return;
+    if (m_side == Side::Rx) m_audio->saveClientPuduRxSettings();
+    else                    m_audio->saveClientPuduSettings();
+}
+
+void StripPuduPanel::showForTx()
+{
+    m_side = Side::Tx;
+    if (m_logo && pudu()) m_logo->setPudu(pudu());
+    const QString title = QString::fromUtf8(
+        "Aetherial Voice Processor \xe2\x80\x94 TX");
+    if (m_titleBar)
+        static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
+    setWindowTitle(title);
+    syncControlsFromEngine();
+    restoreGeometryFromSettings();
+    show();
+    raise();
+    activateWindow();
+}
+
+void StripPuduPanel::showForRx()
+{
+    m_side = Side::Rx;
+    if (m_logo && pudu()) m_logo->setPudu(pudu());
+    const QString title = QString::fromUtf8(
+        "Aetherial Voice Processor \xe2\x80\x94 RX");
+    if (m_titleBar)
+        static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
+    setWindowTitle(title);
+    syncControlsFromEngine();
+    restoreGeometryFromSettings();
+    show();
+    raise();
+    activateWindow();
+}
+
+void StripPuduPanel::syncControlsFromEngine()
+{
+    if (!m_audio || !pudu()) return;
+    ClientPudu* p = pudu();
+    m_restoring = true;
+
+    {
+        const bool isA = (p->mode() == ClientPudu::Mode::Aphex);
+        QSignalBlocker ba(m_modeA);
+        QSignalBlocker bb(m_modeB);
+        m_modeA->setChecked(isA);
+        m_modeB->setChecked(!isA);
+    }
+    { QSignalBlocker b(m_pooDrive);     m_pooDrive->setValue(p->pooDriveDb()); }
+    { QSignalBlocker b(m_pooTune);      m_pooTune->setValue(p->pooTuneHz()); }
+    { QSignalBlocker b(m_pooMix);       m_pooMix->setValue(p->pooMix()); }
+    { QSignalBlocker b(m_dooTune);      m_dooTune->setValue(p->dooTuneHz()); }
+    { QSignalBlocker b(m_dooHarmonics); m_dooHarmonics->setValue(p->dooHarmonicsDb()); }
+    { QSignalBlocker b(m_dooMix);       m_dooMix->setValue(p->dooMix()); }
+
+    m_restoring = false;
+}
+
+void StripPuduPanel::onModeToggled(int id)
+{
+    if (m_restoring || !m_audio) return;
+    pudu()->setMode(
+        id == 1 ? ClientPudu::Mode::Behringer : ClientPudu::Mode::Aphex);
+    savePuduSettings();
+}
+
+void StripPuduPanel::applyPooDrive(float db)
+{
+    if (m_restoring || !m_audio) return;
+    pudu()->setPooDriveDb(db);
+    savePuduSettings();
+}
+void StripPuduPanel::applyPooTune(float hz)
+{
+    if (m_restoring || !m_audio) return;
+    pudu()->setPooTuneHz(hz);
+    savePuduSettings();
+}
+void StripPuduPanel::applyPooMix(float v)
+{
+    if (m_restoring || !m_audio) return;
+    pudu()->setPooMix(v);
+    savePuduSettings();
+}
+void StripPuduPanel::applyDooTune(float hz)
+{
+    if (m_restoring || !m_audio) return;
+    pudu()->setDooTuneHz(hz);
+    savePuduSettings();
+}
+void StripPuduPanel::applyDooHarmonics(float db)
+{
+    if (m_restoring || !m_audio) return;
+    pudu()->setDooHarmonicsDb(db);
+    savePuduSettings();
+}
+void StripPuduPanel::applyDooMix(float v)
+{
+    if (m_restoring || !m_audio) return;
+    pudu()->setDooMix(v);
+    savePuduSettings();
+}
+
+void StripPuduPanel::saveGeometryToSettings()
+{
+    if (m_restoring) return;
+    AppSettings::instance().setValue(
+        "StripPuduPanelGeometry",
+        QString::fromLatin1(saveGeometry().toBase64()));
+}
+
+void StripPuduPanel::restoreGeometryFromSettings()
+{
+    m_restoring = true;
+    const QString b64 = AppSettings::instance()
+        .value("StripPuduPanelGeometry", "").toString();
+    if (!b64.isEmpty()) {
+        restoreGeometry(QByteArray::fromBase64(b64.toLatin1()));
+    }
+    m_restoring = false;
+}
+
+void StripPuduPanel::closeEvent(QCloseEvent* ev)
+{ saveGeometryToSettings(); QWidget::closeEvent(ev); }
+void StripPuduPanel::moveEvent(QMoveEvent* ev)
+{ saveGeometryToSettings(); QWidget::moveEvent(ev); }
+void StripPuduPanel::resizeEvent(QResizeEvent* ev)
+{ saveGeometryToSettings(); QWidget::resizeEvent(ev); }
+void StripPuduPanel::showEvent(QShowEvent* ev)
+{ QWidget::showEvent(ev); }
+void StripPuduPanel::hideEvent(QHideEvent* ev)
+{ saveGeometryToSettings(); QWidget::hideEvent(ev); }
+
+} // namespace AetherSDR

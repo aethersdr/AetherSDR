@@ -1,0 +1,338 @@
+# AetherSDR Theme Style Guide
+
+> **Read this before writing or changing any user-facing UI.** The
+> rule it exists to serve is one sentence:
+>
+> **Every colour in AetherSDR resolves through a ThemeManager token.
+> A contribution never introduces a new hardcoded colour literal.**
+
+For *what the result should look like* on a new or reworked surface — the
+canon's principles, the `color.canon.*` tokens and `CanonWindow` — read
+[`aethersdr-style-guide.md`](aethersdr-style-guide.md) alongside this
+guide; the token inventory behind both is
+[`../theming/canonical-tokens.md`](../theming/canonical-tokens.md).
+
+This guide is the semantic map from *what you are trying to say* on
+screen (error, warning, success, notification, transmit, selection,
+plain text…) to *the token that says it*. If you follow the map, your
+UI is themeable for free, consistent with every existing screen, and
+correct in both bundled themes. If you invent a colour instead, you
+have created one more unique colour in a codebase that is actively
+migrating its colours down onto the token set (#3184) — and a reviewer
+will send you back here.
+
+## 1. How colours work here
+
+The theme system (RFC #3076) is two layers of named tokens, defined in
+`resources/themes/default-dark.json` and `default-light.json` and
+served by `AetherSDR::ThemeManager`:
+
+- **Primitive palette** — a grey ramp (whose steps differ per theme:
+  dark carries `gray.200`/`gray.850`, light carries
+  `gray.100`/`gray.300`/`gray.750`), plus `color.blue.300/500/700`,
+  `color.red.500`, `color.green.500`, `color.amber.500`. These are the
+  raw pigments. **UI code never references primitives directly**; they
+  exist so semantic tokens can share pigments consistently.
+- **Semantic tokens** — `color.accent.danger`, `color.background.tx`,
+  `color.text.secondary`, … Each names a *role*, not a colour. This is
+  the layer UI code uses, and the layer this guide maps.
+
+Tokens can also be **scoped**: the theme JSON can override a token for
+a widget subtree (for example, the `applet/tx` scope turns the
+checked-toggle accent red where the root theme has it blue — scope
+paths are slash-joined, and a widget opts in by carrying the path in
+its `themeContainer` property). The `canon` scope does the same for
+whole windows: AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup,
+TX Band Settings, Callsign Lookup, Connect to Radio, AGC-T Calibration, Icom RC-28 Button Mapping, FFTW Wisdom, MQTT Settings, Keyboard Shortcuts, Ulanzi Dial — Control Mapping, Net Scheduler, Memory Channels, Theme Editor, Support & Diagnostics, the Help guides, Runtime Monitor, What's New, Radio Health, Profile Manager, Import/Export Profiles, MIDI Controller Mapping and Settings Browser sit under `canon/aetherRx`, `canon/aetherTx`, `canon/aetherModem`,
+`canon/aetherMap`, `canon/aetherGps`, `canon/spotHub`, `canon/freedvReporter`, `canon/aetherControl`, `canon/multiFlex`, `canon/radioSetup`, `canon/txBand`, `canon/callsignLookup`, `canon/connection`, `canon/agcCalibration`, `canon/rc28Mapping`, `canon/nr2Wisdom`, `canon/mqttSettings`, `canon/shortcuts`, `canon/ulanziDial`, `canon/netScheduler`, `canon/memory`, `canon/themeEditor`, `canon/support`, `canon/help`, `canon/runtimeMonitor`, `canon/whatsNew`, `canon/radioHealth`, `canon/profileManager`, `canon/profileIO`, `canon/midiMapping` and `canon/settingsBrowser`, and it maps the base tokens onto the canon palette
+there (see [`aethersdr-style-guide.md`](aethersdr-style-guide.md)). The
+widget-aware accessors below resolve scope automatically — prefer them
+inside applets and anything painted inside a scoped window.
+
+A large canon window styles its pages from one sheet on its body rather than
+a sheet per widget. Radio Setup's widgets carry a role the sheet selects on
+(`RadioSetupDialogCommon.h`): a label's tone (`rsTone`: caption, value, hint,
+heading, title, accent for a status in progress, and ok, warn, error), a status chip (`rsChip`) and a button role
+(`rsButton`: select, mute, danger, success). A plain checkable button is an
+on/off toggle, filled `color.toggle.success.*` when on; a Select button is one
+of a set, filled canon cyan when chosen. A disabled control takes
+`color.control.unavailable`, checked or not. Changing a role on a live widget
+re-polishes it, so a status that turns to an error restyles at once.
+
+A canon table takes its rules from `canonTableRules()` (`CanonTableStyle.h`):
+`color.canon.nested` cells with `color.canon.line` rules and border, a
+`color.canon.control` selection band and cyan header text on
+`color.canon.raised`. SpotHub and the multiFLEX Dashboard append their own
+sizes and paddings after it. The selection rule sets no text color, so a
+window that colors items (the dashboard's PTT tick and its own station) keeps
+those colors on a selected row through a delegate, and a window that wants
+plain ink there adds it, as SpotHub does.
+
+Its scroll bars take `canonScrollBarRules()` (`CanonScrollBarStyle.h`): a
+12 px transparent track and a `color.canon.lineHi` handle with no step
+arrows, both orientations. AetherModem, AetherGPS, AetherMap, SpotHub,
+Network Diagnostics, Radio Setup and Icom RC-28 Button Mapping append it to
+their sheets.
+
+### Consuming tokens
+
+```cpp
+auto& tm = AetherSDR::ThemeManager::instance();
+
+// Painting code
+painter.setPen(tm.color("color.accent.danger"));
+painter.setBrush(tm.brush("color.background.1", rect()));  // gradient-safe
+
+// Scope-aware (walks the widget's parent chain for applet overrides)
+painter.setPen(tm.color(this, "color.accent.danger"));
+
+// Stylesheets — {{token}} placeholders, re-applied on theme change
+tm.applyStyleSheet(m_statusLabel,
+    "QLabel { color: {{color.accent.danger}}; font-size: 10px; }");
+```
+
+A token the *loaded theme* omits resolves from the compiled-in seed
+(`src/core/ThemeSeedGenerated.cpp`, generated — never hand-edited):
+`loadThemeFromPath()` re-seeds it as a base layer before flattening the
+JSON on top. A token that exists **nowhere** does not fall back — it
+logs a warning and `color()` returns `Qt::transparent`, while a
+`{{token}}` in a stylesheet resolves to an empty fragment that Qt
+discards, leaving the widget looking unchanged. If a colour is missing
+or refuses to change, check the log for `missing color token`.
+
+## 2. The semantic map
+
+When your UI needs to communicate one of these states, use exactly
+these tokens. Do not approximate them with literals, and do not borrow
+a token for a role it does not name.
+
+### System states
+
+| You are showing… | Token(s) |
+|---|---|
+| **Error / fault / danger / destructive action** | `color.accent.danger` (foreground); `color.button.danger.*.disabled` for a destructive button's disabled state — enabled-state button colours are not tokenised yet, so an enabled destructive button takes its colour from `color.accent.danger` |
+| **Warning / caution / approaching a limit** | `color.accent.warning` (foreground); `color.background.warning` (panel tint); `color.toggle.warning.*` (checked warning toggles) |
+| **A link that is down, not failed (a peripheral OFFLINE)** | `color.accent.offline` — orange, apart from the warning amber and from red, which reads as transmit |
+| **Success / OK / enabled-and-healthy** | `color.accent.success` (foreground); `color.background.success` (panel tint); `color.toggle.success.*` (checked success toggles) |
+| **Notification / message / attention ping** | `color.highlight.message`, with `color.highlight.fg` for text drawn on top |
+| **Transmit-active** | `color.background.tx` + `color.border.tx` (panel), `color.highlight.tx` (marker), `color.slice.tx` (slice flag), `color.tx.mox.*` (MOX button) |
+| **Receive / RX marker** | `color.highlight.rx` |
+| **Selection / active / focused / brand accent** | `color.accent` (primary), `color.accent.bright` (hover/focus), `color.accent.dim` (checked fills, non-primary surfaces), `color.border.accent` |
+
+### Surfaces, text, borders
+
+| Role | Token(s) |
+|---|---|
+| Backgrounds, deepest → raised | `color.background.0` → `color.background.1` → `color.background.2` → `color.background.3`; `color.background.app` (main window); `color.background.spectrum` (display canvas) |
+| Text, most → least emphasis | `color.text.primary` → `color.text.secondary` → `color.text.label` → `color.text.disabled` |
+| Borders | `color.border.subtle` (hairlines), `color.border.strong` (containers), `color.border.accent` (active) |
+
+### Control families
+
+Shared widgets have per-state token families — reach for the family
+before composing from the tables above. `color.toggle.*`,
+`color.slider.*` and `color.knob.*` are complete; `color.button.*` is
+not (see below):
+
+- `color.button.*` — **disabled states only** today (`background`,
+  `foreground`, `border` and their `danger.` counterparts, all
+  `.disabled`); enabled-state button colours are not tokenised yet
+- `color.toggle.*` (base + `.accent/.success/.warning` checked variants —
+  see `docs/theming/toggle-button-tokens.md`)
+- `color.slider.*` / `color.knob.*` (see
+  `docs/theming/slider-knob-tokens.md`)
+- `color.meter.*` (bars, peak/RMS/threshold marks)
+- `color.spectrum.*`, `color.waterfall.*` (traces, grid, colormaps)
+- `color.spe.lcd.*` (hardware-display glass, pixels, idle text, bezel)
+- `color.slice.a…h` + `color.slice.dim.*` (slice identity colours)
+
+The full semantic-token inventory is greppable — 109 tokens, the same
+set the bundled themes carry at root scope:
+
+```bash
+git grep -oh '"color\.[a-zA-Z0-9._]*"' src/core/ThemeSeedGenerated.cpp | sort -u
+```
+
+Keep the character class case-sensitive; a lowercase-only class
+silently drops the four camelCase names. The design rationale and the
+hex values each token canonicalised from live in
+`docs/theming/canonical-tokens.md`.
+
+## 3. Do not deviate
+
+- **No new hex/RGB literals** in `src/` UI code — not in QSS strings,
+  not in `QColor(...)`, not "just for this one label".
+- **No near-miss variants.** `#1b2b3b` because `color.background.1`
+  "felt one shade off" is exactly the drift this guide exists to stop;
+  variants within ΔRGB ≤ 24 of a token are that token
+  (`docs/theming/canonical-tokens.md` documents the collapse rule).
+- **No borrowing across roles.** Amber is a warning, not a decoration;
+  if you want an accent, that's `color.accent`.
+- **Theme-edit, not code-edit.** If a token's *value* looks wrong,
+  propose a change to the theme JSON — do not correct it locally with
+  a literal.
+
+## 4. Genuinely new UX: add a token, never a literal
+
+New UX sometimes needs a colour role that does not exist yet — a new
+meter zone, a new decoder state, a new overlay. That is the one
+sanctioned way a new colour enters the codebase, and it enters as a
+**token**, in the same PR as the UX:
+
+1. Name it semantically in an existing namespace where possible
+   (`color.meter.*`, `color.<feature>.*`), following the patterns
+   above.
+2. Add it to **both** `resources/themes/default-dark.json` and
+   `default-light.json`. Prefer referencing an existing primitive
+   (`{color.amber.500}`) over a fresh hex value — but check the alias
+   resolves in **both** themes: the grey ramps differ, and an alias to a
+   primitive a theme lacks is returned as the literal string
+   (`ThemeManager::resolveAlias()`), yielding an invalid `QColor` with
+   no warning. Nothing catches this for you — `gen_theme_seed.py` reads
+   only `default-dark.json`.
+3. Regenerate the compiled-in seed: `python tools/gen_theme_seed.py`
+   (CI's `check_theme_seed` gate fails the PR if the seed and JSON
+   drift).
+4. Record it in `docs/theming/canonical-tokens.md` — and in this
+   guide's map if it is a new *system* role.
+
+A reviewer seeing a new token asks one question — "is this really a
+new role?" — which is precisely the design conversation a new colour
+deserves.
+
+## 4a. Three-state controls
+
+**Individual controls are never shown or hidden per radio.** Every control
+renders in one of three states, and hiding exists only at *applet* granularity —
+a radio-specific cluster moves to its own applet, which hides wholesale.
+(Maintainer-ruled, #5262 M3a.)
+
+| State | Meaning | Token | Announced as |
+|---|---|---|---|
+| **unavailable** | this radio lacks the capability | `color.control.unavailable` | the reason, verbatim |
+| **inactive** | supported here, not engaged now | `color.control.inactive` | "Available, not currently active" |
+| **active** | engaged | normal text colour | nothing extra |
+
+The reason replaces a control's own tooltip and description only while it is
+unavailable; the control's own texts come back when it is available again. The
+inactive announcement is appended to the control's own description.
+
+### Why dim rather than hide
+
+A hidden control tells a blind operator *nothing at all* — it is not announced,
+so there is no way to learn the radio simply does not support it. A dimmed
+control with a stated reason is discoverable. This has regressed twice: #5266
+gave the Enforce Private IP button a disabled state, tooltip and
+`accessibleDescription`; #5299 replaced all three with a bare `setVisible()`
+four days later. `tools/check_a11y.py` now warns on that shape.
+
+### The reason is required, and a tooltip is not enough
+
+`unavailable` **must** carry a reason, and the reason must reach a screen
+reader. Qt exposes `accessibleDescription` (widgets) and `statusTip`
+(`QAction` — which has no accessible description) to accessibility clients. A tooltip is exposed as help text; it does not replace the primary accessible
+description.
+
+### Contrast, stated honestly
+
+Measured against the app background (`color.gray.900`):
+
+| Token | dark | light |
+|---|---|---|
+| `color.control.inactive` | 7.71:1 | 2.46:1 |
+| `color.control.unavailable` | 2.09:1 | 1.77:1 |
+
+**These do not meet WCAG's 3:1 floor for UI components, and the two states are
+separated by only 1.39:1 in the light theme.** The tokens reuse the existing grey ramp. In the dark theme, unavailable
+matches disabled text; in the light theme it uses a lighter grey than disabled
+text. These retain the palette selected for M3a; improving contrast remains
+tracked under #4896. The consequence is that **colour alone does not reliably distinguish the
+two muted states, especially in the light theme**, which is precisely why the
+accessible description above is mandatory rather than advisory: it is the
+channel that actually carries the distinction.
+
+The underlying greys (`color.text.disabled` at 2.09/2.04, `color.text.label` at
+2.94/3.09) are pre-existing and used tree-wide. Raising them is a visual change
+to every dialog and is tracked separately under #4896, not here.
+
+### Using it
+
+Register with `ControlAvailabilityRegistry` (`src/gui/`) rather than writing
+another `setVisible()`/`setEnabled()` pair. A control declares its predicate
+once; the registry subscribes to `capabilitiesChanged` a single time and
+**applies immediately at registration**, so a widget built after the connect
+edge is correct without the hand-written second push that the Calibration page
+and DemoApplet currently need. M3a introduces the mechanism; those
+production consumers and their second pushes have not yet migrated (M3b).
+
+Standard Qt widget text uses a temporary ThemeManager foreground token layered
+onto the existing stylesheet. Theme switches, token edits and base stylesheet
+updates retain the treatment; Active restores the latest base stylesheet.
+Custom-painted instruments must consume the state token in their paint code.
+An omitted engagement predicate means Inactive. QAction registrations manage
+enabled state and unavailable reasons; per-action color rendering requires its
+menu or toolbar's presentation layer and is not provided by QAction itself.
+
+## 5. Colour-as-data (the exemptions)
+
+A small set of colours are *data*, not theme, and are exempt from the
+no-literals rule above:
+
+- `CompactColorPicker.cpp` swatches — a colour picker's swatches are
+  its content.
+- The *definitions* of waterfall colormap palettes (the
+  `color.waterfall.colormap.*` token values themselves).
+- Canonical token default values in `src/core/ThemeManager.cpp` /
+  `ThemeSeedGenerated.cpp` — those literals *are* the tokens.
+- Brand assets (logos, icons with fixed brand colours).
+
+**The exemption is not automatic in CI.** The ratchet in §6 counts every
+hex literal in any file outside `COLOUR_ALLOWLIST`
+(`tools/audit_colours.py`), which today lists only
+`src/core/ThemeManager.cpp` and `ThemeSeedGenerated.cpp` — so adding one
+swatch to `CompactColorPicker.cpp` fails the gate. If your colour is
+genuinely data, add the FILE to `COLOUR_ALLOWLIST` with a reason in the
+same PR.
+
+If you believe you have found a new member of this list, say so in the
+PR description rather than deciding silently.
+
+## 6. Checking yourself
+
+`tools/audit_colours.py` is the tool behind this guide — it inventories
+hardcoded colours and suggests the token each one should map to:
+
+```bash
+python tools/audit_colours.py --src src --summary-only
+```
+
+CI runs the same tool as a **blocking** gate. The "Hardcoded-colour
+ratchet" step in `.github/workflows/static-checks.yml` runs it with
+`--compare-src <base>/src --strict`, which exits 1 if your branch raises
+the unique-colour, total-reference or `setStyleSheet()` count above **the
+merge base of your branch and `main`**. To see the same verdict before
+you push:
+
+```bash
+BASE=$(git merge-base HEAD origin/main)
+git worktree add /tmp/colour-base "$BASE"
+python tools/audit_colours.py --src src \
+    --compare-src /tmp/colour-base/src --summary-only --strict
+git worktree remove /tmp/colour-base
+```
+
+The base is the merge base rather than `main`'s tip so that colours
+`main` removed after you branched cannot be billed to your PR (#4956).
+
+Conformance is an authoring-time responsibility: choose the token when
+you write the code, and the gate has nothing to flag.
+
+## See also
+
+- `docs/theming/canonical-tokens.md` — the token taxonomy and the
+  legacy-hex → token collapse tables (the migration map for #3184).
+- `docs/style/applet-style-guide.md` — layout, typography, spacing,
+  and widget conventions. Where its historical tables list raw hex
+  values, the token map above is authoritative.
+- `docs/style/dialog-patterns.md` — dialog behaviour conventions.
+- `docs/a11y.md` — contrast and accessibility expectations.

@@ -1,0 +1,12 @@
+// GENERATED -- do not edit. Written by cmake/AetherBuildIdentity.cmake at BUILD
+// time, not configure time, so `cmake --build` after a new commit updates it
+// without re-running cmake (#5804).
+#pragma once
+
+// `git describe --tags --always --dirty`, e.g. "v26.9.3-68-g7e841682", a bare
+// tag when HEAD is exactly on one, or "unknown" outside a git checkout.
+#define AETHER_BUILD_DESCRIBE           "@AETHER_BUILD_DESCRIBE@"
+#define AETHER_BUILD_SHA                "@AETHER_BUILD_SHA@"
+#define AETHER_BUILD_BASELINE           "@AETHER_BUILD_BASELINE@"
+#define AETHER_BUILD_COMMITS_SINCE_TAG  @AETHER_BUILD_COMMITS_SINCE_TAG@
+#define AETHER_BUILD_DIRTY              @AETHER_BUILD_DIRTY@

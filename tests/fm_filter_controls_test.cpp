@@ -1,0 +1,620 @@
+// Socket-free production widgets and SliceModel. The injected backend supplies
+// capability data only; this is not a simulator peer or a hardware test.
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/KiwiSdrManager.h"
+#include "core/backends/SliceDelta.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "gui/ModeFilterPresets.h"
+#include "gui/RxApplet.h"
+#include "gui/FilterPassbandWidget.h"
+#include "gui/ReceiveCaptureAction.h"
+#include "gui/VfoWidget.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include <QApplication>
+#include <QComboBox>
+#include <QImage>
+#include <QMenu>
+#include <QPushButton>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include <QtTest>
+
+using namespace AetherSDR;
+
+namespace AetherSDR {
+struct RadioModelWakeTestAccess {
+    static void identity(RadioModel& radio, const QString& serial)
+    { radio.m_lastInfo.serial = serial; }
+};
+}
+
+namespace {
+class FilterBackend final : public IRadioBackend {
+public:
+    RadioCapabilities caps;
+    int captureRequests = 0;
+    QString lastCapturePan;
+    RadioCapabilities capabilities() const override { return caps; }
+    bool isConnected() const override { return true; }
+    ReceiveControlPolicy receiveControlPolicy() const override { return ReceiveControlPolicy::Confirmed; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    bool recenterReceiveCapture(const QString& pan) override
+    { ++captureRequests; lastCapturePan = pan; return true; }
+    void setKeying(bool, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion&) override {}
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
+
+void setMode(SliceModel& slice, const QString& mode)
+{
+    SliceDelta delta;
+    delta.mode = mode;
+    delta.filterLow = -8000;
+    delta.filterHigh = 8000;
+    slice.applyChanges(delta);
+}
+
+QPushButton* button(QWidget& widget, const QString& text)
+{
+    for (QPushButton* candidate : widget.findChildren<QPushButton*>()) {
+        if (candidate->text().compare(text, Qt::CaseInsensitive) == 0) {
+            return candidate;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+class FmFilterControlsTest : public QObject {
+    Q_OBJECT
+private slots:
+    void receiveOnlyAntennaControlsUsePublishedPorts()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        FilterBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceDelta initial;
+        initial.rxAntenna = "RX"; initial.rxAntennaList = QStringList{"RX"};
+        initial.txAntenna = QString(); initial.txAntennaList = QStringList{};
+        emit source->sliceChanged(3, initial);
+        QVERIFY(model.slice(3));
+        KiwiSdrManager virtualReceivers;
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(model.slice(3)); vfo.setSlice(model.slice(3));
+        rx.setRadioModel(&model); vfo.setRadioModel(&model);
+        const auto namedButton = [](QWidget& widget, const QString& name) {
+            for (auto* candidate : widget.findChildren<QPushButton*>()) {
+                if (candidate->accessibleName() == name) { return candidate; }
+            }
+            return static_cast<QPushButton*>(nullptr);
+        };
+        for (QWidget* widget : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            auto* receive = namedButton(*widget, "RX antenna");
+            auto* transmit = namedButton(*widget, "TX antenna");
+            QVERIFY(receive && transmit);
+            QCOMPARE(receive->text(), QStringLiteral("RX"));
+            QVERIFY(!receive->isEnabled());
+            QVERIFY(receive->accessibleDescription().contains("fixed"));
+            QCOMPARE(transmit->text(), QStringLiteral("None"));
+            QVERIFY(!transmit->isEnabled());
+            QVERIFY(transmit->accessibleDescription().contains("receive-only"));
+        }
+        const QString profileId = virtualReceivers.addProfile("Virtual receiver", "kiwi.example.test:8073");
+        rx.setKiwiSdrManager(&virtualReceivers); vfo.setKiwiSdrManager(&virtualReceivers);
+        for (QWidget* widget : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            auto* receive = namedButton(*widget, "RX antenna");
+            QVERIFY(receive->isEnabled());
+            receive->click();
+            auto* menu = receive->findChild<QMenu*>();
+            QVERIFY(menu);
+            QStringList ports;
+            for (auto* action : menu->actions()) { ports.append(action->data().toString()); }
+            QCOMPARE(ports, (QStringList{"RX", virtualReceivers.virtualAntennaToken(profileId)}));
+            menu->close();
+        }
+        source->caps.canTransmit = true;
+        initial.rxAntenna = "ANT1"; initial.rxAntennaList = QStringList{"ANT1", "ANT2"};
+        initial.txAntenna = "ANT1"; initial.txAntennaList = QStringList{"ANT1", "ANT2"};
+        emit source->sliceChanged(3, initial);
+        emit model.capabilitiesChanged(true, source->caps);
+        for (QWidget* widget : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            auto* receive = namedButton(*widget, "RX antenna");
+            auto* transmit = namedButton(*widget, "TX antenna");
+            QVERIFY(receive->isEnabled() && transmit->isEnabled());
+            QCOMPARE(transmit->text(), QStringLiteral("ANT1"));
+        }
+    }
+
+    void captureActionUsesLiveCapabilityAndModelIntent()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        FilterBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        emit source->panCenterBandwidthChanged(QStringLiteral("0xe1000000"), 100.0, 1.0);
+        ReceiveCaptureAction action(model, [] { return QStringLiteral("0xe1000000"); }, &model);
+        QVERIFY(!action.isEnabled());
+        QVERIFY(!action.statusTip().isEmpty());
+        action.trigger();
+        QCOMPARE(source->captureRequests, 0);
+        source->caps.receiveCapturePlacement = ReceiveCapturePlacement{48'000};
+        // The injection seam wires receiver state only; deliver the same
+        // capability event that setupBackend publishes in a real session.
+        emit model.capabilitiesChanged(true, source->caps);
+        QVERIFY(action.isEnabled());
+        action.trigger();
+        QCOMPARE(source->captureRequests, 1);
+        QCOMPARE(source->lastCapturePan, QStringLiteral("0xe1000000"));
+        source->caps.receiveCapturePlacement.reset();
+        emit model.capabilitiesChanged(true, source->caps);
+        QVERIFY(!action.isEnabled());
+        QVERIFY(!model.requestReceiveCaptureRecenter(QStringLiteral("0xe1000000")));
+        QCOMPARE(source->captureRequests, 1);
+    }
+
+    void squelchUsesDeclaredModesAndAbsoluteAutoThreshold()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        backend->caps.squelchLevelScale = SquelchLevelScale{-120, 1.2,
+            {QStringLiteral("FM"), QStringLiteral("FMN")}, true, QStringLiteral("dBFS/bin"), true};
+        FilterBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        RadioModelWakeTestAccess::identity(model, QStringLiteral("sql-controls"));
+        const RadioSettingsScope scope = model.settingsScope();
+        QVERIFY(scope.setFeature(QStringLiteral("ReceiveSquelchIntent-3"), 1,
+            {{QStringLiteral("manualLevel"), 44}, {QStringLiteral("autoEnabled"), false}}));
+        SliceDelta initial;
+        initial.mode = QStringLiteral("FMN"); initial.frequency = 100.3;
+        initial.filterLow = -8000; initial.filterHigh = 8000;
+        initial.squelchOn = false; initial.squelchLevel = 44;
+        emit source->sliceChanged(3, initial);
+        QVERIFY(model.slice(3));
+        SliceModel& slice = *model.slice(3);
+        slice.applyChanges(initial); slice.setManualSquelchLevel(44);
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice); vfo.setSlice(&slice);
+        rx.setRadioModel(&model); vfo.setRadioModel(&model);
+        QPushButton* rxSql = button(rx, QStringLiteral("SQL"));
+        QPushButton* vfoSql = button(vfo, QStringLiteral("SQL"));
+        QVERIFY(rxSql && vfoSql);
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+        QSignalSpy intents(&slice, &SliceModel::receiveSquelchRequested);
+        rxSql->click();
+        QCOMPARE(intents.count(), 1);
+        QCOMPARE(qvariant_cast<SliceSquelchRequest>(intents.last().at(0)).level, 44);
+        rxSql->click();
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QCOMPARE(intents.count(), 2);
+        QCOMPARE(qvariant_cast<SliceSquelchRequest>(intents.last().at(0)).level, 44); // never the 10 dB margin
+        QVERIFY(!slice.squelchOn()); // waits for accepted state
+        initial.squelchOn = true;
+        slice.applyChanges(initial);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        rx.setSlice(nullptr); // flush this receiver's coalesced preference
+        QVERIFY(scope.featureExact(QStringLiteral("ReceiveSquelchIntent-3"))
+            .value(QStringLiteral("autoEnabled")).toBool());
+        emit source->sliceChanged(5, initial);
+        QVERIFY(model.slice(5));
+        rx.setSlice(model.slice(5));
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Manual);
+        rx.setSlice(&slice);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QCOMPARE(rx.sqlManualLevel(), 44);
+        setMode(slice, QStringLiteral("WFM"));
+        QVERIFY(!rxSql->isEnabled() && !vfoSql->isEnabled());
+        QVERIFY2(rxSql->accessibleDescription().contains(QStringLiteral("unavailable in this receive mode")),
+                 qPrintable(rxSql->accessibleDescription()));
+        QVERIFY2(vfoSql->accessibleDescription().contains(QStringLiteral("unavailable in this receive mode")),
+                 qPrintable(vfoSql->accessibleDescription()));
+        const int before = intents.count();
+        rx.cycleSqlModeExternal();
+        QCOMPARE(intents.count(), before);
+        setMode(slice, QStringLiteral("FM"));
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+        initial.mode = QStringLiteral("FM"); initial.squelchOn = false;
+        slice.applyChanges(initial);
+        rx.setSlice(nullptr);
+        QVERIFY(!scope.featureExact(QStringLiteral("ReceiveSquelchIntent-3"))
+            .value(QStringLiteral("autoEnabled")).toBool());
+    }
+
+    void squelchFollowsModeRuleWithoutDeclaredModel_data()
+    {
+        QTest::addColumn<int>("scale");   // 0 absent, 1 Flex legacy, 2 per-mode line only
+        QTest::newRow("absent") << 0;
+        QTest::newRow("legacy-all-modes") << 1;
+        QTest::newRow("line-modes-not-exclusive") << 2;
+    }
+
+    void squelchFollowsModeRuleWithoutDeclaredModel()
+    {
+        // No exclusive squelch scale, no all-mode squelch: the #2504 mode rule
+        // owns SQL availability, and a capability refresh must not re-enable it.
+        // A scale that only places the pan line (every family but RTL) must not
+        // grant SQL, even in a mode it lists.
+        QFETCH(int, scale);
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        if (scale == 1) {
+            backend->caps.squelchLevelScale = legacyDbmSquelchScale();
+        } else if (scale == 2) {
+            backend->caps.squelchLevelScale = SquelchLevelScale{-140, 0.7,
+                {QStringLiteral("USB"), QStringLiteral("DIGU"), QStringLiteral("CW")}, false};
+        }
+        FilterBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("USB"));
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        QPushButton* rxSql = button(rx, QStringLiteral("SQL"));
+        QPushButton* vfoSql = button(vfo, QStringLiteral("SQL"));
+        QVERIFY(rxSql && vfoSql);
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+        for (const char* mode : {"DIGU", "DIGL", "RTTY", "CW"}) {
+            setMode(slice, QString::fromLatin1(mode));
+            QVERIFY2(!rxSql->isEnabled(), mode);
+            QVERIFY2(!vfoSql->isEnabled(), mode);
+            emit model.capabilitiesChanged(true, source->caps);
+            QVERIFY2(!rxSql->isEnabled(), mode);
+            QVERIFY2(!vfoSql->isEnabled(), mode);
+        }
+        setMode(slice, QStringLiteral("USB"));
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+        source->caps.hasModeIndependentSquelch = true;
+        emit model.capabilitiesChanged(true, source->caps);
+        setMode(slice, QStringLiteral("DIGU"));
+        QVERIFY(rxSql->isEnabled() && vfoSql->isEnabled());
+    }
+
+    void undeclaredFmPassbandFollowsFilterAuthority_data()
+    {
+        QTest::addColumn<int>("control");   // 0 absent, 1 engine without FM, 2 radio without FM
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("adjustable");
+        for (const char* mode : {"FM", "NFM", "WBFM"}) {
+            const QString m = QString::fromLatin1(mode);
+            QTest::newRow(qPrintable(QStringLiteral("absent-%1").arg(m))) << 0 << m << true;
+            QTest::newRow(qPrintable(QStringLiteral("engine-%1").arg(m))) << 1 << m << true;
+            QTest::newRow(qPrintable(QStringLiteral("radio-%1").arg(m))) << 2 << m << false;
+        }
+    }
+
+    void undeclaredFmPassbandFollowsFilterAuthority()
+    {
+        // Host-DSP receivers whose record declares no FM row (an engine record
+        // without one, ANAN/Icom/Demo with none) keep the FM passband they had;
+        // HL2 now declares FM and is pinned by hl2ProductionRecordDrivesFmAndWbfm.
+        // A radio-owned filter refuses FM edits
+        // (FlexLib Slice.cs "Cannot change RX filter width when in FM mode").
+        QFETCH(int, control);
+        QFETCH(QString, mode);
+        QFETCH(bool, adjustable);
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        if (control > 0) {
+            backend->caps.receiveFilterControl = ReceiveFilterControl{
+                control == 1 ? SliceFrequencyControl::Authority::Engine
+                             : SliceFrequencyControl::Authority::Radio,
+                {{QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000}}};
+        }
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, mode);
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        FilterPassbandWidget* passband = rx.findChild<FilterPassbandWidget*>();
+        QVERIFY(passband);
+        QCOMPARE(passband->isEnabled(), adjustable);
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QCOMPARE(button(*surface, QStringLiteral("Filter unavailable")) != nullptr, !adjustable);
+        }
+        QSignalSpy intents(&slice, &SliceModel::filterCommandIssued);
+        emit passband->filterChanged(-6000, 6000);
+        QCOMPARE(intents.count(), adjustable ? 1 : 0);
+    }
+
+    void declaredFmFiltersReachBothWidgets_data()
+    {
+        QTest::addColumn<QString>("mode");
+        for (const char* mode : {"FM", "FMN", "NFM"}) {
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+        }
+    }
+
+    void declaredFmFiltersReachBothWidgets()
+    {
+        QFETCH(QString, mode);
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        backend->caps.receiveFilterControl = ReceiveFilterControl{
+            SliceFrequencyControl::Authority::Engine,
+            {{QStringLiteral("FM"), -21600, -1, 1, 21600, 2, 43200},
+             {QStringLiteral("FMN"), -21600, -1, 1, 21600, 2, 43200}}};
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(3);
+        setMode(slice, mode);
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        // Capability binding after slice attachment exercises the lazy path.
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        FilterPassbandWidget* passband = rx.findChild<FilterPassbandWidget*>();
+        QVERIFY(passband);
+        QVERIFY(passband->isEnabled());
+        QSignalSpy intents(&slice, &SliceModel::filterCommandIssued);
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QPushButton* preset = button(*surface, QStringLiteral("8K"));
+            QVERIFY(preset);
+            QVERIFY(!preset->isHidden());
+            QVERIFY(preset->isEnabled());
+            intents.clear();
+            preset->click();
+            QCOMPARE(intents.count(), 1);
+            QCOMPARE(intents.at(0).at(0).toInt(), -4000);
+            QCOMPARE(intents.at(0).at(1).toInt(), 4000);
+            setMode(slice, mode);
+        }
+        passband->resize(200, 80);
+        const QImage enabledPassband = passband->grab().toImage();
+        setMode(slice, QStringLiteral("WFM"));
+        QVERIFY(!passband->isEnabled());
+        QVERIFY(!passband->accessibleDescription().isEmpty());
+        passband->resize(200, 80);
+        QVERIFY(enabledPassband != passband->grab().toImage());
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QVERIFY(!button(*surface, QStringLiteral("1.8K")));
+            QVERIFY(!button(*surface, QStringLiteral("8K")));
+            QPushButton* unavailable = button(*surface, QStringLiteral("Filter unavailable"));
+            QVERIFY(unavailable);
+            QVERIFY(!unavailable->isHidden());
+            QVERIFY(!unavailable->isEnabled());
+            QVERIFY(!unavailable->accessibleDescription().isEmpty());
+        }
+        setMode(slice, mode);
+        QVERIFY(passband->isEnabled());
+        QVERIFY(button(rx, QStringLiteral("8K")));
+        QVERIFY(button(vfo, QStringLiteral("8K")));
+        // A stale saved SSB-shaped filter must neither return nor erase the
+        // usable default ladder during the filter-highlight refresh.
+        AppSettings::instance().setValue(QStringLiteral("FilterPresets_%1").arg(mode),
+                                         QStringLiteral("95:8000"));
+        setMode(slice, QStringLiteral("WFM"));
+        setMode(slice, mode);
+        QVERIFY(button(rx, QStringLiteral("8K")));
+        QVERIFY(button(vfo, QStringLiteral("8K")));
+        AppSettings::instance().remove(QStringLiteral("FilterPresets_%1").arg(mode));
+    }
+
+    void hl2ProductionRecordDrivesFmAndWbfm()
+    {
+        // The production HL2 record, not a hand-written one. Only
+        // receiveFilterControl is borrowed; the HL2 publishes no radio widths
+        // (rxFilterWidthsHz is empty), which FilterBackend's default matches.
+        hl2::Hl2Backend hl2;
+        const RadioCapabilities hl2Caps = hl2.capabilities();
+        QVERIFY(hl2Caps.receiveFilterControl.has_value());
+        QVERIFY(hl2Caps.rxFilterWidthsHz.isEmpty());
+        const ReceiveFilterControl control = *hl2Caps.receiveFilterControl;
+
+        // Ladder: the eight FM presets all sit inside the declared FM row.
+        const QVector<int> ladder{6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000};
+        QCOMPARE(ModeFilters::widthsForMode(QStringLiteral("FM"), &control), ladder);
+        // WBFM has no row of its own (the FM row does not cover it), so no width passes.
+        QVERIFY(ModeFilters::widthsForMode(QStringLiteral("WBFM"), &control).isEmpty());
+        QVERIFY(ModeFilters::fmFilterAdjustable(QStringLiteral("FM"), &control, false));
+        QVERIFY(!ModeFilters::fmFilterAdjustable(QStringLiteral("WBFM"), &control, false));
+
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        backend->caps.receiveFilterControl = control;
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(4);
+        setMode(slice, QStringLiteral("FM"));
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        FilterPassbandWidget* passband = rx.findChild<FilterPassbandWidget*>();
+        QVERIFY(passband);
+        QVERIFY(passband->isEnabled());
+        QSignalSpy intents(&slice, &SliceModel::filterCommandIssued);
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QPushButton* preset = button(*surface, QStringLiteral("8K"));
+            QVERIFY(preset);
+            QVERIFY(!preset->isHidden());
+            intents.clear();
+            preset->click();
+            QCOMPARE(intents.count(), 1);
+            QCOMPARE(intents.at(0).at(0).toInt(), -4000);
+            QCOMPARE(intents.at(0).at(1).toInt(), 4000);
+        }
+        setMode(slice, QStringLiteral("WBFM"));
+        QVERIFY(!passband->isEnabled());
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QVERIFY(!button(*surface, QStringLiteral("8K")));
+            QPushButton* unavailable = button(*surface, QStringLiteral("Filter unavailable"));
+            QVERIFY(unavailable);
+            QVERIFY(!unavailable->isHidden());
+        }
+    }
+
+    void hl2CwSavedPresetsRespectProductionRanges_data()
+    {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<QString>("saved");
+        QTest::addColumn<QString>("label");
+        QTest::addColumn<int>("low");
+        QTest::addColumn<int>("high");
+        for (const QString& mode : {QStringLiteral("CW"), QStringLiteral("CWL")}) {
+            QTest::newRow(qPrintable(mode + "-edges"))
+                << mode << QStringLiteral("-170:170") << QStringLiteral("340") << -170 << 170;
+            QTest::newRow(qPrintable(mode + "-width"))
+                << mode << QStringLiteral("340") << QStringLiteral("340") << -170 << 170;
+            QTest::newRow(qPrintable(mode + "-mixed"))
+                << mode << QStringLiteral("300:1060,-170:170,-7000:7000")
+                << QStringLiteral("340") << -170 << 170;
+            QTest::newRow(qPrintable(mode + "-invalid"))
+                << mode << QStringLiteral("300:1060,-7000:7000")
+                << QStringLiteral("500") << -250 << 250;
+        }
+    }
+
+    void hl2CwSavedPresetsRespectProductionRanges()
+    {
+        QFETCH(QString, mode);
+        QFETCH(QString, saved);
+        QFETCH(QString, label);
+        QFETCH(int, low);
+        QFETCH(int, high);
+        const QString key = QStringLiteral("FilterPresets_%1").arg(mode);
+        AppSettings::instance().setValue(key, saved);
+        const auto clearPresets = qScopeGuard([key] { AppSettings::instance().remove(key); });
+
+        hl2::Hl2Backend hl2;
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        backend->caps.receiveFilterControl = hl2.capabilities().receiveFilterControl;
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(4);
+        setMode(slice, mode);
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        QSignalSpy intents(&slice, &SliceModel::filterCommandIssued);
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QVERIFY(!button(*surface, QStringLiteral("760")));
+            QVERIFY(!button(*surface, QStringLiteral("14K")));
+            QPushButton* preset = button(*surface, label);
+            QVERIFY(preset);
+            QVERIFY(!preset->isHidden());
+            QVERIFY(preset->isEnabled());
+            intents.clear();
+            preset->click();
+            QCOMPARE(intents.count(), 1);
+            QCOMPARE(intents.at(0).at(0).toInt(), low);
+            QCOMPARE(intents.at(0).at(1).toInt(), high);
+        }
+        QCOMPARE(AppSettings::instance().value(key).toString(), saved);
+    }
+
+    void fixedFmDoesNotAcquireAnAdjustableLadder()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        backend->caps.receiveFilterControl = ReceiveFilterControl{
+            SliceFrequencyControl::Authority::Radio,
+            {{QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000}}};
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("FM"));
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        QVERIFY(!button(rx, QStringLiteral("8K")));
+        QVERIFY(!button(vfo, QStringLiteral("8K")));
+        // The headless record deliberately omits CW; desktop CW remains usable.
+        setMode(slice, QStringLiteral("CW"));
+        QVERIFY(button(rx, QStringLiteral("500")));
+        QVERIFY(button(vfo, QStringLiteral("500")));
+    }
+
+    void nb2FillRowLeavesWithTheNbButtonInFm()
+    {
+        // The NB button hides in FM, so NB2's fill row must too: on a live mode
+        // change (modeChanged) and on attaching a slice already in FM (sync).
+        RadioModel model;
+        model.setBackendForTest(std::make_unique<FilterBackend>(), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("USB"));
+        slice.setNbKind(NoiseBlankerKind::Advanced);
+        VfoWidget vfo;
+        vfo.setRadioModel(&model);
+        vfo.setHasHostNoiseBlanker(true);
+        vfo.setSlice(&slice);
+        auto* fill = vfo.findChild<QComboBox*>(QStringLiteral("dspNB2FillCombo"));
+        QVERIFY(fill && fill->parentWidget());
+        QWidget* row = fill->parentWidget();
+        QVERIFY(!row->isHidden());
+        setMode(slice, QStringLiteral("FM"));
+        QVERIFY(row->isHidden());
+        setMode(slice, QStringLiteral("USB"));
+        QVERIFY(!row->isHidden());
+
+        setMode(slice, QStringLiteral("FM"));
+        VfoWidget attached;
+        attached.setRadioModel(&model);
+        attached.setHasHostNoiseBlanker(true);
+        attached.setSlice(&slice);
+        auto* attachedFill = attached.findChild<QComboBox*>(QStringLiteral("dspNB2FillCombo"));
+        QVERIFY(attachedFill && attachedFill->parentWidget());
+        QVERIFY(attachedFill->parentWidget()->isHidden());
+    }
+
+    void fixedRadioLadderStillWins()
+    {
+        RadioModel model;
+        model.setBackendForTest(std::make_unique<FilterBackend>(), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("FM"));
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        const QList<int> fixed{16000, 12000, 8000};
+        rx.setRadioFilterWidths(fixed);
+        vfo.setRadioFilterWidths(fixed);
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QVERIFY(button(*surface, QStringLiteral("8K")));
+            QVERIFY(!button(*surface, QStringLiteral("6K")));
+            QVERIFY(!button(*surface, QStringLiteral("Filter unavailable")));
+        }
+    }
+};
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("fm-filter-controls"));
+    if (!profile.isValid()) {
+        return 1;
+    }
+    QApplication app(argc, argv);
+    AppSettings::instance().load();
+    FmFilterControlsTest test;
+    return QTest::qExec(&test, argc, argv);
+}
+
+#include "fm_filter_controls_test.moc"

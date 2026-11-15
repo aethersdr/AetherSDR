@@ -1,0 +1,801 @@
+#include "ModelControlWireSpy.h"
+#include "models/TransmitModel.h"
+#include "core/backends/TransmitDelta.h"
+#include "core/ClientQuindarTone.h"
+
+#include <QCoreApplication>
+#include <QObject>
+#include <QStringList>
+
+#include <iostream>
+
+using namespace AetherSDR;
+
+namespace {
+
+bool expect(bool condition, const char* label)
+{
+    std::cout << (condition ? "[ OK ] " : "[FAIL] ") << label << '\n';
+    return condition;
+}
+
+// aetherd RFC 2.3: TransmitModel::applyChanges takes a typed TransmitDelta (the
+// Flex wire decode + compander/dexp aliasing live in FlexBackend::decode*Status,
+// covered by aetherd_transmit_decode_test). This builds a delta from a setter.
+template <class F>
+TransmitDelta td(F&& build)
+{
+    TransmitDelta d;
+    build(d);
+    return d;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+
+    TransmitModel tx;
+    QStringList commands;
+    QStringList blockedMessages;
+    const auto wireEncoder1 = modelControlEncoder(&tx, [&commands](const QString& cmd) { commands.append(cmd); });
+    QObject::connect(&tx, &TransmitModel::tuneCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:tune:on" : "intent:tune:off"); });
+    QObject::connect(&tx, &TransmitModel::moxCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:mox:on" : "intent:mox:off"); });
+    QObject::connect(&tx, &TransmitModel::pttBlocked,
+                     [&blockedMessages](const QString& message) { blockedMessages.append(message); });
+
+    bool ok = true;
+
+    // A backend's MOX delta is the radio's live PTT answer, not this client's
+    // transmit intent. RadioModel publishes it on radioTransmittingChanged;
+    // TransmitModel must retain the observation without opening local mic,
+    // DAX, recorder or serial-PTT consumers through moxChanged.
+    QList<bool> radioTxEdges;
+    QList<bool> localMoxEdges;
+    QObject::connect(&tx, &TransmitModel::transmittingChanged,
+                     [&radioTxEdges](bool on) { radioTxEdges.append(on); });
+    QObject::connect(&tx, &TransmitModel::moxChanged,
+                     [&localMoxEdges](bool on) { localMoxEdges.append(on); });
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(tx.isMox() && !tx.isTransmitting(),
+                 "radio-reported MOX is retained without claiming local TX intent");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
+    ok &= expect(radioTxEdges.isEmpty() && localMoxEdges.isEmpty(),
+                 "radio-reported MOX emits no local transmit-ownership edges");
+
+    // ...but it MUST raise stateChanged(), because that is the only edge a
+    // presentation consumer gating on isMox() can subscribe to (#5306).
+    // MainWindow's PA-current label reads isMox() and repaints on this signal;
+    // wiring it to moxChanged instead produces a slot that never fires, and
+    // the assertion above is precisely why. Guard both directions so a future
+    // change that folds mox into a silent assign, or one that "fixes" this by
+    // reopening moxChanged, fails here.
+    int stateEdges = 0;
+    QObject::connect(&tx, &TransmitModel::stateChanged,
+                     [&stateEdges]() { ++stateEdges; });
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(stateEdges == 1 && tx.isMox(),
+                 "radio-reported MOX raises stateChanged() so isMox() consumers repaint");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(stateEdges == 1,
+                 "an unchanged MOX value raises no redundant stateChanged()");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
+    ok &= expect(stateEdges == 2 && !tx.isMox(),
+                 "the un-key edge repaints too, so the label cannot latch on stale current");
+    ok &= expect(localMoxEdges.isEmpty(),
+                 "and none of that reopened the local moxChanged path");
+
+    // ---- forced mic selection is ADOPTED, never commanded --------------------
+    //
+    // On a radio whose input a client cannot choose (an Icom picks its own from
+    // its MOD Input menu), the Phone applet collapses the source list to PC.
+    // The model has to agree with what the screen shows — it did not, and
+    // reported MIC through a whole session, which made radiocert warn that
+    // transmit audio capture was not running on a radio where that is simply
+    // not how audio gets there.
+    //
+    // But the fix must NOT go through setMicSelection(): that is the operator
+    // intent path, and pushing a capability-forced value back out as intent is
+    // how a capability turns into a command nobody issued (Principle II). So
+    // this asserts the state changed AND that nothing went on the wire.
+    commands.clear();
+    ok &= expect(tx.micSelection() == QStringLiteral("MIC"),
+                 "the model starts on MIC, as a Flex would report");
+    ok &= expect(tx.applyMicSelectionState(QStringLiteral("PC")),
+                 "adopting a forced selection reports that it changed something");
+    ok &= expect(tx.micSelection() == QStringLiteral("PC"),
+                 "and the model now agrees with the screen");
+    ok &= expect(commands.isEmpty(),
+                 "WITHOUT emitting a command — a forced value is not operator intent");
+
+    ok &= expect(!tx.applyMicSelectionState(QStringLiteral("PC")),
+                 "re-adopting the same value is a no-op");
+    ok &= expect(!tx.applyMicSelectionState(QString()),
+                 "and an empty selection is refused rather than stored");
+    ok &= expect(tx.micSelection() == QStringLiteral("PC"),
+                 "so the last good value survives");
+    ok &= expect(commands.isEmpty(), "none of which touched the wire");
+
+    // The operator's own path still commands, so adopting did not break it.
+    tx.setMicSelection(QStringLiteral("MIC"));
+    ok &= expect(!commands.isEmpty(),
+                 "the OPERATOR choosing a source still emits a command");
+    // Leave the recorder clean: the assertions below compare `commands`
+    // EXACTLY, so anything left here fails a test that has nothing to do with
+    // mic selection.
+    commands.clear();
+
+    // CW controls must adopt operator intent even when no radio-side status
+    // echo exists (HL2/software keyer). Otherwise the shortcut toggles the
+    // same stale value forever and the local iambic keyer never sees swap.
+    int cwPhoneEdges = 0;
+    QObject::connect(&tx, &TransmitModel::phoneStateChanged,
+                     [&cwPhoneEdges] { ++cwPhoneEdges; });
+    tx.setCwSwapPaddles(true);
+    ok &= expect(tx.cwSwapPaddles()
+                 && commands == QStringList({"cw swap 1"})
+                 && cwPhoneEdges == 1,
+                 "CW paddle swap is adopted locally and still commands Flex");
+    commands.clear();
+    tx.setCwlEnabled(true);
+    ok &= expect(tx.cwlEnabled()
+                 && commands == QStringList({"cw cwl_enabled 1"})
+                 && cwPhoneEdges == 2,
+                 "CWL selection is adopted locally and still commands Flex");
+    commands.clear();
+
+    tx.startTwoToneTune();
+    ok &= expect(commands == QStringList({
+                     "transmit set tune_mode=two_tone",
+                     "intent:tune:on",
+                 })
+                     && tx.activePttSource() == TransmitModel::PttSource::Tune,
+                 "two-tone tune sets mode and tags the tune source before starting");
+
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = true; }));
+    commands.clear();
+    tx.toggleTwoToneTune();
+    ok &= expect(commands == QStringList({
+                     "intent:tune:off",
+                     "transmit set tune_mode=single_tone",
+                 }),
+                 "two-tone tune toggle stops and restores single-tone mode");
+
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = false; }));
+    commands.clear();
+    tx.toggleTwoToneTune();
+    ok &= expect(commands == QStringList({
+                     "transmit set tune_mode=two_tone",
+                     "intent:tune:on",
+                 }),
+                 "two-tone tune toggle starts two-tone when not tuning");
+
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands == QStringList({"intent:tune:on"})
+                     && tx.activePttSource() == TransmitModel::PttSource::Tune,
+                 "single-tone tune tags the tune source before starting");
+
+    // #5422: no CW source keys while TUNE is active — the radio keys a
+    // `cw key 1` (and CWX text) at TUNE power and is left in TX with no
+    // carrier after key-up. tx is tuning here from the local TUNE control.
+    ok &= expect(!tx.admitsCwKeyEdge(true) && tx.admitsCwKeyEdge(false)
+                     && !tx.admitsCwxSend(),
+                 "tune refuses CW key-down and CWX text, admits key-up");
+    commands.clear();
+    tx.stopTune();
+    ok &= expect(tx.admitsCwKeyEdge(true) && tx.admitsCwxSend()
+                     && commands == QStringList({"intent:tune:off"}),
+                 "stopping tune re-admits CW keying and CWX text");
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = true; }));
+    ok &= expect(!tx.admitsCwKeyEdge(true) && tx.admitsCwKeyEdge(false)
+                     && !tx.admitsCwxSend(),
+                 "tune reported by the radio alone refuses key-down and CWX, admits key-up");
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = false; }));
+    ok &= expect(tx.admitsCwKeyEdge(true) && tx.admitsCwxSend(),
+                 "radio tune=0 re-admits CW keying and CWX text");
+
+    // #5422, other direction: TUNE must not start while a CW source is keying
+    // (measured: it comes up with no carrier and leaves the radio in TX).
+    QString tuneBlock;
+    tx.setTuneAdmission([&tuneBlock] { return tuneBlock; });
+    tuneBlock = QStringLiteral("CW is keyed");
+    commands.clear();
+    blockedMessages.clear();
+    tx.startTune();
+    ok &= expect(commands.isEmpty() && !tx.isTuning()
+                     && blockedMessages == QStringList({"CW is keyed"}),
+                 "TUNE start is refused while CW is keyed");
+    tuneBlock.clear();
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands == QStringList({"intent:tune:on"}) && tx.isTuning(),
+                 "TUNE starts again once CW is released");
+    tx.stopTune();
+    tx.setTuneAdmission({});
+
+    commands.clear();
+    tx.setTuneMode("single_tone");
+    ok &= expect(commands == QStringList({"transmit set tune_mode=single_tone"}),
+                 "single-tone tune mode command is accepted");
+
+    commands.clear();
+    tx.setTuneMode("invalid");
+    ok &= expect(commands.isEmpty(),
+                 "invalid tune mode is ignored");
+
+    commands.clear();
+    tx.setDexp(true);
+    ok &= expect(commands == QStringList({"transmit set compander=1"})
+                 && tx.dexpOn()
+                 && tx.companderOn(),
+                 "DEXP toggle sends compander command and updates local state");
+
+    commands.clear();
+    tx.setDexpLevel(42);
+    ok &= expect(commands == QStringList({"transmit set compander_level=42"})
+                 && tx.dexpLevel() == 42
+                 && tx.companderLevel() == 42,
+                 "DEXP level sends compander_level command and updates local state");
+
+    tx.applyChanges(td([](TransmitDelta& d){ d.compander = false; d.companderLevel = 17; }));
+    ok &= expect(!tx.dexpOn()
+                 && !tx.companderOn()
+                 && tx.dexpLevel() == 17
+                 && tx.companderLevel() == 17,
+                 "compander status updates DEXP state");
+
+    tx.applyChanges(td([](TransmitDelta& d){ d.compander = true; d.companderLevel = 33; }));
+    ok &= expect(tx.dexpOn()
+                 && tx.companderOn()
+                 && tx.dexpLevel() == 33
+                 && tx.companderLevel() == 33,
+                 "canonical compander status wins over legacy DEXP aliases");
+
+    tx.applyChanges(td([](TransmitDelta& d){ d.compander = false; d.companderLevel = 8; }));
+    ok &= expect(!tx.dexpOn()
+                 && !tx.companderOn()
+                 && tx.dexpLevel() == 8
+                 && tx.companderLevel() == 8,
+                 "legacy DEXP aliases update state when canonical compander status is absent");
+
+    tx.setPttPreflight([](TransmitModel::PttSource source) {
+        return source == TransmitModel::PttSource::Tune
+            ? QStringLiteral("blocked")
+            : QString();
+    });
+
+    blockedMessages.clear();
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands.isEmpty()
+                 && blockedMessages == QStringList({"blocked"}),
+                 "tune preflight blocks tune command");
+
+    blockedMessages.clear();
+    commands.clear();
+    tx.startTwoToneTune();
+    ok &= expect(commands.isEmpty()
+                 && blockedMessages == QStringList({"blocked"}),
+                 "two-tone preflight blocks setup and tune commands");
+
+    commands.clear();
+    tx.loadProfile(QStringLiteral("Contest"));
+    ok &= expect(commands == QStringList({"profile tx load \"Contest\""}),
+                 "TX profile load uses profile tx load");
+
+    commands.clear();
+    tx.loadMicProfile(QStringLiteral("Studio Mic"));
+    ok &= expect(commands == QStringList({"profile mic load \"Studio Mic\""}),
+                 "Mic profile load uses profile mic load");
+
+    // #4161 / #4310: rf_power and tune_power need a dedicated signal so TCI
+    // can announce them. A coarse stateChanged() listener cannot tell a power
+    // move apart from any other TX field, and the radio restores per-band
+    // power on QSY — the case that left control-surface dials stale.
+    QList<int> rfPowers;
+    QList<int> tunePowers;
+    QObject::connect(&tx, &TransmitModel::rfPowerChanged,
+                     [&rfPowers](int w) { rfPowers.append(w); });
+    QObject::connect(&tx, &TransmitModel::tunePowerChanged,
+                     [&tunePowers](int w) { tunePowers.append(w); });
+
+    // Radio-originated: the band-switch path. This is the #4310 regression.
+    tx.applyChanges(td([](TransmitDelta& d) { d.rfPower = 30; }));
+    ok &= expect(rfPowers == QList<int>({30}),
+                 "radio-reported rf_power emits rfPowerChanged");
+
+    tx.applyChanges(td([](TransmitDelta& d) { d.tunePower = 15; }));
+    ok &= expect(tunePowers == QList<int>({15}),
+                 "radio-reported tune_power emits tunePowerChanged");
+
+    // An unchanged value must not re-announce, or every status refresh would
+    // re-broadcast to every connected TCI client.
+    tx.applyChanges(td([](TransmitDelta& d) { d.rfPower = 30; }));
+    ok &= expect(rfPowers == QList<int>({30}),
+                 "unchanged rf_power does not re-emit");
+
+    // Locally-originated: GUI slider or a TCI client's SET.
+    rfPowers.clear();
+    tunePowers.clear();
+    tx.setRfPower(75);
+    ok &= expect(rfPowers == QList<int>({75}),
+                 "setRfPower emits rfPowerChanged");
+
+    tx.setTunePower(20);
+    ok &= expect(tunePowers == QList<int>({20}),
+                 "setTunePower emits tunePowerChanged");
+
+    rfPowers.clear();
+    tx.setRfPower(75);
+    ok &= expect(rfPowers.isEmpty(),
+                 "setRfPower to the same value does not re-emit");
+    commands.clear();
+    tx.setTxFilter(1200, 1800);
+    ok &= expect(commands == QStringList({
+                     "transmit set filter_low=1200 filter_high=1800",
+                 }),
+                 "paired TX filter update is sent atomically");
+
+    // ── TX passband: optimistic adoption + the operator-intent signal ───────
+    //
+    // Both halves matter on a radio that modulates on this host. There is no
+    // status echo there, so a setter that only emitted the Flex verb would leave
+    // the model — and therefore the Phone applet's sliders — showing the old
+    // passband while the modulator kept its mode default. And the backend needs
+    // an intent signal it can bind to that applyStatus() never emits, or radio
+    // state would be echoed back as a fresh command.
+    {
+        QList<QPair<int, int>> intents;
+        QObject::connect(&tx, &TransmitModel::txFilterCommandIssued,
+                         [&intents](int lo, int hi) { intents.append({lo, hi}); });
+        commands.clear();
+        tx.setTxFilter(100, 4000);
+        ok &= expect(tx.txFilterLow() == 100 && tx.txFilterHigh() == 4000,
+                     "setTxFilter adopts the passband without waiting for a status echo");
+        ok &= expect(intents == QList<QPair<int, int>>({{100, 4000}}),
+                     "setTxFilter announces operator intent for the seam");
+
+        // The single-edge setters have to carry the other edge through, or
+        // dragging one slider resets the other to whatever it was constructed
+        // with.
+        intents.clear();
+        tx.setTxFilterLow(200);
+        ok &= expect(tx.txFilterLow() == 200 && tx.txFilterHigh() == 4000,
+                     "setTxFilterLow preserves the high cut");
+        tx.setTxFilterHigh(3500);
+        ok &= expect(tx.txFilterLow() == 200 && tx.txFilterHigh() == 3500,
+                     "setTxFilterHigh preserves the low cut");
+
+        // eSSB has to survive the bounds. 100..6000 is a real setting, not an
+        // edge case, and a clamp at 3 kHz would silently make the control a lie.
+        tx.setTxFilter(100, 6000);
+        ok &= expect(tx.txFilterLow() == 100 && tx.txFilterHigh() == 6000,
+                     "an eSSB passband is not clamped away");
+
+        // Radio status must NOT look like operator intent — otherwise a Flex's
+        // own echo would be sent straight back out as a command.
+        intents.clear();
+        TransmitDelta echo;
+        echo.txFilterLow = 300;
+        echo.txFilterHigh = 2700;
+        tx.applyChanges(echo);
+        ok &= expect(tx.txFilterLow() == 300 && tx.txFilterHigh() == 2700,
+                     "radio status still updates the passband");
+        ok &= expect(intents.isEmpty(),
+                     "applying radio status does not emit operator intent");
+    }
+
+    // ── Mic level: the same operator-intent contract ────────────────────────
+    //
+    // Hl2TxDsp::setMicGain had no production caller: the slider's `transmit set
+    // miclevel=` is dropped by a backend with no command plane, so mic gain did
+    // nothing at all on the HL2 and an operator sweeping it end to end saw no
+    // change on the air. micLevelCommandIssued is the seam's route in.
+    //
+    // The applyChanges half is the one that bites if it is wrong. A Flex echoes
+    // miclevel back in transmit status, and if that echo looked like intent it
+    // would be handed straight back to the seam as a fresh command.
+    {
+        QList<int> micIntents;
+        QObject::connect(&tx, &TransmitModel::micLevelCommandIssued,
+                         [&micIntents](int level) { micIntents.append(level); });
+
+        micIntents.clear();
+        tx.setMicLevel(80);
+        ok &= expect(tx.micLevel() == 80, "setMicLevel adopts the level");
+        ok &= expect(micIntents == QList<int>({80}),
+                     "setMicLevel announces operator intent for the seam");
+
+        // Re-asserting the SAME level must still reach the seam. A
+        // host-modulating backend can have been reset underneath the model — a
+        // reconnect, a radio swap — while m_micLevel never moved, and gating on
+        // "changed" would leave the modulator at its default with the slider
+        // insisting otherwise.
+        micIntents.clear();
+        tx.setMicLevel(80);
+        ok &= expect(micIntents == QList<int>({80}),
+                     "re-setting an unchanged mic level still re-asserts to the seam");
+
+        // Out of range is clamped before it is announced, so the seam never has
+        // to defend itself against a CAT client's arithmetic.
+        micIntents.clear();
+        tx.setMicLevel(150);
+        ok &= expect(tx.micLevel() == 100 && micIntents == QList<int>({100}),
+                     "an over-range mic level is clamped before it reaches the seam");
+
+        micIntents.clear();
+        TransmitDelta micEcho;
+        micEcho.micLevel = 42;
+        tx.applyChanges(micEcho);
+        ok &= expect(tx.micLevel() == 42, "radio status still updates the mic level");
+        ok &= expect(micIntents.isEmpty(),
+                     "applying radio status does not emit mic operator intent");
+    }
+
+    // ── CW break-in delay: "hold" against SmartSDR's speed-linked QSK floor ──
+    //
+    // SmartSDR re-pins break_in_delay to a WPM-derived QSK floor on a speed
+    // change and walks it down as WPM rises — on an inline amplifier that can't
+    // tolerate QSK, silent hot-switching. The opt-in "hold" re-asserts the
+    // operator's committed delay from the SPEED-COMMAND path (setCwSpeed), never
+    // from applyChanges: a command issued out of the status-apply path is the
+    // client→radio feedback loop Principle II forbids (#5288 review). With hold
+    // off — the default — the status path only ever adopts.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        const auto wireEncoder2 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        // Hold off (default): the radio walks break_in_delay down on a speed
+        // change and the status path adopts it verbatim — nothing on the wire.
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 20; d.cwDelay = 48; }));
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 32; d.cwDelay = 11; }));
+        ok &= expect(cw.cwDelay() == 11 && cwCmds.isEmpty(),
+                     "hold off: a speed-coupled delay drop is adopted, no command emitted");
+
+        // The synthetic delta RadioModel::restoreClientOwnedCwState builds
+        // carries cwSpeed and cwDelay together in one applyChanges call. It must
+        // adopt wholesale — no re-assert, no command (the cross-session leak the
+        // first revision had, #5288 Blocker 2).
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 25; d.cwDelay = 100; }));
+        ok &= expect(cw.cwSpeed() == 25 && cw.cwDelay() == 100 && cwCmds.isEmpty(),
+                     "a combined speed+delay status delta is adopted wholesale");
+
+        // Local speed change, hold off: only the wpm command goes out.
+        cw.setCwDelay(300);
+        cwCmds.clear();
+        cw.setCwSpeed(28);
+        ok &= expect(cwCmds == QStringList({"cw wpm 28"}),
+                     "hold off: setCwSpeed emits only the wpm command");
+    }
+
+    // Hold on: re-assert the committed delay on the operator's own speed change.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        const auto wireEncoder3 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        cw.setCwDelay(48);                 // operator commits a delay above QSK
+        cw.setHoldBreakInDelay(true);
+        cwCmds.clear();
+
+        // wpm command first, then the committed delay rides out right behind it
+        // so the radio's floor walk never lands. Adopted locally so the slider
+        // does not dip between the two echoes.
+        cw.setCwSpeed(30);
+        ok &= expect(cwCmds == QStringList({"cw wpm 30", "cw break_in_delay 48"}),
+                     "hold on: the committed delay is re-asserted after the wpm command");
+
+        // The re-assert must not write the model's delay. The radio's floor is
+        // enforced on the write side too (#5519: `Parameter out of range`), so a
+        // local adopt can display a value the radio refused — and when a speed
+        // change does not move the floor the radio sends no break_in_delay
+        // status, so nothing would ever correct it (#5288 review, blocker 2).
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 12; }));  // radio walks it
+        cw.setCwSpeed(33);
+        ok &= expect(cwCmds == QStringList({"cw wpm 33", "cw break_in_delay 48"}),
+                     "hold on: the re-assert still goes out after the radio walked the delay");
+        ok &= expect(cw.cwDelay() == 12,
+                     "hold on: the re-assert does NOT overwrite radio truth locally");
+
+        // The radio's echo of the walked-down floor still arrives. With hold on
+        // the model still does NOT fight it from the status path (Principle II)
+        // — it adopts. The re-assert above is the one-shot protection, and more
+        // delay than asked for is safe for the amp anyway.
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 11; }));
+        ok &= expect(cw.cwDelay() == 11 && cwCmds.isEmpty(),
+                     "hold on: applyChanges still only adopts, never re-commands");
+
+        // Every subsequent operator speed change re-asserts from the committed
+        // value (not from whatever the radio last echoed).
+        cwCmds.clear();
+        cw.setCwSpeed(34);
+        ok &= expect(cwCmds == QStringList({"cw wpm 34", "cw break_in_delay 48"}),
+                     "hold on: each operator speed change re-asserts the committed delay");
+
+        // Nit: the floor only moves when the speed does, and the knob/shortcut
+        // paths clamp, so a detent held against the bound calls setCwSpeed()
+        // with an unchanged value. That must not re-send (#5288 review).
+        cwCmds.clear();
+        cw.setCwSpeed(34);
+        cw.setCwSpeed(34);
+        ok &= expect(cwCmds == QStringList({"cw wpm 34", "cw wpm 34"}),
+                     "hold on: an unchanged speed re-sends wpm but never the delay");
+    }
+
+    // A committed delay of 0 is deliberate QSK — never re-asserted.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        const auto wireEncoder4 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        cw.setHoldBreakInDelay(true);
+        cw.setCwDelay(0);
+        cwCmds.clear();
+        cw.setCwSpeed(35);
+        ok &= expect(cwCmds == QStringList({"cw wpm 35"}),
+                     "a committed delay of 0 (QSK) is never re-asserted");
+    }
+
+    // Enabling hold captures nothing on its own — it holds only what the
+    // operator SETS via setCwDelay. The setter is a no-op on no-change; the
+    // committed value follows the latest setCwDelay.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        const auto wireEncoder5 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
+        QList<bool> holdEdges;
+        QObject::connect(&cw, &TransmitModel::holdBreakInDelayChanged,
+                         [&holdEdges](bool on) { holdEdges.append(on); });
+
+        // Delay only ever arrived from the radio; operator never touched it.
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 40; }));
+        cw.setHoldBreakInDelay(true);
+        ok &= expect(holdEdges == QList<bool>({true}),
+                     "holdBreakInDelayChanged fires once on enable");
+        cwCmds.clear();
+        cw.setCwSpeed(26);
+        ok &= expect(cwCmds == QStringList({"cw wpm 26"}),
+                     "hold on but no operator-set delay: nothing is re-asserted (not the radio's 40)");
+
+        // The operator now sets a delay explicitly — that is what hold protects.
+        cw.setCwDelay(72);
+        cwCmds.clear();
+        cw.setCwSpeed(27);
+        ok &= expect(cwCmds == QStringList({"cw wpm 27", "cw break_in_delay 72"}),
+                     "once the operator sets a delay, hold re-asserts it");
+
+        // A further explicit setCwDelay redefines the committed value.
+        cw.setCwDelay(90);
+        cwCmds.clear();
+        cw.setCwSpeed(28);
+        ok &= expect(cwCmds == QStringList({"cw wpm 28", "cw break_in_delay 90"}),
+                     "the committed delay tracks the operator's latest setCwDelay");
+
+        // Toggling hold off stops the re-assert; a redundant set emits nothing.
+        cw.setHoldBreakInDelay(false);
+        cw.setHoldBreakInDelay(false);
+        ok &= expect(holdEdges == QList<bool>({true, false}),
+                     "holdBreakInDelayChanged fires only on a real transition");
+        cwCmds.clear();
+        cw.setCwSpeed(29);
+        ok &= expect(cwCmds == QStringList({"cw wpm 29"}), "hold off again: no re-assert");
+    }
+
+    // Armed vs on: the preference persists across a disconnect and the held
+    // delay does not, so "on but holding nothing" is a real, reachable state and
+    // the UI has to be able to tell it apart (#5288 review, blocker 1).
+    {
+        TransmitModel cw;
+        QList<bool> armedEdges;
+        // Also record what the GETTER says at the moment the signal fires: a
+        // slot that reads holdBreakInDelayArmed() must not see the state being
+        // left behind. Emitting before the member is updated is how the button
+        // kept reading "holding 48 ms" after a disconnect had cleared it.
+        QList<bool> armedAtEmit;
+        QObject::connect(&cw, &TransmitModel::holdBreakInDelayArmedChanged,
+                         [&](bool a) {
+                             armedEdges.append(a);
+                             armedAtEmit.append(cw.holdBreakInDelayArmed());
+                         });
+
+        ok &= expect(!cw.holdBreakInDelayArmed(), "a fresh model is not armed");
+        cw.setHoldBreakInDelay(true);
+        ok &= expect(cw.holdBreakInDelay() && !cw.holdBreakInDelayArmed(),
+                     "enabling hold turns it on but does not arm it");
+        ok &= expect(armedEdges.isEmpty(), "enabling hold emits no arming edge");
+
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 40; }));
+        ok &= expect(!cw.holdBreakInDelayArmed(),
+                     "a radio-reported delay does not arm the hold");
+
+        cw.setCwDelay(48);
+        ok &= expect(cw.holdBreakInDelayArmed() && armedEdges == QList<bool>({true}),
+                     "the operator setting a delay arms the hold, once");
+        cw.setCwDelay(60);
+        ok &= expect(armedEdges == QList<bool>({true}),
+                     "a further delay change does not re-emit the arming edge");
+
+        // Deliberate full QSK is committed but is not something to hold.
+        cw.setCwDelay(0);
+        ok &= expect(!cw.holdBreakInDelayArmed()
+                         && armedEdges == QList<bool>({true, false}),
+                     "a committed delay of 0 (QSK) disarms the hold");
+
+        cw.setCwDelay(72);
+        cw.resetState();
+        ok &= expect(cw.holdBreakInDelay() && !cw.holdBreakInDelayArmed(),
+                     "after a disconnect the hold is still ON but no longer armed");
+        ok &= expect(armedEdges == QList<bool>({true, false, true, false}),
+                     "resetState emits the disarming edge so the UI can show it");
+        ok &= expect(armedAtEmit == armedEdges,
+                     "holdBreakInDelayArmed() already agrees with every edge as it is emitted");
+    }
+
+    // resetState() drops the previous session's DAX flag: a backend with no
+    // Flex command plane never echoes dax=, so nothing else would clear it
+    // (#5871).
+    {
+        TransmitModel dax;
+        dax.setDax(true);
+        int micEdges = 0;
+        QObject::connect(&dax, &TransmitModel::micStateChanged,
+                         [&micEdges] { ++micEdges; });
+        dax.resetState();
+        ok &= expect(!dax.daxOn(), "resetState clears the previous session's DAX flag");
+        ok &= expect(micEdges > 0, "resetState announces the DAX change through micStateChanged");
+    }
+
+    // resetState() (every disconnect, via RadioModel::onDisconnected) clears the
+    // committed delay but keeps the client-side hold preference — #5288
+    // Blocker 2, the cross-session leak.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        const auto wireEncoder6 = modelControlEncoder(&cw, [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        cw.setHoldBreakInDelay(true);
+        cw.setCwDelay(300);               // committed for radio A's session
+        cw.resetState();
+
+        ok &= expect(cw.holdBreakInDelay(), "resetState keeps the hold preference");
+        cwCmds.clear();
+        cw.setCwSpeed(25);
+        ok &= expect(cwCmds == QStringList({"cw wpm 25"}),
+                     "resetState clears the committed delay — radio A's value is not re-asserted at radio B");
+
+        // Radio B's first explicit delay rebuilds the committed value.
+        cw.setCwDelay(60);
+        cwCmds.clear();
+        cw.setCwSpeed(26);
+        ok &= expect(cwCmds == QStringList({"cw wpm 26", "cw break_in_delay 60"}),
+                     "after reset the committed delay rebuilds from the new session");
+    }
+
+    ClientQuindarTone quindar;
+    quindar.prepare(24000.0);
+    quindar.setEnabled(true);
+    tx.setQuindarTone(&quindar);
+    tx.setTxModeGetter([] { return QStringLiteral("USB"); });
+    commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Wspr);
+    ok &= expect(commands == QStringList({"intent:mox:on"})
+                 && quindar.phase() == ClientQuindarTone::Phase::Idle,
+                 "WSPR PTT bypasses Quindar signaling");
+
+    // ── ATU tune failure and user abort tests ──
+    {
+        TransmitModel atuTx;
+        QList<QPair<ATUStatus, QString>> failures;
+        QObject::connect(&atuTx, &TransmitModel::atuTuneFailed,
+                         [&failures](ATUStatus s, const QString& msg) {
+                             failures.append(qMakePair(s, msg));
+                         });
+
+        // 1. InProgress -> FailBypass emits atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.size() == 1
+                     && failures.first().first == ATUStatus::FailBypass
+                     && !failures.first().second.isEmpty(),
+                     "InProgress -> FailBypass emits atuTuneFailed");
+
+        // 2. InProgress -> Fail emits atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL"); }));
+        ok &= expect(failures.size() == 1
+                     && failures.first().first == ATUStatus::Fail
+                     && !failures.first().second.isEmpty(),
+                     "InProgress -> Fail emits atuTuneFailed");
+
+        // 3. InProgress -> Successful does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL"); }));
+        ok &= expect(failures.isEmpty(),
+                     "InProgress -> Successful does not emit atuTuneFailed");
+
+        // 4. InProgress -> OK does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_OK"); }));
+        ok &= expect(failures.isEmpty(),
+                     "InProgress -> OK does not emit atuTuneFailed");
+
+        // 5. User aborts via atuBypass() while in progress -> FailBypass/Aborted does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        atuTx.atuBypass();
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.isEmpty(),
+                     "User-aborted tune does not emit atuTuneFailed on FailBypass");
+
+        // 6. Direct FailBypass on connect without prior InProgress does NOT emit atuTuneFailed
+        TransmitModel freshTx;
+        failures.clear();
+        QObject::connect(&freshTx, &TransmitModel::atuTuneFailed,
+                         [&failures](ATUStatus s, const QString& msg) {
+                             failures.append(qMakePair(s, msg));
+                         });
+        freshTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.isEmpty(),
+                     "Initial status FailBypass without InProgress does not emit atuTuneFailed");
+    }
+
+    // PTT Mic Override (#6442): v4.3 firmware reports it, earlier firmware never
+    // does. The presence latch is what tells the two apart, so it must fire on
+    // the 0 default even though the value does not change.
+    {
+        TransmitModel pttTx;
+        int stateEdges = 0;
+        QObject::connect(&pttTx, &TransmitModel::stateChanged, [&stateEdges] { ++stateEdges; });
+        ok &= expect(!pttTx.havePttMicOverride() && !pttTx.pttMicOverride(),
+                     "PTT mic override is unreported before any transmit status");
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.rfPower = 50; }));
+        ok &= expect(!pttTx.havePttMicOverride(),
+                     "pre-4.3 transmit status without the key leaves it unreported");
+        stateEdges = 0;
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.pttMicOverride = false; }));
+        ok &= expect(pttTx.havePttMicOverride() && !pttTx.pttMicOverride() && stateEdges == 1,
+                     "a reported 0 default latches the key and announces it");
+        pttTx.applyChanges(td([](TransmitDelta& d) { d.pttMicOverride = true; }));
+        ok &= expect(pttTx.pttMicOverride(), "the radio's echo is adopted");
+        pttTx.resetState();
+        ok &= expect(!pttTx.havePttMicOverride() && !pttTx.pttMicOverride(),
+                     "a session reset forgets the radio's PTT mic override");
+    }
+
+    // An applied CW pitch announces cwPitchReported before cwPitchChanged, and a
+    // repeat of the held value is still announced; the CW decoder's range rule
+    // depends on both. A local setter announces only the change.
+    {
+        TransmitModel pitchTx;
+        QStringList order;
+        QObject::connect(&pitchTx, &TransmitModel::cwPitchReported,
+                         [&order](int hz) { order.append(QStringLiteral("reported:%1").arg(hz)); });
+        QObject::connect(&pitchTx, &TransmitModel::cwPitchChanged,
+                         [&order](int hz) { order.append(QStringLiteral("changed:%1").arg(hz)); });
+        // CONSTRUCTED pitches: they exercise the signal order only.
+        pitchTx.applyChanges(td([](TransmitDelta& d) { d.cwPitch = 800; }));
+        ok &= expect(order == QStringList{"reported:800", "changed:800"},
+                     "an applied CW pitch announces the report before the change");
+        order.clear();
+        pitchTx.applyChanges(td([](TransmitDelta& d) { d.cwPitch = 800; }));
+        ok &= expect(order == QStringList{"reported:800"},
+                     "a repeated CW pitch is announced as a report without a change");
+        order.clear();
+        pitchTx.setCwPitch(700);
+        ok &= expect(order == QStringList{"changed:700"},
+                     "a local CW pitch change is not announced as a report");
+    }
+
+    return ok ? 0 : 1;
+}

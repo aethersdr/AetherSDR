@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aethersdr-automation": {
+      "command": "python3",
+      "args": ["tools/aether_mcp.py"]
+    }
+  }
+}

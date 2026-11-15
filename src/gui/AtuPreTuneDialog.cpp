@@ -1,0 +1,1114 @@
+#include "AtuPreTuneDialog.h"
+#include "AtuPreTuneCenters.h"
+#include "FramelessWindowTitleBar.h"
+#include "FramelessResizer.h"
+#include "core/AppSettings.h"
+#include "core/TxKeyingMarker.h"
+#include "models/BandPlanManager.h"
+#include "models/MeterModel.h"
+#include "models/PanadapterModel.h"
+#include "models/RadioModel.h"
+#include "models/Kat500TxController.h"
+#include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+
+#include <QApplication>
+#include <QCheckBox>
+#include <QCloseEvent>
+#include <QComboBox>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QMessageBox>
+#include "ScopedChildWidget.h"
+#include <QPushButton>
+#include <QScrollArea>
+#include <QScopeGuard>
+#include <QStackedWidget>
+#include <QTimer>
+#include <QVBoxLayout>
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
+#include "core/ThemeManager.h"
+
+namespace AetherSDR {
+
+namespace {
+
+// Canonical HF/6m amateur bands. Each row carries a search window used to pick
+// which segments of the active BandPlanManager belong to the band — actual
+// low/high are derived from those segments so the sweep follows the region's
+// regulatory edges rather than a hard-coded table. Segment sizes follow the
+// issue's IARU R1 reference table. (#2624)
+struct BandSpec {
+    const char* name;
+    double  searchLowMhz;
+    double  searchHighMhz;
+    int     segmentKhz;
+    int     katSegmentKhz;
+};
+
+constexpr BandSpec kBandSpecs[] = {
+    {"160m",  1.6,  2.1,    9,  10},
+    {"80m",   3.3,  4.1,    9,  20},
+    {"60m",   5.2,  5.5,    9,  20},
+    {"40m",   6.9,  7.4,   25,  20},
+    {"30m",  10.0, 10.2,   25,  20},
+    {"20m",  13.9, 14.5,   51,  20},
+    {"17m",  18.0, 18.3,   51,  20},
+    {"15m",  20.9, 21.6,   75,  20},
+    {"12m",  24.8, 25.1,   75,  20},
+    {"10m",  27.9, 30.0,   75, 100},
+    {"6m",   49.0, 54.5,  101, 200},
+};
+
+constexpr const char* kDisclaimerText =
+    "<b>Operator Responsibility:</b> You must ensure that your transmissions "
+    "do not interfere with other radio traffic. Always verify that the selected "
+    "frequency is clear before tuning, and never leave this process unattended "
+    "unless you fully understand its behavior, failure modes, and risks. "
+    "AetherSDR transmits at tune power on each frequency in the sweep. You are "
+    "responsible for compliance with your license and local regulations. Do not "
+    "use this function for unattended or automated transmission unless you "
+    "fully understand its behavior, failure modes, and risks.";
+
+constexpr int kSecondsPerPointEstimate = 15;
+constexpr int kPerPointTimeoutMs = 30 * 1000;
+constexpr int kSettleMs = 300;
+constexpr int kMaxConsecutiveFailBypass = 3;
+
+// Operator-attention guardrail: warn if the planned sweep exceeds this many
+// points across all selected bands. Catches the "select-all on a wide
+// regional plan" footgun where 100+ keyings can run for tens of minutes
+// unattended. (#2649 #4)
+constexpr int kMaxPointsSoftCap = 100;
+
+// Warn above this radio tune-power level in Auto mode. Some amplifiers need
+// higher drive, so the operator can confirm the warning and continue. (#2649)
+constexpr int kAutoModeTunePowerWarnLevel = 20;
+
+// AppSettings key for the operator's licence class code (e.g. "G" for
+// General). Stored as a single nested-JSON-equivalent flat string per
+// Principle V's pragmatic note about standalone keys when no related block
+// exists yet to nest under. (#2649 #8)
+constexpr const char* kLicenseClassKey = "OperatorLicenseClass";
+
+// Walk each contiguous region from BandPlanManager (which already merges
+// adjacent segments — see #2822) and produce tune centers per region. On
+// discrete-channel bands (US 60m: 5 USB channels at 2.8 kHz each separated
+// by tens of kHz of gap) this generates one tune-center per legal channel
+// instead of stepping across illegal gaps and triggering radio-side
+// out-of-band rejections. On continuous bands the merge collapses to a
+// single [min, max] region and the walk degenerates to the original
+// even-stride walk. (#2647)
+QVector<double> computeCentersForBand(
+    const BandPlanManager& bandPlan,
+    double searchLowMhz, double searchHighMhz, int segmentKhz,
+    const QString& allowedLicenseClass = QString(), bool alignBins = false)
+{
+    QVector<double> out;
+    if (segmentKhz <= 0) return out;
+
+    // License-class filter (#2649 #8): when set, drop segments whose
+    // non-empty license field doesn't include the operator's class. The
+    // filter runs before the merge so an allowed segment adjacent to a
+    // disallowed one stays as a separate region.
+    const auto regions = bandPlan.contiguousRegionsForBand(
+        searchLowMhz, searchHighMhz, allowedLicenseClass);
+    if (regions.isEmpty()) return out;
+
+    // If a region is narrower than one full tune segment (e.g. US 60m's
+    // 2.8 kHz channel vs 9 kHz segment), emit a single midpoint so the
+    // ATU still tunes that channel; computeCenters() returns empty for
+    // narrow ranges.
+    const double segMhz = segmentKhz / 1000.0;
+    for (const auto& r : regions) {
+        if (alignBins) {
+            // Elecraft FY: globally aligned 10/20/100/200 kHz memory bins.
+            // Clip each bin to legal coverage before choosing a tune point.
+            const double lowKhz = r.lowMhz * 1000.0;
+            const double highKhz = r.highMhz * 1000.0;
+            for (int bin = static_cast<int>(std::floor(lowKhz / segmentKhz)) * segmentKhz;
+                 bin < highKhz; bin += segmentKhz) {
+                const double low = std::max(lowKhz, static_cast<double>(bin));
+                const double high = std::min(highKhz, static_cast<double>(bin + segmentKhz));
+                if (high - low > 0.001) { out.append((low + high) / 2000.0); }
+            }
+        } else if (r.highMhz - r.lowMhz < segMhz) {
+            out.append((r.lowMhz + r.highMhz) / 2.0);
+        } else {
+            out.append(computeCenters(r.lowMhz, r.highMhz, segmentKhz));
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
+                                   BandPlanManager* bandPlan,
+                                   QWidget* parent,
+                                   Kat500TxController* kat500)
+    : QDialog(parent),
+      m_radio(radio),
+      m_kat500(kat500),
+      m_externalTuner(kat500 != nullptr),
+      m_bandPlan(bandPlan)
+{
+    theme::setContainer(this, QStringLiteral("dialog/atuPreTune"));
+    setWindowTitle(m_externalTuner ? tr("KAT500 Band Pre-Tune Sweep") : tr("ATU Band Pre-Tune Sweep"));
+    setModal(false);
+    resize(560, 640);
+
+    m_settleTimer = new QTimer(this);
+    m_settleTimer->setSingleShot(true);
+    m_settleTimer->setInterval(kSettleMs);
+    connect(m_settleTimer, &QTimer::timeout, this, [this]() {
+        if (!routeMatches() || !m_radio || !m_sweepActive || !m_programInput.valid() || !m_pointInput.valid()) {
+            finishSweep(" Aborted: transmit authorization ended.");
+            return;
+        }
+        const QPointer<AtuPreTuneDialog> self(this);
+        const TxController::Input input = m_pointInput;
+        m_waitingForAtu = true;
+        m_tuneLastSwr = 0.0f;
+        m_swrTracking = true;
+        m_timeoutTimer->start(kPerPointTimeoutMs);
+        bool started = false;
+        if (m_externalTuner) {
+            if (m_kat500 && m_kat500->selected() && m_currentIndex >= 0
+                && m_currentIndex < m_points.size()
+                && m_radio->activeTxSliceNum() == m_txSliceId
+                && std::abs(m_radio->transmitModel().transmitFreq()
+                    - m_points[m_currentIndex].freqMhz) < 0.0000005) {
+                started = m_kat500->start(input);
+                m_externalPointStarted = started;
+            }
+        } else {
+            started = input.start();
+        }
+        if (!started && self && input.request().sameRequest(m_pointInput.request())) {
+            finishSweep(" Aborted: ATU request refused.");
+        }
+    });
+
+    m_timeoutTimer = new QTimer(this);
+    m_timeoutTimer->setSingleShot(true);
+    connect(m_timeoutTimer, &QTimer::timeout,
+            this, &AtuPreTuneDialog::onPerPointTimeout);
+
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* titleBar = new FramelessWindowTitleBar(windowTitle(), this);
+    m_titleBar = titleBar;
+    outer->addWidget(m_titleBar);
+
+    auto* body = new QWidget(this);
+    m_bodyLayout = new QVBoxLayout(body);
+    m_bodyLayout->setContentsMargins(12, 10, 12, 10);
+    m_bodyLayout->setSpacing(8);
+
+    m_pages = new QStackedWidget(body);
+    m_bodyLayout->addWidget(m_pages, 1);
+    outer->addWidget(body, 1);
+
+    buildConfigPage();
+    buildSweepPage();
+    m_pages->setCurrentWidget(m_configPage);
+
+    populateLicenseClassRow();
+    populateBands();
+
+    if (m_licenseClassCombo) {
+        connect(m_licenseClassCombo,
+                QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int) {
+            const QString code = selectedLicenseClass();
+            AppSettings::instance().setValue(kLicenseClassKey, code);
+            AppSettings::instance().save();
+            populateBands();  // re-filter centers under the new class
+        });
+    }
+
+    if (m_radio) {
+        connect(&m_radio->transmitModel(), &TransmitModel::atuStateChanged,
+                this, &AtuPreTuneDialog::onAtuStateChanged);
+        connect(&m_radio->transmitModel(), &TransmitModel::atuAvailabilityChanged,
+                this, [this](bool available) {
+            if (!available && !m_externalTuner) {
+                invalidateRoute(tr("The transmit antenna moved to a transverter output. "
+                                   "Close and reopen the pre-tune sweep."));
+            }
+        });
+        // Sample SWR while waiting for ATU terminal state.  The radio
+        // resets SWR to exactly 1.0 in the final meter packet of each tune
+        // cycle (right before the terminal status arrives) even at full
+        // forward power — track the most recent reading > 1.001 so we
+        // report the settled post-tune SWR, not the reset artifact. (#2624)
+        connect(&m_radio->meterModel(), &MeterModel::txMetersChanged,
+                this, [this](float, float swr, bool swrValid) {
+            if (m_swrTracking && swrValid && swr > 1.001f)
+                m_tuneLastSwr = swr;
+        });
+    }
+
+    if (m_kat500) {
+        connect(m_kat500, &Kat500TxController::tunerDisconnected, this, [this] {
+            if (m_externalTuner) {
+                invalidateRoute(tr("KAT500 disconnected. Close and reopen the sweep after reconnecting."));
+            }
+        });
+        connect(m_kat500, &Kat500TxController::changed, this, [this] {
+            if (!routeMatches()) {
+                invalidateRoute(tr("Tuner selection changed. Close and reopen the pre-tune sweep."));
+            }
+        });
+        // Completion publishes carrier-stop and match readback in the same turn.
+        // Observe the settled result, never the intermediate idle transition.
+        connect(m_kat500, &Kat500TxController::changed, this,
+                &AtuPreTuneDialog::onKat500Changed, Qt::QueuedConnection);
+        connect(m_kat500, &QObject::destroyed, this, [this] {
+            invalidateRoute(tr("Tuner route closed. Close and reopen the pre-tune sweep."));
+        });
+    }
+    setFramelessMode(AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+    FramelessResizer::install(this);
+    configureTxActions();
+}
+
+AtuPreTuneDialog::~AtuPreTuneDialog()
+{
+    cancelProgram();
+}
+
+void AtuPreTuneDialog::configureTxActions()
+{
+    registerTxKeyingAction(m_startBtn, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) {
+            return {};
+        }
+        const TxController::Input input = controller->captureProgram(m_externalTuner ? TxController::Activity::Tune : TxController::Activity::Atu);
+        return [this, controller, input] { startSweep(controller, input); };
+    });
+    for (QPushButton* button : {m_tuneBtn, m_continueAfterFailBtn, m_skipBtn}) {
+        const bool resume = button == m_continueAfterFailBtn;
+        const bool skip = button == m_skipBtn;
+        registerTxKeyingAction(button, [this, resume, skip](const std::shared_ptr<TxController>& controller,
+                const QString& action, const QString&) -> TxKeyingAction::Prepared {
+            if (action != QLatin1String("click") || !controller->sameController(m_programController)
+                || !m_sweepActive || !m_programInput.valid()) {
+                return {};
+            }
+            const TxCoordinator::Request original = m_programInput.request();
+            return [this, original, resume, skip] {
+                if (!original.valid() || !original.sameRequest(m_programInput.request())) {
+                    return;
+                }
+                if (skip) {
+                    onSkipClicked();
+                } else if (resume) {
+                    onContinueClicked();
+                } else {
+                    onTuneClicked();
+                }
+            };
+        });
+    }
+}
+
+void AtuPreTuneDialog::setFramelessMode(bool on)
+{
+    const bool wasVisible = isVisible();
+    const QRect g = geometry();
+    if (on) {
+        setWindowFlag(Qt::FramelessWindowHint, true);
+        if (m_titleBar) m_titleBar->show();
+    } else {
+        setWindowFlag(Qt::FramelessWindowHint, false);
+        if (m_titleBar) m_titleBar->hide();
+    }
+    if (wasVisible) {
+        setGeometry(g);
+        show();
+    }
+}
+
+void AtuPreTuneDialog::buildConfigPage()
+{
+    m_configPage = new QWidget(m_pages);
+    auto* layout = new QVBoxLayout(m_configPage);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    m_planNameLabel = new QLabel(m_configPage);
+    m_planNameLabel->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_planNameLabel, "color: {{color.text.primary}}; font-size: 11px;");
+    layout->addWidget(m_planNameLabel);
+
+    auto* disclaimer = new QLabel(kDisclaimerText, m_configPage);
+    disclaimer->setWordWrap(true);
+    disclaimer->setTextFormat(Qt::RichText);
+    disclaimer->setStyleSheet(
+        "QLabel { background: #2a1a10; border: 1px solid #804020; "
+        "color: #ffd0a0; padding: 8px; font-size: 11px; }");
+    layout->addWidget(disclaimer);
+
+    {
+        auto* row = new QHBoxLayout;
+        auto* lbl = new QLabel("Mode:", m_configPage);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "color: {{color.text.secondary}}; font-size: 11px;");
+        row->addWidget(lbl);
+        m_modeCombo = new QComboBox(m_configPage);
+        m_modeCombo->addItem("Step (confirm each point)", static_cast<int>(Mode::Step));
+        m_modeCombo->addItem("Auto (run unattended)",     static_cast<int>(Mode::Auto));
+        row->addWidget(m_modeCombo, 1);
+        layout->addLayout(row);
+    }
+
+    // Licence-class filter row (#2649 #8). Populated in populateLicenseClassRow();
+    // hidden entirely when the active plan declares no license_classes block.
+    m_licenseClassRow = new QWidget(m_configPage);
+    {
+        auto* row = new QHBoxLayout(m_licenseClassRow);
+        row->setContentsMargins(0, 0, 0, 0);
+        auto* lbl = new QLabel("License class:", m_licenseClassRow);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "color: {{color.text.secondary}}; font-size: 11px;");
+        row->addWidget(lbl);
+        m_licenseClassCombo = new QComboBox(m_licenseClassRow);
+        row->addWidget(m_licenseClassCombo, 1);
+    }
+    layout->addWidget(m_licenseClassRow);
+    m_licenseClassRow->setVisible(false);
+
+    auto* scroll = new QScrollArea(m_configPage);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    m_bandsContainer = new QWidget(scroll);
+    m_bandsLayout = new QVBoxLayout(m_bandsContainer);
+    m_bandsLayout->setContentsMargins(0, 0, 0, 0);
+    m_bandsLayout->setSpacing(4);
+    scroll->setWidget(m_bandsContainer);
+    layout->addWidget(scroll, 1);
+
+    auto* btnRow = new QHBoxLayout;
+    btnRow->addStretch(1);
+    m_cancelBtn = new QPushButton("Cancel", m_configPage);
+    m_startBtn  = new QPushButton("START", m_configPage);
+    markTxKeying(m_startBtn);   // starts the ATU pre-tune sweep → keys TX (#3646)
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_startBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
+        "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
+        "QPushButton:hover { background: #007038; }"
+        "QPushButton:disabled { background: #1a2a1a; color: #556070; }");
+    btnRow->addWidget(m_cancelBtn);
+    btnRow->addWidget(m_startBtn);
+    layout->addLayout(btnRow);
+
+    connect(m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+    connect(m_startBtn,  &QPushButton::clicked, this, &AtuPreTuneDialog::onStartClicked);
+
+    m_pages->addWidget(m_configPage);
+}
+
+void AtuPreTuneDialog::buildSweepPage()
+{
+    m_sweepPage = new QWidget(m_pages);
+    auto* layout = new QVBoxLayout(m_sweepPage);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    m_sweepStatus = new QLabel("", m_sweepPage);
+    m_sweepStatus->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sweepStatus, "QLabel { color: {{color.text.primary}}; font-size: 13px; font-weight: bold; }");
+    layout->addWidget(m_sweepStatus);
+
+    m_sweepProgress = new QLabel("", m_sweepPage);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sweepProgress, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    layout->addWidget(m_sweepProgress);
+
+    m_sweepResult = new QLabel("", m_sweepPage);
+    m_sweepResult->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sweepResult, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
+    layout->addWidget(m_sweepResult, 1);
+
+    auto* row = new QHBoxLayout;
+    m_tuneBtn  = new QPushButton("Tune this frequency", m_sweepPage);
+    markTxKeying(m_tuneBtn);   // tunes the current point → keys TX (#3646)
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
+        "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
+        "QPushButton:hover { background: #007038; }"
+        "QPushButton:disabled { background: #1a2a1a; color: #556070; }");
+    m_skipBtn  = new QPushButton("Skip", m_sweepPage);
+    m_continueAfterFailBtn = new QPushButton("Continue", m_sweepPage);
+    markTxKeying(m_continueAfterFailBtn);   // resumes tuning after a failed point → keys TX (#3646)
+    m_continueAfterFailBtn->setVisible(false);
+    m_abortBtn = new QPushButton("ABORT", m_sweepPage);
+    setAbortButtonAbortMode();
+    row->addWidget(m_tuneBtn);
+    row->addWidget(m_skipBtn);
+    row->addWidget(m_continueAfterFailBtn);
+    row->addStretch(1);
+    row->addWidget(m_abortBtn);
+    layout->addLayout(row);
+
+    connect(m_tuneBtn,  &QPushButton::clicked, this, &AtuPreTuneDialog::onTuneClicked);
+    connect(m_skipBtn,  &QPushButton::clicked, this, &AtuPreTuneDialog::onSkipClicked);
+    connect(m_abortBtn, &QPushButton::clicked, this, &AtuPreTuneDialog::onAbortClicked);
+    connect(m_continueAfterFailBtn, &QPushButton::clicked,
+            this, &AtuPreTuneDialog::onContinueClicked);
+
+    m_pages->addWidget(m_sweepPage);
+}
+
+void AtuPreTuneDialog::populateLicenseClassRow()
+{
+    if (!m_licenseClassRow || !m_licenseClassCombo) return;
+    m_licenseClassCombo->blockSignals(true);
+    m_licenseClassCombo->clear();
+
+    if (!m_bandPlan || m_bandPlan->licenseClasses().isEmpty()) {
+        // Plan has no class structure — keep the row hidden so the feature
+        // is inert and the operator's stored class is preserved untouched
+        // for when they switch back to a class-aware plan. (#2649 #8)
+        m_licenseClassRow->setVisible(false);
+        m_licenseClassCombo->blockSignals(false);
+        return;
+    }
+
+    // Always-present "no filter" entry — safety floor: if we can't prove
+    // the operator's class authorizes a segment, leave them unfiltered and
+    // let the disclaimer + TX interlock backstop. (#2649 #8)
+    m_licenseClassCombo->addItem("All classes (no filter)", QString());
+
+    const auto classes = m_bandPlan->licenseClasses();
+    for (auto it = classes.begin(); it != classes.end(); ++it) {
+        m_licenseClassCombo->addItem(
+            QString("%1 (%2)").arg(it.value(), it.key()), it.key());
+    }
+
+    // Default to the operator's stored class when it exists in this plan;
+    // otherwise default to "no filter" rather than auto-picking — keeps
+    // the safety floor honest across plan switches.
+    const QString stored =
+        AppSettings::instance().value(kLicenseClassKey).toString();
+    int idx = stored.isEmpty() ? 0 : m_licenseClassCombo->findData(stored);
+    if (idx < 0) idx = 0;
+    m_licenseClassCombo->setCurrentIndex(idx);
+
+    m_licenseClassRow->setVisible(true);
+    m_licenseClassCombo->blockSignals(false);
+}
+
+QString AtuPreTuneDialog::selectedLicenseClass() const
+{
+    if (!m_licenseClassRow || !m_licenseClassRow->isVisible()) return QString();
+    if (!m_licenseClassCombo) return QString();
+    return m_licenseClassCombo->currentData().toString();
+}
+
+void AtuPreTuneDialog::populateBands()
+{
+    for (auto& row : m_bands) {
+        delete row.check;
+        delete row.info;
+    }
+    m_bands.clear();
+
+    QString planName = m_bandPlan ? m_bandPlan->activePlanName() : QString();
+    m_planNameLabel->setText(
+        QString("Using band plan: <b>%1</b> &mdash; change in View &gt; Band Plan")
+        .arg(planName.isEmpty() ? "(none)" : planName));
+
+    if (!m_bandPlan) return;
+    const auto& segments = m_bandPlan->segments();
+    const QString allowedClass = selectedLicenseClass();
+
+    for (const auto& spec : kBandSpecs) {
+        BandRow row;
+        row.name = spec.name;
+        row.segmentKhz = m_externalTuner ? spec.katSegmentKhz : spec.segmentKhz;
+
+        // Walk segments per contiguous region — discrete-channel bands
+        // (US 60m) get one center per legal channel instead of stepping
+        // across illegal gaps. (#2647)  Display low/high still show the
+        // envelope so the operator sees the band's overall coverage.
+        row.centers = computeCentersForBand(*m_bandPlan,
+                                            spec.searchLowMhz,
+                                            spec.searchHighMhz,
+                                            row.segmentKhz,
+                                            allowedClass, m_externalTuner);
+        if (row.centers.isEmpty()) continue;  // no coverage in active plan
+        double lo = 1e9;
+        double hi = -1.0;
+        for (const auto& seg : segments) {
+            const double mid = (seg.lowMhz + seg.highMhz) / 2.0;
+            if (mid >= spec.searchLowMhz && mid <= spec.searchHighMhz) {
+                lo = std::min(lo, seg.lowMhz);
+                hi = std::max(hi, seg.highMhz);
+            }
+        }
+        row.lowMhz = lo;
+        row.highMhz = hi;
+        row.points = row.centers.size();
+
+        auto* lineWidget = new QWidget(m_bandsContainer);
+        auto* lineLayout = new QHBoxLayout(lineWidget);
+        lineLayout->setContentsMargins(0, 0, 0, 0);
+        lineLayout->setSpacing(8);
+        row.check = new QCheckBox(row.name, lineWidget);
+        row.check->setChecked(true);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(row.check, "color: {{color.text.primary}}; font-size: 11px; font-weight: bold;");
+        row.check->setMinimumWidth(54);
+        lineLayout->addWidget(row.check);
+
+        const int estSecs = row.points * kSecondsPerPointEstimate;
+        const QString infoText =
+            QString("%1 - %2 MHz  &middot;  %3 kHz seg  &middot;  %4 pt  &middot;  ~%5:%6")
+            .arg(row.lowMhz, 0, 'f', 3)
+            .arg(row.highMhz, 0, 'f', 3)
+            .arg(row.segmentKhz)
+            .arg(row.points)
+            .arg(estSecs / 60)
+            .arg(estSecs % 60, 2, 10, QChar('0'));
+        row.info = new QLabel(infoText, lineWidget);
+        row.info->setTextFormat(Qt::RichText);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(row.info, "color: {{color.text.secondary}}; font-size: 10px;");
+        lineLayout->addWidget(row.info, 1);
+        m_bandsLayout->addWidget(lineWidget);
+
+        m_bands.append(row);
+    }
+    m_bandsLayout->addStretch(1);
+}
+
+QVector<double> AtuPreTuneDialog::centersForBand(const BandRow& row) const
+{
+    // Precomputed in populateBands() so discrete-channel walks match the
+    // count shown in the UI exactly. (#2647)
+    return row.centers;
+}
+
+void AtuPreTuneDialog::onStartClicked()
+{
+    if (!m_radio) {
+        return;
+    }
+    const std::shared_ptr<TxController> controller = m_radio->localTxController();
+    if (controller) {
+        startSweep(controller, controller->captureProgram(m_externalTuner ? TxController::Activity::Tune : TxController::Activity::Atu));
+    }
+}
+
+void AtuPreTuneDialog::startSweep(const std::shared_ptr<TxController>& controller,
+                                 const TxController::Input& input)
+{
+    const QPointer<AtuPreTuneDialog> self(this);
+    if (m_preparingSweep || m_sweepActive || !input.valid() || !input.belongsTo(m_radio)) {
+        return;
+    }
+    if (!routeMatches() || (m_externalTuner && !m_kat500->unavailableReason().isEmpty())) { return; }
+    m_preparingSweep = true;
+    const auto preparing = qScopeGuard([self] { if (self) { self->m_preparingSweep = false; } });
+    m_programController = controller;
+    m_programInput = input;
+    if (!m_radio) {
+        reject();
+        return;
+    }
+    m_txSliceId = m_radio->activeTxSliceNum();
+    if (m_txSliceId < 0) {
+        m_sweepStatus->setText("No active TX slice — cannot start sweep.");
+        m_sweepProgress->clear();
+        m_sweepResult->clear();
+        m_tuneBtn->setVisible(false);
+        m_skipBtn->setVisible(false);
+        m_continueAfterFailBtn->setVisible(false);
+        setAbortButtonCloseMode();
+        m_pages->setCurrentWidget(m_sweepPage);
+        return;
+    }
+    SliceModel* txSlice = m_radio->slice(m_txSliceId);
+    m_originalSliceFreqMhz = txSlice ? txSlice->frequency() : 0.0;
+
+    // Capture the TX slice's panadapter view so it can be restored when
+    // the sweep ends — pan is zoomed out to full-band view per band. (#2624)
+    m_originalPanId.clear();
+    m_originalPanCenterMhz = 0.0;
+    m_originalPanBandwidthMhz = 0.0;
+    if (txSlice) {
+        m_originalPanId = txSlice->panId();
+        if (auto* pan = m_radio->panadapter(m_originalPanId)) {
+            m_originalPanCenterMhz = pan->centerMhz();
+            m_originalPanBandwidthMhz = pan->bandwidthMhz();
+        }
+    }
+
+    m_mode = static_cast<Mode>(m_modeCombo->currentData().toInt());
+
+    m_points.clear();
+    for (const auto& row : m_bands) {
+        if (!row.check || !row.check->isChecked()) continue;
+        const auto centers = centersForBand(row);
+        const int total = centers.size();
+        int i = 0;
+        for (double f : centers) {
+            ++i;
+            Point p;
+            p.bandName = row.name;
+            p.freqMhz  = f;
+            p.indexInBand = i;
+            p.totalInBand = total;
+            p.bandLowMhz  = row.lowMhz;
+            p.bandHighMhz = row.highMhz;
+            m_points.append(p);
+        }
+    }
+
+    if (m_externalTuner) {
+        m_points.removeIf([](const Point& point) {
+            return point.freqMhz < 1.8 || point.freqMhz > 54.0;
+        });
+    }
+    if (m_points.isEmpty()) {
+        m_sweepStatus->setText("No bands selected — nothing to do.");
+        m_pages->setCurrentWidget(m_sweepPage);
+        m_tuneBtn->setVisible(false);
+        m_skipBtn->setVisible(false);
+        m_continueAfterFailBtn->setVisible(false);
+        setAbortButtonCloseMode();
+        return;
+    }
+
+    // Operator-attention guardrail (#2649 #4): warn before kicking off a
+    // sweep large enough to keep the radio transmitting for tens of minutes
+    // unattended. Catches the "select all bands on a wide regional plan"
+    // footgun (e.g. ~129 points × 15 s ≈ 32 min of TX on R1 with everything
+    // checked).
+    if (m_points.size() > kMaxPointsSoftCap) {
+        const int estSecs = m_points.size() * kSecondsPerPointEstimate;
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Warning, "Large Pre-Tune Sweep",
+            QString("Selected bands total %1 points "
+                    "(estimated %2 min %3 s of intermittent TX).\n\n"
+                    "Continue?")
+                .arg(m_points.size())
+                .arg(estSecs / 60)
+                .arg(estSecs % 60, 2, 10, QChar('0')),
+            QMessageBox::Ok | QMessageBox::Cancel, this);
+        boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+        const int reply = boxOwner.get()->exec();
+        if (!self || !boxOwner || !input.valid()) {
+            return;
+        }
+        if (reply != QMessageBox::Ok) return;
+    }
+
+    // Equipment guardrail (#2649 #5): warn — never refuse — if tune power
+    // is high when entering Auto mode. Some amps need higher drive (per
+    // Principle XIII the operator outranks the agent); the gate exists to
+    // force a deliberate choice before unattended TX.
+    if (m_mode == Mode::Auto && m_radio) {
+        const int tunePower = m_radio->transmitModel().tunePower();
+        if (tunePower > kAutoModeTunePowerWarnLevel) {
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, "High Tune Power",
+                QString(m_externalTuner
+                    ? "Tune power is %1% — higher than the recommended %2% ceiling for unattended Auto mode.\n\nContinue?"
+                    : "Tune power is %1 W — higher than the recommended %2 W ceiling for unattended Auto mode.\n\nContinue?")
+                    .arg(tunePower).arg(kAutoModeTunePowerWarnLevel),
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int reply = boxOwner.get()->exec();
+            if (!self || !boxOwner || !input.valid()) {
+                return;
+            }
+            if (reply != QMessageBox::Ok) return;
+        }
+    }
+
+    if (!routeMatches() || (m_externalTuner && !m_kat500->unavailableReason().isEmpty())) { return; }
+    m_currentIndex = -1;
+    m_successCount = 0;
+    m_skipCount = 0;
+    m_failCount = 0;
+    m_consecutiveFailBypass = 0;
+    m_sweepActive = true;
+
+    m_pages->setCurrentWidget(m_sweepPage);
+    setAbortButtonAbortMode();
+    beginNextPoint();
+}
+
+void AtuPreTuneDialog::closeEvent(QCloseEvent* ev)
+{
+    // If the dialog is closed via the window manager mid-sweep, clean up
+    // the same way Abort does so the radio isn't left transmitting and the
+    // slice gets restored. (#2624)
+    if (m_sweepActive) {
+        const QPointer<AtuPreTuneDialog> self(this);
+        cancelProgram(true);
+        if (!self) { return; }
+    }
+    QDialog::closeEvent(ev);
+}
+
+void AtuPreTuneDialog::beginNextPoint()
+{
+    if (!m_radio || !m_sweepActive || !m_programInput.valid()) {
+        finishSweep(" Aborted: transmit authorization ended.");
+        return;
+    }
+    m_continueAfterFailBtn->setVisible(false);
+    m_currentIndex++;
+    if (m_currentIndex >= m_points.size()) {
+        finishSweep();
+        return;
+    }
+    const Point p = m_points[m_currentIndex];
+    const QPointer<AtuPreTuneDialog> self(this);
+    const TxCoordinator::Request original = m_programInput.request();
+
+    // On each band's first point, zoom the pan to the full band (#2624). Update
+    // PanadapterModel centre+bandwidth together before the radio command, like
+    // MainWindow::applyPanRangeRequest, so SpectrumWidget reprojects FFT and
+    // waterfall in one shot.
+    const bool firstOfBand = (m_currentIndex == 0)
+        || (m_points[m_currentIndex - 1].bandName != p.bandName);
+    if (firstOfBand && !m_originalPanId.isEmpty() && p.bandHighMhz > p.bandLowMhz) {
+        const double center = (p.bandLowMhz + p.bandHighMhz) / 2.0;
+        const double width  = (p.bandHighMhz - p.bandLowMhz) * 1.10;
+        // Center and bandwidth together, and deferred rather than dropped if a
+        // profile load is holding radio-state writes (#4142). The local model
+        // advances only when the command reaches the wire.
+        m_radio->requestPanCenter(m_originalPanId, center, width);
+        if (!self || !original.valid() || !original.sameRequest(m_programInput.request())) {
+            return;
+        }
+    }
+
+    // Move slice to target. SliceModel::setFrequency uses autopan=0 — no recenter.
+    if (SliceModel* s = m_radio->slice(m_txSliceId)) {
+        s->setFrequency(p.freqMhz);
+    }
+    if (!self || !original.valid() || !original.sameRequest(m_programInput.request())) {
+        return;
+    }
+
+    const double freqKhz = p.freqMhz * 1000.0;
+    m_sweepStatus->setText(
+        QString("Ready to tune: %1 kHz (%2, point %3/%4)")
+            .arg(freqKhz, 0, 'f', 1)
+            .arg(p.bandName)
+            .arg(p.indexInBand)
+            .arg(p.totalInBand));
+    m_sweepProgress->setText(
+        QString("Overall: %1 / %2  (%3 ok, %4 skipped, %5 failed)")
+            .arg(m_currentIndex + 1).arg(m_points.size())
+            .arg(m_successCount).arg(m_skipCount).arg(m_failCount));
+    m_sweepResult->clear();
+
+    if (m_mode == Mode::Step) {
+        m_tuneBtn->setVisible(true);
+        m_skipBtn->setVisible(true);
+        setStepControlsEnabled(true);
+    } else {
+        m_tuneBtn->setVisible(false);
+        m_skipBtn->setVisible(false);
+        requestTuneNow();
+    }
+}
+
+void AtuPreTuneDialog::onTuneClicked()
+{
+    if (m_currentIndex < 0 || m_currentIndex >= m_points.size()) return;
+    setStepControlsEnabled(false);
+    requestTuneNow();
+}
+
+void AtuPreTuneDialog::requestTuneNow()
+{
+    if (!m_radio || !m_sweepActive || !m_programInput.valid()) {
+        finishSweep(" Aborted: transmit authorization ended.");
+        return;
+    }
+    m_pointInput = m_programInput.derive();
+    m_sweepResult->setText("Tuning...");
+    // Slice is already on target (set in beginNextPoint). Wait 300 ms for
+    // the slice to settle before issuing atu start. (#2624)
+    m_settleTimer->start();
+}
+
+void AtuPreTuneDialog::onSkipClicked()
+{
+    if (m_currentIndex < 0) return;
+    m_skipCount++;
+    beginNextPoint();
+}
+
+void AtuPreTuneDialog::onAbortClicked()
+{
+    const QPointer<AtuPreTuneDialog> self(this);
+    cancelProgram(m_sweepActive);
+    if (!self) { return; }
+    accept();
+}
+
+void AtuPreTuneDialog::onContinueClicked()
+{
+    m_continueAfterFailBtn->setVisible(false);
+    beginNextPoint();
+}
+
+void AtuPreTuneDialog::onPerPointTimeout()
+{
+    if (!m_waitingForAtu) return;
+    m_waitingForAtu = false;
+    m_swrTracking = false;
+    m_failCount++;
+    m_consecutiveFailBypass = 0;
+    m_sweepResult->setText(
+        QString("No ATU status within %1 s — ATU may be stuck. Aborting.")
+            .arg(kPerPointTimeoutMs / 1000));
+    QApplication::beep();  // terminal-fail cue for operators not watching (#2649 #7)
+    finishSweep(" Aborted: per-point timeout.");
+}
+
+bool AtuPreTuneDialog::routeMatches() const
+{
+    return !m_routeInvalidated && (m_kat500 ? m_kat500->selected() == m_externalTuner : !m_externalTuner);
+}
+
+void AtuPreTuneDialog::invalidateRoute(const QString& reason)
+{
+    if (m_routeInvalidated) { return; }
+    m_routeInvalidated = true;
+    m_startBtn->setEnabled(false);
+    m_startBtn->setToolTip(reason);
+    m_startBtn->setAccessibleDescription(reason);
+    if (m_sweepActive) { finishSweep(reason); }
+}
+
+void AtuPreTuneDialog::onKat500Changed()
+{
+    if (!m_sweepActive || !m_externalTuner) { return; }
+    if (!m_programInput.valid() || m_routeInvalidated || !m_kat500 || !m_kat500->selected()) {
+        finishSweep(tr(" Aborted: KAT500 selection or transmit authorization changed."));
+        return;
+    }
+    if (!m_waitingForAtu || !m_externalPointStarted || m_kat500->busy()) { return; }
+    m_waitingForAtu = false;
+    m_externalPointStarted = false;
+    m_swrTracking = false;
+    m_timeoutTimer->stop();
+    if (m_kat500->matched()) {
+        ++m_successCount;
+        beginNextPoint();
+    } else {
+        ++m_failCount;
+        finishSweep(tr(" KAT500 stopped: %1").arg(m_kat500->message()));
+    }
+}
+
+void AtuPreTuneDialog::onAtuStateChanged()
+{
+    if (m_externalTuner) { return; }
+    if (!m_waitingForAtu || !m_radio) return;
+    if (!m_programInput.valid()) {
+        finishSweep(" Aborted: transmit authorization ended.");
+        return;
+    }
+    const ATUStatus s = m_radio->transmitModel().atuStatus();
+
+    const bool success     = (s == ATUStatus::Successful || s == ATUStatus::OK);
+    const bool bypass      = (s == ATUStatus::Bypass);
+    const bool failBypass  = (s == ATUStatus::FailBypass);
+    const bool fail        = (s == ATUStatus::Fail);
+    const bool aborted     = (s == ATUStatus::Aborted);
+    if (!(success || bypass || failBypass || fail || aborted)) return;
+
+    m_waitingForAtu = false;
+    m_swrTracking = false;
+    m_timeoutTimer->stop();
+
+    const QString swrTag = (m_tuneLastSwr > 0.0f)
+        ? QString("  SWR %1:1").arg(m_tuneLastSwr, 0, 'f', 2)
+        : QString();
+
+    if (success || bypass) {
+        // TUNE_BYPASS after IN_PROGRESS means the ATU completed its cycle
+        // and decided no inductors were needed — with MEM on the radio
+        // still writes a memory entry, so it counts as a successful pre-tune.
+        m_successCount++;
+        m_consecutiveFailBypass = 0;
+        m_sweepResult->setText(
+            (bypass ? "Tune OK (bypass)." : "Tune OK.") + swrTag);
+        beginNextPoint();
+        return;
+    }
+
+    if (failBypass) {
+        m_failCount++;
+        m_consecutiveFailBypass++;
+        if (m_consecutiveFailBypass >= kMaxConsecutiveFailBypass) {
+            QApplication::beep();  // terminal-fail cue (#2649 #7)
+            // Per-band early exit (#3062): skip past the remaining points on
+            // the dying band instead of aborting the whole sweep. Lets a
+            // multi-band run keep producing useful results when only one
+            // band's antenna is bad (e.g. broken feedline on 80m while
+            // 40m/20m/15m are fine). If the dying band is the last one,
+            // the loop body never runs and beginNextPoint() falls through
+            // to finishSweep() — matches the prior terminal-abort behaviour
+            // for single-band sweeps and last-band failures.
+            const QString bandName = m_points.at(m_currentIndex).bandName;
+            const int skipStart = m_currentIndex;
+            while (m_currentIndex + 1 < m_points.size()
+                   && m_points.at(m_currentIndex + 1).bandName == bandName) {
+                ++m_currentIndex;
+            }
+            // The point that triggered the abort was already counted in
+            // m_failCount above; only the remaining points on the band
+            // count as skips.
+            m_skipCount += (m_currentIndex - skipStart);
+            const QString nextBand = (m_currentIndex + 1 < m_points.size())
+                ? m_points.at(m_currentIndex + 1).bandName
+                : QString();
+            m_sweepResult->setText(nextBand.isEmpty()
+                ? QString("Band %1 aborted after %2 consecutive fails.")
+                      .arg(bandName).arg(kMaxConsecutiveFailBypass)
+                : QString("Band %1 aborted after %2 consecutive fails — continuing on %3.")
+                      .arg(bandName).arg(kMaxConsecutiveFailBypass).arg(nextBand));
+            m_consecutiveFailBypass = 0;
+            beginNextPoint();
+            return;
+        }
+        showFailControls(/*failBypass=*/true);
+        return;
+    }
+
+    // fail / aborted
+    m_failCount++;
+    m_consecutiveFailBypass = 0;
+    showFailControls(/*failBypass=*/false);
+}
+
+void AtuPreTuneDialog::showFailControls(bool failBypass)
+{
+    const QString swrTag = (m_tuneLastSwr > 0.0f)
+        ? QString("  SWR %1:1").arg(m_tuneLastSwr, 0, 'f', 2)
+        : QString();
+    m_sweepResult->setText((failBypass
+        ? "Tune failed and ATU bypassed. Continue or Abort."
+        : "Tune failed. Continue or Abort.") + swrTag);
+    m_tuneBtn->setVisible(false);
+    m_skipBtn->setVisible(false);
+    m_continueAfterFailBtn->setVisible(true);
+    m_continueAfterFailBtn->setEnabled(true);
+}
+
+void AtuPreTuneDialog::setStepControlsEnabled(bool enabled)
+{
+    if (m_tuneBtn) m_tuneBtn->setEnabled(enabled);
+    if (m_skipBtn) m_skipBtn->setEnabled(enabled);
+}
+
+void AtuPreTuneDialog::setAbortButtonAbortMode()
+{
+    if (!m_abortBtn) return;
+    m_abortBtn->setText("ABORT");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_abortBtn, "QPushButton { background: #802020; border: 1px solid {{color.accent.danger}}; "
+        "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
+        "QPushButton:hover { background: #903030; }");
+}
+
+void AtuPreTuneDialog::setAbortButtonCloseMode()
+{
+    if (!m_abortBtn) return;
+    m_abortBtn->setText("Close");
+    m_abortBtn->setStyleSheet(QString());
+}
+
+void AtuPreTuneDialog::finishSweep(const QString& summaryExtra)
+{
+    const QPointer<AtuPreTuneDialog> self(this);
+    cancelProgram(true);
+    if (!self) { return; }
+
+    m_tuneBtn->setVisible(false);
+    m_skipBtn->setVisible(false);
+    m_continueAfterFailBtn->setVisible(false);
+    setAbortButtonCloseMode();
+
+    m_sweepStatus->setText("Sweep complete.");
+    m_sweepResult->setText(
+        QString("%1 points tuned successfully, %2 skipped, %3 failed.%4")
+            .arg(m_successCount).arg(m_skipCount).arg(m_failCount)
+            .arg(summaryExtra));
+    m_sweepProgress->clear();
+}
+
+void AtuPreTuneDialog::cancelProgram(bool restore)
+{
+    const QPointer<AtuPreTuneDialog> self(this);
+    const bool wasPreparing = std::exchange(m_preparingSweep, true);
+    const auto preparing = qScopeGuard([self, wasPreparing] {
+        if (self) { self->m_preparingSweep = wasPreparing; }
+    });
+    m_settleTimer->stop();
+    m_timeoutTimer->stop();
+    m_waitingForAtu = false;
+    m_sweepActive = false;
+    m_swrTracking = false;
+
+    const TxController::Input root = std::exchange(m_programInput, {});
+    const TxController::Input point = std::exchange(m_pointInput, {});
+    const std::shared_ptr<TxController> controller = std::exchange(m_programController, {});
+    restore = restore && root.valid();
+    root.stop(); // close future derivation before ending the current point
+    point.abort();
+    if (std::exchange(m_externalPointStarted, false) && m_kat500) {
+        m_kat500->cancel();
+    }
+    // #2624: a sweep abandoned mid-cycle (Abort, the per-point stuck-ATU
+    // timeout, or the dialog closing between points) must still bypass. A
+    // bypass is not only a stop edge — it also configures idle ATU relays —
+    // so it cannot be gated on our own intent bookkeeping still agreeing a
+    // cycle is in flight, which is exactly the case the timeout exists for.
+    // bypassAtu() delegates to requestProducerAtu() when an Atu intent IS
+    // bound and still reaches transmitModel().atuBypass() when none is.
+    if (!m_externalTuner && !point.bypassAtu()) {
+        (void)root.bypassAtu();
+    }
+    if (self && restore && controller && controller->valid()) {
+        restoreOriginalFrequency(controller);
+    }
+}
+
+void AtuPreTuneDialog::restoreOriginalFrequency(const std::shared_ptr<TxController>& controller)
+{
+    if (!m_radio || !controller->valid() || m_txSliceId < 0) return;
+    if (m_originalSliceFreqMhz <= 0.0) return;
+    const QPointer<AtuPreTuneDialog> self(this);
+    if (SliceModel* s = m_radio->slice(m_txSliceId)) {
+        s->setFrequency(m_originalSliceFreqMhz);
+    }
+    if (!self || !controller->valid()) {
+        return;
+    }
+
+    // Restore the panadapter zoom captured at sweep start — same
+    // optimistic-update pattern used for band transitions.
+    if (!m_originalPanId.isEmpty() && m_originalPanBandwidthMhz > 0.0) {
+        // Restoring the pre-sweep zoom is a user-visible promise: dropping it
+        // during a profile load would strand the pan on the sweep's band view.
+        // Deferred and replayed instead (#4142).
+        m_radio->requestPanCenter(m_originalPanId,
+                                  m_originalPanCenterMhz,
+                                  m_originalPanBandwidthMhz);
+    }
+}
+
+} // namespace AetherSDR

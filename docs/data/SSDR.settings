@@ -1,0 +1,197 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Settings>
+  <TXViewChkboxCW>True</TXViewChkboxCW>
+  <ButtonRightFunction>XIT</ButtonRightFunction>
+  <FocusHelperN1MMPort>12060</FocusHelperN1MMPort>
+  <BIGBOX>
+    <CachedAnnouncementsJson>[]</CachedAnnouncementsJson>
+    <LastModifiedPushNotification>Wed, 27 Aug 2025 21:20:32 GMT</LastModifiedPushNotification>
+    <TXViewChkboxAnalog>True</TXViewChkboxAnalog>
+    <DVKWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;0&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;0&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;0&lt;/Right&gt;&lt;Bottom&gt;0&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</DVKWindowPlacement>
+    <ModemManagerWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;0&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;0&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;0&lt;/Right&gt;&lt;Bottom&gt;0&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</ModemManagerWindowPlacement>
+    <AnalogTXMeterSelection>Power</AnalogTXMeterSelection>
+    <TXViewChkboxAurora>True</TXViewChkboxAurora>
+    <SeenMessages>
+    </SeenMessages>
+    <LoggingWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;0&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;0&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;0&lt;/Right&gt;&lt;Bottom&gt;0&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</LoggingWindowPlacement>
+    <AnalogRXMeterSelection>S-Meter</AnalogRXMeterSelection>
+    <ShowAutoSaveWarning>False</ShowAutoSaveWarning>
+    <TXViewChkboxTuner>False</TXViewChkboxTuner>
+  </BIGBOX>
+  <AutoStartCAT>False</AutoStartCAT>
+  <IsClickGuideEnabled>False</IsClickGuideEnabled>
+  <MemoryFormColumnSortDisplayIndex>0</MemoryFormColumnSortDisplayIndex>
+  <SpotsColorDefault>#FFFFFF00</SpotsColorDefault>
+  <SetupWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;295&lt;/Left&gt;&lt;Top&gt;181&lt;/Top&gt;&lt;Right&gt;770&lt;/Right&gt;&lt;Bottom&gt;701&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</SetupWindowPlacement>
+  <ImportExportPlacement2>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;0&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;0&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;0&lt;/Right&gt;&lt;Bottom&gt;0&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</ImportExportPlacement2>
+  <IsTXPanelPoppedOut>False</IsTXPanelPoppedOut>
+  <TXPanelPositions>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;xamTilesControl assemblyVersion="12.1.20121.2314" layoutVersion="1"&gt;
+  &lt;items&gt;
+    &lt;item serializationId="TileAurora" logicalIndex="0" /&gt;
+    &lt;item serializationId="tileAmp" logicalIndex="1" /&gt;
+    &lt;item serializationId="tiletuner" logicalIndex="4" /&gt;
+    &lt;item serializationId="tileAnalog" logicalIndex="2" /&gt;
+    &lt;item serializationId="tileTX" logicalIndex="6" /&gt;
+    &lt;item serializationId="tileP_CW" logicalIndex="5" /&gt;
+    &lt;item serializationId="tilePhone" logicalIndex="7" /&gt;
+    &lt;item serializationId="tileRX" logicalIndex="3" /&gt;
+    &lt;item serializationId="tileEQ" logicalIndex="8" /&gt;
+  &lt;/items&gt;
+&lt;/xamTilesControl&gt;</TXPanelPositions>
+  <IsSpotsEnabled>True</IsSpotsEnabled>
+  <IsCWXOpen>False</IsCWXOpen>
+  <IsPan3PopOut>False</IsPan3PopOut>
+  <IsPan7PopOut>False</IsPan7PopOut>
+  <TileDVKColumn>1</TileDVKColumn>
+  <IsSpotsOverrideToAutoBackgroundColorEnabled>True</IsSpotsOverrideToAutoBackgroundColorEnabled>
+  <PanSize6>
+  </PanSize6>
+  <Pan6PopoutWindowPlacement>
+  </Pan6PopoutWindowPlacement>
+  <TileCWXColumn>1</TileCWXColumn>
+  <PanSize5>
+  </PanSize5>
+  <showCWXPanel>False</showCWXPanel>
+  <TXBandSettingsWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;742&lt;/Right&gt;&lt;Bottom&gt;314&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</TXBandSettingsWindowPlacement>
+  <RadioFrontSpeakerMute>False</RadioFrontSpeakerMute>
+  <ButtonLeftFunction>RIT</ButtonLeftFunction>
+  <IsPan2PopOut>False</IsPan2PopOut>
+  <DVKPopoutWindowPlacement>
+  </DVKPopoutWindowPlacement>
+  <IsTXPanelOpen>True</IsTXPanelOpen>
+  <MultiFlexWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;840&lt;/Right&gt;&lt;Bottom&gt;208&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</MultiFlexWindowPlacement>
+  <IsPan4PopOut>False</IsPan4PopOut>
+  <RemoteRXGain>100</RemoteRXGain>
+  <isWaveformManagerWindowOpen>False</isWaveformManagerWindowOpen>
+  <ProfileManagerPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;0&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;0&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;0&lt;/Right&gt;&lt;Bottom&gt;0&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</ProfileManagerPlacement>
+  <IsDVKOpen>False</IsDVKOpen>
+  <isDBImportExportWindowOpen>False</isDBImportExportWindowOpen>
+  <isSetupWindowOpen>False</isSetupWindowOpen>
+  <TXViewChkboxTX>True</TXViewChkboxTX>
+  <Pan5PopoutWindowPlacement>
+  </Pan5PopoutWindowPlacement>
+  <IsPan5PopOut>False</IsPan5PopOut>
+  <SpotsBackgroundColorDefault>#FFFFFFFF</SpotsBackgroundColorDefault>
+  <isSpotsWindowOpen>False</isSpotsWindowOpen>
+  <IsSpotsOverrideBackgroundColorsEnabled>True</IsSpotsOverrideBackgroundColorsEnabled>
+  <TXViewChkboxAmp>True</TXViewChkboxAmp>
+  <TilePanafallColumn>2</TilePanafallColumn>
+  <UsbCablesWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;600&lt;/Right&gt;&lt;Bottom&gt;110&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</UsbCablesWindowPlacement>
+  <Pan0PopoutWindowPlacement>
+  </Pan0PopoutWindowPlacement>
+  <LastButtonPressed>Knob</LastButtonPressed>
+  <IsPan6PopOut>False</IsPan6PopOut>
+  <ImportExportConfigPath>
+  </ImportExportConfigPath>
+  <RemoteRxOn>True</RemoteRxOn>
+  <IsPan0PopOut>False</IsPan0PopOut>
+  <IsSingleClickTuneEnabled>False</IsSingleClickTuneEnabled>
+  <isMultiFlexWindowOpen>False</isMultiFlexWindowOpen>
+  <MainWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;-3&lt;/Left&gt;&lt;Top&gt;-4&lt;/Top&gt;&lt;Right&gt;1801&lt;/Right&gt;&lt;Bottom&gt;1032&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</MainWindowPlacement>
+  <isUsbCablesWindowOpen>False</isUsbCablesWindowOpen>
+  <AutoConnect>True</AutoConnect>
+  <NetworkWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;80&lt;/Left&gt;&lt;Top&gt;93&lt;/Top&gt;&lt;Right&gt;390&lt;/Right&gt;&lt;Bottom&gt;283&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</NetworkWindowPlacement>
+  <Pan7PopoutWindowPlacement>
+  </Pan7PopoutWindowPlacement>
+  <LastConnectedRadioSerial>2125-1213-8600-8895</LastConnectedRadioSerial>
+  <IsDVKPoppedOut>False</IsDVKPoppedOut>
+  <isNetworkWindowOpen>False</isNetworkWindowOpen>
+  <UpdateSettings>True</UpdateSettings>
+  <FavoriteMode0>USB</FavoriteMode0>
+  <RefreshToken>
+  </RefreshToken>
+  <TXPanelPopoutWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;1517&lt;/Left&gt;&lt;Top&gt;9&lt;/Top&gt;&lt;Right&gt;1803&lt;/Right&gt;&lt;Bottom&gt;1059&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</TXPanelPopoutWindowPlacement>
+  <TXViewChkboxEQ>True</TXViewChkboxEQ>
+  <FlexControlEnabled>True</FlexControlEnabled>
+  <IsSpotsOverrideColorsEnabled>False</IsSpotsOverrideColorsEnabled>
+  <FocusHelperTarget>None</FocusHelperTarget>
+  <FlexControlPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;395&lt;/Right&gt;&lt;Bottom&gt;489&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</FlexControlPlacement>
+  <PanSize4>
+  </PanSize4>
+  <Pan4PopoutWindowPlacement>
+  </Pan4PopoutWindowPlacement>
+  <LastConnectedRadioWasSmartLink>False</LastConnectedRadioWasSmartLink>
+  <MemoryColumnWidths>47.4,49.8,68.1,46.1,44.3,39.7,98.2,93.9,71.0,70.9,55.9,84.3,20.0,81.9,84.5,69.9,68.2,74.8,76.5</MemoryColumnWidths>
+  <showDVKPanel>False</showDVKPanel>
+  <IsCWXPoppedOut>False</IsCWXPoppedOut>
+  <PanFill>70</PanFill>
+  <PanadapterLayout>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;xamTilesControl assemblyVersion="12.1.20121.2314" layoutVersion="1"&gt;
+  &lt;items&gt;
+    &lt;item serializationId="40000000" logicalIndex="0" /&gt;
+  &lt;/items&gt;
+&lt;/xamTilesControl&gt;</PanadapterLayout>
+  <AutoStartDAX>False</AutoStartDAX>
+  <ApplicationVersion>4.1.5.39794</ApplicationVersion>
+  <IsNewSliceMinimized>False</IsNewSliceMinimized>
+  <FocusHelperOtherWindowName>
+  </FocusHelperOtherWindowName>
+  <PanFillColorHex>#FFFFFFFF</PanFillColorHex>
+  <MTU>1450</MTU>
+  <MemoryColumnOrder>0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18</MemoryColumnOrder>
+  <isMemoryChannelWindowOpen>False</isMemoryChannelWindowOpen>
+  <FocusHelperDelay>100</FocusHelperDelay>
+  <Pan3PopoutWindowPlacement>
+  </Pan3PopoutWindowPlacement>
+  <MemoryPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;224&lt;/Left&gt;&lt;Top&gt;63&lt;/Top&gt;&lt;Right&gt;1488&lt;/Right&gt;&lt;Bottom&gt;543&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</MemoryPlacement>
+  <PrimaryKnobFunction>Tune Slice</PrimaryKnobFunction>
+  <EQ_select>RX</EQ_select>
+  <SpotsStartingHeightPercentage>59.726798065622418</SpotsStartingHeightPercentage>
+  <TileTXViewColumn>3</TileTXViewColumn>
+  <TXViewChkboxRX>True</TXViewChkboxRX>
+  <WaveformWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;0&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;0&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;0&lt;/Right&gt;&lt;Bottom&gt;0&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</WaveformWindowPlacement>
+  <PanSize0>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;xamTilesControl assemblyVersion="12.1.20121.2314" layoutVersion="1" MinimizedAreaExtentY="587.667"&gt;
+  &lt;items&gt;
+    &lt;item serializationId="tileWaterfall" logicalIndex="0" /&gt;
+    &lt;item serializationId="tilePanadapter" isMaximized="true" maximizedIndex="0" logicalIndex="1" /&gt;
+  &lt;/items&gt;
+&lt;/xamTilesControl&gt;</PanSize0>
+  <CWXPopoutWindowPlacement>
+  </CWXPopoutWindowPlacement>
+  <RadioChooserWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;0&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;0&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;0&lt;/X&gt;&lt;Y&gt;0&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;0&lt;/Left&gt;&lt;Top&gt;0&lt;/Top&gt;&lt;Right&gt;0&lt;/Right&gt;&lt;Bottom&gt;0&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</RadioChooserWindowPlacement>
+  <PanSize3>
+  </PanSize3>
+  <StationName>BIGBOX</StationName>
+  <AutoConnectSmartLink>False</AutoConnectSmartLink>
+  <ALE2GConfigPath>
+  </ALE2GConfigPath>
+  <Pan1PopoutWindowPlacement>
+  </Pan1PopoutWindowPlacement>
+  <PanSize7>
+  </PanSize7>
+  <PanSize2>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;xamTilesControl assemblyVersion="12.1.20121.2314" layoutVersion="1" MinimizedAreaExtentY="729"&gt;
+  &lt;items&gt;
+    &lt;item serializationId="tileWaterfall" logicalIndex="0" /&gt;
+    &lt;item serializationId="tilePanadapter" isMaximized="true" maximizedIndex="0" logicalIndex="1" /&gt;
+  &lt;/items&gt;
+&lt;/xamTilesControl&gt;</PanSize2>
+  <SpotFontSize>16</SpotFontSize>
+  <IsDbmVisible>True</IsDbmVisible>
+  <PanSize1>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;xamTilesControl assemblyVersion="12.1.20121.2314" layoutVersion="1" MinimizedAreaExtentY="253"&gt;
+  &lt;items&gt;
+    &lt;item serializationId="tileWaterfall" logicalIndex="0" /&gt;
+    &lt;item serializationId="tilePanadapter" isMaximized="true" maximizedIndex="0" logicalIndex="1" /&gt;
+  &lt;/items&gt;
+&lt;/xamTilesControl&gt;</PanSize1>
+  <RemoteRXMute>False</RemoteRXMute>
+  <IsPan1PopOut>False</IsPan1PopOut>
+  <Pan2PopoutWindowPlacement>
+  </Pan2PopoutWindowPlacement>
+  <SpotsBackgroundOpacity>75</SpotsBackgroundOpacity>
+  <SpotsMaxLevel>3</SpotsMaxLevel>
+  <TXViewChkboxPhone>True</TXViewChkboxPhone>
+  <isTXBandSettingsWindowOpen>False</isTXBandSettingsWindowOpen>
+  <GUIClientID>8F502349-5742-4EF6-857D-987B070D0140</GUIClientID>
+  <ButtonMiddleFunction>Master AF</ButtonMiddleFunction>
+  <FavoriteMode1>CW</FavoriteMode1>
+  <FavoriteMode2>AM</FavoriteMode2>
+  <isProfileManagerWindowOpen>False</isProfileManagerWindowOpen>
+  <isFlexControlWindowOpen>False</isFlexControlWindowOpen>
+  <SpotsWindowPlacement>﻿&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;WINDOWPLACEMENT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"&gt;&lt;length&gt;44&lt;/length&gt;&lt;flags&gt;0&lt;/flags&gt;&lt;showCmd&gt;1&lt;/showCmd&gt;&lt;minPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/minPosition&gt;&lt;maxPosition&gt;&lt;X&gt;-1&lt;/X&gt;&lt;Y&gt;-1&lt;/Y&gt;&lt;/maxPosition&gt;&lt;normalPosition&gt;&lt;Left&gt;63&lt;/Left&gt;&lt;Top&gt;23&lt;/Top&gt;&lt;Right&gt;443&lt;/Right&gt;&lt;Bottom&gt;383&lt;/Bottom&gt;&lt;/normalPosition&gt;&lt;/WINDOWPLACEMENT&gt;</SpotsWindowPlacement>
+  <MemoryFormColumnSortDirection>
+  </MemoryFormColumnSortDirection>
+</Settings>

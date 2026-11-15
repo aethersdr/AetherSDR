@@ -1,0 +1,823 @@
+// Regression harness for issue #4515: the Connect to Radio window must keep
+// its Disconnect footer reachable when its body is taller than the screen.
+
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/backends/icom/IcomCredentials.h"
+#include "core/backends/icom/IcomSettings.h"
+#include "gui/ConnectionPanel.h"
+
+#include <QAbstractButton>
+#include <QApplication>
+#include <QJsonObject>
+#include <QComboBox>
+#include <QFont>
+#include <QFile>
+#include <QJsonDocument>
+#include <QLabel>
+#include <QLayout>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSpinBox>
+#include <QSpacerItem>
+#include <QStyle>
+#include <QToolButton>
+
+#include <cstdio>
+#include <string>
+
+using namespace AetherSDR;
+
+namespace {
+
+int g_failed = 0;
+
+void report(const char* name, bool ok, const std::string& detail = {})
+{
+    std::printf("%s %-58s %s\n",
+                ok ? "[ OK ]" : "[FAIL]",
+                name,
+                detail.c_str());
+    if (!ok) {
+        ++g_failed;
+    }
+}
+
+// Not every environment can host every proof: a work area with no room above
+// the panel's auto-fit height cannot exercise the growth branch at all. Say so
+// out loud rather than failing. #4679 was exactly a precondition the
+// environment could not meet being reported as a product defect.
+void reportSkipped(const char* name, const std::string& detail = {})
+{
+    std::printf("[SKIP] %-58s %s\n", name, detail.c_str());
+}
+
+int bottomInPanel(QWidget* widget, QWidget* panel)
+{
+    return widget->mapTo(panel, QPoint(0, widget->height())).y();
+}
+
+// Every word-wrapped label currently on screen has room for the lines it will
+// actually draw. The failure this catches is a label handed one line's height
+// for two lines of text, which Qt renders as a sliced row overlapping its
+// neighbour rather than as anything obviously broken.
+bool wrappedLabelsFit(QWidget* bodyContent)
+{
+    if (!bodyContent) {
+        return false;
+    }
+    const QList<QLabel*> labels = bodyContent->findChildren<QLabel*>();
+    for (QLabel* label : labels) {
+        if (!label->wordWrap() || !label->isVisibleTo(bodyContent)) {
+            continue;
+        }
+        const int requiredHeight = label->heightForWidth(label->width());
+        if (requiredHeight > 0 && label->height() < requiredHeight) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Put the panel on the manual/VPN page with "Advanced: choose the VPN source
+// path" open. The section only auto-reveals when the host has more than one
+// IPv4 candidate, which a test machine cannot be relied on to have, so drive
+// the widgets directly and keep the geometry deterministic.
+bool expandManualAdvancedSection(ConnectionPanel& panel)
+{
+    auto* manualMode =
+        panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"));
+    auto* toggle =
+        panel.findChild<QToolButton*>(QStringLiteral("connectionManualAdvancedToggle"));
+    auto* section =
+        panel.findChild<QWidget*>(QStringLiteral("connectionManualAdvancedSection"));
+    if (!manualMode || !toggle || !section) {
+        return false;
+    }
+    manualMode->click();
+    toggle->setVisible(true);
+    toggle->setChecked(true);
+    section->setVisible(true);
+    QApplication::processEvents();
+    return true;
+}
+
+void checkIcomManualGuidanceIsModelNeutral()
+{
+    ConnectionPanel panel;
+    auto* manualMode =
+        panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"));
+    auto* radioType =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualRadioType"));
+    auto* hint =
+        panel.findChild<QLabel*>(QStringLiteral("connectionManualHintLabel"));
+    auto* ip = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIp"));
+
+    if (manualMode) {
+        manualMode->click();
+    }
+    const int icomIndex = radioType
+        ? radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyIcom))
+        : -1;
+    if (radioType && icomIndex >= 0) {
+        radioType->setCurrentIndex(icomIndex);
+    }
+    QApplication::processEvents();
+
+    const QString guidance = hint ? hint->text() : QString();
+    report("Icom IP guidance remains credential-focused",
+           guidance.contains(QStringLiteral("configured for network control")));
+    report("Icom IP guidance does not name one radio model",
+           !guidance.contains(QStringLiteral("IC-705")));
+    report("Icom IP guidance omits model-specific MOD settings",
+           !guidance.contains(QStringLiteral("MOD Input"))
+               && !guidance.contains(QStringLiteral("DATA OFF MOD"))
+               && !guidance.contains(QStringLiteral("DATA MOD")));
+    report("Icom address example is model-neutral",
+           ip && !ip->placeholderText().contains(QStringLiteral("IC-705"),
+                                                  Qt::CaseInsensitive));
+}
+
+void checkIcomCustomNatPorts()
+{
+    auto& settings = AppSettings::instance();
+    const bool hadIcom = settings.contains(QStringLiteral("Icom"));
+    const QVariant previousIcom = settings.value(QStringLiteral("Icom"));
+    const bool hadProfiles = settings.contains(QStringLiteral("RoutedProfilesJson"));
+    const QVariant previousProfiles = settings.value(QStringLiteral("RoutedProfilesJson"));
+    const bool hadRecent = settings.contains(QStringLiteral("RecentConnectByIpAddresses"));
+    const QVariant previousRecent = settings.value(QStringLiteral("RecentConnectByIpAddresses"));
+
+    IcomSettings::reset();
+
+    ConnectionPanel panel;
+    auto* manualMode =
+        panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"));
+    auto* radioType =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualRadioType"));
+    auto* portMode =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualIcomPortMode"));
+    auto* basePort =
+        panel.findChild<QSpinBox*>(QStringLiteral("connectionManualIcomBasePort"));
+    auto* user = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomUser"));
+    auto* password =
+        panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomPassword"));
+
+    if (manualMode) {
+        manualMode->click();
+    }
+    const int icomIndex = radioType
+        ? radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyIcom))
+        : -1;
+    if (radioType && icomIndex >= 0) {
+        radioType->setCurrentIndex(icomIndex);
+    }
+    QApplication::processEvents();
+
+    report("Icom connect-by-IP defaults to standard UDP ports",
+           portMode
+               && portMode->currentData().toString() == QStringLiteral("__standard__"));
+    report("custom NAT base port stays hidden in standard mode",
+           basePort && !basePort->isVisibleTo(&panel));
+
+    const int customIndex = portMode
+        ? portMode->findData(QStringLiteral("__custom__"))
+        : -1;
+    if (portMode && customIndex >= 0) {
+        portMode->setCurrentIndex(customIndex);
+    }
+    if (basePort) {
+        basePort->setValue(52001);
+    }
+    if (user) {
+        user->setText(QStringLiteral("test-user"));
+    }
+    if (password) {
+        password->setText(QStringLiteral("test-password"));
+    }
+    QApplication::processEvents();
+
+    report("custom NAT mode reveals the first UDP port",
+           basePort && basePort->isVisibleTo(&panel));
+
+    bool emitted = false;
+    RadioInfo requested;
+    QObject::connect(&panel, &ConnectionPanel::connectRequested,
+                     [&emitted, &requested](const RadioInfo& info) {
+        emitted = true;
+        requested = info;
+    });
+    panel.probeRadio(QStringLiteral("127.0.0.1"));
+
+    report("custom NAT Icom emits a connection request", emitted);
+    report("custom NAT base port becomes the control destination",
+           emitted && requested.port == 52001);
+    report("custom NAT endpoint has a port-qualified radio identity",
+           emitted && requested.serial == QStringLiteral("icom:127.0.0.1:52001"));
+    report("custom NAT range derives the CI-V port",
+           IcomSettings::serialPort() == 52002);
+    report("custom NAT range derives the audio port",
+           IcomSettings::audioPort() == 52003);
+
+    // The authenticated endpoint is the one emitted above. Editing the still-
+    // visible field while that request is in flight must not change what a
+    // later success callback retains for restart.
+    if (basePort) {
+        basePort->setValue(51001);
+    }
+    panel.setConnected(true);
+    const QJsonObject profiles = QJsonDocument::fromJson(
+        settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}"))
+            .toString().toUtf8()).object();
+    const int savedBase = profiles.value(QStringLiteral("127.0.0.1"))
+                              .toObject().value(QStringLiteral("icom"))
+                              .toObject().value(QStringLiteral("base_port")).toInt();
+    report("successful routed profile retains the requested base port", savedBase == 52001);
+
+    if (hadIcom) {
+        settings.setValue(QStringLiteral("Icom"), previousIcom);
+    } else {
+        settings.remove(QStringLiteral("Icom"));
+    }
+    if (hadProfiles) {
+        settings.setValue(QStringLiteral("RoutedProfilesJson"), previousProfiles);
+    } else {
+        settings.remove(QStringLiteral("RoutedProfilesJson"));
+    }
+    if (hadRecent) {
+        settings.setValue(QStringLiteral("RecentConnectByIpAddresses"), previousRecent);
+    } else {
+        settings.remove(QStringLiteral("RecentConnectByIpAddresses"));
+    }
+    settings.save();
+    IcomCredentials::clearSession();
+}
+
+bool setScaledApplicationFont(QApplication& app,
+                              const QFont& originalFont,
+                              qreal scale,
+                              std::string* detail)
+{
+    QFont scaledFont = originalFont;
+    if (originalFont.pointSizeF() > 0.0) {
+        scaledFont.setPointSizeF(originalFont.pointSizeF() * scale);
+        *detail = "pointSizeF=" + std::to_string(scaledFont.pointSizeF());
+    } else if (originalFont.pixelSize() > 0) {
+        scaledFont.setPixelSize(
+            qMax(1, qRound(static_cast<qreal>(originalFont.pixelSize()) * scale)));
+        *detail = "pixelSize=" + std::to_string(scaledFont.pixelSize());
+    } else {
+        *detail = "font exposes neither a point nor pixel size";
+        return false;
+    }
+    app.setFont(scaledFont);
+    return true;
+}
+
+// The footer invariant, in one shipped frameless configuration at one font
+// scale. Both halves of the configuration matter: the app only ever pairs the
+// window flag with the custom title bar's visibility, and screenFitFrameMargins()
+// branches on that flag, so a mixed state would test something nobody runs.
+void checkFooterReachable(QApplication& app,
+                          const QFont& originalFont,
+                          qreal scale,
+                          bool frameless)
+{
+    std::string fontDetail;
+    const bool fontScaled =
+        setScaledApplicationFont(app, originalFont, scale, &fontDetail);
+    const std::string suffix = " scale=" + std::to_string(scale)
+        + (frameless ? " frameless" : " native");
+    report("font scale is representable", fontScaled, suffix + " " + fontDetail);
+    if (!fontScaled) {
+        return;
+    }
+
+    ConnectionPanel panel;   // a CanonWindow: always frameless
+    panel.setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
+                         ConnectionPanel::kSafeMinimumHeight);
+    panel.resize(ConnectionPanel::kSafeMinimumWidth,
+                 ConnectionPanel::kSafeMinimumHeight);
+    panel.setConnected(true);
+    panel.show();
+    QApplication::processEvents();
+
+    QScrollArea* body =
+        panel.findChild<QScrollArea*>(QStringLiteral("connectionBodyScrollArea"));
+    QWidget* bodyContent =
+        panel.findChild<QWidget*>(QStringLiteral("connectionBodyContent"));
+    QPushButton* disconnect =
+        panel.findChild<QPushButton*>(QStringLiteral("connectionDisconnectButton"));
+
+    report("scrollable connection body exists",
+           body != nullptr,
+           suffix);
+    report("body overflows into a vertical scrollbar",
+           body && body->verticalScrollBar()->maximum() > 0,
+           suffix + " maximum="
+               + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
+    report("vertical scrollbar stays clear of the resize edge",
+           body
+               && body->verticalScrollBar()
+                      ->mapTo(&panel,
+                             QPoint(body->verticalScrollBar()->width(), 0))
+                      .x()
+                   <= panel.width() - 12,
+           suffix);
+    report("Disconnect remains visible",
+           disconnect && disconnect->isVisible(),
+           suffix);
+    // The load-bearing assertion. Verified by mutation: putting the footer back
+    // inside the scrolling body fails this at every scale while leaving the
+    // rest of the harness green.
+    report("Disconnect remains inside the panel",
+           disconnect && bottomInPanel(disconnect, &panel) <= panel.height(),
+           suffix + " bottom="
+               + std::to_string(disconnect ? bottomInPanel(disconnect, &panel) : -1)
+               + " panelH=" + std::to_string(panel.height()));
+    report("Disconnect footer stays below the scrolling body",
+           body && disconnect
+               && disconnect->mapTo(&panel, QPoint()).y()
+                   >= body->mapTo(&panel, QPoint(0, body->height())).y(),
+           suffix);
+
+    report("visible wrapped labels receive their required height",
+           wrappedLabelsFit(bodyContent),
+           suffix);
+
+    // The manual/VPN page with Advanced open is the tallest state this dialog
+    // has, and it is the one an operator reported squashed: the source-path
+    // combo drawn as a sliver under a hint clipped to a sliced single line.
+    // Worth its own pass because the section is collapsed by default, so the
+    // sweep above skips both widgets via isVisibleTo().
+    report("manual page reveals its Advanced source-path section",
+           expandManualAdvancedSection(panel),
+           suffix);
+    report("visible wrapped labels still fit with Advanced expanded",
+           wrappedLabelsFit(bodyContent),
+           suffix);
+
+    auto* sourcePath =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualSourcePath"));
+    report("source-path combo is allocated the height it asks for",
+           sourcePath && sourcePath->isVisible()
+               && sourcePath->height() >= sourcePath->minimumSizeHint().height(),
+           suffix + " h="
+               + std::to_string(sourcePath ? sourcePath->height() : -1)
+               + " wants="
+               + std::to_string(sourcePath ? sourcePath->minimumSizeHint().height() : -1));
+
+    // Behavioural, not a policy read-back: squeeze the window below the body's
+    // own minimum width and require a usable horizontal scrollbar. Asserting
+    // horizontalScrollBarPolicy() instead would pass just as happily on a panel
+    // whose right-hand controls were simply cut off.
+    if (body && bodyContent) {
+        panel.setMinimumWidth(200);
+        panel.resize(200, panel.height());
+        QApplication::processEvents();
+        report("horizontal overflow is reachable, not clipped",
+               body->horizontalScrollBar()->maximum() > 0,
+               suffix + " maximum="
+                   + std::to_string(body->horizontalScrollBar()->maximum())
+                   + " contentMinW="
+                   + std::to_string(bodyContent->minimumSizeHint().width()));
+    }
+
+    panel.hide();
+}
+
+// A networked Icom is reached through the manual-IP page rather than broadcast
+// discovery. It must carry the same routed marker as manual Flex/HL2 sessions
+// or MainWindow will discard LastRoutedRadioIp and startup auto-connect will
+// have no host to dial.
+void checkIcomUsesRoutedRetention()
+{
+    auto& settings = AppSettings::instance();
+    const QJsonObject previousWorkspace = settings.radioFeatureExact("local", "", "ConnectionWorkspace");
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
+    const QString previousProfiles =
+        settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}")).toString();
+    settings.setValue(
+        QStringLiteral("RoutedProfilesJson"),
+        QStringLiteral(
+            R"({"127.0.0.1":{"identity":{"target_address":"127.0.0.1","family":"icom"},"bind":{"mode":"auto"}}})"));
+    settings.save();
+
+    ConnectionPanel panel;
+    QComboBox* radioType = panel.findChild<QComboBox*>(
+        QStringLiteral("connectionManualRadioType"));
+    QLineEdit* user = panel.findChild<QLineEdit*>(
+        QStringLiteral("connectionManualIcomUser"));
+    QLineEdit* password = panel.findChild<QLineEdit*>(
+        QStringLiteral("connectionManualIcomPassword"));
+
+    const int flexIndex = radioType
+        ? radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyFlex))
+        : -1;
+    if (radioType && flexIndex >= 0) {
+        radioType->setCurrentIndex(flexIndex);
+    }
+    if (user) {
+        user->setText(QStringLiteral("test-user"));
+    }
+    if (password) {
+        password->setText(QStringLiteral("test-password"));
+    }
+
+    bool emitted = false;
+    RadioInfo requested;
+    QObject::connect(&panel, &ConnectionPanel::connectRequested,
+                     [&emitted, &requested](const RadioInfo& info) {
+        emitted = true;
+        requested = info;
+    });
+    panel.probeRadio(QStringLiteral("127.0.0.1"), /*restoreSavedFamily=*/true);
+
+    report("retained route restores the Icom radio family",
+           radioType
+               && radioType->currentData().toString()
+                      == QString::fromLatin1(ConnectionPanel::kFamilyIcom));
+    report("manual Icom emits a connection request", emitted);
+    report("manual Icom is retained as a routed radio",
+           emitted && requested.isRouted);
+    report("manual Icom keeps its stable host identity",
+           emitted && requested.serial == QStringLiteral("icom:127.0.0.1"));
+    report("manual Icom carries the selected source-path settings",
+           emitted && requested.bindSettings.mode == RadioBindMode::Auto);
+
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
+    if (!previousWorkspace.isEmpty()) { settings.setRadioFeature("local", "", "ConnectionWorkspace", 1, previousWorkspace); }
+    settings.setValue(QStringLiteral("RoutedProfilesJson"), previousProfiles);
+    settings.save();
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-connection-panel-size-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    }
+    QApplication app(argc, argv);
+
+    // MainWindow is intentionally not linked into this focused widget target.
+    // Pin the consolidated startup policy instead: each settings combination
+    // must schedule at most one idempotent show request, while the two real
+    // operator entry points retain deliberate toggle behavior.
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    report("startup dialog test can inspect MainWindow",
+           mainWindowSource.open(QIODevice::ReadOnly));
+    const QByteArray mainWindowText = mainWindowSource.readAll();
+    const qsizetype startupPolicyStart = mainWindowText.indexOf(
+        "// Saved-radio autoconnect is controlled solely");
+    const qsizetype startupPolicyEnd = mainWindowText.indexOf(
+        "// Auto-connect to routed radios", startupPolicyStart);
+    const QByteArray startupPolicy = mainWindowText.mid(
+        startupPolicyStart, startupPolicyEnd - startupPolicyStart);
+    report("connection dialog startup policy remains one adjacent block",
+           startupPolicyStart >= 0 && startupPolicyEnd > startupPolicyStart);
+    report("auto-connect opt-out idempotently shows connection dialog",
+           startupPolicy.contains(
+               "QTimer::singleShot(0, this, &MainWindow::showConnectionDialog);"));
+    report("missing-radio fallback idempotently shows connection dialog",
+           startupPolicy.contains(
+               "QTimer::singleShot(500, this, [this]() { showConnectionDialog(); });"));
+    report("startup policy never toggles an already-visible dialog",
+           !startupPolicy.contains("toggleConnectionDialog"));
+
+    QFile menuSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Menus.cpp"));
+    report("startup dialog test can inspect the Settings menu",
+           menuSource.open(QIODevice::ReadOnly));
+    report("Settings menu retains deliberate toggle behavior",
+           menuSource.readAll().contains("toggleConnectionDialog();"));
+
+    QFile shortcutSource(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Shortcuts.cpp"));
+    report("startup dialog test can inspect keyboard shortcuts",
+           shortcutSource.open(QIODevice::ReadOnly));
+    report("keyboard shortcut retains deliberate toggle behavior",
+           shortcutSource.readAll().contains("toggleConnectionDialog();"));
+
+    // #5788: a parented Qt::Dialog does not follow its parent into a
+    // full-screen Space on macOS, because
+    // NSWindowCollectionBehaviorMoveToActiveSpace moves a window on
+    // order-front rather than on parent-follow. MainWindow::changeEvent
+    // re-asserts the panel across a full-screen crossing so that it is
+    // ordered front on the Space that is now active.
+    //
+    // The Cocoa behavior itself is not reachable from here, and no Linux or
+    // CI configuration can reach it. What this pins is the shape of the
+    // guard, which is what a later edit would erode: dropping the hook,
+    // widening it to fire on any window-state change, or letting it reach a
+    // panel the operator has closed. MainWindow is deliberately not linked
+    // into this target (see above), so the check is on source text, scoped to
+    // changeEvent so a coincidental match elsewhere in the file cannot
+    // satisfy it.
+    const qsizetype changeEventStart =
+        mainWindowText.indexOf("void MainWindow::changeEvent(");
+    const qsizetype changeEventEnd =
+        changeEventStart < 0
+            ? -1
+            : mainWindowText.indexOf("\nvoid MainWindow::", changeEventStart + 1);
+    const bool changeEventFound =
+        changeEventStart >= 0 && changeEventEnd > changeEventStart;
+    report("connection dialog test can inspect MainWindow::changeEvent",
+           changeEventFound);
+    // Empty when the function could not be delimited, so every assertion below
+    // fails loudly rather than passing on a slice of the wrong function.
+    const QByteArray changeEventBody =
+        changeEventFound
+            ? mainWindowText.mid(changeEventStart, changeEventEnd - changeEventStart)
+            : QByteArray();
+
+    report("full-screen crossing re-asserts the connection panel",
+           changeEventBody.contains("showConnectionDialog();"));
+    report("re-assert reads the pre-change state from the event",
+           changeEventBody.contains(
+               "wse->oldState().testFlag(Qt::WindowFullScreen)"));
+    report("re-assert fires on a crossing, not on any window-state change",
+           changeEventBody.contains("wasFull != nowFull"));
+    report("re-assert only touches a panel that is already open",
+           changeEventBody.contains("m_connPanel->isVisible()"));
+
+    AppSettings::instance().load();
+    std::printf("ConnectionPanel screen-fit test harness (#4515)\n\n");
+
+    const QFont originalFont = app.font();
+    for (const qreal scale : {1.0, 1.25, 1.5}) {
+        checkFooterReachable(app, originalFont, scale, true);
+    }
+    app.setFont(originalFont);
+
+    ConnectionPanel oversizedPanel;
+    oversizedPanel.setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
+                                  ConnectionPanel::kSafeMinimumHeight);
+    oversizedPanel.resize(760, 10000);
+    oversizedPanel.show();
+    QApplication::processEvents();
+    QScreen* screen = QApplication::primaryScreen();
+    oversizedPanel.fitToScreen(screen);
+    QApplication::processEvents();
+    const int availableHeight = screen ? screen->availableGeometry().height() : 0;
+    report("screen-fit clamps an oversized panel to available height",
+           availableHeight > 0 && oversizedPanel.frameGeometry().height() <= availableHeight,
+           "frameH=" + std::to_string(oversizedPanel.frameGeometry().height())
+               + " availableH=" + std::to_string(availableHeight));
+
+    // The style fallback, on its own. A shown panel gets its margins from the
+    // platform — offscreen reports a uniform 2 px box — so asserting top() > 0
+    // there proves nothing about the branch that runs before the native window
+    // exists, which is the one the first open on Windows depends on.
+    {
+        // A CanonWindow has no native frame, so nothing is reserved for one.
+        ConnectionPanel unshownFrameless;
+        report("a frameless panel reserves no frame at all",
+               unshownFrameless.screenFitFrameMargins().isNull(),
+               "top=" + std::to_string(
+                            unshownFrameless.screenFitFrameMargins().top()));
+    }
+
+    if (screen) {
+        const QRect available = screen->availableGeometry();
+        const QPoint preferred(available.right(), available.bottom());
+        const QPoint constrained =
+            oversizedPanel.constrainedFrameTopLeft(preferred, available);
+        const QSize frameSize = oversizedPanel.screenFitFrameSize();
+        report("constrained frame remains inside available geometry",
+               available.contains(QRect(constrained, frameSize)),
+               "frameX=" + std::to_string(constrained.x())
+                   + " frameY=" + std::to_string(constrained.y())
+                   + " frameW=" + std::to_string(frameSize.width())
+                   + " frameH=" + std::to_string(frameSize.height()));
+
+        // fitAndClampToScreen() is the show path ConnectionPanel owns itself:
+        // the automation bridge and the deferred re-fit
+        // after a screen/DPI/font change all land here. It must pull a window
+        // back inside the work area without otherwise relocating it.
+        ConnectionPanel strayPanel;
+        strayPanel.show();
+        QApplication::processEvents();
+        strayPanel.move(available.right() - 40, available.bottom() - 40);
+        strayPanel.fitAndClampToScreen(screen);
+        QApplication::processEvents();
+        report("fit-and-clamp pulls an off-work-area window back inside",
+               available.contains(strayPanel.frameGeometry()),
+               "frame=" + std::to_string(strayPanel.frameGeometry().x()) + ","
+                   + std::to_string(strayPanel.frameGeometry().y()) + " "
+                   + std::to_string(strayPanel.frameGeometry().width()) + "x"
+                   + std::to_string(strayPanel.frameGeometry().height()));
+    }
+
+    // Growth policy: a height fitToScreen() chose is reclaimed toward what the
+    // body wants; a height the operator dragged to is left alone. Without the
+    // first half the dialog opens pre-scrolled on a roomy screen and never
+    // recovers; without the second half a deliberately short window springs
+    // back on every reopen.
+    //
+    // Font scaling is not a deterministic way to reach the growth branch: the
+    // platform font and style metrics may still fit at the nominal opening
+    // height. Instead, first let fitToScreen() own the current height, then
+    // drive the scroll body's preferred height above it and back down again
+    // with a harness-only spacer. Both directions are proved as behaviour — a
+    // scrollbar before the re-fit, the pixels handed back after the spacer
+    // goes away — rather than assumed from a particular metric.
+    {
+        ConnectionPanel growPanel;
+        growPanel.show();
+        QApplication::processEvents();
+        growPanel.fitToScreen(screen);
+        QApplication::processEvents();
+        const int initialAutoHeight = growPanel.height();
+        QScrollArea* body = growPanel.findChild<QScrollArea*>(
+            QStringLiteral("connectionBodyScrollArea"));
+        QWidget* bodyContent = growPanel.findChild<QWidget*>(
+            QStringLiteral("connectionBodyContent"));
+
+        // Forcing growth needs room above the height fitToScreen() just chose.
+        // Offscreen — what CTest runs, and what #4679 was reported from — is
+        // 800 px tall, and how much of that the auto-fit leaves is a
+        // font-metrics accident (31 px on Windows, where the body also needs
+        // room for a horizontal scrollbar). Any overflow at all proves the
+        // branch, so take what is there up to 40 px. A hand run against a work
+        // area already clamping the panel has none, and there the branch is
+        // unreachable rather than broken.
+        constexpr int kMinGrowthHeadroom = 8;
+        const int growthWorkAreaHeight =
+            screen ? screen->availableGeometry().height() : 0;
+        const int growthHeadroom =
+            qMin(40, growthWorkAreaHeight - initialAutoHeight);
+
+        if (growthHeadroom < kMinGrowthHeadroom) {
+            reportSkipped("growth proof needs headroom above the auto-fit height",
+                          "autoHeight=" + std::to_string(initialAutoHeight)
+                              + " workAreaH=" + std::to_string(growthWorkAreaHeight));
+        } else {
+            const int forcedPreferredHeight = initialAutoHeight + growthHeadroom;
+            QSpacerItem* spacer = nullptr;
+            if (body && bodyContent && bodyContent->layout()) {
+                const int chromeHeight =
+                    growPanel.sizeHint().height() - body->sizeHint().height();
+                // A showing horizontal bar is part of what the body needs
+                // (#5811); leave it out and the target overshoots by a bar.
+                const int naturalPreferredHeight =
+                    chromeHeight + bodyContent->sizeHint().height()
+                    + (body->horizontalScrollBar()->isVisible()
+                           ? body->horizontalScrollBar()->height()
+                           : 0);
+                spacer = new QSpacerItem(
+                    0,
+                    qMax(1, forcedPreferredHeight - naturalPreferredHeight),
+                    QSizePolicy::Minimum,
+                    QSizePolicy::Fixed);
+                bodyContent->layout()->addItem(spacer);
+                // Two turns: the body sits inside CanonWindow's own body
+                // widget, one layout deeper, so the scroll area hears about
+                // the new minimum a turn later.
+                QApplication::processEvents();
+                QApplication::processEvents();
+            }
+            report("growth setup overflows an auto-fit-owned height",
+                   body && body->verticalScrollBar()->maximum() > 0,
+                   "height=" + std::to_string(initialAutoHeight) + " target="
+                       + std::to_string(forcedPreferredHeight) + " vbarMax="
+                       + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
+
+            growPanel.fitToScreen(screen);
+            QApplication::processEvents();
+            const int grownHeight = growPanel.height();
+            report("auto-sized panel opens without needing to scroll",
+                   body && body->verticalScrollBar()->maximum() == 0,
+                   "height=" + std::to_string(grownHeight) + " vbarMax="
+                       + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
+            report("auto-sized panel grows from its prior auto-fit height",
+                   grownHeight > initialAutoHeight,
+                   "height=" + std::to_string(grownHeight) + " initialAutoHeight="
+                       + std::to_string(initialAutoHeight));
+
+            // The other direction, and the only non-vacuous route to it: take
+            // the extra height back out of the body while fitToScreen() still
+            // owns the window height, and require the re-fit to hand the pixels
+            // back. Resizing to a height fitToScreen() already chose and
+            // re-fitting proves nothing — that lands on the shrink path, which
+            // stays green with the production growth branch deleted.
+            if (spacer && bodyContent && bodyContent->layout()) {
+                bodyContent->layout()->removeItem(spacer);
+                delete spacer;
+                QApplication::processEvents();   // two turns, as above
+                QApplication::processEvents();
+            }
+            growPanel.fitToScreen(screen);
+            QApplication::processEvents();
+            report("a height fit-to-screen set is reclaimed toward the body",
+                   growPanel.height() == initialAutoHeight,
+                   "height=" + std::to_string(growPanel.height())
+                       + " initialAutoHeight=" + std::to_string(initialAutoHeight));
+        }
+
+        // Simulate the operator dragging it short, then reopening.
+        growPanel.resize(growPanel.width(), ConnectionPanel::kSafeMinimumHeight);
+        growPanel.fitToScreen(screen);
+        QApplication::processEvents();
+        report("a height the operator chose survives a re-fit",
+               growPanel.height() == ConnectionPanel::kSafeMinimumHeight,
+               "height=" + std::to_string(growPanel.height()));
+    }
+
+    // A body wider than the window shows a horizontal scrollbar, and that bar
+    // takes its height out of the viewport, so the fit has to leave room for it
+    // or the panel opens one bar short of its body (#5811). Whether the shipped
+    // body is wider than the window is a font-metrics accident — it is on
+    // Windows, it is not on the Linux CI image — so force the overflow with a
+    // harness-only minimum width rather than depend on either. The body must
+    // also want more than the kPreferredHeight floor, or the floor hands out
+    // the missing pixels by luck and the check passes with the fix deleted.
+    {
+        ConnectionPanel widePanel;
+        widePanel.show();
+        QApplication::processEvents();
+        widePanel.fitToScreen(screen);
+        QApplication::processEvents();
+        QScrollArea* body = widePanel.findChild<QScrollArea*>(
+            QStringLiteral("connectionBodyScrollArea"));
+        QWidget* bodyContent = widePanel.findChild<QWidget*>(
+            QStringLiteral("connectionBodyContent"));
+
+        if (!body || !bodyContent || !bodyContent->layout()) {
+            report("wide-body fixture finds the scrolling body", false);
+        } else {
+            bodyContent->setMinimumWidth(widePanel.width() + 200);
+            // Settle before measuring: a wider body re-wraps its labels and
+            // gets shorter, and a height read before that lands the spacer
+            // short of the floor margin it is meant to clear.
+            QApplication::processEvents();
+            QApplication::processEvents();
+            const int barHeight = body->horizontalScrollBar()->sizeHint().height();
+            const int chromeHeight =
+                widePanel.sizeHint().height() - body->sizeHint().height();
+            const int naturalPreferredHeight =
+                chromeHeight + bodyContent->sizeHint().height();
+            // Clear the floor by more than a bar, so a fit that leaves the bar
+            // out cannot land on the floor and pass anyway.
+            const int floorClearing =
+                ConnectionPanel::kPreferredHeight + 2 * barHeight;
+            if (naturalPreferredHeight < floorClearing) {
+                bodyContent->layout()->addItem(new QSpacerItem(
+                    0,
+                    floorClearing - naturalPreferredHeight,
+                    QSizePolicy::Minimum,
+                    QSizePolicy::Fixed));
+            }
+            QApplication::processEvents();   // two turns, as above
+            QApplication::processEvents();
+            const int wantedHeight =
+                qMax(naturalPreferredHeight, floorClearing) + barHeight;
+            const int wideWorkAreaHeight =
+                screen ? screen->availableGeometry().height() : 0;
+
+            report("wide-body setup shows a horizontal scrollbar",
+                   body->horizontalScrollBar()->maximum() > 0,
+                   "hbarMax=" + std::to_string(body->horizontalScrollBar()->maximum())
+                       + " panelW=" + std::to_string(widePanel.width()));
+
+            if (wantedHeight > wideWorkAreaHeight) {
+                reportSkipped("wide-body proof needs body and bar to fit the work area",
+                              "wanted=" + std::to_string(wantedHeight)
+                                  + " workAreaH=" + std::to_string(wideWorkAreaHeight));
+            } else {
+                widePanel.fitToScreen(screen);
+                QApplication::processEvents();
+                // The discriminating read: the viewport against the body's
+                // preferred height, which is what the fit aims for. A fit that
+                // leaves the bar out misses it by exactly one bar on every
+                // platform. The scrollbar check alone does not discriminate —
+                // its range runs off the body's minimum height, and the slack
+                // between that and the preferred height can hide the bar.
+                report("auto-fit gives the body its preferred height beside the bar",
+                       body->viewport()->height() >= bodyContent->sizeHint().height(),
+                       "viewportH=" + std::to_string(body->viewport()->height())
+                           + " bodyWantsH="
+                           + std::to_string(bodyContent->sizeHint().height()));
+                report("auto-fit leaves room for the horizontal scrollbar",
+                       body->verticalScrollBar()->maximum() == 0,
+                       "height=" + std::to_string(widePanel.height()) + " vbarMax="
+                           + std::to_string(body->verticalScrollBar()->maximum())
+                           + " hbarH="
+                           + std::to_string(body->horizontalScrollBar()->height()));
+            }
+        }
+    }
+
+    app.setFont(originalFont);
+    checkIcomManualGuidanceIsModelNeutral();
+    checkIcomCustomNatPorts();
+    checkIcomUsesRoutedRetention();
+    std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES PRESENT");
+    return g_failed == 0 ? 0 : 1;
+}

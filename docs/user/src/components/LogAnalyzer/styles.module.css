@@ -1,0 +1,138 @@
+/* Log Analyzer. Colours come from Infima variables only, so the page follows
+   the site's light and dark themes (src/css/custom.css). */
+
+.wrap {
+  max-width: 60rem;
+  margin: 0 auto;
+}
+
+.privacy {
+  border-left: 4px solid var(--ifm-color-success);
+  background: var(--ifm-background-surface-color);
+  padding: 0.75rem 1rem;
+  border-radius: var(--ifm-global-radius);
+  margin-bottom: 1.5rem;
+}
+
+.dropzone {
+  border: 2px dashed var(--ifm-color-emphasis-400);
+  border-radius: var(--ifm-global-radius);
+  background: var(--ifm-background-surface-color);
+  padding: 1.5rem 1rem;
+  text-align: center;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.dropzoneActive {
+  border-color: var(--ifm-color-primary);
+  background: var(--ifm-color-emphasis-100);
+}
+
+.srOnly,
+.fileInput {
+  /* Visually hidden but focusable through its label button. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.paste {
+  width: 100%;
+  min-height: 9rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.85rem;
+  color: var(--ifm-font-color-base);
+  background: var(--ifm-background-color);
+  border: 1px solid var(--ifm-color-emphasis-400);
+  border-radius: var(--ifm-global-radius);
+  padding: 0.5rem;
+  resize: vertical;
+}
+
+.paste:focus-visible,
+.dropzone:focus-within {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1.5rem;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0 0 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--ifm-background-surface-color);
+  border-radius: var(--ifm-global-radius);
+  overflow-wrap: anywhere;
+}
+
+.summary dt {
+  font-weight: var(--ifm-font-weight-semibold);
+}
+
+.summary dd {
+  margin: 0;
+}
+
+.finding {
+  margin-bottom: 1rem;
+}
+
+.finding h4 {
+  margin-bottom: 0.25rem;
+}
+
+.count {
+  font-weight: normal;
+  font-size: 0.85em;
+  color: var(--ifm-font-color-secondary);
+}
+
+.examples {
+  margin: 0.5rem 0;
+  padding: 0.5rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.8rem;
+  background: var(--ifm-background-color);
+  border-radius: var(--ifm-global-radius);
+  overflow-x: auto;
+  list-style: none;
+}
+
+.examples li {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.lineNo {
+  color: var(--ifm-font-color-secondary);
+  user-select: none;
+  margin-right: 0.5rem;
+}
+
+.ruleList td,
+.ruleList th {
+  vertical-align: top;
+}
+
+@media (max-width: 600px) {
+  .summary {
+    grid-template-columns: 1fr;
+  }
+  .summary dd {
+    margin-bottom: 0.4rem;
+  }
+}

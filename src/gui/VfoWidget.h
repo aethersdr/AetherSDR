@@ -1,0 +1,878 @@
+#pragma once
+
+#include <QWidget>
+#include <QPointer>
+#include <QWheelEvent>
+#include <QMouseEvent>
+#include <QVector>
+#include <QStringList>
+#include <QSet>
+#include <QTimer>
+#include <QElapsedTimer>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <optional>
+
+#include "core/KiwiSdrProtocol.h"
+#include "core/backends/RadioCapabilities.h"
+
+class QPushButton;
+class ScrollableLabel;
+class QLabel;
+class QLineEdit;
+class QStackedWidget;
+class QSlider;
+class QComboBox;
+class QCheckBox;
+class QGraphicsOpacityEffect;
+class QDoubleSpinBox;
+class QGridLayout;
+class QVBoxLayout;
+class QPainter;
+class QHideEvent;
+class QResizeEvent;
+class QShowEvent;
+
+namespace AetherSDR {
+
+class SliceModel;
+class TransmitModel;
+class RadioModel;
+class ControlAvailabilityRegistry;
+class PhaseKnob;
+class RxApplet;
+class KiwiSdrManager;
+class SmartMtrWidget;
+
+// Floating VFO info panel attached to the VFO marker on the spectrum display.
+// Shows slice info (antennas, frequency, signal level, filter width, TX/SPLIT)
+// and tabbed sub-menus (Audio, DSP, Mode, X/RIT, DAX).
+// Anchored to the left of the VFO marker; flips right when clipped.
+class VfoWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit VfoWidget(QWidget* parent = nullptr);
+    ~VfoWidget() override;
+#ifdef HAVE_CW_RX_BACKENDS
+    void refreshCwDecoderControls();
+#endif
+
+    void setSlice(SliceModel* slice);
+    void setAntennaList(const QStringList& ants);
+    void setTransmitModel(TransmitModel* txModel);
+    void setRadioModel(RadioModel* radioModel);
+    void setKiwiSdrManager(KiwiSdrManager* manager);
+    // Wire the SQL button + slider as a mirror of the RxApplet's 3-way
+    // SQL UI (Off / Manual / Auto, manual-level cache, Auto margin).
+    // Without this call, the SQL row still functions but in the old
+    // 2-state on/off mode against the slice's squelchLevel only.
+    void setRxApplet(RxApplet* rx);
+    void setSignalLevel(float dbm);
+    void setRelativeSignalLevel(std::optional<float> dbfs, const QString& unavailableReason = {});
+    bool relativeSignalLevel() const { return m_relativeSignal; }
+    void setReceiveMeterReading(
+        const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
+    // SmartMTR feeds: live mic level + separately-measured mic peak (both dBFS)
+    // and global TX (MOX) state. The SmartMTR view shows the operator-selected TX
+    // meter on this VFO's TX slice while transmitting, and received signal
+    // otherwise. The TX setters mirror setMicLevel: each caches its latest value
+    // and re-pushes while this flag is the transmitting TX slice.
+    void setMicLevel(float micDbfs, float micPeakDbfs);
+    void setTxSwr(float swr);
+    void setTxPower(float fwdPowerW);
+    void setTxCompression(float compPeakDb);
+    void setTransmitting(bool tx);
+    void setDaxVisible(bool visible);
+
+    // Split mode: call whenever TX assignment or active slice changes.
+    //   isTxSlice  — this VFO's slice has tx=1
+    //   splitActive — TX is assigned to a different slice than the active one
+    void updateSplitBadge(bool isTxSlice, bool splitActive);
+
+    // Flag direction hint. Auto/Force* flip to the other side when the panel would
+    // overrun the spectrum edge (20 px). Lock* hold the side regardless; used by
+    // split pairs (#2663) and attached diversity pairs to keep opposite sides.
+    enum FlagDir { Auto, ForceLeft, ForceRight, LockLeft, LockRight };
+
+    struct FlagPlacement {
+        QRect rect;
+        bool onLeft{true};
+    };
+
+    // Reposition relative to VFO marker x coordinate.
+    void updatePosition(int vfoX, int specTop, FlagDir dir = Auto);
+
+    static bool defaultFlagOnLeftForMode(const QString& mode)
+    {
+        const bool lowerSideband = (mode == "LSB" || mode == "DIGL" || mode == "CWL");
+        return !lowerSideband;
+    }
+
+    static FlagDir autoDirectionForSingleFlag(int markerX, int panelWidth,
+                                              int spectrumWidth,
+                                              bool defaultOnLeft,
+                                              bool previousOnLeft)
+    {
+        if (panelWidth <= 0 || spectrumWidth <= 0) {
+            return defaultOnLeft ? ForceLeft : ForceRight;
+        }
+
+        constexpr int kEdgeHysteresis = 20;
+        // Must track kIncrementalTriggerEdgeMarginFrac (MainWindow_Wiring.cpp)
+        // so the flag flips sides at the same margin the pan starts to
+        // scroll — a looser value here makes the flag jump sides long
+        // before anything else reacts (#3482: 0.05 -> 0.02).
+        constexpr double kPanFollowTriggerMarginFrac = 0.02; // matches incremental pan-follow
+        const int guardPx = std::max(
+            kEdgeHysteresis,
+            static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
+
+        if (defaultOnLeft) {
+            const int flipEnter = panelWidth + guardPx;
+            const int flipExit = flipEnter + kEdgeHysteresis;
+            const bool shouldStayRight = !previousOnLeft && markerX < flipExit;
+            return (markerX <= flipEnter || shouldStayRight) ? ForceRight : ForceLeft;
+        }
+
+        const int flipEnter = spectrumWidth - panelWidth - guardPx;
+        const int flipExit = flipEnter - kEdgeHysteresis;
+        const bool shouldStayLeft = previousOnLeft && markerX > flipExit;
+        return (markerX >= flipEnter || shouldStayLeft) ? ForceLeft : ForceRight;
+    }
+
+    static FlagDir autoDirectionForDeconflictedFlag(int index, int count,
+                                                    int markerX,
+                                                    int previousMarkerX,
+                                                    int nextMarkerX,
+                                                    int panelWidth,
+                                                    int spectrumWidth,
+                                                    bool previousOnLeft)
+    {
+        if (index < 0 || index >= count || count <= 0) {
+            return Auto;
+        }
+        if (count == 1) {
+            return Auto;
+        }
+
+        constexpr int kEdgeHysteresis = 20;
+        // Must track kIncrementalTriggerEdgeMarginFrac (MainWindow_Wiring.cpp)
+        // so the flag flips sides at the same margin the pan starts to
+        // scroll — a looser value here makes the flag jump sides long
+        // before anything else reacts (#3482: 0.05 -> 0.02).
+        constexpr double kPanFollowTriggerMarginFrac = 0.02; // matches incremental pan-follow
+        const int guardPx = std::max(
+            kEdgeHysteresis,
+            static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
+
+        auto leftEdgeFlagDirection = [&]() {
+            const int flipEnter = panelWidth + guardPx;
+            const int flipExit = flipEnter + kEdgeHysteresis;
+            const bool shouldStayRight = !previousOnLeft && markerX < flipExit;
+            return (markerX <= flipEnter || shouldStayRight) ? ForceRight : ForceLeft;
+        };
+        auto rightEdgeFlagDirection = [&]() {
+            const int flipEnter = spectrumWidth - panelWidth - guardPx;
+            const int flipExit = flipEnter - kEdgeHysteresis;
+            const bool shouldStayLeft = previousOnLeft && markerX > flipExit;
+            return (markerX >= flipEnter || shouldStayLeft) ? ForceLeft : ForceRight;
+        };
+
+        if (count == 2) {
+            return index == 0 ? leftEdgeFlagDirection() : rightEdgeFlagDirection();
+        }
+
+        if (index == 0) {
+            return leftEdgeFlagDirection();
+        }
+        if (index == count - 1) {
+            return rightEdgeFlagDirection();
+        }
+
+        const int gapLeft = markerX - previousMarkerX;
+        const int gapRight = nextMarkerX - markerX;
+        return (gapLeft >= gapRight) ? ForceLeft : ForceRight;
+    }
+
+    static int diversityPairOrderKey(bool diversityParent,
+                                     bool diversityChild,
+                                     int diversityIndex,
+                                     int sliceId)
+    {
+        if (diversityIndex >= 0) {
+            return diversityIndex;
+        }
+        if (diversityParent) {
+            return 0;
+        }
+        if (diversityChild) {
+            return 1;
+        }
+        return 1000 + std::max(sliceId, 0);
+    }
+
+    // Locked flag side for an attached diversity pair member, by
+    // diversityPairOrderKey index. Index 0 is the DIV parent when the radio reports
+    // diversity_parent / diversity_index (else the lower slice ID) and locks RIGHT
+    // to match SmartSDR; index 1 locks LEFT. Lock*, not Force*, so the pair keeps
+    // opposite sides at a pan edge (#2663, #3880).
+    static FlagDir diversityPairFlagDir(int orderIndex)
+    {
+        return orderIndex == 0 ? LockRight : LockLeft;
+    }
+
+    static FlagPlacement placementForMarker(int markerX,
+                                            int specTop,
+                                            int widgetWidth,
+                                            int widgetHeight,
+                                            int parentWidth,
+                                            FlagDir dir,
+                                            bool defaultOnLeft)
+    {
+        bool onLeft = defaultOnLeft;
+        const bool lockedSide = (dir == LockLeft || dir == LockRight);
+
+        if (dir == ForceLeft || dir == LockLeft) {
+            onLeft = true;
+        } else if (dir == ForceRight || dir == LockRight) {
+            onLeft = false;
+        }
+
+        constexpr int kEdgeHysteresis = 20;
+
+        int x = markerX;
+        if (onLeft) {
+            x = markerX - widgetWidth;
+            if (!lockedSide && x < -kEdgeHysteresis) {
+                x = markerX;
+                onLeft = false;
+            }
+        } else {
+            x = markerX;
+            const int effectiveParentWidth = parentWidth > 0
+                ? parentWidth
+                : std::numeric_limits<int>::max() - kEdgeHysteresis;
+            if (!lockedSide
+                && x + widgetWidth > effectiveParentWidth + kEdgeHysteresis) {
+                x = markerX - widgetWidth;
+                onLeft = true;
+            }
+        }
+
+        return {QRect(x, specTop, widgetWidth, widgetHeight), onLeft};
+    }
+
+    // Draw this flag's SmartMTR extremes value labels (min/max or current signal,
+    // gated by the meter options) onto the spectrum painter, in the band just
+    // below the flag. Called by SpectrumWidget's overlay pass so the labels land
+    // on top of the slice markers. No-op unless the SmartMTR meter + value labels
+    // are active and the flag is expanded. Coordinates are SpectrumWidget-local.
+    void drawSmartMtrLabels(QPainter& p) const;
+
+    // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) were
+    // removed from the VFO DSP grid; that family lives in the spectrum
+    // overlay menu and the AetherDSP applet only.
+    void setAfGain(int pct);
+    void setEscLevel(float dbm);
+    void setEscControlsAvailable(bool available);
+    void syncFromSlice();
+    void setRecordOn(bool on);
+    void setPlayOn(bool on);
+    void setPlayEnabled(bool enabled);
+    void beginDirectEntry(QString source = QStringLiteral("vfo-direct-entry"));
+    QLabel* freqLabel() const { return m_freqLabel; }
+
+    bool isCollapsed() const { return m_collapsed; }
+    void setCollapsed(bool collapsed);
+
+    // Spoken summary of this flag for AT tools (slice, frequency, TX state).
+    // Consumed by VfoWidgetAccessible — the QAccessibleInterface implemented
+    // for this widget in VfoWidget.cpp — so collapsed flags, whose slice/TX
+    // badges are custom-painted with no child-widget equivalent, aren't opaque
+    // to screen readers. (#3754)
+    QString accessibleSummary() const;
+
+    // Reparent the flag's satellite widgets (close/lock/record/play buttons +
+    // collapsed freq label — deliberately siblings of the flag, parented to
+    // the SpectrumWidget so they can render outside the flag's bounds) onto a
+    // new spectrum. Required when the flag itself is moved between pans via
+    // SpectrumWidget::takeVfoWidget/adoptVfoWidget: without this the
+    // satellites stay behind on the old pan — ghost buttons at stale
+    // coordinates whose clicks still act on the migrated slice, deleted
+    // entirely when the old pan is torn down (#4037 review).
+    void reparentFlagSatellites(QWidget* newParent);
+
+    // Which side of the slice marker the flag panel is currently rendered on.
+    // Tracked by updatePosition() via m_lastOnLeft.  Used by panFollowVfo()
+    // to extend the pan-follow trigger to the flag's outer edge — single-side
+    // for non-split slices, both-sides for split pairs (#2761).
+    bool onLeft() const { return m_lastOnLeft; }
+
+#ifdef HAVE_RADE
+    void setRadeActive(bool on, const QString& label = QStringLiteral("RADE"));
+    void setRadeSynced(bool synced);
+    void setRadeSnr(float snrDb);
+    void setRadeFreqOffset(float hz);
+    void setRadeCallsign(const QString& callsign);
+#endif
+
+Q_SIGNALS:
+    void afGainChanged(int value);
+    void audioMuteToggled(bool on);   // per-slice AF mute changed by user (#1560)
+    void rxPanChanged(int value);     // pan slider moved; AudioEngine re-applies after NR (#1460)
+    void closeSliceRequested();
+    void lockToggled(bool locked);
+    // Client-side DSP signals deleted with the buttons — overlay menu
+    // and AetherDSP applet handle those toggles directly now.
+#ifdef HAVE_RADE
+    void radeActivated(bool on, int sliceId);
+#endif
+    void recordToggled(bool on);
+    void playToggled(bool on);
+    void aetherDspRequested();     // user clicked the ADSP button on the DSP tab
+    void aetherVoiceRequested();   // user clicked the AetherVoice button on the DSP tab
+    void splitToggled();
+    void swapRequested();
+    // Right-click on the SPLIT/SWAP badge. The menu itself is built by
+    // MainWindow, which owns the split pair and the remembered arrangement;
+    // this widget only reports where the operator clicked. (#2242, #311)
+    void splitBadgeMenuRequested(const QPoint& globalPos);
+    void autotuneRequested(bool intermittent);  // CW auto-tune: false=stop, true=loop
+    void autotuneOnceRequested();               // CW auto-tune one-shot
+    void zeroBeatRequested();                   // client-side CW zero-beat
+    void addSpotRequested(double freqMhz);
+    void sliceActivationRequested(int sliceId);
+    void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
+    void flexRxAntennaSelected(int sliceId);
+    // The radio published no antenna port to choose and there is no virtual
+    // (Kiwi) receiver on offer, so the RX (tx=false) or TX (tx=true) antenna
+    // pick was refused rather than offering invented ANT1/ANT2
+    // (AntennaChoiceGate.h). MainWindow announces it.
+    void antennaChoiceRefused(bool tx);
+    void autoSqlMarginDbChanged(int dB);
+    // Emitted when the wheel tunes by step so MainWindow can apply the shared
+    // tuning/reveal policy.
+    void stepTuneRequested(double mhz);
+    void directEntryCommitted(double mhz, const QString& source);
+    // Per-slice VFO marker style changed (#1526).  markerWidth: 0 = off
+    // (no center line / no top triangle, passband only), 1 = 1 px line,
+    // 3 = 3 px line.
+    void markerStyleChanged(int markerWidth, bool filterEdgesHidden);
+    // The SmartMTR value labels need a repaint (meter values/options changed).
+    // SpectrumWidget connects this to markOverlayDirty() so the spectrum overlay
+    // (which draws the labels) refreshes. Throttled at the source.
+    void smartMtrLabelsChanged();
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
+    void wheelEvent(QWheelEvent* ev) override;
+    void mousePressEvent(QMouseEvent* ev) override;
+    void mouseReleaseEvent(QMouseEvent* ev) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+private:
+    void syncShadowGeometry();
+    void updateMeterIfPixelsChanged();
+    void updateSignalMeterTarget();
+    void animateSignalMeter();
+    // Build and push the current MeterInput (RX signal vs the selected TX meter)
+    // to the SmartMTR widget. Cheap; safe to call on every level/state update.
+    void pushSmartMtrInput();
+    // Radio-aware forward-power scale top (watts): the radio's rated exciter power
+    // x kPowerHeadroom, mirroring TxApplet's exciter gauge. Used for the Power meter.
+    double txPowerFullScaleW() const;
+    // Read the global extremes options (MeterViewController) and push them to the
+    // SmartMTR widget; show/hide + reposition the value-label overlay. Called on
+    // construction, on extremesChanged() broadcast, and on meter-view switch.
+    void pushSmartMtrOptions();
+    // Throttled bridge from the meter's repaint to a spectrum-overlay refresh.
+    void onSmartMtrRepainted();
+    bool usesUnavailableSignalMeter() const;
+    static float signalDbmToMeterFraction(float dbm);
+
+    void buildUI();
+    void buildTabContent();
+    void populateDaxCombo();  // DAX Ch list, sized to the radio's slice capacity
+    // Sweep every interactive flag control and give it Qt::PointingHandCursor so
+    // hovering signals clickability.  Re-run after rebuildFilterButtons() so the
+    // dynamically recreated filter/autotune/adaptive buttons are covered (#4036).
+    void applyInteractiveCursors();
+    // Meter view (standard S-Meter vs SmartMTR component).  Driven globally by
+    // MeterViewController; m_meterStack switches pages and meterBarRect() locates
+    // the painted bar.  The inline selector row (m_meterMenuRow) is revealed by
+    // clicking the meter strip; syncMeterMenuButtons() reflects the choice.
+    void applyMeterView(bool smartMtr);
+    void syncMeterMenuButtons();
+    void setMeterMenuOpen(bool open);  // open/close the S-Meter/SmartMTR selector
+    QRect meterBarRect() const;
+    void updateTxBadgeStyle(bool isTx);
+    void showTab(int index);
+    void closeActiveTab();  // close any open DSP/Mode/... tab panel
+    void updateDspTabAccent();
+    void deactivateTabButton(int closedTab);  // reset a just-closed tab's style
+    void updateFreqLabel();
+    void updateCaptureStatus();
+    void updateCollapsedFrequencyLabel();
+    bool cancelDirectEntry();
+    void updateFilterLabel();
+    void updateModeTab();
+    void rebuildFilterButtons();
+    void updateCwAutoTuneControls();
+    bool m_cwLoopRequested{false};
+    QPointer<QPushButton> m_registeredCwOnce;
+    QPointer<QPushButton> m_registeredCwLoop;
+    void updateFilterHighlight();
+    void applyFilterPreset(int widthHz);
+    void saveFilterPresets();
+    void updateAgcSliderFromSlice();
+    void syncAutoAgcThreshold();
+    void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
+    void updateAntennaButtons();
+    QStringList rxAntennaOptions() const;
+    QStringList txAntennaOptions() const;
+    QString antennaMenuLabel(const QString& token, const QStringList& options) const;
+    static QString formatFilterLabel(int hz);
+
+    SliceModel*    m_slice{nullptr};
+    TransmitModel* m_txModel{nullptr};
+    RadioModel*    m_radioModel{nullptr};
+    ControlAvailabilityRegistry* m_filterAvailability{nullptr};
+    std::optional<ReceiveFilterControl> m_receiveFilterControl;
+    // exclusiveSquelchScaleValue(caps.squelchLevelScale): the receiver's own gate.
+    std::optional<SquelchLevelScale> m_exclusiveSquelch;
+    QPushButton* m_filterUnavailable{nullptr};
+    QVector<int> defaultFilterWidths(const QString& mode) const;
+    bool acceptsFilterEdges(int low, int high) const;
+    KiwiSdrManager* m_kiwiSdrManager{nullptr};
+    QStringList    m_antList;
+    bool           m_updatingFromModel{false};
+    bool           m_lastOnLeft{true};
+    bool m_relativeSignal = false;
+    bool m_relativeSignalValid = false;
+    QString m_relativeUnavailableReason;
+    float          m_signalDbm{-130.0f};
+    // Whether m_signalDbm is a real calibrated reading. FLEX always is; a
+    // KiwiSDR slice without a calibrated meter is not, in which case the
+    // SmartMTR needle must show no-data rather than peg the hardcoded S0.
+    bool           m_signalHasDbm{true};
+    KiwiSdrProtocol::MeterReading m_receiveMeterReading;
+    bool           m_receiveMeterReadingActive{false};
+    QTimer         m_signalMeterAnimation;
+    QElapsedTimer  m_signalMeterElapsed;
+    QRect          m_lastRequestedMeterBar;
+    int            m_lastRequestedMeterFill{-1};
+    bool           m_lastRequestedMeterRelative{false};
+    float          m_signalMeterFraction{0.0f};
+    float          m_targetSignalMeterFraction{0.0f};
+    bool           m_collapsed{false};
+    bool           m_collapseToggled{false};  // guard: absorb release after toggle
+    int            m_scrollAccum{0};    // trackpad pixel scroll accumulator
+    int            m_angleAccum{0};     // mouse wheel angle accumulator
+    qint64         m_lastWheelMs{0};    // debounce: timestamp of last accepted wheel step
+    QPointer<QLabel> m_collapsedFreqLabel;
+
+    // Accessibility: debounced frequency announcement (300 ms settle before speaking)
+    QTimer   m_accessibleFrequencyTimer;
+    QString  m_pendingAccessibleFrequencyText;
+    QString  m_lastAccessibleFrequencyText;
+    void     scheduleFrequencyAnnouncement(const QString& text);
+    QSet<QWidget*> m_hiddenBeforeCollapse;    // widgets already hidden before collapse
+
+    // Header row
+    QPushButton* m_rxAntBtn{nullptr};
+    QPushButton* m_txAntBtn{nullptr};
+    QLabel*      m_filterWidthLbl{nullptr};
+    QPushButton* m_splitBadge{nullptr};
+    QPushButton* m_txBadge{nullptr};
+    QLabel*      m_sliceBadge{nullptr};
+    QPointer<QPushButton> m_lockVfoBtn;
+    QPointer<QPushButton> m_closeSliceBtn;
+    QPointer<QPushButton> m_recordBtn;
+    QPointer<QPushButton> m_playBtn;
+    QTimer* m_recordPulse{nullptr};
+
+    static constexpr int kSignalMeterAnimationIntervalMs = 8;
+    static constexpr float kSignalMeterAttackTimeSeconds = 0.045f;
+    static constexpr float kSignalMeterReleaseTimeSeconds = 0.180f;
+    static constexpr float kSignalMeterSnapEpsilon = 0.001f;
+
+    // Frequency / meter
+    QLabel* m_freqLabel{nullptr};
+    QLabel* m_captureStatusLabel{nullptr};
+    QLineEdit* m_freqEdit{nullptr};
+    QStackedWidget* m_freqStack{nullptr};
+    QLabel* m_dbmLabel{nullptr};
+    // Meter strip: page 0 = standard S-meter (painted bar + dBm label),
+    // page 1 = SmartMTR component.  m_smartMtr mirrors the current page.
+    QStackedWidget* m_meterStack{nullptr};
+    bool m_smartMtr{false};
+    SmartMtrWidget* m_smartMtrWidget{nullptr};
+    // The SmartMTR extremes value labels are drawn by SpectrumWidget's overlay
+    // pass (so they sit on top of the slice). This clock throttles how often the
+    // meter's repaint asks the spectrum overlay to refresh.
+    QElapsedTimer m_labelDirtyClock;
+    qint64 m_lastLabelDirtyMs{-1};
+    bool m_smartMtrLabelsVisible{false};
+    float m_micDbfs{-40.0f}; // latest mic level (dBFS); SmartMTR TX scale
+    float m_micPeakDbfs{-40.0f}; // latest mic peak (dBFS, radio MICPEAK stat)
+    // Latest TX-meter values, cached for the SmartMTR TX scales (see the setters).
+    float m_swr{1.0f};            // forward/reflected ratio (1.0 = perfect match)
+    float m_fwdPowerW{0.0f};      // smoothed forward power (watts)
+    float m_compPeakDb{0.0f};     // compression peak (dB, positive); -negated for the face
+    bool m_transmitting{false}; // global MOX state
+    // Inline selector row revealed by clicking the meter strip (not a popup),
+    // shown between the meter and the tab bar.
+    QWidget* m_meterMenuRow{nullptr};
+    // Explicit open-state for the selector. The paintEvent underline gates on
+    // this rather than m_meterMenuRow->isVisible(): in GPU flag mode the flag is
+    // hidden and rasterized into a sprite, where the child's isVisible() reads
+    // false even with the selector open — which dropped the underline from the
+    // sprite. The selector is one of the controls that should stay visible.
+    bool m_meterMenuOpen{false};
+    QPushButton* m_sMeterOptBtn{nullptr};
+    QPushButton* m_smartMtrOptBtn{nullptr};
+    // SmartMTR-only display options, shown vertically below the selector
+    // buttons. Disabled while the standard S-meter is selected. "Extremes
+    // speed" is further gated on "Show extremes" being checked.
+    QCheckBox* m_showExtremesChk{nullptr};
+    QComboBox* m_extremesSpeedCmb{nullptr};
+    QComboBox* m_showValuesCmb{nullptr};
+    // Show the meter-type label (MIC/SWR/PWR/COMP) inside the SmartMTR hole.
+    // Disabled when no TX meter is selected (TxMeter::None).
+    QCheckBox* m_showTxMeterTypeChk{nullptr};
+    // Which meter to show while transmitting: None (stay on RX signal) or Mic
+    // Level. Disabled while the standard S-meter is selected.
+    QComboBox* m_txMeterCmb{nullptr};
+    // The three SmartMTR option rows (label + combo). Disabled as a unit when the
+    // option doesn't apply; the label/combo dim via their :disabled stylesheet —
+    // render()-compatible, so they stay dimmed (not blank) in GPU flag sprites.
+    QWidget* m_speedRow{nullptr};
+    QWidget* m_valuesRow{nullptr};
+    QWidget* m_txMeterRow{nullptr};
+    // Enable/disable the SmartMTR-only options per the current meter view and
+    // the "Show extremes" checkbox state (see implementation for the rules).
+    void syncSmartMtrSettingsState();
+    // Re-seed this flag's option controls from the global MeterViewController
+    // (used when another open flag changes a setting), then re-evaluate state.
+    void syncSmartMtrSettingsControls();
+    // Thin spacer between the meter and the tab bar, shown only while the meter
+    // selector is open, to give the curved underline room below the indicator.
+    QWidget* m_meterUnderlineRoom{nullptr};
+    QString m_directEntrySource{"vfo-direct-entry"};
+
+    // Sub-menu tabs
+    QVector<QPushButton*> m_tabBtns;
+    QVector<QLabel*> m_tabSeparators;
+    QStackedWidget* m_tabStack{nullptr};
+    QWidget*        m_tabBar{nullptr};
+    int m_activeTab{-1};
+    int m_daxTabIndex{-1};
+    QPointer<QWidget> m_shadowWidget;
+
+    // Tab content widgets
+    // Audio tab
+    QSlider* m_afGainSlider{nullptr};
+    QSlider* m_panSlider{nullptr};
+    QPushButton* m_muteBtn{nullptr};
+    QPushButton* m_divBtn{nullptr};
+    // ESC (Enhanced Signal Clarity) panel — shown when DIV is active (parent only)
+    QWidget*     m_escPanel{nullptr};
+    QPushButton* m_escBtn{nullptr};
+    PhaseKnob*   m_phaseKnob{nullptr};
+    QSlider*     m_escPhaseSlider{nullptr};
+    QPushButton* m_escPlus180Btn{nullptr};
+    QSlider*     m_escGainSlider{nullptr};
+    QLabel*      m_escPhaseLbl{nullptr};
+    QLabel*      m_escGainLbl{nullptr};
+    QLabel*      m_escMeterLbl{nullptr};
+    QLabel*      m_escDbmLbl{nullptr};
+    QWidget*     m_escMeterBar{nullptr};
+    float        m_escLevelDbm{-130.0f};
+    bool         m_diversityAllowed{true};
+    bool         m_escControlsAvailable{true};
+    void syncEscPanelVisibility();
+    void syncTabStackHeightToCurrentPage();
+    void relayoutToCurrentContent();
+    QPushButton* m_sqlBtn{nullptr};
+    QPointer<RxApplet> m_rxApplet;       // mirrored only while this VFO's slice is active
+    QLabel*      m_sqlValueLbl{nullptr}; // captured during buildUI() for syncSqlVisuals
+    // Apply the current SqlMode from m_rxApplet to the VfoWidget's SQL
+    // button label/style and slider range/value.  Called on rxApplet's
+    // sqlModeChanged signal and once after setRxApplet().
+    bool mirrorsRxAppletSql() const;
+    enum class LocalSqlMode { Off, Manual, Auto };
+    LocalSqlMode standaloneSqlMode() const;
+    void cycleStandaloneSqlMode();
+    int autoSqlMarginDb() const;
+    void setAutoSqlMarginDb(int dB);
+    int manualSqlMaximum() const;
+    int clampManualSqlLevel(int level) const;
+    int agcThresholdMinimum() const;
+    int agcThresholdMaximum() const;
+    void syncSqlVisuals();
+public:
+    void setDiversityAllowed(bool allowed);
+    void setCwAutotuneLicensed(bool licensed);
+    void setHasExtendedDsp(bool has);
+    // Whether the RADIO owns its noise reduction / blanking / auto-notch
+    // (RadioCapabilities::hasRadioSideDsp). False hides NR, NB, ANF, NRL,
+    // ANFL and ANFT — controls that on a host-demodulating backend would
+    // toggle firmware that is not there. The client-side modules in the
+    // AetherDSP applet are untouched.
+    void setHasRadioSideDsp(bool has);
+    // Whether the radio has the WDSP LMS/FFT filter family
+    // (RadioCapabilities::hasLmsNoiseFilters). False hides NRL, ANFL and ANFT
+    // on a radio that runs its own DSP but not FlexRadio's particular set of
+    // it — an Icom has noise reduction, a blanker and both notches, and
+    // nothing these three buttons could reach.
+    void setHasLmsNoiseFilters(bool has);
+    // Whether the radio has one operator-placed in-passband notch
+    // (RadioCapabilities::hasManualNotch). Shows the MN button and re-targets
+    // the shared level slider to the notch POSITION while it is selected.
+    void setHasManualNotch(bool has);
+    // Whether THIS HOST blanks impulse noise in the radio's IQ
+    // (RadioCapabilities::hasHostNoiseBlanker). Shows the NB button on a radio
+    // that reports no radio-side DSP, because on such a radio the blanker runs
+    // here and the button reaches something real — the same exception the
+    // manual notch and the TNF controls already make.
+    void setHasHostNoiseBlanker(bool has);
+    // The radio's fixed filter widths (RadioCapabilities::rxFilterWidthsHz), widest
+    // first. Non-empty replaces the mode-preset grid (e.g. IC-705 has three IF
+    // filters per mode, so presets would snap onto neighbours); empty restores the
+    // operator's presets. Same contract as RxApplet::setRadioFilterWidths.
+    void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
+
+    // Reflect whether any client-side AetherDSP NR module (NR2 / NR4 / MNR /
+    // BNR / DFNR / RN2) is active by accenting the ADSP launcher, so the cue is
+    // visible on the VFO grid without opening the applet. Driven by MainWindow
+    // from the AudioEngine *EnabledChanged signals. (#3800)
+    void setAetherDspActive(bool active);
+
+    // Per-slice VFO marker display prefs, persisted by slice ID (#1526).
+    // markerWidth: 0 = off, 1 = 1 px, 3 = 3 px.
+    int  markerWidth() const { return m_markerWidth; }
+    bool filterEdgesHidden() const { return m_filterEdgesHidden; }
+    static int defaultMarkerWidth();
+    static bool defaultFilterEdgesHidden();
+    static void setDefaultMarkerWidth(int widthPx);
+    static void setDefaultFilterEdgesHidden(bool hide);
+    void setMarkerWidth(int widthPx, bool persist = true);
+    void setFilterEdgesHidden(bool hide, bool persist = true);
+private:
+    int  m_markerWidth{1};
+    bool m_filterEdgesHidden{false};
+    // Marker: single button cycling Off → 1 px → 3 px on click.  Label
+    // reflects the current state.
+    class QPushButton* m_markerThicknessBtn{nullptr};
+    // Filter edge lines: single checkable button — checked = edges shown,
+    // unchecked = edges hidden.
+    class QPushButton* m_edgesBtn{nullptr};
+    void loadDisplayPrefs();
+    void saveMarkerWidthPref();
+    void saveFilterEdgesPref();
+    // Adaptive RX filter controls (SSB-only, rebuilt with the Mode tab) — RFC #3878
+    // Reusable adaptive-RX-filter control group (shared with the RX applet);
+    // recreated on each SSB grid rebuild, bound to the slice as source of truth.
+    class AdaptiveFilterControls* m_adaptive{nullptr};
+
+    QSlider* m_sqlSlider{nullptr};
+    QComboBox* m_agcCmb{nullptr};
+    QSlider* m_agcTSlider{nullptr};
+    QLabel* m_agcValueLbl{nullptr};
+    QPushButton* m_autoAgcTButton{nullptr};
+    void updateDspParameterResetControls();
+    std::optional<DspParameterResetTarget> dspParameterResetTarget(int index) const;
+    QPointer<SliceModel> m_dspResetSlice;
+    QPointer<SliceModel> m_dspResetIntentSlice;
+    QPointer<RadioModel> m_dspResetIntentRadio;
+    DspParameterResetTarget m_dspResetIntentTarget{DspParameterResetTarget::All};
+    quint64 m_dspResetSession{0};
+    bool m_dspResetIntentArmed{false};
+    QComboBox* m_dspResetTarget{nullptr};
+    QPushButton* m_dspResetButton{nullptr};
+
+    // DSP tab
+    QPushButton* m_nbBtn{nullptr};
+    QPushButton* m_nrBtn{nullptr};
+    QPushButton* m_anfBtn{nullptr};
+    QPushButton* m_nrlBtn{nullptr};
+    QPushButton* m_nrsBtn{nullptr};
+    QPushButton* m_rnnBtn{nullptr};
+    QPushButton* m_nrfBtn{nullptr};
+    QPushButton* m_anflBtn{nullptr};
+    QPushButton* m_anftBtn{nullptr};
+    QPushButton* m_mnBtn{nullptr};
+    QPushButton* m_apfBtn{nullptr};
+    QPushButton* m_aetherDspBtn{nullptr};    // launches AetherDSP Settings dialog
+    bool         m_aetherDspActive{false};   // any client NR module on (#3800)
+    QPushButton* m_aetherVoiceBtn{nullptr};  // toggles Aetherial Audio Channel Strip
+    // Holds the two launchers side by side; relayoutDspGrid() spans it across
+    // whatever columns the toggles leave free, and the pair split that evenly.
+    QWidget*     m_aetherLauncherRow{nullptr};
+
+    // Shared DSP-level row at the bottom of the DSP grid: one slider whose
+    // target switches based on which leveled DSP the user most recently
+    // turned on.  RNN / ANFT / APF are toggle-only on this slider — they
+    // either have no level (RNN, ANFT) or own a dedicated container (APF).
+    enum DspLevelTarget { LvlNone = 0, LvlNR, LvlNB, LvlAnf, LvlNrl, LvlNrs, LvlNrf, LvlAnfl,
+                          // POSITION, not amount. The shared slider means
+                          // something different for this target than for every
+                          // other one — see SliceModel::setMnLevel.
+                          LvlMn };
+    QWidget* m_dspLevelRow{nullptr};
+    QLabel*  m_dspLevelLabel{nullptr};
+    QSlider* m_dspLevelSlider{nullptr};
+    QLabel*  m_dspLevelValue{nullptr};
+    DspLevelTarget m_dspLevelTarget{LvlNone};
+    // Activation stack — most recent at the back.  Lets the slider fall
+    // back to the previous still-on DSP when the active one is turned
+    // off, instead of hiding the row entirely.
+    QList<DspLevelTarget> m_dspLevelStack;
+    void pushDspLevelTarget(DspLevelTarget t);
+    void popDspLevelTarget(DspLevelTarget t);
+    void setDspLevelTarget(DspLevelTarget t);
+    // Pick a sensible initial target from the current slice's enable
+    // flags; called when m_slice is set and on mode-driven re-visibility.
+    void refreshDspLevelTarget();
+    // NB2's fill row. Visible only while NB2 is the running blanker; see
+    // refreshNbControls().
+    QWidget*   m_nbFillContainer{nullptr};
+    QComboBox* m_nbFillCombo{nullptr};
+    // Button text, visibility of the fill row and the combo's index, from
+    // whatever the slice now says. One place, called from the click handler, the
+    // model signals and the slice-switch sync, so the three cannot disagree.
+    void refreshNbControls();
+    QWidget* m_apfContainer{nullptr};
+    QSlider* m_apfSlider{nullptr};
+    QLabel*  m_apfValueLbl{nullptr};
+    // DSP grid re-layout
+    QGridLayout* m_dspGrid{nullptr};
+    void relayoutDspGrid();
+    // Shared visibility rule for the 8000-series extended DSP filters
+    // (NRS/RNN/NRF) — one place so setSlice/syncFromSlice/setHasExtendedDsp
+    // can't drift on the mode gate. Caller must hold a valid m_slice. (#2177)
+    void updateExtendedDspVisibility();
+    bool usesTransmitFrequencyCheck() const;
+    void configureRepeaterReverseControl();
+    void configureFmToneControls();
+    void releaseTransmitFrequencyCheck();
+    // The ONE owner of the radio-side DSP buttons' visibility: ANDs each
+    // button's cached mode eligibility with m_hasRadioSideDsp. Both mode
+    // recompute sites and setHasRadioSideDsp() route through here, so no
+    // caller drives these setVisible() directly and none can race another.
+    void applyRadioSideDspVisibility();
+    // RTTY Mark/Shift (shown only in RTTY mode)
+    QWidget* m_rttyContainer{nullptr};
+    // DIG offset (shown only in DIGL/DIGU mode)
+    QWidget*        m_digContainer{nullptr};
+    ScrollableLabel* m_digOffsetLabel{nullptr};   // read-only display, scroll-wheel steps
+    QLineEdit*       m_digOffsetEdit{nullptr};     // inline direct-entry (double-click)
+    QStackedWidget*  m_digOffsetStack{nullptr};    // switches between label and edit
+    // FM-family OPT controls. DSTR uses the duplex controls but not CTCSS.
+    QWidget*       m_fmContainer{nullptr};
+    QVBoxLayout*   m_fmLayout{nullptr};
+    QWidget*       m_fmToneContainer{nullptr};
+    QWidget*       m_fmToneRxContainer{nullptr};
+    QComboBox*     m_fmToneModeCmb{nullptr};
+    QComboBox*     m_fmToneValueCmb{nullptr};
+    QComboBox*     m_fmToneRxValueCmb{nullptr};
+    QComboBox*     m_fmDtcsCodeCmb{nullptr};
+    QComboBox*     m_fmDtcsPolarityCmb{nullptr};
+    QWidget*       m_fmDtcsContainer{nullptr};
+    QDoubleSpinBox* m_fmOffsetSpin{nullptr};
+    QPushButton*   m_fmOffsetDown{nullptr};
+    QPushButton*   m_fmSimplexBtn{nullptr};
+    QPushButton*   m_fmOffsetUp{nullptr};
+    QPushButton*   m_fmRevBtn{nullptr};
+    bool           m_xfcHeldByThisControl{false};
+    ScrollableLabel* m_markLabel{nullptr};
+    ScrollableLabel* m_shiftLabel{nullptr};
+    // Mode tab
+    QComboBox* m_modeCombo{nullptr};
+    QPushButton* m_quickModeBtns[3]{};
+    QString      m_quickModeAssign[3];  // e.g. "USB", "CW", "SSB", "DIG"
+    void updateQuickModeButtons();
+    QGridLayout* m_filterGrid{nullptr};
+    QVector<QPushButton*> m_filterBtns;
+    QVector<int> m_filterWidths;
+    // Radio-declared ladder; empty when the radio does not declare one.
+    QVector<int> m_radioFilterWidths;
+    RxFilterControl m_radioFilterControl;
+    // Parallel to m_filterWidths.  When a slot has user-defined custom
+    // edges (right-click → "Set Custom Edges..."), the lo/hi are stored
+    // here and applied directly instead of going through applyFilterPreset's
+    // mode-rule recompute.  INT_MIN sentinel means "no custom edges, use
+    // mode rules" — preserves the legacy width-only behaviour. (#2259)
+    QVector<int> m_filterCustomLo;
+    QVector<int> m_filterCustomHi;
+    // CW autotune row (only visible in CW mode). The container holds the
+    // "Autotune:" label + buttons; deleting it on rebuild also removes the
+    // label, which is not tracked as its own member.
+    class QWidget* m_autotuneContainer{nullptr};
+    QPushButton* m_autotuneOnceBtn{nullptr};
+    QPushButton* m_autotuneLoopBtn{nullptr};
+    QPushButton* m_zeroBeatBtn{nullptr};
+    bool         m_cwAutotuneLicensed{false};
+    bool         m_hasExtendedDsp{false};
+    // Whether the RADIO runs its own NR/NB/ANF (RadioCapabilities::
+    // hasRadioSideDsp). Defaults TRUE so a widget built before any backend has
+    // reported stays in its pre-existing state rather than briefly hiding
+    // controls that do exist.
+    bool         m_hasRadioSideDsp{true};
+    // Defaults TRUE for the same reason as m_hasRadioSideDsp above: a widget
+    // built before any backend has reported must not briefly hide controls
+    // that do exist. Flex is the only radio that has these today, and it was
+    // the only radio these buttons ever worked on.
+    bool         m_hasLmsNoiseFilters{true};
+    // Defaults FALSE, and that asymmetry is deliberate: MN is a NEW button.
+    // Showing it before a backend has claimed the capability would put a
+    // control on screen for every radio in the pre-report window, including
+    // the Flexes that have TNFs instead and will never claim it.
+    bool         m_hasManualNotch{false};
+    // Defaults FALSE like m_hasManualNotch, and for the mirror of its reason:
+    // this flag can only ADD the NB button (it is OR'd with m_hasRadioSideDsp,
+    // which already defaults true), so a permissive default would show NB in
+    // the pre-report window on radios that will never claim either.
+    bool         m_hasHostNoiseBlanker{false};
+    // Mode eligibility per radio-side DSP button, cached by the two sites that
+    // compute it (modeChanged handler, syncFromSlice) so
+    // applyRadioSideDspVisibility() can AND it with the capability. Their rules
+    // differ (only modeChanged hides ANF/ANFL/ANFT for FreeDV), so don't re-derive.
+    bool         m_nrModeOk{true};
+    bool         m_nbModeOk{true};
+    bool         m_anfModeOk{true};
+    bool         m_nrlModeOk{true};
+    bool         m_anflModeOk{true};
+    bool         m_anftModeOk{true};
+    bool         m_mnModeOk{true};
+    // RIT/XIT tab
+    QList<QWidget*> m_ritControls;
+    QPushButton* m_ritBtn{nullptr};
+    QPushButton* m_xitBtn{nullptr};
+    ScrollableLabel* m_ritLabel{nullptr};
+    ScrollableLabel* m_xitLabel{nullptr};
+    // DAX tab
+    QComboBox* m_daxCmb{nullptr};
+
+#ifdef HAVE_RADE
+    QLabel*  m_radeStatusLabel{nullptr};   // freq row: "RADE ●" badge only
+    QWidget* m_radeInfoRow{nullptr};        // info row: callsign + SNR + offset
+    QLabel*  m_radeCallsignLabel{nullptr};  // hidden until EOO received
+    QLabel*  m_radeSnrLabel{nullptr};       // "12dB" or "---"
+    QLabel*  m_radeOffsetLabel{nullptr};    // "+125Hz" — hidden when no data
+    bool     m_radeActive{false};
+    QString  m_radeLabel{"RADE"};          // badge prefix: "RADE" or "FreeDV"
+#endif
+
+    static constexpr int WIDGET_W = 252;
+    static constexpr int COLLAPSED_W = 34;
+};
+
+} // namespace AetherSDR

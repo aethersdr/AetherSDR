@@ -1,0 +1,232 @@
+#pragma once
+#include "core/TxCoordinator.h"
+
+#include "core/tnc/Ax25.h"
+#include "core/tnc/Ax25LinkTiming.h"
+
+#include <QByteArray>
+#include <QDateTime>
+#include <QObject>
+#include <QString>
+#include <QStringList>
+#include <QVector>
+
+class QTimer;
+
+namespace AetherSDR {
+
+class Ax25Connection;
+
+// Personal Mailbox System (PMS/PBBS): a Kantronics-style AX.25 mailbox for one
+// remote caller at 1200 baud (read/list/send, heard list, disconnect).
+// Messages, callers and heard list persist as JSON in the settings dir. Owns an
+// Ax25Connection; RF-agnostic: feed decoded frames to onAirFrame() and key
+// whatever transmitFrame() emits. Heard list and UI beacon are separate for
+// reuse by a digipeater.
+class PmsMailbox : public QObject {
+    Q_OBJECT
+
+public:
+    void setTransmitProgram(const TxCoordinator::Request& input) { m_txProgram = input; }
+    struct Message {
+        int id{0};
+        QChar type{QLatin1Char('P')}; // 'P' private, 'B' bulletin
+        QString to;
+        QString from;
+        QString subject;
+        QString body;
+        QDateTime utc;
+        bool read{false};
+    };
+
+    struct Caller {
+        QString call;
+        QDateTime utc;
+    };
+
+    struct Heard {
+        QString call;
+        QString dest;
+        QString via;
+        QDateTime utc;
+        int count{1};
+    };
+
+    explicit PmsMailbox(QObject* parent = nullptr);
+    ~PmsMailbox() override;
+
+    // ---- Configuration (the GUI persists these via AppSettings) -------------
+    void setEnabled(bool on);
+    bool isEnabled() const { return m_enabled; }
+    // Full listen callsign-SSID the mailbox answers on, e.g. "KI6BCJ-10".
+    // Invalid/empty text leaves the mailbox without a primary address.
+    void setListenCallsign(const QString& callWithSsid);
+    QString listenCallsign() const { return m_listen.isValid() ? m_listen.toString() : QString(); }
+    // Optional vanity/alias callsign-SSID also answered, e.g. "AETHBBS".
+    // Empty text clears it.
+    void setAliasCallsign(const QString& callWithSsid);
+    QString aliasCallsign() const { return m_alias.isValid() ? m_alias.toString() : QString(); }
+    bool hasValidAddress() const { return m_listen.isValid(); }
+    // The configured primary address (or, mid-session, the one the caller dialed).
+    ax25::Address localAddress() const;
+    void setVersionString(const QString& version) { m_version = version; }
+
+    void setWelcomeText(const QString& text) { m_welcome = text; }
+    QString welcomeText() const { return m_welcome; }
+
+    void setBeaconEnabled(bool on);
+    bool beaconEnabled() const { return m_beaconEnabled; }
+    void setBeaconText(const QString& text) { m_beaconText = text; }
+    QString beaconText() const { return m_beaconText; }
+    void setBeaconIntervalMinutes(int minutes);
+    int beaconIntervalMinutes() const { return m_beaconIntervalMin; }
+    void setBeaconDestination(const QString& dest) { m_beaconDest = dest; }
+
+    // Data-link tunables forwarded to the Ax25Connection.
+    void setRetryTimeoutMs(int t1);
+    void setMaxRetries(int n2);
+    void setPaclen(int bytes);
+
+    // Which air interface the mailbox is answering on; re-derives T1/T2/T3 and
+    // paclen from it. Call whenever the modem profile changes. Until this
+    // existed the mailbox was pinned to VHF-sized timers with no operator
+    // control at all — see docs/HFMODEM.md §1.
+    void setLinkProfile(const ax25::LinkTimingProfile& profile);
+    // One-line description of the active link timing, for the GUI status panel.
+    QString linkSummary() const;
+    // The underlying data link, read-only — for the automation bridge's
+    // `link status` snapshot (live counters and RTT samples).
+    const Ax25Connection* link() const { return m_link; }
+
+    // How long a connected caller may sit silent before the mailbox hangs up.
+    // The mailbox serves one caller at a time and refuses everyone else with DM
+    // while busy, so an abandoned session locks it out for the whole channel.
+    // Milliseconds is the primitive; minutes is the operator-facing convenience.
+    void setSessionIdleTimeoutMs(int ms);
+    void setSessionIdleTimeoutMinutes(int minutes) { setSessionIdleTimeoutMs(minutes * 60000); }
+    int sessionIdleTimeoutMs() const { return m_sessionIdleMs; }
+    int sessionIdleTimeoutMinutes() const { return m_sessionIdleMs / 60000; }
+    // Whether a session is currently being watched for inactivity.
+    bool sessionIdleTimerActive() const;
+
+    // ---- Stats for the GUI -------------------------------------------------
+    int messageCount() const { return m_messages.size(); }
+    int callerCount() const { return m_callers.size(); }
+    QStringList lastCallers(int n = 5) const;
+    QStringList heardSummary(int n = 20) const;
+    qint64 freeDiskBytes() const;
+    QString storageDir() const;
+    bool isCallerConnected() const;
+    QString connectedCaller() const;
+
+public slots:
+    // Feed every decoded AX.25 frame (address..info, no FCS) here. The heard list
+    // is updated for all frames; frames addressed to our PMS are handled by the
+    // data link. Safe to call when disabled (only heard tracking happens).
+    void onAirFrame(const QByteArray& rawNoFcs);
+
+    // Force-disconnect the current caller (graceful DISC).
+    void disconnectCaller();
+
+    // Drop the session immediately WITHOUT transmitting anything, leaving the
+    // mailbox's enabled state alone. For when the radio interface goes away
+    // under us (the modem being switched off): a graceful DISC would key a
+    // transmitter the operator just asked us to stop using.
+    void dropLink();
+
+    // Send a beacon immediately (also called by the hourly timer).
+    void sendBeaconNow();
+
+signals:
+    // A raw AX.25 frame (address..info, no FCS) to key on the air.
+    void transmitFrame(const QByteArray& rawNoFcs,
+                       const AetherSDR::TxCoordinator::Request& input);
+    // Human-readable activity for the AetherModem log.
+    void activity(const QString& message);
+    // Connection/state/stats changed — the GUI should refresh its Mailbox panel.
+    void stateChanged();
+
+private:
+    TxCoordinator::Request m_txProgram;
+    void onLinkConnected(const ax25::Address& peer);
+    void onLinkDisconnected(const ax25::Address& peer, bool byPeer);
+    void onLinkData(const QByteArray& data);
+    void onSessionIdleTimeout();
+    void touchSession(); // caller showed signs of life; restart the idle clock
+
+    void recordHeard(const ax25::Frame& frame);
+    void recordCaller(const ax25::Address& peer);
+
+    void reply(const QString& text); // queue CR-terminated line(s) to the caller
+    void flushReplies();             // hand queued output to the data link at once
+    void sendGreeting(const ax25::Address& peer);
+    void sendPrompt();
+    void processLine(const QString& line);
+    void handleCommand(const QString& line);
+
+    // Command handlers.
+    void cmdHelp();
+    void cmdList(const QString& args, bool mineOnly);
+    void cmdRead(const QString& args);
+    void cmdKill(const QString& args);
+    void cmdSendBegin(const QString& args, QChar type);
+    void cmdJheard(const QString& args);
+    void cmdUsers();
+    void cmdInfo();
+    void finishCompose(bool save);
+
+    bool callerMayAccess(const Message& msg) const;
+
+    // Persistence.
+    QString messagesPath() const;
+    QString callersPath() const;
+    QString heardPath() const;
+    bool ensureStorageDir() const;
+    void loadAll();
+    bool saveMessages(const QVector<Message>& messages, int nextId);
+    bool saveCallers(const QVector<Caller>& callers);
+    bool saveHeard(const QVector<Heard>& heard);
+    void reportPersistenceFailure(const QString& store, const QString& detail);
+
+    // Cap on unterminated inbound text. paclen tops out at 256 bytes and a
+    // mailbox command is a few dozen characters, so anything approaching this
+    // is a stuck peer or noise decoded off the channel, never real input.
+    static constexpr int kMaxLineBufferChars = 4096;
+    static constexpr int kDefaultSessionIdleMs = 10 * 60 * 1000;
+
+    Ax25Connection* m_link{nullptr};
+    QTimer* m_beaconTimer{nullptr};
+    QTimer* m_sessionIdleTimer{nullptr};
+    int m_sessionIdleMs{kDefaultSessionIdleMs};
+
+    bool m_enabled{false};
+    ax25::Address m_listen; // primary listen address (invalid until configured)
+    ax25::Address m_alias;  // optional vanity/alias address (invalid = none)
+    QString m_version{QStringLiteral("0.0")};
+    QString m_welcome;
+    bool m_beaconEnabled{false};
+    QString m_beaconText{QStringLiteral("AetherMailbox online - connect for messages")};
+    QString m_beaconDest{QStringLiteral("BEACON")};
+    int m_beaconIntervalMin{60};
+
+    QVector<Message> m_messages;
+    int m_nextId{1};
+    QVector<Caller> m_callers;
+    QVector<Heard> m_heard;
+
+    // Per-connection session state (single caller).
+    bool m_connected{false};
+    ax25::Address m_caller;
+    QString m_lineBuffer;  // inbound, awaiting a CR
+    QString m_pendingOut;  // outbound, coalesced until flushReplies()
+
+    // Multi-line compose state.
+    enum class Compose { None, Subject, Body };
+    Compose m_compose{Compose::None};
+    Message m_draft;
+    QStringList m_draftLines;
+
+    bool m_loaded{false};
+};
+
+} // namespace AetherSDR

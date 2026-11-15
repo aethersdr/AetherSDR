@@ -1,0 +1,4 @@
+interface:
+  display_name: "AetherSDR Papercuts"
+  short_description: "Rank bridge-provable AetherSDR issues"
+  default_prompt: "Use $papercuts to rank the AetherSDR issues that can be fixed and proven today."

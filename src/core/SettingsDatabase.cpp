@@ -1,0 +1,865 @@
+#include "SettingsDatabase.h"
+
+#include <QDebug>
+#include <QFile>
+
+#include <sqlite3.h>
+
+// Belt against a -DUSE_SYSTEM_SQLITE=ON pkg-config floor (CMakeLists.txt,
+// sqlite3>=3.33) disagreeing with the header actually picked up at compile
+// time: SettingsDatabase uses sqlite_schema (3.33.0, below) and VACUUM INTO
+// (3.27.0). Catches the mismatch at compile time rather than at first launch.
+static_assert(SQLITE_VERSION_NUMBER >= 3033000,
+              "SettingsDatabase requires SQLite >= 3.33.0 (sqlite_schema)");
+
+namespace AetherSDR {
+
+namespace {
+
+// Bound-parameter helper: all our text flows QString <-> UTF-8.
+int bindText(sqlite3_stmt* stmt, int index, const QString& text)
+{
+    const QByteArray utf8 = text.toUtf8();
+    return sqlite3_bind_text(stmt, index, utf8.constData(), utf8.size(),
+                             SQLITE_TRANSIENT);
+}
+
+QString columnText(sqlite3_stmt* stmt, int index)
+{
+    const unsigned char* text = sqlite3_column_text(stmt, index);
+    if (text == nullptr) {
+        return {};
+    }
+    return QString::fromUtf8(reinterpret_cast<const char*>(text),
+                             sqlite3_column_bytes(stmt, index));
+}
+
+// RAII for sqlite3_stmt so every early return finalizes.
+class Statement {
+public:
+    Statement(sqlite3* db, const char* sql)
+    {
+        if (sqlite3_prepare_v2(db, sql, -1, &m_stmt, nullptr) != SQLITE_OK) {
+            m_stmt = nullptr;
+        }
+    }
+    ~Statement()
+    {
+        if (m_stmt != nullptr) {
+            sqlite3_finalize(m_stmt);
+        }
+    }
+    Statement(const Statement&) = delete;
+    Statement& operator=(const Statement&) = delete;
+    sqlite3_stmt* get() const { return m_stmt; }
+    bool valid() const { return m_stmt != nullptr; }
+
+private:
+    sqlite3_stmt* m_stmt = nullptr;
+};
+
+// preserveOwnerBits: keep whatever owner access the file already has and only
+// strip group/other. Correct for the DATABASE, whose mode is the operator's
+// choice — but NOT for the -wal/-shm sidecars. SQLite creates those with the
+// database's own mode, so a read-only database yields a read-only -shm, and a
+// -shm we cannot write makes every later connection read-only even after the
+// operator restores the database's permissions (#5639 review: this locked the
+// store out permanently). The sidecars are SQLite's scratch files, not
+// operator state, so they are always forced back to owner read/write.
+bool setOwnerOnlyPermissions(const QString& filePath, bool required,
+                             bool preserveOwnerBits, QString& error)
+{
+#ifdef Q_OS_WIN
+    Q_UNUSED(filePath);
+    Q_UNUSED(required);
+    Q_UNUSED(preserveOwnerBits);
+    Q_UNUSED(error);
+    return true;
+#else
+    if (!QFile::exists(filePath)) {
+        if (!required) {
+            return true;
+        }
+        error = QStringLiteral("SQLite did not create %1").arg(filePath);
+        return false;
+    }
+
+    constexpr QFileDevice::Permissions ownerMask =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadUser
+        | QFileDevice::WriteUser;
+    const QFileDevice::Permissions current = QFile::permissions(filePath);
+    QFileDevice::Permissions hardened = ownerMask;
+    if (preserveOwnerBits) {
+        // Strip group/other access, but never ADD an owner bit: writing a fixed
+        // ReadOwner|WriteOwner mode also *grants* write on a store the operator
+        // deliberately left read-only, and because this runs before the write
+        // refusal is detected, a failed open silently made a 0400 database 0600
+        // while reporting it had been left in place (#5639 review).
+        hardened = current & ownerMask;
+        if (!hardened.testAnyFlags(QFileDevice::ReadOwner
+                                   | QFileDevice::ReadUser)) {
+            // Never produce a mode with no access at all on a file we just
+            // opened; keep a read floor rather than locking ourselves out.
+            hardened |= QFileDevice::ReadOwner | QFileDevice::ReadUser;
+        }
+    }
+    if (hardened == current) {
+        return true;  // already at the target mode — nothing to tighten or write
+    }
+    if (!QFile::setPermissions(filePath, hardened)) {
+        error = QStringLiteral("cannot set owner-only permissions on %1")
+                    .arg(filePath);
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool hardenDatabaseFilePermissions(const QString& path, QString& error)
+{
+    return setOwnerOnlyPermissions(path, true, /*preserveOwnerBits=*/true, error)
+           && setOwnerOnlyPermissions(path + QStringLiteral("-wal"), false,
+                                      /*preserveOwnerBits=*/false, error)
+           && setOwnerOnlyPermissions(path + QStringLiteral("-shm"), false,
+                                      /*preserveOwnerBits=*/false, error);
+}
+
+} // namespace
+
+SettingsDatabase::SettingsDatabase() = default;
+
+SettingsDatabase::~SettingsDatabase()
+{
+    close();
+}
+
+bool SettingsDatabase::exec(const char* sql)
+{
+    char* errMsg = nullptr;
+    const int rc = sqlite3_exec(m_db, sql, nullptr, nullptr, &errMsg);
+    if (rc != SQLITE_OK) {
+        m_lastError = QString::fromUtf8(errMsg ? errMsg : "unknown sqlite error");
+        sqlite3_free(errMsg);
+        recordSqliteFailure(rc);
+        qWarning() << "SettingsDatabase: exec failed:" << sql << "—" << m_lastError;
+        return false;
+    }
+    return true;
+}
+
+void SettingsDatabase::recordSqliteFailure(int resultCode)
+{
+    // Extended SQLite result codes retain the primary result in the low byte.
+    // The recovery decision intentionally recognizes only demonstrated
+    // corruption, never a generic I/O, permission, or initialization error.
+    const int primaryResult = resultCode & 0xff;
+    if (primaryResult == SQLITE_BUSY || primaryResult == SQLITE_LOCKED) {
+        m_lastOpenBusy = true;
+    }
+    if (primaryResult == SQLITE_CORRUPT || primaryResult == SQLITE_NOTADB) {
+        m_lastOpenCorrupt = true;
+    }
+}
+
+bool SettingsDatabase::open(const QString& path)
+{
+    close();
+    m_newerSchema = false;
+    m_lastOpenBusy = false;
+    m_lastOpenCorrupt = false;
+    m_lastError.clear();
+
+    sqlite3* db = nullptr;
+    const QByteArray utf8Path = path.toUtf8();
+    const int openResult = sqlite3_open_v2(utf8Path.constData(), &db,
+                                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                                           nullptr);
+    if (openResult != SQLITE_OK) {
+        m_lastError = db ? QString::fromUtf8(sqlite3_errmsg(db))
+                         : QStringLiteral("out of memory");
+        recordSqliteFailure(openResult);
+        qWarning() << "SettingsDatabase: cannot open" << path << "—" << m_lastError;
+        if (db != nullptr) {
+            sqlite3_close(db);
+        }
+        return false;
+    }
+    m_db = db;
+    m_path = path;
+
+    // Normalize any -wal/-shm a previous connection left behind, BEFORE SQLite
+    // maps them below. SQLite creates its sidecars with the DATABASE's mode, so
+    // merely READING a read-only store leaves read-only sidecars; the next
+    // connection then maps an unwritable -wal/-shm and every write fails with
+    // SQLITE_READONLY even after the operator has restored the database's
+    // permissions — the store stays locked out for good. This is the only point
+    // where widening them still takes effect: once SQLite has mapped a handle a
+    // later chmod rescues nothing, which is the same trap as #5635 itself.
+    // They are SQLite scratch files, never operator state (#5639 review).
+    {
+        QString sidecarError;
+        setOwnerOnlyPermissions(path + QStringLiteral("-wal"), false,
+                                /*preserveOwnerBits=*/false, sidecarError);
+        setOwnerOnlyPermissions(path + QStringLiteral("-shm"), false,
+                                /*preserveOwnerBits=*/false, sidecarError);
+    }
+
+    // Re-establish, at runtime, the two aether_sqlite3 compile-time hardening
+    // options that a -DUSE_SYSTEM_SQLITE=ON distro library does not carry.
+    // Both are cheap and safe to redo unconditionally on the vendored path,
+    // keeping one behavior for both builds.
+    const int dqsDmlResult =
+        sqlite3_db_config(m_db, SQLITE_DBCONFIG_DQS_DML, 0, nullptr);
+    const int dqsDdlResult =
+        sqlite3_db_config(m_db, SQLITE_DBCONFIG_DQS_DDL, 0, nullptr);
+    if (dqsDmlResult != SQLITE_OK || dqsDdlResult != SQLITE_OK) {
+        m_lastError = QStringLiteral("cannot disable SQLite double-quoted "
+                                     "string literals (%1/%2)")
+                          .arg(dqsDmlResult)
+                          .arg(dqsDdlResult);
+        qWarning() << "SettingsDatabase:" << m_lastError;
+        close();
+        return false;
+    }
+
+    // busy_timeout first so a concurrent instance's transaction doesn't turn
+    // every subsequent pragma into an immediate SQLITE_BUSY failure.
+    sqlite3_busy_timeout(m_db, 5000);
+
+    if (!exec("PRAGMA journal_mode=WAL;")
+        || !exec("PRAGMA synchronous=NORMAL;")) {
+        close();
+        return false;
+    }
+
+    // sqlite3_open_v2() creates the handle lazily; journal_mode is the first
+    // statement that guarantees the database file exists. Harden it before
+    // createSchema() performs the first write. SQLite then derives new WAL/SHM
+    // modes from the database mode on Unix; the later pass verifies all files
+    // explicitly once the write has materialized them.
+    if (!hardenDatabaseFilePermissions(path, m_lastError)) {
+        qWarning() << "SettingsDatabase:" << m_lastError;
+        close();
+        return false;
+    }
+
+    // A non-database file (e.g. truncated or foreign) often only fails once a
+    // real query touches it — probe before trusting it.
+    {
+        Statement probe(m_db, "SELECT count(*) FROM sqlite_schema;");
+        const int rc = probe.valid() ? sqlite3_step(probe.get())
+                                     : sqlite3_errcode(m_db);
+        if (rc != SQLITE_ROW) {
+            m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+            recordSqliteFailure(rc);
+            qWarning() << "SettingsDatabase:" << path
+                       << (m_lastOpenBusy ? "is locked by another process —"
+                                          : "is not a readable database —")
+                       << m_lastError;
+            close();
+            return false;
+        }
+    }
+
+    int userVersion = 0;
+    {
+        Statement stmt(m_db, "PRAGMA user_version;");
+        const int rc = stmt.valid() ? sqlite3_step(stmt.get())
+                                    : sqlite3_errcode(m_db);
+        if (rc != SQLITE_ROW) {
+            m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+            recordSqliteFailure(rc);
+            qWarning() << "SettingsDatabase: could not read schema version for"
+                       << path << "—" << m_lastError;
+            close();
+            return false;
+        }
+        userVersion = sqlite3_column_int(stmt.get(), 0);
+    }
+
+    if (userVersion > kSchemaVersion) {
+        // Newer binary's database: reopen READ-ONLY so the ENGINE enforces
+        // what the caller's read-only convention promises (PR #4612 review) —
+        // and close without a checkpoint, which would write the newer file.
+        if (!hardenDatabaseFilePermissions(path, m_lastError)) {
+            qWarning() << "SettingsDatabase:" << m_lastError;
+            close();
+            return false;
+        }
+        m_newerSchema = true;
+        sqlite3_close(m_db);
+        m_db = nullptr;
+        sqlite3* readOnlyDb = nullptr;
+        const int readOnlyOpenResult = sqlite3_open_v2(utf8Path.constData(),
+                                                       &readOnlyDb,
+                                                       SQLITE_OPEN_READONLY,
+                                                       nullptr);
+        if (readOnlyOpenResult != SQLITE_OK) {
+            m_lastError = readOnlyDb
+                              ? QString::fromUtf8(sqlite3_errmsg(readOnlyDb))
+                              : QStringLiteral("out of memory");
+            recordSqliteFailure(readOnlyOpenResult);
+            if (readOnlyDb != nullptr) {
+                sqlite3_close(readOnlyDb);
+            }
+            m_path.clear();
+            return false;
+        }
+        m_db = readOnlyDb;
+        m_readOnly = true;
+        sqlite3_busy_timeout(m_db, 5000);
+        qWarning() << "SettingsDatabase: schema version" << userVersion
+                   << "is newer than this binary's" << kSchemaVersion
+                   << "— reopened read-only";
+        return true;
+    }
+
+    // Ask the engine whether this handle can write, rather than discovering it
+    // from a failed statement. sqlite3_open_v2(READWRITE|CREATE) silently falls
+    // back to a read-only connection when the FILE is unwritable (#5635), and
+    // the schema CREATEs are no-ops on an existing store — so without this
+    // probe an unwritable database would open "successfully" and only fail at
+    // the first real save. This is a query, not a write: it cannot dirty the
+    // store the way the old redundant user_version stamp did.
+    if (sqlite3_db_readonly(m_db, "main") == 1) {
+        m_lastError = QStringLiteral("attempt to write a readonly database");
+        recordSqliteFailure(SQLITE_READONLY);
+        qWarning() << "SettingsDatabase:" << path
+                   << "opened read-only — the file cannot be written";
+        close();
+        return false;
+    }
+
+    if (!createSchema(userVersion)) {
+        close();
+        return false;
+    }
+    if (!hardenDatabaseFilePermissions(path, m_lastError)) {
+        qWarning() << "SettingsDatabase:" << m_lastError;
+        close();
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::createSchema(int currentUserVersion)
+{
+    if (!exec("BEGIN IMMEDIATE;")) {
+        return false;
+    }
+    const bool ok =
+        exec("CREATE TABLE IF NOT EXISTS meta ("
+             "  key   TEXT PRIMARY KEY,"
+             "  value TEXT NOT NULL"
+             ") WITHOUT ROWID;")
+        && exec("CREATE TABLE IF NOT EXISTS app_settings ("
+                "  key   TEXT PRIMARY KEY,"
+                "  value TEXT NOT NULL"
+                ") WITHOUT ROWID;")
+        && exec("CREATE TABLE IF NOT EXISTS station_settings ("
+                "  station TEXT NOT NULL,"
+                "  key     TEXT NOT NULL,"
+                "  value   TEXT NOT NULL,"
+                "  PRIMARY KEY (station, key)"
+                ") WITHOUT ROWID;")
+        && exec("CREATE TABLE IF NOT EXISTS radio_settings ("
+                "  family         TEXT NOT NULL,"
+                "  radio_id       TEXT NOT NULL,"
+                "  feature        TEXT NOT NULL,"
+                "  schema_version INTEGER NOT NULL,"
+                "  value          TEXT NOT NULL,"
+                "  PRIMARY KEY (family, radio_id, feature)"
+                ") WITHOUT ROWID;")
+        // Stamp the version only when it differs. The CREATE statements above
+        // are no-ops on an existing store and commit nothing, but a redundant
+        // "PRAGMA user_version = 1" is a real write: it commits a transaction
+        // and bumps the file change counter on EVERY launch, dirtying a
+        // database the caller may be about to promise it left untouched
+        // (#5639 review).
+        && (currentUserVersion == kSchemaVersion
+            || exec("PRAGMA user_version = 1;"));
+    if (!ok) {
+        // A rollback can itself fail after the operation that made the store
+        // unusable. Keep that first error: AppSettings surfaces it and must
+        // not replace corruption/permission evidence with cleanup noise.
+        const QString originalError = m_lastError;
+        const bool originalBusy = m_lastOpenBusy;
+        const bool originalCorrupt = m_lastOpenCorrupt;
+        exec("ROLLBACK;");
+        // Restore all three by assignment, exactly like m_lastError: OR-ing the
+        // flags would let a ROLLBACK that itself reported SQLITE_CORRUPT
+        // escalate a mere permission failure to quarantine-eligible, while the
+        // error string still named the permission problem (#5639 review).
+        m_lastError = originalError;
+        m_lastOpenBusy = originalBusy;
+        m_lastOpenCorrupt = originalCorrupt;
+        return false;
+    }
+    return exec("COMMIT;");
+}
+
+void SettingsDatabase::close()
+{
+    if (m_db == nullptr) {
+        m_readOnly = false;
+        return;
+    }
+    // Fold the WAL back into the main file so the on-disk .db is complete on
+    // its own — Reset Settings and backup tooling depend on this. Never on a
+    // read-only handle: a newer binary's file is not ours to write.
+    if (!m_readOnly) {
+        sqlite3_wal_checkpoint_v2(m_db, nullptr, SQLITE_CHECKPOINT_TRUNCATE,
+                                  nullptr, nullptr);
+    }
+    sqlite3_close(m_db);
+    m_db = nullptr;
+    m_path.clear();
+    m_readOnly = false;
+}
+
+SettingsDatabase::IntegrityCheckResult SettingsDatabase::quickCheck()
+{
+    return runIntegrityCheck("PRAGMA quick_check;");
+}
+
+SettingsDatabase::IntegrityCheckResult SettingsDatabase::integrityCheck()
+{
+    return runIntegrityCheck("PRAGMA integrity_check;");
+}
+
+SettingsDatabase::IntegrityCheckResult
+SettingsDatabase::runIntegrityCheck(const char* pragma)
+{
+    if (m_db == nullptr) {
+        m_lastError = QStringLiteral("settings database is not open");
+        return IntegrityCheckResult::Failed;
+    }
+    Statement stmt(m_db, pragma);
+    int resultCode = stmt.valid() ? SQLITE_OK : sqlite3_errcode(m_db);
+    bool sawReport = false;
+    while (stmt.valid() && (resultCode = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        sawReport = true;
+        const QString report = columnText(stmt.get(), 0);
+        if (report != QStringLiteral("ok")) {
+            // A returned report is evidence, unlike failure to run the pragma.
+            m_lastError = QStringLiteral("SQLite integrity check reported: %1")
+                              .arg(report);
+            return IntegrityCheckResult::Corrupt;
+        }
+    }
+    if (sawReport && resultCode == SQLITE_DONE) {
+        return IntegrityCheckResult::Ok;
+    }
+
+    m_lastError = resultCode == SQLITE_DONE
+                      ? QStringLiteral("SQLite integrity check returned no report")
+                      : QString::fromUtf8(sqlite3_errmsg(m_db));
+    const int primaryResult = resultCode & 0xff;
+    if (primaryResult == SQLITE_CORRUPT || primaryResult == SQLITE_NOTADB) {
+        return IntegrityCheckResult::Corrupt;
+    }
+    return IntegrityCheckResult::Failed;
+}
+
+QString SettingsDatabase::metaValue(const QString& key, const QString& defaultValue)
+{
+    Statement stmt(m_db, "SELECT value FROM meta WHERE key = ?1;");
+    if (!stmt.valid()) {
+        return defaultValue;
+    }
+    bindText(stmt.get(), 1, key);
+    if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        return columnText(stmt.get(), 0);
+    }
+    return defaultValue;
+}
+
+bool SettingsDatabase::setMetaValue(const QString& key, const QString& value)
+{
+    Statement stmt(m_db,
+        "INSERT INTO meta (key, value) VALUES (?1, ?2) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, key);
+    bindText(stmt.get(), 2, value);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::loadAppSettings(QMap<QString, QString>& out)
+{
+    Statement stmt(m_db, "SELECT key, value FROM app_settings;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    int rc = 0;
+    while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        out.insert(columnText(stmt.get(), 0), columnText(stmt.get(), 1));
+    }
+    if (rc != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::loadStationSettings(const QString& station,
+                                           QMap<QString, QString>& out)
+{
+    Statement stmt(m_db,
+        "SELECT key, value FROM station_settings WHERE station = ?1;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, station);
+    int rc = 0;
+    while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        out.insert(columnText(stmt.get(), 0), columnText(stmt.get(), 1));
+    }
+    if (rc != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::upsertApp(const QString& key, const QString& value)
+{
+    Statement stmt(m_db,
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, key);
+    bindText(stmt.get(), 2, value);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::removeApp(const QString& key)
+{
+    Statement stmt(m_db, "DELETE FROM app_settings WHERE key = ?1;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, key);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::upsertStation(const QString& station, const QString& key,
+                                     const QString& value)
+{
+    Statement stmt(m_db,
+        "INSERT INTO station_settings (station, key, value) VALUES (?1, ?2, ?3) "
+        "ON CONFLICT(station, key) DO UPDATE SET value = excluded.value;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, station);
+    bindText(stmt.get(), 2, key);
+    bindText(stmt.get(), 3, value);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::removeStation(const QString& station, const QString& key)
+{
+    Statement stmt(m_db,
+        "DELETE FROM station_settings WHERE station = ?1 AND key = ?2;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, station);
+    bindText(stmt.get(), 2, key);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::removeStationAll(const QString& station)
+{
+    Statement stmt(m_db, "DELETE FROM station_settings WHERE station = ?1;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, station);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::readApp(const QString& key, QString& value)
+{
+    Statement stmt(m_db, "SELECT value FROM app_settings WHERE key = ?1;");
+    if (!stmt.valid()) {
+        return false;
+    }
+    bindText(stmt.get(), 1, key);
+    if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+        return false;
+    }
+    value = columnText(stmt.get(), 0);
+    return true;
+}
+
+qint64 SettingsDatabase::appCount()
+{
+    Statement stmt(m_db, "SELECT count(*) FROM app_settings;");
+    if (!stmt.valid() || sqlite3_step(stmt.get()) != SQLITE_ROW) {
+        return -1;
+    }
+    return sqlite3_column_int64(stmt.get(), 0);
+}
+
+bool SettingsDatabase::upsertRadioFeature(const QString& family,
+                                          const QString& radioId,
+                                          const QString& feature,
+                                          int schemaVersion,
+                                          const QString& value)
+{
+    Statement stmt(m_db,
+        "INSERT INTO radio_settings (family, radio_id, feature, schema_version, value) "
+        "VALUES (?1, ?2, ?3, ?4, ?5) "
+        "ON CONFLICT(family, radio_id, feature) DO UPDATE SET "
+        "schema_version = excluded.schema_version, value = excluded.value;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, family);
+    bindText(stmt.get(), 2, radioId);
+    bindText(stmt.get(), 3, feature);
+    sqlite3_bind_int(stmt.get(), 4, schemaVersion);
+    bindText(stmt.get(), 5, value);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::readRadioFeature(const QString& family,
+                                        const QString& radioId,
+                                        const QString& feature,
+                                        int& schemaVersion, QString& value,
+                                        bool* readFailedOut)
+{
+    if (readFailedOut) { *readFailedOut = true; }
+    Statement stmt(m_db,
+        "SELECT schema_version, value FROM radio_settings "
+        "WHERE family = ?1 AND radio_id = ?2 AND feature = ?3;");
+    if (!stmt.valid()) {
+        return false;
+    }
+    bindText(stmt.get(), 1, family);
+    bindText(stmt.get(), 2, radioId);
+    bindText(stmt.get(), 3, feature);
+    const int result = sqlite3_step(stmt.get());
+    if (readFailedOut) { *readFailedOut = result != SQLITE_ROW && result != SQLITE_DONE; }
+    if (result != SQLITE_ROW) {
+        return false;
+    }
+    schemaVersion = sqlite3_column_int(stmt.get(), 0);
+    value = columnText(stmt.get(), 1);
+    return true;
+}
+
+bool SettingsDatabase::removeRadioFeature(const QString& family,
+                                          const QString& radioId,
+                                          const QString& feature)
+{
+    Statement stmt(m_db,
+        "DELETE FROM radio_settings "
+        "WHERE family = ?1 AND radio_id = ?2 AND feature = ?3;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, family);
+    bindText(stmt.get(), 2, radioId);
+    bindText(stmt.get(), 3, feature);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::listRadioFeatures(QList<RadioFeatureRow>& out)
+{
+    Statement stmt(m_db,
+        "SELECT family, radio_id, feature, schema_version, value "
+        "FROM radio_settings ORDER BY family, radio_id, feature;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    int rc = 0;
+    while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        RadioFeatureRow row;
+        row.family = columnText(stmt.get(), 0);
+        row.radioId = columnText(stmt.get(), 1);
+        row.feature = columnText(stmt.get(), 2);
+        row.schemaVersion = sqlite3_column_int(stmt.get(), 3);
+        row.value = columnText(stmt.get(), 4);
+        out.append(row);
+    }
+    if (rc != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::beginExclusive() { return exec("BEGIN EXCLUSIVE;"); }
+bool SettingsDatabase::begin()          { return exec("BEGIN IMMEDIATE;"); }
+bool SettingsDatabase::commit()         { return exec("COMMIT;"); }
+bool SettingsDatabase::rollback()       { return exec("ROLLBACK;"); }
+
+bool SettingsDatabase::backupTo(const QString& destPath)
+{
+    // VACUUM INTO refuses to overwrite; a stale partial from an interrupted
+    // earlier attempt must not block the backup forever.
+    QFile::remove(destPath);
+
+    Statement stmt(m_db, "VACUUM INTO ?1;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, destPath);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        qWarning() << "SettingsDatabase: backup to" << destPath
+                   << "failed —" << m_lastError;
+        QFile::remove(destPath);
+        return false;
+    }
+    QFile::setPermissions(destPath,
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    return true;
+}
+
+bool SettingsDatabase::verifyBackupFile(const QString& path)
+{
+    sqlite3* db = nullptr;
+    const QByteArray utf8Path = path.toUtf8();
+    if (sqlite3_open_v2(utf8Path.constData(), &db, SQLITE_OPEN_READONLY, nullptr)
+        != SQLITE_OK) {
+        sqlite3_close(db);
+        return false;
+    }
+    bool ok = false;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "PRAGMA quick_check;", -1, &stmt, nullptr)
+            == SQLITE_OK
+        && sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char* text = sqlite3_column_text(stmt, 0);
+        ok = text != nullptr
+             && qstrcmp(reinterpret_cast<const char*>(text), "ok") == 0;
+    }
+    sqlite3_finalize(stmt);
+    stmt = nullptr;
+    if (ok) {
+        ok = sqlite3_prepare_v2(db, "SELECT count(*) FROM app_settings;", -1,
+                                &stmt, nullptr) == SQLITE_OK
+             && sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return ok;
+}
+
+bool SettingsDatabase::readAppValueFromFile(const QString& path,
+                                            const QString& key, QString& value)
+{
+    sqlite3* db = nullptr;
+    const QByteArray utf8Path = path.toUtf8();
+    if (sqlite3_open_v2(utf8Path.constData(), &db, SQLITE_OPEN_READONLY, nullptr)
+        != SQLITE_OK) {
+        sqlite3_close(db);
+        return false;
+    }
+    sqlite3_busy_timeout(db, 2000);
+    bool found = false;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT value FROM app_settings WHERE key = ?1;",
+                           -1, &stmt, nullptr) == SQLITE_OK) {
+        const QByteArray utf8Key = key.toUtf8();
+        sqlite3_bind_text(stmt, 1, utf8Key.constData(), utf8Key.size(),
+                          SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            value = columnText(stmt, 0);
+            found = true;
+        }
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return found;
+}
+
+bool SettingsDatabase::readStationValueFromFile(const QString& path,
+                                                const QString& station,
+                                                const QString& key,
+                                                QString& value)
+{
+    sqlite3* db = nullptr;
+    const QByteArray utf8Path = path.toUtf8();
+    if (sqlite3_open_v2(utf8Path.constData(), &db, SQLITE_OPEN_READONLY, nullptr)
+        != SQLITE_OK) {
+        sqlite3_close(db);
+        return false;
+    }
+    sqlite3_busy_timeout(db, 2000);
+    bool found = false;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db,
+            "SELECT value FROM station_settings WHERE station = ?1 AND key = ?2;",
+            -1, &stmt, nullptr)
+        == SQLITE_OK) {
+        const QByteArray utf8Station = station.toUtf8();
+        const QByteArray utf8Key = key.toUtf8();
+        sqlite3_bind_text(stmt, 1, utf8Station.constData(), utf8Station.size(),
+                          SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, utf8Key.constData(), utf8Key.size(),
+                          SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            value = columnText(stmt, 0);
+            found = true;
+        }
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return found;
+}
+
+} // namespace AetherSDR

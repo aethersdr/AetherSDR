@@ -1,0 +1,350 @@
+#include "DiscoveryStartup.h"
+#include "CredentialStartup.h"
+#include "GracefulStop.h"
+#include "GrantAdminClient.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/control/ControlCredentialVault.h"
+#include "core/control/ControlEngine.h"
+#include "core/control/LocalControlServer.h"
+#include "core/control/RadioResourceAdapter.h"
+#include "core/control/RadioCatalogue.h"
+#ifdef HAVE_WEBSOCKETS
+#include "core/control/RemoteControlServer.h"
+#include "core/control/VaultPairingIssuer.h"
+#endif
+#include "core/discovery/DirectedDiscoveryAddress.h"
+#include "models/RadioSession.h"
+
+#include <QCommandLineParser>
+#include <QElapsedTimer>
+#include <QCoreApplication>
+#include <QHostAddress>
+#include <QLockFile>
+#include <QTextStream>
+
+#include <utility>
+
+int main(int argc, char* argv[])
+{
+#ifdef Q_OS_MACOS
+    // QtKeychain's Apple backend delivers completions on the native main
+    // dispatch queue. Qt's default QCoreApplication UNIX dispatcher does not
+    // service that queue. Select CoreFoundation only for credential runs;
+    // ordinary observe/control runs and worker threads keep their defaults.
+    const bool credentialDispatcher = AetherSDR::aetherd::credentialDispatcherRequested(argc, argv);
+    const bool hadDispatcherSetting = qEnvironmentVariableIsSet("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+    const QByteArray dispatcherSetting = qgetenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+    if (credentialDispatcher) {
+        qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", "1");
+    }
+#endif
+    QCoreApplication app(argc, argv);
+#ifdef Q_OS_MACOS
+    if (credentialDispatcher) {
+        if (hadDispatcherSetting) {
+            qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", dispatcherSetting);
+        } else {
+            qunsetenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+        }
+    }
+#endif
+    QCoreApplication::setApplicationName(QStringLiteral("aetherd"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(AETHERSDR_VERSION));
+
+    QCommandLineParser parser;
+    parser.setApplicationDescription(
+        QStringLiteral("AetherSDR headless engine control service"));
+    parser.addHelpOption();
+    parser.addVersionOption();
+    const QCommandLineOption socketOption(
+        QStringList{QStringLiteral("s"), QStringLiteral("socket")},
+        QStringLiteral("Current-user local socket name."),
+        QStringLiteral("name"), QStringLiteral("aetherd-v1"));
+    parser.addOption(socketOption);
+    const QCommandLineOption localDiscoveryOption(
+        QStringLiteral("discover-local"),
+        QStringLiteral("Enable LAN discovery and available RTL-SDR USB enumeration; never connect."));
+    const QCommandLineOption simDiscoveryOption(
+        QStringLiteral("discover-sim"),
+        QStringLiteral("Publish the simulator discovery identity without accessing radio hardware."));
+    parser.addOption(localDiscoveryOption);
+    const QCommandLineOption hl2AddressOption(
+        QStringLiteral("hl2-address"),
+        QStringLiteral("With --discover-local, also probe this IPv4 address for a Hermes-Lite 2 "
+                       "(an HL2 on another subnet; repeatable). Discovery only; never connects."),
+        QStringLiteral("ipv4"));
+    parser.addOption(hl2AddressOption);
+    parser.addOption(simDiscoveryOption);
+    const QCommandLineOption controlOption(
+        QStringLiteral("allow-local-control"),
+        QStringLiteral("Grant current-user local clients non-TX connection and receive control."));
+    parser.addOption(controlOption);
+    const QCommandLineOption transmitOption(QStringLiteral("allow-local-tx"),
+        QStringLiteral("Enable explicit credential-bound TX grants; never arms a client at startup."));
+    parser.addOption(transmitOption);
+    // Remote clients (docs/aetherd-remote-clients.md): receive-only, never TX.
+    const QCommandLineOption remoteListenOption(QStringLiteral("remote-listen"),
+        QStringLiteral("Serve remote clients over wss:// on this one address:port (no wildcard). "
+                       "Needs --tls-cert, --tls-key and --credential-authority. Never grants TX."),
+        QStringLiteral("address:port"));
+    const QCommandLineOption remoteTailnetOption(QStringLiteral("remote-listen-tailnet"),
+        QStringLiteral("Serve remote clients over plain ws:// on this address:port of an up "
+                       "WireGuard (tailscale*/wg*) interface only. Needs --credential-authority."),
+        QStringLiteral("address:port"));
+    const QCommandLineOption tlsCertOption(QStringLiteral("tls-cert"),
+        QStringLiteral("PEM certificate for --remote-listen."), QStringLiteral("file"));
+    const QCommandLineOption tlsKeyOption(QStringLiteral("tls-key"),
+        QStringLiteral("PEM private key for --remote-listen."), QStringLiteral("file"));
+    parser.addOptions({remoteListenOption, remoteTailnetOption, tlsCertOption, tlsKeyOption});
+    AetherSDR::aetherd::addCredentialOptions(parser);
+    AetherSDR::aetherd::addGrantAdminOptions(parser);
+    parser.process(app);
+    const QStringList hl2Addresses = parser.values(hl2AddressOption);
+    for (const QString& text : hl2Addresses) {
+        if (!AetherSDR::discovery::isDirectedDiscoveryAddress(QHostAddress(text))) {
+            QTextStream(stderr) << "aetherd: --hl2-address '" << text
+                                << "' must be a unicast IPv4 literal\n";
+            return 1;
+        }
+    }
+    if (!hl2Addresses.isEmpty() && !parser.isSet(localDiscoveryOption)) {
+        QTextStream(stderr) << "aetherd: --hl2-address has no effect without --discover-local\n";
+    }
+    if (parser.isSet(QStringLiteral("tx-admin"))) {
+        return AetherSDR::aetherd::runGrantAdmin(parser);
+    }
+    for (const auto& option : {QStringLiteral("admin-credential"), QStringLiteral("tx-client"),
+                              QStringLiteral("tx-grant"), QStringLiteral("radio-generation"),
+                              QStringLiteral("tx-operation-ms"), QStringLiteral("tx-lifetime-ms"),
+                              QStringLiteral("tx-keepalive-ms")}) {
+        if (parser.isSet(option)) {
+            QTextStream(stderr) << "aetherd: grant administration options require --tx-admin\n";
+            return 1;
+        }
+    }
+
+    const auto credentialOptions = AetherSDR::aetherd::credentialOptions(parser);
+    if (!credentialOptions.error.isEmpty()) {
+        QTextStream(stderr) << "aetherd: " << credentialOptions.error << '\n';
+        return 1;
+    }
+    if (parser.isSet(transmitOption) && (credentialOptions.authorityId.isEmpty()
+        || credentialOptions.operation || !parser.isSet(controlOption))) {
+        QTextStream(stderr) << "aetherd: local TX requires a serving credential authority and local control\n";
+        return 1;
+    }
+
+    const bool remoteSecure = parser.isSet(remoteListenOption);
+    const bool remoteTailnet = parser.isSet(remoteTailnetOption);
+    if ((parser.isSet(tlsCertOption) || parser.isSet(tlsKeyOption)) && !remoteSecure) {
+        QTextStream(stderr) << "aetherd: --tls-cert and --tls-key only apply to --remote-listen\n";
+        return 1;
+    }
+#ifdef HAVE_WEBSOCKETS
+    using AetherSDR::control::RemoteControlServer;
+    std::optional<RemoteControlServer::Endpoint> secureEndpoint;
+    std::optional<RemoteControlServer::Endpoint> tailnetEndpoint;
+    std::optional<QSslConfiguration> tlsIdentity;
+    if (remoteSecure || remoteTailnet) {
+        if (credentialOptions.authorityId.isEmpty() || credentialOptions.operation) {
+            QTextStream(stderr) << "aetherd: remote listeners require a serving --credential-authority\n";
+            return 1;
+        }
+        if (remoteSecure) {
+            secureEndpoint = RemoteControlServer::parseEndpoint(parser.value(remoteListenOption));
+            if (!secureEndpoint) {
+                QTextStream(stderr) << "aetherd: --remote-listen needs an IP address and port, "
+                                       "like 192.0.2.7:8443 or [2001:db8::7]:8443\n";
+                return 1;
+            }
+            if (!parser.isSet(tlsCertOption) || !parser.isSet(tlsKeyOption)) {
+                QTextStream(stderr) << "aetherd: --remote-listen requires --tls-cert and --tls-key\n";
+                return 1;
+            }
+            QString tlsError;
+            tlsIdentity = RemoteControlServer::loadTlsIdentity(
+                parser.value(tlsCertOption), parser.value(tlsKeyOption), &tlsError);
+            if (!tlsIdentity) {
+                QTextStream(stderr) << "aetherd: " << tlsError << '\n';
+                return 1;
+            }
+        }
+        if (remoteTailnet) {
+            tailnetEndpoint = RemoteControlServer::parseEndpoint(parser.value(remoteTailnetOption));
+            if (!tailnetEndpoint) {
+                QTextStream(stderr) << "aetherd: --remote-listen-tailnet needs an IP address and port\n";
+                return 1;
+            }
+        }
+    }
+#else
+    if (remoteSecure || remoteTailnet) {
+        QTextStream(stderr) << "aetherd: this build has no Qt WebSockets; remote listeners are unavailable\n";
+        return 1;
+    }
+#endif
+
+    // Before anything that owns a radio, so its destructor runs after theirs: a
+    // stop signal then ends aetherd through the teardown that releases the radio.
+    AetherSDR::aetherd::GracefulStop gracefulStop(app, std::chrono::seconds(5));
+    // One engine for every listener (ControlEngine.h); declared before the
+    // listener, so it outlives it.
+    AetherSDR::control::ControlEngine controlEngine;
+    AetherSDR::control::LocalControlServer server(
+        controlEngine, nullptr, {}, parser.isSet(controlOption));
+    if (!server.listen(parser.value(socketOption),
+                       AetherSDR::control::LocalControlServer::ListenMode::ReserveEndpoint)) {
+        QTextStream err(stderr);
+        err << "aetherd: cannot listen on local socket '" << parser.value(socketOption) << "'";
+        if (!server.listenError().isEmpty()) {
+            err << ": " << server.listenError();
+        }
+        err << '\n';
+        return 1;
+    }
+    std::unique_ptr<QLockFile> authorityReservation;
+    AetherSDR::control::ControlCredentials credentials;
+    // Outlives serving: pairing writes a paired client's credential into it.
+    std::unique_ptr<AetherSDR::control::ControlCredentialVault> vault;
+    if (!credentialOptions.authorityId.isEmpty()) {
+        // The authority reservation is independent of --socket: using another
+        // endpoint cannot race provisioning or keep an old verifier alive.
+        authorityReservation = AetherSDR::control::LocalControlServer::reserveCredentialAuthority(
+            credentialOptions.authorityId);
+        if (!authorityReservation) {
+            QTextStream(stderr) << "aetherd: credential authority is unavailable or already in use\n";
+            return 1;
+        }
+        vault = std::make_unique<AetherSDR::control::ControlCredentialVault>(credentialOptions.authorityId);
+        if (credentialOptions.operation) {
+            return AetherSDR::aetherd::provisionCredentials(credentialOptions, *vault);
+        }
+        if (!AetherSDR::aetherd::loadCredentials(*vault, credentials) || !server.bindCredentials(&credentials)) {
+            QTextStream(stderr) << "aetherd: cannot load the requested OS-vault authority; service remains closed\n";
+            return 1;
+        }
+    }
+#ifdef HAVE_WEBSOCKETS
+    // Listen now, like the local socket: arrivals are closed until serving.
+    QElapsedTimer pairingClock;
+    pairingClock.start();
+    std::unique_ptr<AetherSDR::control::VaultPairingIssuer> pairingIssuer;
+    std::unique_ptr<RemoteControlServer> secureServer;
+    std::unique_ptr<RemoteControlServer> tailnetServer;
+    const auto openRemote = [&](RemoteControlServer::Mode mode, const RemoteControlServer::Endpoint& endpoint,
+                                const char* scheme) -> std::unique_ptr<RemoteControlServer> {
+        auto remote = std::make_unique<RemoteControlServer>(controlEngine, mode);
+        QString error;
+        if ((tlsIdentity && mode == RemoteControlServer::Mode::Secure
+             && !remote->setTlsConfiguration(*tlsIdentity))
+            || !remote->listen(endpoint, &error)) {
+            QTextStream(stderr) << "aetherd: cannot listen for remote clients on "
+                                << endpoint.address.toString() << ':' << endpoint.port << ": " << error << '\n';
+            return nullptr;
+        }
+        const QString host = endpoint.address.protocol() == QAbstractSocket::IPv6Protocol
+            ? QStringLiteral("[%1]").arg(endpoint.address.toString()) : endpoint.address.toString();
+        QTextStream(stderr) << "aetherd: remote clients on " << scheme << "://" << host << ':'
+                            << remote->serverPort() << '\n';
+        return remote;
+    };
+    if (secureEndpoint || tailnetEndpoint) {
+        // The one writer of paired clients to the vault: pairing adds them,
+        // and the local socket lists and removes them at run time.
+        pairingIssuer = std::make_unique<AetherSDR::control::VaultPairingIssuer>(*vault, credentials);
+        if (!controlEngine.service.bindRemoteClientAdmin(pairingIssuer.get())) {
+            QTextStream(stderr) << "aetherd: cannot enable paired-client management\n";
+            return 1;
+        }
+    }
+    if (secureEndpoint) {
+        secureServer = openRemote(RemoteControlServer::Mode::Secure, *secureEndpoint, "wss");
+        if (!secureServer) { return 1; }
+        const QString fingerprint = RemoteControlServer::certificateSha256(*tlsIdentity);
+        if (!controlEngine.service.bindPairing(
+                {pairingIssuer.get(), fingerprint, [&pairingClock] { return pairingClock.elapsed(); }})) {
+            QTextStream(stderr) << "aetherd: cannot enable remote pairing\n";
+            return 1;
+        }
+        QTextStream(stderr) << "aetherd: remote certificate SHA-256 " << fingerprint << '\n';
+    }
+    if (tailnetEndpoint) {
+        tailnetServer = openRemote(RemoteControlServer::Mode::Tailnet, *tailnetEndpoint, "ws");
+        if (!tailnetServer) { return 1; }
+    }
+#endif
+    // Claim the endpoint before settings or model construction: even the
+    // AppSettings singleton constructor can create directories/migrate paths.
+    // Native settings must then load before RadioModel snapshots its settings.
+    // Constructors/settings imports can pump nested event loops. Reserving
+    // the endpoint closes early arrivals without admitting sessions, so no
+    // client can race the one-shot target binding or see partial resources.
+    // No HL2 TX grant can exist here (independentTxReady), so the HL2 is
+    // receive only, and its receive controls qualify without idle readback.
+    AetherSDR::hl2::Hl2Backend::setHostOffersTransmit(false);
+    std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
+        AetherSDR::aetherd::makeDiscoverySource(
+            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption),
+             hl2Addresses});
+    AetherSDR::RadioSession radioSession;
+    radioSession.setSessionId(1);
+    std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;
+    std::unique_ptr<AetherSDR::control::SliceFrequencyTarget> frequencyTarget;
+    std::unique_ptr<AetherSDR::control::ReceiveControlTarget> receiveTarget;
+    std::unique_ptr<AetherSDR::control::TransmitControlTarget> transmitTarget;
+    if (parser.isSet(controlOption)) {
+        connectionTarget = AetherSDR::control::makeModelRadioConnectionTarget(&radioSession.radioModel());
+        if (!connectionTarget || !server.bindConnectionTarget(connectionTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize connection control\n";
+            return 1;
+        }
+        frequencyTarget = AetherSDR::control::makeModelSliceFrequencyTarget(
+            &radioSession.radioModel(), connectionTarget.get());
+        if (!frequencyTarget || !server.bindFrequencyTarget(frequencyTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize frequency control\n";
+            return 1;
+        }
+        receiveTarget = AetherSDR::control::makeModelReceiveControlTarget(
+            &radioSession.radioModel(), connectionTarget.get());
+        if (!receiveTarget || !server.bindReceiveTarget(receiveTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize receive control\n";
+            return 1;
+        }
+    }
+    if (parser.isSet(transmitOption)) {
+        transmitTarget = AetherSDR::control::makeModelTransmitControlTarget(&radioSession.radioModel());
+        if (!transmitTarget || !server.bindTransmitTarget(transmitTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize transmit control\n";
+            return 1;
+        }
+    }
+    AetherSDR::control::RadioCatalogue catalogue(
+        std::move(discoverySource), &server.resourceStore());
+    [[maybe_unused]] AetherSDR::control::RadioResourceAdapter resources(
+        &radioSession.radioModel(), &server.resourceStore(),
+        QStringLiteral("radio-1"), nullptr, connectionTarget.get());
+    catalogue.start();
+    if (!server.startServing()) {
+        QTextStream(stderr) << "aetherd: cannot start local client service\n";
+        return 1;
+    }
+#ifdef HAVE_WEBSOCKETS
+    for (RemoteControlServer* remote : {secureServer.get(), tailnetServer.get()}) {
+        if (remote && !remote->startServing()) {
+            QTextStream(stderr) << "aetherd: cannot start the remote client service\n";
+            return 1;
+        }
+    }
+#endif
+    // A stop that arrived during startup could not quit a loop that was not
+    // running yet; teardown below still releases whatever was set up.
+    const int result = gracefulStop.takeStopBeforeLoop() ? 0 : app.exec();
+    // The server was constructed first; stop delivery before target/model
+    // teardown rather than relying on reverse local-variable destruction.
+#ifdef HAVE_WEBSOCKETS
+    if (tailnetServer) { tailnetServer->close(); }
+    if (secureServer) { secureServer->close(); }
+#endif
+    server.close();
+    return result;
+}

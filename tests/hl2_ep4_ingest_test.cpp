@@ -1,0 +1,562 @@
+// HL2 wideband bandscope (endpoint 0x04) — MetisClient ingest. Socket-free:
+// no bind, no peer, no radio. Recorded datagrams are handed straight to the
+// drain path through MetisClientTestAccess, the friend seam MetisClient.h
+// already declares for exactly this.
+//
+// The claim under test is not "EP4 parses" — hl2_ep4_bandscope_test owns that.
+// It is that EP4 and EP6 are accounted SEPARATELY on one socket:
+//
+//   * a bandscope datagram must increment ep4Packets and NOT rxPackets, and it
+//     must not touch the EP6 drop counter or the silence watchdog's clock;
+//   * ep4_seq_no is a different counter with a different reset, so a client
+//     sharing EP6's expectation would report a gap on nearly every packet;
+//   * the counter's start-of-stream rewind is a RESET, not a loss, and it is
+//     counted where it can be seen rather than folded into ep4Drops.
+//
+// Section 8 carries the same claim one layer up, at the IRadioBackend seam:
+// the rows a health dialog reads, and the verb that is the only way to ask for
+// the stream.
+//
+// The sequences replayed here are recorded arrivals from a real v74.2 board
+// (tests/Hl2Ep4ArrivalsD94.h), not invented ones.
+
+#include "core/backends/hl2/MetisClient.h"
+#include "core/backends/hl2/MetisProtocol.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2BandscopeHeadroom.h"
+#include "core/backends/hl2/Hl2TelemetryService.h"
+#include "core/backends/HealthSnapshotMerge.h"
+#include "core/AppSettings.h"
+
+#include "Hl2Ep4ArrivalsD94.h"
+#include "TestSettingsProfile.h"
+
+#include <QCoreApplication>
+#include <QEvent>
+#include <QString>
+#include <QThread>
+#include <QVariant>
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <span>
+#include <vector>
+
+namespace AetherSDR::hl2 {
+// No start(), no bind, no peer: inject transport state and feed the ingest
+// path the bytes a socket would have delivered.
+struct MetisClientTestAccess {
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+    static void feedDatagram(MetisClient& client, std::span<const std::uint8_t> bytes)
+    {
+        client.handleDatagram(bytes);
+    }
+};
+
+// ONE ACCEPTED BANDSCOPE BLOCK, delivered the way a radio delivers one.
+//
+// Through MetisClient's own signal and Hl2Backend's own handler rather than by
+// assigning m_bandscopeBlock: a test that wrote the member itself would keep
+// passing with the ingest connection deleted, which is the wiring half of what
+// section 9 is about. The clock is restarted by that handler, not here, so the
+// age the rows are gated on is the real one.
+struct Hl2HealthBlockTestAccess {
+    static void deliverBlock(Hl2Backend& backend, const Ep4Stats& block)
+    {
+        MetisClient* metis = backend.m_metis;
+        QMetaObject::invokeMethod(metis, [metis, block] {
+            emit metis->bandscopeBlockReady(block);
+        }, Qt::BlockingQueuedConnection);
+        // The handler is a queued connection onto the backend's thread, which
+        // this test never returns to an event loop to service.
+        QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
+    }
+};
+}  // namespace AetherSDR::hl2
+
+using namespace AetherSDR::hl2;
+
+static int g_failures = 0;
+static void check(bool cond, const char* what)
+{
+    if (!cond) {
+        std::fprintf(stderr, "FAIL: %s\n", what);
+        ++g_failures;
+    }
+}
+
+static std::vector<std::uint8_t> makeEp4(std::uint32_t seq)
+{
+    std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
+    pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x04;
+    pkt[4] = 0x00;                                            // hardwired
+    pkt[5] = static_cast<std::uint8_t>((seq >> 16) & 0x0F);
+    pkt[6] = static_cast<std::uint8_t>((seq >> 8) & 0xFF);
+    pkt[7] = static_cast<std::uint8_t>(seq & 0xFF);
+    return pkt;
+}
+
+static std::vector<std::uint8_t> makeEp6(std::uint32_t seq)
+{
+    std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
+    pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
+    pkt[4] = static_cast<std::uint8_t>((seq >> 24) & 0xFF);
+    pkt[5] = static_cast<std::uint8_t>((seq >> 16) & 0xFF);
+    pkt[6] = static_cast<std::uint8_t>((seq >> 8) & 0xFF);
+    pkt[7] = static_cast<std::uint8_t>(seq & 0xFF);
+    for (const std::size_t fs : {std::size_t{8}, std::size_t{8 + kFrameSize}})
+        pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;           // SYNC
+    return pkt;
+}
+
+static void feedEp4(MetisClient& c, std::uint32_t seq)
+{
+    MetisClientTestAccess::feedDatagram(c, makeEp4(seq));
+}
+
+int main(int argc, char** argv)
+{
+    // Before QCoreApplication and before the first AppSettings touch: section 8
+    // builds an Hl2Backend, whose construction reads the settings store.
+    TestSettingsProfile profile(QStringLiteral("aether-hl2-ep4-ingest"));
+    if (!profile.isValid())
+        return 1;
+    QCoreApplication app(argc, argv);
+    AetherSDR::AppSettings::instance().load();
+
+    // ---- 1 · an EP4 datagram is counted as EP4 and as nothing else ----
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        check(c.linkCounters().ep4Packets == 0, "no bandscope packets before any arrive");
+        feedEp4(c, 0);
+        const auto k = c.linkCounters();
+        check(k.ep4Packets == 1, "an EP4 datagram increments ep4Packets");
+        check(k.rxPackets == 0, "...and NOT rxPackets: it carries no IQ and no telemetry");
+        check(k.drops == 0, "...and does not disturb the EP6 drop counter");
+        check(c.droppedPackets() == 0, "...nor the EP6 counter the health row reads");
+        // The bytes still crossed the wire, and a receive total that omits them
+        // would understate the link's real load — which is the number the
+        // bandscope's cost has to be judged against.
+        check(k.rxBytes == kUsbPacketSize, "the bandscope's bytes are counted as traffic");
+    }
+
+    // ---- 2 · a genuine forward skip is a drop ----
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        feedEp4(c, 0);
+        feedEp4(c, 1);
+        feedEp4(c, 3);
+        check(c.ep4Drops() == 1, "a skipped EP4 sequence number is one drop");
+        check(c.ep4Rewinds() == 0, "...and not a rewind");
+        check(c.linkCounters().ep4Packets == 3, "the three that DID arrive are counted");
+    }
+
+    // ---- 3 · the 20-bit wrap is not a drop ----
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        feedEp4(c, kEp4SeqModulus - 2);
+        feedEp4(c, kEp4SeqModulus - 1);
+        feedEp4(c, 0);
+        feedEp4(c, 1);
+        check(c.ep4Drops() == 0, "ep4_seq_no wrapping at 2^20 is not a loss");
+        check(c.ep4Rewinds() == 0, "...and not a rewind either");
+    }
+
+    // ---- 4 · THE MEASURED REWIND: 0,1,2 -> 0 ----
+    //
+    // What a real board does in the first ten milliseconds of every bandscope
+    // session, because usopenhpsdr1.v forces ep4_seq_no's low two bits to zero
+    // while the capture FIFO is still filling.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        for (const std::uint32_t s : {0u, 1u, 2u, 0u, 1u, 2u, 3u})
+            feedEp4(c, s);
+        check(c.ep4Rewinds() == 1, "the start-of-stream rewind is counted as a rewind");
+        check(c.ep4Drops() == 0, "the start-of-stream rewind is NOT a million drops");
+        check(c.linkCounters().ep4Drops == 0, "and the published counter agrees");
+        check(c.linkCounters().ep4Rewinds == 1, "the rewind is published separately");
+    }
+
+    // ---- 5 · the whole recorded leg, replayed ----
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        for (std::size_t i = 0; i < kD94Ep4Seq48kCount; ++i)
+            feedEp4(c, kD94Ep4Seq48k[i]);
+        const auto k = c.linkCounters();
+        check(k.ep4Packets == kD94Ep4Seq48kCount,
+              "every recorded arrival is accounted for");
+        check(k.ep4Drops == 0, "ten seconds of real traffic lost nothing");
+        check(k.ep4Rewinds == 1, "and rewound exactly once, at the start");
+        check(k.rxPackets == 0, "none of it was mistaken for IQ");
+    }
+
+    // ---- 6 · EP6 and EP4 keep their own expectations ----
+    //
+    // Interleaved on one socket, each stream counting from its own zero. A
+    // client that shared one expected-sequence value would score every packet
+    // against the other endpoint's counter and report a gap on nearly all of
+    // them.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        for (std::uint32_t i = 0; i < 4; ++i) {
+            MetisClientTestAccess::feedDatagram(c, makeEp6(i));
+            feedEp4(c, i);
+        }
+        const auto k = c.linkCounters();
+        check(k.rxPackets == 4 && k.ep4Packets == 4, "each stream counts its own packets");
+        check(k.drops == 0, "interleaving does not manufacture an EP6 gap");
+        check(k.ep4Drops == 0, "interleaving does not manufacture an EP4 gap");
+
+        // An EP6 loss is an EP6 loss, and says nothing about the bandscope.
+        MetisClientTestAccess::feedDatagram(c, makeEp6(9));
+        check(c.droppedPackets() == 5, "the EP6 gap is counted where it happened");
+        check(c.ep4Drops() == 0, "...and nowhere else");
+    }
+
+    // ---- 7 · the enable is off by default and never widens the start byte ----
+    {
+        MetisClient c;
+        check(!c.bandscopeEnabled(), "the bandscope is off in a fresh client");
+        // A request with no stream behind it is refused rather than remembered:
+        // the run byte means nothing to a radio that was never started, and
+        // start() brings wide_spectrum up clear.
+        c.setBandscopeEnabled(true);
+        check(!c.bandscopeEnabled(), "enabling a stopped client is refused, not latched");
+
+        MetisClientTestAccess::setStreaming(c);
+        c.setBandscopeEnabled(true);
+        check(c.bandscopeEnabled(), "enabling a running client records the request");
+        c.setBandscopeEnabled(false);
+        check(!c.bandscopeEnabled(), "and disabling clears it");
+
+        // The byte the radio would actually receive is asserted where it is
+        // COMPOSED — metisRunCommand(), in hl2_metis_protocol_test. It used to
+        // be re-derived here from the same two constants, which is an assertion
+        // about `0x01 | kRunWideSpectrum` and not about anything MetisClient
+        // does: the implementation could drop the run bit and this would still
+        // pass (PR #5650 review, blocker 1). What belongs here is the one thing
+        // this target can actually see — that the function MetisClient sends
+        // through keeps `run` set while the bandscope bit moves.
+        check(metisRunCommand(true)[3] == 0x03 && metisRunCommand(false)[3] == 0x01,
+              "the byte MetisClient sends keeps run set on both edges");
+        check(metisStop()[3] == 0x00, "metisStop() still clears run AND wide_spectrum");
+    }
+
+
+    // ---- 8 · the backend's EP4 seam, with no link ----
+    //
+    // Section 7 is MetisClient's own refusal. This is the same question one
+    // layer up, at IRadioBackend: what a health dialog can read, and what the
+    // one verb does. Both are reachable on a default-constructed backend — no
+    // socket, no peer, no discovery, no event loop — because invokeExtension
+    // dispatches on the namespace and verb before it consults anything else,
+    // and healthSnapshot() reads members rather than the wire.
+    //
+    // What is NOT here, and cannot be: the POSITIVE path. Hl2Backend gates the
+    // enable on m_connected, which is set only from MetisClient::linkUp, which
+    // needs a real EP6 datagram from a real peer. "Enable, and watch the health
+    // row follow" is a fake-radio assertion; it is certified against hardware
+    // instead, and it is not faked here.
+    {
+        AetherSDR::hl2::Hl2Backend backend;
+
+        const auto snap = backend.healthSnapshot();
+        const auto has = [&snap](const char* key) {
+            return snap.values.contains(QString::fromLatin1(key));
+        };
+        // Reported WITHOUT being asked for, and reported off. An absent row
+        // would leave "is this costing me link budget?" unanswered rather than
+        // answered "no", which is the answer a reader of that dialog needs
+        // first.
+        check(has("bandscopeEnabled")
+                  && !snap.values.value(QStringLiteral("bandscopeEnabled")).toBool(),
+              "the bandscope is reported, and reported OFF, before anything asks");
+        check(snap.values.value(QStringLiteral("ep4Packets")).toULongLong() == 0u,
+              "no EP4 packets are claimed while it is off");
+        // A row of its OWN, not folded into ep4Drops: exactly one rewind is
+        // expected per stream start and none after, so a second one is an
+        // anomaly that a counter meant to read zero would hide.
+        check(has("ep4Drops") && has("ep4Rewinds"),
+              "drops and rewinds are separate rows");
+        check(has("bandscopeBlocks") && has("bandscopeTimeouts"),
+              "the gate's own health is reported too");
+        // The headroom rows are ABSENT until a block has arrived — the
+        // "absent means not reported" contract doing the work no default could,
+        // since 0.00 dBFS would read as a hard clip rather than as "never
+        // looked at".
+        check(!has("adcPeakDbfs") && !has("adcRmsDbfs") && !has("adcCrestDb"),
+              "the headroom rows are ABSENT, not zero, before any block");
+        // The DC-level pair too (#5856): a mean of 0 codes would read as "no
+        // pedestal", which is an answer, and nothing has been measured yet.
+        check(!has("adcDcDbfs") && !has("adcDcCodes"),
+              "the DC-level rows are ABSENT, not zero, before any block");
+        // ...and DECLARED: absent is a withheld value, not a missing row, so
+        // the dialog shows a dash in place rather than a list that changes
+        // shape when the first block lands.
+        check(snap.order.contains(QStringLiteral("adcDcDbfs"))
+                  && snap.labels.contains(QStringLiteral("adcDcDbfs"))
+                  && snap.order.contains(QStringLiteral("adcDcCodes"))
+                  && snap.labels.contains(QStringLiteral("adcDcCodes")),
+              "the DC-level rows keep their place and label before any block");
+
+        // The verb. Counted rather than spied so this target needs no Qt6::Test.
+        int results = 0;
+        int errors = 0;
+        quint64 lastId = 0;
+        QVariant lastPayload;
+        QObject::connect(&backend, &AetherSDR::IRadioBackend::extensionResult, &backend,
+                         [&](quint64 id, const QVariant& payload) {
+            ++results; lastId = id; lastPayload = payload;
+        });
+        QObject::connect(&backend, &AetherSDR::IRadioBackend::extensionError, &backend,
+                         [&](quint64, const QString&) { ++errors; });
+
+        backend.invokeExtension(QStringLiteral("hl2"),
+                                QStringLiteral("bandscope.enable"), 43, QVariant(true));
+        check(errors == 0, "bandscope.enable is an implemented verb, not the error stub");
+        check(results == 1, "...it completes locally, like freqcal.set, with no round trip");
+        check(lastId == 43u, "...carrying its requestId back");
+        check(lastPayload.toMap().contains(QStringLiteral("enabled")),
+              "...and reporting the state it applied");
+        // REFUSED while disconnected, and reported as refused. MetisClient
+        // ignores a run byte with no stream behind it, so echoing the request
+        // back would be this side inventing a state the radio was never told
+        // about. This is the assertion the connected case cannot make.
+        check(!lastPayload.toMap().value(QStringLiteral("enabled")).toBool(),
+              "a bandscope enable with no link is refused, not echoed");
+        // The row follows LinkCounters — what MetisClient actually has — and
+        // not this side's request, so a refused enable cannot light it up and
+        // neither can an accepted one until the client reports it. That is the
+        // point: the two can disagree across the thread hop, and when they do
+        // the gate is right. (PR #5650 review round 3.)
+        check(!backend.healthSnapshot().values
+                   .value(QStringLiteral("bandscopeEnabled")).toBool(),
+              "and the health row follows the client, never the request");
+
+        // requestId 0 is the fire-and-forget form a caller uses when it wants no
+        // reply. NOT "the UI uses": no UI reaches this verb at all — the
+        // capabilities map lists it as caller-less and the verb's own comment in
+        // Hl2Backend says so. (PR #5650 review, K5PTB.)
+        backend.invokeExtension(QStringLiteral("hl2"),
+                                QStringLiteral("bandscope.enable"), 0, QVariant(false));
+        check(results == 1, "requestId 0 asks for no reply and gets none");
+        check(errors == 0, "...and is still not the error stub");
+    }
+
+    // ---- 9 . the converter rows EXPIRE, and the age row is what survives ----
+    //
+    // Section 8 above asserts these rows are absent BEFORE a block. This is the
+    // other edge, and it is the one that was missing: absent again once the
+    // newest block has stopped describing now.
+    //
+    // THE FAILURE THIS CLOSES. m_bandscopeBlock has two writers -- the ingest
+    // handler above and resetBandscopeMirrors(), whose only callers are the
+    // link edges. `bandscope.enable(false)` clears neither, so stopping the
+    // stream inside a live session left healthSnapshot() republishing one
+    // frozen block for the rest of the link. Measured on hardware: 31 dB of
+    // commanded LNA gain moved these rows 0.00 dB while adcSlicePeakDbfs0,
+    // which comes from a different subsystem that never stopped, moved 19.04
+    // dB over the same steps.
+    //
+    // BOTH DIRECTIONS, AND THE RETURN. A gate that withheld everything would
+    // pass "stale is withheld" and be worthless, so the fresh case is asserted
+    // first, with the block's own arithmetic rather than with numbers typed
+    // out here; and the rows are made to come BACK, because an expiry that
+    // latched would be a second freeze wearing the fix's clothes.
+    {
+        Hl2Backend backend;
+
+        // A record a real gate could produce: 2048 codes, peak 512, no DC, an
+        // AC deviation of 128 codes. Peak -12.04 dBFS, RMS -24.08, crest 12.04.
+        Ep4Stats blk;
+        blk.samples = kEp4BlockSamples;
+        blk.peakAbs = 512;
+        blk.sum = 0.0;
+        blk.sumSquares = static_cast<double>(kEp4BlockSamples) * 128.0 * 128.0;
+        blk.clippedSamples = 0;
+
+        const auto value = [](const AetherSDR::IRadioBackend::HealthSnapshot& s, const char* k) {
+            return s.values.value(QString::fromLatin1(k));
+        };
+        const auto has = [&value](const AetherSDR::IRadioBackend::HealthSnapshot& s, const char* k) {
+            return value(s, k).isValid();
+        };
+        const auto listed = [](const AetherSDR::IRadioBackend::HealthSnapshot& s, const char* k) {
+            const QString key = QString::fromLatin1(k);
+            return s.order.contains(key) && s.labels.contains(key);
+        };
+
+        Hl2HealthBlockTestAccess::deliverBlock(backend, blk);
+        const AetherSDR::IRadioBackend::HealthSnapshot fresh = backend.healthSnapshot();
+
+        // THE POSITIVE HALF.
+        check(has(fresh, "adcPeakDbfs") && has(fresh, "adcRmsDbfs")
+                  && has(fresh, "adcCrestDb") && has(fresh, "adcClippedPerBlock")
+                  && has(fresh, "adcDcDbfs") && has(fresh, "adcDcCodes"),
+              "a block just delivered publishes all six converter rows");
+        // Against the block's OWN arithmetic, so the check cannot agree with a
+        // wrong reading merely because both were typed from the same guess.
+        check(value(fresh, "adcPeakDbfs").toString()
+                  == QString::number(blk.peakDbfs(), 'f', 2),
+              "...and the peak row carries this block's peak, not a default");
+        check(value(fresh, "adcRmsDbfs").toString()
+                  == QString::number(blk.rmsDbfs(), 'f', 2),
+              "...and the RMS row carries this block's RMS");
+        check(blk.crestDb().has_value()
+                  && value(fresh, "adcCrestDb").toString()
+                         == QString::number(*blk.crestDb(), 'f', 2),
+              "...and the crest row carries this block's crest");
+        // The DC-level pair (#5856), gated by the same expiry. This block has
+        // no mean, so the dBFS row is the floor and the codes row is zero --
+        // still REPORTED, because "measured, and zero" is an answer.
+        check(value(fresh, "adcDcDbfs").toString()
+                  == QString::number(blk.dcDbfs(), 'f', 2),
+              "...and the DC-level row carries this block's DC dBFS");
+        check(value(fresh, "adcDcCodes").toString()
+                  == QString::number(blk.meanCodes(), 'f', 2),
+              "...and the signed-mean row carries this block's mean");
+        check(has(fresh, "adcObservedAgoMs")
+                  && value(fresh, "adcObservedAgoMs").toLongLong() < kHeadroomMaxAgeMs,
+              "...and the age row reports an age inside the expiry");
+
+        // Let it age past the expiry with nothing delivering. Real elapsed
+        // time against the real QElapsedTimer: the gate under test is the one
+        // healthSnapshot() actually consults, not a stand-in for it.
+        QThread::msleep(static_cast<unsigned long>(kHeadroomMaxAgeMs) + 250u);
+        const AetherSDR::IRadioBackend::HealthSnapshot stale = backend.healthSnapshot();
+
+        // THE NEGATIVE HALF.
+        check(!has(stale, "adcPeakDbfs"), "an expired block withholds the peak");
+        check(!has(stale, "adcRmsDbfs"), "an expired block withholds the RMS");
+        check(!has(stale, "adcCrestDb"), "an expired block withholds the crest");
+        check(!has(stale, "adcDcDbfs"), "an expired block withholds the DC level");
+        check(!has(stale, "adcDcCodes"), "an expired block withholds the signed mean");
+        check(!has(stale, "adcClippedPerBlock"),
+              "an expired block withholds the rail count -- a frozen zero reads "
+              "as 'not clipping', which is the dangerous direction");
+
+        // A DASH, NOT A DISAPPEARANCE. Dropping the rows outright was tried and
+        // reverted on PR #5650 round 3; put() keeps the key in order and labels
+        // and withholds only the value, and that is what a reader sees.
+        check(listed(stale, "adcPeakDbfs") && listed(stale, "adcRmsDbfs")
+                  && listed(stale, "adcCrestDb") && listed(stale, "adcClippedPerBlock")
+                  && listed(stale, "adcDcDbfs") && listed(stale, "adcDcCodes"),
+              "...while the rows keep their place and their labels");
+
+        // AND THE AGE ROW SURVIVES THE EXPIRY IT CAUSED. Six dashes and no age
+        // says only that something is missing; six dashes and an age says the
+        // gate stopped, which is the whole diagnostic.
+        check(has(stale, "adcObservedAgoMs"),
+              "the age row outlives the values it expired");
+        check(value(stale, "adcObservedAgoMs").toLongLong() > kHeadroomMaxAgeMs,
+              "...reporting an age past the expiry, which is why they are gone");
+
+        // ---- THE MERGE MUST NOT PUT BACK WHAT THE EXPIRY TOOK OUT ----
+        //
+        // A GUARD AGAINST A FUTURE EDIT, NOT A PROOF OF TODAY'S BEHAVIOUR, and
+        // the distinction is the reason it is an assertion rather than a
+        // comment.
+        //
+        // Neither consumer reads healthSnapshot() on its own. RadioHealthDialog
+        // and AutomationServer::doHealth both call
+        // mergeHealthSnapshots(offlineRows, backendSnapshot), whose one
+        // load-bearing rule is the exact inverse of the expiry above: "a key
+        // the winner declares but leaves OUT of `values` means 'not reported',
+        // and must not erase a value the base does have." A withheld row is
+        // therefore BACK-FILLED from the offline base if the base has one.
+        //
+        // That is correct for the rows the rule was written for -- the in-band
+        // path going quiet is exactly when the stream-free source should own
+        // temperatureC -- and it would silently undo this expiry. The six rows
+        // here have no stream-free twin: there is no second sensor that can
+        // answer "what did the converter see" while the gate that answers it is
+        // stopped, so a value arriving from the base could only be a staler
+        // copy of the one just withheld.
+        //
+        // It is safe today because Hl2TelemetryService::healthRows() declares
+        // none of the six. Nothing enforced that, and nothing about the merge
+        // would complain: add `adcPeakDbfs` to the offline source and every
+        // other assertion in this file stays green while the expiry stops
+        // reaching either consumer. This is the assertion that goes red
+        // instead.
+        {
+            // No target, so the poller has nowhere to send and holds no socket
+            // -- this file's socket-free promise survives.
+            Hl2TelemetryService offline;
+            const AetherSDR::IRadioBackend::HealthSnapshot offlineRows =
+                offline.offlineHealthRows();
+            const AetherSDR::IRadioBackend::HealthSnapshot merged =
+                AetherSDR::mergeHealthSnapshots(offlineRows, stale);
+
+            // POSITIVE CONTROL FIRST. An offline source that published nothing
+            // would satisfy every check below while proving none of them, and
+            // an empty base is exactly what a constructor change could produce.
+            check(offlineRows.values.contains(QStringLiteral("telemetrySource")),
+                  "the offline source really does publish values to merge from");
+            check(merged.values.contains(QStringLiteral("telemetrySource")),
+                  "...and the merge carries the base's values through");
+            // And that the merge is genuinely capable of back-filling a key the
+            // winner withheld -- otherwise the guard below is asserting against
+            // a mechanism that is not armed.
+            {
+                AetherSDR::IRadioBackend::HealthSnapshot base;
+                base.order.push_back(QStringLiteral("probeKey"));
+                base.labels.insert(QStringLiteral("probeKey"), QStringLiteral("probe"));
+                base.values.insert(QStringLiteral("probeKey"), QVariant(7));
+                AetherSDR::IRadioBackend::HealthSnapshot winner;
+                winner.order.push_back(QStringLiteral("probeKey"));
+                winner.labels.insert(QStringLiteral("probeKey"), QStringLiteral("probe"));
+                // declared, deliberately valueless -- the withheld shape
+                const auto back = AetherSDR::mergeHealthSnapshots(base, winner);
+                check(back.values.value(QStringLiteral("probeKey")).toInt() == 7,
+                      "the merge DOES back-fill a withheld key, so the guard "
+                      "below is guarding something live");
+            }
+
+            for (const char* key : {"adcPeakDbfs", "adcRmsDbfs",
+                                    "adcCrestDb", "adcClippedPerBlock",
+                                    "adcDcDbfs", "adcDcCodes"}) {
+                const QString k = QString::fromLatin1(key);
+                check(!offlineRows.values.contains(k),
+                      "Hl2TelemetryService must not publish a converter row the "
+                      "backend expires -- there is no stream-free sensor for it, "
+                      "and the merge would back-fill the expired value");
+                check(!merged.values.contains(k),
+                      "...so the expiry survives the merge both consumers do");
+            }
+        }
+
+        // NOT A LATCH: a new block restores the rows. This one carries a
+        // NEGATIVE mean of 32 codes, so the sign survives the backend: the
+        // dBFS row cannot say which way the pedestal sits and adcDcCodes must.
+        blk.peakAbs = 1024;
+        blk.sum = -32.0 * static_cast<double>(kEp4BlockSamples);
+        Hl2HealthBlockTestAccess::deliverBlock(backend, blk);
+        const AetherSDR::IRadioBackend::HealthSnapshot again = backend.healthSnapshot();
+        check(has(again, "adcPeakDbfs")
+                  && again.values.value(QStringLiteral("adcPeakDbfs")).toString()
+                         == QString::number(blk.peakDbfs(), 'f', 2),
+              "a block after an expiry publishes again, at its own level");
+        check(again.values.value(QStringLiteral("adcPeakDbfs"))
+                  != fresh.values.value(QStringLiteral("adcPeakDbfs")),
+              "...and the new level is the new block's, not the expired one's");
+        check(again.values.value(QStringLiteral("adcDcCodes")).toString()
+                  == QStringLiteral("-32.00"),
+              "the signed-mean row reports a negative pedestal as negative");
+        check(again.values.value(QStringLiteral("adcDcDbfs")).toString()
+                  == QString::number(20.0 * std::log10(32.0 / kEp4FullScale), 'f', 2),
+              "...and the DC-level row reports its magnitude in dBFS");
+    }
+
+    if (g_failures == 0)
+        std::fprintf(stderr, "hl2_ep4_ingest_test: all checks passed\n");
+    return g_failures == 0 ? 0 : 1;
+}

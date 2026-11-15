@@ -1,0 +1,638 @@
+#include "PhoneApplet.h"
+#include "GuardedSlider.h"
+#include "models/TransmitModel.h"
+#include "Theme.h"
+
+#include <QPushButton>
+#include <QLabel>
+#include <QSlider>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QSignalBlocker>
+#include <QFrame>
+#include <QPainter>
+#include "core/ThemeManager.h"
+#include "core/TxKeyingMarker.h"
+
+#include <QPointer>
+
+namespace AetherSDR {
+
+// ── Triangle step button (reused from RxApplet pattern) ─────────────────────
+
+class PhoneTriBtn : public QPushButton {
+public:
+    enum Dir { Left, Right };
+    explicit PhoneTriBtn(Dir dir, QWidget* parent = nullptr)
+        : QPushButton(parent), m_dir(dir)
+    {
+        setFlat(false);
+        setFixedSize(22, 22);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
+            "border-radius: 3px; padding: 0; margin: 0; min-width: 0; min-height: 0; }"
+            "QPushButton:hover { background: {{color.background.1}}; }"
+            "QPushButton:pressed { background: {{color.accent}}; }");
+    }
+protected:
+    void paintEvent(QPaintEvent* ev) override {
+        QPushButton::paintEvent(ev);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setBrush(isDown() ? QColor(0, 0, 0) : QColor(0xc8, 0xd8, 0xe8));
+        p.setPen(Qt::NoPen);
+        const int cx = width() / 2, cy = height() / 2;
+        QPolygon tri;
+        if (m_dir == Left)
+            tri << QPoint(cx - 5, cy) << QPoint(cx + 4, cy - 5) << QPoint(cx + 4, cy + 5);
+        else
+            tri << QPoint(cx + 5, cy) << QPoint(cx - 4, cy - 5) << QPoint(cx - 4, cy + 5);
+        p.drawPolygon(tri);
+    }
+private:
+    Dir m_dir;
+};
+
+
+
+// ── Style constants ──────────────────────────────────────────────────────────
+
+static QString percentText(int value)
+{
+    return QStringLiteral("%1%").arg(value);
+}
+
+static const QString kGreenActive =
+    "QPushButton:checked { background-color: #006040; color: #00ff88; "
+    "border: 1px solid #00a060; }";
+
+static const QString kBlueActive =
+    "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
+    "border: 1px solid #0090e0; }";
+
+static const QString kBtnBase =
+    "QPushButton { background-color: #1a2a3a; color: #c8d8e8; "
+    "border: 1px solid #205070; border-radius: 3px; font-size: 11px; "
+    "font-weight: bold; padding: 2px 4px; }";
+
+// Small step button style (< > for filter cut)
+static const QString kStepBtnStyle =
+    "QPushButton { background-color: #1a2a3a; color: #c8d8e8; "
+    "border: 1px solid #205070; border-radius: 2px; font-size: 11px; "
+    "font-weight: bold; padding: 0px; }";
+
+// ── PhoneApplet ──────────────────────────────────────────────────────────────
+
+PhoneApplet::PhoneApplet(QWidget* parent)
+    : QWidget(parent)
+{
+    theme::setContainer(this, QStringLiteral("applet/phone"));
+    buildUI();
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    setVisible(false);
+}
+
+void PhoneApplet::setAmCarrierAvailable(bool available)
+{
+    m_amCarrierRow->setEnabled(available);
+    m_amCarrierRow->setToolTip(available ? QString() : tr("AM carrier level is unavailable on this radio"));
+}
+
+void PhoneApplet::setVoxDelayAvailable(bool available)
+{
+    m_voxDelayRow->setEnabled(available);
+    m_voxDelayRow->setToolTip(available ? QString() : tr("VOX delay is unavailable on this radio"));
+}
+
+void PhoneApplet::setVoxAvailable(bool available)
+{
+    m_voxAvailable = available;
+    if (!m_voxBtn || !m_voxLevelSlider) {
+        return;
+    }
+    // The reason reaches a screen reader through accessibleDescription; a
+    // tooltip alone is never announced (theme-style-guide, Three-state controls).
+    const QString reason = tr("Unavailable: this radio has no voice-operated "
+                              "transmit that AetherSDR can control.");
+    if (available) {
+        if (m_model) {
+            const QSignalBlocker blocker(m_voxBtn);
+            m_voxBtn->setChecked(m_model->voxEnable());
+        }
+        m_voxBtn->setToolTip(QString());
+        m_voxBtn->setAccessibleDescription(
+            QStringLiteral("Toggle voice-activated transmit"));
+        m_voxLevelSlider->setToolTip(QString());
+        m_voxLevelSlider->setAccessibleDescription(
+            QStringLiteral("VOX activation threshold"));
+    } else {
+        // Optimistic setVoxEnable() would otherwise leave the button lit.
+        const QSignalBlocker blocker(m_voxBtn);
+        m_voxBtn->setChecked(false);
+        m_voxBtn->setToolTip(reason);
+        m_voxBtn->setAccessibleDescription(reason);
+        m_voxLevelSlider->setToolTip(reason);
+        m_voxLevelSlider->setAccessibleDescription(reason);
+    }
+    m_voxBtn->setEnabled(available);
+    m_voxLevelSlider->setEnabled(available);
+    m_voxLevelLabel->setEnabled(available);
+}
+
+void PhoneApplet::buildUI()
+{
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* vbox = new QVBoxLayout;
+    vbox->setContentsMargins(4, 2, 8, 4);
+    vbox->setSpacing(4);
+    outer->addLayout(vbox);
+
+    // ── AM Carrier row ───────────────────────────────────────────────────
+    {
+        auto* rowW = new QWidget;
+        m_amCarrierRow = rowW;
+        rowW->setFixedHeight(24);
+        auto* row = new QHBoxLayout(rowW);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+
+        auto* lbl = new QLabel("AM\nCarrier:");
+        lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        lbl->setFixedWidth(52);
+        row->addWidget(lbl);
+        row->addSpacing(10);
+
+        m_amCarrierSlider = new GuardedSlider(Qt::Horizontal);
+        m_amCarrierSlider->setRange(0, 100);
+        m_amCarrierSlider->setDragValueFormatter(percentText);
+        m_amCarrierSlider->setAccessibleName("AM carrier level");
+        m_amCarrierSlider->setAccessibleDescription("AM carrier power level, 0 to 100 percent");
+        applyPrimarySliderStyle(m_amCarrierSlider);
+        connect(m_amCarrierSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (!m_updatingFromModel && m_model && m_amCarrierRow->isEnabled()) m_model->setAmCarrierLevel(v);
+            m_amCarrierLabel->setText(QString::number(v));
+        });
+        row->addWidget(m_amCarrierSlider, 1);
+
+        m_amCarrierLabel = new QLabel("48");
+        m_amCarrierLabel->setFixedWidth(26);
+        m_amCarrierLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_amCarrierLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        row->addWidget(m_amCarrierLabel);
+
+        vbox->addWidget(rowW);
+    }
+
+    // ── VOX row: toggle + level slider ───────────────────────────────────
+    {
+        auto* rowW = new QWidget;
+        rowW->setFixedHeight(24);
+        auto* row = new QHBoxLayout(rowW);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+
+        m_voxBtn = new QPushButton("VOX");
+        m_voxBtn->setCheckable(true);
+        m_voxBtn->setFixedSize(52, 22);
+        m_voxBtn->setAccessibleName("VOX voice-operated transmit");
+        m_voxBtn->setAccessibleDescription("Toggle voice-activated transmit");
+        m_voxBtn->setStyleSheet(kBtnBase + kGreenActive);
+        connect(m_voxBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (!m_updatingFromModel && m_model) m_model->setVoxEnable(on);
+        });
+        // The automation bridge may switch VOX off and never on: the scoped
+        // action exists for a disarm only. Disarming lowers TX risk and does
+        // not require bridge TX permission.
+        // Arming verbs and pointer input have no action and require permission,
+        // so they stay refused.
+        const auto isDisarm = [](const QString& action, const QString& value) {
+            const QString v = value.trimmed().toLower();
+            return action == QLatin1String("setChecked")
+                && (v == QLatin1String("false") || v == QLatin1String("0")
+                    || v == QLatin1String("off") || v == QLatin1String("no")
+                    || v == QLatin1String("unchecked"));
+        };
+        registerTxKeyingAction(m_voxBtn,
+            [this, isDisarm](const std::shared_ptr<TxController>&,
+                             const QString& action,
+                             const QString& value) -> TxKeyingAction::Prepared {
+                if (!isDisarm(action, value)) {
+                    return {};
+                }
+                const QPointer<PhoneApplet> self(this);
+                return [self] {
+                    if (self && self->m_model) {
+                        self->m_model->setVoxEnable(false);
+                    }
+                };
+            },
+            [isDisarm](const QString& action, const QString& value) -> bool {
+                return !isDisarm(action, value);
+            });
+        row->addWidget(m_voxBtn);
+        row->addSpacing(10);
+
+        m_voxLevelSlider = new GuardedSlider(Qt::Horizontal);
+        m_voxLevelSlider->setRange(0, 100);
+        m_voxLevelSlider->setDragValueFormatter(percentText);
+        m_voxLevelSlider->setAccessibleName("VOX level");
+        m_voxLevelSlider->setAccessibleDescription("VOX activation threshold");
+        applyPrimarySliderStyle(m_voxLevelSlider);
+        connect(m_voxLevelSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (!m_updatingFromModel && m_model) m_model->setVoxLevel(v);
+            m_voxLevelLabel->setText(QString::number(v));
+        });
+        row->addWidget(m_voxLevelSlider, 1);
+
+        m_voxLevelLabel = new QLabel("50");
+        m_voxLevelLabel->setFixedWidth(26);
+        m_voxLevelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxLevelLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        row->addWidget(m_voxLevelLabel);
+
+        vbox->addWidget(rowW);
+    }
+
+    // ── VOX delay row ────────────────────────────────────────────────────
+    {
+        auto* rowW = new QWidget;
+        m_voxDelayRow = rowW;
+        rowW->setFixedHeight(24);
+        auto* row = new QHBoxLayout(rowW);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+
+        auto* lbl = new QLabel("Delay:");
+        lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        lbl->setFixedWidth(52);
+        row->addWidget(lbl);
+        row->addSpacing(10);
+
+        m_voxDelaySlider = new GuardedSlider(Qt::Horizontal);
+        m_voxDelaySlider->setRange(0, 100);
+        m_voxDelaySlider->setAccessibleName("VOX delay");
+        m_voxDelaySlider->setAccessibleDescription("VOX hang time before returning to receive");
+        applyPrimarySliderStyle(m_voxDelaySlider);
+        connect(m_voxDelaySlider, &QSlider::valueChanged, this, [this](int v) {
+            if (!m_updatingFromModel && m_model && m_voxDelayRow->isEnabled()) m_model->setVoxDelay(v);
+            m_voxDelayLabel->setText(QString::number(v));
+        });
+        row->addWidget(m_voxDelaySlider, 1);
+
+        m_voxDelayLabel = new QLabel("50");
+        m_voxDelayLabel->setFixedWidth(26);
+        m_voxDelayLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxDelayLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        row->addWidget(m_voxDelayLabel);
+
+        vbox->addWidget(rowW);
+    }
+
+    // ── DEXP row: toggle + level slider ────────────────────────────────
+    {
+        auto* rowW = new QWidget;
+        m_dexpRow = rowW;
+        m_dexpRow->setObjectName(QStringLiteral("phoneDexpRow"));
+        rowW->setFixedHeight(24);
+        auto* row = new QHBoxLayout(rowW);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+
+        m_dexpBtn = new QPushButton("DEXP");
+        m_dexpBtn->setCheckable(true);
+        m_dexpBtn->setFixedSize(52, 22);
+        m_dexpBtn->setAccessibleName("Downward expander");
+        m_dexpBtn->setAccessibleDescription("Toggle downward expander noise gate");
+        m_dexpBtn->setStyleSheet(kBtnBase + kBlueActive);
+        connect(m_dexpBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (!m_updatingFromModel && m_model) {
+                m_model->setDexp(on);
+            }
+        });
+        row->addWidget(m_dexpBtn);
+        row->addSpacing(10);
+
+        m_dexpSlider = new GuardedSlider(Qt::Horizontal);
+        m_dexpSlider->setRange(0, 100);
+        m_dexpSlider->setDragValueFormatter(percentText);
+        m_dexpSlider->setAccessibleName("DEXP threshold");
+        m_dexpSlider->setAccessibleDescription("Downward expander gate threshold");
+        applyPrimarySliderStyle(m_dexpSlider);
+        connect(m_dexpSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (!m_updatingFromModel && m_model) {
+                m_model->setDexpLevel(v);
+            }
+            m_dexpLabel->setText(QString::number(v));
+        });
+        row->addWidget(m_dexpSlider, 1);
+
+        m_dexpLabel = new QLabel("0");
+        m_dexpLabel->setFixedWidth(26);
+        m_dexpLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_dexpLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        row->addWidget(m_dexpLabel);
+
+        vbox->addWidget(rowW);
+    }
+
+    // ── TX filter section ────────────────────────────────────────────────
+    // Two columns: Low Cut (left) and High Cut (right), each with header
+    // centered over < value > step buttons.
+    {
+        m_txFilterWidget = new QWidget;
+        m_txFilterWidget->setObjectName(QStringLiteral("txFilterControls"));
+        auto* grid = new QHBoxLayout(m_txFilterWidget);
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setSpacing(0);
+
+        // ── Left column: Low Cut ─────────────────────────────────────────
+        auto* lowCol = new QVBoxLayout;
+        lowCol->setSpacing(1);
+
+        auto* lowLbl = new QLabel("Low Cut");
+        lowLbl->setAlignment(Qt::AlignCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lowLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        lowCol->addWidget(lowLbl);
+
+        auto* lowRow = new QHBoxLayout;
+        lowRow->setSpacing(2);
+
+        auto* txLbl = new QLabel("TX");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(txLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }");
+        txLbl->setFixedWidth(18);
+        lowRow->addWidget(txLbl);
+
+        m_lowCutDown = new PhoneTriBtn(PhoneTriBtn::Left);
+        m_lowCutDown->setAccessibleName("TX low cut decrease");
+        // Step buttons snap the value to the next multiple of 50 Hz in
+        // the chosen direction (rather than the old +/-50 from current).
+        // Example on a continuous radio: at 87 Hz, ▲ → 100, ▼ → 50.
+        // A backend may instead publish a discrete edge list below.
+        auto lowCutDown = [this]() {
+            if (!m_model) return;
+            if (m_txLowEdgesHz.isEmpty()) {
+                const int v = m_model->txFilterLow();
+                const int snapped = ((v - 1) / 50) * 50;
+                m_model->setTxFilterLow(qMax(m_model->txFilterMinHz(), snapped));
+                return;
+            }
+            m_model->setTxFilterLow(steppedEdgeHz(m_txLowEdgesHz,
+                                                   m_model->txFilterLow(), -1));
+        };
+        auto lowCutUp = [this]() {
+            if (!m_model) return;
+            if (m_txLowEdgesHz.isEmpty()) {
+                const int v = m_model->txFilterLow();
+                const int snapped = ((v / 50) + 1) * 50;
+                m_model->setTxFilterLow(qMin(m_model->txFilterHigh()
+                                                 - m_model->txFilterMinWidthHz(),
+                                             snapped));
+                return;
+            }
+            m_model->setTxFilterLow(steppedEdgeHz(m_txLowEdgesHz,
+                                                   m_model->txFilterLow(), +1));
+        };
+        connect(m_lowCutDown, &QPushButton::clicked, this, lowCutDown);
+        lowRow->addWidget(m_lowCutDown);
+
+        m_lowCutLabel = new ScrollableLabel("50");
+        m_lowCutLabel->setAccessibleName("TX low cut frequency");
+        m_lowCutLabel->setFixedWidth(46);
+        m_lowCutLabel->setAlignment(Qt::AlignCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_lowCutLabel, "QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
+            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }");
+        // Direct numeric entry (#3627). The validator range comes from the
+        // model (TransmitModel::txFilterMaxHz), never a literal. No re-sync
+        // after commit: the editor overlays the label, and a real model change
+        // repaints it via phoneStateChanged → syncFromModel().
+        m_lowCutLabel->setEditable(m_model ? m_model->txFilterMinHz() : TransmitModel::kTxFilterMinHz,
+                                   m_model ? m_model->txFilterMaxHz() : TransmitModel::kTxFilterMaxHz);
+        m_lowCutLabel->setEditorStyler([](QWidget* editor) {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(editor,
+                "QLineEdit { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
+                "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }");
+        });
+        connect(m_lowCutLabel, &ScrollableLabel::editCommitted, this, [this](int hz) {
+            if (!m_model) return;
+            // Enforce the cross-bound here: TransmitModel::setTxFilter() keeps
+            // the given low and pushes high to low + 50, moving an edge the
+            // operator never touched. Out of range is rejected (the previous
+            // value stands, #3627), unlike the step buttons, which clamp because
+            // a step is a request to move one increment.
+            if (hz < m_model->txFilterMinHz()
+                || hz > m_model->txFilterHigh() - m_model->txFilterMinWidthHz()
+                || (!m_txLowEdgesHz.isEmpty() && !m_txLowEdgesHz.contains(hz))) {
+                return;
+            }
+            m_model->setTxFilterLow(hz);
+        });
+        connect(m_lowCutLabel, &ScrollableLabel::scrolled, this,
+                [lowCutUp, lowCutDown](int dir) {
+            if (dir > 0) lowCutUp(); else lowCutDown();
+        });
+        lowRow->addWidget(m_lowCutLabel);
+
+        m_lowCutUp = new PhoneTriBtn(PhoneTriBtn::Right);
+        m_lowCutUp->setAccessibleName("TX low cut increase");
+        connect(m_lowCutUp, &QPushButton::clicked, this, lowCutUp);
+        lowRow->addWidget(m_lowCutUp);
+
+        lowCol->addLayout(lowRow);
+        grid->addLayout(lowCol);
+
+        grid->addStretch();
+
+        // ── Right column: High Cut ───────────────────────────────────────
+        auto* highCol = new QVBoxLayout;
+        highCol->setSpacing(1);
+
+        auto* highLbl = new QLabel("High Cut");
+        highLbl->setAlignment(Qt::AlignCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(highLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        highCol->addWidget(highLbl);
+
+        auto* highRow = new QHBoxLayout;
+        highRow->setSpacing(2);
+
+        m_highCutDown = new PhoneTriBtn(PhoneTriBtn::Left);
+        m_highCutDown->setAccessibleName("TX high cut decrease");
+        auto highCutDown = [this]() {
+            if (!m_model) return;
+            if (m_txHighEdgesHz.isEmpty()) {
+                const int v = m_model->txFilterHigh();
+                const int snapped = ((v - 1) / 50) * 50;
+                m_model->setTxFilterHigh(qMax(m_model->txFilterLow()
+                                                  + m_model->txFilterMinWidthHz(),
+                                              snapped));
+                return;
+            }
+            m_model->setTxFilterHigh(steppedEdgeHz(m_txHighEdgesHz,
+                                                    m_model->txFilterHigh(), -1));
+        };
+        auto highCutUp = [this]() {
+            if (!m_model) return;
+            if (m_txHighEdgesHz.isEmpty()) {
+                const int v = m_model->txFilterHigh();
+                const int snapped = ((v / 50) + 1) * 50;
+                m_model->setTxFilterHigh(qMin(m_model->txFilterMaxHz(), snapped));
+                return;
+            }
+            m_model->setTxFilterHigh(steppedEdgeHz(m_txHighEdgesHz,
+                                                    m_model->txFilterHigh(), +1));
+        };
+        connect(m_highCutDown, &QPushButton::clicked, this, highCutDown);
+        highRow->addWidget(m_highCutDown);
+
+        m_highCutLabel = new ScrollableLabel("3300");
+        m_highCutLabel->setAccessibleName("TX high cut frequency");
+        m_highCutLabel->setFixedWidth(46);
+        m_highCutLabel->setAlignment(Qt::AlignCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_highCutLabel, "QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
+            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }");
+        // Direct numeric entry (#3627) — see the low-cut comment above.
+        m_highCutLabel->setEditable(m_model ? m_model->txFilterMinHz() : TransmitModel::kTxFilterMinHz,
+                                    m_model ? m_model->txFilterMaxHz() : TransmitModel::kTxFilterMaxHz);
+        m_highCutLabel->setEditorStyler([](QWidget* editor) {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(editor,
+                "QLineEdit { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
+                "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }");
+        });
+        connect(m_highCutLabel, &ScrollableLabel::editCommitted, this, [this](int hz) {
+            if (!m_model) return;
+            // Symmetric with the low-cut handler now that a typed value is
+            // rejected rather than clamped (#3627 / #5064 review). Relying on
+            // setTxFilter() to raise a too-low high to low + the minimum width
+            // was the CLAMPING answer; it is the wrong one for direct entry,
+            // where the operator gets their previous value back instead.
+            if (hz > m_model->txFilterMaxHz()
+                || hz < m_model->txFilterLow() + m_model->txFilterMinWidthHz()
+                || (!m_txHighEdgesHz.isEmpty() && !m_txHighEdgesHz.contains(hz))) {
+                return;
+            }
+            m_model->setTxFilterHigh(hz);
+        });
+        connect(m_highCutLabel, &ScrollableLabel::scrolled, this,
+                [highCutUp, highCutDown](int dir) {
+            if (dir > 0) highCutUp(); else highCutDown();
+        });
+        highRow->addWidget(m_highCutLabel);
+
+        m_highCutUp = new PhoneTriBtn(PhoneTriBtn::Right);
+        m_highCutUp->setAccessibleName("TX high cut increase");
+        connect(m_highCutUp, &QPushButton::clicked, this, highCutUp);
+        highRow->addWidget(m_highCutUp);
+
+        highCol->addLayout(highRow);
+        grid->addLayout(highCol);
+
+        vbox->addWidget(m_txFilterWidget);
+    }
+
+}
+
+// ── Model binding ────────────────────────────────────────────────────────────
+
+void PhoneApplet::setDexpVisible(bool visible)
+{
+    m_dexpRow->setVisible(visible);
+}
+
+int PhoneApplet::steppedEdgeHz(const QList<int>& edges, int currentHz, int dir)
+{
+    if (edges.isEmpty()) {
+        // Continuous radio: the original behaviour — snap to the next multiple
+        // of 50 Hz in the chosen direction, so 87 Hz goes to 100 up and 50 down.
+        return dir < 0 ? ((currentHz - 1) / 50) * 50 : ((currentHz / 50) + 1) * 50;
+    }
+    // FROM WHERE THE RADIO ACTUALLY IS, which need not be in the list: the
+    // operator may have connected to a radio holding an edge from a firmware or
+    // model we do not have tabulated. Start from the nearest entry so the first
+    // click still lands somewhere reachable rather than doing nothing.
+    int nearest = 0;
+    int bestDelta = qAbs(edges.at(0) - currentHz);
+    for (int i = 1; i < edges.size(); ++i) {
+        const int delta = qAbs(edges.at(i) - currentHz);
+        if (delta < bestDelta) {
+            nearest = i;
+            bestDelta = delta;
+        }
+    }
+    // Only advance off the nearest entry when we are already ON it. Otherwise
+    // the click's job is to land on it — moving past would skip an edge.
+    const int index = (edges.at(nearest) == currentHz) ? nearest + dir : nearest;
+    return edges.at(qBound(0, index, edges.size() - 1));
+}
+
+void PhoneApplet::setTxFilterEdges(const QList<int>& lowEdgesHz, const QList<int>& highEdgesHz)
+{
+    m_txLowEdgesHz  = lowEdgesHz;
+    m_txHighEdgesHz = highEdgesHz;
+}
+
+void PhoneApplet::setTxFilterControlsAvailable(bool available)
+{
+    if (m_txFilterWidget) {
+        m_txFilterWidget->setVisible(available);
+    }
+}
+
+void PhoneApplet::setTransmitModel(TransmitModel* model)
+{
+    m_model = model;
+    if (!model) return;
+
+    connect(model, &TransmitModel::phoneStateChanged, this, &PhoneApplet::syncFromModel);
+    syncFromModel();
+}
+
+void PhoneApplet::syncFromModel()
+{
+    if (!m_model) return;
+    m_updatingFromModel = true;
+
+    // AM Carrier
+    {
+        QSignalBlocker b(m_amCarrierSlider);
+        m_amCarrierSlider->setValue(m_model->amCarrierLevel());
+        m_amCarrierLabel->setText(QString::number(m_model->amCarrierLevel()));
+    }
+
+    // VOX
+    {
+        QSignalBlocker b(m_voxBtn);
+        m_voxBtn->setChecked(m_voxAvailable && m_model->voxEnable());
+    }
+    {
+        QSignalBlocker b(m_voxLevelSlider);
+        m_voxLevelSlider->setValue(m_model->voxLevel());
+        m_voxLevelLabel->setText(QString::number(m_model->voxLevel()));
+    }
+    {
+        QSignalBlocker b(m_voxDelaySlider);
+        m_voxDelaySlider->setValue(m_model->voxDelay());
+        m_voxDelayLabel->setText(QString::number(m_model->voxDelay()));
+    }
+
+    // DEXP
+    {
+        QSignalBlocker b(m_dexpBtn);
+        m_dexpBtn->setChecked(m_model->dexpOn());
+    }
+    {
+        QSignalBlocker b(m_dexpSlider);
+        m_dexpSlider->setValue(m_model->dexpLevel());
+        m_dexpLabel->setText(QString::number(m_model->dexpLevel()));
+    }
+
+    // TX filter
+    m_lowCutLabel->setText(QString::number(m_model->txFilterLow()));
+    m_highCutLabel->setText(QString::number(m_model->txFilterHigh()));
+
+    m_updatingFromModel = false;
+}
+
+} // namespace AetherSDR

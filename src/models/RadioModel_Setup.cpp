@@ -1,0 +1,347 @@
+#include "RadioModel.h"
+#include "core/AppSettings.h"
+
+#include <QPointer>
+#include <QTimer>
+#include <QThread>
+#include <memory>
+
+namespace AetherSDR {
+
+RadioControlSession RadioModel::controlSession() const
+{
+    return {m_backendReceiverGeneration, m_sessionGeneration};
+}
+
+bool RadioModel::controlSessionCurrent(const RadioControlSession& session) const
+{
+    return session == controlSession() && isConnected() && !m_txSessionClosing
+        && !m_expiringPendingCallbacks;
+}
+
+RadioSetupCompletion RadioModel::fencedSetupCompletion(
+    QObject* context, const RadioSetupCompletion& completion, bool requiresLiveSession)
+{
+    if (!completion) { return {}; }
+    const QPointer<RadioModel> model(this);
+    const QPointer<QObject> owner(context ? context : this);
+    const RadioControlSession session = controlSession();
+    const auto finished = std::make_shared<bool>(false);
+    const auto connection = std::make_shared<QMetaObject::Connection>();
+    const RadioSetupCompletion reply = [model, owner, session, finished, connection, completion, requiresLiveSession]
+        (const RadioSetupReply& result) {
+        if (*finished) { return; }
+        *finished = true;
+        QObject::disconnect(*connection);
+        if (!model || !owner) { return; }
+        if (session != model->controlSession()
+            || (requiresLiveSession && !model->controlSessionCurrent(session))) {
+            completion({RadioSetupReply::Kind::Cancelled, -1,
+                        QStringLiteral("the original radio session ended")});
+        } else {
+            completion(result);
+        }
+    };
+    *connection = connect(this, &RadioModel::connectionStateChanged, this,
+        [model, session, reply, requiresLiveSession] {
+            if (!model || session != model->controlSession()
+                || (requiresLiveSession && !model->controlSessionCurrent(session))) {
+                reply({RadioSetupReply::Kind::Cancelled, -1,
+                       QStringLiteral("the original radio session ended")});
+            }
+        });
+    QTimer::singleShot(30000, this, [reply] {
+        reply({RadioSetupReply::Kind::Failed, -1, QStringLiteral("no radio response")});
+    });
+    return reply;
+}
+
+namespace {
+QString setupOperationLabel(const RadioSetupRequest& request)
+{
+    using Field = RadioSetupRequest::Field;
+    switch (request.field) {
+    case Field::LineoutGain:
+        return QStringLiteral("line output gain %1").arg(std::get<int>(request.value));
+    case Field::LineoutMute:
+        return QStringLiteral("line output mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::HeadphoneGain:
+        return QStringLiteral("headphone gain %1").arg(std::get<int>(request.value));
+    case Field::HeadphoneMute:
+        return QStringLiteral("headphone mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::FrontSpeakerMute:
+        return QStringLiteral("front speaker mute %1").arg(int(std::get<bool>(request.value)));
+    case Field::ShowTxInWaterfall:
+        return QStringLiteral("show TX in waterfall %1").arg(int(std::get<bool>(request.value)));
+    case Field::RemoteOnEnabled: case Field::MultiFlexEnabled:
+    case Field::Callsign: case Field::ClientStation: case Field::PrivateIpPolicy:
+    case Field::NetworkMtu: case Field::Dhcp: case Field::StaticNetwork:
+    case Field::AccTxDelayMs: case Field::TxDelayMs: case Field::Tx1DelayMs:
+    case Field::Tx2DelayMs: case Field::Tx3DelayMs: case Field::TimeoutMs:
+    case Field::MaximumPowerPercent: case Field::MeterDuringReceive:
+    case Field::SyncCwx: case Field::RttyMarkDefaultHz:
+    case Field::CalibrationFrequencyMhz: case Field::FrequencyCorrectionPpb:
+    case Field::ReferenceSource: case Field::MuteLocalWhenRemote:
+    case Field::BinauralReceive: case Field::SharpnessLevel: case Field::SharpnessAuto:
+    case Field::LowLatencyDigital: case Field::StartFrequencyCalibration: case Field::Count:
+        return QStringLiteral("radio setup");
+    }
+    return QStringLiteral("radio setup");
+}
+}
+
+ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
+                                             QObject* replyContext,
+                                             const RadioSetupCompletion& completion)
+{
+    using Field = RadioSetupRequest::Field;
+    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    if (request.field == RadioSetupField::RemoteOnEnabled || request.field == RadioSetupField::MultiFlexEnabled) {
+        return requestAdministrationSetting(request, replyContext, completion);
+    }
+    const QPointer<RadioModel> alive(this);
+    const QPointer<QObject> owner(replyContext ? replyContext : this);
+    const RadioControlSession session = controlSession();
+    const bool station = request.field == Field::ClientStation;
+    const bool identity = request.field == Field::Callsign || station;
+    const quint64 stationRevision = station && request.valid()
+        ? ++m_stationIntentRevision : m_stationIntentRevision;
+    const bool localDisplay = request.field == Field::ShowTxInWaterfall
+        && backendCapabilities().clientPersistsShowTxInWaterfall();
+    const bool calibration = request.field == Field::StartFrequencyCalibration;
+    const auto pending = std::make_shared<bool>(true);
+    const RadioSetupCompletion completed = [pending, completion](const RadioSetupReply& result) {
+        *pending = false;
+        if (completion) { completion(result); }
+    };
+    RadioSetupCompletion reply = fencedSetupCompletion(replyContext,
+        calibration ? completed : completion, !identity && !localDisplay);
+    const auto persistIdentity = [&] {
+        if (request.field == Field::Callsign) {
+            setStationCallsign(std::get<QString>(request.value));
+        } else if (request.field == Field::ClientStation) {
+            if (m_stationIntentRevision != stationRevision) { return; }
+            AppSettings::instance().setValue("StationName", std::get<QString>(request.value));
+            AppSettings::instance().save();
+        }
+    };
+    const auto refuse = [&](bool announce = true) {
+        if (reply) { reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("configuration not dispatched")}); }
+        if (alive && announce) { reportReceiveDispatch(ReceiveDispatch::Unsupported, setupOperationLabel(request)); }
+        return ReceiveDispatch::Unsupported;
+    };
+    if (!request.valid()) { return refuse(false); }
+    // Saved operator intent is independent of temporary radio labels. Commit
+    // it before dispatch can reenter with a radio-only override.
+    if (station) {
+        persistIdentity();
+        if (!alive) { return ReceiveDispatch::LocalOnly; }
+    }
+    // Client-owned display preferences remain editable without a radio link.
+    if (request.field == Field::ShowTxInWaterfall
+        && requestLocalShowTxInWaterfall(std::get<bool>(request.value))) {
+        if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, {}}); }
+        return ReceiveDispatch::LocalOnly;
+    }
+    if (!m_backend || !controlSessionCurrent(session)) {
+        if (identity) {
+            if (!station) { persistIdentity(); }
+            if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, {}}); }
+            return ReceiveDispatch::LocalOnly;
+        }
+        return refuse();
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    if ((request.field != Field::Callsign && request.field != Field::ClientStation
+         && (!caps.radioSetupControl || !caps.radioSetupControl->supports(request.field)))
+        || (request.field == Field::PrivateIpPolicy && !caps.hasPrivateIpConnectionPolicy)
+        || ((request.field == Field::Dhcp || request.field == Field::StaticNetwork) && !caps.hasClientNetworkConfig)
+        || (request.field == Field::NetworkMtu && !caps.usesVita49Transport)
+        || ((request.field == Field::SharpnessLevel || request.field == Field::SharpnessAuto
+             || request.field == Field::LowLatencyDigital) && !caps.hasSharpFilters)
+        || (request.field == Field::MaximumPowerPercent && !caps.txPowerBands.isEmpty())) {
+        return refuse();
+    }
+    if (request.field == Field::SharpnessLevel || request.field == Field::SharpnessAuto) {
+        const bool automatic = request.field == Field::SharpnessAuto;
+        const SharpnessMode mode = automatic ? std::get<SharpnessAuto>(request.value).mode
+                                            : std::get<SharpnessLevel>(request.value).mode;
+        const size_t index = static_cast<size_t>(mode) * 2 + size_t(automatic);
+        // Replies arrive in request order, so each accepted one is applied in
+        // turn unless status for that field arrived after the request, or a
+        // newer request was already accepted.
+        const quint64 status = m_filterSharpnessRevisions[index];
+        const quint64 sequence = ++m_filterSharpnessRequestSequence;
+        const RadioSetupCompletion notify = reply;
+        // Flex firmware 4.3.16 acknowledges sharpness writes without a self echo.
+        // Retain only an accepted request; subsequent status remains authoritative. (#6913)
+        reply = fencedSetupCompletion(this, [alive, request, mode, automatic, index, status, sequence, notify](const RadioSetupReply& result) {
+            if (alive && alive->m_filterSharpnessRevisions[index] == status) {
+                const bool apply = result.kind == RadioSetupReply::Kind::Accepted
+                    && sequence > alive->m_filterSharpnessAccepted[index];
+                if (apply) { alive->m_filterSharpnessAccepted[index] = sequence; }
+                if (apply && automatic) {
+                    bool& value = mode == SharpnessMode::Voice ? alive->m_filterVoiceAuto
+                        : mode == SharpnessMode::Cw ? alive->m_filterCwAuto : alive->m_filterDigitalAuto;
+                    value = std::get<SharpnessAuto>(request.value).enabled;
+                } else if (apply) {
+                    int& value = mode == SharpnessMode::Voice ? alive->m_filterVoice
+                        : mode == SharpnessMode::Cw ? alive->m_filterCw : alive->m_filterDigital;
+                    value = std::get<SharpnessLevel>(request.value).level;
+                }
+                emit alive->infoChanged();
+            }
+            if (notify) { notify(result); }
+        });
+    }
+    RadioSetupRequest effective = request;
+    if (effective.field == Field::NetworkMtu) {
+        effective.value = networkMtuParam(std::get<int>(effective.value));
+    }
+    const RadioControlFence current = [alive, owner, session, pending, calibration, station, stationRevision] {
+        return alive && alive->controlSessionCurrent(session) && (!calibration || (owner && *pending))
+            && (!station || alive->m_stationIntentRevision == stationRevision);
+    };
+    const ReceiveDispatch result = m_backend->requestRadioSetup(effective, reply, current);
+    if (!alive) { return result; }
+    if (station && result == ReceiveDispatch::Dispatched && current()) { m_stationOverrideOwner = 0; }
+    if (identity) {
+        if (!station) { persistIdentity(); }
+        if (!alive) { return result; }
+        if (result == ReceiveDispatch::Unsupported) {
+            if (reply) { reply({RadioSetupReply::Kind::Accepted, 0, QStringLiteral("Station identity saved locally; radio copy not dispatched.")}); }
+            return ReceiveDispatch::LocalOnly;
+        }
+    }
+    if (!controlSessionCurrent(session)) {
+        if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("the original radio session ended")}); }
+        return result;
+    }
+    if (result == ReceiveDispatch::Unsupported) { return refuse(); }
+    if (result == ReceiveDispatch::LocalOnly && reply) {
+        reply({RadioSetupReply::Kind::Accepted, 0, {}});
+    }
+    return result;
+}
+
+ReceiveDispatch RadioModel::requestTxBand(const TxBandRequest& request,
+                                         std::optional<RadioControlSession> expectedSession,
+                                         QObject* replyContext,
+                                         const RadioSetupCompletion& completion)
+{
+    return dispatchTxBand(request, expectedSession, replyContext, completion, TxBandWrite::Operator);
+}
+
+ReceiveDispatch RadioModel::dispatchTxBand(const TxBandRequest& request,
+                                          std::optional<RadioControlSession> expectedSession,
+                                          QObject* replyContext,
+                                          const RadioSetupCompletion& completion,
+                                          TxBandWrite origin)
+{
+    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion);
+    if (expectedSession && *expectedSession != session) {
+        if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original TX band editor session ended.")}); }
+        return ReceiveDispatch::Unsupported;
+    }
+    if (origin == TxBandWrite::Operator && request.valid() && controlSessionCurrent(session)) {
+        relinquishTuneInhibit(request);
+    }
+    const bool restoring = origin == TxBandWrite::Restore;
+    const bool admitted = restoring
+        ? isConnected() && !m_expiringPendingCallbacks
+        : controlSessionCurrent(session);
+    const auto sessionAlive = m_transmitServiceSession;
+    // An owned restore is queued to the original transport before its ordered
+    // disconnect: closing TX admission must not cancel it, even on the
+    // connection thread after resetTxOperations() flips this session's flag.
+    // Ordinary configuration and service requests expire with their session.
+    const RadioControlFence current = [sessionAlive, restoring] {
+        return restoring || sessionAlive->load(std::memory_order_acquire);
+    };
+    const ReceiveDispatch result = m_backend && admitted
+        && request.valid() && m_txBandSettings.contains(request.bandId)
+        ? m_backend->requestTxBand(request, reply, current) : ReceiveDispatch::Unsupported;
+    if (alive && session == controlSession()) {
+        if (result == ReceiveDispatch::Unsupported && reply) {
+            reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("TX band setting not dispatched")});
+        }
+        if (alive) { reportReceiveDispatch(result, QStringLiteral("TX band setting")); }
+    }
+    return result;
+}
+
+ReceiveDispatch RadioModel::requestUsbCable(const UsbCableRequest& request)
+{
+    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    UsbCableRequest effective = request;
+    const UsbCable cable = m_usbCableModel.cables().value(request.serial);
+    if (!effective.expectedLifetime) { effective.expectedLifetime = cable.lifetime; }
+    const ReceiveDispatch result = m_backend && controlSessionCurrent(session) && request.valid()
+        && effective.expectedLifetime && effective.expectedLifetime == cable.lifetime
+        && effective.expectedLifetime->current() && (request.bit < 0 || cable.type == QLatin1String("bit"))
+        ? m_backend->requestUsbCable(effective) : ReceiveDispatch::Unsupported;
+    if (alive && session == controlSession()) { reportReceiveDispatch(result, QStringLiteral("USB cable setting")); }
+    return result;
+}
+
+ReceiveDispatch RadioModel::requestUsbCableWrite(const QString& serial, const QByteArray& bytes)
+{
+    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    const auto cable = m_usbCableModel.cables().constFind(serial);
+    const bool writable = cable != m_usbCableModel.cables().constEnd()
+        && cable->type == QLatin1String("passthrough") && cable->present;
+    // Not reported through reportReceiveDispatch: a poller calls this many
+    // times a second and its own watchdog reports a silent device.
+    return m_backend && controlSessionCurrent(controlSession()) && writable
+        ? m_backend->requestUsbCableWrite(serial, bytes) : ReceiveDispatch::Unsupported;
+}
+
+ReceiveDispatch RadioModel::requestUsbCableStatus()
+{
+    return requestSessionControl(SessionControlRequest::subscription(SessionTopic::UsbCable));
+}
+
+ReceiveDispatch RadioModel::requestTransverter(const TransverterRequest& request,
+                                              QObject* replyContext,
+                                              const RadioSetupCompletion& completion,
+                                              std::optional<RadioControlSession> expectedSession)
+{
+    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    TransverterRequest effective = request;
+    const bool creating = request.field == TransverterRequest::Field::Create;
+    const bool removing = request.field == TransverterRequest::Field::Remove;
+    const auto identity = m_xvtrList.value(request.id).lifetime;
+    if (!effective.expectedLifetime && !creating) { effective.expectedLifetime = identity; }
+    const auto current = [effective, creating, identity] {
+        return creating || (identity && identity == effective.expectedLifetime && identity->current());
+    };
+    const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion
+        ? RadioSetupCompletion([completion, current, removing](const RadioSetupReply& result) {
+            // A removal retires its own identity, usually before the reply lands.
+            completion(current() || removing ? result : RadioSetupReply{RadioSetupReply::Kind::Cancelled, -1,
+                QStringLiteral("the original transverter was removed or replaced")});
+        }) : RadioSetupCompletion{});
+    if (expectedSession && *expectedSession != session) {
+        if (reply) { reply({RadioSetupReply::Kind::Cancelled, -1, QStringLiteral("Original transverter editor session ended.")}); }
+        return ReceiveDispatch::Unsupported;
+    }
+    const ReceiveDispatch result = m_backend && controlSessionCurrent(session) && request.valid()
+        && current()
+        ? m_backend->requestTransverter(effective, reply) : ReceiveDispatch::Unsupported;
+    if (alive && session == controlSession()) {
+        if (result == ReceiveDispatch::Unsupported && reply) {
+            reply({RadioSetupReply::Kind::Refused, -1, QStringLiteral("transverter configuration not dispatched")});
+        }
+        if (alive) { reportReceiveDispatch(result, QStringLiteral("transverter setting")); }
+    }
+    return result;
+}
+
+} // namespace AetherSDR

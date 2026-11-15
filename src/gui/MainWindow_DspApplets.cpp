@@ -1,0 +1,1228 @@
+// MainWindow_DspApplets.cpp — client-DSP applet wiring: wirePooDooTiles() and
+// wireDspApplets() (two methods because constructor chrome wiring runs between
+// them). Covers PooDoo RX chain tiles, P/CW and PHNE applets, the client DSP
+// applet family (TX and RX), TX chain + PUDU monitor, and RX chain edit/bypass.
+// Window-side, runs once at construction.
+
+#include "MainWindow.h"
+
+#include "AetherDspWidget.h"
+#include "AppletPanel.h"
+#include "AetherialAudioStrip.h"
+#include "ClientCompApplet.h"
+#include "ClientCompEditor.h"
+#include "ClientDeEssApplet.h"
+#include "ClientEqApplet.h"
+#include "ClientEqEditor.h"
+#include "ClientGateApplet.h"
+#include "ClientGateEditor.h"
+#include "ClientPuduApplet.h"
+#include "ClientPuduEditor.h"
+#include "ClientReverbApplet.h"
+#include "ClientRxDspApplet.h"
+#include "ClientTubeApplet.h"
+#include "ClientTubeEditor.h"
+#include "EqApplet.h"
+#include "PhoneApplet.h"
+#include "PanadapterStack.h"
+#include "PhoneCwApplet.h"
+#include "SpectrumWidget.h"
+#include "TitleBar.h"
+#include "ClientChainApplet.h"
+#include "MainWindowHelpers.h"
+#include "core/AetherDspModePolicy.h"
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/ClientComp.h"
+#include "core/ClientEq.h"
+#include "core/HostVoiceChainPolicy.h"
+#include "core/LogManager.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include <QAccessible>
+#include <QAccessibleEvent>
+#include <QMessageBox>
+#include <QStatusBar>
+#include <QTimer>
+
+#include <memory>
+
+#include <algorithm>
+
+namespace AetherSDR {
+
+MainWindow::TxAudioPathBlock MainWindow::txAudioPathBlock() const
+{
+    const bool pcAudioOn = AppSettings::instance()
+        .value("PcAudioEnabled", "True").toString() == "True";
+    return classifyTxAudioPath(m_radioModel.isConnected(),
+                              m_radioModel.backendCapabilities(), pcAudioOn,
+                              m_radioModel.transmitModel().micSelection(),
+                              m_audio && m_audio->txInputDeviceMissing());
+}
+
+QString MainWindow::txAudioPathBlockMessage(TxAudioPathBlock block) const
+{
+    switch (block) {
+    case TxAudioPathBlock::PcAudio:
+        return tr("PC Audio is off, so this radio cannot receive AetherTX audio "
+                  "from your computer. Connect your microphone to the computer "
+                  "and turn on PC Audio in the main window. A mic on the radio "
+                  "bypasses AetherTX.");
+    case TxAudioPathBlock::MicInput:
+        return tr("AetherTX uses a microphone connected to this computer. "
+                  "A mic plugged into the radio bypasses its effects. "
+                  "In Phone/CW, set Microphone source to PC.");
+    case TxAudioPathBlock::NoInputDevice:
+        if (noInputDeviceWording(m_radioModel.backendCapabilities())
+            == NoInputDeviceWording::NoVoiceRf) {
+            return tr("No microphone: this radio is modulated by the computer, "
+                      "and no audio input device was found. Voice transmits no "
+                      "RF until one is connected. CW, TUNE and DAX/TCI are not "
+                      "affected.");
+        }
+        return tr("No microphone: no audio input device was found on this "
+                  "computer, so no voice audio from the computer reaches the "
+                  "radio. AetherTX needs a microphone connected to this "
+                  "computer.");
+    case TxAudioPathBlock::None:
+        return {};
+    }
+    return {};
+}
+
+bool MainWindow::showTxAudioPathErrorIfBlocked()
+{
+    const TxAudioPathBlock block = txAudioPathBlock();
+    if (block == TxAudioPathBlock::None) return false;
+    if (QMessageBox* existing = findChild<QMessageBox*>(
+            QStringLiteral("aetherTxAudioPathError"))) {
+        existing->raise();
+        existing->activateWindow();
+        return true;
+    }
+    auto* error = new QMessageBox(
+        QMessageBox::Warning, tr("AetherTX unavailable"),
+        txAudioPathBlockMessage(block)
+            + tr("\n\nFix the audio path, then open AetherTX again."),
+        QMessageBox::Ok, this);
+    error->setObjectName(QStringLiteral("aetherTxAudioPathError"));
+    error->setAccessibleName(tr("AetherTX audio path error"));
+    error->setAttribute(Qt::WA_DeleteOnClose);
+    error->open();
+    return true;
+}
+
+void MainWindow::updateTxAudioPathNotice()
+{
+    const bool pcAudioOn = AppSettings::instance()
+        .value("PcAudioEnabled", "True").toString() == "True";
+    QString detail;
+    QString compact;
+    bool warning = false;
+
+    if (!m_radioModel.isConnected()) {
+        m_noInputVoiceKeyNotice.observe(TxAudioPathBlock::None);
+        if (!pcAudioOn) {
+            detail = tr("PC Audio is off. AetherTX processes a microphone "
+                        "connected to this computer; a mic plugged into the "
+                        "radio bypasses its effects. Connect a radio to see "
+                        "its audio routing requirements.");
+            compact = tr("PC Audio is off. A radio mic bypasses AetherTX; "
+                         "use a computer mic.");
+        }
+    } else {
+        const TxAudioPathBlock block = txAudioPathBlock();
+        m_noInputVoiceKeyNotice.observe(block);
+        detail = txAudioPathBlockMessage(block);
+        warning = block != TxAudioPathBlock::None;
+        if (block == TxAudioPathBlock::PcAudio) {
+            compact = tr("PC Audio is off. Use a computer mic and turn on "
+                         "PC Audio for AetherTX.");
+        } else if (block == TxAudioPathBlock::MicInput) {
+            compact = tr("A radio mic bypasses AetherTX. In Phone/CW, "
+                         "set Microphone source to PC.");
+        } else if (block == TxAudioPathBlock::NoInputDevice) {
+            compact = noInputDeviceWording(m_radioModel.backendCapabilities())
+                    == NoInputDeviceWording::NoVoiceRf
+                ? tr("No audio input device was found. Connect a "
+                     "microphone to this computer.")
+                : tr("No audio input device was found. AetherTX needs a "
+                     "microphone connected to this computer.");
+        }
+    }
+
+    if (m_aetherialStrip) {
+        m_aetherialStrip->setAudioPathNotice(detail, warning);
+    }
+    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+        m_appletPanel->clientChainApplet()->setTxAudioPathNotice(compact, warning);
+        m_appletPanel->setTxAudioPathBlocked(warning);
+    }
+    // A live route change must not leave the TX editor usable after it
+    // becomes unavailable. The applet gives the operator the recovery path.
+    if (warning && m_aetherialStrip) {
+        m_aetherialStrip->closeSettingsIfOpen();
+        if (m_aetherialStrip->isVisible()) {
+            m_aetherialStrip->hide();
+            updateToolsMenuState();
+        }
+    }
+    if (warning) {
+        if (m_clientEqEditor && m_clientEqEditor->isShowingTx()) m_clientEqEditor->hide();
+        if (m_clientGateEditor && m_clientGateEditor->isShowingTx()) m_clientGateEditor->hide();
+        if (m_clientCompEditor && m_clientCompEditor->isShowingTx()) m_clientCompEditor->hide();
+        if (m_clientTubeEditor && m_clientTubeEditor->isShowingTx()) m_clientTubeEditor->hide();
+        if (m_clientPuduEditor && m_clientPuduEditor->isShowingTx()) m_clientPuduEditor->hide();
+    }
+}
+
+bool MainWindow::txMicChainReady() const
+{
+    const TransmitModel& tx = m_radioModel.transmitModel();
+    return pcMicChainReady(m_radioModel.backendCapabilities(), tx.micSelection(),
+                           tx.daxOn(), m_audio && m_audio->txInputDeviceMissing());
+}
+
+void MainWindow::refreshTxMicReadyIndicators()
+{
+    const bool ready = txMicChainReady();
+    const bool txActive = ready && m_radioModel.transmitModel().isTransmitting();
+    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+        m_appletPanel->clientChainApplet()->setMicInputReady(ready);
+        m_appletPanel->clientChainApplet()->setTxActive(txActive);
+    }
+    if (m_aetherialStrip) {
+        m_aetherialStrip->setMicInputReady(ready);
+        m_aetherialStrip->setTxActive(txActive);
+    }
+}
+
+// Advisory only: the key has already been accepted and is left alone.
+void MainWindow::noticeVoiceKeyWithoutInput()
+{
+    const SliceModel* txSlice = m_radioModel.txSlice();
+    const QString txMode = txSlice ? txSlice->mode()
+                                   : m_radioModel.transmitModel().txSliceMode();
+    const bool voiceKey = isMicVoiceKey(
+        m_radioModel.isOperatorTransmitting(),
+        m_radioModel.transmitModel().activePttSource()
+            == TransmitModel::PttSource::Wspr,
+        txMode, m_audio && m_audio->isRadeMode());
+    if (!voiceKey) {
+        return;
+    }
+    const TxAudioPathBlock block = txAudioPathBlock();
+    if (!m_noInputVoiceKeyNotice.takeVoiceKey(m_radioModel.backendCapabilities(),
+                                              block)) {
+        return;
+    }
+    const QString message = txAudioPathBlockMessage(block);
+    qCWarning(lcAudio) << "MainWindow: voice key started with no audio input device";
+    // The card is painted on the panadapter, which a screen reader cannot
+    // read (#3957), so the notice is announced as well.
+    if (QAccessible::isActive()) {
+        QAccessibleAnnouncementEvent announcement(this, message);
+        announcement.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+        QAccessible::updateAccessibility(&announcement);
+    }
+    SpectrumWidget* where = nullptr;
+    if (m_panStack) {
+        if (txSlice && !txSlice->panId().isEmpty()) {
+            where = m_panStack->spectrum(txSlice->panId());
+        }
+        if (!where) {
+            where = m_panStack->activeSpectrum();
+        }
+    }
+    if (where) {
+        where->showNoticeCard(message, QStringLiteral("txaudio.no-input-device"),
+                              10000);
+        return;
+    }
+    statusBar()->showMessage(message, 10000);
+}
+
+QString MainWindow::activeAetherDspMethod() const
+{
+    if (!m_audio) {
+        return {};
+    }
+    if (m_audio->nr2Enabled()) {
+        return QStringLiteral("NR2");
+    }
+    if (m_audio->nr4Enabled()) {
+        return QStringLiteral("NR4");
+    }
+    if (m_audio->mnrEnabled()) {
+        return QStringLiteral("MNR");
+    }
+    if (m_audio->dfnrEnabled()) {
+        return QStringLiteral("DFNR");
+    }
+    if (m_audio->rn2Enabled()) {
+        return QStringLiteral("RN2");
+    }
+    if (m_audio->nvAfxEnabled()) {
+        return QStringLiteral("BNR");
+    }
+    if (m_audio->nnrEnabled()) {
+        return QStringLiteral("NNR");
+    }
+    return {};
+}
+
+void MainWindow::setAetherDspMethodEnabled(const QString& method, bool enabled)
+{
+    if (!m_audio || method.isEmpty()) {
+        return;
+    }
+    if (method == QStringLiteral("NR2") && enabled) {
+        enableNr2WithWisdom();
+        return;
+    }
+
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, method, enabled]() {
+        if (method == QStringLiteral("NR2")) {
+            audio->setNr2Enabled(enabled);
+        } else if (method == QStringLiteral("NR4")) {
+            audio->setNr4Enabled(enabled);
+        } else if (method == QStringLiteral("MNR")) {
+            audio->setMnrEnabled(enabled);
+        } else if (method == QStringLiteral("DFNR")) {
+            audio->setDfnrEnabled(enabled);
+        } else if (method == QStringLiteral("RN2")) {
+            audio->setRn2Enabled(enabled);
+        } else if (method == QStringLiteral("BNR")) {
+            audio->setNvAfxEnabled(enabled);
+        } else if (method == QStringLiteral("NNR")) {
+            audio->setNnrEnabled(enabled);
+        }
+    });
+}
+
+void MainWindow::updateAetherDspModePolicy()
+{
+    if (!m_audio) {
+        return;
+    }
+
+    QList<AetherDspSliceAudioState> sliceStates;
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!slice) {
+            continue;
+        }
+        sliceStates.append({
+            slice->mode(),
+            slice->audioMute(),
+            slice->audioGain(),
+            slice->inCapture(),
+        });
+    }
+
+    const bool restricted = aetherDspMixRequiresDisable(sliceStates);
+    const AetherDspModePolicy::Action action =
+        m_aetherDspModePolicy.update(restricted, activeAetherDspMethod());
+    if (action.kind == AetherDspModePolicy::ActionKind::Disable) {
+        qCInfo(lcAudio).noquote()
+            << "AetherDSP: disabling" << action.method
+            << "because an audible slice uses CW or a digital mode";
+        setAetherDspMethodEnabled(action.method, false);
+    } else if (action.kind == AetherDspModePolicy::ActionKind::Enable) {
+        qCInfo(lcAudio).noquote()
+            << "AetherDSP: restoring" << action.method
+            << "after all audible slices returned to compatible modes";
+        setAetherDspMethodEnabled(action.method, true);
+    }
+}
+
+void MainWindow::wirePooDooTiles()
+{
+    // ── PooDoo RX chain status tiles (Phase 0 chassis) ─────────────────────
+    // RADIO tile = PC Audio enabled (standard SSB / remote_audio_rx stream).
+    // DSP tile   = any client-side NR active (NR4 / DFNR / BNR).
+    // SPEAK tile = AudioEngine output unmuted.
+    if (auto* chain = m_appletPanel->clientChainApplet()) {
+        // RADIO — driven by the existing PC Audio toggle in TitleBar.
+        // Also forward to the strip's RX chain so its RADIO tile
+        // tracks the same state.
+        connect(m_titleBar, &TitleBar::pcAudioToggled, this,
+                [this, chain](bool on) {
+            chain->setRxPcAudioEnabled(on);
+            updateTxAudioPathNotice();
+        });
+        // Capture starts on the audio thread; re-read the route when it
+        // finds, or stops finding, an input device.
+        connect(m_audio, &AudioEngine::txInputDeviceMissingChanged, this,
+                [this](bool) {
+            updateTxAudioPathNotice();
+            // Only a host-modulated radio's MIC tile reads the device state.
+            if (hostModulatesTxAudio()) {
+                refreshTxMicReadyIndicators();
+            }
+        });
+        connect(&m_radioModel, &RadioModel::operatorTransmitChanged, this,
+                [this](bool keyed) {
+            if (keyed) {
+                noticeVoiceKeyWithoutInput();
+            }
+        });
+
+        // DSP — aggregate of every client-side NR module.  These are
+        // mutually exclusive in AudioEngine::processRx (chained
+        // if/else), so at most one is active at a time.  The tile
+        // greens whenever any is on, and its label rotates to the
+        // active module's short name (NR2 / RN2 / NR4 / DFNR / MNR /
+        // BNR).  Shared state lives in a struct held by shared_ptr
+        // captured into each lambda so lifetime ends with the last
+        // connected slot.
+        struct DspState {
+            bool nr2{false}, rn2{false}, nr4{false},
+                 dfnr{false}, mnr{false}, bnr{false}, nnr{false};
+        };
+        auto dspState = std::make_shared<DspState>();
+        auto pushDsp = [chain, dspState]() {
+            // Priority order picks the most "specific" / most-recent
+            // module if more than one is somehow on at once.  Same
+            // order as the audio-thread dispatcher so the displayed
+            // label matches what's actually processing.
+            QString label;
+            if      (dspState->nnr)  label = "NNR";
+            else if (dspState->bnr)  label = "BNR";
+            else if (dspState->mnr)  label = "MNR";
+            else if (dspState->dfnr) label = "DFNR";
+            else if (dspState->nr4)  label = "NR4";
+            else if (dspState->rn2)  label = "RN2";
+            else if (dspState->nr2)  label = "NR2";
+            const bool anyOn = !label.isEmpty();
+            chain->setRxClientDspActive(anyOn, label);
+        };
+        connect(m_audio, &AudioEngine::nr2EnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->nr2 = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::rn2EnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->rn2 = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::nr4EnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->nr4 = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::dfnrEnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->dfnr = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::mnrEnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->mnr = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::nvAfxEnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->bnr = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::nnrEnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->nnr = on; pushDsp(); });
+
+        // SPEAK — AudioEngine emits mutedChanged on every setMuted() flip.
+        connect(m_audio, &AudioEngine::mutedChanged, this,
+                [chain](bool muted) {
+            chain->setRxOutputUnmuted(!muted);
+        });
+
+        // Seed initial state — settings and engine values are already
+        // loaded by the time we reach this wiring code.  We pull from
+        // the engine (not signals) so an already-on NR module shows up
+        // immediately instead of waiting for the next toggle.
+        const bool pcOn = AppSettings::instance()
+            .value("PcAudioEnabled", "True").toString() == "True";
+        chain->setRxPcAudioEnabled(pcOn);
+        updateTxAudioPathNotice();
+        dspState->nr2  = m_audio->nr2Enabled();
+        dspState->rn2  = m_audio->rn2Enabled();
+        dspState->nr4  = m_audio->nr4Enabled();
+        dspState->dfnr = m_audio->dfnrEnabled();
+        dspState->mnr  = m_audio->mnrEnabled();
+        dspState->bnr  = m_audio->nvAfxEnabled();   // BNR == local AFX denoiser
+        dspState->nnr  = m_audio->nnrEnabled();
+        pushDsp();
+        chain->setRxOutputUnmuted(!m_audio->isMuted());
+    }
+}
+
+void MainWindow::wireDspApplets()
+{
+    // ── P/CW applet: mic meters + ALC meter + model ────────────────────────
+    // Suppress radio CODEC meters when mic_selection=PC (they just show noise).
+    // Client-side metering handles PC mic display below.
+    // Compression gauge: full 20fps meter rate, gated on actual radio TX + PROC.
+    {
+        connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
+                this, [this](float micLevel, float compLevel, float micPeak, float compPeak) {
+            // Mic level: hardware mic uses radio meters, PC uses client-side.
+            // The Level gauge shows what the S-meter's Level face shows
+            // (MeterModel::transmitLevelFaceValue): MICPEAK where the radio
+            // publishes no MIC meter (HL2).
+            if (m_radioModel.transmitModel().micSelection() != "PC")
+                m_appletPanel->phoneCwApplet()->updateMeters(
+                    m_radioModel.meterModel().transmitLevelFaceValue(micLevel, micPeak),
+                    compLevel, micPeak, 0.0f);
+
+            // Compression has no useful meaning in RX; FLEX-8000 radios can
+            // publish quiescent TX-chain meters there that look fully pegged.
+            {
+                const auto& tx = m_radioModel.transmitModel();
+                const bool showCompression =
+                    m_radioModel.isRadioTransmitting() && tx.speechProcessorEnable();
+                m_appletPanel->phoneCwApplet()->updateCompression(
+                    showCompression ? compPeak : 0.0f);
+            }
+        });
+    }
+    connect(&m_radioModel.meterModel(), &MeterModel::alcValueChanged,
+            this, [this](float alc, const QString& unit) {
+        // FLEX-8000 TX-chain meters can publish quiescent RX values near 0 dBFS.
+        // Only show SW ALC while the radio interlock says RF is actually keyed.
+        m_appletPanel->phoneCwApplet()->setAlcMeterUnit(unit);
+        if (!unit.isEmpty() && m_radioModel.isRadioTransmitting()) {
+            m_appletPanel->phoneCwApplet()->updateAlc(alc);
+        } else {
+            m_appletPanel->phoneCwApplet()->resetAlc();
+        }
+    });
+    // ALC applied-gain row. Shown only with a sample (hasAlcGainValue()), since
+    // a cleared meter would otherwise read as "holding at unity". Whether the
+    // row exists is decided on the meter-definition signals, not on values:
+    // alcGain fires only while keyed, and Hl2Backend defines meters after
+    // capabilities are published. clear() emits only metersCleared. Idempotent.
+    {
+        auto syncAlcGainRow = [this] {
+            m_appletPanel->phoneCwApplet()->setHasAlcGainMeter(
+                m_radioModel.meterModel().hasAlcGainMeter());
+        };
+        connect(&m_radioModel.meterModel(), &MeterModel::meterDefinitionChanged,
+                this, [syncAlcGainRow](int) { syncAlcGainRow(); });
+        connect(&m_radioModel.meterModel(), &MeterModel::meterRemoved,
+                this, [syncAlcGainRow](int) { syncAlcGainRow(); });
+        connect(&m_radioModel.meterModel(), &MeterModel::metersCleared,
+                this, syncAlcGainRow);
+    }
+    connect(&m_radioModel.meterModel(), &MeterModel::alcGainChanged,
+            this, [this](float gainDb) {
+        // READING ONLY. Presence is settled above, on the definition signals.
+        const bool live = m_radioModel.isRadioTransmitting()
+                       && m_radioModel.meterModel().hasAlcGainValue();
+        if (live) {
+            m_appletPanel->phoneCwApplet()->updateAlcGain(gainDb);
+        } else {
+            m_appletPanel->phoneCwApplet()->resetAlcGain();
+        }
+    });
+    // Client-side PC mic metering — radio CODEC meters only see hardware mics.
+    // Apply VU-style ballistics: fast attack, slow decay (~20 dB/sec).
+    {
+        auto heldLevel = std::make_shared<float>(-150.0f);
+        auto heldPeak  = std::make_shared<float>(-150.0f);
+        connect(m_audio, &AudioEngine::pcMicLevelChanged,
+                this, [this, heldLevel, heldPeak](float peakDb, float avgDb) {
+            if (m_radioModel.transmitModel().micSelection() != "PC" && !m_audio->isRadeMode()) return;
+            constexpr float kDecayPerUpdate = 1.0f;  // ~20 dB/sec at 20 updates/sec
+            // Level: fast attack, slow decay
+            if (avgDb > *heldLevel)
+                *heldLevel = avgDb;
+            else
+                *heldLevel = qMax(avgDb, *heldLevel - kDecayPerUpdate);
+            // Peak: fast attack, slower decay
+            if (peakDb > *heldPeak)
+                *heldPeak = peakDb;
+            else
+                *heldPeak = qMax(*heldLevel, *heldPeak - kDecayPerUpdate * 0.5f);
+            m_appletPanel->phoneCwApplet()->updateMeters(*heldLevel, 0.0f, *heldPeak, 0.0f);
+        });
+    }
+    m_appletPanel->phoneCwApplet()->setTransmitModel(&m_radioModel.transmitModel());
+    const auto updatePhoneCwReceiveOnly = [this](bool connected, const RadioCapabilities& caps) {
+        m_appletPanel->phoneCwApplet()->setTransmitControlsAvailable(!connected || caps.canTransmit);
+    };
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, this, updatePhoneCwReceiveOnly);
+    updatePhoneCwReceiveOnly(m_radioModel.isConnected(), m_radioModel.backendCapabilities());
+
+
+
+
+    // ── PHNE applet: VOX + CW controls ──────────────────────────────────────
+    m_appletPanel->phoneApplet()->setTransmitModel(&m_radioModel.transmitModel());
+
+    // ── EQ applet: graphic equalizer ─────────────────────────────────────────
+    m_appletPanel->eqApplet()->setEqualizerModel(&m_radioModel.equalizerModel());
+
+    // ── Client EQ applets: dedicated TX and RX tiles (Phase 7.1) ───────────
+    m_appletPanel->clientEqTxApplet()->setAudioEngine(m_audio);
+    m_appletPanel->clientEqRxApplet()->setAudioEngine(m_audio);
+
+    auto wireEqEditOpen = [this](ClientEqApplet* applet) {
+        connect(applet, &ClientEqApplet::editRequested, this,
+                [this](ClientEqApplet::Path path) {
+            if (path == ClientEqApplet::Path::Tx && showTxAudioPathErrorIfBlocked()) return;
+            ensureClientEqEditor()->showForPath(path);
+        });
+    };
+    wireEqEditOpen(m_appletPanel->clientEqTxApplet());
+    wireEqEditOpen(m_appletPanel->clientEqRxApplet());
+
+    // Push TX low/high filter cutoffs to the EQ canvases as dashed yellow
+    // guide lines.  Subscribes to the *dedicated* txFilterCutoffChanged
+    // signal — NOT the omnibus phoneStateChanged which fires on every
+    // VOX/CW/mic-boost/dexp/etc. transmit-status update and would
+    // cascade unnecessary repaints into the audio path during TX.
+    auto pushTxFilterCutoffsToEq = [this](int lo, int hi) {
+        if (m_appletPanel && m_appletPanel->clientEqTxApplet())
+            m_appletPanel->clientEqTxApplet()->setTxFilterCutoffs(lo, hi);
+        if (m_clientEqEditor)
+            m_clientEqEditor->setTxFilterCutoffs(lo, hi);
+        if (m_aetherialStrip)
+            m_aetherialStrip->setTxFilterCutoffs(lo, hi);
+    };
+    {
+        const auto& tx = m_radioModel.transmitModel();
+        pushTxFilterCutoffsToEq(tx.txFilterLow(), tx.txFilterHigh());
+    }
+    connect(&m_radioModel.transmitModel(), &TransmitModel::txFilterCutoffChanged,
+            this, pushTxFilterCutoffsToEq);
+
+    // RX filter passband guide lines on the RX EQ canvas — fed by the
+    // currently-active RX slice.  filterLow / filterHigh on a slice are
+    // *offsets* (e.g. -3000..0 for LSB, 0..3000 for USB, -3000..3000 for
+    // AM); the EQ canvas plots in absolute audio-frequency.  Convert:
+    //   audio_high = max(|lo|, |hi|)
+    //   audio_low  = (lo and hi same sign / one zero) ? min(|lo|, |hi|) : 0
+    // Then push to the docked RX-bound applet + floating editor (if open).
+    // setActiveSlice() and SliceModel::filterChanged both call this lambda
+    // so the guides track both slice swaps and live filter drags.
+    pushRxFilterCutoffsToEq();
+    connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel* s) {
+        if (!s) return;
+        connect(s, &SliceModel::filterChanged, this,
+                [this, s](int /*lo*/, int /*hi*/) {
+            if (s->sliceId() == m_activeSliceId)
+                pushRxFilterCutoffsToEq();
+        });
+    });
+
+    // ── Client Compressor applets: TX (#1661) + RX (Phase 7.3) ─────────────
+    m_appletPanel->clientCompTxApplet()->setAudioEngine(m_audio);
+    m_appletPanel->clientCompRxApplet()->setAudioEngine(m_audio);
+    connect(m_appletPanel->clientCompTxApplet(), &ClientCompApplet::editRequested,
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientCompEditor()->showForTx();
+    });
+    connect(m_appletPanel->clientCompRxApplet(), &ClientCompApplet::editRequested,
+            this, [this]() { ensureClientCompEditor()->showForRx(); });
+
+    // ── Client Gate applets: TX (#1661 Phase 2) + RX (Phase 7.2) ───────────
+    m_appletPanel->clientGateTxApplet()->setAudioEngine(m_audio);
+    m_appletPanel->clientGateRxApplet()->setAudioEngine(m_audio);
+    connect(m_appletPanel->clientGateTxApplet(), &ClientGateApplet::editRequested,
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientGateEditor()->showForTx();
+    });
+    connect(m_appletPanel->clientGateRxApplet(), &ClientGateApplet::editRequested,
+            this, [this]() { ensureClientGateEditor()->showForRx(); });
+
+    // ── Client De-esser applet: TX sidechain-filtered dynamics (#1661 Phase 3) ─
+    m_appletPanel->clientDeEssApplet()->setAudioEngine(m_audio);
+
+    // ── Client Tube applets: TX (#1661) + RX (Phase 7.4) ───────────────────
+    m_appletPanel->clientTubeTxApplet()->setAudioEngine(m_audio);
+    m_appletPanel->clientTubeRxApplet()->setAudioEngine(m_audio);
+    connect(m_appletPanel->clientTubeTxApplet(), &ClientTubeApplet::editRequested,
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientTubeEditor()->showForTx();
+    });
+    connect(m_appletPanel->clientTubeRxApplet(), &ClientTubeApplet::editRequested,
+            this, [this]() { ensureClientTubeEditor()->showForRx(); });
+
+    // ── Client Reverb applet: TX reverb (Freeverb) ─
+    m_appletPanel->clientReverbApplet()->setAudioEngine(m_audio);
+
+    // ── RX-side AetherDSP applet — same controls as the Settings menu
+    // dialog, embedded as a docked tile in PooDoo Audio (RX).  Parameter
+    // changes route through the same per-signal wiring used by the dialog,
+    // factored into wireAetherDspWidget() to keep dialog + applet in sync.
+    if (auto* a = m_appletPanel->clientRxDspApplet()) {
+        a->setAudioEngine(m_audio);
+        if (auto* w = a->widget())
+            wireAetherDspWidget(w);
+    }
+
+    // ── Client PUDU applets: TX (#1661 Phase 5) + RX (Phase 7.5) ───────────
+    m_appletPanel->clientPuduTxApplet()->setAudioEngine(m_audio);
+    m_appletPanel->clientPuduRxApplet()->setAudioEngine(m_audio);
+    connect(m_appletPanel->clientPuduTxApplet(), &ClientPuduApplet::editRequested,
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientPuduEditor()->showForTx();
+    });
+    connect(m_appletPanel->clientPuduRxApplet(), &ClientPuduApplet::editRequested,
+            this, [this]() { ensureClientPuduEditor()->showForRx(); });
+
+    // ── TX signal-chain applet (#1661) ──────────────────────────────────────
+    // Visual strip showing MIC → stages → TX with per-stage bypass +
+    // drag-drop reorder.  Clicking a stage opens its floating editor.
+    //
+    // TX-stage applet visibility is independent of bypass state — the
+    // chain widget click and the editor Bypass buttons toggle the DSP
+    // and refresh the applet's bypass indicator, but do not show or
+    // hide the tile.  Users control applet visibility via the applet
+    // header ✕ and toolbar toggles (persisted as Applet_<ID>).
+    m_appletPanel->clientChainApplet()->setAudioEngine(m_audio);
+    // PooDoo TX/RX tab → AppletPanel side filter.  Hides the inactive
+    // side's per-stage applet tiles whenever the user flips the chain
+    // tab.  Seed the initial side from the saved tab so the first
+    // paint is correct.
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::chainModeChanged,
+            this, [this](ClientChainApplet::ChainMode mode) {
+        if (!m_appletPanel) return;
+        m_appletPanel->setPooDooActiveSide(
+            mode == ClientChainApplet::ChainMode::Tx
+                ? AppletPanel::PooDooSide::Tx
+                : AppletPanel::PooDooSide::Rx);
+    });
+    // Side-filter seed is moved further down — must run AFTER
+    // setTxDspChainOrder, otherwise that helper's insertChildWidget
+    // calls re-show every TX container we just hid.
+
+    // Seed the PooDoo MIC-ready + TX-pulse indicators from current
+    // state — subsequent changes flow through the TransmitModel
+    // signal connections above (micStateChanged + moxChanged).
+    {
+        const auto& tx = m_radioModel.transmitModel();
+        const bool ready = txMicChainReady();
+        m_appletPanel->clientChainApplet()->setMicInputReady(ready);
+        m_appletPanel->clientChainApplet()->setTxActive(
+            ready && tx.isTransmitting());
+        if (m_aetherialStrip) {
+            m_aetherialStrip->setMicInputReady(ready);
+            m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
+        }
+    }
+    // Pulse the TX endpoint red when we're transmitting AND PooDoo
+    // is actually in the signal path (MIC=PC and DAX off).  Otherwise
+    // the pulse would lie about what's being processed.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            this, [this](bool txActive) {
+        if (!m_appletPanel || !m_appletPanel->clientChainApplet()) return;
+        const bool ready = txMicChainReady();
+        m_appletPanel->clientChainApplet()->setTxActive(ready && txActive);
+        if (m_aetherialStrip)
+            m_aetherialStrip->setTxActive(ready && txActive);
+    });
+
+    // ── PUDU monitor wiring ─────────────────────────────────────
+    auto* chainApplet = m_appletPanel->clientChainApplet();
+    chainApplet->setMonitorHasRecording(m_finalMonitor->hasRecording());
+
+    // Easter-egg nub on the chain applet → toggle the Aetherial Audio
+    // Channel Strip.  Stubbed in step 1 of the strip plan (#2301);
+    // step 4 lazy-creates the strip window and toggles visibility.
+    connect(chainApplet, &ClientChainApplet::aetherialStripToggleRequested,
+            this, &MainWindow::toggleAetherialStrip);
+
+    // User-click → start/stop based on current monitor state.  The
+    // monitor's own signals drive the button visuals back.
+    connect(chainApplet, &ClientChainApplet::monitorRecordClicked,
+            this, [this]() {
+        if (m_finalMonitor->isRecording()) {
+            m_finalMonitor->stopRecording();
+        } else {
+            // Don't record while playing — button shouldn't be
+            // enabled in that state, but guard anyway.
+            if (m_finalMonitor->isPlaying()) m_finalMonitor->stopPlayback();
+            m_finalMonitor->startRecording();
+        }
+    });
+    connect(chainApplet, &ClientChainApplet::monitorPlayClicked,
+            this, [this]() {
+        if (m_finalMonitor->isPlaying()) {
+            m_finalMonitor->stopPlayback();
+        } else {
+            m_finalMonitor->startPlayback();
+        }
+    });
+
+    // Monitor state → UI updates.  RX audio gating is handled
+    // separately via the muteRxRequested wiring above.  State is
+    // forwarded both to the docked ClientChainApplet AND to the
+    // AetherialAudioStrip's mirrored buttons (when the strip exists).
+    connect(m_finalMonitor, &ClientPuduMonitor::recordingStarted,
+            this, [this]() {
+        if (m_appletPanel && m_appletPanel->clientChainApplet())
+            m_appletPanel->clientChainApplet()->setMonitorRecording(true);
+        if (m_aetherialStrip)
+            m_aetherialStrip->setMonitorRecording(true);
+    });
+    connect(m_finalMonitor, &ClientPuduMonitor::recordingStopped,
+            this, [this](int /*durationMs*/) {
+        if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+            auto* a = m_appletPanel->clientChainApplet();
+            a->setMonitorRecording(false);
+            a->setMonitorHasRecording(true);
+        }
+        if (m_aetherialStrip) {
+            m_aetherialStrip->setMonitorRecording(false);
+            m_aetherialStrip->setMonitorHasRecording(true);
+        }
+        // Auto-start playback — the mute stays installed across the
+        // transition because the monitor only emits muteRxRequested
+        // (false) at stopPlayback().
+        m_finalMonitor->startPlayback();
+    });
+    connect(m_finalMonitor, &ClientPuduMonitor::playbackStarted,
+            this, [this]() {
+        if (m_appletPanel && m_appletPanel->clientChainApplet())
+            m_appletPanel->clientChainApplet()->setMonitorPlaying(true);
+        if (m_aetherialStrip)
+            m_aetherialStrip->setMonitorPlaying(true);
+    });
+    connect(m_finalMonitor, &ClientPuduMonitor::playbackStopped,
+            this, [this]() {
+        if (m_appletPanel && m_appletPanel->clientChainApplet())
+            m_appletPanel->clientChainApplet()->setMonitorPlaying(false);
+        if (m_aetherialStrip)
+            m_aetherialStrip->setMonitorPlaying(false);
+    });
+    // TX chain applet visibility is independent of bypass state — the
+    // user controls show/hide via the applet header ✕ and toolbar
+    // toggles, persisted via Applet_<ID>.  Bypassing a stage just
+    // shows the applet as bypassed; it doesn't hide the tile.
+
+    // Initial applet-stack order mirrors the persisted chain order
+    // for both sides, and stays in sync on every subsequent drag-
+    // reorder.
+    if (m_audio) {
+        m_appletPanel->setTxDspChainOrder(m_audio->txChainStages());
+        m_appletPanel->setRxDspChainOrder(m_audio->rxChainStages());
+    }
+    auto reapplyPooDooSide = [this]() {
+        if (!m_appletPanel) return;
+        const QString savedTab = AppSettings::instance()
+            .value("PooDooAudioActiveTab", "TX").toString();
+        m_appletPanel->setPooDooActiveSide(
+            savedTab == "RX" ? AppletPanel::PooDooSide::Rx
+                             : AppletPanel::PooDooSide::Tx);
+    };
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::chainReordered,
+            this, [this, reapplyPooDooSide]() {
+        if (!m_appletPanel || !m_audio) return;
+        m_appletPanel->setTxDspChainOrder(m_audio->txChainStages());
+        // setTxDspChainOrder re-shows every reinserted child, so re-
+        // apply the side filter to keep the inactive side hidden.
+        reapplyPooDooSide();
+    });
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::rxChainReordered,
+            this, [this, reapplyPooDooSide]() {
+        if (!m_appletPanel || !m_audio) return;
+        m_appletPanel->setRxDspChainOrder(m_audio->rxChainStages());
+        reapplyPooDooSide();
+    });
+
+    // PooDoo TX/RX side-filter seed — runs AFTER setTxDspChainOrder
+    // because that helper's insertChildWidget unconditionally shows
+    // each child it reinserts, undoing any earlier hide.  Putting the
+    // seed here ensures the inactive side stays hidden on first paint.
+    {
+        const QString savedTab = AppSettings::instance()
+            .value("PooDooAudioActiveTab", "TX").toString();
+        m_appletPanel->setPooDooActiveSide(
+            savedTab == "RX" ? AppletPanel::PooDooSide::Rx
+                             : AppletPanel::PooDooSide::Tx);
+    }
+
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::stageEnabledChanged,
+            this, &MainWindow::onTxChainStageEnabledChanged);
+
+    // ── RX chain edit + bypass ──────────────────────────────────────────────
+    // Phase 1 routes RX EQ double-clicks to the existing ClientEqEditor in
+    // RX path mode.  Click-bypass lands on the engine via the chain widget
+    // itself; we just refresh the CEQ applet's Enable toggle here so it
+    // stays in sync.
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::rxEditRequested,
+            this, [this](AudioEngine::RxChainStage stage) {
+        switch (stage) {
+            case AudioEngine::RxChainStage::Eq:
+                ensureClientEqEditor()->showForPath(ClientEqApplet::Path::Rx);
+                break;
+            case AudioEngine::RxChainStage::Gate:
+                ensureClientGateEditor()->showForRx();
+                break;
+            case AudioEngine::RxChainStage::Comp:
+                ensureClientCompEditor()->showForRx();
+                break;
+            case AudioEngine::RxChainStage::Tube:
+                ensureClientTubeEditor()->showForRx();
+                break;
+            case AudioEngine::RxChainStage::Pudu:
+                ensureClientPuduEditor()->showForRx();
+                break;
+            default:
+                break;
+        }
+    });
+    connect(m_appletPanel->clientChainApplet(),
+            &ClientChainApplet::rxStageEnabledChanged,
+            this, [this](AudioEngine::RxChainStage stage, bool /*enabled*/) {
+        // Keep the shared per-stage applet's Enable toggle in lock-
+        // step with the click-bypass that just fired on the chain
+        // widget.  Each stage routes to its own applet refresh.
+        if (!m_appletPanel) return;
+        switch (stage) {
+            case AudioEngine::RxChainStage::Eq:
+                if (m_appletPanel->clientEqRxApplet())
+                    m_appletPanel->clientEqRxApplet()->refreshEnableFromEngine();
+                break;
+            case AudioEngine::RxChainStage::Gate:
+                if (m_appletPanel->clientGateRxApplet())
+                    m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
+                break;
+            case AudioEngine::RxChainStage::Comp:
+                if (m_appletPanel->clientCompRxApplet())
+                    m_appletPanel->clientCompRxApplet()->refreshEnableFromEngine();
+                break;
+            case AudioEngine::RxChainStage::Tube:
+                if (m_appletPanel->clientTubeRxApplet())
+                    m_appletPanel->clientTubeRxApplet()->refreshEnableFromEngine();
+                break;
+            case AudioEngine::RxChainStage::Pudu:
+                if (m_appletPanel->clientPuduRxApplet())
+                    m_appletPanel->clientPuduRxApplet()->refreshEnableFromEngine();
+                break;
+            default:
+                break;
+        }
+    });
+}
+
+// Speech processor on a host-modulating backend. PROC and NOR/DX/DX+ map to
+// `transmit set speech_processor_*`, which reach nothing without a Flex command
+// plane, so they drive the ClientComp already in AudioEngine's TX chain — the
+// same instance the Aetherial strip edits, so two compressors never run in
+// series. Level presets overwrite the strip's settings, so they apply only on
+// a level change or off→on.
+
+bool MainWindow::hostModulatesTxAudio() const
+{
+    // The same capability pair MainWindow_Session.cpp tests before opening the
+    // mic: a backend host-modulates only if it says so AND may transmit.
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    return caps.hostModulates && caps.canTransmit;
+}
+
+void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
+{
+    if (!m_audio || !hostModulatesTxAudio())
+        return;
+    ClientComp* comp = m_audio->clientCompTx();
+    if (!comp)
+        return;
+
+    const auto& tx = m_radioModel.transmitModel();
+    const bool on = tx.speechProcessorEnable();
+    const int level = qBound(0, tx.speechProcessorLevel(), 2);
+
+    // The preset is written only for operator intent. The compressor is shared
+    // with the Aetherial strip, and the 20 Hz mirror reports a strip-originated
+    // enable back as an off→on transition, which must not overwrite the
+    // operator's strip settings.
+    const bool levelChanged = level != m_lastAppliedProcLevel;
+    const bool switchedOn = on && !m_lastAppliedProcEnable;
+    if (operatorIntent && on && (levelChanged || switchedOn)) {
+        // NOR / DX / DX+. Progressively lower thresholds and higher ratios, with
+        // makeup chosen to keep the average level rising with the setting rather
+        // than merely squashing peaks — "more processing" has to sound louder or
+        // the control reads as broken.
+        //
+        // The makeup comes from this stage alone: the modulator's ALC
+        // (Hl2TxAlc), downstream, only reduces level.
+        struct Preset { float thresholdDb; float ratio; float makeupDb; };
+        static constexpr Preset kPresets[3] = {
+            { -18.0f, 2.5f,  4.0f },   // NOR
+            { -24.0f, 4.0f,  8.0f },   // DX
+            { -30.0f, 6.0f, 12.0f },   // DX+
+        };
+        const Preset& p = kPresets[level];
+        comp->setThresholdDb(p.thresholdDb);
+        comp->setRatio(p.ratio);
+        comp->setMakeupDb(p.makeupDb);
+        // Fast enough to catch a syllable, slow enough not to pump on speech.
+        comp->setAttackMs(5.0f);
+        comp->setReleaseMs(120.0f);
+        comp->setKneeDb(6.0f);
+    }
+    if (comp->isEnabled() != on)
+        comp->setEnabled(on);
+
+    m_lastAppliedProcEnable = on;
+    m_lastAppliedProcLevel = level;
+
+    // OPERATOR INTENT ONLY claims the shared compressor.
+    //
+    // The observe path reaches here too, from the 20 Hz mirror below reporting a
+    // STRIP-originated enable. That must not count: claiming ownership from it
+    // would arm the family-swap unwind against settings this code never made, so
+    // the operator's own strip compressor would be switched off the next time
+    // they connected a Flex. See core/HostVoiceChainPolicy.h.
+    if (operatorIntent)
+        m_hostVoiceChainOwned = true;
+
+    // The strip's own compressor tile reads its checked state from the engine,
+    // so it has to be told the object underneath it changed.
+    if (m_appletPanel && m_appletPanel->clientCompTxApplet())
+        m_appletPanel->clientCompTxApplet()->refreshEnableFromEngine();
+}
+
+// 8-band graphic EQ on a host-modulating backend: drives ClientEq (TX via
+// TxVoiceProcessor, RX via processMixedRxAudioData) since `eq TXsc/RXsc` has no
+// receiver. Bands use ClientEq slots 0..7, shared with the Aetherial strip, so
+// this writes only on an actual EQ-applet change. Q 1.4 = one octave between
+// -3 dB points, matching the 63/125/250… spacing.
+void MainWindow::applyGraphicEqToClientEq(bool transmit)
+{
+    // Flex is excluded: there the sliders reach the radio's own 8-band hardware
+    // EQ through the command plane, and mapping them onto ClientEq as well would
+    // equalize twice for one slider movement.
+    if (!m_audio || m_radioModel.usesFlexCommandPlane())
+        return;
+    ClientEq* eq = transmit ? m_audio->clientEqTx() : m_audio->clientEqRx();
+    if (!eq)
+        return;
+
+    const auto& model = m_radioModel.equalizerModel();
+    const bool enabled = transmit ? model.txEnabled() : model.rxEnabled();
+
+    // Centres in Hz, matching EqualizerModel::Band order exactly. Kept here as
+    // numbers rather than parsed from bandKey() so a protocol-string change
+    // cannot silently retune the filters.
+    static constexpr float kCentresHz[EqualizerModel::BandCount] = {
+        63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f
+    };
+
+    for (int i = 0; i < EqualizerModel::BandCount; ++i) {
+        const auto band = static_cast<EqualizerModel::Band>(i);
+        const int gainDb = transmit ? model.txBand(band) : model.rxBand(band);
+        ClientEq::BandParams p;
+        p.freqHz = kCentresHz[i];
+        p.gainDb = static_cast<float>(gainDb);
+        p.q = 1.4f;
+        p.type = ClientEq::FilterType::Peak;
+        // A 0 dB band still runs, and must: leaving it disabled would make the
+        // slider's return to centre a different operation from never having
+        // moved it, and the two have to sound identical.
+        p.enabled = true;
+        eq->setBand(i, p);
+    }
+    if (eq->activeBandCount() < EqualizerModel::BandCount)
+        eq->setActiveBandCount(EqualizerModel::BandCount);
+    eq->setEnabled(enabled);
+
+    // The graphic EQ now owns slots 0..7 of a shared object. Both the
+    // connect-time re-push and the family-swap unwind key off this — see
+    // core/HostVoiceChainPolicy.h for why neither may act without it.
+    //
+    // Unconditional here, unlike the compressor's operator-intent gate above:
+    // every path into this function is already operator intent. On a
+    // host-modulating backend EqualizerModel only moves when a slider does
+    // (there is no `eq` status to observe), and the one caller that is not a
+    // slider — the connect edge — is itself gated on this flag.
+    m_hostVoiceChainOwned = true;
+
+    // The strip's own EQ tile reads its checked state from the engine.
+    if (m_appletPanel) {
+        auto* tile = transmit ? m_appletPanel->clientEqTxApplet()
+                              : m_appletPanel->clientEqRxApplet();
+        if (tile)
+            tile->refreshEnableFromEngine();
+    }
+}
+
+void MainWindow::wireHostModulatedVoiceChain()
+{
+    // The persisted graphic EQ comes back BEFORE the ClientEq binding below, so
+    // restoring writes nothing into the shared objects; the connect-edge re-push
+    // does, and only on a host-modulating backend. A restored layout licenses
+    // that re-push and is not ownership, so a Flex connected first unwinds nothing.
+    {
+        const EqualizerModel::State restored = EqualizerModel::loadPersistedState();
+        m_radioModel.equalizerModel().restoreState(restored);
+        m_restoredGraphicEqPending = restoredGraphicEqHoldsLayout(
+            restored.anyBandNonZero(), restored.anyEnabled());
+    }
+
+    // The graphic EQ. Bound on BOTH state signals rather than on a capability
+    // check at wiring time, because the capability is not known until a backend
+    // attaches; applyGraphicEqToClientEq() re-checks on every call.
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::txStateChanged,
+            this, [this] {
+        if (!m_graphicEqReloading)
+            applyGraphicEqToClientEq(true);
+    });
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::rxStateChanged,
+            this, [this] {
+        if (!m_graphicEqReloading)
+            applyGraphicEqToClientEq(false);
+    });
+
+    // Operator -> settings, in the EqApplet object and never in the strip's
+    // ClientEq keys. Not on a Flex, whose EQ the radio keeps, nor while the
+    // model still holds a Flex's values.
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::operatorEdited,
+            this, [this] {
+        if (graphicEqPersistAllowed(m_radioModel.isConnected(),
+                                    hostModulatesTxAudio(),
+                                    m_graphicEqFromRadio)) {
+            EqualizerModel::savePersistedState(m_radioModel.equalizerModel().state());
+        }
+    });
+
+    // Operator -> DSP.
+    //
+    // TWO signals, and the split is load-bearing. speechProcessorCommandIssued
+    // is the operator actually moving PROC, and only that is allowed to write
+    // the NOR/DX/DX+ preset over the shared compressor's settings.
+    // micStateChanged is any state movement at all — including the mirror below
+    // reporting a strip-originated enable — and may only sync the enable flag.
+    connect(&m_radioModel.transmitModel(),
+            &TransmitModel::speechProcessorCommandIssued, this,
+            [this] { applySpeechProcessorToClientComp(true); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
+            this, [this] { applySpeechProcessorToClientComp(false); });
+
+    // ── Connection edges ────────────────────────────────────────────────────
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        const bool hostModulates = hostModulatesTxAudio();
+
+        if (connected && hostModulates) {
+            // After a Flex the model holds the radio's EQ: the saved layout comes
+            // back silently first, and licenses the re-push as at startup.
+            if (graphicEqReloadRequired(connected, hostModulates,
+                                        m_graphicEqFromRadio)) {
+                const EqualizerModel::State saved = EqualizerModel::loadPersistedState();
+                m_graphicEqReloading = true;
+                m_radioModel.equalizerModel().restoreState(saved);
+                m_graphicEqReloading = false;
+                m_restoredGraphicEqPending = restoredGraphicEqHoldsLayout(
+                    saved.anyBandNonZero(), saved.anyEnabled());
+                m_graphicEqFromRadio = false;
+            }
+            // Re-push on connect, since the capability was unknown before. Only
+            // what the operator set or what was restored
+            // (hostVoiceChainRepushAllowed; core/HostVoiceChainPolicy.h): an
+            // unconditional push would overwrite the saved strip with defaults.
+            const bool restoredEq = m_restoredGraphicEqPending;
+            m_restoredGraphicEqPending = false;
+            // PROC does not persist: a restored graphic EQ alone must leave the
+            // strip's compressor as the operator saved it.
+            if (hostVoiceChainRepushAllowed(connected, hostModulates,
+                                            m_hostVoiceChainOwned)) {
+                // The cache is reset so the preset re-applies.
+                m_lastAppliedProcLevel = -1;
+                m_lastAppliedProcEnable = false;
+                applySpeechProcessorToClientComp(true);
+            }
+            if (hostVoiceChainRepushAllowed(connected, hostModulates,
+                                            m_hostVoiceChainOwned || restoredEq)) {
+                applyGraphicEqToClientEq(true);
+                applyGraphicEqToClientEq(false);
+                // Sliders moved while disconnected are saved once they apply.
+                EqualizerModel::savePersistedState(
+                    m_radioModel.equalizerModel().state());
+            }
+            m_hostVoiceChainTimer.start();
+            return;
+        }
+
+        m_hostVoiceChainTimer.stop();
+
+        // A Flex writes its own EQ into the model, so the layout restored from
+        // settings is no longer what the model holds: it must not be re-pushed.
+        if (connected && m_radioModel.usesFlexCommandPlane()) {
+            m_restoredGraphicEqPending = false;
+            m_graphicEqFromRadio = true;
+        }
+
+        // Unwind on a family swap: after host-modulated EQ/PROC on an HL2, a
+        // later Flex session's applies all return early, but ClientEq/ClientComp
+        // stay ENABLED, double-equalizing with the radio's hardware EQ. Bounded
+        // by ownership (m_hostVoiceChainOwned) so a plain Flex session never
+        // loses the operator's strip. Bypass, not clear, so settings survive.
+        // Fires once per HL2→Flex transition; a deliberate re-enable mid-Flex
+        // session is left alone.
+        if (m_audio
+            && hostVoiceChainUnwindRequired(connected, hostModulates,
+                                            m_radioModel.usesFlexCommandPlane(),
+                                            m_hostVoiceChainOwned)) {
+            if (auto* eqTx = m_audio->clientEqTx())   eqTx->setEnabled(false);
+            if (auto* eqRx = m_audio->clientEqRx())   eqRx->setEnabled(false);
+            if (auto* comp = m_audio->clientCompTx()) comp->setEnabled(false);
+            // Out of circuit and no longer ours: a second Flex connect must not
+            // disable them again after the operator has switched them back on.
+            m_hostVoiceChainOwned = false;
+            if (m_appletPanel) {
+                if (auto* t = m_appletPanel->clientEqTxApplet())   t->refreshEnableFromEngine();
+                if (auto* t = m_appletPanel->clientEqRxApplet())   t->refreshEnableFromEngine();
+                if (auto* t = m_appletPanel->clientCompTxApplet()) t->refreshEnableFromEngine();
+            }
+        }
+    });
+
+    // DSP -> meter, and DSP -> operator.
+    //
+    // ClientComp has no change notification — every other consumer polls it on a
+    // timer (ClientCompApplet::tickMeter) — so this does too, at the same 20 Hz
+    // the compression gauge is fed at elsewhere. Started and stopped on the
+    // connection edge above rather than running for the process lifetime.
+    m_hostVoiceChainTimer.setInterval(50);
+    connect(&m_hostVoiceChainTimer, &QTimer::timeout, this, [this] {
+        if (!m_audio || !hostModulatesTxAudio())
+            return;
+
+        // Mirror the shared ClientEq enables back onto the graphic EQ, so an
+        // EQ toggled in the Aetherial strip, the chain tiles or the CEQ applet
+        // does not leave the EQ applet's ON button lying. Only while the
+        // graphic EQ may own the ClientEq bands; the reload guard keeps the
+        // silent restore from writing the bands back into ClientEq.
+        if (graphicEqMirrorAllowed(hostModulatesTxAudio(), m_hostVoiceChainOwned)) {
+            EqualizerModel& eqModel = m_radioModel.equalizerModel();
+            EqualizerModel::State mirrored = eqModel.state();
+            if (const ClientEq* eqTx = m_audio->clientEqTx())
+                mirrored.txEnabled = eqTx->isEnabled();
+            if (const ClientEq* eqRx = m_audio->clientEqRx())
+                mirrored.rxEnabled = eqRx->isEnabled();
+            if (mirrored != eqModel.state()) {
+                m_graphicEqReloading = true;
+                eqModel.restoreState(mirrored);
+                m_graphicEqReloading = false;
+                if (graphicEqPersistAllowed(m_radioModel.isConnected(),
+                                            hostModulatesTxAudio(),
+                                            m_graphicEqFromRadio)) {
+                    EqualizerModel::savePersistedState(mirrored);
+                }
+            }
+        }
+
+        ClientComp* comp = m_audio->clientCompTx();
+        if (!comp)
+            return;
+
+        // TX:COMPPEAK wants a POSITIVE amount of compression in dB;
+        // ClientComp reports gain reduction as a value <= 0. Negate, do not
+        // abs(): a positive gainReductionDb would be a bug upstream and
+        // abs() would render it as heavy compression.
+        const float reduction = comp->isEnabled() ? -comp->gainReductionDb() : 0.0f;
+        m_radioModel.meterModel().updateValueByName(
+            QStringLiteral("TX"), QStringLiteral("COMPPEAK"),
+            qBound(0.0f, reduction, 25.0f));
+
+        // Mirror the strip back onto PROC, so toggling the compressor there
+        // does not leave the button lying. applySpeechProcessorState() emits
+        // micStateChanged but NOT speechProcessorCommandIssued, so this settles
+        // in one pass and can never be mistaken for the operator moving PROC.
+        m_radioModel.transmitModel().applySpeechProcessorState(
+            comp->isEnabled(), m_radioModel.transmitModel().speechProcessorLevel());
+    });
+}
+
+} // namespace AetherSDR

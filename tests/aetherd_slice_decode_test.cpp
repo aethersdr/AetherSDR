@@ -1,0 +1,215 @@
+// aetherd RFC 2.3 — SliceModel touchpoint: FlexSliceStatus::decodeValues.
+// Pins the Flex slice-status wire → typed SliceDelta translation that moved out
+// of SliceModel::applyStatus (key renames, "1"→bool, list split, lowercase,
+// ok-guarded numeric parses, present-only). The model's apply-side behavior is
+// covered by slice_model_letter_test / antenna_alias_test.
+
+#include "core/backends/flex/FlexSliceStatus.h"
+#include "core/backends/SliceDelta.h"
+
+#include <QCoreApplication>
+#include <QSignalSpy>
+#include <QString>
+#include <cstdio>
+#include <initializer_list>
+
+using namespace AetherSDR;
+
+static int g_failures = 0;
+#define CHECK(cond) do { if (!(cond)) { \
+    std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
+
+// Decode one present-only value report without a transport or model.
+static SliceDelta decode(const QMap<QString, QString>& kvs)
+{
+    return FlexSliceStatus::decodeValues(kvs);
+}
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    qRegisterMetaType<SliceDelta>();
+
+    // ---- DSP level status names (#6447): the radio reports nrl_level /
+    // nrs_level / anfl_level, not the lms_nr_level / speex_nr_level /
+    // lms_anf_level command names; those stay as a fallback ----
+    {
+        const SliceDelta d = decode({
+            {QStringLiteral("nrl_level"), QStringLiteral("41")},
+            {QStringLiteral("nrs_level"), QStringLiteral("50")},
+            {QStringLiteral("anfl_level"), QStringLiteral("17")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 41);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 50);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 17);
+    }
+    {
+        const SliceDelta d = decode({
+            {QStringLiteral("lms_nr_level"), QStringLiteral("12")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("13")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("14")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 12);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 13);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 14);
+    }
+    {
+        // Both present: the status name wins.
+        const SliceDelta d = decode({
+            {QStringLiteral("nrl_level"), QStringLiteral("30")},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("nrs_level"), QStringLiteral("31")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("anfl_level"), QStringLiteral("32")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("99")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 30);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 31);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 32);
+    }
+    {
+        // Zero is a reported level, not a reason to use the alias.
+        const SliceDelta d = decode({
+            {QStringLiteral("nrl_level"), QStringLiteral("0")},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("nrs_level"), QStringLiteral("0")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("99")},
+            {QStringLiteral("anfl_level"), QStringLiteral("0")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("99")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 0);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 0);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 0);
+    }
+    for (const QString& invalid : {QStringLiteral("junk"), QStringLiteral("2147483648")}) {
+        // A present but invalid status name suppresses the command-name alias.
+        const SliceDelta d = decode({
+            {QStringLiteral("nrl_level"), invalid},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("12")},
+            {QStringLiteral("nrs_level"), invalid},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("13")},
+            {QStringLiteral("anfl_level"), invalid},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("14")},
+        });
+        CHECK(!d.nrlLevel.has_value());
+        CHECK(!d.nrsLevel.has_value());
+        CHECK(!d.anflLevel.has_value());
+    }
+    {
+        // Invalid aliases do not replace valid primary values.
+        const SliceDelta d = decode({
+            {QStringLiteral("nrl_level"), QStringLiteral("30")},
+            {QStringLiteral("lms_nr_level"), QStringLiteral("junk")},
+            {QStringLiteral("nrs_level"), QStringLiteral("31")},
+            {QStringLiteral("speex_nr_level"), QStringLiteral("junk")},
+            {QStringLiteral("anfl_level"), QStringLiteral("32")},
+            {QStringLiteral("lms_anf_level"), QStringLiteral("junk")},
+        });
+        CHECK(d.nrlLevel.has_value() && *d.nrlLevel == 30);
+        CHECK(d.nrsLevel.has_value() && *d.nrsLevel == 31);
+        CHECK(d.anflLevel.has_value() && *d.anflLevel == 32);
+    }
+    {
+        // Malformed: dropped, never applied as 0.
+        const SliceDelta d = decode({
+            {QStringLiteral("nrs_level"), QStringLiteral("junk")},
+            {QStringLiteral("nr"), QStringLiteral("1")},
+        });
+        CHECK(!d.nrsLevel.has_value());
+    }
+
+    // ---- key renames + typed values ----
+    {
+        const SliceDelta d = decode({
+            {QStringLiteral("RF_frequency"), QStringLiteral("14.25")},
+            {QStringLiteral("mode"), QStringLiteral("USB")},
+            {QStringLiteral("filter_lo"), QStringLiteral("-2700")},
+            {QStringLiteral("filter_hi"), QStringLiteral("0")},
+            {QStringLiteral("index_letter"), QStringLiteral("A")},
+            {QStringLiteral("dax"), QStringLiteral("2")},
+            {QStringLiteral("audio_level"), QStringLiteral("60")},
+            {QStringLiteral("rfgain"), QStringLiteral("-5")},
+        });
+        CHECK(d.frequency.has_value() && qFuzzyCompare(*d.frequency, 14.25));
+        CHECK(d.mode.has_value() && *d.mode == QStringLiteral("USB"));
+        CHECK(d.filterLow.has_value() && *d.filterLow == -2700);
+        CHECK(d.filterHigh.has_value() && *d.filterHigh == 0);
+        CHECK(d.letter.has_value() && *d.letter == QStringLiteral("A"));
+        CHECK(d.daxChannel.has_value() && *d.daxChannel == 2);
+        CHECK(d.audioGain.has_value() && qFuzzyCompare(*d.audioGain, 60.0));
+        CHECK(d.rfGain.has_value() && qFuzzyCompare(*d.rfGain, -5.0));
+        // Fields not on the wire stay disengaged:
+        CHECK(!d.qsk.has_value());
+        CHECK(!d.txSlice.has_value());
+    }
+
+    // ---- "1"→bool; absent → disengaged ----
+    {
+        const SliceDelta d = decode({
+            {QStringLiteral("active"), QStringLiteral("1")},
+            {QStringLiteral("tx"), QStringLiteral("0")},
+            {QStringLiteral("lock"), QStringLiteral("1")},
+        });
+        CHECK(d.active.has_value() && *d.active == true);
+        CHECK(d.txSlice.has_value() && *d.txSlice == false);
+        CHECK(d.locked.has_value() && *d.locked == true);
+        CHECK(!d.qsk.has_value());
+    }
+
+    // ---- ok-guarded numeric parse: a malformed present field is DROPPED (#4068) ----
+    {
+        // A garbled RF_frequency must NOT retune to 0 Hz — the field is dropped.
+        const SliceDelta d = decode({
+            {QStringLiteral("RF_frequency"), QStringLiteral("garbage")},
+            {QStringLiteral("filter_lo"), QStringLiteral("notanint")},
+            {QStringLiteral("mode"), QStringLiteral("LSB")},
+        });
+        CHECK(!d.frequency.has_value());   // dropped, not 0.0
+        CHECK(!d.filterLow.has_value());   // dropped, not 0
+        CHECK(d.mode.has_value() && *d.mode == QStringLiteral("LSB"));  // valid field still carried
+    }
+
+    // ---- esc "1"/"on" → true, "0" → false ----
+    {
+        CHECK(*decode({{QStringLiteral("esc"), QStringLiteral("on")}}).esc == true);
+        CHECK(*decode({{QStringLiteral("esc"), QStringLiteral("1")}}).esc == true);
+        CHECK(*decode({{QStringLiteral("esc"), QStringLiteral("0")}}).esc == false);
+    }
+
+    // ---- antenna lists: rx_ant_list precedence, split+trim; mode_list de-dupe ----
+    {
+        const SliceDelta d = decode({
+            {QStringLiteral("rx_ant_list"), QStringLiteral("ANT1, RX_A ,RX_B")},
+            {QStringLiteral("ant_list"), QStringLiteral("SHOULD_BE_IGNORED")},
+            {QStringLiteral("mode_list"), QStringLiteral("USB,LSB,DSTR,DSTR, DSTR,CW")},
+        });
+        CHECK(d.rxAntennaList.has_value()
+              && *d.rxAntennaList == QStringList({QStringLiteral("ANT1"),
+                                                  QStringLiteral("RX_A"),
+                                                  QStringLiteral("RX_B")}));
+        CHECK(d.modeList.has_value()
+              && *d.modeList == QStringList({QStringLiteral("USB"),
+                                             QStringLiteral("LSB"),
+                                             QStringLiteral("DSTR"),
+                                             QStringLiteral("CW")}));
+    }
+
+    // ---- lowercase normalization; play/step_list carried raw ----
+    {
+        const SliceDelta d = decode({
+            {QStringLiteral("fm_tone_mode"), QStringLiteral("CTCSS")},
+            {QStringLiteral("play"), QStringLiteral("disabled")},
+            {QStringLiteral("step_list"), QStringLiteral("10,100,1000")},
+        });
+        CHECK(d.fmToneMode.has_value() && *d.fmToneMode == QStringLiteral("ctcss"));
+        CHECK(d.play.has_value() && *d.play == QStringLiteral("disabled"));
+        CHECK(d.stepList.has_value() && *d.stepList == QStringLiteral("10,100,1000"));
+    }
+
+    if (g_failures == 0) {
+        std::printf("aetherd_slice_decode_test: all checks passed\n");
+        return 0;
+    }
+    std::printf("aetherd_slice_decode_test: %d failure(s)\n", g_failures);
+    return 1;
+}

@@ -1,0 +1,206 @@
+#include "gui/VfoWidget.h"
+
+#include <cstdio>
+
+using AetherSDR::VfoWidget;
+
+namespace {
+
+int g_failures = 0;
+
+void report(const char* name, bool ok)
+{
+    std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", name);
+    if (!ok) {
+        ++g_failures;
+    }
+}
+
+void expectDir(const char* name, VfoWidget::FlagDir actual, VfoWidget::FlagDir expected)
+{
+    report(name, actual == expected);
+}
+
+} // namespace
+
+int main()
+{
+    // Guard math at these dimensions (see VfoWidget.h): guardPx =
+    // max(20, round(1000 * kPanFollowTriggerMarginFrac=0.02)) = 20, so
+    // default-left flipEnter = 200+20 = 220 (exit 240) and default-right
+    // flipEnter = 1000-200-20 = 780 (exit 760). The margin tracks
+    // kIncrementalTriggerEdgeMarginFrac (#3482: 0.05 -> 0.02).
+    constexpr int kSpectrumWidth = 1000;
+    constexpr int kPanelWidth = 200;
+
+    report("USB defaults to left",
+           VfoWidget::defaultFlagOnLeftForMode(QStringLiteral("USB")));
+    report("LSB defaults to right",
+           !VfoWidget::defaultFlagOnLeftForMode(QStringLiteral("LSB")));
+    report("CWL defaults to right",
+           !VfoWidget::defaultFlagOnLeftForMode(QStringLiteral("CWL")));
+    report("DIGL defaults to right",
+           !VfoWidget::defaultFlagOnLeftForMode(QStringLiteral("DIGL")));
+
+    expectDir("default-left stays left in middle",
+              VfoWidget::autoDirectionForSingleFlag(
+                  500, kPanelWidth, kSpectrumWidth, true, true),
+              VfoWidget::ForceLeft);
+    expectDir("default-left flips right before left pan-follow guard",
+              VfoWidget::autoDirectionForSingleFlag(
+                  210, kPanelWidth, kSpectrumWidth, true, true),
+              VfoWidget::ForceRight);
+    expectDir("default-left flips right at left pan-follow guard",
+              VfoWidget::autoDirectionForSingleFlag(
+                  220, kPanelWidth, kSpectrumWidth, true, true),
+              VfoWidget::ForceRight);
+    expectDir("default-left holds right through hysteresis",
+              VfoWidget::autoDirectionForSingleFlag(
+                  230, kPanelWidth, kSpectrumWidth, true, false),
+              VfoWidget::ForceRight);
+    expectDir("default-left returns left after hysteresis",
+              VfoWidget::autoDirectionForSingleFlag(
+                  250, kPanelWidth, kSpectrumWidth, true, false),
+              VfoWidget::ForceLeft);
+
+    expectDir("default-right stays right in middle",
+              VfoWidget::autoDirectionForSingleFlag(
+                  500, kPanelWidth, kSpectrumWidth, false, false),
+              VfoWidget::ForceRight);
+    expectDir("default-right flips left before right pan-follow guard",
+              VfoWidget::autoDirectionForSingleFlag(
+                  790, kPanelWidth, kSpectrumWidth, false, false),
+              VfoWidget::ForceLeft);
+    expectDir("default-right flips left at right pan-follow guard",
+              VfoWidget::autoDirectionForSingleFlag(
+                  780, kPanelWidth, kSpectrumWidth, false, false),
+              VfoWidget::ForceLeft);
+    expectDir("default-right holds left through hysteresis",
+              VfoWidget::autoDirectionForSingleFlag(
+                  770, kPanelWidth, kSpectrumWidth, false, true),
+              VfoWidget::ForceLeft);
+    expectDir("default-right returns right after hysteresis",
+              VfoWidget::autoDirectionForSingleFlag(
+                  750, kPanelWidth, kSpectrumWidth, false, true),
+              VfoWidget::ForceRight);
+
+    expectDir("two-vfo leftmost flips right at left edge",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  0, 2, 210, 0, 760, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::ForceRight);
+    expectDir("two-vfo leftmost flips right at pan-follow guard",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  0, 2, 220, 0, 760, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::ForceRight);
+    expectDir("two-vfo leftmost holds right through hysteresis",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  0, 2, 230, 0, 760, kPanelWidth, kSpectrumWidth, false),
+              VfoWidget::ForceRight);
+    expectDir("two-vfo leftmost returns left after hysteresis",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  0, 2, 250, 0, 760, kPanelWidth, kSpectrumWidth, false),
+              VfoWidget::ForceLeft);
+    expectDir("two-vfo rightmost flips left at right edge",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  1, 2, 790, 240, 0, kPanelWidth, kSpectrumWidth, false),
+              VfoWidget::ForceLeft);
+    expectDir("two-vfo rightmost flips left at pan-follow guard",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  1, 2, 780, 240, 0, kPanelWidth, kSpectrumWidth, false),
+              VfoWidget::ForceLeft);
+    expectDir("two-vfo rightmost holds left through hysteresis",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  1, 2, 770, 240, 0, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::ForceLeft);
+    expectDir("two-vfo rightmost returns right after hysteresis",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  1, 2, 750, 240, 0, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::ForceRight);
+
+    expectDir("three-vfo first flips right at left edge",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  0, 3, 210, 0, 500, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::ForceRight);
+    expectDir("three-vfo last flips left at right edge",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  2, 3, 790, 500, 0, kPanelWidth, kSpectrumWidth, false),
+              VfoWidget::ForceLeft);
+    expectDir("three-vfo interior uses larger left gap",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  1, 3, 500, 300, 620, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::ForceLeft);
+    expectDir("three-vfo interior uses larger right gap",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  1, 3, 500, 380, 800, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::ForceRight);
+    expectDir("invalid deconflicted index falls back to auto",
+              VfoWidget::autoDirectionForDeconflictedFlag(
+                  -1, 2, 0, 0, 0, kPanelWidth, kSpectrumWidth, true),
+              VfoWidget::Auto);
+
+    expectDir("invalid geometry preserves default left",
+              VfoWidget::autoDirectionForSingleFlag(0, 0, 0, true, false),
+              VfoWidget::ForceLeft);
+    expectDir("invalid geometry preserves default right",
+              VfoWidget::autoDirectionForSingleFlag(0, 0, 0, false, true),
+              VfoWidget::ForceRight);
+
+    const VfoWidget::FlagPlacement forcedAtLeftEdge =
+        VfoWidget::placementForMarker(10, 3, 200, 80, 1000,
+                                      VfoWidget::ForceLeft, true);
+    report("force-left geometry flips right at left edge",
+           forcedAtLeftEdge.rect.x() == 10 && !forcedAtLeftEdge.onLeft);
+
+    const VfoWidget::FlagPlacement lockedAtLeftEdge =
+        VfoWidget::placementForMarker(10, 3, 200, 80, 1000,
+                                      VfoWidget::LockLeft, true);
+    report("lock-left geometry stays left at left edge",
+           lockedAtLeftEdge.rect.x() == -190 && lockedAtLeftEdge.onLeft);
+
+    report("diversity index 0 orders before index 1",
+           VfoWidget::diversityPairOrderKey(false, false, 0, 5)
+               < VfoWidget::diversityPairOrderKey(false, false, 1, 4));
+    report("diversity parent orders before child without index",
+           VfoWidget::diversityPairOrderKey(true, false, -1, 5)
+               < VfoWidget::diversityPairOrderKey(false, true, -1, 4));
+    report("diversity unknown role orders by stable slice id",
+           VfoWidget::diversityPairOrderKey(false, false, -1, 3)
+               < VfoWidget::diversityPairOrderKey(false, false, -1, 4));
+
+    expectDir("diversity order index 0 flag locks right",
+              VfoWidget::diversityPairFlagDir(0), VfoWidget::LockRight);
+    expectDir("diversity order index 1 flag locks left",
+              VfoWidget::diversityPairFlagDir(1), VfoWidget::LockLeft);
+
+    // Compose the ordering and the side map the way assignDiversityPairDirections
+    // does. When the radio reports roles, a parent sorts ahead of a child even
+    // when the child has the lower slice ID, so the parent (master, DIV-tagged)
+    // lands RIGHT and the child LEFT — the parent-goes-right guarantee the old
+    // inline literal left untested.
+    {
+        const int parentKey = VfoWidget::diversityPairOrderKey(true, false, -1, 7);
+        const int childKey = VfoWidget::diversityPairOrderKey(false, true, -1, 2);
+        const bool parentFirst = parentKey <= childKey;
+        report("diversity reported parent lands on the right",
+               VfoWidget::diversityPairFlagDir(parentFirst ? 0 : 1)
+                   == VfoWidget::LockRight);
+        report("diversity reported child lands on the left",
+               VfoWidget::diversityPairFlagDir(parentFirst ? 1 : 0)
+                   == VfoWidget::LockLeft);
+    }
+
+    // Metadata absent: the order key falls back to slice ID, so "index 0" is
+    // just the lower-numbered slice. The pair still splits to opposite sides —
+    // all the pre-metadata path ever promised.
+    {
+        const int loKey = VfoWidget::diversityPairOrderKey(false, false, -1, 3);
+        const int hiKey = VfoWidget::diversityPairOrderKey(false, false, -1, 9);
+        const bool loFirst = loKey <= hiKey;
+        report("diversity metadata-absent pair still splits opposite",
+               VfoWidget::diversityPairFlagDir(loFirst ? 0 : 1)
+                   != VfoWidget::diversityPairFlagDir(loFirst ? 1 : 0));
+    }
+
+    std::printf("%s\n", g_failures == 0 ? "All tests passed." : "Test failures.");
+    return g_failures == 0 ? 0 : 1;
+}

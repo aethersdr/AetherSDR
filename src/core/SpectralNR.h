@@ -1,0 +1,418 @@
+/*  SpectralNR.h
+
+This file is part of AetherSDR.
+
+Portions of this file are derived from WDSP (emnr.c):
+  Copyright (C) 2015, 2025 Warren Pratt, NR0V
+  https://github.com/TAPR/OpenHPSDR-wdsp
+
+The WDSP-derived portions are licensed under the GNU General Public License
+as published by the Free Software Foundation; either version 2 of the
+License, or (at your option) any later version.
+
+AetherSDR integration and C++20/Qt6 adaptation:
+  Copyright (C) 2024-2026 AetherSDR Contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+#ifdef HAVE_FFTW3
+#include <fftw3.h>
+#endif
+
+namespace AetherSDR {
+
+// Client-side spectral NR with WDSP Gaussian/Gamma speech estimators and OSMS,
+// MMSE or non-stationary noise tracking, derived from WDSP NR2 (emnr.c, Warren
+// Pratt NR0V). FFTW3 (with wisdom) when available, else built-in radix-2.
+// Mono float32 at 24 kHz; processStereo() keeps a separate noise estimate and
+// mask per channel (diversity L/R has two noise floors).
+
+class SpectralNR {
+public:
+    explicit SpectralNR(int fftSize = 256, int sampleRate = 24000,
+                        int overlap = 2,
+                        bool useLegacyGainMethods = false);
+    ~SpectralNR();
+
+    SpectralNR(const SpectralNR&) = delete;
+    SpectralNR& operator=(const SpectralNR&) = delete;
+
+    // Feed mono float32 samples in, get noise-reduced mono float32 out.
+    // Output buffer must be at least numSamples long.
+    void process(const float* input, float* output, int numSamples);
+
+    // Feed interleaved stereo float32 samples in, get interleaved stereo
+    // float32 out. The left channel runs through this instance and the right
+    // through a second one with the same geometry, so each channel has its own
+    // noise estimate and mask. Every setter and reset reaches both; the
+    // getters and reset counters report this (left) instance.
+    // Output buffer must be at least numFrames * 2 samples long.
+    // Use only one process entry point for an instance between resets.
+    void processStereo(const float* input, float* output, int numFrames);
+
+    // Reset all internal state (call when toggling on or stream restarts).
+    void reset();
+
+    // Flush only the transient state — overlap-add rings, gain masks, the
+    // AGC common-mode references, and the dry→wet startup ramp — while
+    // retaining the converged OSMS/MMSE/NSTAT noise estimates. For the
+    // TX→RX edge, where the stream resumes on the same band and the stale
+    // overlap-add ring is the hazard (#3340): a full reset() there re-seeds
+    // the noise floor and costs a fresh estimator convergence on every
+    // over, heard as un-suppressed band noise after unkey (#3821). Not a
+    // substitute for reset() on enable or source switches, where the old
+    // noise profile does not describe the new stream.
+    void resetTransient();
+
+    // Monotonic diagnostics used by the bridge and the socket-free TX->RX
+    // integration test. A full reset increments both counters; the warm
+    // TX->RX path increments only transientResetCount().
+    std::uint64_t transientResetCount() const { return m_transientResetCount; }
+    std::uint64_t noiseEstimateResetCount() const { return m_noiseEstimateResetCount; }
+
+    // User-adjustable parameters (thread-safe, called from main thread)
+    void setGainMax(float v);
+    void setGainFloor(float v);
+    void setQspp(float v);
+    void setGainSmooth(float v);
+    float gainMax() const       { return static_cast<float>(m_gainMax.load()); }
+    float gainFloor() const     { return static_cast<float>(m_gainFloor.load()); }
+    float qspp() const         { return static_cast<float>(m_qSpp.load()); }
+    float gainSmooth() const    { return static_cast<float>(m_gainSmooth.load()); }
+    // Gain method: 0=Linear, 1=Log, 2=Gamma (default, MMSE-LSA), 3=Trained
+    void setGainMethod(int m);
+    int  gainMethod() const     { return m_gainMethod.load(); }
+
+    // NPE method: 0=OSMS (default), 1=MMSE, 2=NSTAT
+    void setNpeMethod(int m);
+    int  npeMethod() const      { return m_npeMethod.load(); }
+
+    // AE filter: artifact elimination post-processing
+    void setAeFilter(bool on);
+    bool aeFilter() const       { return m_aeFilter.load(); }
+
+    // ── Psychoacoustic post-processing (WDSP emnr.c's post2 stage) ─────────
+    //
+    // Spectral NR leaves the gaps between syllables completely silent, which
+    // operators hear as the receiver going dead rather than quiet, and its
+    // residual has the processed character that gives spectral NR its
+    // reputation. WDSP's answer is to mix a controlled amount of noise back in
+    // over a tapered low band: partly the GENUINE residual this reduction just
+    // removed, partly synthetic white, with the level following the signal's
+    // own peak. Off by default, exactly as WDSP ships it.
+    void setPost2Run(bool on);
+    bool post2Run() const            { return m_post2Run.load(); }
+
+    // Blend between the removed residual (0.0) and synthetic white (1.0).
+    void setPost2Factor(float v);
+    float post2Factor() const        { return m_post2Factor.load(); }
+
+    // How much of that blend is mixed back in. 0.0 injects nothing.
+    void setPost2Nlevel(float v);
+    float post2Nlevel() const        { return m_post2Nlevel.load(); }
+
+    // Top of the band the stage covers, in Hz. NOT WDSP's `taper` fraction:
+    // that constant is calibrated to WDSP's own 48 kHz/4096 geometry and means
+    // a different frequency at ours, so the control is specified where it is
+    // meaningful and converted to a bin count from the live geometry. Bins
+    // above it are zeroed, so this doubles as a lowpass on the NR output.
+    void setPost2TaperHz(float hz);
+    float post2TaperHz() const       { return m_post2TaperHz.load(); }
+
+    // Decay time constant of the peak follower that sets the injected level.
+    void setPost2DecaySeconds(float seconds);
+    float post2DecaySeconds() const  { return m_post2Decay.load(); }
+
+    int fftSize() const { return m_fftSize; }
+
+    // Highest bin the post-processing stage touches, for the current geometry.
+    // Exposed so a test can pin the Hz-to-bin conversion the port turns on.
+    int post2BinLimit() const;
+    bool usesLegacyGainMethods() const { return m_useLegacyGainMethods; }
+#ifdef HAVE_FFTW3
+    bool hasPlanFailed() const
+    {
+        return m_planFailed || (m_rightChannel && m_rightChannel->m_planFailed);
+    }
+#else
+    bool hasPlanFailed() const { return false; }
+#endif
+
+    // Generate FFTW wisdom file for optimal FFT performance.
+    // Call once on first use; subsequent runs load existing wisdom.
+    // The progress callback receives (currentStep, totalSteps, description).
+    using WisdomProgressCb = std::function<void(int, int, const std::string&)>;
+    using WisdomCancelCb = std::function<bool()>;
+    enum class WisdomResult {
+        Ready,      // existing or imported wisdom is ready
+        Generated,  // new wisdom was generated and saved
+        Cancelled,  // caller cancelled before wisdom was ready
+        Failed,     // generation or export failed
+    };
+    static bool loadWisdom(const std::string& directory);
+    static WisdomResult generateWisdom(const std::string& directory,
+                                       WisdomProgressCb progress = nullptr,
+                                       WisdomCancelCb shouldCancel = nullptr);
+
+private:
+    // FFTW planning and the fftw_malloc/free pairing (#5424) are not thread-safe;
+    // every .cpp site that plans, allocates, frees or moves wisdom takes the
+    // process-wide AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h,
+    // #5895). fftw_execute() needs no lock.
+
+    SpectralNR(int fftSize, int sampleRate, int overlap,
+               bool useLegacyGainMethods, bool withRightChannel);
+
+    // The right channel of processStereo(). Null on that instance itself.
+    std::unique_ptr<SpectralNR> m_rightChannel;
+    // De-interleaved staging for processStereo(), at most one hop per channel.
+    std::vector<float> m_stereoIn[2];
+    std::vector<float> m_stereoOut[2];
+
+    // FFT parameters
+    int m_fftSize;
+    int m_overlap;          // supported values: 2 (50%) or 4 (75%)
+    int m_hopSize;          // fftSize / overlap
+    int m_msize;            // fftSize / 2 + 1  (real-FFT bin count)
+    int m_sampleRate;
+    double m_olaScale;      // unity-gain normalization for periodic Hann COLA
+    bool m_useLegacyGainMethods{false};
+
+    // Overlap-add accumulators
+    std::vector<double> m_inAccum;      // circular input buffer
+    int m_inWritePos{0};
+    int m_inReadPos{0};
+    int m_samplesAccum{0};
+
+    std::vector<double> m_outAccum;     // overlap-add output ring
+    int m_outWritePos{0};
+    int m_outReadPos{0};
+    int m_outputAvailable{0};           // finalized samples queued for callers
+
+    // Window
+    std::vector<double> m_window;
+
+    // FFT working buffers
+    std::vector<double> m_fftIn;        // time-domain input (windowed)
+    std::vector<double> m_ifftOut;      // inverse FFT result
+
+#ifdef HAVE_FFTW3
+    fftw_complex* m_fftOut{nullptr};    // forward FFT output (FFTW-allocated)
+    fftw_complex* m_ifftIn{nullptr};    // inverse FFT input  (FFTW-allocated)
+    fftw_plan     m_planFwd{nullptr};
+    fftw_plan     m_planRev{nullptr};
+    bool          m_planFailed{false};
+#else
+    // Fallback: built-in radix-2 FFT scratch buffers
+    std::vector<double> m_fftScratchRe;
+    std::vector<double> m_fftScratchIm;
+    std::vector<double> m_fftScratchRe2;
+    std::vector<double> m_fftScratchIm2;
+    std::vector<int>    m_bitRev;
+
+    void initBitReversal();
+    void fftForward(const double* timeIn, double* re, double* im);
+    void fftInverse(const double* re, const double* im, double* timeOut);
+#endif
+
+    // Frequency-domain bins (real/imag separate, msize elements)
+    std::vector<double> m_freqRe;
+    std::vector<double> m_freqIm;
+    std::vector<double> m_gainRe;       // gain-applied freq bins
+    std::vector<double> m_gainIm;
+
+    // Selected noise estimate consumed by the gain stage. Each NPE method has
+    // its own history below. All three histories stay warm on every frame so
+    // a live method switch cannot expose a reset-time estimate.
+    std::vector<double> m_noisePsd;     // lambda_d -- selected noise PSD
+
+    // Noise estimation (OSMS) per-bin state
+    std::vector<double> m_osmsNoisePsd; // sigma2N -- OSMS noise PSD
+    std::vector<double> m_smoothPsd;    // p(k)      -- smoothed periodogram
+    std::vector<double> m_pMin;         // running minimum per bin
+    std::vector<double> m_pBar;         // variance estimator: mean of p
+    std::vector<double> m_p2Bar;        // variance estimator: mean of p^2
+    std::vector<double> m_alphaOpt;     // per-bin optimal smoothing factor
+    std::vector<double> m_alphaHat;     // per-bin effective smoothing factor
+    double m_alphaC{1.0};               // global correction factor
+
+    // OSMS sub-window tracking
+    std::vector<double> m_actMin;       // current sub-window minimum
+    std::vector<double> m_actMinSub;    // sub-frame minimum
+    std::vector<std::vector<double>> m_actMinBuf; // circular buffer of U sub-windows
+    std::vector<int> m_kMod;            // current frame found a new sub-window minimum
+    std::vector<int> m_lminFlag;
+    int m_subwc{1};                     // sub-window counter
+    int m_ambIdx{0};                    // circular index into actMinBuf
+    int m_U{8};                         // number of sub-windows
+    int m_V{15};                        // frames per sub-window
+    int m_D;                            // U * V
+    double m_alphaMax{0.96};            // hop-scaled OSMS maximum smoothing
+    double m_alphaCMin{0.7};            // hop-scaled global correction floor
+    double m_alphaMinMax{0.3};          // hop-scaled optimal-smoothing floor cap
+    double m_snrq{-0.25};               // hop-scaled SNR exponent
+    double m_betaMax{0.8};              // hop-scaled variance smoothing cap
+    double m_mOfD{0.0};                 // minimum-statistics bias interpolation M(D)
+    double m_mOfV{0.0};                 // minimum-statistics bias interpolation M(V)
+    double m_noiseSlopeMax[4]{};         // guarded upward noise-floor slopes
+
+    // Receiver AGC can move every bin of post-demodulated audio together.
+    // These fixed-size histories identify that common-mode power scale before
+    // the estimators update, then preserve the pre-change residual target.
+    // They are deliberately independent of speech-stop timing.
+    std::vector<double> m_commonReferencePsd;
+    std::vector<double> m_residualReferencePsd;
+    std::vector<double> m_residualReferenceGainRatio;
+    std::vector<std::uint8_t> m_residualReferenceValid;
+    std::vector<std::uint8_t> m_commonNoiseLike;
+    double m_commonReferenceAlpha{0.0};
+    double m_commonScaleAlpha{0.0};
+    double m_residualReferenceAlpha{0.0};
+    double m_commonLevelReferencePower{0.0};
+    double m_commonScaleLog{0.0};
+    double m_commonAppliedScale{1.0};
+    double m_commonReturnScale{1.0};
+    double m_commonDetectedScale{1.0};
+    bool m_commonReferenceInitialized{false};
+    bool m_commonLevelReferenceInitialized{false};
+    bool m_commonReferenceReacquiring{false};
+    bool m_commonSilenceRecoveryContext{false};
+    // Speech-presence MMSE estimator (WDSP LambdaDs / NPE method 1)
+    std::vector<double> m_mmseNoisePsd;
+    std::vector<double> m_mmsePbar;
+    double m_mmseAlphaPow{0.8};
+    double m_mmseAlphaPbar{0.9};
+
+    // Non-stationary minima estimator (WDSP LambdaDl / NPE method 2)
+    std::vector<double> m_nstatPower;
+    std::vector<double> m_nstatPowerMin;
+    std::vector<double> m_nstatSpeechProbability;
+    std::vector<double> m_nstatTonalProbability;
+    std::vector<std::uint8_t> m_nstatTonalIndicator;
+    std::vector<std::uint8_t> m_commonWantedProtected;
+    std::vector<double> m_nstatNoisePsd;
+    double m_nstatEta{0.7};
+    double m_nstatGamma{0.998};
+    double m_nstatBeta{0.8};
+    double m_nstatAlphaD{0.85};
+    double m_nstatAlphaP{0.2};
+    double m_nstatTonalAlpha{0.0};
+    double m_nstatTonalReleaseAlpha{0.0};
+    int m_nstatLowFrequencyBin{0};
+    int m_nstatMidFrequencyBin{0};
+
+    // Decision-directed gain memory, scaled to the actual hop duration.
+    double m_gainAlpha{0.985};
+    double m_gainDecreaseSmooth{0.5};
+
+    // Gain state per-bin
+    std::vector<double> m_prevMask;     // previous frame gain mask
+    std::vector<double> m_prevGamma;    // previous frame a-posteriori SNR
+    std::vector<double> m_mask;         // current gain mask
+    std::vector<double> m_smoothMask;   // temporally smoothed gain (anti-musical-noise)
+    std::vector<double> m_lambdaY;      // current frame signal PSD
+    double m_currentWet{0.0};            // startup dry/wet blend for current frame
+
+    // Startup ramp
+    int m_frameCount{0};                // frames processed since reset
+    int m_rampFrames{1};                // one second at the configured hop rate
+    std::uint64_t m_transientResetCount{0};
+    std::uint64_t m_noiseEstimateResetCount{0};
+
+    // ── Algorithm constants (fixed) ─────────────────────────────────────
+    static constexpr double GammaMax   = 40.0;    // linear a-posteriori SNR cap
+    static constexpr double XiMin      = 1e-4;    // a-priori SNR floor
+    static constexpr double EpsFloor   = 1e-300;  // match WDSP eps_floor
+    static constexpr double InvQeqMax  = 0.5;
+
+    // ── User-adjustable parameters (atomic for audio thread safety) ───
+    std::atomic<double> m_gainMax{1.0};     // cap gain — noise REDUCTION, never amplify above input (#1507)
+    std::atomic<double> m_gainFloor{0.00};  // no forced residual; user can raise Naturalness if needed
+    std::atomic<double> m_qSpp{0.2};        // speech presence probability prior
+    std::atomic<double> m_gainSmooth{0.85}; // temporal gain smoothing (anti-musical-noise)
+    std::atomic<int>    m_gainMethod{2};    // 0=Linear, 1=Log, 2=Gamma, 3=Trained
+    std::atomic<int>    m_npeMethod{0};     // 0=OSMS, 1=MMSE, 2=NSTAT
+    std::atomic<bool>   m_aeFilter{true};   // artifact elimination post-processing
+
+    // AE filter state (per-bin)
+    std::vector<double> m_aeMask;           // smoothed AE gain mask
+    std::vector<double> m_aePrefix;         // prefix sums for adaptive frequency averaging
+
+    // ── Internal methods ───────────────────────────────────────────────
+    void initWindow();
+    void resetNoiseEstimate();
+    void processFrame();
+    bool updateMaskFromCurrentFrame();
+    void synthesizeCurrentFrequencyBinsWithMask();
+
+    // Noise estimation (keeps every estimator warm, then selects one)
+    void estimateNoise();
+    void estimateNoiseOsms();   // method 0: Optimal Smoothing Minimum Statistics
+    void estimateNoiseMmse();   // method 1: MMSE noise estimator
+    void estimateNoiseNstat();  // method 2: Non-stationary noise estimator
+    void detectCommonModeScale();
+    bool isCommonWantedLike(int bin) const;
+
+    // Runs on m_gainRe/m_gainIm after the mask is applied and before the
+    // inverse transform, which is where WDSP runs it (emnr.c: post2()).
+    void applyPsychoacousticPostProcessing();
+    unsigned int post2NextRandom();
+
+    std::atomic<bool>  m_post2Run{false};
+    std::atomic<float> m_post2Factor{0.15f};
+    std::atomic<float> m_post2Nlevel{0.15f};
+    std::atomic<float> m_post2TaperHz{2871.0f};
+    std::atomic<float> m_post2Decay{5.0f};
+    // Seeded per instance, as upstream does from its own pointer: every
+    // receiver seeded identically would inject correlated noise across them.
+    unsigned int m_post2RngState{0};
+    double m_post2PeakHold{0.0};
+    // Raised-cosine taper, rebuilt only when the band limit moves, rather than
+    // a std::cos per bin per hop on the audio thread (upstream: post2_calc_w).
+    std::vector<double> m_post2Window;
+    int m_post2WindowBins{-1};
+    void applyCommonModeNoiseEstimate();
+    void scalePowerHistory(double ratio,
+                           const std::vector<std::uint8_t>* binMask = nullptr);
+    void updateResidualReference(double gainMax, bool afterCap);
+
+    // Spectral gain computation (dispatches on m_gainMethod)
+    void computeGain();
+    void computeGainWiener();   // legacy Aether method 0 comparison
+    void computeGainLinear();   // method 0: Gaussian, linear amplitude
+    void computeGainLog();      // method 1: Gaussian, log amplitude
+    void computeGainGamma();    // method 2: Gamma-prior GG x GGS lookup
+    void computeGainTrained();  // method 3: Aether experimental approximation
+
+    // Artifact elimination post-processing
+    void applyAeFilter();
+
+    // Exponentially-scaled modified Bessel functions of the first kind.
+    // bessI0e(x) = exp(-|x|) * I0(x),  bessI1e(x) = exp(-|x|) * I1(x).
+    // The large-x branch is 1/sqrt(|x|) * poly — no exp() computed, no overflow.
+    static double bessI0e(double x);
+    static double bessI1e(double x);
+};
+
+} // namespace AetherSDR

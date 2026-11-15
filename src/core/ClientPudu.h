@@ -1,0 +1,152 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+
+namespace AetherSDR {
+
+// Client-side TX exciter (#1661), two parallel bands, mode-selectable:
+//   Mode A (Aphex):
+//     Doo = Aural Exciter: HPF -> VGA -> asymmetric diode soft-clip -> DC block
+//           -> attenuation (odd + even harmonics).
+//     Poo = Big Bottom: LPF -> envelope dynamic EQ -> soft saturation -> atten.
+//   Mode B (Behringer SX3040):
+//     Doo = HPF -> drive -> tanh -> mix (odd harmonics only).
+//     Poo = frequency-selective compressor + 2nd-order all-pass rotator; no
+//           harmonics, transient emphasis.
+// Same six knobs in both modes:
+//   Poo: Drive (0..24 dB), Tune (50..160 Hz LPF), Mix (0..1)
+//   Doo: Tune (1..10 kHz HPF), Harmonics (0..24 dB), Mix (0..1)
+// UI thread writes atomics + bumps a version; the audio thread recaches per
+// block. No locks, allocations or exceptions in process().
+class ClientPudu {
+public:
+    enum class Mode : uint8_t {
+        Aphex     = 0,   // Aural Exciter + Big Bottom
+        Behringer = 1,   // SX 3040 Sonic Exciter
+    };
+
+    ClientPudu();
+    ~ClientPudu() = default;
+
+    ClientPudu(const ClientPudu&)            = delete;
+    ClientPudu& operator=(const ClientPudu&) = delete;
+
+    // Audio owner only; never concurrently with process(). GUI rate reads
+    // and parameter setters remain safe while a new producer is prepared.
+    void prepare(double sampleRate);
+
+    void setEnabled(bool on) noexcept;
+    bool isEnabled() const noexcept;
+
+    void  setMode(Mode m) noexcept;
+    Mode  mode() const noexcept;
+
+    // Poo (low band).
+    void  setPooDriveDb(float db) noexcept;          // 0..24 dB
+    float pooDriveDb() const noexcept;
+    void  setPooTuneHz(float hz) noexcept;           // 50..160 Hz
+    float pooTuneHz() const noexcept;
+    void  setPooMix(float v) noexcept;               // 0..1
+    float pooMix() const noexcept;
+
+    // Doo (high band).
+    void  setDooTuneHz(float hz) noexcept;           // 1000..10000 Hz
+    float dooTuneHz() const noexcept;
+    void  setDooHarmonicsDb(float db) noexcept;      // 0..24 dB
+    float dooHarmonicsDb() const noexcept;
+    void  setDooMix(float v) noexcept;               // 0..1
+    float dooMix() const noexcept;
+
+    // Audio thread — process in place.  channels must be 1 or 2.
+    void process(float* interleaved, int frames, int channels) noexcept;
+
+    // Audio thread — flush biquad + envelope + DC-block state.
+    void reset() noexcept;
+
+    // UI thread — read-only snapshots.
+    float inputPeakDb() const noexcept;
+    float outputPeakDb() const noexcept;
+    // Post-nonlinearity RMS in dB.  Drives the PooDoo logo pulse in
+    // the applet — dim at silence, bright when the exciter is
+    // actively adding content.
+    float wetRmsDb() const noexcept;
+
+    // Audio owner: mirror a presented auxiliary source into UI-facing meters.
+    // Copies atomic snapshots only; parameters and processing histories stay local.
+    void copyMeteringFrom(const ClientPudu& source) noexcept;
+
+    double sampleRate() const noexcept
+    { return m_sampleRate.load(std::memory_order_relaxed); }
+
+    // Public because the cpp-local biquad helper takes references.
+    // Not part of the user-facing API.
+    struct BiquadCoef { float b0{1}, b1{0}, b2{0}, a1{0}, a2{0}; };
+    struct BiquadState { float z1{0}, z2{0}; };
+
+private:
+    struct Atomics {
+        std::atomic<bool>     enabled{false};
+        std::atomic<uint8_t>  mode{static_cast<uint8_t>(Mode::Aphex)};
+        std::atomic<float>    pooDriveDb{0.0f};
+        std::atomic<float>    pooTuneHz{100.0f};
+        std::atomic<float>    pooMix{0.5f};
+        std::atomic<float>    dooTuneHz{5000.0f};
+        std::atomic<float>    dooHarmonicsDb{6.0f};
+        std::atomic<float>    dooMix{0.5f};
+        std::atomic<uint64_t> version{0};
+    };
+
+    struct Cached {
+        uint8_t mode{0};
+        // HF path.
+        BiquadCoef hpf{};
+        float      dooDriveLin{1.0f};   // 10^(harmonics/20)
+        float      dooMix{0.5f};
+        // LF path.
+        BiquadCoef lpf{};
+        BiquadCoef allpass{};            // used in Behringer mode
+        float      pooDriveLin{1.0f};
+        float      pooMix{0.5f};
+        // LF dynamics (both modes, different coefficients).
+        float      envAttackCoeff{0.0f};
+        float      envReleaseCoeff{0.0f};
+    };
+
+    struct Meters {
+        std::atomic<float> inputPeakDb{-120.0f};
+        std::atomic<float> outputPeakDb{-120.0f};
+        std::atomic<float> wetRmsDb{-120.0f};
+    };
+
+    void recacheIfDirty() noexcept;
+
+    // Per-channel state bundles so stereo maintains independent
+    // biquad memories without tangling the process() loop.
+    struct ChannelState {
+        BiquadState hpf;
+        BiquadState lpf;
+        BiquadState allpass;
+        // Single-pole DC block on the Doo path (Aphex mode only —
+        // needed because one-sided clipping introduces DC offset).
+        float dcX1{0.0f};
+        float dcY1{0.0f};
+    };
+
+    // Audio owner writes in prepare(); UI reads the displayed processing rate.
+    std::atomic<double> m_sampleRate{24000.0};
+    Atomics m_atomics;
+    Cached  m_cached;
+    Meters  m_meters;
+
+    // Audio-thread state.
+    uint64_t     m_lastVersion{0};
+    ChannelState m_chL;
+    ChannelState m_chR;
+    // Envelope followers for the LF band.  Shared across modes —
+    // Aphex mode treats them as a dynamic-EQ level detector; Behringer
+    // mode treats them as a compressor sidechain.
+    float        m_lfEnvLin{0.0f};
+};
+
+} // namespace AetherSDR

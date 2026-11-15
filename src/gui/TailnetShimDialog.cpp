@@ -1,0 +1,1129 @@
+#include "TailnetShimDialog.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "QrCodeImage.h"
+#include "ScopedChildWidget.h"
+
+#include "core/TailnetShimTokenStore.h"
+#include "core/ThemeManager.h"
+#include "models/RadioModel.h"
+
+#include <QCheckBox>
+#include <QClipboard>
+#include <QDateTime>
+#include <QLocale>
+#include <QPixmap>
+#include <QFrame>
+#include <QGridLayout>
+#include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPointer>
+#include <QPushButton>
+#include <QStyle>
+#include <QTimer>
+#include <QVBoxLayout>
+
+namespace AetherSDR {
+
+namespace {
+
+// AetherSDR style guide (docs/style/aethersdr-style-guide.md, RFC #6226),
+// modelled on the About window: a CanonWindow (ambient ground, rounded
+// corners, corner close), nested 12 px cards with a hairline, keys in muted,
+// values in ink-soft, canon secondary controls, and Done as the brand-gradient
+// primary like About's OK. State colours always travel with a word. Rules are
+// scoped by object name or the tsRole property so the card rule never reaches
+// the QLabels inside it (QLabel is a QFrame).
+constexpr const char* kTailnetDialogStyle =
+    "QWidget#tailnetBody { background: transparent; }"
+    "QWidget#tsInset { background: transparent; }"
+    "QLabel { color: {{color.canon.inkSoft}}; background: transparent; border: none; font-size: 12px; }"
+    "QLabel#tsTitle { color: {{color.canon.ink}}; font-size: 20px; font-weight: bold; }"
+    "QLabel#tsStatusLine { color: {{color.canon.muted}}; font-size: 13px; }"
+    "QLabel#tsStatusDot { background: {{color.canon.muted}}; border-radius: 4px;"
+    " min-width: 8px; max-width: 8px; min-height: 8px; max-height: 8px; }"
+    "QLabel#tsStatusDot[state=\"running\"] { background: {{color.canon.cyan}}; }"
+    "QLabel#tsStatusDot[state=\"starting\"] { background: {{color.accent.warning}}; }"
+    "QLabel#tsStatusDot[state=\"error\"] { background: {{color.accent.danger}}; }"
+    "QFrame#tsRule { background: {{color.canon.line}}; border: none; min-height: 1px; max-height: 1px; }"
+    "QFrame[tsRole=\"card\"] { background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}};"
+    " border-radius: 12px; }"
+    "QLabel[tsRole=\"cardTitle\"] { color: {{color.canon.ink}}; font-size: 13px; font-weight: bold; }"
+    "QLabel[tsRole=\"key\"] { color: {{color.canon.muted}}; font-size: 10px; font-weight: bold; }"
+    "QLabel[tsRole=\"value\"] { color: {{color.canon.inkSoft}}; font-size: 12px; }"
+    "QLabel[tsRole=\"hint\"] { color: {{color.canon.muted}}; font-size: 11px; }"
+    "QLabel[tsRole=\"message\"][tone=\"error\"] { color: {{color.accent.danger}}; }"
+    "QLabel[tsRole=\"message\"][tone=\"ok\"] { color: {{color.accent.success}}; }"
+    "QLabel[tsRole=\"message\"][tone=\"warn\"] { color: {{color.accent.warning}}; }"
+    "QLineEdit { background: {{color.canon.control}}; color: {{color.canon.ink}};"
+    " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 5px 8px; font-size: 12px;"
+    " selection-background-color: {{color.canon.cyan}}; selection-color: {{color.canon.onAccent}}; }"
+    "QLineEdit:focus { border-color: {{color.canon.aqua}}; }"
+    "QLineEdit:disabled { color: {{color.canon.muted}}; border-color: {{color.canon.line}}; }"
+    "QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; font-size: 12px; spacing: 8px; }"
+    "QCheckBox:disabled { color: {{color.canon.muted}}; }"
+    "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}};"
+    " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 6px 16px;"
+    " font-size: 12px; font-weight: bold; }"
+    "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }"
+    "QPushButton:focus { border-color: {{color.canon.aqua}}; }"
+    "QPushButton:disabled { background: transparent; color: {{color.canon.muted}};"
+    " border-color: {{color.canon.line}}; }"
+    // Done: the primary action, in the brand gradient, exactly as About's OK.
+    "QPushButton#tsDone { background: {{color.brand.gradient}}; color: {{color.canon.onAccent}};"
+    " border: 1px solid transparent; border-radius: 4px; padding: 6px 30px; }"
+    "QPushButton#tsDone:hover { border-color: {{color.canon.aqua}}; }"
+    "QPushButton#tsDone:focus { border: 2px solid {{color.canon.aqua}}; padding: 5px 29px; }"
+    // Advanced: a disclosure line, not a button-shaped control.
+    "QPushButton#tsAdvanced { background: transparent; border: none; color: {{color.canon.cyan}};"
+    " padding: 2px 0; text-align: left; font-weight: bold; }"
+    "QPushButton#tsAdvanced:hover { color: {{color.canon.aqua}}; }"
+    "QPushButton#tsAdvanced:focus { color: {{color.canon.aqua}}; text-decoration: underline; }";
+
+// The QR code's area: the code is scaled to a whole number of pixels per
+// module inside it, so phones read crisp edges.
+constexpr int kQrArea = 232;
+
+bool waitingOnPerson(const QString& state)
+{
+    return state == QLatin1String("needs_login") || state == QLatin1String("needs_approval");
+}
+
+QString stateText(const TailnetShimStatus& st)
+{
+    const QString state = st.state;
+    if (state == QLatin1String("running")) {
+        return QObject::tr("On your tailnet");
+    }
+    if (state == QLatin1String("starting")) {
+        return QObject::tr("Joining the tailnet…");
+    }
+    if (state == QLatin1String("needs_login")) {
+        return QObject::tr("Waiting for sign-in");
+    }
+    if (state == QLatin1String("needs_approval")) {
+        return QObject::tr("Waiting for approval");
+    }
+    if (state == QLatin1String("unprovisioned")) {
+        return QObject::tr("Not set up");
+    }
+    if (state == QLatin1String("error")) {
+        return QObject::tr("Problem");
+    }
+    return state;
+}
+
+void repolish(QWidget* w)
+{
+    w->style()->unpolish(w);
+    w->style()->polish(w);
+}
+
+QLabel* roleLabel(const QString& text, const char* role, QWidget* parent)
+{
+    auto* label = new QLabel(text, parent);
+    label->setProperty("tsRole", QString::fromLatin1(role));
+    return label;
+}
+
+// A canon card: nested surface, hairline border, 12 px radius, with a title.
+QFrame* makeCard(const QString& title, QWidget* parent, QVBoxLayout** contents)
+{
+    auto* card = new QFrame(parent);
+    card->setProperty("tsRole", QStringLiteral("card"));
+    card->setAccessibleName(title);
+    auto* v = new QVBoxLayout(card);
+    v->setContentsMargins(16, 14, 16, 16);
+    v->setSpacing(10);
+    v->addWidget(roleLabel(title, "cardTitle", card));
+    *contents = v;
+    return card;
+}
+
+}  // namespace
+
+TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* parent)
+    : CanonWindow(tr("Remote Access (Tailscale)"), parent)
+    , m_model(model)
+    , m_native(native)
+{
+    constexpr int kWidth = 600;
+    constexpr int kSide = 28;          // body side margins, as About's 24 plus room for cards
+    constexpr int kCardPad = 16;       // makeCard() side padding
+    setFixedWidth(kWidth);
+    m_bodyTextWidth = kWidth - 2 * CanonWindow::kInset - 2 * kSide;
+    m_cardTextWidth = m_bodyTextWidth - 2 * kCardPad - 2;   // less the card's hairline
+    bodyWidget()->setObjectName(QStringLiteral("tailnetBody"));
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kTailnetDialogStyle) + canonIndicatorRules();
+    });
+
+    auto* layout = new QVBoxLayout(bodyWidget());
+    layout->setContentsMargins(kSide, 26, kSide, 22);
+    layout->setSpacing(14);
+    QWidget* body = bodyWidget();
+
+    // Header: title, then a status line led by a dot (the dot never stands
+    // alone: the line always names the state), then a hairline.
+    auto* title = new QLabel(tr("Remote Access"), body);
+    title->setObjectName(QStringLiteral("tsTitle"));
+    title->setAlignment(Qt::AlignCenter);
+    title->setAccessibleName(tr("Remote access over Tailscale"));
+    layout->addWidget(title);
+    auto* statusRow = new QHBoxLayout;
+    statusRow->setSpacing(8);
+    statusRow->addStretch(1);
+    m_statusDot = new QLabel(body);
+    m_statusDot->setObjectName(QStringLiteral("tsStatusDot"));
+    m_statusDot->setAccessibleName(tr("Remote access status indicator"));
+    m_stateLabel = new QLabel(tr("Checking…"), body);
+    m_stateLabel->setObjectName(QStringLiteral("tsStatusLine"));
+    m_stateLabel->setAccessibleName(tr("Remote access status"));
+    statusRow->addWidget(m_statusDot, 0, Qt::AlignVCenter);
+    statusRow->addWidget(m_stateLabel, 0);
+    statusRow->addStretch(1);
+    layout->addLayout(statusRow);
+    auto* rule = new QFrame(body);
+    rule->setObjectName(QStringLiteral("tsRule"));
+    layout->addWidget(rule);
+
+    auto* intro = roleLabel(QString(), "value", body);
+    intro->setAlignment(Qt::AlignCenter);
+    intro->setAccessibleName(tr("About remote access over Tailscale"));
+    setWrapped(intro,
+        (m_native
+            ? tr("This radio waveform puts the radio on your Tailscale network, so AetherSDR can "
+                 "reach it from anywhere, including behind CGNAT. Set it up here while you are "
+                 "on the radio's local network, then connect remotely with Connect → Manual and "
+                 "the tailnet address below.")
+            : tr("This radio container puts the radio on your Tailscale network, so AetherSDR "
+                 "can reach it from anywhere, including behind CGNAT. Set it up here while you "
+                 "are on the radio's local network, then connect remotely with Connect → Manual "
+                 "and the tailnet address below.")),
+        m_bodyTextWidth);
+    layout->addWidget(intro);
+
+    // Card: the node on the tailnet.
+    QVBoxLayout* tailnet = nullptr;
+    m_tailnetCard = makeCard(tr("Tailnet"), body, &tailnet);
+    layout->addWidget(m_tailnetCard);
+    auto* grid = new QGridLayout;
+    grid->setHorizontalSpacing(16);
+    grid->setVerticalSpacing(8);
+    grid->setColumnStretch(1, 1);
+    auto addRow = [&](int row, const QString& key, QWidget* value, QWidget* trailing = nullptr) {
+        grid->addWidget(roleLabel(key, "key", body), row, 0, Qt::AlignLeft | Qt::AlignVCenter);
+        grid->addWidget(value, row, 1);
+        if (trailing) {
+            grid->addWidget(trailing, row, 2);
+        }
+    };
+    m_nameLabel = roleLabel(QStringLiteral("—"), "value", body);
+    m_nameLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_nameLabel->setAccessibleName(tr("Tailnet name"));
+    m_addressLabel = roleLabel(QStringLiteral("—"), "value", body);
+    m_addressLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_addressLabel->setAccessibleName(tr("Tailnet address"));
+    m_copyButton = new QPushButton(tr("Copy"), body);
+    m_copyButton->setAccessibleName(tr("Copy tailnet address"));
+    connect(m_copyButton, &QPushButton::clicked, this, [this] {
+        if (m_status && !m_status->tailnetIp.isEmpty()) {
+            QGuiApplication::clipboard()->setText(m_status->tailnetIp);
+        }
+    });
+    m_sessionsLabel = roleLabel(QStringLiteral("—"), "value", body);
+    m_sessionsLabel->setAccessibleName(tr("Remote sessions"));
+    m_versionLabel = roleLabel(QStringLiteral("—"), "value", body);
+    m_versionLabel->setAccessibleName(m_native ? tr("Waveform version") : tr("Container version"));
+    addRow(0, tr("TAILNET NAME"), m_nameLabel);
+    addRow(1, tr("TAILNET ADDRESS"), m_addressLabel, m_copyButton);
+    addRow(2, tr("REMOTE SESSIONS"), m_sessionsLabel);
+    addRow(3, m_native ? tr("WAVEFORM VERSION") : tr("CONTAINER VERSION"), m_versionLabel);
+    m_expiryLabel = roleLabel(QStringLiteral("—"), "value", body);
+    m_expiryLabel->setAccessibleName(tr("Sign-in expires"));
+    addRow(4, tr("SIGN-IN EXPIRES"), m_expiryLabel);
+    tailnet->addLayout(grid);
+    m_expiryHint = roleLabel(QString(), "hint", body);
+    m_expiryHint->setAccessibleName(tr("About the sign-in's expiry"));
+    m_expiryHint->hide();
+    tailnet->addWidget(m_expiryHint);
+
+    // Card: joining (by QR code, or an auth key under Advanced) and who may
+    // connect.
+    QVBoxLayout* join = nullptr;
+    m_joinCard = makeCard(tr("Join your tailnet"), body, &join);
+    layout->addWidget(m_joinCard);
+    // Who may reach the radio is the tailnet's business (its access rules
+    // in the Tailscale admin console), not a list kept here.
+    m_qrHint = roleLabel(QString(), "hint", body);
+    m_qrHint->setAccessibleName(tr("QR code sign-in note"));
+    m_qrHint->hide();
+    join->addWidget(m_qrHint);
+
+    // The sign-in QR code, its steps, and the link for a screen reader or a
+    // phone-less sign-in.
+    m_qrPanel = new QWidget(body);
+    m_qrPanel->setObjectName(QStringLiteral("tsInset"));
+    auto* qrRow = new QHBoxLayout(m_qrPanel);
+    qrRow->setContentsMargins(0, 4, 0, 0);
+    qrRow->setSpacing(16);
+    m_qrImage = new QLabel(m_qrPanel);
+    m_qrImage->setFixedSize(kQrArea, kQrArea);
+    m_qrImage->setAlignment(Qt::AlignCenter);
+    m_qrImage->setAccessibleName(tr("Sign-in QR code"));
+    m_qrImage->setAccessibleDescription(
+        tr("Scan it with your phone's camera, or open the link next to it."));
+    qrRow->addWidget(m_qrImage, 0, Qt::AlignTop);
+    auto* qrText = new QVBoxLayout;
+    qrText->setSpacing(8);
+    const int qrTextWidth = m_cardTextWidth - kQrArea - 16;
+    m_qrSteps = roleLabel(QString(), "value", m_qrPanel);
+    m_qrSteps->setAccessibleName(tr("How to sign in"));
+    m_qrSteps->setFixedWidth(qrTextWidth);
+    qrText->addWidget(m_qrSteps);
+    m_qrLink = roleLabel(QString(), "hint", m_qrPanel);
+    m_qrLink->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    m_qrLink->setAccessibleName(tr("Sign-in link"));
+    m_qrLink->setFixedWidth(qrTextWidth);
+    qrText->addWidget(m_qrLink);
+    m_copyLinkButton = new QPushButton(tr("Copy Link"), m_qrPanel);
+    m_copyLinkButton->setAccessibleName(tr("Copy the sign-in link"));
+    connect(m_copyLinkButton, &QPushButton::clicked, this, [this] {
+        if (!m_authUrl.isEmpty()) {
+            QGuiApplication::clipboard()->setText(m_authUrl);
+        }
+    });
+    qrText->addWidget(m_copyLinkButton, 0, Qt::AlignLeft);
+    qrText->addStretch(1);
+    qrRow->addLayout(qrText, 1);
+    m_qrPanel->hide();
+    join->addWidget(m_qrPanel);
+
+    // Advanced: the auth key, for a tagged radio that never expires or a
+    // sign-in without a phone.
+    m_advancedToggle = new QPushButton(body);
+    m_advancedToggle->setObjectName(QStringLiteral("tsAdvanced"));
+    m_advancedToggle->setCheckable(true);
+    m_advancedToggle->setAccessibleName(tr("Advanced: use an auth key"));
+    connect(m_advancedToggle, &QPushButton::toggled, this, &TailnetShimDialog::setAdvancedOpen);
+    join->addWidget(m_advancedToggle, 0, Qt::AlignLeft);
+    m_keyPanel = new QWidget(body);
+    m_keyPanel->setObjectName(QStringLiteral("tsInset"));
+    auto* keyBox = new QVBoxLayout(m_keyPanel);
+    keyBox->setContentsMargins(0, 0, 0, 0);
+    keyBox->setSpacing(8);
+    auto* keyGrid = new QGridLayout;
+    keyGrid->setHorizontalSpacing(16);
+    keyGrid->setVerticalSpacing(8);
+    keyGrid->setColumnStretch(1, 1);
+    // The machine name applies to a join with a key; the QR sign-in starts
+    // as the window opens, with the name suggested from the radio's
+    // nickname (rename it in the Tailscale admin console).
+    m_hostnameEdit = new QLineEdit(m_keyPanel);
+    m_hostnameEdit->setAccessibleName(tr("Tailnet machine name"));
+    m_hostnameEdit->setMaxLength(63);
+    keyGrid->addWidget(roleLabel(tr("MACHINE NAME"), "key", m_keyPanel), 0, 0);
+    keyGrid->addWidget(m_hostnameEdit, 0, 1);
+    m_keyEdit = new QLineEdit(m_keyPanel);
+    m_keyEdit->setEchoMode(QLineEdit::Password);
+    m_keyEdit->setPlaceholderText(QStringLiteral("tskey-auth-…"));
+    m_keyEdit->setAccessibleName(tr("Tailscale auth key"));
+    m_keyEdit->setAccessibleDescription(
+        tr("A single-use key from the Tailscale admin console. It is sent to the radio once "
+           "and is not stored."));
+    connect(m_keyEdit, &QLineEdit::textChanged, this, &TailnetShimDialog::updateControls);
+    // Enter here joins with the key, not the window's default (QR) button.
+    connect(m_keyEdit, &QLineEdit::returnPressed, this, [this] {
+        if (m_joinButton->isEnabled()) {
+            this->join();
+        }
+    });
+    keyGrid->addWidget(roleLabel(tr("AUTH KEY"), "key", m_keyPanel), 1, 0);
+    keyGrid->addWidget(m_keyEdit, 1, 1);
+    keyBox->addLayout(keyGrid);
+    auto* keyHint = roleLabel(QString(), "hint", m_keyPanel);
+    setWrapped(keyHint,
+        tr("Create a single-use key in the Tailscale admin console under Settings → Keys. "
+           "AetherSDR sends it to the radio once and does not keep it. A key with a tag makes "
+           "a radio whose sign-in never expires."),
+        m_cardTextWidth);
+    keyBox->addWidget(keyHint);
+    auto* keyButtons = new QHBoxLayout;
+    keyButtons->addStretch(1);
+    m_joinButton = new QPushButton(tr("Join with Key"), m_keyPanel);
+    m_joinButton->setAccessibleName(tr("Join the tailnet with this auth key"));
+    keyButtons->addWidget(m_joinButton);
+    keyBox->addLayout(keyButtons);
+    join->addWidget(m_keyPanel);
+    setAdvancedOpen(false);
+
+    // Card: station devices (4O3A accessories) shared as subnet routes.
+    QVBoxLayout* devices = nullptr;
+    m_devicesCard = makeCard(tr("Station devices"), body, &devices);
+    layout->addWidget(m_devicesCard);
+    m_devicesLabel = roleLabel(QString(), "value", body);
+    setWrapped(m_devicesLabel,
+               tr("Looking for Antenna Genius, Power Genius XL and Tuner Genius XL…"),
+               m_cardTextWidth);
+    m_devicesLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_devicesLabel->setAccessibleName(tr("Station devices found on the radio's network"));
+    devices->addWidget(m_devicesLabel);
+    m_shareDiscoveredCheck = new QCheckBox(tr("Share the devices found here over the tailnet"), body);
+    m_shareDiscoveredCheck->setChecked(true);
+    m_shareDiscoveredCheck->setAccessibleName(tr("Share discovered station devices over the tailnet"));
+    connect(m_shareDiscoveredCheck, &QCheckBox::toggled, this, &TailnetShimDialog::updateControls);
+    devices->addWidget(m_shareDiscoveredCheck);
+    auto* otherRow = new QGridLayout;
+    otherRow->setHorizontalSpacing(16);
+    otherRow->setColumnStretch(1, 1);
+    m_extraDevicesEdit = new QLineEdit(body);
+    m_extraDevicesEdit->setPlaceholderText(tr("192.168.1.40, 192.168.1.41"));
+    m_extraDevicesEdit->setAccessibleName(tr("Other LAN devices to share"));
+    m_extraDevicesEdit->setAccessibleDescription(
+        tr("Local network addresses of other devices to reach over the tailnet, separated by commas."));
+    otherRow->addWidget(roleLabel(tr("OTHER DEVICES"), "key", body), 0, 0);
+    otherRow->addWidget(m_extraDevicesEdit, 0, 1);
+    devices->addLayout(otherRow);
+    m_sharingNote = roleLabel(QString(), "hint", body);
+    m_sharingNote->setAccessibleName(tr("Device sharing status"));
+    devices->addWidget(m_sharingNote);
+    auto* sharingButtons = new QHBoxLayout;
+    sharingButtons->addStretch(1);
+    m_saveSharingButton = new QPushButton(tr("Save Sharing"), body);
+    m_saveSharingButton->setAccessibleName(tr("Save which station devices are shared"));
+    sharingButtons->addWidget(m_saveSharingButton);
+    devices->addLayout(sharingButtons);
+
+    // The node's details and station-device sharing mean nothing until the
+    // radio is on a tailnet: they appear once it has been (showStatus).
+    m_tailnetCard->hide();
+    m_devicesCard->hide();
+
+    // Messages (always worded; colour only reinforces).
+    m_messageLabel = roleLabel(QString(), "message", body);
+    m_messageLabel->setAccessibleName(tr("Remote access message"));
+    m_messageLabel->hide();
+    layout->addWidget(m_messageLabel);
+
+    auto* footer = new QHBoxLayout;
+    m_refreshButton = new QPushButton(tr("Refresh"), body);
+    m_refreshButton->setAccessibleName(tr("Refresh remote access status"));
+    m_signOutButton = new QPushButton(tr("Disconnect"), body);
+    m_signOutButton->setAccessibleName(tr("Disconnect the radio from your tailnet"));
+    m_resetButton = new QPushButton(tr("Reset"), body);
+    m_resetButton->setAccessibleName(tr("Reset remote access on this radio"));
+    m_resetButton->setToolTip(
+        tr("This computer can't change this radio's remote access. Reset reinstalls it."));
+    m_resetButton->hide();
+    m_updateButton = new QPushButton(tr("Update"), body);
+    m_updateButton->setAccessibleName(tr("Update remote access on this radio"));
+    m_updateButton->hide();
+    auto* doneButton = new QPushButton(tr("Done"), body);
+    doneButton->setObjectName(QStringLiteral("tsDone"));
+    doneButton->setAccessibleName(tr("Close remote access settings"));
+    footer->addWidget(m_refreshButton);
+    footer->addWidget(m_signOutButton);
+    footer->addWidget(m_resetButton);
+    footer->addWidget(m_updateButton);
+    footer->addStretch(1);
+    footer->addWidget(doneButton);
+    layout->addSpacing(4);
+    layout->addLayout(footer);
+
+    connect(doneButton, &QPushButton::clicked, this, &QDialog::close);
+    connect(m_refreshButton, &QPushButton::clicked, this, [this] {
+        // Pressing Refresh also retries a sign-in code that couldn't start;
+        // the refresh after a failed request doesn't, or it would loop.
+        m_autoSignInTried = false;
+        refresh();
+    });
+    connect(m_joinButton, &QPushButton::clicked, this, &TailnetShimDialog::join);
+    connect(&m_client, &TailnetShimClient::loginReceived, this, &TailnetShimDialog::onLogin);
+    connect(m_saveSharingButton, &QPushButton::clicked, this, &TailnetShimDialog::saveSharing);
+    connect(m_signOutButton, &QPushButton::clicked, this, &TailnetShimDialog::signOut);
+    connect(m_resetButton, &QPushButton::clicked, this, &TailnetShimDialog::reset);
+    connect(m_updateButton, &QPushButton::clicked, this, &TailnetShimDialog::updateRadioShim);
+
+    connect(&m_client, &TailnetShimClient::statusReceived, this,
+            [this](const TailnetShimStatus& st) {
+        setBusy(false);
+        showStatus(st);
+        maybeSignInUnasked();
+    });
+    connect(&m_client, &TailnetShimClient::requestFailed,
+            this, &TailnetShimDialog::onRequestFailed);
+
+    m_pollTimer = new QTimer(this);
+    m_pollTimer->setInterval(3000);
+    connect(m_pollTimer, &QTimer::timeout, this, [this] {
+        if (!m_busy) {
+            // While a sign-in is waited on, the status reply fetches the
+            // login too (showStatus), which keeps a restarted join's code
+            // current.
+            m_client.fetchStatus();
+        }
+    });
+
+    // Status, errors and device names come from whatever answers on the
+    // radio's LAN address: never let Qt read them as rich text.
+    for (QLabel* label : findChildren<QLabel*>()) {
+        label->setTextFormat(Qt::PlainText);
+    }
+
+    // Reachability: the provisioning API listens only on the radio's LAN
+    // address. A radio reached over the tailnet itself (or any routed path
+    // that isn't a private LAN address) can't be configured from here.
+    const QHostAddress address = m_model ? m_model->radioAddress() : QHostAddress();
+    const RadioInfo info = m_model ? m_model->lastRadioInfo() : RadioInfo{};
+    m_lanReachable = m_model && m_model->isConnected() && !address.isNull()
+        && address.protocol() == QAbstractSocket::IPv4Protocol
+        && (address.isPrivateUse() || address.isLinkLocal());
+    // Key the admin token by the radio's own serial (from its `info` reply):
+    // the discovery serial is the IP address for a manual/routed connection,
+    // which would make one radio look like two.
+    m_radioSerial = m_model ? m_model->chassisSerial().trimmed() : QString();
+    if (m_radioSerial.isEmpty() && QHostAddress(info.serial.trimmed()).isNull()) {
+        // Discovery's serial is the real one for a discovered radio; for a
+        // manual connection it is the address, which must never key a token.
+        m_radioSerial = info.serial.trimmed();
+    }
+    m_hostnameEdit->setText(tailnetshim::suggestedHostname(
+        m_model ? m_model->nickname() : QString()));
+
+    if (!m_lanReachable) {
+        setStatusLine(tr("Unavailable"), QStringLiteral("idle"));
+        showError(m_native
+            ? tr("Connect to this radio over its local network to set up remote access. "
+                 "The waveform's settings can't be changed over the tailnet.")
+            : tr("Connect to this radio over its local network to set up remote access. "
+                 "The container's settings can't be changed over the tailnet."));
+        updateControls();
+        return;
+    }
+
+    m_apiAddress = address;
+    m_client.setRadioAddress(address);
+    // The window is for the radio it opened on. If that connection goes
+    // (or is replaced by another radio, which disconnects first), stop
+    // offering changes rather than send them to whatever is there now. A
+    // join already under way still finishes and saves its token.
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (connected || !m_lanReachable) {
+            return;
+        }
+        m_lanReachable = false;
+        m_pollTimer->stop();
+        setStatusLine(tr("Unavailable"), QStringLiteral("idle"));
+        showError(tr("The radio disconnected. Reopen this window once it is connected again."));
+        updateControls();
+    });
+    TailnetShimTokenStore::load(m_radioSerial, this, [this](const QString& token) {
+        m_adminToken = tailnetshim::tokenAfterKeychainRead(m_adminToken, token);
+        m_tokenLoaded = true;
+        updateControls();
+        maybeSignInUnasked();   // the status may have arrived first
+    });
+    refresh();
+}
+
+void TailnetShimDialog::maybeSignInUnasked()
+{
+    if (!m_status) {
+        return;
+    }
+    // A radio no tailnet owns gets its sign-in code as soon as the window
+    // opens: there is nothing to choose first. Once per window (Refresh
+    // tries again), and only once the keychain has answered.
+    if (tailnetshim::shouldSignInUnasked(*m_status, m_tokenLoaded, !m_adminToken.isEmpty(),
+                                         m_busy, m_lanReachable, m_autoSignInTried)) {
+        m_autoSignInTried = true;
+        signInWithQr();
+    }
+}
+
+// Fits the window to what is shown, after the layout has caught up with a
+// show or hide: measured at once, a just-hidden panel still counts, so the
+// window grows but never shrinks back.
+void TailnetShimDialog::fitToContents()
+{
+    if (m_fitPending) {
+        return;
+    }
+    m_fitPending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_fitPending = false;
+        if (!isVisible()) {
+            return;
+        }
+        if (QLayout* l = bodyWidget()->layout()) {
+            l->activate();
+        }
+        if (QLayout* l = layout()) {
+            l->activate();
+        }
+        adjustSize();
+    });
+}
+
+void TailnetShimDialog::setWrapped(QLabel* label, const QString& text, int width)
+{
+    // Status polls repeat the same text every few seconds; re-laying out the
+    // window for it makes it jump.
+    if (label->wordWrap() && label->text() == text) {
+        return;
+    }
+    label->setWordWrap(true);
+    label->setText(text);
+    label->ensurePolished();
+    label->setMinimumHeight(text.isEmpty() ? 0 : label->heightForWidth(width));
+    if (isVisible()) {
+        fitToContents();
+    }
+}
+
+void TailnetShimDialog::setStatusLine(const QString& text, const QString& state)
+{
+    m_stateLabel->setText(text);
+    m_statusDot->setProperty("state", state);
+    repolish(m_statusDot);
+}
+
+void TailnetShimDialog::showMessage(const QString& message, const QString& tone)
+{
+    m_messageLabel->setProperty("tone", tone);
+    repolish(m_messageLabel);
+    m_messageLabel->show();
+    setWrapped(m_messageLabel, message, m_bodyTextWidth);
+}
+
+void TailnetShimDialog::refresh()
+{
+    if (!m_lanReachable) {
+        return;
+    }
+    setBusy(true, tr("Checking…"));
+    m_client.fetchStatus();
+}
+
+void TailnetShimDialog::setBusy(bool busy, const QString& what)
+{
+    m_busy = busy;
+    if (busy && !what.isEmpty()) {
+        setStatusLine(what, QStringLiteral("starting"));
+    }
+    updateControls();
+}
+
+void TailnetShimDialog::showError(const QString& message)
+{
+    showMessage(tr("Problem: %1").arg(message), QStringLiteral("error"));
+}
+
+void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
+{
+    m_status = st;
+    // Joined: on the tailnet now, or holding an address from before (an
+    // expired sign-in keeps its address and its shared devices).
+    const bool joined = st.state == QLatin1String("running") || !st.tailnetIp.isEmpty();
+    // Joining is done once the radio is on the tailnet; an expired sign-in
+    // (or any state short of running) brings the card back for its code.
+    const bool joining = st.state != QLatin1String("running");
+    if (m_tailnetCard->isVisible() != joined || m_devicesCard->isVisible() != joined
+        || m_joinCard->isVisible() != joining) {
+        m_tailnetCard->setVisible(joined);
+        m_devicesCard->setVisible(joined);
+        m_joinCard->setVisible(joining);
+        if (isVisible()) {
+            fitToContents();
+        }
+    }
+    QString line = stateText(st);
+    if (!st.version.isEmpty()) {
+        line += QStringLiteral(" · ")
+            + (m_native ? tr("waveform %1") : tr("container %1")).arg(st.version);
+        const QString pinned = tailnetshim::pinnedVersion(m_native);
+        if (tailnetshim::updateAvailable(st.version, pinned)) {
+            line += QStringLiteral(" · ") + tr("%1 available").arg(pinned);
+        }
+    }
+    if (st.state == QLatin1String("running")) {
+        line += QStringLiteral(" · ") + tr("%n remote session(s)", "", st.sessions);
+    }
+    // A wait on a person shows like a join under way: amber, with words.
+    setStatusLine(line, waitingOnPerson(st.state) ? QStringLiteral("starting") : st.state);
+    m_nameLabel->setText(st.dnsName.isEmpty() ? QStringLiteral("—") : st.dnsName);
+    m_addressLabel->setText(st.tailnetIp.isEmpty() ? QStringLiteral("—") : st.tailnetIp);
+    m_sessionsLabel->setText(QString::number(st.sessions));
+    m_versionLabel->setText(st.version);
+    const QDateTime expires = QDateTime::fromString(st.keyExpiry, Qt::ISODate);
+    const QString expiresText = expires.isValid()
+        ? QLocale().toString(expires.toLocalTime().date(), QLocale::LongFormat)
+        : QString();
+    // Only a container that reports expiry (0.5.0 on) can say "Never".
+    m_expiryLabel->setText(!expiresText.isEmpty() ? expiresText
+                           : st.state == QLatin1String("running")
+                                   && tailnetshim::supportsQrSignIn(st.version)
+                               ? tr("Never")
+                               : QStringLiteral("—"));
+    const bool showExpiryHint = st.state == QLatin1String("running") && !expiresText.isEmpty();
+    if (showExpiryHint) {
+        setWrapped(m_expiryHint,
+            tr("The radio's sign-in expires on %1, and then it leaves your tailnet until it is "
+               "signed in again from here. To keep it on, turn off key expiry for it in the "
+               "Tailscale admin console: Machines → this radio → Disable key expiry.")
+                .arg(expiresText),
+            m_cardTextWidth);
+    }
+    m_expiryHint->setVisible(showExpiryHint);
+    if (!st.hostname.isEmpty()) {
+        m_hostnameEdit->setText(st.hostname);
+    }
+    QStringList found;
+    for (const TailnetShimDevice& d : st.discovered) {
+        found << tr("%1 “%2” at %3").arg(d.kind, d.name, d.ip);
+    }
+    setWrapped(m_devicesLabel, found.isEmpty()
+        ? tr("No Antenna Genius, Power Genius XL or Tuner Genius XL has announced itself on "
+             "the radio's network yet.")
+        : found.join(QStringLiteral("\n")), m_cardTextWidth);
+    if (!m_shareDiscoveredCheck->hasFocus()) {
+        m_shareDiscoveredCheck->setChecked(st.shareDiscovered);
+    }
+    if (!m_extraDevicesEdit->hasFocus()) {
+        m_extraDevicesEdit->setText(st.routes.join(QStringLiteral(", ")));
+    }
+    if (st.state == QLatin1String("running")) {
+        if (st.advertisedRoutes.isEmpty()) {
+            setWrapped(m_sharingNote, tr("No devices are shared."), m_cardTextWidth);
+        } else {
+            QStringList approved, waiting;
+            for (const QString& r : st.advertisedRoutes) {
+                (st.approvedRoutes.contains(r) ? approved : waiting) << r;
+            }
+            QStringList lines;
+            if (!approved.isEmpty()) {
+                lines << tr("Confirmed in use over the tailnet: %1.")
+                             .arg(approved.join(QStringLiteral(", ")));
+            }
+            if (!waiting.isEmpty()) {
+                lines << tr("Offered, not yet confirmed: %1. If you haven't already, approve them "
+                            "once in the Tailscale admin console (Machines \u2192 this radio "
+                            "\u2192 Edit route settings). A route is confirmed the first time a "
+                            "remote device connects through it.")
+                             .arg(waiting.join(QStringLiteral(", ")));
+            }
+            lines << tr("Remotely, set each device's applet to its LAN address.");
+            setWrapped(m_sharingNote, lines.join(QStringLiteral("\n")), m_cardTextWidth);
+        }
+    } else {
+        setWrapped(m_sharingNote, tr("Devices are shared once the radio is on the tailnet."),
+                   m_cardTextWidth);
+    }
+    if (st.state == QLatin1String("error") && !st.lastError.isEmpty()) {
+        showError(st.lastError);
+    }
+    if (waitingOnPerson(st.state)) {
+        if (!m_adminToken.isEmpty()) {
+            m_client.fetchLogin(m_adminToken);
+        }
+        if (st.state == QLatin1String("needs_approval")) {
+            showSignIn(QString());
+        }
+    } else if (st.state != QLatin1String("starting") && !m_qrPanel->isHidden()) {
+        // "starting" is a join on its way to a sign-in or back from one:
+        // the code stays up until the radio is on the tailnet or gives up.
+        hideSignIn();
+    }
+    if (st.state == QLatin1String("running") && m_signingIn) {
+        m_signingIn = false;
+        showMessage(tr("Signed in. Connect remotely with Connect → Manual and the address %1.")
+                        .arg(st.tailnetIp),
+                    QStringLiteral("ok"));
+    }
+    if (st.state == QLatin1String("starting") || waitingOnPerson(st.state)) {
+        m_pollTimer->start();
+    } else {
+        m_pollTimer->stop();
+    }
+    updateControls();
+}
+
+void TailnetShimDialog::updateControls()
+{
+    const bool known = m_lanReachable && m_status.has_value() && !m_busy;
+    const bool provisioned = known && m_status->provisioned;
+    const bool haveToken = !m_adminToken.isEmpty();
+    // A provisioned container accepts changes only with its admin token,
+    // unless no tailnet owns it yet (claimable).
+    const bool mayChange = known && (!provisioned || haveToken || m_status->claimable);
+
+    // Saving sharing restarts a join on the radio, which would replace the
+    // QR code being scanned: not while one is waited on.
+    const bool waiting = known && waitingOnPerson(m_status->state);
+    const bool qrSupported = known && tailnetshim::supportsQrSignIn(m_status->version);
+
+    m_refreshButton->setEnabled(m_lanReachable && !m_busy);
+    m_keyEdit->setEnabled(mayChange);
+    m_hostnameEdit->setEnabled(mayChange);
+    m_joinButton->setText(provisioned ? tr("Change Key") : tr("Join with Key"));
+    m_joinButton->setAccessibleName(provisioned
+        ? tr("Rejoin the tailnet with a new auth key")
+        : tr("Join the tailnet with this auth key"));
+    m_joinButton->setEnabled(mayChange && !m_keyEdit->text().trimmed().isEmpty());
+    if (known && !qrSupported) {
+        // An older container may still enforce a Who may connect list this
+        // window no longer edits; name it, since updating is what drops it.
+        QString hint = tr("This remote-access container (version %1) can only join with an auth "
+                          "key, under Advanced. Use Update below to sign in with a QR code.")
+                           .arg(m_status->version);
+        if (!m_status->allow.isEmpty()) {
+            hint += QLatin1Char(' ')
+                + tr("It also still limits who may connect to %1; updating hands that to your "
+                     "tailnet's access rules.").arg(m_status->allow.join(QStringLiteral(", ")));
+        }
+        setWrapped(m_qrHint, hint, m_cardTextWidth);
+        if (!m_advancedOpenedForVersion) {
+            m_advancedOpenedForVersion = true;
+            m_advancedToggle->setChecked(true);
+        }
+    }
+    m_qrHint->setVisible(known && !qrSupported);
+    m_saveSharingButton->setEnabled(provisioned && haveToken && !waiting);
+    // Disconnect belongs to a radio on the tailnet; until then there is
+    // only the sign-in to finish.
+    // A provisioned radio stuck in error can also be signed out, or its
+    // token holder would have no way back.
+    const bool joined = known
+        && (m_status->state == QLatin1String("running") || !m_status->tailnetIp.isEmpty()
+            || (provisioned && !m_status->claimable
+                && m_status->state == QLatin1String("error")));
+    // Without the admin token nothing here can change a radio a tailnet
+    // owns: Reset (reinstall the container) takes Disconnect's place.
+    const bool lockedOut = provisioned && m_tokenLoaded && !haveToken && !m_status->claimable;
+    m_signOutButton->setVisible(joined && !lockedOut);
+    m_signOutButton->setEnabled(joined && haveToken);
+    m_resetButton->setVisible(lockedOut);
+    m_resetButton->setEnabled(lockedOut && !m_busy);
+    // An older release on the radio: Update reinstalls it at the pin. Reset,
+    // when shown, does the same, so it isn't offered twice.
+    const bool outdated = known
+        && tailnetshim::updateAvailable(m_status->version, tailnetshim::pinnedVersion(m_native));
+    m_updateButton->setVisible(outdated && !lockedOut);
+    m_updateButton->setEnabled(outdated && !m_busy);
+    const QString updateWhy = outdated
+        ? tr("Install version %1 on the radio.").arg(tailnetshim::pinnedVersion(m_native))
+        : QString();
+    m_updateButton->setToolTip(updateWhy);
+    m_updateButton->setAccessibleDescription(updateWhy);
+    m_shareDiscoveredCheck->setEnabled(mayChange);
+    m_extraDevicesEdit->setEnabled(mayChange);
+    m_copyButton->setEnabled(m_status && !m_status->tailnetIp.isEmpty());
+}
+
+void TailnetShimDialog::join()
+{
+    const QString key = m_keyEdit->text().trimmed();
+    if (key.isEmpty()) {
+        return;
+    }
+    setBusy(true, tr("Joining the tailnet…"));
+    provision(key);
+    // The key leaves this process in the request above and is kept nowhere.
+    m_keyEdit->clear();
+}
+
+void TailnetShimDialog::signInWithQr()
+{
+    m_signingIn = true;
+    setBusy(true, tr("Getting a sign-in code…"));
+    provision(QString());
+}
+
+// Provisions with an auth key, or by QR code when it is empty. The join can
+// take a minute and rotates the admin token, so it must not depend on this
+// window: closing it (or the Waveforms window that owns it) mid-join would
+// otherwise drop the only copy of the new token and leave the container
+// unchangeable until it is reinstalled. The request and the keychain save
+// belong to the application; the window hears the outcome only if it is
+// still open.
+void TailnetShimDialog::provision(const QString& authKey)
+{
+    m_messageLabel->hide();
+    hideSignIn();
+    auto* transaction = new TailnetShimClient(qApp);
+    transaction->setRadioAddress(m_apiAddress);
+    const QPointer<TailnetShimDialog> window(this);
+    const QString serial = m_radioSerial;
+    connect(transaction, &TailnetShimClient::provisioned, qApp,
+            [transaction, window, serial](const TailnetShimProvisionReply& reply) {
+        // A token the keychain refuses is kept for this session only; the
+        // log says why. The window doesn't: there is nothing to act on.
+        TailnetShimTokenStore::save(serial, reply.adminToken, qApp,
+                                    [](bool persisted, const QString& error) {
+            if (!persisted) {
+                qWarning("Remote access: the new admin token was not saved to the keychain: %s",
+                         qPrintable(error));
+            }
+        });
+        if (window) {
+            window->onProvisioned(reply);
+        }
+        transaction->deleteLater();
+    });
+    connect(transaction, &TailnetShimClient::requestFailed, qApp,
+            [transaction, window](const QString& operation, const QString& message,
+                                  bool unauthorized) {
+        if (window) {
+            window->m_signingIn = false;
+            window->onRequestFailed(operation, message, unauthorized);
+        }
+        transaction->deleteLater();
+    });
+    // An older container still keeps a Who may connect list: rejoining
+    // passes it through rather than silently widening access. 0.5.0
+    // ignores it.
+    transaction->provision(authKey, m_hostnameEdit->text().trimmed(),
+                           m_status ? m_status->allow : QStringList{},
+                           tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
+                           m_shareDiscoveredCheck->isChecked(), m_adminToken);
+}
+
+void TailnetShimDialog::onProvisioned(const TailnetShimProvisionReply& reply)
+{
+    m_adminToken = reply.adminToken;
+    setBusy(false);
+    showStatus(reply.status);
+    if (!reply.error.isEmpty()) {
+        m_signingIn = false;
+        showError(reply.error);
+        return;
+    }
+    if (!reply.authUrl.isEmpty()) {
+        showSignIn(reply.authUrl);
+        return;
+    }
+    if (reply.status.state == QLatin1String("running") && !m_signingIn) {
+        showMessage(tr("Joined. Connect remotely with Connect → Manual and the address %1.")
+                        .arg(reply.status.tailnetIp),
+                    QStringLiteral("ok"));
+    }
+}
+
+void TailnetShimDialog::onLogin(const TailnetShimLogin& login)
+{
+    if (login.state == QLatin1String("needs_login") && !login.authUrl.isEmpty()) {
+        showSignIn(login.authUrl);
+    } else if (login.state == QLatin1String("needs_approval")) {
+        showSignIn(QString());
+    }
+}
+
+// Shows the sign-in code for url, or with an empty url, that the radio is
+// signed in and waits for a tailnet admin's approval.
+void TailnetShimDialog::showSignIn(const QString& url)
+{
+    // A node that had an address and now wants a sign-in is one whose key expired.
+    const bool expired = !m_signingIn && m_status && !m_status->tailnetIp.isEmpty();
+    if (url.isEmpty()) {
+        m_authUrl.clear();
+        m_qrImage->clear();
+        m_qrImage->hide();
+        m_copyLinkButton->hide();
+        m_qrLink->clear();
+        setWrapped(m_qrSteps,
+            tr("Signed in. This tailnet also needs an admin to approve new devices: approve "
+               "the radio in the Tailscale admin console (Machines). This window shows it on "
+               "your tailnet when that is done."),
+            m_cardTextWidth - kQrArea - 16);
+    } else if (url != m_authUrl) {
+        m_authUrl = url;
+        const ThemeManager& theme = ThemeManager::instance();
+        const QImage code = qrCodeImage(url, 1, theme.color(this, QStringLiteral("color.qr.dark")),
+                                        theme.color(this, QStringLiteral("color.qr.light")));
+        if (code.isNull()) {
+            m_qrImage->setText(tr("(no QR code)"));
+        } else {
+            // A whole number of pixels per module keeps the edges crisp.
+            const int scale = qMax(1, kQrArea / code.width());
+            m_qrImage->setPixmap(QPixmap::fromImage(code.scaled(
+                code.width() * scale, code.height() * scale, Qt::KeepAspectRatio,
+                Qt::FastTransformation)));
+        }
+        m_qrImage->show();
+        m_copyLinkButton->show();
+        setWrapped(m_qrSteps,
+            (expired ? tr("The radio's sign-in has expired, so it has left your tailnet. Sign it "
+                          "in again:\n\n")
+                     : QString())
+                + tr("1. Scan the code with your phone's camera.\n"
+                     "2. Sign in to Tailscale and approve this radio.\n"
+                     "3. This window shows the radio on your tailnet when it's done."),
+            m_cardTextWidth - kQrArea - 16);
+        setWrapped(m_qrLink, tr("Or open: %1").arg(url), m_cardTextWidth - kQrArea - 16);
+    }
+    // isHidden, not isVisible: the panel's own flag, whether or not the
+    // Join card around it is showing.
+    if (m_qrPanel->isHidden()) {
+        m_qrPanel->show();
+        if (isVisible()) {
+            fitToContents();
+        }
+    }
+}
+
+void TailnetShimDialog::hideSignIn()
+{
+    m_authUrl.clear();
+    m_qrImage->clear();
+    if (!m_qrPanel->isHidden()) {
+        m_qrPanel->hide();
+        if (isVisible()) {
+            fitToContents();
+        }
+    }
+}
+
+void TailnetShimDialog::setAdvancedOpen(bool open)
+{
+    m_advancedToggle->setText(open ? tr("▾ Advanced: use an auth key")
+                                   : tr("▸ Advanced: use an auth key"));
+    m_keyPanel->setVisible(open);
+    if (isVisible()) {
+        fitToContents();
+    }
+}
+
+void TailnetShimDialog::onRequestFailed(const QString& operation, const QString& message,
+                                        bool unauthorized)
+{
+    setBusy(false);
+    if (unauthorized) {
+        // Mid sign-in, a refused token means another computer started the
+        // sign-in over, which replaced this window's code and token.
+        if (operation == QLatin1String("login")) {
+            // The token is dead: forget it, here and in the keychain, so
+            // Refresh or reopening the window offers a new code instead of
+            // failing with it again. Not unasked in this window, or two open
+            // windows would keep replacing each other's code.
+            m_signingIn = false;
+            m_adminToken.clear();
+            TailnetShimTokenStore::save(m_radioSerial, QString());
+            hideSignIn();
+            showError(tr("This radio's sign-in was started over from another computer. Finish "
+                         "it there, or press Refresh for a new code here."));
+            updateControls();
+            return;
+        }
+        showError(m_native
+            ? tr("The waveform rejected this computer's admin token. To start over, uninstall "
+                 "and reinstall the remote-access waveform from the Waveforms list.")
+            : tr("The container rejected this computer's admin token. To start over, "
+                 "remove and reinstall the remote-access container from the Waveforms "
+                 "list."));
+        return;
+    }
+    showError(message);
+    // After a failed sign-out the status says whether anything changed:
+    // still provisioned means the container kept the token, so this
+    // computer keeps it too (see signOut()).
+    if (operation != QLatin1String("status")) {
+        refresh();
+    }
+}
+
+void TailnetShimDialog::saveSharing()
+{
+    m_messageLabel->hide();
+    setBusy(true, tr("Saving…"));
+    m_client.setSharing(tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
+                        m_shareDiscoveredCheck->isChecked(), m_adminToken);
+}
+
+void TailnetShimDialog::reset()
+{
+    const QPointer<TailnetShimDialog> self(this);
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Reset Remote Access?"),
+        tr("This computer doesn't hold the key that lets it change this radio's remote access."),
+        this);
+    ask.get()->setInformativeText(
+        m_native
+            ? tr("Resetting uninstalls and reinstalls the remote-access waveform, so the radio "
+                 "can be signed in again with a new code.\n\n%1").arg(offTailnetWarning())
+            : tr("Resetting removes and reinstalls the remote-access container: the radio leaves "
+                 "your tailnet now, and you sign it in again with a new code.\n\n%1")
+                  .arg(offTailnetWarning()));
+    // Return keeps what is on the radio; resetting takes a click.
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Reset"), CanonMessageBox::Role::Destructive);
+    ask.get()->exec();
+    if (!self || !ask || ask.get()->clickedButton() != go) {
+        return;
+    }
+    emit resetRequested(false);
+    close();
+}
+
+void TailnetShimDialog::updateRadioShim()
+{
+    if (!m_status) {
+        return;
+    }
+    const QPointer<TailnetShimDialog> self(this);
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Update Remote Access?"),
+        tr("Version %1 is available; this radio runs %2.")
+            .arg(tailnetshim::pinnedVersion(m_native), m_status->version),
+        this);
+    ask.get()->setInformativeText(
+        m_native
+            ? tr("Updating uninstalls and reinstalls the remote-access waveform, so the radio "
+                 "leaves your tailnet and you sign it in again with a new code.\n\n%1")
+                  .arg(offTailnetWarning())
+            : tr("Updating removes and reinstalls the remote-access container, so the radio "
+                 "leaves your tailnet and you sign it in again with a new code.\n\n%1")
+                  .arg(offTailnetWarning()));
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Update"), CanonMessageBox::Role::Destructive);
+    ask.get()->exec();
+    if (!self || !ask || ask.get()->clickedButton() != go) {
+        return;
+    }
+    emit resetRequested(true);
+    close();
+}
+
+void TailnetShimDialog::signOut()
+{
+    const QPointer<TailnetShimDialog> self(this);
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Disconnect from Your Tailnet?"),
+        tr("Remote sessions end now, and the radio leaves your tailnet."), this);
+    ask.get()->setInformativeText(
+        tr("To connect it again, open this window on the radio's local network and scan the "
+           "new code.\n\n%1").arg(offTailnetWarning()));
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Disconnect"), CanonMessageBox::Role::Destructive);
+    ask.get()->exec();
+    if (!self || !ask || ask.get()->clickedButton() != go) {
+        return;
+    }
+    m_messageLabel->hide();
+    // Disconnected stays disconnected: a new code waits for the window to be
+    // reopened (or Refresh), as the confirmation says.
+    m_autoSignInTried = true;
+    setBusy(true, tr("Disconnecting…"));
+    connect(&m_client, &TailnetShimClient::statusReceived, this,
+            [this](const TailnetShimStatus& st) {
+        if (!st.provisioned) {
+            m_adminToken.clear();
+            TailnetShimTokenStore::save(m_radioSerial, QString());
+            updateControls();
+        }
+    }, Qt::SingleShotConnection);
+    m_client.signOut(m_adminToken);
+}
+
+}  // namespace AetherSDR

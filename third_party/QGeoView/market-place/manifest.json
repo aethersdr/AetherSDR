@@ -1,0 +1,48 @@
+{
+  "$schema": "http://qt.io/schema/extension-schema-v1#",
+  "title": "QGeoView",
+  "extensionType": [
+    "library"
+  ],
+  "version": "1.0.2",
+  "vendor": {
+    "name": "AmonRaNet",
+    "url": "https://github.com/AmonRaNet"
+  },
+  "contact": "AmonRaNet",
+  "copyright": [
+    "AmonRaNet"
+  ],
+  "author": "Andrey Yaroshenko",
+  "icon": "https://github.com/AmonRaNet/QGeoView/raw/master/market-place/logo_256_256.png",
+  "licenses": [
+    {
+      "licenseType": "LGPLv3",
+      "licenseUrl": "https://www.gnu.org/licenses/lgpl-3.0.html"
+    }
+  ],
+  "created": "2018-09-19",
+  "lastUpdate": "2020-04-26",
+  "platforms": [
+    "Linux,"
+    "Windows",
+    "MacOS",
+  ],
+  "qtVersions": [
+    "5.12.0",
+    "5.13.0",
+    "5.14.0"
+  ],
+  "tags": [
+    "GeoView"
+  ],
+  "price": {
+    "listprice": 0
+  },
+  "support": "amonra@ngs.ru",
+  "bugUrl": "https://github.com/AmonRaNet/QGeoView/issues",
+  "sourceRepoUrl": "https://github.com/AmonRaNet/QGeoView",
+  "dependencies": [
+    "Widgets"
+  ]
+}

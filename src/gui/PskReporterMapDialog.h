@@ -1,0 +1,191 @@
+#pragma once
+
+#include "CanonWindow.h"
+#include "models/RadioModel.h"
+#include "models/TxController.h"
+
+#include <optional>
+
+#include <QTimer>
+
+class QCheckBox;
+class QComboBox;
+class QDoubleSpinBox;
+class QSpinBox;
+class QLabel;
+class QLineEdit;
+class QPushButton;
+class QToolButton;
+class GuardedSlider;
+
+namespace AetherSDR {
+
+class MapDisplayWidget;
+class AudioEngine;
+class PropForecastClient;
+class PskReporterClient;
+class RadioModel;
+class TransmitModel;
+class WsprSpotFeed;
+struct PskReporterSpot;
+
+// AetherMap, the PSK Reporter reception map (Tools menu): a CanonWindow
+// workspace (style guide, RFC #6226). Shows who is hearing our
+// callsign, centered on the radio's GPS fix (falling back to the reported
+// grid locator). Update cadence is fixed-interval only — PSK Reporter asks
+// clients not to poll more than once per five minutes, so there is no
+// manual-refresh button and the fastest non-live choice is five minutes.
+class PskReporterMapDialog : public CanonWindow {
+    Q_OBJECT
+
+public:
+    // propForecast may be null; the band-conditions row is simply hidden
+    // when no propagation client is available.
+    // wsprFeed may be null: the WSPR receiver's decodes are then not shown.
+    explicit PskReporterMapDialog(AudioEngine* audioEngine,
+                                  RadioModel* radioModel,
+                                  PropForecastClient* propForecast = nullptr,
+                                  WsprSpotFeed* wsprFeed = nullptr,
+                                  QWidget* parent = nullptr);
+    ~PskReporterMapDialog() override;
+
+    // Every way the window closes ends here: the close button and the window
+    // manager (through QDialog::closeEvent()), Escape and Ctrl+W (through
+    // reject(), which sends no close event), and MainWindow quitting. Public,
+    // as QDialog's is, so nothing is pushed toward a bare hide().
+    void done(int result) override;
+
+protected:
+    void showEvent(QShowEvent* event) override;
+
+private:
+    void rebuildMarkers();
+    void updateHomeFromRadio();
+    void onLookbackChanged(int index);
+    void restartClients();
+    void restartGlobalClient();
+    void restartCallsignClient();
+    void applyMapCallsign();
+    void updateBandConditions();
+    void updateConnectionIndicator();
+    void scheduleBeacon();
+    void scheduleBeacon(const std::shared_ptr<TxController>& controller,
+                        TxCoordinator::Request request);
+    enum class BeaconStopOutcome { Completed, Cancelled, Interrupted };
+    void stopBeacon(const QString& status,
+                    BeaconStopOutcome outcome = BeaconStopOutcome::Interrupted);
+    void updateBeaconState();
+    void setBeaconStatus(const QString& text, const char* colourToken = "color.accent.warning");
+    // Stay armed and roll to the following even UTC minute. Used when the slot
+    // boundary was missed, or when the DAX TX stream is still being created.
+    void deferBeaconToNextSlot(const QString& reason);
+    void updateBeaconDefaults();
+    // The WSPR beacon's generated level, per radio. applyBeaconLevel() rides
+    // TransmitModel::hostModulationChanged so the answer follows the connected
+    // radio's transmit chain; the other two are its store side. Decisions live
+    // in PskBeaconLevelPolicy.h.
+    void applyBeaconLevel();
+    std::optional<int> storedBeaconLevelDbFs(bool hostModulates);
+    void writeBeaconLevelDbFs(int dbfs);
+    void setBeaconControlsEnabled(bool enabled);
+    bool applyBeaconBand();
+    // Re-sends mode and both passbands immediately before the key, and reports
+    // whether the channel is still the one the operator armed. See the
+    // definition for why one push at arm time is not enough.
+    bool reassertBeaconChannel(QString* reason);
+    // Called from reassertBeaconChannel(), i.e. at the KEY and not at arm, so
+    // the operator's own station keeps its audio processing (and VOX) for the
+    // whole time the beacon is merely waiting for its slot.
+    void borrowBeaconSpeechChain(TransmitModel& tx);
+    void restoreBorrowedTxState(const TxCoordinator::Request& original);
+
+    QPointer<AudioEngine> m_audioEngine;
+    QPointer<RadioModel> m_radioModel;
+    std::shared_ptr<TxController> m_beaconController;
+    bool m_beaconTransition{false};
+    TxCoordinator::Request m_beaconRequest;
+    TxCoordinator::Context m_beaconContext;
+    uint64_t m_beaconGeneration{0};
+    PskReporterClient*  m_client{nullptr};
+    PskReporterClient*  m_globalClient{nullptr};
+    // The WSPR receiver on the radio: stations this station heard, as
+    // reports, shown alongside PSK Reporter's.
+    QPointer<WsprSpotFeed> m_wsprFeed;
+    QVector<PskReporterSpot> m_wsprReports;
+    PropForecastClient* m_propForecast{nullptr};
+    MapDisplayWidget*   m_mapView{nullptr};
+    QComboBox*          m_bandCombo{nullptr};
+    QComboBox*          m_modeCombo{nullptr};
+    QComboBox*          m_lookbackCombo{nullptr};
+    QLineEdit*          m_queryCallsign{nullptr};
+    QLabel*             m_statusLabel{nullptr};
+    QLabel*             m_dxLabel{nullptr};
+    QLabel*             m_connLabel{nullptr};
+    QCheckBox*          m_pathsCheck{nullptr};
+    QCheckBox*          m_globeCheck{nullptr};
+    QCheckBox*          m_allCallsignsCheck{nullptr};
+    QCheckBox*          m_activeMonitorsCheck{nullptr};
+    QCheckBox*          m_terminatorCheck{nullptr};
+    QCheckBox*          m_cityLightsCheck{nullptr};
+    GuardedSlider*      m_cityLightsBrightness{nullptr};
+    GuardedSlider*      m_cityLightsFaintLights{nullptr};
+    GuardedSlider*      m_cityLightsWarmth{nullptr};
+    QCheckBox*          m_weatherRadarCheck{nullptr};
+    QCheckBox*         m_radarRegionChecks[4]{};
+    QCheckBox*          m_radarCoverageCheck{nullptr};
+    QCheckBox*          m_radarLegendCheck{nullptr};
+    QCheckBox*          m_radarLegendTopCheck{nullptr};
+    QLabel*            m_radarProductLabel{nullptr};
+    QToolButton*        m_weatherRadarPlayButton{nullptr};
+    QComboBox*          m_weatherRadarHistoryCombo{nullptr};
+    GuardedSlider*      m_weatherRadarSpeedSlider{nullptr};
+    QLabel*            m_weatherRadarSpeedValue{nullptr};
+    QLabel*             m_weatherRadarFrameLabel{nullptr};
+    QTimer*             m_emptyStateTimer{nullptr};
+    QTimer*             m_lookbackDebounce{nullptr};
+    QTimer*             m_markerRefreshTimer{nullptr};
+    QTimer*             m_beaconTimer{nullptr};
+    QLineEdit*          m_beaconCallsign{nullptr};
+    QLineEdit*          m_beaconGrid{nullptr};
+    QComboBox*          m_beaconBand{nullptr};
+    QComboBox*          m_beaconPower{nullptr};
+    QDoubleSpinBox*     m_beaconTone{nullptr};
+    QSpinBox*           m_beaconLevel{nullptr};
+    QPushButton*        m_beaconButton{nullptr};
+    QLabel*             m_beaconStatus{nullptr};
+    QLabel*             m_beaconStatusDot{nullptr};
+    qint64              m_beaconSlotMs{0};
+    qint64              m_beaconStopDeadlineMs{0};
+    // How many slots this arming has rolled past waiting for the TX stream,
+    // and why — the reason rides the countdown so it survives the 50 ms tick.
+    int                 m_beaconDeferrals{0};
+    QString             m_beaconDeferReason;
+    // WSPR slots are two minutes and a frame is 111.6 s, so a late start eats
+    // the headroom before it runs into the next slot. Decoders sync on the
+    // signal and tolerate a small offset against the boundary; past that,
+    // re-arm rather than transmit into the wrong slot.
+    static constexpr qint64 kBeaconSlotMs = 2 * 60 * 1000;
+    static constexpr qint64 kBeaconMaxSlotLatenessMs = 2000;
+    static constexpr int    kBeaconMaxDeferrals = 2;
+    // Canonical WSPR audio start: 1.000 s into the even minute.
+    static constexpr qint64 kBeaconAudioStartMs = 1000;
+    int                 m_beaconPrevTxFilterLow{0};
+    int                 m_beaconPrevTxFilterHigh{0};
+    bool                m_beaconTxFilterSaved{false};
+    // The station TX processing the beacon switches off for the duration of a
+    // frame, and the values to hand back afterwards. Flex command plane only.
+    bool                m_beaconTxChainSaved{false};
+    bool                m_beaconPrevSpeechProc{false};
+    bool                m_beaconPrevCompander{false};
+    bool                m_beaconPrevVox{false};
+    bool                m_beaconPrevTxEq{false};
+    bool                m_beaconArmed{false};
+    bool                m_beaconTransmitting{false};
+    bool                m_weatherRadarTimelineLoading{false};
+    QLabel*             m_bandCondPills[4]{};
+    bool                m_started{false};
+    bool                m_mapCallsignUserEdited{false};
+    QString             m_appliedMapCallsign;
+};
+
+} // namespace AetherSDR

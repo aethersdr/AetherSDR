@@ -1,0 +1,817 @@
+// No socket or radio peer: inject device operations into the actual USB worker
+// and drive the actual backend's publication path with controlled callbacks.
+#include "core/backends/rtl/RtlSdrBackend.h"
+#include "core/backends/rtl/RtlSdrWorker.h"
+#include "SeamThreadAffinityProbe.h"
+#include "RtlInjectedDevice.h"
+
+#include <QCoreApplication>
+#include <QPointer>
+#include <QByteArray>
+#include <QElapsedTimer>
+#include <QEvent>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <mutex>
+#include <numbers>
+#include <optional>
+
+using namespace AetherSDR;
+using T = rtl::RtlCaptureTransaction;
+namespace AetherSDR::rtl {
+struct RtlCaptureBackendTestAccess {
+    static void start(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device, int capacity = 1)
+    {
+        backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
+        const double wfmGuard = RtlReceivePipeline::kQualifiedWfmEnabled ? 3000 : 0;
+        backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, wfmGuard, wfmGuard}, T::Mode::Wfm}};
+        if (capacity > 1) {
+            backend.m_receiverCapacity = capacity;
+            backend.m_capture = RtlCaptureTransaction({8, static_cast<std::size_t>(capacity)});
+            backend.m_requested.receivers = {{{0, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+        }
+        backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, capacity));
+    }
+    static std::size_t pending(const RtlSdrBackend& backend) { return backend.m_capture.pendingCount(); }
+    static bool busy(const RtlSdrBackend& backend) { return backend.m_capture.busy() || backend.m_pendingDrag; }
+    static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
+    static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
+    { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
+    static void service(RtlSdrBackend& backend) { backend.serviceCapture(); }
+    static bool stopWorker(RtlSdrBackend& backend) { return backend.m_worker->stopReading(); }
+    static RtlSdrWorker* worker(RtlSdrBackend& backend) { return backend.m_worker.get(); }
+    static RtlReceivePipeline::Diagnostics diagnostics(const RtlSdrBackend& backend)
+    { return backend.m_worker->diagnostics(); }
+};
+}
+static int failures = 0;
+static void check(bool value, const char* message)
+{
+    if (!value) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); }
+}
+using DeviceState = AetherSDR::test::DeviceState;
+using InjectedDevice = AetherSDR::test::InjectedDevice;
+template<class Predicate> bool waitFor(Predicate predicate, qint64 boundMs = 3000)
+{
+    QElapsedTimer timer; timer.start();
+    while (!predicate() && timer.elapsed() < boundMs) {
+        QCoreApplication::processEvents(); QThread::msleep(1);
+    }
+    return predicate();
+}
+
+static void callbackMeasurement()
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend backend;
+    rtl::RtlCaptureBackendTestAccess::start(backend, std::make_unique<InjectedDevice>(device), 2);
+    device->releaseReadback();
+    const bool connected = waitFor([&] { return backend.isConnected() && device->starts == 1; });
+    check(connected, "callback measurement fixture establishes actual USB-worker acquisition");
+    if (!connected) { backend.disconnectRadio(); return; }
+    // Deliver one block at a time through Device::readAsync, including malformed
+    // lengths that must be counted without touching their purported samples.
+    constexpr std::array<std::uint32_t, 6> bytes{16384, 4096, 2, 0, 1, 16385};
+    for (const std::uint32_t length : bytes) {
+        const int expected = device->callbacks + 1;
+        device->callbackBytes = length;
+        device->block();
+        check(waitFor([&] { return device->callbacks >= expected; }),
+              "measurement fixture completes each actual callback before changing its length");
+    }
+    check(rtl::RtlCaptureBackendTestAccess::stopWorker(backend),
+          "callback counters are frozen only after acquisition joins");
+    const auto measured = rtl::RtlCaptureBackendTestAccess::diagnostics(backend);
+    check(measured.callbackCount == 3 && measured.callbackIqSamples == 8192 + 2048 + 1
+          && measured.malformedCallbacks == 3,
+          "valid callback sample totals exclude zero, odd and oversized blocks");
+    check(measured.usbReadStarts == static_cast<std::uint64_t>(device->starts.load())
+          && measured.usbCancelRequests == static_cast<std::uint64_t>(device->cancels.load())
+          && measured.usbCancelRequests > 0,
+          "worker USB counters count actual read and cancellation API invocations");
+    std::uint64_t histogramCount = 0;
+    std::uint64_t histogramLowerTotal = 0;
+    std::uint64_t histogramUpperTotal = 0;
+    for (std::size_t i = 0; i < measured.callbackDurationBuckets.size(); ++i) {
+        const std::uint64_t count = measured.callbackDurationBuckets[i];
+        histogramCount += count;
+        if (count == 0) { continue; }
+        const std::uint64_t lower = i == 0 ? 0 : rtl::RtlSdrWorker::kCallbackDurationUpperBoundsNs[i - 1] + 1;
+        // Exact observed maximum safely bounds even the final overflow bucket.
+        const std::uint64_t upper = std::min(measured.callbackMaxNs,
+            rtl::RtlSdrWorker::kCallbackDurationUpperBoundsNs[i]);
+        check(measured.callbackMaxNs >= lower,
+              "occupied duration bucket agrees with the measured maximum");
+        histogramLowerTotal += lower * count;
+        histogramUpperTotal += upper * count;
+    }
+    check(histogramCount == measured.callbackCount
+          && measured.callbackTotalNs > 0 && measured.callbackMaxNs > 0
+          && measured.callbackTotalNs >= histogramLowerTotal
+          && measured.callbackTotalNs <= histogramUpperTotal
+          && measured.callbackTotalNs >= measured.callbackMaxNs
+          && measured.callbackDeadlineMisses <= measured.callbackCount,
+          "joined callback histogram, total, maximum and deadline accounting are consistent");
+    backend.disconnectRadio();
+}
+
+// A held pointer keeps issuing newer centers before each hardware readback.
+// Each completed capture must nevertheless publish a fresh, correctly framed
+// FFT before the next retune, without relaxing non-pan supersession rules.
+static void sustainedPanProgress(bool narrow)
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend receiver;
+    rtl::RtlCaptureBackendTestAccess::start(receiver, std::make_unique<InjectedDevice>(device));
+    device->releaseReadback();
+    check(waitFor([&] { return receiver.isConnected() && device->starts > 0; }),
+          "held-pan fixture connects the actual worker");
+    receiver.setPanBandwidth({}, narrow ? 200'000 : 2'400'000);
+    {
+        std::lock_guard lock(device->mutex); device->holdReadback = true;
+    }
+    int frames = 0;
+    double framedCenter = 0;
+    QObject::connect(&receiver, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray&, const SpectrumCoverage& coverage) {
+            ++frames;
+            framedCenter = (coverage.lowMhz + coverage.highMhz) * 500'000;
+        });
+    const std::array<double, 7> targets = narrow
+        ? std::array<double, 7>{101'300'000, 101'800'000, 102'300'000,
+                               100'000'000, 98'700'000, 98'200'000, 100'200'000}
+        : std::array<double, 7>{105'000'000, 106'000'000, 107'000'000,
+                               106'000'000, 99'000'000, 98'000'000, 100'000'000};
+    receiver.setPanCenter({}, targets.front(), IRadioBackend::PanCenterIntent::Drag);
+    for (std::size_t step = 0; step < targets.size(); ++step) {
+        check(waitFor([&] { std::lock_guard lock(device->mutex); return device->inReadback; }),
+              "held-pan retune reaches controlled hardware readback");
+        const auto previous = rtl::RtlCaptureBackendTestAccess::state(receiver);
+        if (step + 1 < targets.size()) {
+            for (int move = 1; move <= 25; ++move) {
+                const double next = targets[step]
+                    + (targets[step + 1] - targets[step]) * move / 25;
+                receiver.setPanCenter({}, next, IRadioBackend::PanCenterIntent::Drag);
+                check(rtl::RtlCaptureBackendTestAccess::pending(receiver) <= 1,
+                      "continuous pointer motion has bounded pending hardware work");
+            }
+        }
+        device->releaseOneReadback();
+        const bool progressed = waitFor([&] {
+            return rtl::RtlCaptureBackendTestAccess::state(receiver).token != previous.token;
+        });
+        check(progressed, "held motion publishes completed capture before pointer release");
+        if (!progressed) { break; }
+        const auto accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+        check(accepted.hardware.centerHz != previous.hardware.centerHz,
+              "held motion advances genuine hardware-confirmed RF");
+        const int beforeFrames = frames;
+        const int beforeWrites = device->writes;
+        const int beforeCallbacks = device->callbacks;
+        // Each injected block represents real sample time (3.4 ms here).
+        // Bursting all seven drains native WFM's nonblocking WDSP output ring
+        // and correctly requests receiver repair, superseding this pan. Pace
+        // the fixture so it tests held-pan ordering through the native graph.
+        const unsigned long callbackMicroseconds = static_cast<unsigned long>(std::ceil(
+            1.0e6 * (device->callbackBytes.load() / 2.0) / accepted.hardware.sampleRateHz));
+        const auto clockBlock = [&] {
+            const int completed = device->callbacks + 1;
+            device->block();
+            check(waitFor([&] { return device->callbacks >= completed; }),
+                  "paced capture callback completes");
+            QThread::usleep(callbackMicroseconds);
+        };
+        for (int block = 0; block < 7; ++block) { clockBlock(); }
+        check(waitFor([&] { return device->callbacks >= beforeCallbacks + 7; }),
+              "fresh capture receives seven partial FFT blocks");
+        check(frames == beforeFrames && device->writes == beforeWrites,
+              "next pan waits for a whole fresh observation, not a partial window");
+        clockBlock();
+        check(waitFor([&] { return frames > beforeFrames; }),
+              "fresh RF frame escapes while continuous pointer motion is pending");
+        check(std::abs(framedCenter - accepted.hardware.centerHz) < 1,
+              "progress frame carries its actual accepted capture RF bounds");
+    }
+    device->releaseReadback();
+    check(waitFor([&] {
+        device->block();
+        return !rtl::RtlCaptureBackendTestAccess::busy(receiver);
+    }), "held-pan final target converges after release");
+    const auto final = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    check(final.receivers.front().passband.carrierHz == 100'000'000,
+          "continuous pan preserves configured receiver RF");
+    check(final.receivingIds == std::vector<int>{0},
+          "direction reversal resumes the parked receiver");
+    receiver.disconnectRadio();
+}
+
+static void deferredPanCannotOutliveNewerIntent()
+{
+    for (bool fail : {false, true}) {
+        auto device = std::make_shared<DeviceState>();
+        rtl::RtlSdrBackend receiver;
+        rtl::RtlCaptureBackendTestAccess::start(receiver, std::make_unique<InjectedDevice>(device));
+        device->releaseReadback();
+        check(waitFor([&] { return receiver.isConnected(); }), "supersession fixture connects");
+        {
+            std::lock_guard lock(device->mutex); device->holdReadback = true;
+        }
+        if (fail) { device->failWriteAt = device->writes + 5; }
+        receiver.setPanCenter({}, 105'000'000, IRadioBackend::PanCenterIntent::Drag);
+        check(waitFor([&] { std::lock_guard lock(device->mutex); return device->inReadback; }),
+              "supersession fixture reaches forward or rollback readback");
+        receiver.setPanCenter({}, 106'000'000, IRadioBackend::PanCenterIntent::Drag);
+        if (!fail) { receiver.setSliceFrequency(0, 100'200'000); }
+        device->releaseReadback();
+        check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+              "newer tune or verified failure settles without replaying deferred pan");
+        const auto accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+        check(accepted.hardware.centerHz < 102'000'000
+            && accepted.receivers.front().passband.carrierHz == (fail ? 100'000'000 : 100'200'000)
+            && accepted.receivingIds == std::vector<int>{0},
+              "old queued drag cannot override newer receiver intent or failed capture rollback");
+        receiver.disconnectRadio();
+    }
+}
+static void receiverTuneKeepsDisplayAverage()
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend receiver;
+    rtl::RtlCaptureBackendTestAccess::start(receiver, std::make_unique<InjectedDevice>(device));
+    device->releaseReadback();
+    const bool connected = waitFor([&] { return receiver.isConnected(); });
+    check(connected, "averaging worker connects");
+    if (!connected) { receiver.disconnectRadio(); return; }
+    receiver.setPanAverage({}, 100);
+    int frames = 0;
+    float lastDc = -999;
+    bool captureCorrected = false;
+    int correctedFrames = 0;
+    std::optional<float> firstCorrectedDc;
+    T::Token firstCorrectedToken;
+    QObject::connect(&receiver, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray& frame, const SpectrumCoverage&) {
+            ++frames;
+            std::memcpy(&lastDc, frame.constData() + frame.size() / 2, sizeof(lastDc));
+            const T::State accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+            if (captureCorrected && accepted.dcSuppression) {
+                ++correctedFrames;
+                if (!firstCorrectedDc) {
+                    firstCorrectedDc = lastDc;
+                    firstCorrectedToken = accepted.token;
+                }
+            }
+        });
+
+    // Grant only one callback and wait for its completion before granting the
+    // next. Polling predicates must not enqueue work: waitFor evaluates its
+    // predicate again on return, and DeviceState retains permits across USB
+    // restarts. Bursts also outrun native WFM's nonblocking WDSP output ring.
+    const unsigned long callbackMicroseconds = static_cast<unsigned long>(std::ceil(
+        1.0e6 * (device->callbackBytes.load() / 2.0) / 2'400'000));
+    const auto clockBlock = [&] {
+        {
+            std::lock_guard lock(device->mutex);
+            check(device->blocks == 0, "averaging callback clock has no queued permits");
+            if (device->blocks != 0) { return false; }
+        }
+        const int completed = device->callbacks + 1;
+        device->block();
+        const bool finished = waitFor([&] { return device->callbacks >= completed; });
+        check(finished, "averaging callback clock waits for actual completion");
+        if (!finished) { return false; }
+        QThread::usleep(callbackMicroseconds);
+        // Publish an acknowledged adoption on its owner thread before another
+        // callback can complete its first FFT under an unpublished revision.
+        rtl::RtlCaptureBackendTestAccess::service(receiver);
+        QCoreApplication::processEvents();
+        const bool exact = device->callbacks == completed;
+        check(exact, "averaging callback clock delivers exactly one block");
+        return exact;
+    };
+    const auto clockBlocks = [&](int count) {
+        for (int i = 0; i < count; ++i) {
+            if (!clockBlock()) { return false; }
+        }
+        return true;
+    };
+    const auto adoptWithClock = [&] {
+        QElapsedTimer timer;
+        timer.start();
+        while (rtl::RtlCaptureBackendTestAccess::busy(receiver) && timer.elapsed() < 3000) {
+            if (!clockBlock()) { return false; }
+        }
+        return timer.elapsed() < 3000 && !rtl::RtlCaptureBackendTestAccess::busy(receiver);
+    };
+
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
+    check(waitFor([&] { return frames > 0; }), "averaging worker seeds a complete observation");
+    const int writes = device->writes;
+    receiver.setSliceFrequency(0, 100'100'000);
+    const bool tuned = adoptWithClock();
+    check(tuned, "receiver-only tune adopts through the actual USB callback");
+    if (!tuned) { receiver.disconnectRadio(); return; }
+    // Keep the weak seed unchanged while asynchronous preparation runs. Its
+    // duration must not age the old average with the stronger test input.
+    device->iqLevel = 190;
+    const int beforeFrames = frames;
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
+    check(waitFor([&] { return frames > beforeFrames; }), "tuned receiver emits new accepted FFT");
+    const double raw = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
+                                      * .35875 * (65535. / 65536));
+    check(device->writes == writes && lastDc < raw - 8,
+          "receiver-only adoption preserves display smoothing with unchanged hardware");
+    receiver.setPanRfGain({}, 25);
+    check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+          "gain change adopts through verified hardware path");
+    const int beforeGainFrames = frames;
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
+    check(waitFor([&] { return frames > beforeGainFrames; }), "new gain emits complete frame");
+    check(std::abs(lastDc - raw) < .02,
+          "gain transition discards incompatible amplitude history");
+    const T::State beforePpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    device->iqLevel = 130;
+    receiver.invokeExtension("rtl", "ppm.set", 1, 1);
+    check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+          "PPM change completes its hardware readback");
+    const T::State afterPpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    SharedCapturePolicy::CaptureDescriptor expectedCapture = beforePpm.capture;
+    expectedCapture.generation = afterPpm.capture.generation;
+    T::Hardware expectedHardware = beforePpm.hardware;
+    expectedHardware.ppm = 1;
+    check(afterPpm.token.session == beforePpm.token.session
+        && afterPpm.token.revision > beforePpm.token.revision
+        && afterPpm.capture.generation > beforePpm.capture.generation
+        && afterPpm.capture == expectedCapture && afterPpm.hardware == expectedHardware
+        && afterPpm.receivers == beforePpm.receivers && afterPpm.receivingIds == beforePpm.receivingIds,
+          "PPM changes capture generation without changing WFM receiver or RF geometry");
+    const int beforePpmFrames = frames;
+    const QByteArray obsolete(rtl::RtlSdrDdc::kSpectrumBinCount * int(sizeof(float)), '\0');
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, beforePpm.token);
+    check(frames == beforePpmFrames,
+          "PPM adoption rejects queued spectrum from the old capture");
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, afterPpm.token);
+    check(frames == beforePpmFrames + 1,
+          "PPM adoption accepts the same spectrum payload with the current token");
+    const int afterPpmControlFrames = frames;
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
+    check(waitFor([&] { return frames > afterPpmControlFrames; }), "PPM change emits complete observation");
+    const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
+                                       * .35875 * (65535. / 65536));
+    check(rtl::RtlCaptureBackendTestAccess::state(receiver).hardware.ppm == 1
+        && std::abs(lastDc - weak) < .02,
+          "PPM change cannot reinterpret the previous RF history");
+    device->iqLevel = 190;
+    captureCorrected = true; // Arm before intent; never substitute a later FFT.
+    receiver.invokeExtension("rtl", "dc_suppression.set", 2, true);
+    const bool correctedAdopted = adoptWithClock();
+    check(correctedAdopted, "DC correction adopts on a real callback boundary");
+    if (!correctedAdopted) { receiver.disconnectRadio(); return; }
+    const T::State afterDc = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    const int afterDcCallbacks = device->callbacks;
+    check(afterDc.dcSuppression && afterDc.token.session == afterPpm.token.session
+        && afterDc.token.revision > afterPpm.token.revision && correctedFrames == 0,
+          "DC adoption publishes before its first complete corrected window");
+    // Adoption processes one 8192-sample block. Six more still cannot fill
+    // the 65536-sample FFT; precisely the seventh completes its first window.
+    if (!clockBlocks(6)) { receiver.disconnectRadio(); return; }
+    check(correctedFrames == 0, "DC correction cannot publish a partial first window");
+    if (!clockBlock()) { receiver.disconnectRadio(); return; }
+    check(waitFor([&] { return firstCorrectedDc.has_value(); }), "DC correction emits complete observation");
+    check(correctedFrames == 1 && firstCorrectedToken == afterDc.token
+        && rtl::RtlCaptureBackendTestAccess::state(receiver).token == afterDc.token
+        && device->callbacks == afterDcCallbacks + 7,
+          "DC observation is exactly the first complete window of the accepted revision");
+    const double pole = std::exp(-2 * std::numbers::pi * rtl::RtlDcBlocker::kCornerHz / 2'400'000);
+    double correctedWindowGain = 0;
+    for (int i = 0; i < 65536; ++i) {
+        const double a = 2 * std::numbers::pi * i / 65535;
+        const double window = .35875 - .48829 * std::cos(a) + .14128 * std::cos(2*a) - .01168 * std::cos(3*a);
+        correctedWindowGain += window * std::pow(pole, i) / 65536;
+    }
+    const double corrected = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
+                                            * (1 + pole) / 2 * correctedWindowGain);
+    check(rtl::RtlCaptureBackendTestAccess::state(receiver).dcSuppression
+        && firstCorrectedDc && std::abs(*firstCorrectedDc - corrected) < .03,
+          "DC mode change discards old estimates and shows the actual first corrected window");
+    const auto measured = rtl::RtlCaptureBackendTestAccess::diagnostics(receiver);
+    check(std::ranges::all_of(measured.receiverWithdrawals, [](std::uint64_t count) { return count == 0; }),
+          "paced averaging fixture never withdraws a native receiver for repair");
+    {
+        std::lock_guard lock(device->mutex);
+        check(device->blocks == 0, "averaging fixture finishes without queued callback permits");
+    }
+    receiver.disconnectRadio();
+}
+
+static void rapidMonitorEditsKeepSpectrum(bool metersEnabled)
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend backend;
+    rtl::RtlCaptureBackendTestAccess::start(backend, std::make_unique<InjectedDevice>(device), 2);
+    device->releaseReadback();
+    if (!waitFor([&] { return backend.isConnected(); })) {
+        check(false, "monitor averaging fixture connects");
+        backend.disconnectRadio(); return;
+    }
+    backend.setPanAverage({}, 100);
+    backend.invokeExtension("rtl", "receive_meters.set", 1, metersEnabled);
+    const auto clockBlock = [&] {
+        const int completed = device->callbacks + 1;
+        device->block();
+        check(waitFor([&] { return device->callbacks == completed; }), "monitor callback completes");
+        QThread::usleep(3500);
+        rtl::RtlCaptureBackendTestAccess::service(backend);
+        QCoreApplication::processEvents();
+    };
+    check(backend.createSlice({}, 100'200'000), "monitor fixture admits independent second slice");
+    for (int i = 0; i < 200 && rtl::RtlCaptureBackendTestAccess::busy(backend); ++i) { clockBlock(); }
+    const T::State before = rtl::RtlCaptureBackendTestAccess::state(backend);
+    check(before.receivers.size() == 2, "monitor fixture publishes both receivers");
+    int frames = 0;
+    float lastDc = -999;
+    // Observe production worker frames before publication fencing: superseded
+    // tokens must still be rejected by the backend, but RF cadence must survive.
+    QObject::connect(rtl::RtlCaptureBackendTestAccess::worker(backend),
+        &rtl::RtlSdrWorker::spectrumFrameReady, &backend,
+        [&](quint64, quint64, int, const QByteArray& frame) {
+            ++frames;
+            std::memcpy(&lastDc, frame.constData() + frame.size() / 2, sizeof(lastDc));
+        });
+    for (int i = 0; i < 24; ++i) { clockBlock(); }
+    const int seededFrames = frames;
+    const int writes = device->writes;
+    const int starts = device->starts;
+    device->iqLevel = 190;
+    for (int i = 0; i < 96; ++i) {
+        if (i % 4 == 0) {
+            const int id = (i / 4) % 2;
+            // The second request supersedes the first before its callback;
+            // this exercises real compensation, not a sequential setter test.
+            backend.setSliceAudioGain(id, 20);
+            backend.setSliceAudioGain(id, 60 + id);
+            backend.setSliceAudioPan(id, 30 + id);
+            backend.setSliceAudioMute(id, true);
+        }
+        clockBlock();
+    }
+    check(frames - seededFrames >= 8,
+          "rapid independent monitor edits preserve continuous FFT cadence through compensation");
+    const double raw = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
+                                      * .35875 * (65535. / 65536));
+    for (int i = 0; i < 200 && rtl::RtlCaptureBackendTestAccess::busy(backend); ++i) { clockBlock(); }
+    const int framesBeforeFinal = frames;
+    for (int i = 0; i < 12; ++i) { clockBlock(); }
+    check(frames > framesBeforeFinal && lastDc < raw - 3,
+          "rapid monitor edits retain accumulated averaging instead of reseeding raw power");
+    const T::State after = rtl::RtlCaptureBackendTestAccess::state(backend);
+    check(!rtl::RtlCaptureBackendTestAccess::busy(backend)
+        && after.receivers.size() == 2 && after.receivers[0].audioGain == 60
+        && after.receivers[1].audioGain == 61 && after.receivers[0].audioPan == 30
+        && after.receivers[1].audioPan == 31 && after.receivers[0].audioMute
+        && after.receivers[1].audioMute && after.capture == before.capture
+        && after.hardware == before.hardware && device->writes == writes && device->starts == starts,
+          "latest per-slice monitor intent is confirmed without hardware writes or USB restart");
+    const double retainedDb = raw - lastDc;
+    int staleFrames = 0;
+    QObject::connect(&backend, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray&) { ++staleFrames; });
+    rtl::RtlCaptureBackendTestAccess::spectrum(backend,
+        QByteArray(65536 * int(sizeof(float)), '\0'), before.token);
+    check(staleFrames == 0, "retaining RF history never admits obsolete revision output");
+    std::printf("monitor_average meters=%d frames=%d retained_db=%.3f\n",
+        metersEnabled, frames - seededFrames, retainedDb);
+    backend.disconnectRadio();
+}
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    callbackMeasurement();
+    sustainedPanProgress(false);
+    sustainedPanProgress(true);
+    receiverTuneKeepsDisplayAverage();
+    rapidMonitorEditsKeepSpectrum(true);
+    rapidMonitorEditsKeepSpectrum(false);
+    deferredPanCannotOutliveNewerIntent();
+    auto state = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend backend;
+    test::SeamThreadAffinityProbe probe(&backend);
+    test::attachAllSeamSignals(probe);
+    int changes = 0, slices = 0, audio = 0;
+    QObject::connect(&backend, &IRadioBackend::operatingStateChanged, [&] { ++changes; });
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, [&](int, const SliceDelta&) { ++slices; });
+    QObject::connect(&backend, &IRadioBackend::audioFrameReady, [&](const PcmFrame&) { ++audio; });
+    rtl::RtlCaptureBackendTestAccess::start(backend, std::make_unique<InjectedDevice>(state));
+    check(waitFor([&] { std::lock_guard lock(state->mutex); return state->inReadback; }),
+          "initial hardware request reached readback");
+    check(!backend.isConnected() && changes == 0 && slices == 0,
+          "initial requested state never published before readback");
+    state->releaseReadback();
+    check(waitFor([&] { return backend.isConnected() && state->starts == 1; }), "initial capture confirmed");
+    check(backend.currentOperatingState().rfFrequencyHz == 100'000'000, "initial confirmed center");
+    // A malformed USB callback is an observable gap, even if capture geometry
+    // does not move. The next display frame needs a wholly fresh observation.
+    int gapFrames = 0;
+    const auto gapConnection = QObject::connect(&backend, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray&) { ++gapFrames; });
+    const auto clockBlocks = [&](int count) {
+        const int expected = state->callbacks + count;
+        for (int i = 0; i < count; ++i) { state->block(); }
+        check(waitFor([&] { return state->callbacks >= expected; }), "controlled spectrum callbacks finish");
+        QCoreApplication::processEvents();
+    };
+    clockBlocks(7);
+    check(gapFrames == 0, "USB partial window is not padded into a frame");
+    state->callbackBytes = 1;
+    clockBlocks(1);
+    state->callbackBytes = 16384;
+    clockBlocks(7);
+    check(gapFrames == 0, "malformed callback discards the previous partial spectrum");
+    clockBlocks(1);
+    check(waitFor([&] { return gapFrames == 1; }), "complete fresh USB window resumes display after gap");
+    QObject::disconnect(gapConnection);
+    const int initialChanges = changes;
+    backend.setSliceFrequency(0, 100'200'000);
+    check(changes == initialChanges, "in-window request waits for callback adoption");
+    state->block();
+    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > initialChanges; }), "in-window receiver adoption acknowledged");
+    check(state->starts == 1 && state->cancels == 0 && state->writes == 6,
+          "receiver-only change never cancels/restarts/writes USB");
+    const int noOpChanges = changes;
+    backend.setSliceFrequency(0, 100'200'000); state->block();
+    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > noOpChanges; }), "no-op acknowledged");
+    check(state->starts == 1 && state->cancels == 0, "no-op does not restart USB");
+
+    // Hold the device readback, supersede a rate change, then release it. Old
+    // success must compensate before the latest desired set publishes.
+    {
+        std::lock_guard lock(state->mutex); state->holdReadback = true;
+    }
+    backend.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 1000, 2'000'000);
+    check(waitFor([&] { std::lock_guard lock(state->mutex); return state->inReadback; }), "rate change quiesced");
+    check(backend.currentOperatingState().sampleRateHz == 2'400'000,
+          "pending rate does not reach OperatingState");
+    for (int i = 0; i < 100; ++i) {
+        backend.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 1001 + i, 1'536'000);
+    }
+    check(rtl::RtlCaptureBackendTestAccess::pending(backend) == 1, "backend pending work stays bounded");
+    bool obsoletePublished = false;
+    QObject::connect(&backend, &IRadioBackend::operatingStateChanged, [&] {
+        obsoletePublished |= backend.currentOperatingState().sampleRateHz == 2'000'000;
+    });
+    state->releaseReadback();
+    check(waitFor([&] { return backend.currentOperatingState().sampleRateHz == 1'536'000; }),
+          "newest capture confirmed after compensation");
+    check(!obsoletePublished, "superseded readback never published by backend");
+    check(state->starts == 4, "initial, provisional, rollback and final captures each start exactly once");
+    check(state->cancels >= 3, "each of the three hardware transitions cancels acquisition");
+    const int startsBeforeReceiver = state->starts;
+    const int cancelsBeforeReceiver = state->cancels;
+    const int beforeFilter = changes;
+    backend.setSliceFilter(0, -8000, 8000);
+    check(changes == beforeFilter && !rtl::RtlCaptureBackendTestAccess::busy(backend),
+          "invalid narrow WFM filter request neither publishes nor queues work");
+    const int beforeMode = changes;
+    backend.setSliceMode(0, QStringLiteral("FM"));
+    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeMode; }), "mode adopted at callback boundary");
+    check(state->starts == startsBeforeReceiver && state->cancels == cancelsBeforeReceiver,
+          "mode-only change preserves USB acquisition");
+    for (int i = 0; i < 16; ++i) { state->block(); }
+    check(waitFor([&] { return audio > 0; }), "confirmed worker feeds existing PCM route");
+
+    // A synchronous observer can submit an extension during publication. Its
+    // promise belongs to that NEW transaction, not the just-completed one.
+    bool injectedExtension = false;
+    bool prematureExtension = false;
+    bool extensionFinished = false;
+    QObject::connect(&backend, &IRadioBackend::extensionResult, [&](quint64 id, const QVariant&) {
+        if (id == 77) {
+            std::lock_guard lock(state->mutex);
+            prematureExtension = state->holdReadback;
+            extensionFinished = true;
+        }
+    });
+    QObject::connect(&backend, &IRadioBackend::operatingStateChanged, [&] {
+        if (!injectedExtension) {
+            injectedExtension = true;
+            { std::lock_guard lock(state->mutex); state->holdReadback = true; }
+            backend.invokeExtension(QStringLiteral("rtl"), QStringLiteral("ppm.set"), 77, 10);
+        }
+    });
+    backend.setSliceFilter(0, -8000, 8000); state->block();
+    check(waitFor([&] { state->block(); QThread::msleep(5); std::lock_guard lock(state->mutex); return state->inReadback; }),
+          "reentrant extension reached its own readback");
+    check(!prematureExtension && !extensionFinished, "extension cannot complete on an older publication");
+    state->releaseReadback();
+    check(waitFor([&] { return extensionFinished; }), "extension resolved after its own transaction");
+
+    state->badReadback = true;
+    backend.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 2000, 2'400'000);
+    check(waitFor([&] { return !backend.isConnected(); }), "bad apply and rollback withdraw connection");
+    check(probe.violations().isEmpty(), "backend seam signals stay on owner thread");
+    QCoreApplication::processEvents();
+    check(probe.afterDisconnect().isEmpty(), "no old worker emissions after disconnect");
+    // A legacy demodulator can have a partial PCM batch when its receiver
+    // parks without changing hardware. Resuming must start a fresh audio
+    // epoch while the capture FFT remains available.
+    {
+        rtl::RtlSdrDdc ddc;
+        ddc.applyCapture(2'400'000, 100'000'000, 100'000'000, T::Mode::Am, -8000, 8000);
+        int emitted = 0;
+        QByteArray resumedTap;
+        QObject::connect(&ddc, &rtl::RtlSdrDdc::audioFrameReady,
+            [&](const QByteArray&, const QByteArray& tap) {
+                ++emitted;
+                if (emitted == 2) { resumedTap = tap; }
+            });
+        const QVector<std::complex<float>> oldIq(8192, {0.6f, 0.0f});
+        const QVector<std::complex<float>> newIq(8192, {0.3f, 0.0f});
+        ddc.processIqData(oldIq);
+        ddc.processIqData(oldIq);
+        check(emitted == 1, "legacy DDC holds a partial second PCM batch before parking");
+        ddc.resetReceiveAudio();
+        ddc.processIqData(newIq);
+        check(emitted == 2 && !resumedTap.isEmpty(),
+            "legacy resume emits a fresh batch without waiting for pre-park PCM");
+        float peak = 0;
+        for (int offset = 0; offset + static_cast<int>(sizeof(float)) <= resumedTap.size();
+             offset += static_cast<int>(sizeof(float))) {
+            float sample = 0;
+            std::memcpy(&sample, resumedTap.constData() + offset, sizeof(sample));
+            peak = std::max(peak, std::abs(sample));
+        }
+        check(peak < 0.01f, "resumed legacy PCM excludes pre-park samples and demodulator history");
+    }
+    // A client may cancel synchronously from connected(). Initial deltas must
+    // not escape after disconnected(), even though readback was successful.
+    {
+        auto device = std::make_shared<DeviceState>();
+        rtl::RtlSdrBackend canceled;
+        test::SeamThreadAffinityProbe cancelProbe(&canceled);
+        test::attachAllSeamSignals(cancelProbe);
+        bool sawConnect = false;
+        QObject::connect(&canceled, &IRadioBackend::connected, [&] {
+            sawConnect = true; canceled.disconnectRadio();
+        });
+        rtl::RtlCaptureBackendTestAccess::start(canceled, std::make_unique<InjectedDevice>(device));
+        device->releaseReadback();
+        check(waitFor([&] { return sawConnect; }), "reentrant connect cancellation reached");
+        QCoreApplication::processEvents();
+        check(cancelProbe.afterDisconnect().isEmpty(), "reentrant cancellation fences initial publication");
+    }
+    // Full backend slice lifecycle, with explicit offline test admission.
+    // This does not raise the production architecture profile.
+    {
+        auto device = std::make_shared<DeviceState>();
+        rtl::RtlSdrBackend multiple;
+        QSet<int> live;
+        QMap<int, PcmFrame> frames;
+        int sliceAudioPackets = 0, spectra = 0;
+        QObject::connect(&multiple, &IRadioBackend::sliceChanged, [&](int id, const SliceDelta&) { live.insert(id); });
+        QObject::connect(&multiple, &IRadioBackend::sliceRemoved, [&](int id) { live.remove(id); });
+        QObject::connect(&multiple, &IRadioBackend::sliceAudioFrameReady, [&](int id, const PcmFrame& frame) {
+            frames[id] = frame; ++sliceAudioPackets;
+        });
+        QObject::connect(&multiple, &IRadioBackend::spectrumFrameReady, [&](int, const QByteArray&) { ++spectra; });
+        rtl::RtlCaptureBackendTestAccess::start(multiple, std::make_unique<InjectedDevice>(device), 4);
+        device->releaseReadback();
+        check(waitFor([&] { return multiple.isConnected(); }), "multi-receiver backend starts on accepted capture");
+        const auto pump = [&] { device->block(); QThread::msleep(5); };
+        check(multiple.createSlice({}, 100200000), "second receiver admitted in fixed capture");
+        check(waitFor([&] { pump(); return live.contains(1); }), "second receiver publishes after preparation and adoption");
+        check(multiple.createSlice({}, 99800000), "third receiver admitted");
+        check(waitFor([&] { pump(); return live.contains(2) && frames.contains(0) && frames.contains(1); }), "independent native PCM reaches actual backend seam");
+        const PcmFrame survivor = frames[0];
+        const PcmFrame removed = frames[1];
+        check(removed.stream().format.sampleRateHz == 48000, "upgraded backend publishes truthful 48 kHz format");
+        check(multiple.removeSlice(1), "middle receiver removal requested");
+        check(waitFor([&] { pump(); return !live.contains(1); }), "accepted middle removal preserves sparse IDs");
+        check(!removed.current() && survivor.current(), "removal revokes old tap without resetting sibling producer");
+        QThread::msleep(30); QCoreApplication::processEvents();
+        check(multiple.createSlice({}, 100300000), "lowest retired slot can be reused");
+        check(waitFor([&] { pump(); return live.contains(1) && frames[1].stream().receiverInstance != removed.stream().receiverInstance; }),
+            "reused stable ID receives a fresh instance and cannot inherit stale audio");
+        check(device->starts == 1 && device->cancels == 0, "add remove and reuse never restart USB acquisition");
+        // Dragging a full-width view away from every receiver moves capture,
+        // but keeps each configured RF frequency and slice identity intact.
+        check(waitFor([&] { pump(); return frames.contains(0) && frames[0].current(); }),
+            "active sibling has a current PCM stream before free pan");
+        const T::State beforePark = rtl::RtlCaptureBackendTestAccess::state(multiple);
+        const PcmFrame activeFrame = frames[0];
+        multiple.setPanCenter(QStringLiteral("0xe1000000"), 104'000'000,
+            IRadioBackend::PanCenterIntent::Drag);
+        check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(multiple)
+            && rtl::RtlCaptureBackendTestAccess::state(multiple).receivingIds.empty(); }),
+            "free pan confirms an empty receiving bank outside all guarded passbands");
+        const T::State parked = rtl::RtlCaptureBackendTestAccess::state(multiple);
+        check(parked.receivers == beforePark.receivers && live.contains(0) && live.contains(1)
+            && live.contains(2) && parked.hardware.centerHz != beforePark.hardware.centerHz,
+            "parked slices preserve configured RF, IDs and settings across capture retune");
+        check(!activeFrame.current(), "park revokes the previously published native PCM stream");
+        const int audioAtPark = sliceAudioPackets;
+        const int iqSpectraAtPark = spectra;
+        const int parkedCallbacks = device->callbacks + 64;
+        for (int i = 0; i < 64; ++i) { pump(); QCoreApplication::processEvents(); }
+        // pump() only queues; both checks below are about blocks the worker
+        // actually processed, so wait for the queue to drain first.
+        check(waitFor([&] { return device->callbacks >= parkedCallbacks; }, 30000),
+              "parked IQ callbacks are all processed");
+        QThread::msleep(20); QCoreApplication::processEvents();
+        check(sliceAudioPackets == audioAtPark,
+            "IQ callbacks with every slice parked publish no slice PCM");
+        check(spectra > iqSpectraAtPark,
+            "parked IQ callbacks continue producing spectrum frames");
+        const QByteArray raw(rtl::RtlSdrDdc::kSpectrumBinCount * static_cast<int>(sizeof(float)), '\0');
+        const int spectraAtPark = spectra;
+        rtl::RtlCaptureBackendTestAccess::spectrum(multiple, raw, parked.token);
+        check(spectra == spectraAtPark + 1,
+            "current parked-capture token admits spectrum frames");
+        rtl::RtlCaptureBackendTestAccess::spectrum(multiple, raw, beforePark.token);
+        check(spectra == spectraAtPark + 1,
+            "pre-park FFT revisions cannot leak into the parked view");
+        multiple.setPanCenter(QStringLiteral("0xe1000000"), 100'000'000,
+            IRadioBackend::PanCenterIntent::Drag);
+        check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(multiple)
+            && rtl::RtlCaptureBackendTestAccess::state(multiple).receivingIds.size() == 3; }),
+            "return drag resumes all configured receivers automatically");
+        const T::State resumed = rtl::RtlCaptureBackendTestAccess::state(multiple);
+        check(resumed.receivers == beforePark.receivers && resumed.token != parked.token,
+            "resume preserves RF settings and publishes a new capture revision");
+        check(waitFor([&] { pump(); return sliceAudioPackets > audioAtPark && frames[0].current(); }),
+            "resumed receiver produces fresh native PCM");
+        const int spectraAtResume = spectra;
+        rtl::RtlCaptureBackendTestAccess::spectrum(multiple, raw, parked.token);
+        check(spectra == spectraAtResume,
+            "parked-capture frames cannot leak after automatic resume");
+        // Deliberately stop servicing the owner while the injected acquisition
+        // produces real FM packets. This is queue saturation, not a fake counter.
+        const int targetCallbacks = device->callbacks + 200;
+        { std::lock_guard lock(device->mutex); device->blocks += 200; device->changed.notify_all(); }
+        // Bounded only so a broken worker fails rather than hangs: 200 callbacks
+        // take well under 3 s normally, but a sanitizer build's DSP is several
+        // times slower and must not read as a missing saturation.
+        QElapsedTimer stalledOwner; stalledOwner.start();
+        while (device->callbacks < targetCallbacks && stalledOwner.elapsed() < 30000) { QThread::msleep(1); }
+        check(device->callbacks >= targetCallbacks, "injected acquisition reaches bounded queue saturation");
+        check(waitFor([&] {
+            return multiple.healthSnapshot().values.value("rtlQueueDrops").toULongLong() > 0;
+        }), "actual pipeline drop counter reaches existing backend health diagnostics");
+        const auto health = multiple.healthSnapshot();
+        check(health.values.contains("rtlMixerLateFrames") && health.values.contains("rtlMixerRejectedBlocks")
+            && health.values.value("rtlMixerConfigurationFailures").toULongLong() == 0,
+            "observed mixer diagnostics have explicit values without an invariant failure");
+        const PcmFrame reconnect = frames[0];
+        bool invalidationObserved = false;
+        bool reentrantCreate = true;
+        QObject::connect(&multiple, &IRadioBackend::connectionError, [&] {
+            invalidationObserved = multiple.isConnected();
+            reentrantCreate = multiple.createSlice({}, 100400000);
+        });
+        device->badReadback = true;
+        multiple.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 3000, 2000000);
+        check(waitFor([&] { return !multiple.isConnected(); }), "multi-receiver capture invalidation disconnects");
+        check(invalidationObserved && !reentrantCreate,
+            "reentrant creation refuses the invalidated capture before disconnect notification");
+        check(!reconnect.current(), "disconnect revokes native PCM immediately");
+        check(multiple.healthSnapshot().isEmpty(), "disconnected health cannot report stale live counters");
+    }
+    // Cancellation cannot interrupt an in-progress device control. Timeout
+    // must retain the device; its later thread exit must still retire it.
+    {
+        auto delayed = std::make_shared<DeviceState>();
+        rtl::RtlSdrBackend stopped;
+        test::SeamThreadAffinityProbe stoppedProbe(&stopped);
+        test::attachAllSeamSignals(stoppedProbe);
+        rtl::RtlCaptureBackendTestAccess::start(stopped, std::make_unique<InjectedDevice>(delayed));
+        check(waitFor([&] { std::lock_guard lock(delayed->mutex); return delayed->inReadback; }),
+              "delayed reader holds a device operation");
+        const QPointer<rtl::RtlSdrWorker> retained(rtl::RtlCaptureBackendTestAccess::worker(stopped));
+        stopped.disconnectRadio();
+        check(!delayed->destroyed, "stop timeout never closes a live device");
+        // The retained reader is still connected to the backend (contract rule 6,
+        // #6096): its read error must not surface after disconnected().
+        check(!retained.isNull(), "stop timeout retains the reader object");
+        if (retained) {
+            emit retained->readError(QStringLiteral("simulated USB read failure"));
+        }
+        QCoreApplication::processEvents();
+        check(stoppedProbe.count(QStringLiteral("connectionError")) == 0,
+              "a retained reader's read error is not reported after disconnect");
+        delayed->releaseReadback();
+        check(waitFor([&] {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            return delayed->destroyed.load();
+        }), "late reader exit retires its retained device");
+        QCoreApplication::processEvents();
+        check(stoppedProbe.afterDisconnect().isEmpty(), "late reader emits no retired seam state");
+    }
+    std::fprintf(stderr, "rtl_capture_worker_test: %d failures\n", failures);
+    return failures ? 1 : 0;
+}

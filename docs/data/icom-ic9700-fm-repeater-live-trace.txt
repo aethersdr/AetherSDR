@@ -1,0 +1,51 @@
+# IC-9700 FM repeater CI-V evidence
+#
+# Source: local IC-9700 session, 2026-08-21, CI-V address A2.
+# Original log: aethersdr-20260821-191011.log
+# SHA-256: f6ca0b76bd7313220a580e35e9c79876e56b334e85adc2d10ec81ed1955110cc
+#
+# This is a minimal, credential-free extraction of the raw CI-V trace. TX
+# lines include the complete controller-to-radio frame. RX lines contain the
+# decoded CI-V command payload after RS-BA1 transport framing was removed.
+
+# Radio snapshot: offset, duplex, access selector, TX/RX tone, DTCS, XFC,
+# and transmit-frequency readback.
+[19:10:18.865] TX -> fe fe a2 e0 0c fd
+[19:10:18.879] RX <- 0c 00 00 05
+[19:10:18.899] RX <- 0f 12
+[19:10:18.927] TX -> fe fe a2 e0 16 5d fd
+[19:10:18.933] RX <- 16 5d 00
+[19:10:18.956] TX -> fe fe a2 e0 1b 00 fd
+[19:10:18.959] RX <- 1b 00 00 10 35
+[19:10:18.986] TX -> fe fe a2 e0 1b 01 fd
+[19:10:18.988] RX <- 1b 01 00 06 70
+[19:10:19.016] TX -> fe fe a2 e0 1b 02 fd
+[19:10:19.020] RX <- 1b 02 00 00 23
+[19:10:19.046] TX -> fe fe a2 e0 1c 02 fd
+[19:10:19.049] RX <- 1c 02 00
+[19:10:19.075] TX -> fe fe a2 e0 1c 03 fd
+[19:10:19.079] RX <- 1c 03 00 56 42 48 04
+
+# Offset write followed by authoritative magnitude readback. Five MHz is
+# encoded as little-endian packed BCD in 100 Hz units: 00 00 05.
+[19:10:21.433] TX -> fe fe a2 e0 0d 00 00 05 fd
+[19:10:21.467] TX -> fe fe a2 e0 0c fd
+[19:10:21.472] RX <- 0c 00 00 05
+
+# Simplex has asymmetric command/report values on the live IC-9700.
+[19:10:21.500] TX -> fe fe a2 e0 0f 10 fd
+[19:10:21.533] RX <- 0f 00
+
+# Duplex-minus and duplex-plus round trips.
+[19:10:24.502] TX -> fe fe a2 e0 0f 11 fd
+[19:10:24.567] RX <- 0f 11
+[19:10:26.844] TX -> fe fe a2 e0 0f 12 fd
+[19:10:26.899] RX <- 0f 12
+
+# XFC/REV is a temporary 1C 02 state with direct radio readback.
+[19:10:30.950] TX -> fe fe a2 e0 1c 02 01 fd
+[19:10:31.017] TX -> fe fe a2 e0 1c 02 fd
+[19:10:31.035] RX <- 1c 02 01
+[19:10:31.650] TX -> fe fe a2 e0 1c 02 00 fd
+[19:10:31.684] TX -> fe fe a2 e0 1c 02 fd
+[19:10:31.700] RX <- 1c 02 00

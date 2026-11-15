@@ -1,0 +1,68 @@
+#pragma once
+#include <QString>
+#include "DeepFistCommitter.h"
+#include <vector>
+namespace lyra::dsp { class DeepFistModel; }
+namespace AetherSDR {
+// One worker owns this fixed-memory 3.2 kHz streaming context.
+class DeepFistStream {
+public:
+    // Stream defaults for developer replay; the app overrides some in DeepFistCwModel::appParameters().
+    struct Parameters {
+        int tickSamples = 1280;
+        double guardSeconds = 1.3;
+        double slowGuardSeconds = 2.2;
+        int slowBelowWpm = 13;
+        float activityThreshold = 12.f;
+        bool requireCompletedMark = false;
+        bool carryPending = false;
+        bool normalizeActivity = false; // Developer candidate; does not alter inference audio.
+        int recentActivitySamples = 0; // Diagnostic candidate; zero keeps the six-second gate.
+        bool valid() const;
+    };
+    DeepFistStream() = default;
+    explicit DeepFistStream(const Parameters& parameters);
+    struct Observation {
+        double seconds;
+        int realSamples;
+        float paddedRatio;
+        float realRatio;
+        int wpm;
+        double settled;
+        bool completedMark;
+        double committedBefore = 0;
+        double committedAfter = 0;
+        bool gated = false;
+        QString publication;
+        float recentRatio = 0.f;
+        struct Token {
+            int id;
+            int frame;
+            double seconds;
+            QString text;
+            QString decision;
+        };
+        std::vector<Token> tokens;
+    };
+    // pieces, when given, receives the published text split into runs with
+    // their confidence (DeepFistCommitter::Piece); the returned text is unchanged.
+    QString process(const float* samples, int count, lyra::dsp::DeepFistModel& model,
+                    std::vector<Observation>* observations = nullptr,
+                    std::vector<DeepFistCommitter::Piece>* pieces = nullptr);
+    // Mean posterior of class `id` over the frames from `frame` while it stays
+    // the argmax. `logProbs` is row-major [frames][classes]; each row is
+    // normalized here, so raw logits and log-probabilities give the same value.
+    static float spanConfidence(const float* logProbs, int frames, int classes, int frame, int id);
+    static bool hasCompletedMark(const float* samples, int count);
+    bool failed() const { return m_failed; }
+private:
+    static constexpr int kWindow = 19200;
+    Parameters m_parameters;
+    std::vector<float> m_ring = std::vector<float>(kWindow, 0.f);
+    std::vector<float> m_window = std::vector<float>(kWindow, 0.f);
+    std::vector<float> m_logits;
+    quint64 m_samples = 0;
+    DeepFistCommitter m_committer;
+    bool m_failed = false;
+};
+}

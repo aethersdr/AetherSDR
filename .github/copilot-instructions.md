@@ -1,0 +1,74 @@
+# GitHub Copilot Instructions for AetherSDR
+
+**Canonical project guide: [`/AGENTS.md`](../AGENTS.md).** Read it
+before suggesting non-trivial code. This file holds only the highest-
+priority must-knows that fit in Copilot's chat context window.
+
+## Must-knows before suggesting code
+
+1. **Signed commits required on `main`.** Branch protection enforces
+   it. See `docs/COMMIT-SIGNING.md` for setup; the doc has explicit AI
+   Assistant Instructions at the top.
+
+2. **The AetherSDR Constitution governs every contribution.** See
+   `CONSTITUTION.md` (canonical: `.specify/memory/constitution.md`).
+   Structured per Cisco's
+   [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
+   spec. Commit-message format: `Short description (#NNNN). Principle <N>.`
+   when the change is principle-relevant.
+
+3. **Enforcement is by infrastructure, not prompt** (Principle XII):
+   branch protection (required CI checks, CODEOWNERS review, signed
+   commits) for every contributor, plus `bin/validate-diff.sh` — a
+   path allow-list in the AetherClaude orchestrator's own repo that
+   gates that bot's PRs. Don't suggest patches that try to work
+   around either.
+
+4. **Use `AppSettings`, NOT `QSettings`.** Persist as **nested JSON
+   under one root key** per feature (Principle V). Example: a feature
+   stores `{"enabled": true, "mode": "auto"}` under `AppSettings["MyFeature"]`,
+   not `MyFeatureEnabled` + `MyFeatureMode` as flat keys. Backed by the
+   SQLite store (RFC #4603). Credentials go to QtKeychain, never the
+   settings store.
+
+5. **All meter UI uses `MeterSmoother`** (`docs/agents/gui.md`). Do not
+   suggest envelope followers, `std::pow`/`exp` smoothing, or
+   asymmetric `kAlpha` blenders for new meter widgets.
+
+6. **Assign yourself before implementing a fix or landing a PR — not
+   to review** (`gh issue edit NNNN --add-assignee @me` or
+   `gh pr edit NNNN --add-assignee @me`). The assignees list is the
+   visible multi-agent write lock — Principle X: it says another
+   project member is now involved, so never claim your own PR. A
+   landing (`/pr-land`) holds the PR until the merge fires, so nobody
+   pushes under it.
+   Reviews, comments and triage take no claim: anyone can review any
+   PR, in parallel. **AetherClaude (`@aethersdr-agent`) auto-triages
+   everything, so adding yourself alongside it is expected**; only
+   avoid double-assigning when another non-AetherClaude agent is
+   already implementing or landing — coordinate via comment in that
+   case, and unassign when you stop.
+
+7. **New or reworked UI follows the visual canon**
+   (`docs/style/aethersdr-style-guide.md`, RFC #6226): `color.canon.*`
+   tokens, `CanonWindow`, the spark's gold only for recognising people
+   (warning amber and meter zones are unaffected). Apply it to UI the issue
+   already changes; never restyle other screens unasked.
+
+## C++ / Qt6 style highlights (full guide in AGENTS.md)
+
+- C++20, Qt6, no `QSettings`, no naked `new`/`delete`, no `goto`,
+  braces on all control flow.
+- Platform guards prefer `Q_OS_WIN` / `Q_OS_MACOS` / `Q_OS_LINUX`.
+- For new files: classes `PascalCase`, methods `camelCase`, member
+  vars `m_camelCase`, constants `kPascalCase`.
+
+## Multi-agent context
+
+AetherSDR is touched by ≥6 distinct AI tools. PRs from different
+agents must verify their base is current before producing patches
+(Principle X: Claims Are Atomic And Mortal — PR #2780 was the
+canonical stale-snapshot revert incident this principle exists to
+prevent).
+
+For everything else, read `/AGENTS.md`.

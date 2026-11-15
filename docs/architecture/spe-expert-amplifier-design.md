@@ -1,0 +1,575 @@
+# SPE Expert Amplifier Support — Design Note
+
+**Status:** Draft for maintainer review. A **peripheral accessory** in the
+same sense as the ACOM S-series integration
+(`docs/architecture/acom-600s-amplifier-design.md`) and the 4O3A
+PGXL/TGXL/Antenna Genius family — `peripheral(spe)` in
+`docs/architecture/aetherd-touchpoint-tags.json`. The SPE has no FlexRadio
+awareness at all, so this is explicitly NOT a new `IRadioBackend` family.
+
+**Scope:** A dedicated `SpeApplet` driven by `SpeConnection`, a peripheral
+transport (serial, or a ser2net proxy in raw **or telnet** mode — the same
+protocol bytes flow either way), plus a Peripherals settings row.
+Status/telemetry decode with model identification, Operate/Standby toggle,
+power-level cycle, TUNE, switch-off, the band/antenna/input keys, and remote
+power-ON (§4 — the one feature that needs the proxy in RFC 2217 telnet mode).
+The applet has two presentations (§10): the compact rail layout, and a
+floating window that adds a **live mirror of the amplifier's own LCD**
+(§11) plus the remaining front-panel keys (BAND±, SET, L±/C±) — menu
+navigation is deliberately available ONLY next to that mirror, never
+blind. No CAT-configuration mirror, no firmware operations (KTerm
+territory, spec §1).
+
+---
+
+## 1. Why this is a peripheral, not a backend
+
+Same reasoning as the ACOM design note §1: the SPE Expert is a standalone
+USB/RS-232 device the radio has never heard of. `SpeConnection` lives
+directly under `src/core/`, outside the radio seam, and never touches
+`IRadioBackend`/`invokeExtension`. Per the ACOM note's recorded design
+reversal ("a peripheral with no relationship to an existing device's
+model/view should get its own model and view from the start"), the SPE gets
+a dedicated `SpeConnection`/`SpeApplet` pair from day one — `AmpModel`,
+`AmpApplet`, `AcomConnection`, and `AcomApplet` are all untouched.
+
+**Protocol authority (Principle I):** the manufacturer's own published
+*"Application Programmer's Guide — Expert 1.3K-FA / 1.5K-FA / 2K-FA"*,
+Rev 1.1 (2015-10-15), SPE s.r.l. — the primary source for packet framing,
+the keystroke command set, and the Status string's field/warning/alarm
+tables. The real-hardware cross-check is the contributing author's own
+working control application for a 1.5K-FA over ser2net (see
+`THIRD_PARTY_LICENSES` for the provenance record), which contributed three
+facts the spec omits: commands need a trailing CR LF in practice, the
+per-power-level bar thresholds for the 1.5K-FA (LOW 450/500/600, MID
+950/1000/1100, HIGH 1450/1500/1600 — i.e. nominal−50 / nominal /
+nominal+100 per level), and that a ser2net proxy in telnet mode works fine
+on real hardware (the validation station runs one; see §3).
+
+---
+
+## 2. What gets added
+
+```
+SpeProtocol (src/core/SpeProtocol.h/.cpp)
+  pure protocol layer, zero Qt-networking dependency, unit-tested:
+    framing:  host->amp   0x55 0x55 0x55 | CNT | DATA | CHK  (+ CR LF)
+              amp->host   0xAA 0xAA 0xAA | CNT | DATA | CHK...
+              (ACK carries a 1-byte checksum; the 67-char Status string a
+               16-bit one + CR LF — the parser dispatches on CNT)
+    decodes:  Status string (19 CSV fields: ID, standby/operate, RX/TX,
+              bank, input, band, TX ant + ATU state, RX ant, power level,
+              output W, SWR ATU, SWR ANT, V PA, I PA, 3 temps,
+              warning, alarm)
+    builds:   front-panel keystroke commands (0x01..0x11), backlight,
+              status request (0x90)
+    tables:   band names, warning/alarm texts, per-model display scaling
+
+SpeConnection (src/core/SpeConnection.h/.cpp)
+  holds a QIODevice* — QSerialPort (115200 8N1; the amp auto-adapts, spec
+  §1) or QTcpSocket (ser2net, raw or telnet mode) — chosen at connect time.
+  Owns the 100 ms status poll loop (the SPE never pushes; it only answers),
+  poll-silence detection (respondingChanged — with ser2net the TCP link
+  outlives the amp being switched off), auto-reconnect, model
+  identification from the Status ID field, and the power-ON pulse state
+  machine (RFC 2217 over telnet, or local DTR/RTS on serial — §4).
+  signals: connected/disconnected/connectionFailed, statusUpdated,
+           modelChanged(id), respondingChanged(bool)
+
+SpeApplet (src/gui/SpeApplet.h/.cpp)
+  three permanent HGauge rows — Power / SWR(antenna) / SWR(ATU input) —
+  since the Status string reports all three as independently real fields
+  (same reasoning as AcomApplet's three-gauge layout). V/I/temperature are
+  text readouts (no protocol-defined scale to size an axis against). Temps
+  are shown with a bare ° sign: the amp reports degrees in whichever unit
+  its own display is configured for, without saying which (spec §5).
+  3-cell info grid (temp/V/I, band/antenna/input·level), status pill
+  (OPR·TX / OPR·RX / STANDBY), fault banner (alarms + warnings), and two
+  keystroke button rows: ON (hardware pulse, §4) / OPER-STBY toggle / power
+  level (the button's label IS the current LOW/MID/HIGH) / TUNE / OFF, and
+  INPUT / ANT / ▼ / ▲ —
+  the arrows being the Expert's front-panel arrow keys, which adjust the
+  drive power the amp requests from the radio over CAT. The power gauge
+  rescales with the selected level (§5), matching the amp's own display.
+
+AppletPanel (extended)
+  registers SpeApplet as its own dockable panel (speApplet(),
+  setSpeVisible()) — independent of setAmpVisible/setAcomVisible; a station
+  can run a PGXL, an ACOM, and an SPE at once.
+
+RadioSetupDialog::buildPeripheralsTab()  (extended)
+  SPE row: Serial ⇄ Network mode toggle, structurally identical to the ACOM
+  row (settings nested under PeripheralSettings device "SpeExpert").
+```
+
+---
+
+## 3. Protocol summary
+
+Everything is a front-panel keystroke or a poll — there is no richer command
+envelope and no unsolicited telemetry. Serial setup: 8N1, no parity, no
+handshake, up to 115200 (the amp auto-adapts to lower rates).
+
+| Direction | Shape | Contents |
+|---|---|---|
+| host → amp | `55 55 55 CNT DATA CHK` + CR LF | Keystroke codes 0x01–0x11 (INPUT, BAND±, ANTENNA, L±/C±, TUNE, SWITCH OFF, POWER, DISPLAY, OPERATE, CAT, arrows, SET), backlight 0x82/0x83, status request 0x90. CHK = mod-256 sum of DATA (= the byte itself for these 1-byte commands). |
+| amp → host | `AA AA AA 01 cmd CHK` | ACK: echoes the received keystroke. 1-byte checksum. |
+| amp → host | `AA AA AA 43 <67 ASCII chars> CHKlo CHKhi CR LF` | Status string: 19 comma-separated fields behind a leading marker char. 16-bit mod-256/div-256 checksum. |
+
+The trailing CR LF on host commands is not in the spec's packet diagram but
+is required in practice — commands without it were intermittently ignored by
+real 1.5K-FA hardware over a ser2net link. Two bytes outside the framed
+packet are harmless to a sync-run-keyed parser, so they are always sent.
+
+Poll cadence is 100 ms — the spec allows "several times every second", the
+GUI refreshes readouts at 10 Hz anyway, and the reference application's
+300 ms poll made the power bar visibly stair-step.
+
+Network mode expects a ser2net proxy in **raw or telnet** mode — unlike the
+ACOM (raw-only), both are supported and telnet is verified on real
+hardware: the validation station's ser2net runs `accepter: telnet`. The
+parser's sync-run resync shrugs off telnet negotiation. LCD frames are
+checksum-validated after accepting either byte-exact raw data or telnet's
+doubled-IAC representation, so a glyph/attribute byte of 0xFF cannot corrupt
+the mirror. The rare Status frame whose checksum byte is 0xFF is still dropped
+and re-polled 100 ms later — harmless in a polled protocol. RFC 2217 replies
+are scanned only while an explicit negotiation is pending, and an escaped
+`FF FF FE 2C` payload cannot be mistaken for `IAC DONT 2C`. Remote power-ON (§4)
+is the one feature that needs more than telnet framing: it drives the proxy's
+control lines via RFC 2217, so that port must be
+`accepter: telnet(rfc2217=true),<port>`. Everything else — polling,
+telemetry, every keystroke — works over a raw port too.
+
+Status fields decoded (spec §5): amplifier ID (`13K`/`15K`/`20K`),
+STANDBY/OPERATE, RX/TX, memory bank (A/B, 1.3K/1.5K only), input port 1/2,
+band index 00 (160 m)–11 (4 m), TX antenna + ATU state
+(tunable/bypassed/enabled), RX-only antenna, power level L/M/H, output
+power (W), SWR before the ATU, SWR at the antenna, PA voltage, PA current,
+heatsink temperatures (upper/lower/combiner — lower and combiner are real
+only on the 2K-FA), one warning letter, one alarm letter (both tables
+transcribed in `SpeProtocol.cpp`).
+
+---
+
+## 4. Command scope for v1
+
+| Tier | Included in v1? | Rationale |
+|---|---|---|
+| Status poll + decode (0x90) | Yes | Read-only, no risk. |
+| OPERATE toggle, POWER-level cycle, SWITCH OFF | Yes | The functional slice for normal operation; each is one keystroke with the amp's own protections behind it. |
+| TUNE | Yes | Explicit, user-initiated click — transmit-on-intent (Principle VI) is satisfied by it being a deliberate button, exactly like the amp's own front-panel key. The amp itself refuses to tune without drive ("Tuning with no power" warning). |
+| ANTENNA, INPUT | Yes | One-keystroke conveniences the status display fully reflects on the next poll. |
+| ◄/► arrow keys (▼/▲ buttons) | Yes | On the Expert these adjust the requested drive power from the radio over CAT — an operating-time control, not menu navigation. |
+| BAND±, SET, L±/C± (FRONT PANEL group) | Floating only | Originally excluded because blind menu navigation without the amp's display is a foot-gun. The floating presentation's live LCD mirror (§11) removes the "blind": the operator navigates the amplifier's own menu while watching the amplifier's own screen, exactly as at the front panel. The compact rail keeps them hidden — the original reasoning still applies where the mirror is absent. DISPLAY stays unexposed (it only cycles the physical panel's pages). |
+| Backlight on/off | Builder only | `buildBacklightCommand()` exists in the protocol layer (it's free) but no GUI surface yet — deferred, not rejected. |
+| Remote power-ON (ON button) | Yes | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network `SpeConnection::powerOn()` drives the proxy's DTR/RTS lines via **RFC 2217** COM-port-control (needs `accepter: telnet(rfc2217=true),<port>` — the Peripherals row's tooltip carries the reference `ser2net.yaml`); on a local COM port it drives the lines directly. The pulse sequence (DTR on 100 ms, DTR off + RTS on 1000 ms, DTR on + RTS off) is carried verbatim from the field-proven reference application, so **RTS carries the 1 s power pulse** and the sequence ends with RTS low. The ON button is the one control that stays enabled while the amp is silent — that is its entire purpose. Because a proxy that is not in RFC 2217 mode silently discards the SET-CONTROL frames, `powerOn()` reads the peer's answer to `WILL COM-PORT-OPTION` and reports what it actually agreed to — `DO`, `DONT`, or no answer at all (raw mode) — instead of claiming the pulse landed. The pulse itself is always sent: sending into a proxy that ignores COM-port control is harmless, so the gate is on the *reporting*, not on the attempt. |
+| Firmware upload, settings/antenna presets | **Never** | KTerm territory (spec §1); no legitimate use from a radio-control app. |
+
+---
+
+## 5. Model handling: the ID field makes it trivial
+
+Unlike the ACOM (whose `0x11` type code is documented for exactly one model,
+forcing that design into auto-ranging heuristics), the SPE reports its
+identity in **every** Status reply: field 1 is `13K`, `15K`, or `20K`. So
+`SpeConnection::modelChanged` fires on the first poll reply and the GUI
+applies the right scale immediately — no dropdown, no heuristics, no tier
+ratchet.
+
+Per-model display constants (`SpeProtocol.cpp::modelTable()`):
+
+| ID | Model | Nominal (W) | Yellow from (W) | Gauge max (W) | Banks | Combiner temps |
+|---|---|---|---|---|---|---|
+| 13K | 1.3K-FA | 1300 | 1250 | 1400 | A/B | no |
+| 15K | 1.5K-FA | 1500 | 1450 | 1600 | A/B | no |
+| 20K | 2K-FA | 2000 | 1950 | 2100 | — | yes |
+
+The 1.5K-FA row is **hardware-validated** (the thresholds are carried from a
+field-proven control application for that exact model). The 1.3K-FA and
+2K-FA rows apply the same shape (yellow at rated−50, ceiling at rated+100)
+to SPE's published rated output — derived, not measured; owners of those
+models are invited to correct them. An unknown ID (an older or future model)
+falls back to the 1.5K-FA entry and logs the raw ID at info level so it can
+be reported.
+
+The power gauge additionally rescales with the **selected power level**:
+red starts at that level's nominal, yellow at nominal−50 W, ceiling at
+nominal+100 W (LOW 500, MID 1000, HIGH = model nominal for the 1.3K/1.5K;
+LOW 1000, MID 1500 derived for the 2K-FA). The 1.5K-FA level thresholds are
+hardware-validated; the rest follow the same shape.
+
+The whole axis comes from `Spe::levelGaugeRange()`, and at HIGH it is the
+table row above **verbatim** — the GUI wiring never re-derives it. That is
+deliberate: an owner correcting the 1.3K-FA or 2K-FA numbers, as invited
+above, would otherwise be editing a table that nothing on screen reads.
+LOW and MID have no tabulated thresholds, so they take the derived shape.
+`spe_protocol_test` pins both halves, asserting the HIGH axis against the
+table's own fields rather than against literals.
+
+SWR gauges are fixed 1.0–3.0 regardless of model — a ratio needs no
+per-model scaling (same convention as AcomApplet).
+
+---
+
+## 6. Poll-silence vs. disconnect
+
+The SPE only speaks when spoken to, and with ser2net the TCP transport
+happily stays up while the amplifier is switched off. So `SpeConnection`
+distinguishes:
+
+- **disconnected()** — the transport itself went away (socket drop, serial
+  unplug). Applet hides, auto-reconnect arms.
+- **respondingChanged(false)** — the transport is up but 30 consecutive
+  polls (~3 s) went unanswered. The applet stays visible but greys its pill
+  to "—", disables the command buttons (which would otherwise silently do
+  nothing), and **blanks every reading** — gauges, supply V/I, heatsink
+  temperature, band/antenna/level, and the alarm banner all go back to their
+  not-yet-known state. Only the source label and the identified model
+  survive, because those are still true. The reset is the point: over
+  ser2net this is the *only* signal that arrives when an operator switches
+  the amplifier off, and a panel frozen at the last poll's plausible-looking
+  numbers reads as live telemetry. Polling continues; the first reply
+  repopulates everything.
+
+---
+
+## 7. Touchpoint tagging
+
+`core/SpeConnection.h` is tagged `peripheral(spe)` in
+`docs/architecture/aetherd-touchpoint-tags.json`, matching the existing
+`peripheral(acom)`/`peripheral(4o3a)` precedent. `src/gui/SpeApplet.h` needs
+no entry — the manifest tracks `core/`/`models/` headers, not `gui/` files.
+
+---
+
+## 8. Testing
+
+- `tests/spe_protocol_test.cpp` (pure, `Qt6::Core` only): host framing
+  verified against the spec's literal OPERATE and Status-request byte
+  sequences; ACK and Status parsing round-trips including the spec's own
+  verbatim 67-character Status example; parser resync past noise, bad
+  checksums, implausible CNT, and split feeds; the full field decode for
+  both an RX/standby and a TX string; warning/alarm/band/model tables; and
+  the RFC 2217 frame literals plus the COM-PORT-OPTION reply scan that
+  `powerOn()` gates on.
+- `tests/hgauge_range_test.cpp` (offscreen Qt Widgets): pins the gauge-rescale
+  contract `SpeApplet::setPowerRange` depends on — a range change re-maps the
+  current reading onto the new axis, and does so even when the reading itself
+  never changes. Renders the widget and measures the painted fill, because
+  the defect it guards against (PR #4531) was invisible to every value-level
+  assertion: `value`/`min`/`max` all read correct while the bar was wrong.
+- Hardware validation: developed and to be soak-tested against a real
+  1.5K-FA over ser2net in telnet mode (the contributing author's station;
+  §3). Serial-mode validation on real hardware is pending — the transport
+  code is shared with the network path and structurally identical to
+  AcomConnection's, but this is stated, not assumed.
+
+## 9. Open questions (for maintainer input)
+
+- **DTR idle level — RESOLVED on the bench (real 1.5K-FA, 2026-08-03).**
+  With DTR held high after the power-ON pulse: no `R` ("Power switch held
+  by remote") warning in the status stream, SWITCH OFF and every other
+  keystroke work normally, and repeated ON→OFF cycles behave. The power
+  switch rides the RTS pulse alone. Ruling: **DTR-high is the harmless
+  idle state**; `connectSerial()` now comes up DTR-high/RTS-low to match
+  the pulse's terminal step, so the resting state no longer depends on
+  session history and reconnects produce no edge. Same bench session also
+  established that ser2net 4.3.11 with a plain `accepter: telnet` port
+  replies `DONT COM-PORT-OPTION` yet still **executes** SET-CONTROL —
+  the pulse works even where negotiation says refused (the
+  `telnet(rfc2217=true)` config stays the documented recommendation; the
+  REFUSED log wording says "may not have reached" accordingly).
+- 1.3K-FA / 2K-FA gauge thresholds are derived (§5) — need owners to
+  confirm.
+- Whether the ACK for a keystroke should drive optimistic UI updates.
+  v1 deliberately waits for the next status poll (≤300 ms) instead —
+  radio-authoritative live state (Principle II) applied to a peripheral.
+
+---
+
+## 10. Two presentations: rail and window
+
+`SpeApplet::setFloating()` (driven by the container's `dockModeChanged`,
+same pattern as the PWR cross-needle) switches between:
+
+- **Docked** — the compact rail layout, unchanged from v1.
+- **Floating** — roomier margins and type scale, taller gauges, a
+  fixed-size status pill (left at the default size policy it inflated
+  into a block when the window handed the header row real height —
+  hardware-observed), content top-anchored via a trailing stretch, and
+  two additions the rail has no room for: the LCD mirror (§11) and the
+  FRONT PANEL key group (BAND±, SET, L±/C±). Every mode-dependent style
+  is a ThemeManager template, so theme changes re-resolve both
+  presentations.
+
+The presentation switch also gates the LCD polling
+(`SpeApplet::lcdPollingWanted` → `SpeConnection::setLcdPolling`): docked,
+the display is neither shown nor requested.
+
+## 11. The LCD mirror
+
+The spec's foreword advertises remote display copies ("a perfect copy of
+the display ... in less than 400 bytes") and documents nothing about
+them. The working mechanism — carried from the contributing author's v2
+control application and re-validated against the real 1.5K-FA (see
+`THIRD_PARTY_LICENSES` for the provenance chain, which ends at the
+MIT-licensed expert-amp-server project) — is:
+
+- **Request**: the standard keystroke-style packet with code `0x80`.
+  All request pacing is decided by `Spe::LcdScheduler` — a deterministic,
+  I/O-free state machine (`SpeLcdScheduler.h`) that keeps requests
+  **single-file**: at most one in flight and at most one timer armed,
+  with every trigger path — the idle cadence, a keystroke ACK, the
+  corrupted-frame retry, the lost-reply fallback — flowing through the
+  same gate. Its invariant is unit-tested in `spe_protocol_test`,
+  including an exhaustive event-sequence sweep, rather than asserted in
+  prose. Concretely: a request arms a 2 s lost-reply fallback; a decoded
+  reply arms the 250 ms idle gap (or immediately services a refresh an
+  ACK asked for while the request was in flight — pending work, never a
+  second in-flight request); a rejected frame supersedes the fallback
+  with the 80 ms retry pause. The effective cadence is therefore gap plus
+  round trip plus the link's own serialization time for the 371-byte
+  frame (~285 ms total at 115200; a 19200 proxy serial side stretches it
+  to ~450 ms on its own): the amplifier is never asked to interleave
+  display blocks, and a slow link stretches the cadence instead of
+  accumulating a request backlog.
+
+  The single-file property has exactly one documented exception, and the
+  protocol is why it cannot be closed. A round trip beyond the 2 s
+  fallback — five times the ~390 ms a 9600 baud serial side spends on
+  the frame alone — is misclassified as a lost reply and retried; when
+  the original reply then arrives, nothing can attribute it, because the
+  request is a fixed packet and the reply carries no sequence field. The
+  scheduler credits it to the retry, and **two requests stay on the wire
+  until the next `reset()`** (a disconnect, or a docked⇄floating
+  switch) rather than for one exchange. Counting orphans instead does
+  not help: a counter that swallows the late reply swallows a genuinely
+  retried one just as often, which freezes the mirror — strictly worse
+  than the overlap. The mitigation is the width of `kLcdLostReplyMs`,
+  which is why it is 2 s and not the round-trip-plus-margin it looks
+  like. Note the interaction with the 2.4 s freshness window below: a
+  retry at 2 s has ~400 ms to land a frame before the FRONT PANEL keys
+  gate, so a wholly VANISHED reply can brush the gate. Corrupted
+  replies — the field case — take the 80 ms retry path instead.
+
+  At a 9600 baud proxy serial side the 100 ms Status poll
+  alone consumes ~80% of the wire, so ser2net serial sides should be
+  configured at 57600 or above.
+- **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
+  ` 2-byte inverted flag word |` 320 character bytes (8 rows x 40
+  columns, row-major) + 40 attribute bytes (one per column, bit N =
+  inverse video on row N) + a 2-byte little-endian checksum over the
+  362-byte payload — 371 bytes total. Character data starts at offset 9.
+  The layout and checksum are pinned to a captured real Expert 1.3K-FA
+  response reproduced in `spe_protocol_test`.
+- **Parsing**: `Spe::FrameParser` recognises the display header before
+  the CNT plausibility check would reject `0x6A` as an implausible
+  count, accepts raw or telnet-IAC-escaped bytes, validates the checksum,
+  and hands the logical frame to a dedicated callback. Display replies
+  do not count as Status liveness: telemetry and its command gate still
+  go stale if Status stops while the LCD continues (§6).
+- **Rendering**: `SpeLcdWidget` maps character bytes into the
+  amplifier's own 256-glyph 6x8 font ROM (`SpeLcdFontRom.inc`,
+  mechanically generated), applies the inverse-video attributes, renders
+  at native 240x64 and integer-scales for crisp pixels. The glass keeps
+  the hardware's green-on-dark palette regardless of theme — it depicts
+  a physical display, the same rule the analog meter faces follow
+  (colours as numeric QColor components; the colour ratchet stays +0).
+
+With the mirror on screen, the FRONT PANEL keys stop being blind — the
+operator navigates the amplifier's menu watching the amplifier's screen,
+which is what unlocked the §4 ruling change. Those keys remain disabled
+until the first checksum-valid display arrives and are disabled again after
+2.4 s without one — an absolute window sized to cover a lost frame plus a
+retry even on a 9600 baud proxy serial side AND the amplifier's own quiet
+spells around OPERATE/STANDBY relay transitions, because routine events
+must read as a hiccup, not flap the gate. Each staleness transition is
+logged with its window so field reports can measure real gap lengths —
+but `lcTuner` is registered at `QtWarningMsg` and `LogManager` applies a
+blanket `aether.*.debug=false`, so those lines only appear once the
+reporter enables the **Tuner/AGM** category. Ask for that explicitly when
+requesting a log; a default capture will not contain them. A display frame that arrives
+complete but fails validation triggers a prompt re-request (80 ms pause;
+each retry is itself provoked by a full received-and-rejected frame, so
+the retry stream is self-limited by the link's serialization time, and is
+deliberately faster than the healthy cadence because the mirror needs
+only one clean frame to stay live): the
+field case is strong RF near the serial run mid-transmit, where the
+371-byte display reply dies to bit errors far more often than the 76-byte
+Status reply, and one clean frame every second or two is all the mirror
+needs to stay live through a transmission. Losing freshness changes
+nothing on the glass: the mirror holds its newest image at full
+brightness, exactly like the amplifier's own LCD holds its picture, and
+the disabled key group is the one and only not-live signal. (Both
+alternatives were field-tested and rejected: blanking the glass made the
+mirror blink in and out, and even a light dim read as the LCD switching
+off — display gaps of one to several seconds are ROUTINE on a
+best-effort link, in plain standby on a quiet band, so any visible
+staleness treatment fires constantly and punishes the operator without
+adding safety the key gate doesn't already provide.) The mirror only
+returns to the idle glass when the image is truly obsolete: the
+connection dropped, a docked⇄floating switch restarted the mirror, or
+the amplifier stopped answering Status polls altogether for ~3 s
+(`kSilentPollLimit`), which routes through `SpeApplet::clearTelemetry()`
+along with the rest of the readings. That last path is the one a ser2net
+operator meets when the amplifier is switched off under a live socket.
+Note what `clearTelemetry()` deliberately does NOT do: it never writes
+`m_lcdFresh`. Both of its callers have already forced the connected or
+responding flag false, which closes the FRONT PANEL gate on its own, and
+zeroing the applet's copy behind `SpeConnection`'s back would desync the
+two — `setLcdFresh()` returns early when the value is unchanged, so the
+keys would never be re-enabled beside a mirror that had stayed live
+throughout. Freshness has exactly one writer on the applet side. Every
+acknowledged keystroke requests a display refresh — immediately when the
+line is free, otherwise as pending work the scheduler services the moment
+the in-flight request resolves — and the cadence re-arms from each
+display *reply* rather than free-running: the original free-running
+600 ms period was an exact multiple of the 100 ms Status poll, and two
+such timers phase-lock with every display reply straddling a status poll
+on the wire, dropping display frames in bursts until clock drift walks
+the alignment out. Pacing from the reply folds the amplifier's variable
+response latency into the period, so no stable phase relationship can
+form — and it is also what makes the small 250 ms gap safe on slow links
+(see the request bullet above).
+
+## 12. The original 1K-FA (legacy protocol)
+
+The original Expert 1K-FA — the RS-232-only model that predates the
+1.3K/1.5K/2K-FA, not the later 1K-FA "Taurus" — speaks SPE's older
+"Expert 1K-FA Remote Control Protocol" Rev 2.0. Only the sync framing is
+shared with the newer family; everything a client depends on differs:
+
+| | 1.3K / 1.5K / 2K-FA | original 1K-FA |
+|---|---|---|
+| Line | 115200 8N1 (amp auto-adapts) | 9600 8N1 only |
+| Status | `0x90` poll → 67-char ASCII CSV, 16-bit checksum + CR LF | `0x80` RCU_ON → amp streams a 30-byte binary Status at 5–8 Hz, 8-bit checksum |
+| `0x80` | LCD display request | RCU_ON — so the LCD mirror must never be requested |
+| Keys | single byte `0x01`..`0x11` | `0x10` + key code (`0x18`..`0x34`) |
+| Model ID | in every Status | none — the operator picks the model |
+| Power ON | RTS pulse, DTR high at rest | DTR held high **is** the power switch |
+| Power level | LOW / MID / HIGH | HALF / FULL (MODE key) |
+
+Design: one connection class, two protocols. The operator picks
+**Amplifier Model** in the Peripherals row (persisted as
+`PeripheralSettings["SpeExpert"]["Model"]`, `Expert` or `1K-FA-Legacy`;
+absent reads as `Expert`, so existing installs are unchanged).
+`SpeConnection` latches the variant at connect and swaps parser, poll
+loop, key encoding and line handling; `Spe::Legacy::parseStatus()` maps
+the binary Status onto the shared `Spe::Status`, so `SpeApplet` and the
+wiring are reused. Mapping choices:
+
+- Model ID is the synthetic `10K`, keying a `1K-FA` row in the model
+  table (FULL 1000 W, HALF 500 W per the operator's manual; HALF → `L`,
+  FULL → `H`). The row's capability flags (`reportsAtuSwr` and
+  `hasLcdMirror` false, `powerOnHoldsDtr` true) drive
+  `SpeApplet::setModelCapabilities()`, which dims each missing readout
+  with its reason on tooltip and accessibleDescription and describes how
+  ON works.
+- Bands 0..9 (160..6 m, no 60 m) are translated onto the shared table.
+- SWR: STANDBY reports it directly; OPERATE reports PA gain in that field
+  instead, so SWR is derived from forward and reverse power and flagged
+  `Status::swrEstimated`; the applet shows it as `SWR ≈` with a tooltip,
+  because a power-ratio SWR reads low against the amp's own meter
+  (#4436). There is no before-ATU SWR — the ATU row is dimmed.
+- Warnings come from the Status's display-context byte, the alarm from its
+  ALARM flag, as plain text (`Status::warningDetail` / `alarmDetail`).
+- No LCD mirror (the amp's own display works as usual; there is just no
+  remote copy): no LCD request is sent (legacy `0x80` starts Status),
+  the floating window's glass says
+  so instead of "waiting for display…", and the menu keys stay gated
+  off, exactly as when the mirror is stale on the newer family.
+- Power: DTR held high is the 1K-FA's power switch. ON raises DTR —
+  over ser2net via RFC 2217 SET-CONTROL, as in §4, so a raw-mode port or a
+  plain serial-to-Ethernet bridge cannot do it; powerOn() reports that in
+  the log and as a note under the applet's buttons.
+- Line policy, the same on every OS: **DTR is held only while AetherSDR
+  has the port open.** A connect never raises it (both lines go low right
+  after open()). SWITCH OFF sends the OFF key, then releases DTR 150 ms
+  later, once the key is on the wire. Disconnect, a reconnect, quitting
+  AetherSDR (the destructor) and a serial error all release it explicitly
+  before close(), so the amp powers off if ON had powered it; an amp
+  switched on from its front panel stayed on during the pre-policy Windows
+  connect bench. Its response to the final policy and the open-time DTR
+  pulse remains unverified.
+  The ON tooltip says so. The release is explicit because close() is not
+  portable: Windows restores the DCB captured before open() (its DTR setting
+  predates AetherSDR) and then leaves the line to the driver, while Linux
+  and macOS restore the original termios and drop DTR via HUPCL. For the
+  1K-FA, `setSettingsRestoredOnClose(false)` keeps the Windows restore from
+  re-raising the line after the release. Over the network the release is
+  an RFC 2217 SET-CONTROL before the socket closes, sent only if ON raised
+  the line on that connection.
+- The release is skipped only when the device itself is gone
+  (`ResourceError`, `PermissionError`): `QSerialPort::error()` stays set
+  until `clearError()`, so gating on "no error" would let one earlier
+  glitch cancel every later release. teardownDevice() clears the error after
+  each close, a fatal serial error tears the port down at once (releasing
+  the line where it still can), and the bounded drain's `TimeoutError` is
+  not treated as a link failure. Errors during a deliberate disconnect
+  are handled by that disconnect, without a second disconnected signal.
+- No TX guard yet: a release whose last received status reports TRANSMIT is logged
+  as a warning, and the user guide says not to disconnect or quit while
+  transmitting. A TX inhibit around the 1K-FA's power transitions is the
+  follow-up #6231.
+- SWITCH OFF's key-first order assumes the amplifier honours the remote OFF
+  key while DTR is held. Its front-panel power switch is refused in that
+  state; whether the remote key is too is a pending bench row. If it is,
+  the 150 ms release is what actually powers the amp off.
+- Not controllable in software: the OS asserts DTR inside open() itself.
+  Measured on macOS 27 (Apple Silicon) with an FTDI FT2232H dual-port
+  RS-232 adapter, port A's DTR wired to port B's DSR and port B polled at
+  about 6.6 kHz while port A was driven through QSerialPort exactly as
+  above. Every open() (14 of 14) raised DTR for 3.5–4.5 ms, until
+  AetherSDR's own setDataTerminalReady(false). ON then held the line
+  steadily, and the explicit release dropped it before close(). A close()
+  without the release also dropped DTR (HUPCL), with and without Qt's
+  settings restore. So on macOS the pre-policy code would have powered the
+  amp off on Disconnect, unlike the Windows bench. Linux is expected to
+  behave alike (unmeasured). Whether a ~4 ms DTR pulse starts a 1K-FA is
+  still an open bench question; ON's own boot took about 3 s with the line
+  held. If it does, the remedies are keeping the port open (one blip per
+  session) or an RC delay on the cable's DTR. A crash or a pulled adapter
+  leaves the line to the OS/driver.
+- Bench results so far, **Windows 11 only**, real 1K-FA on a local COM
+  port, from the build before the policy above (`7de6abec`..`72a971a5`
+  era): amp off, connect: stays off, ON powers it about 3 s later; amp on
+  from its front panel, connect: stays on; after ON, front-panel power
+  switch: refused ("Shutdown not allowed") while DTR is held; after ON,
+  quitting AetherSDR: powers off. Under the old behaviour Disconnect left
+  the amp on; under the policy above it powers off by design. Linux and
+  macOS, and the policy itself on all three, still need a bench.
+- RCU_ON is re-sent once a second while no Status arrives, which covers
+  the amp's boot after ON.
+- Every legacy frame is logged as hex at debug level (Help → Support
+  logging: Tuner/AGM) so field reports can pin the Status offsets.
+- Disconnect sends RCU_OFF so the amplifier stops streaming, and waits up
+  to 50 ms for it to leave (Qt's Windows close() discards unsent bytes).
+- ser2net: prefer **raw** mode. The Status is binary, and telnet mode
+  doubles every `0xFF` byte, so a Status that happens to contain one fails
+  its checksum and is dropped (the stream resyncs on the next frame).
+  Telnet with `rfc2217=true` still works — the price is an occasional lost
+  frame — and is needed only for power-ON over the network.
+- Plain serial-to-Ethernet converters (field report: a Waveshare RS232 TO
+  ETH in TCP-server mode, protocol "None") behave like a raw ser2net port:
+  monitoring, keys and SWITCH OFF work, but they never answer the RFC 2217
+  request and offer no remote DTR control, so ON cannot power the amp.
+  powerOn() names this case in its log warning; the operator powers on at
+  the front panel, or replaces the bridge with ser2net (`rfc2217=true`)
+  and a serial adapter that drives DTR.
+
+Unit tests: `tests/spe_legacy_protocol_test.cpp` (framing, parser resync,
+Status decode, key table, variant persistence). The fixture is built from
+the same offset table as the decoder, so the hardware evidence is a bench
+test on a real 1K-FA: readings matched the amp's own display, the keys and
+DTR power-ON worked. Two live Status captures (OPERATE + FULL, ANT1:
+receiving on 160 m, keyed on 80 m) are pinned as fixtures. Only the keyed
+capture discriminates the band offset (its band nibble is 1; the receive
+capture's band, input and antenna fields are all zero) and the four 16-bit
+power and supply fields. STANDBY, HALF, ANT≠1 and IN2 captures are still to
+come (#6162), so the direct-SWR field, the HALF polarity, the antenna/input
+nibbles beyond 0/1, the display-context warning texts and the ALARM bit rest
+on the spec table until then. Alarm-history context `0x1D` is not a warning.
+An input nibble other than 0/1 decodes as 0 (unknown), and a warning-range display context without text is logged, so
+an unpinned value shows up instead of reading as a confident IN2 or
+nothing. The key table is asserted code by code against the Rev 2.0
+document; four keys (Operate, Tune, HALF/FULL, ANT) are live-tested.

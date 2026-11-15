@@ -1,0 +1,153 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <memory>
+
+namespace AetherSDR {
+
+class ClientPhaseRotator;
+
+// Client-side TX compressor (#1661): feed-forward, soft-knee static curve with an
+// attack/release envelope follower, plus a brickwall peak limiter on the output.
+// Stereo-linked: envelope from max(|L|, |R|), same gain on both channels. UI
+// thread writes atomics + bumps a version; the audio thread recaches once per
+// block. No locks, allocations or exceptions in process().
+class ClientComp {
+public:
+    ClientComp();
+    ~ClientComp();
+
+    ClientComp(const ClientComp&)            = delete;
+    ClientComp& operator=(const ClientComp&) = delete;
+
+    // Audio owner — call before first process() and on sample-rate change.
+    // Never call concurrently with process(); parameter setters remain atomic.
+    void prepare(double sampleRate);
+
+    // Main thread — global enable / bypass. Lock-free.
+    void setEnabled(bool on) noexcept;
+    bool isEnabled() const noexcept;
+
+    // Core compressor parameters.
+    void  setThresholdDb(float db) noexcept;
+    float thresholdDb() const noexcept;
+    void  setRatio(float ratio) noexcept;        // 1.0 = bypass, 20.0 = limiter
+    float ratio() const noexcept;
+    void  setAttackMs(float ms) noexcept;
+    float attackMs() const noexcept;
+    void  setReleaseMs(float ms) noexcept;
+    float releaseMs() const noexcept;
+    void  setKneeDb(float db) noexcept;
+    float kneeDb() const noexcept;
+    void  setMakeupDb(float db) noexcept;
+    float makeupDb() const noexcept;
+
+    // Brickwall limiter on the output.  Ceiling in dBFS (negative).
+    void  setLimiterEnabled(bool on) noexcept;
+    bool  limiterEnabled() const noexcept;
+    void  setLimiterCeilingDb(float db) noexcept;
+    float limiterCeilingDb() const noexcept;
+
+    // Pre-comp Drive (#2887). Linear gain in dB applied BEFORE the
+    // compressor sees the signal. Pushes more material across the
+    // threshold so the comp engages harder, raising RMS while the
+    // existing limiter holds peaks. 0 dB = bypass.
+    void  setDriveDb(float db) noexcept;          // 0 .. 18 dB
+    float driveDb() const noexcept;
+
+    // Pre-comp phase rotator (#2887). Cascade of N second-order all-pass
+    // filters at staggered audio centres — symmetrizes asymmetric voice
+    // peaks so the harder compression and downstream limiting don't
+    // sound trashy. 0 = off (bypass), 4 = broadcast default, 6 = max.
+    void  setPhaseRotatorStages(int stages) noexcept;
+    int   phaseRotatorStages() const noexcept;
+
+    // Audio thread — process in place.  channels must be 1 or 2.
+    void process(float* interleaved, int frames, int channels) noexcept;
+
+    // Audio thread — flush envelope state (e.g. on TX start).
+    void reset() noexcept;
+
+    // UI thread — read-only snapshots of the latest detector state for
+    // meters. Updated once per block on the audio thread via atomics.
+    float inputPeakDb() const noexcept;       // pre-compression peak
+    float outputPeakDb() const noexcept;      // post-limiter peak
+    float gainReductionDb() const noexcept;   // comp GR in dB (≤ 0)
+    float limiterGrDb() const noexcept;       // limiter-only GR in dB (≤ 0)
+    bool  limiterActive() const noexcept;     // true while limiter is clamping
+
+    // Sample rate this comp was prepared at.
+    // Audio owner: mirror a presented auxiliary source into UI-facing meters.
+    // Copies atomic snapshots only; parameters and processing histories stay local.
+    void copyMeteringFrom(const ClientComp& source) noexcept;
+
+    double sampleRate() const noexcept
+    { return m_sampleRate.load(std::memory_order_relaxed); }
+
+private:
+    struct Atomics {
+        std::atomic<bool>     enabled{false};
+        std::atomic<float>    thresholdDb{-18.0f};
+        std::atomic<float>    ratio{3.0f};
+        std::atomic<float>    attackMs{20.0f};
+        std::atomic<float>    releaseMs{200.0f};
+        std::atomic<float>    kneeDb{6.0f};
+        std::atomic<float>    makeupDb{0.0f};
+        std::atomic<bool>     limEnabled{true};
+        std::atomic<float>    limCeilingDb{-1.0f};
+        std::atomic<float>    driveDb{0.0f};
+        std::atomic<int>      phaseRotatorStages{0};
+        std::atomic<uint64_t> version{0};
+    };
+
+    struct Cached {
+        float thresholdDb{-18.0f};
+        float ratioInv{1.0f / 3.0f};       // 1/ratio, pre-computed
+        float attackCoeff{0.0f};           // 1 - exp(-1 / (fs · τ))
+        float releaseCoeff{0.0f};
+        float kneeDb{6.0f};
+        float makeupLin{1.0f};
+        bool  limEnabled{true};
+        float limCeilingLin{0.891f};       // 10^(-1/20)
+        float limAttackCoeff{0.0f};
+        float limReleaseCoeff{0.0f};
+        float driveLin{1.0f};              // 10^(driveDb / 20)
+        int   phaseRotatorStages{0};
+    };
+
+    // Meter snapshots — atomic stores on the audio thread after each
+    // block, atomic loads on the UI thread for paint.
+    struct Meters {
+        std::atomic<float> inputPeakDb{-120.0f};
+        std::atomic<float> outputPeakDb{-120.0f};
+        std::atomic<float> gainReductionDb{0.0f};
+        std::atomic<float> limiterGrDb{0.0f};
+        std::atomic<bool>  limiterActive{false};
+    };
+
+    void recacheIfDirty() noexcept;
+    float staticCurveGainDb(float envDb) const noexcept;
+
+    // Audio owner writes in prepare(); UI reads the displayed processing rate.
+    std::atomic<double> m_sampleRate{24000.0};
+    Atomics  m_atomics;
+    Cached   m_cached;
+    Meters   m_meters;
+
+    // Audio-thread state — accessed only from process().
+    uint64_t m_lastVersion{0};
+    // Linear-domain peak envelope: tracks max(|L|,|R|) with attack/release
+    // ballistics. Converting to dB after smoothing gives proper peak
+    // tracking — log-domain smoothing of a sine would settle ~4 dB below
+    // the peak (average of log|sin|), which is wrong for a peak compressor.
+    float    m_envLin{0.0f};
+    float    m_limEnvLin{0.0f};       // limiter envelope (linear)
+
+    // Pre-compressor phase rotator (#2887). Owned here so the comp's
+    // Drive + Phase + threshold + ratio + ceiling all act as a single
+    // PAPR-reducing block on the chain's COMP card.
+    std::unique_ptr<ClientPhaseRotator> m_phaseRotator;
+};
+
+} // namespace AetherSDR

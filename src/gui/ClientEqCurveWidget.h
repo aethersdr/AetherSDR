@@ -1,0 +1,216 @@
+#pragma once
+
+#include <QElapsedTimer>
+#include <QFont>
+#include <QPixmap>
+#include <QString>
+#include <QStringList>
+#include <QVariantMap>
+#include <QWidget>
+#include <array>
+#include <vector>
+
+class QPainter;
+
+namespace AetherSDR {
+
+class ClientEq;
+
+// QPainter view of a ClientEq: log-frequency and dB grids, response curve,
+// band regions, FFT analyzer overlay and band handles. Compact in the docked
+// ClientEqApplet (analyzer + summed curve); full size with interactions in
+// the floating ClientEqEditor.
+class ClientEqCurveWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit ClientEqCurveWidget(QWidget* parent = nullptr);
+
+    // Null is allowed — widget draws the grid with no response data.
+    void setEq(ClientEq* eq);
+
+    // -1 means "nothing selected" — the default in the docked applet view.
+    // The editor canvas sets this as the user interacts with handles /
+    // icons / param columns so all three UI layers stay in sync.
+    void setSelectedBand(int idx);
+    int  selectedBand() const { return m_selectedBand; }
+
+    // Show semi-transparent filled regions behind each band's response
+    // curve. On by default for the editor canvas; the docked applet view
+    // can turn it off if the curve gets too busy at sidebar width.
+    void setShowFilledRegions(bool on);
+
+    // Feed the live post-EQ FFT bins to render as a filled analyzer
+    // gradient behind the EQ curves. Pass an empty vector to clear.
+    // `sampleRate` is the rate the FFT was computed at so the widget
+    // can map bins to log-freq x positions.
+    void setFftBinsDb(const std::vector<float>& binsDb,
+                      double sampleRate);
+
+    // When true, the per-bin peak-hold trace stops decaying — peaks
+    // stick at whatever maximum has been observed so far.  Toggling
+    // back to false resumes the normal decay.
+    void setPeakHoldFrozen(bool frozen);
+
+    // Display-only fractional-octave smoothing of the analyzer trace: a 1/N-octave
+    // linear-power average around each bin (96 ≈ off, 24 gentle, 12 default, 6 for
+    // shape decisions, 3 very smooth). Peak-hold still tracks raw bins.
+    void setSmoothingOctaveFraction(int n);
+    int  smoothingOctaveFraction() const { return m_smoothingFraction; }
+
+    // Audio band-plan strip occupies the bottom this-many pixels of the
+    // drawing rect.  Exposed so derived widgets can avoid intercepting
+    // clicks in the strip area.
+    static constexpr int kAudioBandStripPx = 14;
+
+    int filterLowCutHz()  const { return m_filterLowCutHz;  }
+    int filterHighCutHz() const { return m_filterHighCutHz; }
+
+    // Free-function smoothing for unit tests — operates on a flat
+    // dB-bin vector with explicit sample rate.  Same algorithm the
+    // widget runs internally.
+    static std::vector<float> applyFractionalOctaveSmoothing(
+        const std::vector<float>& binsDb,
+        double sampleRate,
+        int octaveFraction);
+
+    // Draw faint dashed yellow vertical guides at the radio's TX
+    // low / high filter cutoff frequencies.  Pass 0 for either edge
+    // to skip drawing it.  Designed for the TX EQ where the cutoffs
+    // are meaningful — the RX EQ won't call this and the lines stay
+    // hidden.
+    void setFilterCutoffs(int lowHz, int highHz);
+
+    // Overlay one of several reference curves on the EQ canvas as a
+    // thin amber line.  Use kReferenceCurveIds[] below for the canonical
+    // names; empty string or "Off" hides the overlay.  Curves include
+    // the AT&T 1959 intelligibility target plus digitized responses of
+    // famous SSB microphones (Astatic D-104, Shure 444, Heil HC-5)
+    // and a Bob-Heil-style aggressive DX preset.
+    void setReferenceCurvePreset(const QString& id);
+    QString referenceCurvePreset() const { return m_referencePreset; }
+
+    // Stable IDs for AppSettings persistence and combo-box wiring.  The
+    // first entry is always "Off".
+    static const QStringList& referenceCurveIds();
+
+    // Bridge-facing, production-light paint/cache counters. AutomationServer
+    // invokes this by class name so core code does not depend on GUI headers.
+    // `reset` returns the completed interval before beginning a fresh one.
+    Q_INVOKABLE QVariantMap eqstatsSnapshot(bool reset);
+
+signals:
+    void selectedBandChanged(int idx);
+    // Fired whenever band params mutate on the audio side from user
+    // interaction in the canvas (drag, double-click-to-create, type
+    // cycle via right-click menu, delete). The editor subscribes so it
+    // can refresh the icon row + param row text live.
+    void bandsChanged();
+
+public:
+    // Band palette — 8-step colour wheel across the audio spectrum, with
+    // ends grayed for HP/LP slopes. Editor and curve share this so a band
+    // keeps the same color in handle, curve, and parameter-row contexts.
+    // Index is 0..kMaxBands-1; wraps / interpolates beyond the 8 stops.
+    static QColor bandColor(int bandIdx);
+
+protected:
+    void paintEvent(QPaintEvent* ev) override;
+
+    // Map Hz <-> x in the drawing rect (log scale, 20 Hz to 20 kHz).
+    float freqToX(float hz) const;
+    float xToFreq(float x) const;
+    // Map dB <-> y in the drawing rect (±18 dB linear).
+    float dbToY(float db) const;
+    float yToDb(float y) const;
+
+    ClientEq*          m_eq{nullptr};
+    int                m_selectedBand{-1};
+    bool               m_showFilled{true};
+    std::vector<float> m_fftBinsDb;      // empty = no analyzer drawn
+    std::vector<float> m_fftBinsDbSmoothed;  // fractional-octave smoothed copy used for drawing
+    std::vector<float> m_peakHoldDb;     // per-bin peak-hold trail (raw, used for max tracking)
+    std::vector<float> m_peakHoldDbSmoothed;  // smoothed copy of peak-hold used for drawing
+    bool               m_peakHoldFrozen{false};
+    double             m_fftSampleRate{24000.0};
+    int                m_smoothingFraction{96};  // 96 = effectively off
+    int                m_filterLowCutHz{0};      // 0 = don't draw
+    int                m_filterHighCutHz{0};     // 0 = don't draw
+    QString            m_referencePreset;  // empty = off
+
+private:
+    struct BackgroundCacheKey {
+        QSize size;
+        qreal devicePixelRatio{1.0};
+        QFont font;
+        int filterLowCutHz{0};
+        int filterHighCutHz{0};
+
+        bool operator==(const BackgroundCacheKey&) const = default;
+    };
+
+    struct BandCacheState {
+        float freqHz{0.0f};
+        float gainDb{0.0f};
+        float q{0.0f};
+        int type{0};
+        bool enabled{false};
+        int slopeDbPerOct{0};
+
+        bool operator==(const BandCacheState&) const = default;
+    };
+
+    struct ResponseCacheKey {
+        QSize size;
+        qreal devicePixelRatio{1.0};
+        QFont font;
+        ClientEq* eq{nullptr};
+        int selectedBand{-1};
+        bool showFilled{true};
+        QString referencePreset;
+        bool eqEnabled{false};
+        int filterFamily{0};
+        double sampleRate{0.0};
+        int activeBandCount{0};
+        // Keep in sync with ClientEq::kMaxBands. responseCacheKey() pins
+        // the relationship with a static_assert where ClientEq is complete.
+        std::array<BandCacheState, 16> bands{};
+
+        bool operator==(const ResponseCacheKey&) const = default;
+    };
+
+    struct PerfStats {
+        quint64 fftUpdates{0};
+        quint64 paints{0};
+        quint64 paintUsTotal{0};
+        quint64 paintUsMax{0};
+        quint64 backgroundCacheRebuilds{0};
+        quint64 responseCacheRebuilds{0};
+        quint64 backgroundCacheHits{0};
+        quint64 responseCacheHits{0};
+    };
+
+    void applySmoothing();
+    BackgroundCacheKey backgroundCacheKey() const;
+    ResponseCacheKey responseCacheKey() const;
+    bool cacheEligible(const QSize& size, qreal devicePixelRatio) const;
+    QPixmap makeCachePixmap(const QSize& size, qreal devicePixelRatio) const;
+    void drawBackground(QPainter& painter, const QRect& rect) const;
+    void drawResponse(QPainter& painter, const QRect& rect,
+                      const ResponseCacheKey& key) const;
+    void resetPerfStats();
+
+    QPixmap m_backgroundCache;
+    QPixmap m_responseCache;
+    BackgroundCacheKey m_backgroundCacheKey;
+    ResponseCacheKey m_responseCacheKey;
+    bool m_backgroundCacheValid{false};
+    bool m_responseCacheValid{false};
+    QElapsedTimer m_perfSince;
+    // Wall clock between peak-hold updates, so the decay is per second
+    // rather than per call — see setFftBinsDb().
+    QElapsedTimer m_peakHoldClock;
+    PerfStats m_perfStats;
+};
+
+} // namespace AetherSDR

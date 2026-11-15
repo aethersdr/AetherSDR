@@ -1,0 +1,862 @@
+#include "core/backends/icom/IcomSession.h"
+
+#include <QDateTime>
+
+#include <QLoggingCategory>
+#include <QRandomGenerator>
+#include <QThread>
+#include <QTimer>
+
+#include <algorithm>
+
+namespace AetherSDR::icom {
+
+// The RS-BA1 handshake is a multi-step chain with no error packet for most of
+// its failure modes — a radio that refuses at any step simply stops answering.
+// Without these lines the whole sequence is a black box that either works or
+// silently does not, which is exactly what happened on first contact with real
+// hardware. Off by default; enable with QT_LOGGING_RULES="aether.icom*=true".
+Q_LOGGING_CATEGORY(lcIcom, "aether.icom.session")
+
+namespace {
+
+// The radio consumes one 20 ms frame at a time; this timer is the wire clock.
+// Drain by ELAPSED TIME, bounded by kTxPumpMaxFramesPerTick: a late tick sends
+// the frames it owes so backlog can't ratchet into TxPacketizer's 250 ms
+// drop-oldest cap, while the modem's lead buffer never leaves as a burst.
+constexpr int kTxPumpMs = 20;
+constexpr qint64 kTxPumpMaxFramesPerTick = 3;
+
+// A partial CI-V frame older than this is abandoned. Without it, one truncated
+// frame swallows every subsequent byte and the radio appears to stop answering
+// while the link is demonstrably fine.
+constexpr int kCivFrameTimeoutMs = 100;
+// Re-send the CI-V data-stream open at the reference's cadence until the radio
+// starts streaming. Matches kappanhang / SDR9700 startCivDataTimer(100).
+constexpr int kCivOpenRetryMs = 100;
+// ~5 s of asking. Long enough for a slow radio, short enough that a radio which
+// will never answer says so rather than retrying silently forever.
+constexpr int kCivOpenMaxAttempts = 50;
+
+std::span<const std::uint8_t> asSpan(const QByteArray& b)
+{
+    return {reinterpret_cast<const std::uint8_t*>(b.constData()),
+            static_cast<std::size_t>(b.size())};
+}
+
+}  // namespace
+
+IcomSession::IcomSession(QObject* parent) : QObject(parent) {}
+
+IcomSession::~IcomSession() { stop(); }
+
+bool IcomSession::start(const Params& params)
+{
+    stop();
+    m_params = params;
+    m_tokenRequestId = params.tokenRequestId != 0
+        ? params.tokenRequestId
+        : static_cast<quint16>(QRandomGenerator::global()->bounded(1, 0x10000));
+    m_lastAuthOkMs = 0;
+    m_lastRenewalSeq = 0;
+    m_lastRenewalResult = QStringLiteral("not sent");
+    m_lastRenewalResponse = 0;
+    m_renewAcceptedCount = 0;
+    m_tokenReissuedCount = 0;
+    m_renewRejectedCount = 0;
+    m_ignoredAuthReplies = 0;
+    m_ignoredControlPackets = 0;
+    m_tx = TxPacketizer(params.codec);
+    m_rx = RxAssembler(params.codec);
+
+    if (!codecSupported(params.codec)) {
+        // Refusing here rather than at decode time is deliberate: a codec we
+        // cannot decode, fed through the LPCM path, is full-scale noise into
+        // the operator's headphones.
+        fail(QStringLiteral("audio codec %1 is not supported by this client")
+                 .arg(static_cast<int>(params.codec)));
+        return false;
+    }
+    if (params.tokenRenewalMs <= 0 || params.tokenAckGraceMs <= 0
+        || params.initialMaintenanceMs <= 0
+        || params.tokenDeadMs <= params.tokenRenewalMs) {
+        fail(QStringLiteral("invalid RS-BA1 lease timing configuration"));
+        return false;
+    }
+
+    // Bind the media sockets FIRST, without handshaking. The control stream's
+    // request has to announce their local ports, and it is sent before either
+    // may start — so we have to know the ports by then.
+    m_serial = new IcomStream(this);
+    m_audio  = new IcomStream(this);
+    IcomStream::Config serialCfg{params.host, params.serialPort, 0, IcomStream::Role::Serial};
+    IcomStream::Config audioCfg{params.host, params.audioPort, 0, IcomStream::Role::Audio};
+    if (!m_serial->bindOnly(serialCfg) || !m_audio->bindOnly(audioCfg)) {
+        fail(QStringLiteral("cannot bind local UDP sockets for the CI-V and audio streams"));
+        return false;
+    }
+
+    connect(m_serial, &IcomStream::ready, this, &IcomSession::onSerialReady);
+    connect(m_serial, &IcomStream::payloadReady, this, &IcomSession::onSerialPayload);
+    connect(m_serial, &IcomStream::failed, this, &IcomSession::fail);
+    connect(m_audio, &IcomStream::ready, this, &IcomSession::onAudioReady);
+    connect(m_audio, &IcomStream::payloadReady, this, &IcomSession::onAudioPayload);
+    connect(m_audio, &IcomStream::failed, this, &IcomSession::fail);
+    // Loss is CONCEALED, not just counted: the fill goes out through audioReady so
+    // the RX timeline stays continuous; audioLost still fires for gap counting.
+    connect(m_audio, &IcomStream::packetsLost, this, [this](int packets) {
+        emit audioLost(packets);
+        if (packets <= 0)
+            return;
+        auto fill = m_rx.concealLoss(packets, m_params.sampleRateHz);
+        if (!fill.empty())
+            emit audioReady(fill);
+    });
+
+    m_control = new IcomStream(this);
+    connect(m_control, &IcomStream::ready, this, &IcomSession::onControlReady);
+    connect(m_control, &IcomStream::payloadReady, this, &IcomSession::onControlPayload);
+    connect(m_control, &IcomStream::failed, this, &IcomSession::fail);
+
+    IcomStream::Config controlCfg{params.host, params.controlPort, 0, IcomStream::Role::Control};
+    return m_control->start(controlCfg);
+}
+
+void IcomSession::stop()
+{
+    for (QTimer** t : {&m_tokenTimer, &m_txTimer, &m_civTimeout, &m_civOpenRetry}) {
+        if (*t) {
+            (*t)->stop();
+            (*t)->deleteLater();
+            *t = nullptr;
+        }
+    }
+    // Deauthenticate before teardown: a per-stream disconnect (0x05) closes the
+    // streams but not the SESSION, and the radio refuses the next login until it
+    // times out (kappanhang also sends auth 0x01 here). Send it TWICE as TRACKED
+    // packets so IcomStream stamps the outer sequence; an unstamped deauth is
+    // discarded and the next token request is rejected with 0xffffffff.
+    if (m_control && m_control->isReady()) {
+        const auto bye = buildAuth(m_control->localSessionId(),
+                                   m_control->remoteSessionId(), m_innerSeq++, m_authId,
+                                   AuthKind::Deauth);
+        m_control->sendTracked(bye);
+        m_control->sendTracked(bye);
+        // Flush, don't sleep: sendRaw() only fills the socket buffer, and blocking the
+        // event loop would stop Qt draining it (and freeze the GUI on every reconnect).
+        m_control->flush();
+    }
+
+    // Control FIRST now. It owns the session the other two hang off, so the
+    // deauth above must be the last thing the radio hears from us — tearing the
+    // media streams down first would put two more disconnects after it.
+    for (IcomStream** s : {&m_control, &m_serial, &m_audio}) {
+        if (*s) {
+            (*s)->stop();
+            (*s)->deleteLater();
+            *s = nullptr;
+        }
+    }
+    m_authOk = false;
+    m_renewUnacked = false;
+    m_initialMaintenancePending = false;
+    m_renewRetries = 0;
+    m_pendingRenewals.clear();
+    m_haveRadioId = false;
+    m_advertisedCivAddress = 0;
+    m_streamsRequested = false;
+    m_streamGranted = false;
+    m_connected = false;
+    m_innerSeq = 0;
+    m_serialSendSeq = 0;
+    m_audioSendSeq = 1;
+    m_civ.reset();
+    m_tx.flush();
+}
+
+void IcomSession::fail(const QString& reason)
+{
+    if (m_failing)
+        return;   // a teardown can make several streams fail at once
+    if (!m_connected && reason.isEmpty())
+        return;
+    m_failing = true;
+    qCWarning(lcIcom) << "session failed:" << reason;
+    const bool was = m_connected;
+    m_connected = false;
+    if (was || !reason.isEmpty())
+        emit disconnected(reason);
+
+    // ACTUALLY TEAR DOWN. Emitting disconnected() and leaving the streams
+    // running left three UDP sockets open to the radio after a failed connect
+    // — and because an Icom serves ONE client, that held the radio's session
+    // slot so every later attempt timed out with "no answer". The operator sees
+    // a radio that worked once and then refuses to talk to anything.
+    //
+    // Deferred to the event loop because fail() is usually reached FROM a
+    // stream's own signal, and stop() deletes those streams.
+    QTimer::singleShot(0, this, [this] {
+        stop();
+        m_failing = false;
+    });
+}
+
+void IcomSession::sendRenewal(const QString& reason)
+{
+    if (!m_control || !m_control->isReady()) {
+        return;
+    }
+    const quint16 seq = m_innerSeq++;
+    m_pendingRenewals.insert(seq);
+    m_lastRenewalSeq = seq;
+    m_lastRenewalResult = QStringLiteral("pending");
+    m_lastRenewalResponse = 0;
+    m_renewUnacked = true;
+    qCInfo(lcIcom).noquote() << "RS-BA1 token renewal sent: seq" << seq
+                             << "reason" << reason
+                             << "pending" << m_pendingRenewals.size();
+    m_control->sendTracked(buildAuth(m_control->localSessionId(),
+                                     m_control->remoteSessionId(), seq, m_authId,
+                                     AuthKind::Renew));
+}
+
+bool IcomSession::isCurrentControlPacket(std::span<const std::uint8_t> packet) const
+{
+    if (!m_control || packet.size() < kHeaderSize) {
+        return false;
+    }
+    const Header header = parseHeader(packet);
+    return header.sentId == m_control->remoteSessionId()
+        && header.rcvdId == m_control->localSessionId();
+}
+
+void IcomSession::onControlReady()
+{
+    qCInfo(lcIcom) << "control stream ready — sending login for user"
+                   << m_params.username << "(password"
+                   << (m_params.password.isEmpty() ? "EMPTY)" : "supplied)")
+                   << "token request"
+                   << QStringLiteral("0x%1").arg(m_tokenRequestId, 4, 16, QLatin1Char('0'));
+    m_control->sendTracked(buildLogin(m_control->localSessionId(), m_control->remoteSessionId(),
+                                      m_innerSeq++, m_tokenRequestId,
+                                      m_params.username.toStdString(),
+                                      m_params.password.toStdString()));
+}
+
+void IcomSession::onControlPayload(const QByteArray& packet)
+{
+    // Failure is terminal even while its deferred stream teardown is pending.
+    if (m_failing) {
+        return;
+    }
+    const auto pkt = asSpan(packet);
+
+    // Dispatch on LENGTH, not on type: every one of these rides packet type
+    // 0x00, and the length is the only thing that distinguishes them.
+    switch (packet.size()) {
+    case static_cast<qsizetype>(kLenLoginReply): {
+        qCInfo(lcIcom) << "got login reply";
+        AuthId id{};
+        switch (parseLoginReply(pkt, id)) {
+        case LoginResult::BadCredentials:
+            fail(QStringLiteral("the radio rejected the username or password"));
+            return;
+        case LoginResult::NotALoginReply:
+            return;
+        case LoginResult::Ok:
+            break;
+        }
+        m_authId = id;
+        qCInfo(lcIcom) << "login accepted — sending first auth + token request";
+        // Two auths, in this order. The first establishes the session and the
+        // second requests the token that actually gates the media streams;
+        // sending only one leaves a session that looks logged in and never
+        // opens audio.
+        m_control->sendTracked(buildAuth(m_control->localSessionId(),
+                                         m_control->remoteSessionId(), m_innerSeq++, m_authId,
+                                         AuthKind::First));
+        sendRenewal(QStringLiteral("initial token request"));
+        return;
+    }
+
+    case static_cast<qsizetype>(kLenToken): {
+        const AuthReply reply = parseAuthReply(pkt);
+        if (reply.result == AuthReplyResult::NotRenewal) {
+            return;
+        }
+        const bool initialToken = !m_authOk && !m_streamsRequested && !m_streamGranted;
+        const bool mayRotateInitialToken = initialToken
+            && reply.result == AuthReplyResult::Nonzero;
+        if (!isCurrentControlPacket(pkt)
+            || (reply.authId != m_authId && !mayRotateInitialToken)
+            || !m_pendingRenewals.remove(reply.innerSeq)) {
+            ++m_ignoredAuthReplies;
+            qCWarning(lcIcom).noquote()
+                << "ignoring stale or duplicate RS-BA1 token reply: seq"
+                << reply.innerSeq << "response"
+                << QStringLiteral("0x%1").arg(reply.response, 8, 16, QLatin1Char('0'))
+                << "pending" << m_pendingRenewals.size();
+            return;
+        }
+        m_lastRenewalSeq = reply.innerSeq;
+        m_lastRenewalResponse = reply.response;
+        if (reply.result == AuthReplyResult::Nonzero && !initialToken) {
+            ++m_renewRejectedCount;
+            m_lastRenewalResult = QStringLiteral("rejected");
+            qCWarning(lcIcom).noquote()
+                << "RS-BA1 token renewal rejected: seq" << reply.innerSeq
+                << "response"
+                << QStringLiteral("0x%1").arg(reply.response, 8, 16, QLatin1Char('0'));
+            fail(QStringLiteral("the radio rejected RS-BA1 session renewal %1 (response 0x%2)")
+                     .arg(reply.innerSeq)
+                     .arg(reply.response, 8, 16, QLatin1Char('0')));
+            return;
+        }
+
+        if (reply.result == AuthReplyResult::Nonzero) {
+            // wfview follows this exact reconnect path: the radio can answer
+            // the first post-login token request with 0xffffffff while
+            // returning the token that must be used for the stream request.
+            // The same response on an established lease is a real rejection,
+            // handled above. Context, not packet shape, is the discriminator.
+            m_authId = reply.authId;
+            ++m_tokenReissuedCount;
+            m_lastRenewalResult = QStringLiteral("reissued");
+            qCWarning(lcIcom) << "RS-BA1 token reissued during reconnect: seq"
+                              << reply.innerSeq;
+        } else {
+            ++m_renewAcceptedCount;
+            m_lastRenewalResult = QStringLiteral("accepted");
+            qCInfo(lcIcom) << "RS-BA1 token renewal accepted: seq" << reply.innerSeq;
+        }
+        m_pendingRenewals.clear();
+        m_authOk = true;
+        m_lastAuthOkMs = QDateTime::currentMSecsSinceEpoch();
+        m_renewUnacked = false;
+        m_renewRetries = 0;
+        // A live immediate reconnect received a media grant that went silent
+        // around 45 s even though the ordinary 60 s renewal was later accepted.
+        // Renew once at 30 s after initial authentication, then use the normal
+        // reference cadence for the rest of the session.
+        m_initialMaintenancePending = initialToken;
+        if (!m_tokenTimer) {
+            m_tokenTimer = new QTimer(this);
+            connect(m_tokenTimer, &QTimer::timeout, this, &IcomSession::onTokenRenew);
+            // This timer is both the 60 s renewal scheduler and the watchdog
+            // for a missing acknowledgement.
+            m_tokenTimer->start(m_params.tokenAckGraceMs);
+        }
+        requestStreamsIfReady();
+        return;
+    }
+
+    case static_cast<qsizetype>(kLenCapabilities):
+        qCInfo(lcIcom) << "got capabilities packet";
+        if (parseCapabilities(pkt, m_radioId)) {
+            m_haveRadioId = true;
+            m_advertisedCivAddress = parseCapabilitiesCivAddress(pkt);
+            m_radioName = QString::fromStdString(parseCapabilitiesName(pkt));
+            requestStreamsIfReady();
+        }
+        return;
+
+    case static_cast<qsizetype>(kLenStatus):
+        switch (parseStatus(pkt)) {
+        case StatusKind::AuthFailed:
+            // There are two distinguishable late-teardown shapes. A previous
+            // session can carry its old header IDs, but the IC-7300MK2 also
+            // sends 0x50/ffffffff on the NEW control association after that
+            // association's stream grant. wfview applies the same lifecycle
+            // discriminator: the sentinel is fatal before streamOpened and is
+            // ignored afterwards. Keep the header check as stronger evidence,
+            // then preserve the proven post-grant exception even if the radio
+            // stamped the status with this session's IDs.
+            if (!isCurrentControlPacket(pkt)) {
+                ++m_ignoredControlPackets;
+                qCWarning(lcIcom) << "ignoring auth-failure status for a stale control session";
+                return;
+            }
+            if (m_streamGranted && m_authOk) {
+                ++m_ignoredControlPackets;
+                qCWarning(lcIcom) << "ignoring late auth-failure status after the current "
+                                     "session's stream grant";
+                return;
+            }
+            fail(QStringLiteral("authentication failed — check the user name and password, "
+                                "or power-cycle the radio"));
+            return;
+        case StatusKind::Disconnected:
+            fail(QStringLiteral("the radio dropped the session"));
+            return;
+        default:
+            return;
+        }
+
+    case static_cast<qsizetype>(kLenConnInfo): {
+        if (m_connected) {
+            const ConnectionUsage usage = parseConnectionUsage(pkt);
+            if (usage.kind == ConnectionUsageKind::Available
+                && isCurrentControlPacket(pkt) && usage.authId == m_authId
+                && m_haveRadioId && usage.radioId == m_radioId) {
+                fail(QStringLiteral("the radio released the serial and audio streams; "
+                                    "reconnecting the Icom session"));
+            }
+            return;
+        }
+        const StreamGrant grant = parseStreamGrant(pkt);
+        qCInfo(lcIcom) << "got stream-request reply, granted =" << grant.granted
+                       << "byte0x60 =" << static_cast<quint8>(packet.at(0x60));
+        if (!grant.granted)
+            return;
+        if (!m_streamsRequested || !m_authOk
+            || grant.localSid != m_control->localSessionId()
+            || grant.remoteSid != m_control->remoteSessionId()) {
+            ++m_ignoredControlPackets;
+            qCWarning(lcIcom) << "ignoring stale RS-BA1 stream grant: requested="
+                              << m_streamsRequested << "authenticated=" << m_authOk
+                              << "headerMatches=" << isCurrentControlPacket(pkt);
+            return;
+        }
+        m_deviceName = QString::fromStdString(grant.deviceName);
+        m_authId = grant.authId;
+        m_streamGranted = true;
+        openMediaStreams();
+        return;
+    }
+
+    default:
+        // THE diagnostic that matters most on first contact: a control payload
+        // whose length we do not recognise means the radio answered with
+        // something this client does not model, and silently ignoring it is
+        // indistinguishable from the radio saying nothing at all.
+        qCWarning(lcIcom) << "UNHANDLED control payload, length" << packet.size()
+                          << "first bytes" << packet.left(24).toHex(' ');
+        return;
+    }
+}
+
+void IcomSession::requestStreamsIfReady()
+{
+    if (m_streamsRequested || !m_authOk || !m_haveRadioId) {
+        qCDebug(lcIcom) << "stream request not yet possible: requested="
+                        << m_streamsRequested << "authOk=" << m_authOk
+                        << "haveRadioId=" << m_haveRadioId;
+        return;
+    }
+    qCInfo(lcIcom) << "requesting serial + audio streams; radio name =" << m_radioName
+                   << "civ port =" << m_serial->localPort()
+                   << "audio port =" << m_audio->localPort();
+    m_streamsRequested = true;
+
+    StreamRequest req;
+    req.localSid  = m_control->localSessionId();
+    req.remoteSid = m_control->remoteSessionId();
+    req.innerSeq  = m_innerSeq++;
+    req.authId    = m_authId;
+    req.radioId   = m_radioId;
+    req.radioName = m_radioName.toStdString();
+    req.username  = m_params.username.toStdString();
+    req.rxCodec   = m_params.codec;
+    req.txCodec   = m_params.codec;
+    req.sampleRateHz = m_params.sampleRateHz;
+    // The ports we ACTUALLY bound, not the defaults. This is why the media
+    // sockets are bound before the handshake runs.
+    req.civLocalPort   = m_serial->localPort();
+    req.audioLocalPort = m_audio->localPort();
+    req.txBufferMs = m_params.txBufferMs;
+    req.enableTx   = m_params.enableTx;
+
+    m_control->sendTracked(buildStreamRequest(req));
+}
+
+void IcomSession::openMediaStreams()
+{
+    // The runtime rate check. IcomProtocol.h's static_assert only sees the
+    // compile-time kAudioRateHz; any other sampleRateHz here would still produce
+    // 1920-byte frames (60 ms at 16 kHz) and a transmitter that keys with zero
+    // forward power. Clamped rather than refused. Supporting another rate requires
+    // re-deriving the 1364/556 split.
+    if (m_params.sampleRateHz != kAudioRateHz) {
+        qCWarning(lcIcom) << "audio sample rate" << m_params.sampleRateHz
+                          << "Hz cannot be honoured — the packet split is sized for"
+                          << kAudioRateHz << "Hz; clamping. Changing the rate "
+                             "requires re-deriving kAudioSplitLarge/Small.";
+        m_params.sampleRateHz = kAudioRateHz;
+    }
+
+    m_serial->beginHandshake();
+    m_audio->beginHandshake();
+}
+
+// Token ticker and renewal watchdog in one timer. The radio stops media
+// silently after the last accepted token (no disconnect packet; untokened idle
+// keepalives keep the transport and isConnected() alive). Observed on an
+// IC-7300MK2: ~90 s after an established token, ~45 s after a reconnect grant.
+// So: renew once at 30 s, then every 60 s, retry within 3 s, fail at 80 s.
+void IcomSession::onTokenRenew()
+{
+    if (!m_control || !m_control->isReady())
+        return;
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastAuthOkMs <= 0)
+        m_lastAuthOkMs = now;
+
+    const qint64 sinceAck = now - m_lastAuthOkMs;
+
+    // Nothing has been acknowledged for most of the contract. Report it while
+    // it is still true — a session that dies here used to be discovered minutes
+    // later as "the meters stopped".
+    if (sinceAck > m_params.tokenDeadMs) {
+        fail(QStringLiteral(
+                 "the radio stopped renewing our session token (no acknowledgement "
+                 "for %1 s). The link is up but the session has expired — this is "
+                 "usually a lossy or power-saving WiFi path to the radio.")
+                 .arg(sinceAck / 1000));
+        return;
+    }
+
+    // A renewal is outstanding: resend it rather than waiting for the next
+    // interval, because the next interval may be past the expiry.
+    if (m_renewUnacked) {
+        if (m_renewRetries < kTokenRenewMaxRetries) {
+            ++m_renewRetries;
+            qCWarning(lcIcom) << "token renewal unacknowledged after"
+                              << m_params.tokenAckGraceMs << "ms — resend" << m_renewRetries
+                              << "of" << kTokenRenewMaxRetries;
+            sendRenewal(QStringLiteral("acknowledgement retry %1")
+                            .arg(m_renewRetries));
+            return;
+        }
+        // Release the latch: retries for THIS renewal are exhausted, but the token
+        // lives until tokenDeadMs, so fall through and let the cadence start a fresh
+        // renewal with a fresh budget — effectively continuous retry until the deadline.
+        m_renewUnacked = false;
+        m_renewRetries = 0;
+    }
+
+    // A reconnect grant can have a shorter first window than an established
+    // lease. Cover it once, then return to the wfview/kappanhang 60 s cadence.
+    const int cadenceMs = m_initialMaintenancePending
+        ? std::min(m_params.tokenRenewalMs, m_params.initialMaintenanceMs)
+        : m_params.tokenRenewalMs;
+    if (sinceAck < cadenceMs)
+        return;
+    m_renewRetries = 0;
+    sendRenewal(QStringLiteral("scheduled"));
+}
+
+void IcomSession::onSerialReady()
+{
+    qCInfo(lcIcom) << "serial stream ready — opening the CI-V pipe";
+    // Opening the CI-V pipe is a separate step from the stream handshake. A
+    // serial stream that handshakes and never opens carries keepalives forever
+    // and no commands.
+    m_serial->sendTracked(buildSerialOpen(m_serial->localSessionId(),
+                                          m_serial->remoteSessionId(), m_serialSendSeq++, true));
+
+    // One open is not enough: an IC-9700 can accept the CI-V open, report ready,
+    // and stream nothing (then the model never resolves and scope/TX stay off).
+    // Re-send the open on a timer until data flows, as kappanhang/SDR9700
+    // (startCivDataTimer, 100 ms) do.
+    m_civDataSeen = false;
+    m_civOpenAttempts = 0;
+    if (!m_civOpenRetry) {
+        m_civOpenRetry = new QTimer(this);
+        connect(m_civOpenRetry, &QTimer::timeout, this, [this]() {
+            if (m_civDataSeen || !m_serial) {
+                m_civOpenRetry->stop();
+                return;
+            }
+            // Bounded. The reference retries indefinitely, but it is a headless
+            // bridge; here an unbounded 10 Hz stream of opens at a radio that is
+            // never going to answer is just noise that hides the real fault. Say
+            // so once and stop — a silent forever-retry is how "it just does not
+            // work" becomes unreportable.
+            if (++m_civOpenAttempts > kCivOpenMaxAttempts) {
+                m_civOpenRetry->stop();
+                qCWarning(lcIcom)
+                    << "CI-V stream never started after" << kCivOpenMaxAttempts
+                    << "open attempts — the radio accepted the open and sent no data."
+                    << "Check CI-V is enabled for the network port on the radio.";
+                return;
+            }
+            m_serial->sendTracked(buildSerialOpen(m_serial->localSessionId(),
+                                                  m_serial->remoteSessionId(),
+                                                  m_serialSendSeq++, true));
+        });
+    }
+    m_civOpenRetry->start(kCivOpenRetryMs);
+
+    if (!m_civTimeout) {
+        m_civTimeout = new QTimer(this);
+        connect(m_civTimeout, &QTimer::timeout, this, &IcomSession::onCivFrameTimeout);
+        m_civTimeout->start(kCivFrameTimeoutMs);
+    }
+
+    if (!m_connected) {
+        m_connected = true;
+        emit connected(m_deviceName.isEmpty() ? m_radioName : m_deviceName);
+    }
+}
+
+void IcomSession::onSerialPayload(const QByteArray& packet)
+{
+    const auto payload = serialPayload(asSpan(packet));
+    if (payload.empty())
+        return;   // a keepalive idle, or the serial open/close echo
+
+    // First real CI-V payload: the stream is live, so stop asking it to open.
+    // The reference stops its timer on exactly this condition rather than after
+    // a fixed count, because a slow radio must not be abandoned early.
+    if (!m_civDataSeen) {
+        m_civDataSeen = true;
+        if (m_civOpenRetry)
+            m_civOpenRetry->stop();
+        qCInfo(lcIcom) << "CI-V stream live — open-retry stopped";
+    }
+
+    for (const auto& raw : m_civ.feed(payload)) {
+        auto frame = parseFrame(raw);
+        if (!frame)
+            continue;
+        // Drop our OWN commands: the radio echoes every frame on the CI-V bus, and an
+        // echo is never radio state. `from` ALONE is the test — `to` isn't reliable
+        // because setCivAddress() can move our target mid-session, and a 0x19 0x00
+        // query to broadcast 0x00 echoes as to=0x00, from=0xE0 (the echo arrives before
+        // the real reply). A radio's transceive to 0x00 still passes: its `from` is the
+        // radio's address.
+        if (frame->from == kControllerAddress)
+            continue;
+        emit civFrameReady(*frame);
+    }
+}
+
+void IcomSession::onCivFrameTimeout()
+{
+    if (m_civ.framePending())
+        m_civ.timeout();
+}
+
+void IcomSession::onAudioReady()
+{
+    qCInfo(lcIcom) << "audio stream ready";
+    if (!m_txTimer && m_params.enableTx) {
+        m_txTimer = new QTimer(this);
+        m_txTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_txTimer, &QTimer::timeout, this, &IcomSession::onTxPump);
+        m_txTimer->start(kTxPumpMs);
+    }
+}
+
+void IcomSession::onAudioPayload(const QByteArray& packet)
+{
+    const auto payload = audioPayload(asSpan(packet));
+    if (payload.empty())
+        return;
+    auto samples = m_rx.accept(payload);
+    if (!samples.empty())
+        emit audioReady(samples);
+}
+
+void IcomSession::onTxPump()
+{
+    if (!m_txContext.permitsDispatch(TxCoordinator::monotonicMs())) {
+        flushTxAudio();
+    }
+    if (!m_audio || !m_audio->isReady())
+        return;
+    if (m_tx.pendingBytes() < kAudioFrameBytes) {
+        // Idle. Forget the reference clock so the gap between transmissions
+        // is not counted as frames owed to the next one.
+        m_txPumpClock.invalidate();
+        m_txFramesSent = 0;
+        return;
+    }
+
+    // Frames due since this stream started flowing: one on the first tick,
+    // then one per kTxPumpMs of wall clock. AudioEngine and AetherModem may
+    // submit larger blocks to build a jitter cushion; that queue depth changes
+    // nothing here while ticks arrive on time, and only lateness is paid back.
+    qint64 due = 1;
+    qint64 shouldHaveSent = 1;
+    if (!m_txPumpClock.isValid()) {
+        m_txPumpClock.start();
+        m_txFramesSent = 0;
+    } else {
+        shouldHaveSent = 1 + m_txPumpClock.elapsed() / kTxPumpMs;
+        due = std::clamp<qint64>(shouldHaveSent - m_txFramesSent, 1,
+                                 kTxPumpMaxFramesPerTick);
+    }
+
+    qint64 sent = 0;
+    for (; sent < due; ++sent) {
+        const auto chunks = m_tx.takeFrame();
+        if (chunks.empty())
+            break;
+        for (const auto& c : chunks) {
+            m_audio->sendTrackedTxAudio(buildAudio(m_audio->localSessionId(),
+                                            m_audio->remoteSessionId(), 0, m_audioSendSeq++,
+                                            c.bytes), m_txContext);
+        }
+    }
+    m_txFramesSent += sent;
+    if (sent < due) {
+        // The queue ran short of what the clock says is owed: the producer,
+        // not this pump, is behind. Forgive the difference rather than burst
+        // it later when the producer catches up.
+        m_txFramesSent = shouldHaveSent;
+    }
+}
+
+int IcomSession::txAudioDrainMs() const
+{
+    if (!m_params.enableTx)
+        return 0;
+    // Every codec's frame is 20 ms of audio, so pending bytes convert through
+    // the frame size regardless of sample width. The last partial or whole
+    // frame leaves on the next tick; then the radio plays out its own buffer.
+    const std::size_t pendingFrames =
+        (m_tx.pendingBytes() + kAudioFrameBytes - 1) / kAudioFrameBytes;
+    return static_cast<int>(pendingFrames) * kTxPumpMs + kTxPumpMs
+        + static_cast<int>(m_params.txBufferMs);
+}
+
+void IcomSession::sendCiv(std::span<const std::uint8_t> frame,
+                          const std::optional<TxCoordinator::Command>& command)
+{
+    if (!m_serial || !m_serial->isReady())
+        return;
+    if (command) {
+        if (!command->permitsDispatch(TxCoordinator::monotonicMs())) {
+            return;
+        }
+        m_serial->sendTrackedTxCommand(buildSerialData(m_serial->localSessionId(),
+            m_serial->remoteSessionId(), 0, m_serialSendSeq++, frame), *command);
+        return;
+    }
+    m_serial->sendTracked(buildSerialData(m_serial->localSessionId(),
+                                          m_serial->remoteSessionId(), 0, m_serialSendSeq++,
+                                          frame));
+}
+
+bool IcomSession::reopenCivPipe()
+{
+    if (!m_serial || !m_serial->isReady()) {
+        return false;
+    }
+    m_serial->sendTracked(buildSerialRestart(m_serial->localSessionId(),
+                                             m_serial->remoteSessionId(),
+                                             m_serialSendSeq++));
+    return true;
+}
+
+void IcomSession::sendAudio(std::span<const float> mono, const TxCoordinator::Context& context)
+{
+    if (!m_params.enableTx || !context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txContext.sameContext(context)) {
+        flushTxAudio();
+        m_txContext = context;
+    }
+    m_tx.submit(mono);
+}
+
+std::size_t IcomSession::padTxAudioToFrame(const TxCoordinator::Context& context)
+{
+    return m_params.enableTx && context.sameContext(m_txContext)
+        && context.permitsDispatch(TxCoordinator::monotonicMs()) ? m_tx.padToFrame() : 0;
+}
+
+void IcomSession::flushTxAudio()
+{
+    m_tx.flush();
+    m_txContext = {};
+    m_txPumpClock.invalidate();
+    m_txFramesSent = 0;
+}
+
+IcomSession::Stats IcomSession::stats() const
+{
+    Stats s;
+    if (m_control) s.control = m_control->counters();
+    if (m_serial)  s.serial  = m_serial->counters();
+    if (m_audio)   s.audio   = m_audio->counters();
+    return s;
+}
+
+QVariantMap IcomSession::leaseDiagnostics() const
+{
+    QVariantMap out;
+    const qint64 ageMs = m_lastAuthOkMs > 0
+        ? QDateTime::currentMSecsSinceEpoch() - m_lastAuthOkMs : -1;
+    out.insert(QStringLiteral("authenticated"), m_authOk);
+    out.insert(QStringLiteral("connected"), m_connected);
+    out.insert(QStringLiteral("streamsRequested"), m_streamsRequested);
+    out.insert(QStringLiteral("streamGranted"), m_streamGranted);
+    out.insert(QStringLiteral("nextInnerSequence"), m_innerSeq);
+    out.insert(QStringLiteral("tokenRequestId"),
+               QStringLiteral("0x%1").arg(m_tokenRequestId, 4, 16, QLatin1Char('0')));
+    out.insert(QStringLiteral("lastRenewalSequence"), m_lastRenewalSeq);
+    out.insert(QStringLiteral("lastRenewalResult"), m_lastRenewalResult);
+    out.insert(QStringLiteral("lastRenewalResponse"),
+               QStringLiteral("0x%1").arg(m_lastRenewalResponse, 8, 16, QLatin1Char('0')));
+    out.insert(QStringLiteral("lastAcceptedAgeMs"), ageMs);
+    out.insert(QStringLiteral("pendingRenewals"), m_pendingRenewals.size());
+    out.insert(QStringLiteral("renewalRetries"), m_renewRetries);
+    out.insert(QStringLiteral("acceptedRenewals"),
+               QVariant::fromValue<qulonglong>(m_renewAcceptedCount));
+    out.insert(QStringLiteral("reissuedTokens"),
+               QVariant::fromValue<qulonglong>(m_tokenReissuedCount));
+    out.insert(QStringLiteral("rejectedRenewals"),
+               QVariant::fromValue<qulonglong>(m_renewRejectedCount));
+    out.insert(QStringLiteral("ignoredAuthReplies"),
+               QVariant::fromValue<qulonglong>(m_ignoredAuthReplies));
+    out.insert(QStringLiteral("ignoredControlPackets"),
+               QVariant::fromValue<qulonglong>(m_ignoredControlPackets));
+    out.insert(QStringLiteral("renewalCadenceMs"), m_params.tokenRenewalMs);
+    out.insert(QStringLiteral("initialMaintenanceMs"), m_params.initialMaintenanceMs);
+    out.insert(QStringLiteral("initialMaintenancePending"), m_initialMaintenancePending);
+    out.insert(QStringLiteral("ackGraceMs"), m_params.tokenAckGraceMs);
+    out.insert(QStringLiteral("deadSessionMs"), m_params.tokenDeadMs);
+    return out;
+}
+
+QVariantMap IcomSession::transportDiagnostics() const
+{
+    const Stats snapshot = stats();
+    const auto streamMap = [](const IcomStream::Counters& counters) {
+        QVariantMap out;
+        out.insert(QStringLiteral("rxBytes"),
+                   QVariant::fromValue<qulonglong>(counters.rxBytes));
+        out.insert(QStringLiteral("txBytes"),
+                   QVariant::fromValue<qulonglong>(counters.txBytes));
+        out.insert(QStringLiteral("rxPackets"),
+                   QVariant::fromValue<qulonglong>(counters.rxPackets));
+        out.insert(QStringLiteral("txPackets"),
+                   QVariant::fromValue<qulonglong>(counters.txPackets));
+        out.insert(QStringLiteral("rxLost"),
+                   QVariant::fromValue<qulonglong>(counters.rxLost));
+        out.insert(QStringLiteral("retransmitsAsked"),
+                   QVariant::fromValue<qulonglong>(counters.retransmitsAsked));
+        out.insert(QStringLiteral("retransmitsServed"),
+                   QVariant::fromValue<qulonglong>(counters.retransmitsServed));
+        out.insert(QStringLiteral("rttMs"), counters.rttMs);
+        out.insert(QStringLiteral("lastRxAgeMs"), counters.lastRxAgeMs);
+        out.insert(QStringLiteral("lastTxAgeMs"), counters.lastTxAgeMs);
+        out.insert(QStringLiteral("lastPayloadAgeMs"), counters.lastPayloadAgeMs);
+        out.insert(QStringLiteral("lastPingReplyAgeMs"), counters.lastPingReplyAgeMs);
+        out.insert(QStringLiteral("socketErrors"),
+                   QVariant::fromValue<qulonglong>(counters.socketErrors));
+        out.insert(QStringLiteral("lastSocketError"), counters.lastSocketError);
+        return out;
+    };
+    QVariantMap out;
+    out.insert(QStringLiteral("control"), streamMap(snapshot.control));
+    out.insert(QStringLiteral("serial"), streamMap(snapshot.serial));
+    out.insert(QStringLiteral("audio"), streamMap(snapshot.audio));
+    return out;
+}
+
+}  // namespace AetherSDR::icom

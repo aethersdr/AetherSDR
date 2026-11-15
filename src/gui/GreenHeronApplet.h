@@ -1,0 +1,183 @@
+#pragma once
+
+// GHE tile: antenna ports of the Green Heron "Everyware" switch this radio is
+// wired to (other switches' SWITCHLOCKS mark "in use by <switch>"). Owns its
+// GreenHeronModel; shows what the device reported, never what we asked for. The
+// rotator shares the socket and shows only while a heading is reported. Safety:
+//   1. Choosing a heading and sending it are separate gestures (Turn or Enter);
+//      the protocol has no stop/park verb, so nothing sends on click or drag.
+//   2. The readout is the REPORTED heading with no "on target" verdict (rotor
+//      stops ~2° short, overshoots, wanders ±3.8°): "62.9° · asked 64.3° · Δ1.4°".
+// RotorCompass (floating tile only) is read-only by invariant 1: no mouse handlers.
+
+#include <QHash>
+#include <QStringList>
+#include <QWidget>
+
+class QComboBox;
+class QLabel;
+class QLineEdit;
+class QPushButton;
+class QSpinBox;
+class QTimer;
+class QVBoxLayout;
+
+namespace AetherSDR {
+
+class GreenHeronModel;
+
+// Rotator dial, shown only while the GHE tile floats. Needle at the REPORTED
+// heading plus a dimmer ghost tick at the commanded one. No arrival state,
+// tolerance ring or accent colours: the rotor stops ~2° short and wanders ±3.8°
+// at rest, so any threshold would flicker. Needle uses the primary text colour,
+// ghost the label colour.
+class RotorCompass : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit RotorCompass(QWidget* parent = nullptr);
+
+    // `reported` is what POINT last said. `asked` is drawn only when
+    // `hasAsked`, and is never used to move the needle.
+    void setHeading(double reported, bool hasAsked, double asked);
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+    // For tests: what the dial is currently drawing. Due north is 0.0, which
+    // is why the change guard in setHeading() cannot use qFuzzyCompare.
+    double reportedHeading() const { return m_reported; }
+    bool   hasAskedHeading() const { return m_hasAsked; }
+    double askedHeading() const { return m_asked; }
+
+protected:
+    void paintEvent(QPaintEvent* ev) override;
+
+    // NOTE: no mousePressEvent / mouseMoveEvent, by design. See the header
+    // comment above — a click on this widget must not be able to aim a
+    // rotator, directly or by filling the field that Turn reads.
+
+private:
+    double m_reported{0.0};
+    double m_asked{0.0};
+    bool   m_hasAsked{false};
+};
+
+class GreenHeronApplet : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit GreenHeronApplet(QWidget* parent = nullptr);
+
+    // Exposed for tests and the automation bridge; the applet creates and
+    // owns it.
+    GreenHeronModel* model() const { return m_model; }
+
+    // The switch whose ports are on screen. Empty until one is chosen.
+    QString selectedSwitch() const;
+
+    // The rotator whose heading is on screen, or empty when the device is not
+    // reporting one. Exposed for tests and the automation bridge.
+    QString selectedRotor() const;
+
+    // Docked vs floating. Drives the compass and nothing else: every control
+    // in the tile is present and behaves identically either way, so a tile
+    // that is never floated loses nothing. Wired to
+    // ContainerWidget::dockModeChanged where the GHE entry is built.
+    void setFloating(bool on);
+
+    // Exposed for tests: the compass exists in both modes and is hidden in
+    // the docked one, so its visibility is the thing worth asserting.
+    const RotorCompass* compass() const { return m_compass; }
+
+private:
+    void buildUI();
+    void toggleConnection();
+    void refreshSwitchChoices();
+    // The switch actually driven and drawn: the operator's choice while the
+    // device still offers it, otherwise the first switch on the roster. Kept
+    // apart from m_wantedSwitch so a roster that is still arriving cannot
+    // overwrite what the operator asked for.
+    QString effectiveSwitch() const;
+    void rebuildPortList();
+    void syncFromModel();
+    // The rotator half: which one is shown, what the readout says, and the
+    // one place a TURN is ever sent from.
+    QString effectiveRotor() const;
+    void refreshRotorChoices();
+    void syncRotorFromModel();
+    void sendTurn();
+    void updateStatus();
+    void note(const QString& text);
+    void showNote(const QString& text, const QString& colourToken);
+
+    GreenHeronModel* m_model{nullptr};
+
+    QLineEdit*   m_hostEdit{nullptr};
+    QSpinBox*    m_portSpin{nullptr};
+    QComboBox*   m_switchCombo{nullptr};
+    QPushButton* m_connectBtn{nullptr};
+    QLabel*      m_statusLabel{nullptr};
+    QLabel*      m_noteLabel{nullptr};
+    QTimer*      m_noteTimer{nullptr};
+
+    QWidget*     m_portHost{nullptr};
+    QVBoxLayout* m_portLayout{nullptr};
+
+    // Hidden as a whole whenever no rotator is reporting — see the header
+    // comment. There is no "rotator offline" placeholder because the device
+    // does not distinguish "absent" from "powered off"; silence is all it has.
+    QWidget*     m_rotorSection{nullptr};
+    QComboBox*   m_rotorCombo{nullptr};
+    QLabel*      m_rotorReadout{nullptr};
+    QLineEdit*   m_headingEdit{nullptr};
+    QPushButton* m_turnBtn{nullptr};
+
+    // Lives INSIDE m_rotorSection rather than beside it, so it inherits that
+    // section's gate for free: the section is shown only while a rotator is
+    // reporting and is torn down after kRotorSilentAfterMs of silence. A
+    // compass parented anywhere else would need its own copy of that rule,
+    // and getting it wrong leaves a needle frozen at a stale heading after
+    // the controller is switched off — the exact failure the gate exists for.
+    RotorCompass* m_compass{nullptr};
+
+    // Explicitly hidden at build time, so that showing m_rotorSection in the
+    // docked tile does not bring the compass up with it.
+    bool m_floating{false};
+
+    // port name → its button. Rebuilt whenever the shown switch's roster
+    // changes.
+    QHash<QString, QPushButton*> m_portButtons;
+
+    // What the current port list was built from, so a redraw that changes
+    // nothing does not tear the buttons down under the operator's cursor.
+    QString     m_builtForSwitch;
+    QStringList m_builtForPorts;
+
+    // The operator's choice, remembered across roster arrivals and restarts.
+    // Held separately from the combo because the combo is empty until the
+    // device announces its switches. Written only by the operator picking from
+    // the combo and by the settings load — never from an arriving roster, which
+    // spans several reads and is therefore incomplete for a time.
+    QString m_wantedSwitch;
+
+    // The operator's rotator choice, when the server reports more than one.
+    // Not persisted: a rotator exists only while its controller is on, so
+    // there is nothing stable to remember, and the common case is one.
+    QString m_wantedRotor;
+
+    // Headings this session has commanded, per rotator. Kept ONLY to render
+    // "asked X · ΔY" beside the reported heading — never fed back into the
+    // readout itself, and never compared against a tolerance to declare
+    // arrival.
+    QHash<QString, double> m_commanded;
+
+    // What the readout last said, so a screen reader is not told the heading
+    // once a second. The device pushes POINT at ~0.97 s and the value dithers
+    // at rest, so announcing every change would make the tile unusable with
+    // Orca / NVDA; only the rotator appearing, disappearing, or a command
+    // going out is worth an announcement.
+    QString m_lastRotorAnnouncement;
+};
+
+} // namespace AetherSDR

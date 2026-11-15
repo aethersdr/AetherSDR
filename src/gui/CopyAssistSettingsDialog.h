@@ -1,0 +1,147 @@
+#pragma once
+
+#include "PersistentDialog.h"
+
+#include <QString>
+
+class QCheckBox;
+class QComboBox;
+class QLabel;
+class QLineEdit;
+class QPushButton;
+class QSlider;
+
+namespace AetherSDR {
+
+// Modeless settings dialog for Copy Assist (RFC #4333). Houses the model-tier
+// and compute-device (GPU/CPU) selectors — moved out of the panel's cramped
+// control row — behind the panel's ⚙ button, with room for further options.
+//
+// Like CopyAssistPanel it stays ThemeManager-free (so it links in the
+// lightweight offscreen unit test); the controller populates it, wires its
+// signals, and applies any theming. It mirrors the panel's old model/GPU API so
+// the controller's call sites move over unchanged.
+class CopyAssistSettingsDialog : public PersistentDialog {
+    Q_OBJECT
+public:
+    static constexpr int kGpuDiscoveryPending = -2;
+
+    explicit CopyAssistSettingsDialog(QWidget* parent = nullptr);
+
+    // Model tier selector (id + human label).
+    void addTier(const QString& id, const QString& label);
+    void setCurrentTier(const QString& id);
+    void setTierLabel(const QString& id, const QString& label);
+    QString currentTier() const;
+
+    // Compute-device selector — disabled during discovery and hidden on CPU-only hosts.
+    void addGpuDevice(int index, const QString& name);
+    void clearGpuDevices();
+    void setCurrentGpu(int index);
+    int currentGpu() const;
+    void setGpuSelectorVisible(bool on);
+    void setGpuSelectorEnabled(bool on);
+
+    // Fault stand-down row (#5190). Shown only while a fault record is standing
+    // a device — or the whole local speech engine — down, with `reason` saying
+    // which and why; the button asks for the attempt to be made again. Hidden
+    // (the default) the dialog looks exactly as it did before.
+    void setFaultStandDown(const QString& reason);
+    // The operator asked for another attempt: the record is gone, but this
+    // session is still stood down (the latch is one-way, #4502). Keep the row,
+    // say the retry happens at the next start, and disable the button.
+    void setFaultRetryPending();
+    void clearFaultStandDown();
+    bool faultStandDownVisible() const;
+
+    // Transcription-language selector (code + human label, e.g. "en"/"English").
+    // The controller populates it from the whisper backend's supported list;
+    // whisper-free here, same as the tier/GPU combos. Only applies to the
+    // whisper/remote backends — the controller hides it for sherpa-onnx (which
+    // takes its language from the loaded model).
+    void addLanguage(const QString& code, const QString& name);
+    void setCurrentLanguage(const QString& code);
+    QString currentLanguage() const;
+    void setLanguageSelectorVisible(bool on);
+
+    // Transcript-to-file logging: a checkbox + a (controller-populated) path. The
+    // controller owns the file picker and the actual writing.
+    void setLogToFile(bool on);
+    bool logToFile() const;
+    void setLogFilePath(const QString& path);
+    QString logFilePath() const;
+
+    // Learned Silero VAD (ONNX) in place of the energy VAD: a checkbox + an
+    // .onnx path. The controller owns the file picker and rebuilds the engine.
+    void setUseSileroVad(bool on);
+    // Tap point for the ASR feed: unchecked = after client NR and the RX
+    // effects chain (what every build before this did), checked = before them.
+    void setRawAudio(bool on);
+    void setNativeAudioRoute(bool native);
+    QWidget* rawAudioControl() const;
+    bool isRawAudio() const;
+    bool useSileroVad() const;
+    void setVadModelPath(const QString& path);
+    QString vadModelPath() const;
+
+    // Per-utterance speaker labeling (A/B/C…) via a speaker-embedding .onnx.
+    void setLabelSpeakers(bool on);
+    bool labelSpeakers() const;
+    void setSpeakerModelPath(const QString& path);
+    QString speakerModelPath() const;
+    // Cosine match threshold as a percent 0–100 (higher = stricter → more, finer
+    // speaker splits; lower = looser → fewer, merged speakers).
+    void setSpeakerThreshold(int percent);
+    int speakerThreshold() const;
+
+    // Boundary-word recovery / segment overlap (RFC #4821): milliseconds of
+    // trailing audio carried across a forced segment cut so a word split at the
+    // boundary isn't lost. 0 = off (the default). Opt-in.
+    void setBoundaryOverlapMs(int ms);
+    int boundaryOverlapMs() const;
+    // Context-carry (RFC #4818) has no control here — it lives on the panel
+    // header (CopyAssistPanel::contextCarryButton) so it can be toggled without
+    // opening this dialog.
+
+signals:
+    void tierChanged(const QString& tierId);
+    void gpuChanged(int index);
+    void retryAfterFaultRequested();
+    void languageChanged(const QString& code);
+    void logToFileToggled(bool on);
+    void browseLogFileRequested();
+    void useSileroVadToggled(bool on);
+    void rawAudioToggled(bool on);
+    void browseVadModelRequested();
+    void labelSpeakersToggled(bool on);
+    void browseSpeakerModelRequested();
+    void speakerThresholdChanged(int percent);
+    void boundaryOverlapChanged(int ms);
+
+private:
+    QComboBox* m_tier = nullptr;
+    QComboBox* m_gpu = nullptr;
+    QLabel* m_gpuLabel = nullptr;   // paired with m_gpu so both hide together
+    QWidget* m_faultRow = nullptr;  // reason + "Try again" (hidden unless a fault stands something down)
+    QLabel* m_faultReason = nullptr;
+    QPushButton* m_faultRetry = nullptr;
+    QComboBox* m_language = nullptr;
+    QLabel* m_languageLabel = nullptr; // paired with m_language so both hide together
+    QCheckBox* m_logToFile = nullptr;
+    QLineEdit* m_logPath = nullptr; // read-only display of the chosen path
+    QPushButton* m_logBrowse = nullptr;
+    QCheckBox* m_useSilero = nullptr;
+    QCheckBox* m_rawAudio = nullptr;
+    QString m_presentationAudioToolTip;
+    QLineEdit* m_vadPath = nullptr;
+    QPushButton* m_vadBrowse = nullptr;
+    QCheckBox* m_labelSpeakers = nullptr;
+    QLineEdit* m_spkPath = nullptr;
+    QPushButton* m_spkBrowse = nullptr;
+    QSlider* m_spkThreshold = nullptr;
+    QLabel* m_spkThresholdValue = nullptr;
+    QSlider* m_overlap = nullptr;
+    QLabel* m_overlapValue = nullptr;
+};
+
+} // namespace AetherSDR

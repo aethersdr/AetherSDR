@@ -1,0 +1,238 @@
+// Exercises the actual DFNR/NVIDIA wrapper source against deterministic
+// local C APIs. No SDK pack, model inference, network, or GPU is used.
+#include "core/DeepFilterFilter.h"
+#include "core/NvidiaAfxFilter.h"
+#include "nr_stereo_independence.h"
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QLibrary>
+#include <QTemporaryDir>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <memory>
+#include <numbers>
+
+unsigned aetherTestDfProcessedSamples();
+
+namespace {
+int g_failures{0};
+void check(bool condition, const char* name)
+{
+    std::printf("%s %s\n", condition ? "PASS" : "FAIL", name);
+    if (!condition) {
+        ++g_failures;
+    }
+}
+
+QByteArray tone(int rate, int first, int frames)
+{
+    QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(block.data());
+    const double hz = rate == 48000 ? 16000.0 : 4000.0;
+    for (int frame = 0; frame < frames; ++frame) {
+        const float value = 0.2f * std::sin(
+            2.0 * std::numbers::pi * hz * (first + frame) / rate);
+        samples[2 * frame] = value;
+        samples[2 * frame + 1] = value;
+    }
+    return block;
+}
+
+template<class Filter>
+QByteArray run(Filter& filter, int rate, bool irregular = true)
+{
+    constexpr std::array<int, 5> kPartitions{13, 511, 960, 73, 480};
+    QByteArray result;
+    const int total = rate * 2;
+    for (int first = 0, part = 0; first < total; ++part) {
+        const int frames = std::min(total - first,
+            irregular ? kPartitions[part % kPartitions.size()] : 480);
+        const QByteArray input = tone(rate, first, frames);
+        const QByteArray output = filter.process(input);
+        if (output.size() != input.size()) {
+            check(false, "wrapper preserves sample-frame count");
+            return {};
+        }
+        result.append(output);
+        first += frames;
+    }
+    return result;
+}
+
+double rmsTail(const QByteArray& data, int rate)
+{
+    const auto* samples = reinterpret_cast<const float*>(data.constData());
+    const int frames = data.size() / (2 * static_cast<int>(sizeof(float)));
+    double power = 0;
+    for (int frame = rate; frame < frames; ++frame) {
+        if (!std::isfinite(samples[2 * frame])
+            || samples[2 * frame] != samples[2 * frame + 1]) {
+            return -1;
+        }
+        power += static_cast<double>(samples[2 * frame]) * samples[2 * frame];
+    }
+    return frames > rate ? std::sqrt(power / (frames - rate)) : -1;
+}
+
+bool writeFixture(const QString& path)
+{
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write("test C API fixture") > 0;
+}
+}
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    QTemporaryDir state;
+    if (!state.isValid() || argc != 2) {
+        return 1;
+    }
+    // CMake gives this test its own executable directory. The model lookup
+    // follows the production path, but the linked C API reads no model bytes.
+    const QString fixture = QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("DeepFilterNet3_onnx.dfmodel"));
+    const bool createdFixture = !QFile::exists(fixture);
+    if (createdFixture && !writeFixture(fixture)) {
+        return 1;
+    }
+
+    const QString pack = state.path() + QStringLiteral("/pack");
+#if defined(_WIN32)
+    const QString libraryPath = pack + QStringLiteral("/bin/NVAudioEffects.dll");
+#else
+    const QString libraryPath = pack + QStringLiteral("/nvafx/lib/libnv_audiofx.so");
+#endif
+    QDir().mkpath(QFileInfo(libraryPath).absolutePath());
+    if (!QFile::copy(QString::fromLocal8Bit(argv[1]), libraryPath)
+        || !writeFixture(pack + QStringLiteral(
+            "/features/denoiser/models/sm_test/denoiser_48k.trtpkg"))) {
+        return 1;
+    }
+    QLibrary library(libraryPath);
+    library.load();
+    using Samples = unsigned (*)();
+    const Samples nvSamples = reinterpret_cast<Samples>(
+        library.resolve("aetherTestProcessedSamples"));
+    const Samples nvResets = reinterpret_cast<Samples>(
+        library.resolve("aetherTestResets"));
+    const Samples nvUnresetRuns = reinterpret_cast<Samples>(
+        library.resolve("aetherTestUnresetRuns"));
+    if (!nvSamples || !nvResets || !nvUnresetRuns) {
+        return 1;
+    }
+
+    using AetherSDR::DeepFilterFilter;
+    using AetherSDR::NvidiaAfxFilter;
+    DeepFilterFilter invalidDf(44100);
+    NvidiaAfxFilter invalidNv(pack, 44100);
+    check(!invalidDf.isValid() && !invalidNv.isValid(), "unsupported domains fail initialization");
+
+    DeepFilterFilter legacyDf;
+    DeepFilterFilter explicitDf(24000);
+    check(legacyDf.isValid() && explicitDf.isValid(), "DFNR C API test instances initialize");
+    const QByteArray baselineDf = run(legacyDf, 24000);
+    check(baselineDf == run(explicitDf, 24000), "DFNR default and explicit24 match bit-for-bit");
+    NvidiaAfxFilter legacyNv(pack);
+    NvidiaAfxFilter explicitNv(pack, 24000);
+    check(legacyNv.isValid() && explicitNv.isValid(), "NVIDIA C API test instances initialize");
+    const QByteArray baselineNv = run(legacyNv, 24000);
+    check(baselineNv == run(explicitNv, 24000), "NVIDIA default and explicit24 match bit-for-bit");
+
+    DeepFilterFilter nativeDf(48000);
+    NvidiaAfxFilter nativeNv(pack, 48000);
+    check(nativeDf.sampleRate() == 48000 && nativeNv.sampleRate() == 48000,
+          "native wrappers keep immutable48 domain");
+    const unsigned dfBefore = aetherTestDfProcessedSamples();
+    const unsigned nvBefore = nvSamples();
+    const QByteArray df48 = run(nativeDf, 48000);
+    const QByteArray nv48 = run(nativeNv, 48000);
+    // Two seconds of stereo at 48 kHz: each channel's 96000 samples reach its
+    // own model instance exactly once.
+    check(aetherTestDfProcessedSamples() - dfBefore == 2 * 96000,
+          "DFNR processes each native input sample exactly once per channel");
+    check(nvSamples() - nvBefore == 2 * 96000,
+          "NVIDIA processes each native input sample exactly once per channel");
+    check(std::abs(rmsTail(df48, 48000) - 0.0707107) < 0.001,
+          "DFNR native48 retains16k carrier with algorithm half-gain");
+    check(std::abs(rmsTail(nv48, 48000) - 0.0707107) < 0.001,
+          "NVIDIA native48 retains16k carrier with algorithm half-gain");
+    nativeDf.reset();
+    check(run(nativeDf, 48000) == df48, "DFNR reset clears algorithm and wrapper history");
+    NvidiaAfxFilter replacementNv(pack, 48000);
+    check(run(replacementNv, 48000) == nv48, "NVIDIA replacement creates a clean processing epoch");
+
+    DeepFilterFilter concurrentDf24(24000);
+    DeepFilterFilter concurrentDf48(48000);
+    NvidiaAfxFilter concurrentNv24(pack, 24000);
+    NvidiaAfxFilter concurrentNv48(pack, 48000);
+    QByteArray df24Concurrent;
+    QByteArray nv24Concurrent;
+    constexpr std::array<int, 5> kPartitions{13, 511, 960, 73, 480};
+    for (int first = 0, part = 0; first < 48000; ++part) {
+        const int frames = std::min(48000 - first, kPartitions[part % kPartitions.size()]);
+        const QByteArray input24 = tone(24000, first, frames);
+        df24Concurrent.append(concurrentDf24.process(input24));
+        nv24Concurrent.append(concurrentNv24.process(input24));
+        concurrentDf48.process(tone(48000, first * 2, frames * 2));
+        concurrentNv48.process(tone(48000, first * 2, frames * 2));
+        first += frames;
+    }
+    check(df24Concurrent == baselineDf, "concurrent48 leaves DFNR24 output unchanged");
+    check(nv24Concurrent == baselineNv, "concurrent48 leaves NVIDIA24 output unchanged");
+
+    // Every effect is reset after Load, before its first Run: the real SDK can
+    // otherwise hand a new effect a destroyed one's leftover state.
+    check(nvUnresetRuns() == 0, "NVIDIA effects are reset before their first Run");
+    {
+        NvidiaAfxFilter resettable(pack, 48000);
+        const unsigned before = nvResets();
+        resettable.reset();
+        check(nvResets() - before == 2, "NVIDIA reset() resets both channel effects");
+    }
+
+    // Each channel runs its own instance, as RN2 does: nothing is mixed to
+    // mono, so neither side hears the other and a hard pan is immediate.
+    for (const int rate : {24000, 48000}) {
+        const NrStereoIndependence::MakeProcess makeDf = [rate]() {
+            auto filter = std::make_shared<DeepFilterFilter>(rate);
+            return NrStereoIndependence::Process(
+                [filter](const QByteArray& pcm) { return filter->process(pcm); });
+        };
+        const NrStereoIndependence::MakeProcess makeNv = [&pack, rate]() {
+            auto filter = std::make_shared<NvidiaAfxFilter>(pack, rate);
+            return NrStereoIndependence::Process(
+                [filter](const QByteArray& pcm) { return filter->process(pcm); });
+        };
+        check(NrStereoIndependence::leftIgnoresRight(makeDf, rate)
+                  && NrStereoIndependence::rightIgnoresLeft(makeDf, rate),
+              rate == 24000 ? "DFNR24 channels are independent"
+                            : "DFNR48 channels are independent");
+        check(NrStereoIndependence::panStepSettles(makeDf, rate),
+              rate == 24000 ? "DFNR24 hard pan step settles within 300 ms"
+                            : "DFNR48 hard pan step settles within 300 ms");
+        check(NrStereoIndependence::attenuatesNoise(makeDf, rate),
+              rate == 24000 ? "DFNR24 both channels reach the algorithm"
+                            : "DFNR48 both channels reach the algorithm");
+        check(NrStereoIndependence::leftIgnoresRight(makeNv, rate)
+                  && NrStereoIndependence::rightIgnoresLeft(makeNv, rate),
+              rate == 24000 ? "NVIDIA24 channels are independent"
+                            : "NVIDIA48 channels are independent");
+        check(NrStereoIndependence::panStepSettles(makeNv, rate),
+              rate == 24000 ? "NVIDIA24 hard pan step settles within 300 ms"
+                            : "NVIDIA48 hard pan step settles within 300 ms");
+        check(NrStereoIndependence::attenuatesNoise(makeNv, rate),
+              rate == 24000 ? "NVIDIA24 both channels reach the algorithm"
+                            : "NVIDIA48 both channels reach the algorithm");
+    }
+
+    if (createdFixture) {
+        QFile::remove(fixture);
+    }
+    return g_failures == 0 ? 0 : 1;
+}

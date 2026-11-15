@@ -1,0 +1,30 @@
+30a31,33
+> #ifndef RADE_EXPORT
+> #define RADE_EXPORT __attribute__((visibility("default")))
+> #endif /* RADE_EXPORT */
+88,93c90,95
+< void compute_generic_dense(const LinearLayer *layer, float *output, const float *input, int activation, int arch);
+< void compute_generic_gru(const LinearLayer *input_weights, const LinearLayer *recurrent_weights, float *state, const float *in, int arch);
+< void compute_generic_conv1d(const LinearLayer *layer, float *output, float *mem, const float *input, int input_size, int activation, int arch);
+< void compute_generic_conv1d_dilation(const LinearLayer *layer, float *output, float *mem, const float *input, int input_size, int dilation, int activation, int arch);
+< void compute_glu(const LinearLayer *layer, float *output, const float *input, int arch);
+< void compute_gated_activation(const LinearLayer *layer, float *output, const float *input, int activation, int arch);
+---
+> void RADE_EXPORT compute_generic_dense(const LinearLayer *layer, float *output, const float *input, int activation, int arch);
+> void RADE_EXPORT compute_generic_gru(const LinearLayer *input_weights, const LinearLayer *recurrent_weights, float *state, const float *in, int arch);
+> void RADE_EXPORT compute_generic_conv1d(const LinearLayer *layer, float *output, float *mem, const float *input, int input_size, int activation, int arch);
+> void RADE_EXPORT compute_generic_conv1d_dilation(const LinearLayer *layer, float *output, float *mem, const float *input, int input_size, int dilation, int activation, int arch);
+> void RADE_EXPORT compute_glu(const LinearLayer *layer, float *output, const float *input, int arch);
+> void RADE_EXPORT compute_gated_activation(const LinearLayer *layer, float *output, const float *input, int activation, int arch);
+96c98
+< int parse_weights(WeightArray **list, const void *data, int len);
+---
+> int RADE_EXPORT parse_weights(WeightArray **list, const void *data, int len);
+108c110
+< int linear_init(LinearLayer *layer, const WeightArray *arrays,
+---
+> int RADE_EXPORT linear_init(LinearLayer *layer, const WeightArray *arrays,
+119c121
+< int conv2d_init(Conv2dLayer *layer, const WeightArray *arrays,
+---
+> int RADE_EXPORT conv2d_init(Conv2dLayer *layer, const WeightArray *arrays,

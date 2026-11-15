@@ -1,0 +1,150 @@
+#pragma once
+
+#include <QString>
+#include <QList>
+#include <QMap>
+
+struct sqlite3;
+
+namespace AetherSDR {
+
+// RAII wrapper around the vendored SQLite for the client settings store (RFC
+// #4603). The only TU allowed to include sqlite3.h.
+//
+// Schema v1:
+//   meta             (key TEXT PRIMARY KEY, value TEXT NOT NULL)
+//   app_settings     (key TEXT PRIMARY KEY, value TEXT NOT NULL)
+//   station_settings (station, key, value; PRIMARY KEY (station, key))
+//   radio_settings   (family, radio_id, feature, schema_version, value;
+//                     PRIMARY KEY (family, radio_id, feature))
+//
+// SQLITE_THREADSAFE=1 makes single calls thread-safe; callers own transaction
+// composition (AppSettings serializes saves with its own mutex). No
+// exceptions: methods return success, log via qWarning(), set lastError().
+class SettingsDatabase {
+public:
+    static constexpr int kSchemaVersion = 1;
+
+    // A check that could not execute is deliberately distinct from a check
+    // that returned a corruption report. AppSettings may only move the live
+    // store aside after the latter: permissions, I/O and lock failures must
+    // leave the original database available for a later retry.
+    enum class IntegrityCheckResult { Ok, Corrupt, Failed };
+
+    SettingsDatabase();
+    ~SettingsDatabase();
+    SettingsDatabase(const SettingsDatabase&) = delete;
+    SettingsDatabase& operator=(const SettingsDatabase&) = delete;
+
+    // Open (creating if absent) with WAL + NORMAL sync + busy_timeout, and
+    // create the v1 schema on a fresh file. Returns false on any failure —
+    // including a file that is not a SQLite database. A database whose
+    // user_version is NEWER than kSchemaVersion opens successfully but
+    // reports isNewerSchema(); callers must treat it read-only and never
+    // "repair" it.
+    bool open(const QString& path);
+    void close();                       // checkpoints WAL, then closes
+    bool isOpen() const { return m_db != nullptr; }
+    bool isNewerSchema() const { return m_newerSchema; }
+    // True when the last failed open() was a lock/busy condition rather than
+    // corruption — a busy database is HEALTHY and must never be quarantined
+    // (PR #4612 review: POSIX rename() succeeds on open files, so quarantining
+    // a busy store split-brains a concurrent instance's committed writes).
+    bool lastOpenWasBusy() const { return m_lastOpenBusy; }
+    // True only when SQLite explicitly reported SQLITE_CORRUPT/SQLITE_NOTADB
+    // while opening this database. This is the open-path counterpart to an
+    // IntegrityCheckResult::Corrupt report.
+    bool lastOpenWasCorrupt() const { return m_lastOpenCorrupt; }
+    QString path() const { return m_path; }
+    QString lastError() const { return m_lastError; }
+
+    // Integrity: cheap check for every startup; full check when cheap fails.
+    IntegrityCheckResult quickCheck();
+    IntegrityCheckResult integrityCheck();
+
+    // meta table -------------------------------------------------------------
+    QString metaValue(const QString& key, const QString& defaultValue = {});
+    bool setMetaValue(const QString& key, const QString& value);
+
+    // Bulk load --------------------------------------------------------------
+    bool loadAppSettings(QMap<QString, QString>& out);
+    // Loads only rows for `station`.
+    bool loadStationSettings(const QString& station, QMap<QString, QString>& out);
+
+    // Row mutation — call inside a transaction for multi-row updates ---------
+    bool upsertApp(const QString& key, const QString& value);
+    bool removeApp(const QString& key);
+    bool upsertStation(const QString& station, const QString& key, const QString& value);
+    bool removeStation(const QString& station, const QString& key);
+    bool removeStationAll(const QString& station);
+
+    // Single-row read (used by import verification).
+    // Returns true and fills `value` iff the row exists.
+    bool readApp(const QString& key, QString& value);
+    qint64 appCount();
+
+    // radio_settings — one versioned feature document per (family, radio, feature)
+    // (RFC #4603 proposal A; radio_id "" = family-wide default row) -----------
+    bool upsertRadioFeature(const QString& family, const QString& radioId,
+                            const QString& feature, int schemaVersion,
+                            const QString& value);
+    bool readRadioFeature(const QString& family, const QString& radioId,
+                          const QString& feature, int& schemaVersion,
+                          QString& value, bool* readFailedOut = nullptr);
+    bool removeRadioFeature(const QString& family, const QString& radioId,
+                            const QString& feature);
+    // Full enumeration for diagnostics (--config features / support bundle).
+    struct RadioFeatureRow {
+        QString family;
+        QString radioId;
+        QString feature;
+        int schemaVersion = 0;
+        QString value;
+    };
+    bool listRadioFeatures(QList<RadioFeatureRow>& out);
+
+    // Transactions -----------------------------------------------------------
+    bool beginExclusive();   // BEGIN EXCLUSIVE — blocks concurrent writers
+    bool begin();            // BEGIN IMMEDIATE
+    bool commit();
+    bool rollback();
+
+    // Backups ----------------------------------------------------------------
+    // VACUUM INTO a fresh single-file snapshot (safe against a live WAL DB,
+    // unlike a file copy). Removes a pre-existing file at `destPath` first.
+    bool backupTo(const QString& destPath);
+    // Opens `path` read-only, runs quick_check, and confirms the app_settings
+    // table exists. Static so a backup can be verified without disturbing the
+    // live connection.
+    static bool verifyBackupFile(const QString& path);
+
+    // One-shot read-only fetch of a single app_settings row, without creating
+    // the file or requiring a QCoreApplication — the pre-QApplication
+    // bootstrap path (SettingsBootstrap). Returns true iff the row exists.
+    static bool readAppValueFromFile(const QString& path, const QString& key,
+                                     QString& value);
+    // Same one-shot read-only fetch for a station_settings row — the
+    // evidence-over-assertion verification read (a failed save() keeps the
+    // change in the CACHE for retry, so only a file read proves persistence).
+    static bool readStationValueFromFile(const QString& path,
+                                         const QString& station,
+                                         const QString& key, QString& value);
+
+private:
+    bool exec(const char* sql);
+    // currentUserVersion: the value open() read, so the stamp is written only
+    // when it actually changes (a redundant write dirties the store).
+    bool createSchema(int currentUserVersion);
+    void recordSqliteFailure(int resultCode);
+    IntegrityCheckResult runIntegrityCheck(const char* pragma);
+
+    sqlite3* m_db = nullptr;
+    QString m_path;
+    QString m_lastError;
+    bool m_newerSchema = false;
+    bool m_readOnly = false;
+    bool m_lastOpenBusy = false;
+    bool m_lastOpenCorrupt = false;
+};
+
+} // namespace AetherSDR

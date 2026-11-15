@@ -1,0 +1,1964 @@
+[
+  {
+    "status": "0",
+    "odimcode": "bezav",
+    "location": "Zaventem",
+    "country": "Belgium",
+    "latitude": "50.9054",
+    "longitude": "4.4579",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "bewid",
+    "location": "Wideumont",
+    "country": "Belgium",
+    "latitude": "49.9135",
+    "longitude": "5.5044",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "bejab",
+    "location": "Jabbeke",
+    "country": "Belgium",
+    "latitude": "51.1919",
+    "longitude": "3.0641",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "behel",
+    "location": "Helchteren",
+    "country": "Belgium",
+    "latitude": "51.0702",
+    "longitude": "5.4054",
+    "maxrange": "200"
+  },
+  {
+    "status": "1",
+    "odimcode": "hrbil",
+    "location": "Bilogora",
+    "country": "Croatia",
+    "latitude": "45.8835",
+    "longitude": "17.2005",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "hrpun",
+    "location": "Puntijarka",
+    "country": "Croatia",
+    "latitude": "45.9078",
+    "longitude": "15.9683",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "hrgra",
+    "location": "Gradište",
+    "country": "Croatia",
+    "latitude": "45.1592",
+    "longitude": "18.7033",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "hrgol",
+    "location": "Goli",
+    "country": "Croatia",
+    "latitude": "45.0205",
+    "longitude": "14.1223",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "hrdeb",
+    "location": "Debeljak",
+    "country": "Croatia",
+    "latitude": "44.0455",
+    "longitude": "15.3765",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "hrulj",
+    "location": "Uljenje",
+    "country": "Croatia",
+    "latitude": "42.8944",
+    "longitude": "17.4783",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "czska",
+    "location": "Skalky",
+    "country": "Czechia",
+    "latitude": "49.5011",
+    "longitude": "16.7885",
+    "maxrange": "260"
+  },
+  {
+    "status": "1",
+    "odimcode": "czbrd",
+    "location": "Brdy-Praha",
+    "country": "Czechia",
+    "latitude": "49.6583",
+    "longitude": "13.8178",
+    "maxrange": "260"
+  },
+  {
+    "status": "1",
+    "odimcode": "dkste",
+    "location": "Stevns",
+    "country": "Denmark",
+    "latitude": "55.3262",
+    "longitude": "12.4493",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "dkrom",
+    "location": "Römö",
+    "country": "Denmark",
+    "latitude": "55.1731",
+    "longitude": "8.552",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "dksin",
+    "location": "Sindal",
+    "country": "Denmark",
+    "latitude": "57.4893",
+    "longitude": "10.1365",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "dkbor",
+    "location": "Bornholm",
+    "country": "Denmark",
+    "latitude": "55.1127",
+    "longitude": "14.8875",
+    "maxrange": "240"
+  },
+  {
+    "status": "0",
+    "odimcode": "dkvir",
+    "location": "Virring",
+    "country": "Denmark",
+    "latitude": "56.024",
+    "longitude": "10.0246",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "dksam",
+    "location": "Samsø",
+    "country": "Denmark",
+    "latitude": "55.8119",
+    "longitude": "10.5853",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "eehar",
+    "location": "Harku",
+    "country": "Estonia",
+    "latitude": "59.3971",
+    "longitude": "24.6021",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "eesur",
+    "location": "Sürgavere",
+    "country": "Estonia",
+    "latitude": "58.4823",
+    "longitude": "25.5187",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fianj",
+    "location": "Anjalankoski",
+    "country": "Finland",
+    "latitude": "60.9039",
+    "longitude": "27.1081",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fikuo",
+    "location": "Kuopio",
+    "country": "Finland",
+    "latitude": "62.8626",
+    "longitude": "27.3815",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fikor",
+    "location": "Korpo",
+    "country": "Finland",
+    "latitude": "60.1285",
+    "longitude": "21.6434",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fiuta",
+    "location": "Utajärvi",
+    "country": "Finland",
+    "latitude": "64.7749",
+    "longitude": "26.3189",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "filuo",
+    "location": "Luosto",
+    "country": "Finland",
+    "latitude": "67.1391",
+    "longitude": "26.8969",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fivim",
+    "location": "Vimpeli",
+    "country": "Finland",
+    "latitude": "63.1048",
+    "longitude": "23.8209",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fikes",
+    "location": "Kesälahti",
+    "country": "Finland",
+    "latitude": "61.9069",
+    "longitude": "29.7977",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fipet",
+    "location": "Petäjävesi",
+    "country": "Finland",
+    "latitude": "62.3045",
+    "longitude": "25.4401",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "finur",
+    "location": "Nurmes",
+    "country": "Finland",
+    "latitude": "63.8378",
+    "longitude": "29.4489",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fivih",
+    "location": "Vihti",
+    "country": "Finland",
+    "latitude": "60.5562",
+    "longitude": "24.4956",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fikan",
+    "location": "Kankaanpää",
+    "country": "Finland",
+    "latitude": "61.8108",
+    "longitude": "22.502",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "fikau",
+    "location": "Kaunispää",
+    "country": "Finland",
+    "latitude": "68.4344",
+    "longitude": "27.444",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "frtra",
+    "location": "Trappes",
+    "country": "France",
+    "latitude": "48.7746",
+    "longitude": "2.0083",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frabb",
+    "location": "Abbeville",
+    "country": "France",
+    "latitude": "50.136",
+    "longitude": "1.8347",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frbor",
+    "location": "Bordeaux",
+    "country": "France",
+    "latitude": "44.8315",
+    "longitude": "-0.6919",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frbou",
+    "location": "Bourges",
+    "country": "France",
+    "latitude": "47.0586",
+    "longitude": "2.3595",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frgre",
+    "location": "Grèzes",
+    "country": "France",
+    "latitude": "45.1044",
+    "longitude": "1.3697",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frcae",
+    "location": "Falaise",
+    "country": "France",
+    "latitude": "48.9272",
+    "longitude": "-0.1496",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frnan",
+    "location": "Nancy",
+    "country": "France",
+    "latitude": "48.7158",
+    "longitude": "6.5816",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frnim",
+    "location": "Nîmes",
+    "country": "France",
+    "latitude": "43.8061",
+    "longitude": "4.5027",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frtou",
+    "location": "Toulouse",
+    "country": "France",
+    "latitude": "43.5743",
+    "longitude": "1.3763",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frtro",
+    "location": "Arcis-sur-Aube",
+    "country": "France",
+    "latitude": "48.4621",
+    "longitude": "4.3093",
+    "maxrange": "256"
+  },
+  {
+    "status": "0",
+    "odimcode": "frlep",
+    "location": "Sembadel",
+    "country": "France",
+    "latitude": "45.2892",
+    "longitude": "3.7095",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frtre",
+    "location": "Treillères",
+    "country": "France",
+    "latitude": "47.3374",
+    "longitude": "-1.6563",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frbol",
+    "location": "Bollène",
+    "country": "France",
+    "latitude": "44.323",
+    "longitude": "4.7621",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "fropo",
+    "location": "Opoul",
+    "country": "France",
+    "latitude": "42.9184",
+    "longitude": "2.865",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frniz",
+    "location": "Saint Nizier",
+    "country": "France",
+    "latitude": "46.0678",
+    "longitude": "4.4453",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frcol",
+    "location": "Collobrières",
+    "country": "France",
+    "latitude": "43.2166",
+    "longitude": "6.3729",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frpla",
+    "location": "Plabennec",
+    "country": "France",
+    "latitude": "48.4609",
+    "longitude": "-4.4298",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frale",
+    "location": "Aléria",
+    "country": "France",
+    "latitude": "42.1298",
+    "longitude": "9.4964",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frmcl",
+    "location": "Montclar",
+    "country": "France",
+    "latitude": "43.9905",
+    "longitude": "2.6096",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frave",
+    "location": "Avesnes",
+    "country": "France",
+    "latitude": "50.1283",
+    "longitude": "3.8118",
+    "maxrange": "256"
+  },
+  {
+    "status": "0",
+    "odimcode": "frche",
+    "location": "Cherves",
+    "country": "France",
+    "latitude": "46.6986",
+    "longitude": "0.0656",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frbla",
+    "location": "Blaisy-Haut",
+    "country": "France",
+    "latitude": "47.3552",
+    "longitude": "4.7759",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frmom",
+    "location": "Momuy",
+    "country": "France",
+    "latitude": "43.6245",
+    "longitude": "-0.6094",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frmtc",
+    "location": "Montancy",
+    "country": "France",
+    "latitude": "47.3686",
+    "longitude": "7.019",
+    "maxrange": "256"
+  },
+  {
+    "status": "0",
+    "odimcode": "",
+    "location": "Mont Colombis",
+    "country": "France",
+    "latitude": "44.4961",
+    "longitude": "6.2206",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "frmau",
+    "location": "Mont Maurel",
+    "country": "France",
+    "latitude": "44.0128",
+    "longitude": "6.5292",
+    "maxrange": "256"
+  },
+  {
+    "status": "0",
+    "odimcode": "",
+    "location": "Moucherotte",
+    "country": "France",
+    "latitude": "45.1477",
+    "longitude": "5.6394",
+    "maxrange": "256"
+  },
+  {
+    "status": "0",
+    "odimcode": "",
+    "location": "Vars",
+    "country": "France",
+    "latitude": "44.5876",
+    "longitude": "6.6531",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "fraja",
+    "location": "Ajaccio",
+    "country": "France",
+    "latitude": "41.9531",
+    "longitude": "8.7005",
+    "maxrange": "256"
+  },
+  {
+    "status": "0",
+    "odimcode": "",
+    "location": "Saint-Rémy",
+    "country": "France",
+    "latitude": "46.0666",
+    "longitude": "2.9606",
+    "maxrange": "256"
+  },
+  {
+    "status": "0",
+    "odimcode": "",
+    "location": "Noyal-Pontivy",
+    "country": "France",
+    "latitude": "48.0468",
+    "longitude": "-2.8942",
+    "maxrange": "256"
+  },
+  {
+    "status": "1",
+    "odimcode": "demem",
+    "location": "Memmingen",
+    "country": "Germany",
+    "latitude": "48.0421",
+    "longitude": "10.2192",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deoft",
+    "location": "Offenthal",
+    "country": "Germany",
+    "latitude": "49.9847",
+    "longitude": "8.7129",
+    "maxrange": "180"
+  },
+  {
+    "status": "0",
+    "odimcode": "deemd",
+    "location": "Emden",
+    "country": "Germany",
+    "latitude": "53.3387",
+    "longitude": "7.0237",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deasb",
+    "location": "Isle of Borkum",
+    "country": "Germany",
+    "latitude": "53.564",
+    "longitude": "6.7482",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deboo",
+    "location": "Boostedt",
+    "country": "Germany",
+    "latitude": "54.0043",
+    "longitude": "10.0468",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deros",
+    "location": "Rostock",
+    "country": "Germany",
+    "latitude": "54.1757",
+    "longitude": "12.058",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "dehnr",
+    "location": "Hannover",
+    "country": "Germany",
+    "latitude": "52.46",
+    "longitude": "9.6945",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "depro",
+    "location": "Protzel/Berlin",
+    "country": "Germany",
+    "latitude": "52.6486",
+    "longitude": "13.858",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deess",
+    "location": "Essen",
+    "country": "Germany",
+    "latitude": "51.4055",
+    "longitude": "6.9669",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "defld",
+    "location": "Flechtdorf",
+    "country": "Germany",
+    "latitude": "51.3112",
+    "longitude": "8.802",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deumd",
+    "location": "Ummendorf",
+    "country": "Germany",
+    "latitude": "52.1601",
+    "longitude": "11.1761",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deneu",
+    "location": "Neuhaus",
+    "country": "Germany",
+    "latitude": "50.5001",
+    "longitude": "11.1351",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "dedrs",
+    "location": "Dresden",
+    "country": "Germany",
+    "latitude": "51.1246",
+    "longitude": "13.7686",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "denhb",
+    "location": "Neuheilenbach",
+    "country": "Germany",
+    "latitude": "50.1097",
+    "longitude": "6.5483",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "detur",
+    "location": "Tuerkheim",
+    "country": "Germany",
+    "latitude": "48.5853",
+    "longitude": "9.7828",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deeis",
+    "location": "Eisberg",
+    "country": "Germany",
+    "latitude": "49.5407",
+    "longitude": "12.4028",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "defbg",
+    "location": "Feldberg",
+    "country": "Germany",
+    "latitude": "47.8736",
+    "longitude": "8.0039",
+    "maxrange": "180"
+  },
+  {
+    "status": "1",
+    "odimcode": "deisn",
+    "location": "Isen/München",
+    "country": "Germany",
+    "latitude": "48.1747",
+    "longitude": "12.1017",
+    "maxrange": "180"
+  },
+  {
+    "status": "0",
+    "odimcode": "",
+    "location": "MUC (EDDM)",
+    "country": "Germany",
+    "latitude": "48.351",
+    "longitude": "11.789",
+    "maxrange": "100"
+  },
+  {
+    "status": "0",
+    "odimcode": "",
+    "location": "FRA (EDDF)",
+    "country": "Germany",
+    "latitude": "50.038",
+    "longitude": "8.527",
+    "maxrange": "100"
+  },
+  {
+    "status": "1",
+    "odimcode": "grymi",
+    "location": "Ymittos",
+    "country": "Greece",
+    "latitude": "37.9461",
+    "longitude": "23.8138",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "grlar",
+    "location": "Larisa",
+    "country": "Greece",
+    "latitude": "39.6446",
+    "longitude": "22.4603",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "grthe",
+    "location": "Thessaloniki",
+    "country": "Greece",
+    "latitude": "40.5282",
+    "longitude": "22.9757",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "grand",
+    "location": "Andravida",
+    "country": "Greece",
+    "latitude": "37.9261",
+    "longitude": "21.2894",
+    "maxrange": "300"
+  },
+  {
+    "status": "0",
+    "odimcode": "graig",
+    "location": "Aigina",
+    "country": "Greece",
+    "latitude": "37.4312",
+    "longitude": "23.3",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "grakt",
+    "location": "Aktio",
+    "country": "Greece",
+    "latitude": "38.9166",
+    "longitude": "20.7528",
+    "maxrange": "300"
+  },
+  {
+    "status": "0",
+    "odimcode": "grxri",
+    "location": "Xrisoupoli",
+    "country": "Greece",
+    "latitude": "40.9277",
+    "longitude": "24.633",
+    "maxrange": "300"
+  },
+  {
+    "status": "0",
+    "odimcode": "grast",
+    "location": "Astypalaia",
+    "country": "Greece",
+    "latitude": "36.5993",
+    "longitude": "26.4404",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "hunap",
+    "location": "Napkor",
+    "country": "Hungary",
+    "latitude": "47.9622",
+    "longitude": "21.8867",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "hupog",
+    "location": "Poganyvar",
+    "country": "Hungary",
+    "latitude": "46.6604",
+    "longitude": "17.0624",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "hubud",
+    "location": "Budapest",
+    "country": "Hungary",
+    "latitude": "47.4294",
+    "longitude": "19.1817",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "husze",
+    "location": "Szentes",
+    "country": "Hungary",
+    "latitude": "46.6397",
+    "longitude": "20.4325",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "huhar",
+    "location": "Harmashegy",
+    "country": "Hungary",
+    "latitude": "46.1775",
+    "longitude": "18.3372",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "iskef",
+    "location": "Keflavik",
+    "country": "Iceland",
+    "latitude": "64.0257",
+    "longitude": "-22.6353",
+    "maxrange": "240"
+  },
+  {
+    "status": "0",
+    "odimcode": "isegs",
+    "location": "Fljotsdalsheidi",
+    "country": "Iceland",
+    "latitude": "65.0279",
+    "longitude": "-15.0382",
+    "maxrange": "240"
+  },
+  {
+    "status": "0",
+    "odimcode": "isx1",
+    "location": "Huginn - mobile",
+    "country": "Iceland",
+    "latitude": "MOBILE",
+    "longitude": "",
+    "maxrange": "120"
+  },
+  {
+    "status": "0",
+    "odimcode": "isx2",
+    "location": "Muninn - mobile",
+    "country": "Iceland",
+    "latitude": "MOBILE",
+    "longitude": "",
+    "maxrange": "120"
+  },
+  {
+    "status": "1",
+    "odimcode": "isska",
+    "location": "Skagi",
+    "country": "Iceland",
+    "latitude": "66.0557",
+    "longitude": "-20.268",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "isbjo",
+    "location": "Bjolfur",
+    "country": "Iceland",
+    "latitude": "65.2658",
+    "longitude": "-14.0618",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "iesha",
+    "location": "Shannon",
+    "country": "Ireland",
+    "latitude": "52.6928",
+    "longitude": "-8.9201",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "iedub",
+    "location": "Dublin",
+    "country": "Ireland",
+    "latitude": "53.4299",
+    "longitude": "-6.2443",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "lvrix",
+    "location": "Riga",
+    "country": "Latvia",
+    "latitude": "56.9143",
+    "longitude": "23.9897",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "ltlau",
+    "location": "Laukuva",
+    "country": "Lithuania",
+    "latitude": "55.609",
+    "longitude": "22.2395",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "ltvil",
+    "location": "Vilnius",
+    "country": "Lithuania",
+    "latitude": "54.6262",
+    "longitude": "25.1067",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "mtgud",
+    "location": "Gudja",
+    "country": "Malta",
+    "latitude": "35.8529",
+    "longitude": "14.4748",
+    "maxrange": "200"
+  },
+  {
+    "status": "0",
+    "odimcode": "mdchs",
+    "location": "Chisinau",
+    "country": "Republic of Moldova",
+    "latitude": "46.932324",
+    "longitude": "28.9509",
+    "maxrange": "360"
+  },
+  {
+    "status": "0",
+    "odimcode": "nldbl",
+    "location": "De Bilt",
+    "country": "Netherlands",
+    "latitude": "52.1017",
+    "longitude": "5.1783",
+    "maxrange": "320"
+  },
+  {
+    "status": "1",
+    "odimcode": "nldhl",
+    "location": "Den Helder",
+    "country": "Netherlands",
+    "latitude": "52.9528",
+    "longitude": "4.7906",
+    "maxrange": "320"
+  },
+  {
+    "status": "1",
+    "odimcode": "nlhrw",
+    "location": "Herwijnen",
+    "country": "Netherlands",
+    "latitude": "51.8371",
+    "longitude": "5.138",
+    "maxrange": "320"
+  },
+  {
+    "status": "1",
+    "odimcode": "nobml",
+    "location": "Boemlo",
+    "country": "Norway",
+    "latitude": "59.8536988",
+    "longitude": "5.0895912",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "norst",
+    "location": "Rost",
+    "country": "Norway",
+    "latitude": "67.53044",
+    "longitude": "12.09889",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "noand",
+    "location": "Andoya",
+    "country": "Norway",
+    "latitude": "69.24139",
+    "longitude": "16.00297",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "nohas",
+    "location": "Hasvik",
+    "country": "Norway",
+    "latitude": "70.605194",
+    "longitude": "22.442972",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "nosta",
+    "location": "Stad",
+    "country": "Norway",
+    "latitude": "62.1870756",
+    "longitude": "5.127454",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "nohur",
+    "location": "Hurum",
+    "country": "Norway",
+    "latitude": "59.62720765",
+    "longitude": "10.56445226",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "nohgb",
+    "location": "Haegebostad",
+    "country": "Norway",
+    "latitude": "58.360145",
+    "longitude": "7.16481",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "norsa",
+    "location": "Rissa",
+    "country": "Norway",
+    "latitude": "63.6905143",
+    "longitude": "10.2039034",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "nober",
+    "location": "Berlevaag",
+    "country": "Norway",
+    "latitude": "70.51065196",
+    "longitude": "29.01838382",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "nosmn",
+    "location": "Soemna",
+    "country": "Norway",
+    "latitude": "65.2198595",
+    "longitude": "11.9925139",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "nohfj",
+    "location": "Hafjell",
+    "country": "Norway",
+    "latitude": "61.2318",
+    "longitude": "10.5273",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "norsg",
+    "location": "Rassegalvarri",
+    "country": "Norway",
+    "latitude": "69.2186047",
+    "longitude": "23.4397591",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "plleg",
+    "location": "Legionowo",
+    "country": "Poland",
+    "latitude": "52.4053",
+    "longitude": "20.9611",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plram",
+    "location": "Ramża",
+    "country": "Poland",
+    "latitude": "50.1513",
+    "longitude": "18.7251",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plpas",
+    "location": "Pastewnik",
+    "country": "Poland",
+    "latitude": "50.8925",
+    "longitude": "16.0395",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plrze",
+    "location": "Rzeszów",
+    "country": "Poland",
+    "latitude": "50.1141",
+    "longitude": "22.037",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plpoz",
+    "location": "Poznań",
+    "country": "Poland",
+    "latitude": "52.4133",
+    "longitude": "16.797",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plswi",
+    "location": "Świdwin",
+    "country": "Poland",
+    "latitude": "53.7958",
+    "longitude": "15.8368",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plbrz",
+    "location": "Brzuchania",
+    "country": "Poland",
+    "latitude": "50.3942",
+    "longitude": "20.083228",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "pluzr",
+    "location": "Uzranki",
+    "country": "Poland",
+    "latitude": "53.8565",
+    "longitude": "21.4121",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plgsa",
+    "location": "Góra Św. Anny",
+    "country": "Poland",
+    "latitude": "50.4639",
+    "longitude": "18.1532",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "plgdy",
+    "location": "Gdynia-Szemud",
+    "country": "Poland",
+    "latitude": "54.5009",
+    "longitude": "18.2718",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "ptlis",
+    "location": "Coruche/Cruz do Leão",
+    "country": "Portugal",
+    "latitude": "39.0714",
+    "longitude": "-8.4001",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "ptfar",
+    "location": "Loulé/Cavalos do Caldeirão",
+    "country": "Portugal",
+    "latitude": "37.3041",
+    "longitude": "-7.953",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "ptprt",
+    "location": "Arouca/Pico do Gralheiro",
+    "country": "Portugal",
+    "latitude": "40.845",
+    "longitude": "-8.2797",
+    "maxrange": "300"
+  },
+  {
+    "status": "0",
+    "odimcode": "ptpst",
+    "location": "Porto Santo/Pico do Espigão",
+    "country": "Portugal",
+    "latitude": "33.0377",
+    "longitude": "-16.3838",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "pttrc",
+    "location": "Terceira/ Santa Barbara",
+    "country": "Portugal",
+    "latitude": "38.7302",
+    "longitude": "-27.3208",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "ptflr",
+    "location": "Flores/Morro Alto",
+    "country": "Portugal",
+    "latitude": "39.4634",
+    "longitude": "-31.22",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "ptsmg",
+    "location": "São Miguel/Pico Santos de Cima",
+    "country": "Portugal",
+    "latitude": "37.81913",
+    "longitude": "-25.75158",
+    "maxrange": "300"
+  },
+  {
+    "status": "1",
+    "odimcode": "robuc",
+    "location": "Bucuresti",
+    "country": "Romania",
+    "latitude": "44.512667",
+    "longitude": "26.077346",
+    "maxrange": "230"
+  },
+  {
+    "status": "1",
+    "odimcode": "roora",
+    "location": "Oradea",
+    "country": "Romania",
+    "latitude": "47.092181",
+    "longitude": "21.942893",
+    "maxrange": "230"
+  },
+  {
+    "status": "1",
+    "odimcode": "rocra",
+    "location": "Craiova",
+    "country": "Romania",
+    "latitude": "44.31029",
+    "longitude": "23.86743",
+    "maxrange": "230"
+  },
+  {
+    "status": "1",
+    "odimcode": "rotim",
+    "location": "Timisoara",
+    "country": "Romania",
+    "latitude": "45.77174",
+    "longitude": "21.257725",
+    "maxrange": "230"
+  },
+  {
+    "status": "1",
+    "odimcode": "robob",
+    "location": "Bobohalma",
+    "country": "Romania",
+    "latitude": "46.36022",
+    "longitude": "24.22523",
+    "maxrange": "230"
+  },
+  {
+    "status": "1",
+    "odimcode": "robar",
+    "location": "Barnova",
+    "country": "Romania",
+    "latitude": "47.01184",
+    "longitude": "27.58255",
+    "maxrange": "230"
+  },
+  {
+    "status": "1",
+    "odimcode": "romed",
+    "location": "Medgidia",
+    "country": "Romania",
+    "latitude": "44.24336",
+    "longitude": "28.25059",
+    "maxrange": "230"
+  },
+  {
+    "status": "1",
+    "odimcode": "rsfrg",
+    "location": "Fruska gora",
+    "country": "Serbia",
+    "latitude": "45.1573",
+    "longitude": "19.8109",
+    "maxrange": "400"
+  },
+  {
+    "status": "0",
+    "odimcode": "rssam",
+    "location": "Samos",
+    "country": "Serbia",
+    "latitude": "45.1876",
+    "longitude": "20.7707",
+    "maxrange": "400"
+  },
+  {
+    "status": "0",
+    "odimcode": "rsval",
+    "location": "Valjevo",
+    "country": "Serbia",
+    "latitude": "44.3741",
+    "longitude": "19.9181",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rsbuk",
+    "location": "Bukulja",
+    "country": "Serbia",
+    "latitude": "44.2984",
+    "longitude": "20.5284",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rspet",
+    "location": "Petrovac",
+    "country": "Serbia",
+    "latitude": "44.3256",
+    "longitude": "21.337",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rscrn",
+    "location": "Crni vrh",
+    "country": "Serbia",
+    "latitude": "44.1299",
+    "longitude": "21.9645",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rsuzi",
+    "location": "Uzice",
+    "country": "Serbia",
+    "latitude": "43.8874",
+    "longitude": "19.8403",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rsbes",
+    "location": "Besnjaja",
+    "country": "Serbia",
+    "latitude": "43.9971",
+    "longitude": "21.0478",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rssje",
+    "location": "Sjenica",
+    "country": "Serbia",
+    "latitude": "43.2614",
+    "longitude": "19.9733",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rskru",
+    "location": "Krusevac",
+    "country": "Serbia",
+    "latitude": "43.6227",
+    "longitude": "21.2527",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rsnis",
+    "location": "Nis",
+    "country": "Serbia",
+    "latitude": "43.4041",
+    "longitude": "21.9474",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rskuk",
+    "location": "Kukavica",
+    "country": "Serbia",
+    "latitude": "42.7908",
+    "longitude": "21.9467",
+    "maxrange": "250"
+  },
+  {
+    "status": "0",
+    "odimcode": "rsjas",
+    "location": "Jastrebac",
+    "country": "Serbia",
+    "latitude": "43.3913",
+    "longitude": "21.4436",
+    "maxrange": "400"
+  },
+  {
+    "status": "1",
+    "odimcode": "skjav",
+    "location": "Maly Javornik",
+    "country": "Slovakia",
+    "latitude": "48.2556",
+    "longitude": "17.1524",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "skkoj",
+    "location": "Kojsovska hola",
+    "country": "Slovakia",
+    "latitude": "48.7827",
+    "longitude": "20.9873",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "skkub",
+    "location": "Kubinska hola",
+    "country": "Slovakia",
+    "latitude": "49.2717",
+    "longitude": "19.2494",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "sklaz",
+    "location": "Spani laz",
+    "country": "Slovakia",
+    "latitude": "48.2404",
+    "longitude": "19.2573",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "silis",
+    "location": "Lisca",
+    "country": "Slovenia",
+    "latitude": "46.068",
+    "longitude": "15.285",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "sipas",
+    "location": "Pasja ravan",
+    "country": "Slovenia",
+    "latitude": "46.098",
+    "longitude": "14.2283",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "eslid",
+    "location": "Autilla Pino (Palencia)",
+    "country": "Spain",
+    "latitude": "41.9959",
+    "longitude": "-4.6021",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "estjv",
+    "location": "Torrejon de Velasco (Madrid)",
+    "country": "Spain",
+    "latitude": "40.1759",
+    "longitude": "-3.7136",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esval",
+    "location": "Cullera (Valencia)",
+    "country": "Spain",
+    "latitude": "39.1761",
+    "longitude": "-0.2521",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esftn",
+    "location": "Fortuna (Murcia)",
+    "country": "Spain",
+    "latitude": "38.26438",
+    "longitude": "-1.1897",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esgld",
+    "location": "Gelida (Barcelona)",
+    "country": "Spain",
+    "latitude": "41.4081",
+    "longitude": "1.8848",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esccd",
+    "location": "Cerceda ( La Coruna)",
+    "country": "Spain",
+    "latitude": "43.16903",
+    "longitude": "-8.5269",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "espdg",
+    "location": "Perdiguera (Zaragoza)",
+    "country": "Spain",
+    "latitude": "41.7339",
+    "longitude": "-0.5459",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "essan",
+    "location": "Aguión (Asturias)",
+    "country": "Spain",
+    "latitude": "43.4625",
+    "longitude": "-6.3019",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "essse",
+    "location": "Baquio (Vizcaya)",
+    "country": "Spain",
+    "latitude": "43.4033",
+    "longitude": "-2.8419",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "essft",
+    "location": "Sierra de Fuentes (Caceres)",
+    "country": "Spain",
+    "latitude": "39.4288",
+    "longitude": "-6.2853",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esahr",
+    "location": "Alhaurin el Grande (Malaga)",
+    "country": "Spain",
+    "latitude": "36.6133",
+    "longitude": "-4.6593",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esclg",
+    "location": "Castillo las Guardas (Sevilla)",
+    "country": "Spain",
+    "latitude": "37.68868",
+    "longitude": "-6.33308",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esnjr",
+    "location": "Nijar (Almeria)",
+    "country": "Spain",
+    "latitude": "36.8324",
+    "longitude": "-2.0821",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esllm",
+    "location": "Llucmajor (Baleares)",
+    "country": "Spain",
+    "latitude": "39.3797",
+    "longitude": "2.7851",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "esatn",
+    "location": "Artenara (Gran Canaria)",
+    "country": "Spain",
+    "latitude": "28.0186",
+    "longitude": "-15.6144",
+    "maxrange": "300"
+  },
+  {
+    "status": "",
+    "odimcode": "esamg",
+    "location": "Almagro (Ciudad Real)",
+    "country": "Spain",
+    "latitude": "38.9468",
+    "longitude": "-3.7538",
+    "maxrange": "250"
+  },
+  {
+    "status": "",
+    "odimcode": "esbnv",
+    "location": "Buenavista del Norte (Tenerife)",
+    "country": "Spain",
+    "latitude": "28.31093",
+    "longitude": "-16.82384",
+    "maxrange": "250"
+  },
+  {
+    "status": "",
+    "odimcode": "esgrm",
+    "location": "Guadramiro (Salamanca)",
+    "country": "Spain",
+    "latitude": "41.01158",
+    "longitude": "-6.47775",
+    "maxrange": "250"
+  },
+  {
+    "status": "1",
+    "odimcode": "sekrn",
+    "location": "Kiruna",
+    "country": "Sweden",
+    "latitude": "67.708758",
+    "longitude": "20.617791",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "sella",
+    "location": "Luleå (Rosvik)",
+    "country": "Sweden",
+    "latitude": "65.430886",
+    "longitude": "21.864993",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "seosd",
+    "location": "Östersund",
+    "country": "Sweden",
+    "latitude": "63.295079",
+    "longitude": "14.759105",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "seoer",
+    "location": "Örnsköldsvik",
+    "country": "Sweden",
+    "latitude": "63.63947",
+    "longitude": "18.401882",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "sehuv",
+    "location": "Hudiksvall",
+    "country": "Sweden",
+    "latitude": "61.577112",
+    "longitude": "16.714434",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "selek",
+    "location": "Leksand",
+    "country": "Sweden",
+    "latitude": "60.723043",
+    "longitude": "14.877571",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "sebaa",
+    "location": "Bålsta",
+    "country": "Sweden",
+    "latitude": "59.61102",
+    "longitude": "17.583337",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "sehem",
+    "location": "Hemse (Ase)",
+    "country": "Sweden",
+    "latitude": "57.303467",
+    "longitude": "18.400084",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "seatv",
+    "location": "Åtvidaberg (Vilebo)",
+    "country": "Sweden",
+    "latitude": "58.105907",
+    "longitude": "15.936496",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "sevax",
+    "location": "Vara",
+    "country": "Sweden",
+    "latitude": "58.255645",
+    "longitude": "12.826024",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "seang",
+    "location": "Ängelholm",
+    "country": "Sweden",
+    "latitude": "56.367452",
+    "longitude": "12.851691",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "sekaa",
+    "location": "Karlskrona",
+    "country": "Sweden",
+    "latitude": "56.295542",
+    "longitude": "15.610225",
+    "maxrange": "240"
+  },
+  {
+    "status": "1",
+    "odimcode": "chalb",
+    "location": "Albis",
+    "country": "Switzerland",
+    "latitude": "47.2843",
+    "longitude": "8.512",
+    "maxrange": "246"
+  },
+  {
+    "status": "1",
+    "odimcode": "chdol",
+    "location": "La Dole",
+    "country": "Switzerland",
+    "latitude": "46.4251",
+    "longitude": "6.0994",
+    "maxrange": "246"
+  },
+  {
+    "status": "1",
+    "odimcode": "chlem",
+    "location": "Monte Lema",
+    "country": "Switzerland",
+    "latitude": "46.0408",
+    "longitude": "8.8332",
+    "maxrange": "246"
+  },
+  {
+    "status": "1",
+    "odimcode": "chppm",
+    "location": "Plaine Monte",
+    "country": "Switzerland",
+    "latitude": "46.3706",
+    "longitude": "7.4866",
+    "maxrange": "246"
+  },
+  {
+    "status": "1",
+    "odimcode": "chwei",
+    "location": "Weissfluhgiptel",
+    "country": "Switzerland",
+    "latitude": "46.835",
+    "longitude": "9.7945",
+    "maxrange": "246"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukcle",
+    "location": "Clee Hill",
+    "country": "United Kingdom",
+    "latitude": "52.3986",
+    "longitude": "-2.5954",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukham",
+    "location": "Hameldon Hill",
+    "country": "United Kingdom",
+    "latitude": "53.7548",
+    "longitude": "-2.2892",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukche",
+    "location": "Chenies",
+    "country": "United Kingdom",
+    "latitude": "51.6895",
+    "longitude": "-0.5302",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukcas",
+    "location": "Castor Bay",
+    "country": "United Kingdom",
+    "latitude": "54.502",
+    "longitude": "-6.3429",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukpre",
+    "location": "Predannack",
+    "country": "United Kingdom",
+    "latitude": "50.0034",
+    "longitude": "-5.223",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "uking",
+    "location": "Ingham",
+    "country": "United Kingdom",
+    "latitude": "53.3347",
+    "longitude": "-0.5594",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukcyg",
+    "location": "Crug y Gorllwyn",
+    "country": "United Kingdom",
+    "latitude": "51.9798",
+    "longitude": "-4.4446",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukjer",
+    "location": "Jersey",
+    "country": "United Kingdom",
+    "latitude": "49.1772",
+    "longitude": "-2.2239",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukdud",
+    "location": "Hill Of Dudwick",
+    "country": "United Kingdom",
+    "latitude": "57.4304",
+    "longitude": "-2.0367",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "uklew",
+    "location": "Druim A'Starraig",
+    "country": "United Kingdom",
+    "latitude": "58.2117",
+    "longitude": "-6.1821",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukcob",
+    "location": "Cobbacombe Cross",
+    "country": "United Kingdom",
+    "latitude": "50.9639",
+    "longitude": "-3.4521",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukhhd",
+    "location": "Holehead",
+    "country": "United Kingdom",
+    "latitude": "56.018",
+    "longitude": "-4.2171",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukmun",
+    "location": "Munduff Hill",
+    "country": "United Kingdom",
+    "latitude": "56.2148",
+    "longitude": "-3.3118",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukthu",
+    "location": "Thurnham",
+    "country": "United Kingdom",
+    "latitude": "51.2948",
+    "longitude": "0.6043",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukdea",
+    "location": "Dean Hill",
+    "country": "United Kingdom",
+    "latitude": "51.0307",
+    "longitude": "-1.6534",
+    "maxrange": "255"
+  },
+  {
+    "status": "1",
+    "odimcode": "ukhmy",
+    "location": "High Moorsley",
+    "country": "United Kingdom",
+    "latitude": "54.8034",
+    "longitude": "-1.4746",
+    "maxrange": "255"
+  }
+]

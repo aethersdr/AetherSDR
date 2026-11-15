@@ -1,0 +1,118 @@
+#pragma once
+
+#include <QAudio>
+#include <QAudioDevice>
+#include <QBuffer>
+#include <QByteArray>
+#include <QElapsedTimer>
+#include <QObject>
+#include <QPointer>
+#include <QTimer>
+
+#include <atomic>
+#include <cstdint>
+
+class QAudioSink;
+
+namespace AetherSDR {
+
+// PUDU monitor: records up to 30 s of post-DSP TX audio in memory and plays it
+// back through the RX sink, so the operator hears the chain without keying. On
+// stop a WAV snapshot goes to /tmp; playback reads the buffer, not the file.
+// feedTxPostDsp() runs on the audio thread (single writer, atomics, early-out
+// when not recording); everything else is UI thread, with a queued hand-off at
+// the 30 s cap.
+class ClientPuduMonitor : public QObject {
+    Q_OBJECT
+
+public:
+    explicit ClientPuduMonitor(QObject* parent = nullptr);
+    ~ClientPuduMonitor() override = default;
+
+    // UI-thread transitions.  All idempotent — calling start while
+    // already started, or stop while already stopped, is a no-op.
+    void startRecording();
+    void stopRecording();
+    void startPlayback();
+    void stopPlayback();
+
+    bool isRecording()  const noexcept { return m_recording.load(std::memory_order_acquire); }
+    bool isPlaying()    const noexcept { return m_playing; }
+    bool hasRecording() const noexcept { return m_recordedBytes > 0; }
+    int  recordedMs()   const noexcept;
+
+    // Audio output device the playback sink opens.  When null, falls back to
+    // QMediaDevices::defaultAudioOutput().  MainWindow's AudioOutputRouter seeds
+    // this from AudioEngine::outputDevice() at registration and refreshes it on
+    // AudioEngine::outputDeviceChanged so monitor playback follows the
+    // user's selection in Radio Settings > Audio rather than going to the
+    // system default (#3361 / #3306).
+    void setOutputDevice(const QAudioDevice& dev) { m_outputDevice = dev; }
+
+    // Audio thread — appends int16 stereo 24 kHz PCM into the buffer
+    // while recording.  No-op otherwise.  Stops itself and queues the
+    // UI-thread auto-stop handler once the 30-s cap is reached.
+    void feedTxPostDsp(const QByteArray& int16stereo) noexcept;
+
+    // Sample-rate / channel-count assumed throughout the class.  Kept
+    // as constants so the WAV writer and playback chunk sizes can
+    // reference them directly.
+    static constexpr int kSampleRate  = 24000;
+    static constexpr int kChannels    = 2;
+    static constexpr int kBytesPerFrame = kChannels * 2;
+    static constexpr int kMaxSeconds  = 30;
+    static constexpr int kMaxBytes    = kMaxSeconds * kSampleRate * kBytesPerFrame;
+
+signals:
+    // State transitions for the UI.
+    void recordingStarted();
+    void recordingStopped(int durationMs);
+    void playbackStarted();
+    void playbackStopped();
+    // Ask MainWindow to toggle the live RX audio feed off/on.  True
+    // = disconnect live RX (so we don't hear over our capture or
+    // playback), false = restore.  Held from recordingStarted
+    // through playbackStopped as one continuous mute window.
+    void muteRxRequested(bool mute);
+
+private slots:
+    // Posted from the audio thread when the 30-s buffer fills.
+    void onAutoStop();
+    // Fires when the dedicated playback sink finishes draining.
+    void onPlaybackSinkState(QAudio::State state);
+
+private:
+    void writeWavFile();
+    // Materialise the captured buffer at the sink's native rate so
+    // QAudioSink's pull-mode can consume it directly.  Returns true
+    // on success with m_playPcm populated.
+    bool preparePlaybackPcm(int sinkRateHz);
+
+    // ── Audio-thread-visible state ──────────────────────────────────
+    std::atomic<bool>     m_recording{false};
+    std::atomic<int>      m_writeBytes{0};
+    // Buffer is pre-sized to kMaxBytes at construction; the audio
+    // thread memcpys into it at m_writeBytes.  Data ownership stays
+    // with this object — never reassigned.
+    QByteArray            m_buffer;
+
+    // ── UI-thread-only state ────────────────────────────────────────
+    int                   m_recordedBytes{0};     // snapshot of m_writeBytes after stop
+    int                   m_recordedMs{0};
+    bool                  m_playing{false};
+    QElapsedTimer         m_recElapsed;
+
+    // Dedicated playback pipeline.  Owns its own QAudioSink so the
+    // monitor is fully decoupled from the RX sink's resample path and
+    // timer cadence — sink's pull-mode consumes at its native rate,
+    // which means macOS/Windows CoreAudio/WASAPI glitches from
+    // timer jitter go away.  m_playPcm holds the full captured
+    // buffer pre-converted to the sink's preferred rate.
+    QAudioSink*            m_playSink{nullptr};
+    QPointer<QIODevice>    m_playSource;
+    QByteArray             m_playPcm;
+    QBuffer                m_playBuffer;
+    QAudioDevice           m_outputDevice;
+};
+
+} // namespace AetherSDR

@@ -1,0 +1,160 @@
+#pragma once
+
+#include <optional>
+#include "core/WfmReceptionDiagnostics.h"
+
+#include "core/backends/NoiseBlankerKind.h"
+#include "core/backends/ReceiveCommand.h"
+
+#include <QMetaType>
+#include <QString>
+#include <QStringList>
+
+namespace AetherSDR {
+
+// Desktop setter publication contract. Confirmed backends own both requested
+// state and asynchronous adoption; only their slice/pan reports are live.
+// Existing backends retain their historical optimistic setter behavior.
+enum class ReceiveControlPolicy { Optimistic, Confirmed };
+
+// Observed broadcast output state: forced mono is Mono even with an acquired
+// pilot. Independent pilot observations live in WfmReceptionDiagnostics.
+enum class WfmStereoStatus { Unavailable, Acquiring, Mono, Stereo };
+
+// Normalized slice-status delta (aetherd RFC 2.3). A backend populates only the
+// fields the wire reported (engaged optional == present); SliceModel::applyChanges
+// applies exactly those. Canonical value types; the FlexBackend decode owns the
+// SmartSDR wire→canonical translation. Kept out of model headers so the backend
+// interface has no model dependency.
+struct SliceDelta {
+    // Identity / tuning
+    std::optional<QString>     panId;
+    std::optional<QString>     letter;
+    std::optional<double>      frequency;      // MHz
+    std::optional<QString>     mode;
+    std::optional<QString>     chainMode;      // empty = unknown; absent = unchanged
+    std::optional<int>         filterLow;      // Hz
+    std::optional<int>         filterHigh;     // Hz
+    std::optional<QStringList> modeList;
+
+    // Core state
+    std::optional<bool>        active;
+    // Whether the complete guarded receive passband is inside this slice's
+    // capture stream. Independent of active, which means selected/focused.
+    std::optional<bool>        inCapture;
+    std::optional<bool>        txSlice;
+    std::optional<double>      rfGain;
+    std::optional<double>      audioGain;
+    std::optional<int>         audioPan;
+    std::optional<bool>        audioMute;
+    std::optional<bool>        inUse;
+    std::optional<bool>        locked;
+    std::optional<bool>        qsk;
+
+    // Diversity
+    std::optional<bool>        diversityChild;
+    std::optional<bool>        diversityParent;
+    std::optional<bool>        diversity;
+    std::optional<int>         diversityIndex;
+
+    // ESC (diversity beamforming)
+    std::optional<bool>        esc;
+    std::optional<double>      escGain;
+    std::optional<double>      escPhaseShift;
+
+    // Antennas
+    std::optional<QStringList> rxAntennaList;
+    std::optional<QStringList> txAntennaList;
+    std::optional<QString>     rxAntenna;
+    std::optional<QString>     txAntenna;
+
+    // DSP toggles
+    // `nb` is the RADIO's answer: a bool, because a radio-side blanker is one
+    // blanker. A host-side backend that runs WDSP's second blanker sets nbKind
+    // instead, and SliceModel prefers it — see applyChanges(). Setting both is
+    // allowed and the kind wins; setting only nb keeps a host kind that is
+    // already on, so an echo can never downgrade NB2 to NB.
+    std::optional<bool>        nb;
+    std::optional<AetherSDR::NoiseBlankerKind> nbKind;
+    std::optional<AetherSDR::NoiseBlankerFill> nbFill;
+    std::optional<bool>        nr;
+    std::optional<bool>        anf;
+    std::optional<bool>        nrl;
+    std::optional<bool>        nrs;
+    std::optional<bool>        rnn;
+    std::optional<bool>        nrf;
+    std::optional<bool>        anfl;
+    std::optional<bool>        anft;
+    std::optional<bool>        apf;
+    // The radio's own single in-passband notch (RadioCapabilities::
+    // hasManualNotch). Distinct from `anf`, which is the auto notch that finds
+    // its own tone, and from the TNFs, which are pinned to absolute
+    // frequencies.
+    std::optional<bool>        mn;
+    // DSP levels
+    std::optional<int>         apfLevel;
+    std::optional<int>         nbLevel;
+    std::optional<int>         nrLevel;
+    std::optional<int>         anfLevel;
+    std::optional<int>         nrlLevel;
+    std::optional<int>         nrsLevel;
+    std::optional<int>         nrfLevel;
+    std::optional<int>         anflLevel;
+    // Manual-notch POSITION, 0..100 across the passband — not a frequency.
+    std::optional<int>         mnLevel;
+
+    // AGC / squelch / RIT / XIT
+    std::optional<QString>     agcMode;
+    std::optional<int>         agcThreshold;
+    std::optional<AgcThresholdMode> agcThresholdMode;
+    std::optional<int>         agcOffLevel;
+    std::optional<bool>        squelchOn;
+    std::optional<int>         squelchLevel;
+    std::optional<bool>        automaticSquelch;
+    std::optional<int>         automaticSquelchMarginDb;
+    std::optional<int>         wfmDeemphasisUs;
+    std::optional<bool>        wfmForceMono;
+    std::optional<WfmReceptionDiagnostics> wfmReceptionDiagnostics;
+    std::optional<WfmStereoStatus> wfmStereoStatus;
+    std::optional<bool>        ritOn;
+    std::optional<int>         ritFreq;
+    std::optional<bool>        xitOn;
+    std::optional<int>         xitFreq;
+
+    // DAX / RTTY / DIG offsets
+    std::optional<int>         daxChannel;
+    std::optional<int>         rttyMark;
+    std::optional<int>         rttyShift;
+    std::optional<int>         diglOffset;
+    std::optional<int>         diguOffset;
+
+    // Record / playback (play is 3-state disabled/1/0 — carried raw, model interprets)
+    std::optional<bool>        recordOn;
+    std::optional<QString>     play;
+
+    // FM duplex/repeater
+    std::optional<QString>     fmToneMode;
+    std::optional<double>      fmToneValue;
+    std::optional<double>      fmToneRxValue;
+    std::optional<int>         fmDtcsCode;
+    std::optional<bool>        fmDtcsTxReverse;
+    std::optional<bool>        fmDtcsRxReverse;
+    std::optional<QString>     repeaterOffsetDir;
+    std::optional<double>      fmRepeaterOffsetFreq;
+    std::optional<double>      txOffsetFreq;
+    std::optional<int>         fmDeviation;
+
+    // Step (stepList carried raw — model builds the QVector<int>)
+    std::optional<int>         step;
+    std::optional<QString>     stepList;
+};
+
+}  // namespace AetherSDR
+
+// Registered so the type can ride IRadioBackend::sliceChanged across a queued
+// connection and be captured by QSignalSpy in tests. (Same-thread today resolves
+// to a synchronous DirectConnection, but the registration keeps it correct if a
+// backend is ever moved to a worker thread.)
+Q_DECLARE_METATYPE(AetherSDR::SliceDelta)
+Q_DECLARE_METATYPE(AetherSDR::WfmStereoStatus)
+Q_DECLARE_METATYPE(AetherSDR::WfmReceptionDiagnostics)

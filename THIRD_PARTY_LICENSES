@@ -1,0 +1,899 @@
+AetherSDR Third-Party Software Licenses
+========================================
+
+AetherSDR incorporates or links against the following third-party software.
+Each component retains its original license. Full license texts are included
+in the corresponding third_party/ subdirectories where the source is bundled.
+
+
+Protocol References
+-------------------
+AetherSDR implements the SmartSDR protocol to communicate with FlexRadio
+transceivers. The protocol behavior was determined by consulting the FlexLib
+API source code, which is Copyright FlexRadio Systems and All Rights Reserved.
+No FlexLib code is incorporated into AetherSDR — the protocol implementation
+is entirely original. SmartSDR is a trademark of FlexRadio Systems.
+
+  FlexLib:   Copyright (c) 2012-2025 FlexRadio Systems
+  Reference: https://www.flexradio.com/
+
+The KiwiSDR receive integration includes source-attributed protocol facts
+derived from the public KiwiSDR server source. No KiwiSDR code is incorporated,
+vendored, translated, or linked into AetherSDR; the referenced source is
+consulted only to verify wire-protocol facts, which are then expressed in
+original AetherSDR code. The consulted facts are:
+  - server MSG keys and numeric badp denial codes (error handling); and
+  - the accepted `SET squelch=<offset> param=<float>` and
+    `SET agc=… thresh=… decay=… manGain=…` command shapes, plus their numeric
+    ranges, for KiwiSDR replacement-receiver squelch/AGC control; and
+  - waterfall wire/display facts including W/F row framing, `wf_cal`,
+    `maxdb`/`mindb` messages, `SET maxdb=... mindb=...`, default waterfall
+    min/max dB values, zoom-related floor correction, and the supported
+    square-root weak-signal color-index option.
+See docs/kiwisdr-cleanroom-design.md for the per-file, per-fact provenance.
+
+  KiwiSDR source: Copyright (c) 2014-2026 John Seamons and contributors
+  License:        LGPL-2.0-or-later for the consulted rx/* server files;
+                  GPL-3.0-or-later for the consulted OpenWebRX browser file
+                  used only as a behavioral reference
+  Source:         https://github.com/jks-prv/Beagle_SDR_GPS
+                  https://github.com/jks-prv/KiwiSDR
+  References:     commits efb38e2b25137029cb37a96a94e03366f8d2871e
+                  and e48e74bce3e323e47fe2de3228ae7d43604238b0
+
+The AGC/squelch numeric ranges (threshold -160..0 dB, manual gain 0..100 dB,
+decay 20..5000 ms, and NBFM squelch behavior) were verified against the CuteSDR
+DSP component bundled in that repository, which is separately licensed. Only the
+documented numeric ranges/behavior were used; no CuteSDR code is incorporated.
+
+  CuteSDR source: Copyright (c) Moe Wheatley (AE4JY), per consulted file headers
+  License:        BSD-2-Clause (Simplified BSD)
+  Source:         https://github.com/jks-prv/Beagle_SDR_GPS  (rx/CuteSDR/)
+
+The Hermes-Lite 2 radio backend implements HPSDR Protocol 1 ("Metis") — UDP
+discovery, the EP2/EP6 IQ frame layout, and the Command & Control register map
+(sample-rate/receiver config, RX NCO frequency, and the AD9866 LNA gain
+register). These wire-protocol
+facts were consulted clean-room and are expressed in original AetherSDR code
+(tools/hl2/ and, subsequently, the in-tree Hl2Backend). No openHPSDR,
+Hermes-Lite 2, or pihpsdr code is incorporated, vendored, translated, or linked
+into AetherSDR; the referenced sources are consulted only to verify protocol
+facts. The consulted facts are:
+  - the Metis discovery handshake and EP2/EP6 1032-byte frame framing;
+  - the C0 register-address encoding ((addr<<1)|MOX) and the config/RX-freq/
+    gain register semantics;
+  - the minimal round-robin C&C init a receiver requires (config, RX1 frequency,
+    LNA gain), verified against the pihpsdr reference client's C&C construction;
+  - the AD9866 LNA gain encoding, where C4 bit 6 selects the direct-value
+    mapping rather than the legacy inverted one (read from the gateware RTL,
+    whose own reset default sets that bit);
+  - the run/stop command byte's bit-7 "watchdog_disable" semantics (0 enables
+    the gateware watchdog, which halts the radio's stream when the client stops
+    sending EP2 — the mechanism that prevents a radio left streaming at a dead
+    endpoint), read from the Hermes-Lite 2 gateware RTL;
+  - the requirement to send Command & Control frames BEFORE the Metis start
+    command so the DDC latches sample rate, NCO and receiver count — a stream
+    started before any C&C has landed emits ADC-idle samples with Q pinned to
+    zero; and
+  - that the EP2 cadence follows the frame geometry (one EP2 frame per 126
+    samples, i.e. 2625 us at 48 kHz) rather than the EP6 arrival rate, so the
+    C&C stream cannot be starved by a stalled receive path.
+
+  openHPSDR Protocol 1 (Programmer's guide) — HPSDR project, hosted by TAPR
+  License:  GPL-2.0-or-later (consulted as a protocol specification only)
+  Source:   https://github.com/TAPR/OpenHPSDR-Protocol1-Programmers
+
+  Hermes-Lite 2:  Copyright (c) Steve Haynal (KF7O) and Hermes-Lite 2 contributors
+  Note:           The upstream repository states no license. Consulted as a
+                  hardware-behaviour reference only (register/bit semantics read
+                  from the gateware RTL); no gateware code is incorporated.
+  Reference:      https://github.com/softerhardware/Hermes-Lite2
+                  (wiki + gateware; rtl/dsopenhpsdr1.v for the RUNSTOP /
+                  watchdog_disable bit semantics)
+
+  Thetis:    Copyright (c) Doug Wigley (W5WC), Richard Samphire (MW0LGE), and
+             Thetis contributors
+  License:   LGPL-2.1-or-later / GPL-2.0-or-later per file (consulted as a
+             behavioral reference only)
+  Source:    https://github.com/ramdor/Thetis
+             (Project Files/Source/ChannelMaster/networkproto1.c — the start
+             priming sequence and EP2 pacing behaviour)
+
+  pihpsdr:   Copyright (c) Christoph van Wüllen (DL1YCF) and contributors
+  License:   GPL-3.0-or-later (consulted as a behavioral reference only)
+  Source:    https://github.com/dl1ycf/pihpsdr  (src/old_protocol.c)
+
+The ACOM S-series amplifier peripheral (shipped; see
+docs/architecture/acom-600s-amplifier-design.md) implements ACOM's RS-232
+serial protocol — the binary frame layout (start byte, address, length,
+checksum), the unified telemetry message (address 0x2F), the error-code
+bitfields (address 0x21), the system-config query (address 0x11), and the
+mode-change/clear-faults command envelope (address 0x81). These wire-protocol
+facts were consulted clean-room from the manufacturer's own published
+specification and are expressed in original AetherSDR code; no code from
+either source below is incorporated, vendored, translated, or linked into
+AetherSDR.
+
+  ACOM 600S Serial Port Communication Protocol, v1.1 (2014-12-04) — eng.
+  Nikolay Nenov, the primary protocol authority (Principle I).
+  Publisher: ACOM (manufacturer public documentation)
+  Reference: no stable public URL — distributed directly by ACOM (Bulgaria)
+             as a maintainer-supplied PDF, not a web download, so no
+             URL/access-date/hash triple is recorded here; contrast
+             third_party/crdv/CLEANROOM_PROVENANCE.md's stricter format,
+             used where a public, hashable download exists
+
+  ACOM-Controller (Björn Ekelund, SM7IUN) — consulted only as a secondary,
+  practical cross-check (e.g. that the checksum sign convention and 72-byte
+  framing match a working real-world implementation; that the mandatory-per-spec
+  0x86 acknowledgement is safely omittable on a direct RS-232 link in practice).
+  License:  MIT
+  Source:   https://github.com/bjornekelund/ACOM-Controller
+
+  ACOM product pages (acom-bg.com) — consulted for the per-model nominal/max
+  rated-power figures used to derive the auto-ranging table in
+  AcomProtocol.cpp's modelTable() (500S/600S/700S/1200S/1400S/2020S); no code
+  or text incorporated, figures only.
+  Publisher: ACOM (manufacturer public documentation)
+
+The TelePost LP-100A wattmeter peripheral (see
+docs/architecture/lp-100a-wattmeter-design.md) implements TelePost's own
+published serial protocol — the single-byte command set, the ';'-framed record
+and its field order and semantics. These wire-protocol facts were consulted
+from the manufacturer's public documentation and re-implemented from scratch;
+no vendor code was used.
+  Source:   "RF Wattmeter LP-100A Operations Manual", TelePost Inc. (N8LP),
+            http://www.telepostinc.com/LP-100A-Op_Manual.pdf
+  Publisher: TelePost Inc. (manufacturer public documentation)
+
+  NOTE: the manual's printed example record is wrong about two things, both
+  corrected against real hardware rather than against the document: its Z field
+  is 4 characters where the wire sends 5 (zero-padded), and it lists five SWR
+  alarm values and two peak-hold modes where the hardware has six and three.
+
+  wt2p_lp100a / "LP100A OSD" (Cedrick Johnson, WT2P) — consulted only as a
+  secondary, practical cross-check on the port settings and the response field
+  order. No code incorporated.
+  License:  MIT
+  Source:   https://github.com/chibondking/wt2p_lp100a
+
+  A Node-RED flow authored by this project's own contributor and used to drive
+  the reference LP-100A for several years was consulted as a working example
+  of the protocol in practice. It is first-party material, not third-party, and
+  is recorded here only because the design note audits which of its behaviours
+  were adopted, improved on, or rejected.
+
+The SPE Expert amplifier peripheral (see
+docs/architecture/spe-expert-amplifier-design.md) implements SPE's USB/RS-232
+serial protocol — the command/data packet framing (sync run, count,
+checksum), the front-panel keystroke command set, and the 67-character CSV
+Status string with its field tables. These wire-protocol facts were consulted
+clean-room from the manufacturer's own published specification and are
+expressed in original AetherSDR code; no third-party code is incorporated,
+vendored, translated, or linked.
+
+  Application Programmer's Guide — Expert 1.3K-FA / 1.5K-FA / 2K-FA, Rev 1.1
+  (2015-10-15), the primary protocol authority (Principle I).
+  Publisher: SPE s.r.l. (manufacturer public documentation,
+             linear-amplifier.com)
+  Reference: distributed by SPE as a contributor-supplied PDF; no stable
+             public URL, so no URL/access-date/hash triple is recorded here
+             (same treatment as the ACOM spec above)
+
+  The contributing author's own prior control application for the 1.5K-FA
+  (Python, unpublished) served as the real-hardware cross-check: it
+  established that commands need a trailing CR LF in practice, its ~300 ms
+  status poll cadence (this implementation polls faster, at 100 ms), and
+  the 1450/1500/1600 W gauge thresholds carried
+  into SpeProtocol.cpp's modelTable(). Author's own work, contributed under
+  this project's license; no third-party rights involved.
+
+  The remote LCD mirror (SpeProtocol.cpp's Lcd namespace + gui/SpeLcdWidget)
+  decodes the display frame the amplifier answers to keystroke 0x80 — a
+  mechanism the spec's foreword advertises ("a perfect copy of the display
+  ... in less than 400 bytes") but does not document. The frame layout
+  (payload-length header, 95 FE type marker, 8x40 character matrix,
+  per-column inverse-video attribute bytes), the character-to-glyph mapping,
+  and the 256-glyph 6x8 font ROM in gui/SpeLcdFontRom.inc are carried from
+  the contributing author's own v2 control application (validated against a
+  real 1.5K-FA), which in turn ported them from:
+
+  expert-amp-server (FtlC-ian) — Go web server mirroring the SPE Expert LCD
+  in a browser; the origin of the display-frame decode and the font ROM.
+  License:  MIT
+  Source:   https://github.com/FtlC-ian/expert-amp-server
+
+  The C++ parser and renderer are an original re-expression of the wire-format
+  facts. The glyph table and the captured frame embedded in the protocol test
+  are reproduced from expert-amp-server under its MIT license:
+
+  MIT License
+
+  Copyright (c) 2026 Ian Ferrell
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+1. WDSP 2.11 — engine-side SDR DSP
+----------------------------------
+Bundled as an isolated static library at third_party/wdsp/ from the exact
+TAPR/OpenHPSDR-wdsp revision below. AetherSDR uses the complete WDSP channel
+API behind src/core/dsp/WdspChannel for raw-IQ radio backends. Local
+changes are documented in third_party/wdsp/AETHERSDR-PATCHES.md. The
+snapshot includes the four trained Neural Noise Reduction networks upstream
+compiles in (upstream/nnr_model_0.c through upstream/nnr_model_3.c).
+
+The SpectralNR module (src/core/SpectralNR.h, SpectralNR.cpp) additionally
+derives its OSMS, MMSE, and NSTAT noise estimators and Gaussian/Gamma gain
+processing from the same library's emnr.c; the exact 241 x 241 GG and GGS
+lookup-table values in src/core/Nr2GammaTables.inc are embedded from WDSP's
+Source/calculus binary.
+
+  Copyright (C) 2011-2026 Warren Pratt, NR0V, and named contributors
+  License: GPL-2.0-or-later
+  Source:  https://github.com/TAPR/OpenHPSDR-wdsp
+  Pinned commit: e69de50d1d702216098019013899ad87534c64e0
+  Calculus source:
+    https://raw.githubusercontent.com/TAPR/OpenHPSDR-wdsp/e69de50d1d702216098019013899ad87534c64e0/wdsp%202.11/Source/calculus
+  Calculus SHA-256:
+    de43a4b9c7db4445997e6452852980d58d2558d635ab3c63e6423a347ba326c3
+
+
+2. RNNoise — Neural Network Noise Suppression (RN2)
+----------------------------------------------------
+Bundled at third_party/rnnoise/
+
+  Copyright (c) 2007-2017, 2024 Jean-Marc Valin
+  Copyright (c) 2023 Amazon
+  Copyright (c) 2017, Mozilla
+  Copyright (c) 2005-2017, Xiph.Org Foundation
+  Copyright (c) 2003-2004, Mark Borgerding
+  License: BSD-3-Clause
+  Source:  https://github.com/xiph/rnnoise
+
+
+3. libspecbleach — Spectral Noise Reduction (NR4)
+-------------------------------------------------
+Bundled at third_party/libspecbleach/
+
+  Copyright (C) 2022 Luciano Dato <lucianodato@gmail.com>
+  License: LGPL-2.1-or-later
+  Source:  https://github.com/lucianodato/libspecbleach
+
+
+4. r8brain-free-src — Sample Rate Converter
+--------------------------------------------
+Bundled at third_party/r8brain/
+
+  Copyright (c) 2013-2025 Aleksey Vaneev
+  License: MIT
+  Source:  https://github.com/avaneev/r8brain-free-src
+
+
+5. RtMidi — MIDI I/O
+---------------------
+Bundled at third_party/rtmidi/
+
+  Copyright (c) 2003-2023 Gary P. Scavone
+  License: MIT (with non-binding request to share modifications)
+  Source:  https://github.com/thestk/rtmidi
+
+
+6. ggmorse — Morse Code Decoder
+--------------------------------
+Bundled at third_party/ggmorse/
+
+  Copyright (c) 2021 Georgi Gerganov
+  License: MIT
+  Source:  https://github.com/ggerganov/ggmorse
+
+
+7. Eclipse Mosquitto — MQTT Client Library
+-------------------------------------------
+Bundled at third_party/mosquitto/
+
+  Copyright (c) 2010-2021 Roger Light <roger@atchoo.org>
+  License: EPL-2.0 OR BSD-3-Clause (dual-licensed)
+  Source:  https://github.com/eclipse/mosquitto
+
+
+8. RADAE — Radio Autoencoder
+-----------------------------
+Bundled at third_party/radae/
+
+  Copyright (c) 2026 Peter B Marks
+  License: BSD-2-Clause
+  Source:  https://github.com/drowe67/radae
+
+
+9. opus-rade — Opus Codec (RADE variant)
+-----------------------------------------
+Bundled at third_party/opus-rade/
+
+  Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
+                      Jean-Marc Valin, Timothy B. Terriberry,
+                      CSIRO, Gregory Maxwell, Mark Borgerding,
+                      Erik de Castro Lopo, Mozilla, Amazon
+  License: BSD-3-Clause
+  Source:  https://github.com/nicoboss/opus-rade
+
+
+10. DeepFilterNet — Deep Noise Suppression
+-------------------------------------------
+Bundled at third_party/deepfilter/
+
+  Copyright (c) DeepFilterNet Contributors
+  License: Apache-2.0 OR MIT (dual-licensed)
+  Source:  https://github.com/Rikorose/DeepFilterNet
+
+
+11. ONNX Runtime — Neural Network Inference Engine (optional)
+--------------------------------------------------------------
+Pre-built binaries staged at third_party/onnxruntime/ (all platforms) by
+scripts/setup/setup-onnxruntime.sh (Linux/macOS) or setup-onnxruntime.ps1
+(Windows); version 1.27.0. Loaded at runtime for the S-History CNN signal
+classifier and the Copy Assist ASR ONNX features (Silero VAD, speaker labeling).
+When sherpa-onnx is also present the app shares its bundled ONNX Runtime instead
+(same version). Optional — absent unless the setup script has been run.
+
+  Copyright (c) Microsoft Corporation. All rights reserved.
+  License: MIT
+  Source:  https://github.com/microsoft/onnxruntime
+
+  Note: the tools/train_classifier.py training script requires PyTorch
+  (BSD-3-Clause, https://pytorch.org/) as a separate installation.
+  PyTorch is a build tool only — it is not linked into or distributed
+  with AetherSDR.  The trained .onnx model file produced by the script
+  is entirely the user's own work.
+
+
+12. FFTW3 — Fast Fourier Transform Library
+--------------------------------------------
+Pre-built binaries at third_party/fftw3/ (Windows only; Linux uses system pkg)
+
+  Copyright (c) 2003, 2007-2014 Matteo Frigo
+  Copyright (c) 2003, 2007-2014 Massachusetts Institute of Technology
+  License: GPL-2.0-or-later
+  Source:  https://www.fftw.org/
+
+
+13. TCI Protocol Specification — Transceiver Control Interface
+---------------------------------------------------------------
+The TCI server (src/core/TciProtocol.cpp, TciServer.cpp) implements the
+TCI 2.1 protocol specification published by Expert Electronics. The binary
+audio frame header follows the spec's Stream struct definition. No code was
+copied from ExpertSDR3; this is an independent implementation of the published
+protocol. An unmodified copy of the specification, "TCI Protocol 2.1.pdf"
+(sha256 e60833985619ca6a1c7b5c4c48bdbff59e694924589c238d06557e011e18c074,
+upstream commit 6cbccdd7004858152b4b5b463f9b087432d81a21), is kept with its
+MIT license at docs/specs/tci/.
+
+  Copyright (c) 2021 Expert Electronics (EE)
+  License: MIT
+  Spec:    https://github.com/ExpertSDR3/TCI
+
+
+14. zlib — Compression Library
+-------------------------------
+Bundled at third_party/zlib/ (v1.3.1) for raw-deflate decompression of
+.ssdr_cfg profile import/export ZIP packages.  Vendored from the upstream
+GitHub release (sha256
+9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23) so the
+version is identical on Linux, macOS, and Windows.  Previously, Linux/macOS
+linked the system zlib and Windows pulled it via vcpkg; bundling unifies the
+three paths per the constitution's Technology Constraint preferring bundled
+libraries.  See #2651.
+
+  Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler
+  License: zlib license (permissive, similar to MIT)
+  Source:  https://github.com/madler/zlib
+
+
+15. Dire Wolf — AFSK Demodulator (algorithmic derivation)
+----------------------------------------------------------
+Bundled at third_party/direwolf_afsk/ as an algorithmic derivation of the
+Dire Wolf "profile A" AFSK demodulator. Rewritten in C++20 for AetherSDR.
+Referenced source files: src/demod_afsk.c, src/dsp.c from Dire Wolf 1.7.
+Used unconditionally for the VHF 1200 baud AX.25 receive path.
+
+  Copyright (C) 2011-2020 John Langner WB2OSZ
+  License: GPL-2.0-or-later (compatible into AetherSDR's GPL-3.0-or-later)
+  Source:  https://github.com/wb2osz/direwolf
+
+
+16. QGeoView — Qt Map Widget (OSM/TMS slippy-map engine)
+--------------------------------------------------------
+Bundled at third_party/QGeoView/ (upstream tag 1.1.0) and compiled as a
+separately-linked static library. Provides the QGraphicsView-based OpenStreetMap
+tile/scene engine behind the reusable MapView widget (PSK Reporter reception map;
+future AetherModem APRS map). Demo/sample/CI trees dropped; AetherSDR
+modifications — static-lib build, app-identifying tile User-Agent, restored TLS
+peer verification (upstream shipped a VerifyNone bypass), and HTTPS OSM tile
+URLs — are documented in third_party/QGeoView/AETHERSDR-PATCHES.md.
+
+  Copyright (C) 2018-2025 Andrey Yaroshenko
+  License: LGPL-3.0-or-later
+  Source:  https://github.com/AmonRaNet/QGeoView
+
+
+17. NVIDIA Maxine Audio Effects (AFX) — BNR GPU denoiser (download-on-demand)
+----------------------------------------------------------------------------
+NOT bundled in the source tree or the shipped binary. The optional BNR feature
+downloads an NVIDIA runtime "pack" on demand at first use (see
+src/core/NvidiaAfxPack.cpp and docs/nvidia-bnr.md) and caches it under the app
+data dir. AetherSDR redistributes a subset of these NVIDIA binaries as GitHub
+release assets (the afx-bits-2.1.0 release); CUDA runtime libraries are pulled
+directly from NVIDIA's PyPI wheels at install time (not redistributed by us).
+
+Redistributed / downloaded components:
+  - Maxine Audio Effects runtime (libnv_audiofx.so / NVAudioEffects.dll + the
+    denoiser feature library)
+  - NVIDIA TensorRT inference runtime (nvinfer)
+  - NVIDIA CUDA runtime libraries (cuda-runtime, cuBLAS, cuFFT, nvRTC) — from
+    NVIDIA's PyPI wheels
+  - Per-GPU denoiser model (denoiser_48k.trtpkg)
+
+  Copyright (C) NVIDIA Corporation
+  Licenses: NVIDIA Software License Agreement; Product-Specific Terms for
+            NVIDIA AI Products; NVIDIA Community Model License (denoiser model).
+            The full license texts ship inside the downloaded pack
+            (licenses/ + NOTICE.txt) and the user must accept them on first use.
+  Source:   https://developer.nvidia.com/maxine  (NGC: nvidia/maxine)
+
+
+18. SmartSDR-DSP ThumbDV Waveform Helper
+-----------------------------------------
+Bundled at third_party/smartsdr-dsp/ as a local helper executable for D-Star
+waveform operation with a ThumbDV/DV3000U attached to the user's computer. The
+import is trimmed to the ThumbDV waveform runtime sources from the public
+`thumbDV_support` branch. The historical FTDI D2XX header, static library,
+Windows GUI, IDE files, and packaged `.ssdr_waveform` binary are not bundled.
+AetherSDR replaces the D2XX calls used by the helper with a POSIX termios serial
+compatibility shim and starts the helper as a separate process. The imported
+OpenDV-derived D-STAR framing/state code and its GPL-2.0-only definitions are
+not distributed; they were replaced by the independently implemented `crdv`
+component described below.
+
+The retained Flex GPLv3 GMSK stream modem uses the 15-tap BT 0.35 Gaussian
+interpolator published by MMDVM. MMDVM is GPL-2.0-or-later, which is compatible
+with this GPL-3.0-or-later work. The attribution and local changes are recorded
+in third_party/smartsdr-dsp/AETHERSDR-PATCHES.md.
+
+  Copyright (C) 2014 FlexRadio Systems
+  License: GPL-3.0-or-later
+  Source:  https://github.com/n5ac/smartsdr-dsp
+  Import:  thumbDV_support commit 762297a7d56f9e37c661c550e4b1cbd8b78091f1
+  Patches: third_party/smartsdr-dsp/AETHERSDR-PATCHES.md
+
+  MMDVM modem: Copyright (C) MMDVM contributors
+  License:     GPL-2.0-or-later
+  Source:      https://github.com/g4klx/MMDVM
+
+
+19. crdv - Clean-Room D-STAR and DV3000 Protocol Core
+------------------------------------------------------
+Bundled at third_party/crdv/ and linked into the local waveform helper. This
+portable C17 library independently implements the non-AMBE D-STAR air framing,
+header protection, slow data, bounded receive parser, parameterized modem
+helpers, DV3000 packet framing, and transport parsers. ThumbDV hardware remains
+responsible for AMBE encode/decode. The library does not key a radio or perform
+I/O.
+
+The implementation team was isolated from AetherSDR and the removed code. Its
+sole project-specific input was a sanitized, public-source-backed functional
+specification. The access log, source citations, attestation, integration
+contract, deterministic test results, and content hash manifest are retained
+inside third_party/crdv/.
+
+  Copyright (C) 2026 AetherSDR contributors
+  License: GPL-3.0-or-later
+  Provenance: third_party/crdv/CLEANROOM_PROVENANCE.md
+  Manifest:   third_party/crdv/CONTENT_SHA256.txt
+
+
+20. whisper.cpp (bundling ggml) — Copy Assist ASR Engine
+--------------------------------------------------------
+Vendored under third_party/whisper.cpp/ (library only; see that directory's
+AETHER_VENDORING.md for what was trimmed). Version 1.9.1, upstream commit pinned
+in third_party/whisper.cpp/COMMIT. This is the default on-device speech-to-text
+engine adopted in RFC #4333, and it bundles ggml (third_party/whisper.cpp/ggml/)
+as its tensor library — upstream ships a single MIT LICENSE covering both, which
+is vendored verbatim at third_party/whisper.cpp/LICENSE.
+
+Two files in the vendored ggml Metal backend carry AetherSDR-local changes
+(build-time Metal kernel compilation, #4535 / PR #4553). Every modification is
+recorded in third_party/whisper.cpp/AETHERSDR-PATCHES.md.
+
+  Copyright (c) 2023-2026 The ggml authors
+  License: MIT (see third_party/whisper.cpp/LICENSE)
+  Source:  https://github.com/ggml-org/whisper.cpp
+           https://github.com/ggml-org/ggml
+
+  Model weights are NOT vendored: the ggml-format Whisper models are downloaded
+  on first enable (primary: Hugging Face; fallback: the AetherSDR release
+  mirror), SHA-256-verified, and cached under the user's data dir. The
+  underlying Whisper models are Copyright (c) 2022 OpenAI, MIT-licensed
+  (https://github.com/openai/whisper).
+
+
+21. sherpa-onnx — Non-Whisper ASR Engine (optional)
+---------------------------------------------------
+Pre-built C-API shared library staged at third_party/sherpa-onnx/ by
+scripts/setup/setup-sherpa-onnx.sh (from k2-fsa's releases on x64/macOS, or from
+the AetherSDR `sherpa-onnx-libs` release on linux-aarch64, which is built by
+.github/workflows/build-sherpa-onnx-aarch64.yml). Provides the optional
+"sherpa-onnx model…" Copy Assist backend (offline transducer/Moonshine/
+Paraformer/CTC models). Absent unless the setup script has been run.
+
+  Copyright (c) 2022-2026  Xiaomi Corporation and the k2-fsa/sherpa-onnx authors
+  License: Apache-2.0
+  Source:  https://github.com/k2-fsa/sherpa-onnx
+
+  Bundled inside the sherpa-onnx shared library:
+    - kaldi-native-fbank  Apache-2.0  https://github.com/csukuangfj/kaldi-native-fbank
+    - kaldifst            Apache-2.0  https://github.com/k2-fsa/kaldifst
+    - ONNX Runtime        MIT         (see entry 11; sherpa ships its own copy)
+
+
+22. Silero VAD — Voice-Activity-Detection Model (download-on-demand)
+-------------------------------------------------------------------
+Model weights only; NOT bundled in the binary. Downloaded on first enable of the
+optional Silero VAD option (primary: Hugging Face; fallback: the AetherSDR
+`asr-models-v1` release mirror), SHA-256-verified, cached under the user's data
+dir. Run by ONNX Runtime (entry 11).
+
+  Copyright (c) Silero Team
+  License: MIT
+  Source:  https://github.com/snakers4/silero-vad
+           https://huggingface.co/onnx-community/silero-vad
+
+
+23. WeSpeaker ECAPA-TDNN — Speaker-Embedding Model (download-on-demand)
+----------------------------------------------------------------------
+Model weights only; NOT bundled in the binary. Downloaded on first enable of the
+optional speaker-labeling option (primary: Hugging Face; fallback: the AetherSDR
+`asr-models-v1` release mirror), SHA-256-verified, cached under the user's data
+dir. Trained on VoxCeleb2. Run by ONNX Runtime (entry 11).
+
+  Attribution: "WeSpeaker" by the Wenet Open Source Community (wenet-e2e).
+  License: CC-BY-4.0  (attribution required — https://creativecommons.org/licenses/by/4.0/)
+  Source:  https://github.com/wenet-e2e/wespeaker
+           https://huggingface.co/Wespeaker/wespeaker-ecapa-tdnn512-LM
+
+
+24. Moonshine — Speech-Recognition Model (download-on-demand, via sherpa-onnx)
+-----------------------------------------------------------------------------
+Model weights only; NOT bundled or redistributed by AetherSDR. A user may point
+the "sherpa-onnx model…" folder picker at a Moonshine bundle obtained from the
+sherpa-onnx model zoo. Listed here because AetherSDR documents it as the default
+sherpa-onnx model.
+
+  Copyright (c) 2024 Useful Sensors, Inc.
+  License: MIT
+  Source:  https://github.com/usefulsensors/moonshine
+
+
+25. KiwiSDR Community DX Database
+-----------------------------------
+Bundled at resources/dist.dx_community.json for the "Show KiwiSDR DX Community Spots"
+overlay layer. Contains community-curated utility, beacon, broadcast, and DX spots
+(frequency, mode, station name, notes).
+
+  Copyright (c) John Seamons and KiwiSDR community contributors
+  License: GPL-2.0 / GPL-3.0 / LGPL-2.1 / MIT (per KiwiSDR repository root _LICENSE)
+  Source:  https://github.com/jks-prv/KiwiSDR/blob/master/unix_env/kiwi.config/dist.dx_community.json
+
+
+26. PortAudio — Portable Audio I/O (Windows CW sidetone sink)
+--------------------------------------------------------------
+Built from source at third_party/portaudio/ (v19.7.0) by
+scripts/setup/setup-portaudio.ps1 and linked statically into the Windows
+build only, for the callback-model CW sidetone sink and its WASAPI host-API
+preference.  Linux and macOS link the system PortAudio.
+
+AetherSDR ships a MODIFIED PortAudio on Windows.  The setup script applies a
+one-token fix to three functions that pass the address of the caller's pointer
+to PaUtil_FreeMemory() instead of the pointer itself, which corrupts the heap
+and terminates the process inside Pa_Initialize():
+
+  - src/os/win/pa_win_wdmks_utils.c   WdmGetPinPropertyMulti
+  - src/hostapi/wdmks/pa_win_wdmks.c  WdmGetPinPropertyMulti
+  - src/hostapi/wdmks/pa_win_wdmks.c  WdmGetPropertyMulti
+
+No other change is made to the upstream sources.  See #5713 and the upstream
+report PortAudio/portaudio#1176.
+
+  Copyright (c) 1999-2011 Ross Bencina and Phil Burk
+  License: MIT
+  Source:  https://github.com/PortAudio/portaudio (tag v19.7.0, sha256
+           5af29ba58bbdbb7bbcefaaecc77ec8fc413f0db6f4c4e286c40c3e1b83174fa0)
+
+DeepFist native helpers
+-----------------------
+MIT License
+
+Copyright (c) 2026 Brent Crier
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+27. flex-tailnet-shim — In-Radio Tailnet Relay (Go modules, vendored)
+-----------------------------------------------------------------------
+tools/flex-tailnet-shim/ (RFC #6271) is a separate Go program that runs inside
+a FLEX-8000/Aurora radio as a Docker waveform container. It is never linked
+into AetherSDR. Its Go modules are vendored at tools/flex-tailnet-shim/vendor/
+(Go requires the vendor tree beside go.mod, so it cannot live under
+third_party/); each module's license text is in its vendored directory.
+build.sh assembles the license of every module linked into the linux/arm64
+image into the LICENSES file shipped inside it.
+The image is built FROM scratch: no BusyBox or other base-image software.
+All modules are permissive and GPLv3-compatible; none ships a NOTICE file.
+
+  Built with: Go (standard library, BSD-3-Clause), https://go.dev/
+  Primary:    tailscale.com (tsnet), BSD-3-Clause, https://github.com/tailscale/tailscale
+              "Tailscale" is a trademark of Tailscale Inc.; used here only to
+              describe compatibility.
+
+  Module                                           Version                            License
+  filippo.io/edwards25519                          v1.2.0                             BSD-3-Clause
+  github.com/coder/websocket                       v1.8.15                            ISC
+  github.com/creachadair/msync                     v0.10.1                            BSD-2-Clause
+  github.com/fxamacker/cbor/v2                     v2.9.3                             MIT
+  github.com/gaissmai/bart                         v0.29.0                            MIT
+  github.com/godbus/dbus/v5                        v5.2.2                             BSD-2-Clause
+  github.com/go-json-experiment/json               v0.0.0-20260820222146-c27c302e5fc3 BSD-3-Clause
+  github.com/golang/groupcache                     v0.0.0-20241129210726-2c02b8208cf8 Apache-2.0
+  github.com/google/btree                          v1.1.3                             Apache-2.0
+  github.com/hdevalence/ed25519consensus           v0.2.0                             BSD-3-Clause
+  github.com/huin/goupnp                           v1.3.0                             BSD-2-Clause
+  github.com/jsimonetti/rtnetlink                  v1.4.2                             MIT
+  github.com/klauspost/compress                    v1.20.0                            Apache-2.0
+  github.com/mdlayher/netlink                      v1.11.2                            MIT
+  github.com/mdlayher/socket                       v0.7.0                             MIT
+  github.com/mitchellh/go-ps                       v1.0.0                             MIT
+  github.com/pires/go-proxyproto                   v0.15.0                            Apache-2.0
+  github.com/safchain/ethtool                      v0.7.0                             Apache-2.0
+  github.com/tailscale/hujson                      v0.0.0-20260727124030-b80ff77dac4f BSD-3-Clause
+  github.com/tailscale/peercred                    v0.0.0-20250107143737-35a0c7bd7edc BSD-3-Clause
+  github.com/tailscale/web-client-prebuilt         v0.0.0-20260917222731-e0ed2d0d0fea BSD-3-Clause
+  github.com/tailscale/wireguard-go                v0.0.0-20260928213032-417aef361226 MIT
+  github.com/x448/float16                          v0.8.4                             MIT
+  go4.org/mem                                      v0.0.0-20240501181205-ae6ca9944745 Apache-2.0
+  go4.org/netipx                                   v0.0.0-20260823151212-3075585bcbeb BSD-3-Clause
+  golang.org/x/crypto                              v0.57.0                            BSD-3-Clause
+  golang.org/x/crypto/x509roots/fallback           v0.0.0-20261005185213-c3db4df58582 BSD-3-Clause
+  golang.org/x/exp                                 v0.0.0-20260908205506-85c1c2202aba BSD-3-Clause
+  golang.org/x/net                                 v0.59.0                            BSD-3-Clause
+  golang.org/x/oauth2                              v0.37.0                            BSD-3-Clause
+  golang.org/x/sync                                v0.23.0                            BSD-3-Clause
+  golang.org/x/sys                                 v0.48.0                            BSD-3-Clause
+  golang.org/x/term                                v0.46.0                            BSD-3-Clause
+  golang.org/x/text                                v0.42.0                            BSD-3-Clause
+  golang.org/x/time                                v0.16.0                            BSD-3-Clause
+  gvisor.dev/gvisor                                v0.0.0-20260915211658-a6f909f08a72 Apache-2.0
+  tailscale.com                                    v1.104.1                           BSD-3-Clause
+
+  Vendored but not linked into the image (Windows- or test-only dependencies of
+  tailscale.com, redistributed in the source tree):
+  github.com/akutz/memconn                         v0.1.0                             Apache-2.0
+  github.com/alexbrainman/sspi                     v0.0.0-20250919150558-7d374ff0d59e BSD-3-Clause
+  github.com/dblohm7/wingoes                       v0.0.0-20260526185140-fb298caac7ca BSD-3-Clause
+  github.com/google/go-cmp                         v0.7.0                             BSD-3-Clause
+  github.com/tailscale/certstore                   v0.1.1-0.20260409135935-3638fb84b77d MIT
+  github.com/tailscale/go-winio                    v0.0.0-20231025203758-c4f33415bf55 MIT
+  golang.zx2c4.com/wintun                          v0.0.0-20230126152724-0fa3db229ce2 MIT
+  golang.zx2c4.com/wireguard/windows               v1.0.1                             MIT
+
+
+28. Noto Sans Symbols 2 — PDF manual font (vendored, documentation build only)
+-------------------------------------------------------------------------------
+tools/docs/pdf/fonts/NotoSansSymbols2-Regular.ttf is used by
+tools/docs/build_pdf.py when it typesets the printable user manual, for the
+UI symbols the docs quote (such as the menu and close icons) that the
+manual's body fonts lack. It is embedded in the generated PDF and is never
+linked into or shipped with AetherSDR itself. The full license text is in
+tools/docs/pdf/fonts/OFL.txt.
+
+  Copyright: Copyright 2022 The Noto Project Authors
+  License:   SIL Open Font License, Version 1.1
+  Source:    https://github.com/notofonts/symbols
+
+
+29. esp-serial-flasher and esp-flasher-stub — ESP32 ROM bootloader protocol
+-------------------------------------------------------------------------------
+Bundled at third_party/esp-serial-flasher/ (library v2.0.0; the flasher
+stubs in src/stubs/ regenerated from esp-flasher-stub v1.4.1 with the
+library's cmake/gen_stub_sources.py, see COMMIT). Used to install firmware
+on ESP32-family controllers held in their ROM download mode; the stubs are
+uploaded to the device's RAM, not run on the host. The full license text is
+in third_party/esp-serial-flasher/LICENSE.
+
+  Copyright: Copyright 2020-2026 Espressif Systems (Shanghai) CO LTD
+  License:   Apache License 2.0 (library); Apache-2.0 OR MIT (stubs)
+  Source:    https://github.com/espressif/esp-serial-flasher
+             https://github.com/espressif/esp-flasher-stub
+
+
+30. Monocypher — Ed25519 signature verification
+-------------------------------------------------------------------------------
+Bundled at third_party/monocypher/ (4.0.3: monocypher.c and the optional
+monocypher-ed25519.c). Verifies the signatures on downloaded firmware
+manifests. The full license text is in third_party/monocypher/LICENCE.md.
+
+  Copyright: Copyright (c) 2017-2023 Loup Vaillant, Michael Savage,
+             Fabio Scotoni
+  License:   CC0-1.0 OR BSD-2-Clause (at the user's choice)
+  Source:    https://monocypher.org
+
+
+31. littlefs — CTR2-Max registration check (read-only)
+-------------------------------------------------------------------------------
+Bundled at third_party/littlefs/ (v2.11.3), built with LFS_READONLY so no
+write path is compiled. Reads the CTR2-Max stock firmware's file system to
+check the unit is registered before AetherCTR2 is installed. The full
+license text is in third_party/littlefs/LICENSE.md.
+
+  Copyright: Copyright (c) 2022, The littlefs authors.
+             Copyright (c) 2017, Arm Limited.
+  License:   BSD-3-Clause
+  Source:    https://github.com/littlefs-project/littlefs
+
+
+32. DeepCW — Neural CW Decoder (ported code in-binary + model download-on-demand)
+---------------------------------------------------------------------------------
+The optional neural CW decode backend (DeepCwEngine, RFC #4817). Unlike the
+download-only ASR entries above, this has TWO distinct AGPL-3.0 obligations:
+
+  a) Ported code (compiled into the binary). src/core/DeepCwEngine.{h,cpp} is a
+     C++ port of decode_morse.py from e04/deepcw-engine — the spectrogram build
+     (256-pt FFT, hop 48, periodic Hann, 400-1200 Hz -> 65 bins, log1p) and the
+     greedy-CTC decode. A faithful port of AGPL-3.0 source is a derivative of it,
+     so this code ships AGPL-3.0 in every binary regardless of whether a user
+     ever downloads the weights. AetherSDR is GPL-3.0-or-later; GPLv3 §13
+     permits the combination (its only added obligation, AGPL's network clause,
+     affects hosting the combined work as a network service — desktop use is
+     unaffected, and AetherSDR source is already public).
+
+  b) Model weights (NOT bundled). Downloaded on first enable of the DeepCW
+     backend (source: the e04/deepcw-engine repository), SHA-256-verified,
+     cached under the user's data dir. Run by ONNX Runtime (entry 11).
+
+  Attribution: "deepcw-engine" by e04.
+  License: AGPL-3.0-or-later (both the ported code and the model)
+  Source:  https://github.com/e04/deepcw-engine
+
+
+33. DeepFist — CW model weights (download-on-demand)
+-------------------------------------------------------------------------------
+The exp27_bt-champion model (deepfist.onnx and deepfist.onnx.json) is downloaded
+on first selection, never bundled or mirrored by AetherSDR. Size and SHA-256
+are pinned in src/core/CwModelAssets.cpp. The accompanying LICENSE is fetched
+from the release tag's resolved source revision, not a historical MIT revision.
+The native helpers' separate historical MIT notice above remains in effect.
+
+  Copyright: Copyright (C) 2026 Brent Crier (N9BC)
+  License understanding: GPL-3.0-or-later, following the published release's
+             LICENSE and README; accepted for this pinned download by the
+             operator on 2026-10-17. This is not a separate upstream ruling on
+             the older checkpoint. See docs/deepfist-cw-backend.md.
+  Release:   https://github.com/n9bc/DeepFist/releases/tag/exp27_bt-champion
+  Source:    https://github.com/n9bc/DeepFist/tree/930bd3cea7d9bf19fd45413acc9064b54c722871
+  License:   https://raw.githubusercontent.com/n9bc/DeepFist/930bd3cea7d9bf19fd45413acc9064b54c722871/LICENSE
+  LICENSE:   35927 bytes; SHA-256
+             d8dcabd2c59c9e96be89f094a94474685e3fcd5ee8c4304ae7fbbf6c722df6ab
+
+
+34. QR Code generator library (C++) — Remote Access sign-in QR code
+-------------------------------------------------------------------------------
+Bundled at third_party/qrcodegen/ (v1.8.0: cpp/qrcodegen.hpp and
+cpp/qrcodegen.cpp, unmodified; hashes in VERSION.txt). Draws the Remote
+Access window's Tailscale sign-in link as a QR code. The full license text is
+in third_party/qrcodegen/LICENSE.
+
+  Copyright: Copyright (c) Project Nayuki
+  License:   MIT
+  Source:    https://github.com/nayuki/QR-Code-generator/tree/v1.8.0
+
+35. musl libc — linked into the radio health tools and the WSPR receiver
+-------------------------------------------------------------------------------
+Statically linked into the AetherHealth agent binaries
+(resources/waveforms/AetherHealth.ssdr_waveform, built from tools/radio-health
+by zig 0.17, which bundles musl). AetherSDR installs that package on a radio
+when "Install radio health tools" is ticked. The same applies to the AetherWSPR
+binaries (resources/waveforms/AetherWSPR.ssdr_waveform, built from
+tools/wspr-agent), installed from Waveforms → Install → WSPR Receiver. The full
+license text ships in each package as LICENSES.
+
+  Copyright: Copyright (c) 2005-2020 Rich Felker, et al.
+  License:   MIT
+  Source:    https://musl.libc.org/
+
+36. wsprd — the WSPR decoder from WSJT-X
+-------------------------------------------------------------------------------
+tools/wspr-agent/wsprd holds the C sources of wsprd from WSJT-X (lib/wsprd,
+identical in 2.7.0 and 3.0.2), built into the AetherWSPR binaries
+(resources/waveforms/AetherWSPR.ssdr_waveform). main() is renamed and FFTW is
+replaced by a small FFT (fftw_compat.c). wsprd/osdwspr.c and grayline.c are C
+translations of WSJT-X's Fortran (osdwspr.f90, indexx.f90, grayline.f90,
+sun.f90, grid2deg.f90). The GPL text is at tools/wspr-agent/wsprd/COPYING.
+
+  Copyright: Copyright 2001-2018 Joe Taylor, K1JT
+             Copyright 2014-2018 Steven Franke, K9AN
+             Copyright 1994 Phil Karn, KA9Q (the Fano decoder, fano.c)
+             Bob Jenkins (the lookup3 hash, nhash.c, public domain)
+  License:   GPL-3.0-or-later
+  Source:    https://github.com/WSJTX/wsjtx
+
+
+37. Data2G — HF data modem core
+-------------------------------
+Bundled at third_party/data2g/ (upstream release v0.5.0, commit
+7e1b98c5812839b6dee05d1a336d20793ed8bf92): the data2g_core target's sources,
+byte for byte, compiled as a separately-linked static library for
+AetherModem's receive-only HF data monitor (RFC #7159). The generated tables
+under core/generated/ include the rate shifter's trained model; upstream
+documents how each was produced (docs/outcome-training-data.md,
+data2g/codes_data/README.md). The license texts are at
+third_party/data2g/LICENSE, third_party/data2g/LICENSE_exception and
+third_party/data2g/LICENSE_ion.
+
+  Copyright: Copyright (c) 2026, Andrew Rodland (as named in
+             LICENSE_exception), and the Data2G authors (see the
+             repository history)
+  License:   Artistic License 2.0, with the Data2G Interface Exception 1.0
+             (an additional permission from the copyright holder covering
+             section 8's "direct interface" condition)
+  Source:    https://github.com/arodland/Data2G
+
+Data2G incorporates features from Ion (CW identification, core/cwid/),
+relicensed for Data2G by Ion's author. Ion itself is distributed under the
+Apache License 2.0.
+
+  Copyright: Jesse Forkum, N0JLF
+  License:   Apache-2.0
+  Source:    https://github.com/jesseforkum/ion-hf
+
+
+38. pocketfft — FFT (single header, vendored by Data2G)
+-------------------------------------------------------
+Bundled at third_party/data2g/third_party/pocketfft/ as Data2G ships it.
+
+  Copyright: Copyright (C) 2010-2024 Max-Planck-Society
+             Copyright (C) 2019-2020 Peter Bell
+             Copyright (C) 2003, 2007-14 Matteo Frigo and Massachusetts
+               Institute of Technology (algorithms after FFTW)
+             Copyright (C) 2024 Tan Ping Liang, Peter Bell
+  License:   BSD-3-Clause
+  Source:    https://github.com/mreineck/pocketfft

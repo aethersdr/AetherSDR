@@ -1,0 +1,792 @@
+#pragma once
+#include "core/backends/ModelControlRequest.h"
+#include <array>
+#include <optional>
+#include <QPointer>
+
+#include <QObject>
+#include <QHash>
+#include <QSet>
+#include <QMap>
+#include <QString>
+#include <QStringList>
+
+#include "core/backends/TransmitDelta.h"
+
+#include <functional>
+#include <atomic>
+#include <memory>
+
+class QTimer;
+
+namespace AetherSDR {
+
+// ATU tune status values (from FlexLib ATUTuneStatus enum).
+enum class ATUStatus {
+    None,
+    NotStarted,
+    InProgress,
+    Bypass,
+    Successful,
+    OK,
+    FailBypass,
+    Fail,
+    Aborted,
+    ManualBypass
+};
+
+// State model for the radio's transmit parameters and internal ATU.
+//
+// Transmit status arrives via TCP as "transmit rfpower=93 tunepower=38 ..."
+// after "sub tx all".  ATU status arrives as "atu status=TUNE_SUCCESSFUL ...".
+//
+// Commands use "transmit set ..." for power, "transmit tune <0|1>" for tune,
+// "xmit <0|1>" for MOX, and "atu ..." for ATU control.
+class TransmitModel : public QObject {
+    Q_OBJECT
+
+public:
+    void invalidateControlIntents()
+    {
+        for (quint64& revision : m_controlIntentRevisions) { ++revision; }
+    }
+    explicit TransmitModel(QObject* parent = nullptr);
+    ~TransmitModel() override;
+
+    // ── Transmit getters ────────────────────────────────────────────────────
+    int     rfPower()       const { return m_rfPower; }
+
+    // Whether rfPower() has been reported by a backend this session, or is still
+    // the class default (#5518): m_rfPower{100} is indistinguishable from a real
+    // 100%. Cleared by resetState() on every disconnect. Unlike
+    // RadioCapabilities::transmitDriveControl (can it be confirmed, per backend),
+    // this says whether it has been.
+    bool    haveTransmitStatus() const { return m_haveTransmitStatus; }
+
+    // The same question for maxPowerLevel(), asked SEPARATELY (#5733 review).
+    //
+    // Only FlexBackend populates TransmitDelta::maxPowerLevel; Icom and HL2
+    // never do, and their ceiling arrives later (or not at all) through
+    // setMaxPowerLevel() from the band tables or slice status. Gating it on the
+    // drive latch therefore published m_maxPowerLevel{100} — a compiled-in
+    // default — as a reported ceiling on a 10 W IC-705, which is the same
+    // phantom haveTransmitStatus() exists to prevent and worse, because
+    // drive_confirmed vouched for it.
+    bool    haveMaxPowerLevel() const { return m_haveMaxPowerLevel; }
+
+    // Whether the CURRENT rfPower() value came from the radio or from us
+    // (#5733 review). setRfPower() writes the model optimistically and emits
+    // rfPowerChanged before the radio has seen the command, so on a backend
+    // that does read drive back, the value is still a REQUEST for one round
+    // trip. Principle II: radio status is truth, client commands are requests —
+    // so `drive_confirmed` is this ANDed with the backend's authority, and goes
+    // false the moment we ask for something until the radio echoes it.
+    bool    rfPowerIsFromRadio() const { return m_rfPowerFromRadio; }
+
+    // Clear power provenance without the rest of resetState(), for
+    // RadioModel::teardownBackend() (#5733). resetState() emits six TX signals, and
+    // one teardown caller is ~RadioModel(), where consumers are half-destroyed.
+    // Values are harmless once unvouched, since every publisher gates on these
+    // latches. Emits nothing, on purpose.
+    void    resetPowerProvenance() {
+        m_haveTransmitStatus = false;
+        m_haveMaxPowerLevel = false;
+        m_rfPowerFromRadio = false;
+    }
+    // The radio-reported PTT mic override belongs to the radio that reported it,
+    // so a family switch clears it too (#6442). Non-emitting, like
+    // resetPowerProvenance() and for the same caller (teardownBackend(), from
+    // ~RadioModel()); RadioModel::backendRebuilt tells an open view.
+    void    resetPttMicOverrideReport() {
+        m_pttMicOverride = false;
+        m_havePttMicOverride = false;
+    }
+    int     tunePower()     const { return m_tunePower; }
+    bool    isTuning()      const { return m_tune; }
+    // CW admission while TUNE is active (#5422; FLEX-8400 fw 4.2.20): `cw key 1`
+    // during a tune carrier keys at TUNE power and on key-up the radio stays in TX
+    // with tune=1; CWX does the same. So key-down and CWX are refused while
+    // tuning; key-up is never refused (fail closed is key UP). m_tune is set
+    // optimistically by startTune(), so the guard closes on the click.
+    bool    admitsCwKeyEdge(bool down) const { return !down || !m_tune; }
+    bool    admitsCwxSend() const { return !m_tune; }
+    bool    isMox()         const { return m_mox; }
+    bool    isTransmitting() const { return m_transmitting; }
+    double  transmitFreq()  const { return m_transmitFreq; }  // MHz, from "transmit freq=..."
+    void    setTransmitting(bool tx);
+
+    // ── Mic / monitor / processor getters ─────────────────────────────────
+    QString micSelection()          const { return m_micSelection; }
+    int     micLevel()              const { return m_micLevel; }
+    bool    micAcc()                const { return m_micAcc; }
+    bool    speechProcessorEnable() const { return m_speechProcEnable; }
+    int     speechProcessorLevel()  const { return m_speechProcLevel; }
+    int     speechProcessorLevelMaximum() const { return m_speechProcLevelMaximum; }
+    bool    companderOn()           const { return m_companderOn; }
+    int     companderLevel()        const { return m_companderLevel; }
+    bool    daxOn()                 const { return m_daxOn; }
+    // `transmit dax` commands sent but not yet answered. Until the radio's
+    // reply lands, a status for an EARLIER command can still arrive and put
+    // daxOn() back to a value already superseded; daxRequested() is what the
+    // newest command asked for (#6593 review).
+    bool    daxSettled()            const { return m_pendingDaxAnswers.isEmpty(); }
+    bool    daxRequested()          const { return m_daxRequested; }
+    bool    sbMonitor()             const { return m_sbMonitor; }
+    int     monGainSb()             const { return m_monGainSb; }
+
+    // ── VOX getters ───────────────────────────────────────────────────────
+    bool    voxEnable()     const { return m_voxEnable; }
+    int     voxLevel()      const { return m_voxLevel; }
+    int     voxDelay()      const { return m_voxDelay; }
+    bool    micBoost()      const { return m_micBoost; }
+    bool    micBias()       const { return m_micBias; }
+    bool    metInRx()       const { return m_metInRx; }
+    bool    syncCwx()       const { return m_syncCwx; }
+    int     amCarrierLevel() const { return m_amCarrierLevel; }
+    bool    dexpOn()         const { return m_dexpOn; }
+    int     dexpLevel()      const { return m_dexpLevel; }
+    // TX filter bounds.  ACCESSORS, not bare constants, deliberately: every
+    // backend shares this range today, but a radio that declares its own
+    // passband limits should be able to narrow it without any caller
+    // changing — the GUI already asks rather than assumes.
+    //
+    // FlexBackend clamps to the same range on the wire, which is where a
+    // radio-specific limit properly belongs; this is the client-side mirror.
+    static constexpr int kTxFilterMinHz      = 0;
+    static constexpr int kTxFilterMaxHz      = 10000;
+    static constexpr int kTxFilterMinWidthHz = 50;
+    int txFilterMinHz()      const { return kTxFilterMinHz; }
+    int txFilterMaxHz()      const { return kTxFilterMaxHz; }
+    int txFilterMinWidthHz() const { return kTxFilterMinWidthHz; }
+
+    int     txFilterLow()    const { return m_txFilterLow; }
+    int     txFilterHigh()   const { return m_txFilterHigh; }
+
+    // ── CW getters ──────────────────────────────────────────────────────
+    int     cwSpeed()       const { return m_cwSpeed; }
+    int     cwPitch()       const { return m_cwPitch; }
+    bool    cwBreakIn()     const { return m_cwBreakIn; }
+    int     cwDelay()       const { return m_cwDelay; }
+    bool    cwSidetone()    const { return m_cwSidetone; }
+    bool    cwIambic()      const { return m_cwIambic; }
+    int     cwIambicMode()  const { return m_cwIambicMode; }  // 0=A, 1=B
+    bool    cwSwapPaddles() const { return m_cwSwapPaddles; }
+    bool    cwlEnabled()    const { return m_cwlEnabled; }
+    int     monGainCw()     const { return m_monGainCw; }
+    int     monPanCw()      const { return m_monPanCw; }
+    bool    holdBreakInDelay() const { return m_holdBreakInDelay; }
+    // The opt-in is ARMED only once the operator has set a delay this session.
+    // holdBreakInDelay() alone says the operator asked for protection; this says
+    // whether there is anything to protect with. They differ after every
+    // disconnect and every app start, because the preference is persisted and
+    // the held value deliberately is not (#5288 review).
+    bool    holdBreakInDelayArmed() const { return m_cwDelayHeld > 0; }
+
+    // ── Interlock / TX settings getters ──────────────────────────────────────
+    int     accTxDelay()     const { return m_accTxDelay; }
+    int     tx1Delay()       const { return m_tx1Delay; }
+    int     tx2Delay()       const { return m_tx2Delay; }
+    int     tx3Delay()       const { return m_tx3Delay; }
+    int     txDelay()        const { return m_txDelay; }
+    int     interlockTimeout() const { return m_interlockTimeout; }
+    int     accTxReqPolarity() const { return m_accTxReqPolarity; }
+    int     rcaTxReqPolarity() const { return m_rcaTxReqPolarity; }
+    // Hardware PTT (RCA/ACC/mic jack) forces the analog mic even while DAX or
+    // remote audio is the TX source. Radio-wide; firmware v4.3+ only, so
+    // havePttMicOverride() says whether this radio has reported it (#6442).
+    bool    pttMicOverride() const { return m_pttMicOverride; }
+    bool    havePttMicOverride() const { return m_havePttMicOverride; }
+    int     maxPowerLevel()  const { return m_maxPowerLevel; }
+    // Latches haveMaxPowerLevel() on PRESENCE, not on change: a radio reporting
+    // 100 into a model already at the 100 default must still count as reported,
+    // for the same reason applyChanges() latches the drive side that way.
+    void    setMaxPowerLevel(int w) {
+        const bool firstReport = !m_haveMaxPowerLevel;
+        m_haveMaxPowerLevel = true;
+        if (m_maxPowerLevel != w) { m_maxPowerLevel = w; emit maxPowerLevelChanged(w); }
+        else if (firstReport) emit powerProvenanceChanged();
+    }
+    QString tuneMode()        const { return m_tuneMode; }
+    QString txSliceMode()     const { return m_txSliceMode; }
+    bool tuneAvailable() const { return m_tuneAvailable; }
+    void setTuneAvailable(bool available);
+    // Whether the selected TX antenna passes through the internal ATU.
+    bool atuAvailable() const { return m_atuAvailable; }
+    void setAtuAvailable(bool available);
+    bool    showTxInWaterfall() const { return m_showTxInWaterfall; }
+
+    // ── APD getters ─────────────────────────────────────────────────────────
+    bool    apdEnabled()        const { return m_apdEnabled; }
+    bool    apdConfigurable()   const { return m_apdConfigurable; }
+    bool    apdEqualizerActive()const { return m_apdEqActive; }
+    // Unset until the radio reports a lifecycle state (SmartSDR 4.3+).
+    std::optional<ApdLifecycleState> apdLifecycleState() const { return m_apdLifecycle; }
+    static QString apdLifecycleStateName(ApdLifecycleState state);
+
+    // The transmit slice an equalizer status is matched against. RadioModel
+    // supplies it; without one, scoped equalizer statuses never apply.
+    struct ApdTxSlice {
+        QString txAntenna;
+        double  frequencyMhz{0.0};
+    };
+    using ApdTxSliceResolver = std::function<std::optional<ApdTxSlice>()>;
+    void setApdTxSliceResolver(ApdTxSliceResolver resolver) { m_apdTxSliceResolver = std::move(resolver); }
+
+    // External APD per-TX-antenna sampler-port assignment (SmartSDR 4.2.18+).
+    struct ApdSampler {
+        QString     selected{"INTERNAL"};
+        QStringList available{"INTERNAL"};
+    };
+    ApdSampler apdSampler(const QString& txAnt) const { return m_apdSamplers.value(txAnt); }
+    // Reset all state to defaults on disconnect — different radio models
+    // have different capabilities (APD, max power, pan count, etc.)
+    void resetState();
+
+    // ── ATU getters ─────────────────────────────────────────────────────────
+    bool      atuEnabled()      const { return m_atuEnabled; }
+    ATUStatus atuStatus()       const { return m_atuStatus; }
+    bool      memoriesEnabled() const { return m_memoriesEnabled; }
+    bool      usingMemory()     const { return m_usingMemory; }
+
+    // ── Profile getters ─────────────────────────────────────────────────────
+    QStringList profileList()       const { return m_profileList; }
+    QString     activeProfile()     const { return m_activeProfile; }
+    QStringList micProfileList()    const { return m_micProfileList; }
+    QString     activeMicProfile()  const { return m_activeMicProfile; }
+    QStringList cwProfileList()     const { return m_cwProfileList; }
+    QString     activeCwProfile()   const { return m_activeCwProfile; }
+    bool        cwProfileUnsaved()  const { return m_cwProfileUnsaved; }
+    QStringList micInputList()      const { return m_micInputList; }
+
+    // Apply a normalized, typed transmit delta from the backend
+    // (IRadioBackend::transmitChanged). Vendor-neutral fields only — the Flex
+    // wire decode for all five transmit-family status planes lives in
+    // FlexBackend::decode*Status. Present-only. (aetherd RFC 2.3.)
+    void applyChanges(const TransmitDelta& delta);
+    void setProfileList(const QStringList& profiles);
+    void setActiveProfile(const QString& profile);
+    void setMicProfileList(const QStringList& profiles);
+    void setActiveMicProfile(const QString& profile);
+    void setCwProfileList(const QStringList& profiles);
+    void setActiveCwProfile(const QString& profile);
+    void setCwProfileUnsaved(bool unsaved);
+    void setMicInputList(const QStringList& inputs);
+
+    // PTT request coordinator (#2262) — single entry point for "user
+    // wants to key/unkey".  When Quindar is enabled and the active TX
+    // slice is on a phone mode, runs the engage/disengage tone state
+    // machine before the actual MOX flip; otherwise forwards directly
+    // to setMox().  All UI and TCI hardware-PTT callers should use this
+    // path so Quindar tones happen consistently regardless of source.
+    enum class PttSource : uint8_t {
+        Mox          = 0,   // GUI/local MOX or PTT
+        TciHardware  = 1,   // TCI radio-direct PTT (e.g. Stream Deck plugin)
+        Footswitch   = 2,   // future: serial-PTT or other hardware path
+        Tune         = 3,   // local TUNE/two-tone carrier
+        Dax          = 4,   // external digital-audio PTT path
+        Atu          = 5,   // internal automatic-tuner carrier
+        Wspr         = 6,   // local generated WSPR audio
+    };
+
+    // Source of the most recently *initiated* key-up. Set by the keying entry
+    // points (requestPttOn / RadioModel::setTransmit / RadioModel's ATU command
+    // gate) so downstream consumers can tell an operator-driven MOX/PTT/VOX
+    // transmit from an ATU/TCI-hardware/DAX-triggered one — the radio interlock
+    // reports these software paths as source=SW, so the distinction has to be
+    // captured here at the funnel.
+    // Resets to Mox on full unkey so a subsequent hardware/VOX key (which never
+    // flows through a source-bearing entry point) is treated as operator TX.
+    PttSource activePttSource() const { return m_activePttSource; }
+    void      noteActivePttSource(PttSource source) { m_activePttSource = source; }
+
+    // ── Command methods (emit typed controlRequested) ──────────────────────
+    void setRfPower(int power);
+
+    // The host modulates, so the microphone is a PC input and nothing else.
+    //
+    // The mic-source list (MIC / BAL / LINE / ACC / PC) enumerates a FlexRadio's
+    // physical input jacks. A Hermes-Lite 2 has none of them: audio is
+    // modulated here and handed to the radio as IQ, so "PC" is not a preference
+    // but the only thing that can possibly be true. Offering the others invites
+    // the operator to select an input that silently transmits nothing.
+    void setHostModulation(bool on);
+    [[nodiscard]] bool hostModulation() const { return m_hostModulation; }
+
+    // Whether the connected radio has an antenna tuner at all
+    // (RadioCapabilities::hasTuner), pushed down by RadioModel on connect for
+    // the same reason hostModulation is: the capability lives on the backend and
+    // the widgets that need it only see this model.
+    //
+    // Defaults TRUE so nothing changes for a Flex, and so a widget that reads it
+    // before any backend has reported stays in the pre-existing state rather
+    // than briefly greying out a control that does exist.
+    void setHasTuner(bool present);
+    [[nodiscard]] bool hasTuner() const { return m_hasTuner; }
+    // Independent from matching: Flex exposes radio-side ATU memory recall
+    // and database operations, while an Icom 1C 01 tuner path does not.
+    void setHasTunerMemories(bool present);
+    [[nodiscard]] bool hasTunerMemories() const { return m_hasTunerMemories; }
+    void setTunePower(int power);
+    void setTuneMode(const QString& mode);
+    void startTune(PttSource source = PttSource::Tune);
+    void startTwoToneTune(PttSource source = PttSource::Tune);
+    void toggleTwoToneTune();
+    void stopTune();
+    void setMox(bool on);
+
+    void requestPttOn(PttSource source);
+    void requestPttOff(PttSource source);
+    // Bindings injected once at MainWindow wire-up.  The coordinator
+    // needs the Quindar DSP module pointer to drive intro/outro
+    // phases, and a callable that returns the active TX slice's mode
+    // string for the phone-mode gate.  The mode-getter indirection
+    // keeps TransmitModel decoupled from RadioModel/SliceModel so the
+    // test executables don't need Qt6::Network linkage.
+    void setQuindarTone(class ClientQuindarTone* tone);
+    using TxModeGetter = std::function<QString()>;
+    void setTxModeGetter(TxModeGetter getter);
+    using PttPreflight = std::function<QString(PttSource)>;
+    void setPttPreflight(PttPreflight preflight);
+    // TUNE admission (#5422). RadioModel returns a non-empty message while a
+    // client CW source is keying (key edge down, paddle held, CWX in flight);
+    // startTune()/startTwoToneTune() are then refused and pttBlocked() carries
+    // the message. Measured on a FLEX-8400 fw 4.2.20: TUNE started on top of
+    // active CW keying comes up with no carrier and leaves the radio in TX with
+    // tune=1 — the same latched state as a key edge during TUNE, from the
+    // other direction. Unset = always admitted.
+    using TuneAdmission = std::function<QString()>;
+    void setTuneAdmission(TuneAdmission admission);
+
+    enum class KeyingIntent { Mox, Tune, Atu };
+    // Installed by the engine. Admission precedes optimistic state and every
+    // keying signal; a standalone model has no transport to authorize.
+    using KeyingPermit = std::function<bool()>;
+    using KeyingAdmission = std::function<KeyingPermit(KeyingIntent, bool)>;
+    // A trusted engine controller binds a producer before entering the model.
+    // These callbacks preserve the model's preflight and optimistic UI path
+    // without installing an ambient caller identity around a widget callback.
+    struct KeyingRoute {
+        std::function<KeyingPermit(bool)> admit;
+        std::function<void(bool)> dispatch;
+    };
+    void requestTune(PttSource source, bool twoTone, const KeyingRoute& route);
+    void stopTune(const KeyingRoute& route);
+    void requestAtu(bool start, const KeyingRoute& route);
+    void setKeyingAdmission(KeyingAdmission admission) { m_keyingAdmission = std::move(admission); }
+    void requestPttOn(PttSource source, std::function<KeyingPermit()> admit,
+                      std::function<void()> engage);
+
+    // A deferred release owns its original cancellation fence. A new key-on,
+    // explicit stop, reset or destruction invalidates it, including on audio
+    // workers. Never reconstruct a release from the then-current operation.
+    struct PttRelease {
+        std::function<bool()> isCurrent;
+        std::function<void()> finish;
+        std::function<void()> abandoned;
+        bool current() const { return isCurrent && isCurrent(); }
+        void release() const { if (current() && finish) { finish(); } }
+    };
+    void requestPttOff(PttSource source, PttRelease release);
+    using PttOffHook = std::function<void(PttRelease)>;
+    void setPttOffHook(PttOffHook hook);
+    void clearPttOffHook();
+    void invalidatePttRelease();
+    void cancelPttRelease();
+
+    void atuStart();
+    void atuBypass();
+    void setAtuMemories(bool on);
+    // Clears the radio's entire ATU memory database. FlexLib's ATUClearMemories
+    // sends "atu clear"; the radio acknowledges with R|0| only — no status echo.
+    void atuClearMemories();
+    void loadProfile(const QString& name);
+    void setApdEnabled(bool on);
+    void setApdSamplerPort(const QString& txAnt, const QString& port);
+    void resetApdEqualizer();
+
+    // ── Mic / monitor / processor commands ────────────────────────────────
+    void setMicSelection(const QString& input);
+    quint64 micSelectionIntentRevision() const
+    { return m_controlIntentRevisions[static_cast<size_t>(TransmitControlRequest::Field::MicInput)]; }
+    void setMicLevel(int level);
+    void setMicAcc(bool on);
+    void setSpeechProcessorEnable(bool on);
+    void setSpeechProcessorLevel(int level);
+    void setSpeechProcessorLevelMaximum(int maximum);
+    // Adopt speech-processor state not originated here (the client-side
+    // compressor on a host-modulating backend, also reachable via the Aetherial
+    // strip). Notifies the UI without emitting controlRequested: the setters above are
+    // operator intent, and mirroring engine state through them would echo and
+    // oscillate with the strip. Returns true when something changed.
+    bool applySpeechProcessorState(bool on, int level);
+    // Adopt a mic selection the OPERATOR did not choose — a radio whose input
+    // this client cannot select forces the source, and the model must agree
+    // with what the UI is showing. Like applySpeechProcessorState this updates
+    // state WITHOUT emitting controlRequested, because pushing a forced value back
+    // out as operator intent is how a capability turns into a command nobody
+    // issued. Returns true when something changed.
+    bool applyMicSelectionState(const QString& input);
+    void setDax(bool on);
+    void setSbMonitor(bool on);
+    void setMonGainSb(int gain);
+    void loadMicProfile(const QString& name);
+
+    // ── VOX commands ────────────────────────────────────────────────────────
+    void setVoxEnable(bool on);
+    // Ask the radio to change VOX and report what it answered, rather than
+    // assuming it agreed. A FLEX-6500 on 4.2.20 answers `transmit set
+    // vox_enable` with R<seq>|0| in ~30 ms and then never repeats vox_enable in
+    // a transmit status, so the reply is the only confirmation there is. No
+    // optimistic write: the model changes only when the radio says it applied
+    // the request, and only if no later VOX change superseded it. Returns the
+    // ticket voxEnableAnswered() will carry, or 0 when nothing was asked (off
+    // the owner thread). For a caller that must not act until VOX really has
+    // changed; a control that only reflects an operator click wants
+    // setVoxEnable().
+    quint64 requestVoxEnable(bool on);
+    // Changes whenever VOX is asked to change, by anyone, and when a session
+    // ends. A caller that changed VOX on the operator's behalf compares it
+    // before putting VOX back, so a change the operator made since wins.
+    // Whether voxEnable() is what the radio has said — in a status, or in its
+    // answer to requestVoxEnable() — rather than what was last asked for.
+    // setVoxEnable() is optimistic: it writes the model at once and the radio
+    // may answer late, or refuse, and a FLEX-6500 never repeats vox_enable in
+    // a status, so a caller that must know VOX is really off (recording) asks
+    // the radio again while this is false.
+    bool voxStateConfirmed() const { return !m_voxUnconfirmed; }
+    quint64 voxIntentMark() const
+    {
+        return m_controlIntentRevisions[static_cast<size_t>(TransmitControlRequest::Field::VoxEnabled)];
+    }
+    // RadioModel: the backend's (or RadioModel's own) answer to a request this
+    // model sent with a ticket. Unknown and repeated tickets are ignored.
+    void handleControlAnswer(quint64 ticket, bool applied);
+    void setVoxLevel(int level);
+    void setVoxDelay(int delay);
+    void setMicBoost(bool on);
+    void setMicBias(bool on);
+    void setPttMicOverride(bool on);
+    void setAmCarrierLevel(int level);
+    void setDexp(bool on);
+    void setDexpLevel(int level);
+    void setTxFilterLow(int hz);
+    void setTxFilterHigh(int hz);
+    void setTxFilter(int lowHz, int highHz);
+
+    // ── CW commands ─────────────────────────────────────────────────────────
+    void setCwSpeed(int wpm);
+    void setCwPitch(int hz);
+    // Receive-only engines acknowledge pitch after their DSP bank is adopted.
+    void setReceiveCwPitchConfirmation(bool confirmed) { m_confirmReceiveCwPitch = confirmed; }
+    bool confirmsReceiveCwPitch() const { return m_confirmReceiveCwPitch; }
+    // The pitch last carried by an applied delta this session (a backend report
+    // or a restored state); the local setter never sets it. Empty after reset.
+    std::optional<int> reportedCwPitch() const { return m_reportedCwPitch; }
+    void setCwBreakIn(bool on);
+    void setCwDelay(int ms);
+    void setCwSidetone(bool on);
+    void setCwIambic(bool on);
+    void setCwIambicMode(int mode);   // 0=A, 1=B
+    void setCwSwapPaddles(bool on);
+    void setCwlEnabled(bool on);
+    void setMonGainCw(int gain);
+    void setMonPanCw(int pan);
+
+    // Opt-in (client-side, default off): when set, setCwSpeed() re-asserts the
+    // delay the operator last SET (setCwDelay) right after the `cw wpm` command,
+    // so SmartSDR's speed-linked QSK-floor walk cannot drop an inline amplifier
+    // into hot-switching. Enabling it captures nothing on its own — until the
+    // operator sets a delay this session there is nothing to hold. Not radio
+    // state: PhoneCwApplet persists it in AppSettings and re-applies it on bind;
+    // resetState() leaves it be. Because the preference persists and the held
+    // value does not, on-but-unarmed is a real state — see
+    // holdBreakInDelayArmed(), which the applet renders distinctly.
+    void setHoldBreakInDelay(bool on);
+
+signals:
+    void stateChanged();
+    // The answer to requestVoxEnable(): which request, what it asked for, and
+    // whether the radio applied it. current is false when a VOX change was
+    // asked for after it (an operator click, another request, a session
+    // ending): the radio may then have applied this one and moved on, so the
+    // answer no longer says what VOX is now.
+    void voxEnableAnswered(quint64 ticket, bool on, bool applied, bool current);
+    // (rfPowerChanged is declared once below — main already has it for the
+    // external-surface mirror path; backends that set drive through the seam
+    // reuse that same signal rather than a duplicate. #4449 recovery.)
+    // Keying and tune as INTENT rather than as a Flex command string.
+    //
+    // All backends receive these through RadioModel's coordinator and typed
+    // seam. Keying is never duplicated through commandReady.
+    void moxCommandIssued(bool on);
+    // Immediate teardown/cancellation, distinct from a normal tail request.
+    void pttReleaseCancelled();
+    void tuneCommandIssued(bool on);
+    void hostModulationChanged(bool on);
+    void hasTunerChanged(bool present);
+    void hasTunerMemoriesChanged(bool present);
+    void tuneChanged(bool tuning);
+    void tuneAvailabilityChanged(bool available);
+    void atuAvailabilityChanged(bool available);
+    void moxChanged(bool mox);
+    // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
+    // OR from setTransmitting() (interlock-driven: CW break-in, VOX, footswitch).
+    // Use this instead of moxChanged() for anything that should track actual TX
+    // state regardless of source (e.g. hardware TX indicator LEDs).
+    void transmittingChanged(bool tx);
+    void atuStateChanged();
+    void profileListChanged();
+    void micStateChanged();
+    void micProfileListChanged();
+    // CW profile list or active name changed.
+    void cwProfilesChanged();
+    // The radio's unsaved-changes flag for the active CW profile changed.
+    void cwProfileUnsavedChanged(bool unsaved);
+    void micInputListChanged();
+    void phoneStateChanged();       // VOX or CW property changed
+    // Fires only when txFilterLow / txFilterHigh actually change.  Use this
+    // instead of phoneStateChanged for slot work that should NOT run on
+    // every VOX/CW/dexp/mic-boost/etc. status update.
+    void txFilterCutoffChanged(int lowHz, int highHz);
+    // Compatibility notification for test observers of a TX passband request.
+    // Backend dispatch uses controlRequested. Unlike txFilterCutoffChanged,
+    // neither intent signal is emitted by radio status (Principle II).
+    void txFilterCommandIssued(int lowHz, int highHz);
+    // Test notification of MIC-slider intent; radio observations never emit it.
+    void micLevelCommandIssued(int level);
+    // The operator moved PROC or its NOR/DX/DX+ level. OPERATOR INTENT ONLY,
+    // for the same reason as txFilterCommandIssued — and here the distinction is
+    // what protects the operator's own work: the client compressor these drive is
+    // shared with the Aetherial strip, and its NOR/DX/DX+ presets overwrite the
+    // strip's threshold/ratio/makeup. Keying the preset write off micStateChanged
+    // instead would let the strip's OWN enable toggle read as an off->on
+    // transition and overwrite the settings the operator had just dialled in
+    // there. applySpeechProcessorState() never emits this.
+    void speechProcessorCommandIssued(bool on, int level);
+    // Compatibility setting-intent notifications for test observers. Backend
+    // dispatch uses controlRequested exclusively. Radio status never emits them.
+    void voxCommandIssued(bool on, int level, int delayMs);
+    void monitorCommandIssued(bool on, int level);
+    void rfPowerCommandIssued(int percent);
+    void tunePowerCommandIssued(int percent);
+    // Production ATU start/stop uses this separate operation-fenced route.
+    void atuCommandIssued(bool start);
+    // Fires only when cwPitch actually changes. Use this instead of
+    // phoneStateChanged for slot work that should NOT run on every
+    // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
+    void cwPitchChanged(int hz);
+    // Fires on every applied delta that carries the CW pitch (a radio report,
+    // or a host-DSP backend's restored state), changed or not, before that
+    // delta's cwPitchChanged: the first report after a connect often repeats
+    // the value already held, so cwPitchChanged stays silent there. The local
+    // setter never emits it.
+    void cwPitchReported(int hz);
+    void cwSpeedChanged(int wpm);
+    // Compatibility CW-intent notifications for test observers; radio
+    // observations never emit them. Backend dispatch uses controlRequested.
+    void cwPitchCommandIssued(int hz);
+    void cwSpeedCommandIssued(int wpm);
+    void cwBreakInCommandIssued(bool on);
+    // The "hold break-in delay" opt-in changed. UI-only mirror; no wire effect.
+    void holdBreakInDelayChanged(bool on);
+    // Whether the opt-in currently has a delay to re-assert changed. Lets the UI
+    // distinguish "on and protecting" from "on but holding nothing" instead of
+    // showing one checked state for both (#5288 review).
+    void holdBreakInDelayArmedChanged(bool armed);
+    void apdStateChanged();
+    void apdSamplerChanged(const QString& txAnt);
+    void apdEqualizerResetReceived();
+    void maxPowerLevelChanged(int maxWatts);
+    // Fire only when RF/tune power actually changes, from either the local
+    // setter or a radio status update. Use these instead of stateChanged()
+    // for anything that mirrors power to an external surface (#4161) — the
+    // radio restores per-band power on QSY, and a coarse stateChanged()
+    // listener cannot tell that apart from any other TX field moving.
+    void rfPowerChanged(int watts);
+    void tunePowerChanged(int watts);
+    // The PROVENANCE of the power fields moved without the value moving
+    // (#5733 review): a latch flipping on first report, or drive crossing
+    // between radio-reported and operator-requested. A value-change signal
+    // cannot carry these — a radio reporting 100 into a model already at 100
+    // makes assign() return false — so a mirror that publishes what the radio
+    // has confirmed needs this edge or it never learns.
+    void powerProvenanceChanged();
+    // Emitted when the radio reports the TX slice mode (e.g. "FDVU", "FDVL", "USB").
+    // Value is empty string until the first transmit status is received.
+    void txSliceModeChanged(const QString& mode);
+    // Retained for source compatibility and no-raw-command regression probes;
+    // model setters no longer emit wire text.
+    void commandReady(const QString& cmd);
+    void controlRequested(const AetherSDR::TransmitControlRequest& request);
+    void pttBlocked(const QString& message);
+    void atuTuneFailed(AetherSDR::ATUStatus status, const QString& message);
+    // Quindar active-phase signal (#2262).  Emitted on the GUI thread
+    // immediately when intro/outro starts and again when each finishes,
+    // sized from the tone's current duration.  Used by the strip's
+    // QUIN chip to flash bright while a tone is playing — replaces an
+    // earlier 30 Hz poll of ClientQuindarTone::phase().
+    void quindarActiveChanged(bool active);
+
+private:
+    friend class RadioModel;
+    void resetDaxSessionState();
+    auto captureControlIntent(TransmitControlRequest::Field field)
+    {
+        const QPointer<TransmitModel> alive(this);
+        const quint64 revision = ++m_controlIntentRevisions[static_cast<size_t>(field)];
+        return [alive, field, revision] {
+            return alive && alive->m_controlIntentRevisions[static_cast<size_t>(field)] == revision;
+        };
+    }
+    bool refuseControlOffThread() const;
+    std::array<quint64, static_cast<size_t>(TransmitControlRequest::Field::Count)> m_controlIntentRevisions{};
+    // requestVoxEnable() tickets still waiting on an answer, with what each
+    // asked for and the VOX intent revision it was issued at.
+    struct PendingVoxAnswer { bool on; quint64 revision; };
+    QHash<quint64, PendingVoxAnswer> m_pendingVoxAnswers;
+    // setDax() tickets still waiting on an answer; see daxSettled().
+    QSet<quint64> m_pendingDaxAnswers;
+    bool m_daxRequested{false};
+    quint64 m_lastAnswerTicket{0};
+    // See voxStateConfirmed(). Unconfirmed until the radio first reports VOX.
+    bool m_voxUnconfirmed{true};
+    static ATUStatus parseAtuTuneStatus(const QString& s);
+    bool isPhoneModeForQuindar() const;
+    bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
+    bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
+    void cancelPendingQuindarOff();
+    void dispatchMoxOff(const PttRelease& release);
+    PttRelease capturePttRelease(PttRelease release);
+
+    // PTT coordinator state (#2262)
+    class ClientQuindarTone* m_quindarTone{nullptr};
+    TxModeGetter             m_txModeGetter;
+    PttPreflight             m_pttPreflight;
+    TuneAdmission            m_tuneAdmission;   // #5422
+    KeyingAdmission          m_keyingAdmission;
+    QTimer*                  m_pendingMoxOffTimer{nullptr};
+    bool                     m_quindarOutroInFlight{false};
+    PttOffHook               m_pttOffHook;
+    std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
+    std::function<void()> m_pttReleaseAbandoned;
+    quint64 m_moxIntentEpoch{0};
+    quint64 m_tuneIntentEpoch{0};
+
+    // APD state
+    bool m_apdEnabled{false};
+    bool m_apdConfigurable{false};
+    bool m_apdEqActive{false};
+    std::optional<ApdLifecycleState> m_apdLifecycle;
+    ApdTxSliceResolver m_apdTxSliceResolver;
+    bool apdStatusMatchesTxSlice(const TransmitDelta& d) const;
+    QHash<QString, ApdSampler> m_apdSamplers;  // keyed by ANT1/ANT2/XVTA/XVTB
+
+    // Transmit state
+    int    m_rfPower{100};
+    bool   m_haveTransmitStatus{false};  // see haveTransmitStatus() (#5518)
+    bool   m_haveMaxPowerLevel{false};   // see haveMaxPowerLevel() (#5733)
+    bool   m_rfPowerFromRadio{false};    // see rfPowerIsFromRadio() (#5733)
+    bool   m_hostModulation{false};
+    bool   m_hasTuner{true};
+    bool   m_hasTunerMemories{true};
+    int    m_tunePower{10};
+    bool   m_tune{false};
+    bool   m_mox{false};
+    double m_transmitFreq{0.0};   // MHz — last reported "transmit freq=..."
+    bool m_transmitting{false};
+
+    // Mic / monitor / processor state
+    QString m_micSelection{"MIC"};
+    int     m_micLevel{50};
+    bool    m_micAcc{false};
+    bool    m_speechProcEnable{false};
+    int     m_speechProcLevel{0};
+    int     m_speechProcLevelMaximum{2};
+    bool    m_companderOn{false};
+    int     m_companderLevel{0};
+    bool    m_daxOn{false};
+    bool    m_sbMonitor{false};
+    int     m_monGainSb{50};
+
+    // Source of the currently-/last-initiated key-up (see activePttSource()).
+    PttSource m_activePttSource{PttSource::Mox};
+
+    // VOX / phone state
+    bool m_voxEnable{false};
+    int  m_voxLevel{50};
+    int  m_voxDelay{50};      // raw 0–100, actual ms = value × 20
+    bool m_micBoost{false};
+    bool m_micBias{false};
+    bool m_metInRx{false};
+    bool m_syncCwx{true};
+    int  m_amCarrierLevel{48};  // 0–100
+    bool m_dexpOn{false};       // downward expander (noise gate)
+    int  m_dexpLevel{0};        // noise gate level (0–100)
+    int  m_txFilterLow{50};     // TX filter low cut (Hz)
+    int  m_txFilterHigh{3300};  // TX filter high cut (Hz)
+
+    // CW state
+    int  m_cwSpeed{20};       // 5–100 WPM
+    bool    m_confirmReceiveCwPitch{false};
+    std::optional<int> m_reportedCwPitch;
+    int  m_cwPitch{600};      // 100–6000 Hz
+    bool m_cwBreakIn{false};
+    int  m_cwDelay{500};      // 0–2000 ms
+    // The break-in delay the operator last set via setCwDelay(); written nowhere
+    // else (never from status), so it can't drift onto a QSK floor. With
+    // m_holdBreakInDelay, setCwSpeed() re-asserts it after a speed change. -1 =
+    // nothing set this session; resetState() clears it on every disconnect
+    // (#5288). holdBreakInDelayArmed() exposes that to the UI.
+    int  m_cwDelayHeld{-1};
+    // Client-side opt-in, default off. Persisted by PhoneCwApplet in
+    // AppSettings("CwHoldBreakInDelay"), not radio state — survives resetState().
+    bool m_holdBreakInDelay{false};
+    bool m_cwSidetone{true};
+    bool m_cwIambic{true};
+    int  m_cwIambicMode{0};   // 0=A, 1=B
+    bool m_cwSwapPaddles{false};
+    bool m_cwlEnabled{false};
+    int  m_monGainCw{50};
+    int  m_monPanCw{50};
+
+    // Interlock / TX settings
+    int     m_accTxDelay{0};
+    int     m_tx1Delay{0};
+    int     m_tx2Delay{0};
+    int     m_tx3Delay{0};
+    int     m_txDelay{0};
+    int     m_interlockTimeout{0};
+    int     m_accTxReqPolarity{0};
+    int     m_rcaTxReqPolarity{0};
+    bool    m_pttMicOverride{false};      // v4.3 firmware default
+    bool    m_havePttMicOverride{false};
+    int     m_maxPowerLevel{100};
+    QString m_tuneMode{"single_tone"};
+    bool m_tuneAvailable = true;
+    bool m_atuAvailable = true;
+    QString m_txSliceMode;   // empty until first transmit status; "FDVU", "FDVL", "USB", etc.
+    bool    m_showTxInWaterfall{false};
+
+    // ATU state
+    bool      m_atuEnabled{false};
+    ATUStatus m_atuStatus{ATUStatus::None};
+    bool      m_memoriesEnabled{false};
+    bool      m_usingMemory{false};
+    bool      m_userAbortedAtu{false};
+
+    // TX profiles
+    QStringList m_profileList;
+    QString     m_activeProfile;
+
+    // Mic profiles
+    QStringList m_micProfileList;
+    QString     m_activeMicProfile;
+    QStringList m_micInputList;
+
+    // CW profiles (SmartSDR 4.3.16+)
+    QStringList m_cwProfileList;
+    QString     m_activeCwProfile;
+    bool        m_cwProfileUnsaved{false};
+};
+
+} // namespace AetherSDR
