@@ -155,9 +155,14 @@ void repolish(QWidget* w)
     w->style()->polish(w);
 }
 
+// Plain text always: a label's text can come from whatever answers on the
+// radio's LAN address (device names, statuses), and labels made after the
+// constructor's sweep below, such as the announcement card's device rows,
+// would otherwise be read as rich text.
 QLabel* roleLabel(const QString& text, const char* role, QWidget* parent)
 {
     auto* label = new QLabel(text, parent);
+    label->setTextFormat(Qt::PlainText);
     label->setProperty("tsRole", QString::fromLatin1(role));
     return label;
 }
