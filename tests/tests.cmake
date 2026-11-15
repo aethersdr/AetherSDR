@@ -5115,6 +5115,17 @@ target_link_libraries(aetherpd_session_test PRIVATE aethercore Qt6::Core Qt6::Ne
 add_test(NAME aetherpd_session_test COMMAND aetherpd_session_test)
 set_tests_properties(aetherpd_session_test PROPERTIES TIMEOUT 30)
 
+# Installer preview/approval UI with injected credentials and HTTP, no sockets.
+add_executable(aetherpd_installation_dialog_test
+    tests/aetherpd_installation_dialog_test.cpp
+    src/gui/AetherPDDialog.cpp src/gui/CanonWindow.cpp ${THEME_TEST_RESOURCES})
+target_include_directories(aetherpd_installation_dialog_test PRIVATE src tests)
+target_compile_definitions(aetherpd_installation_dialog_test PRIVATE
+    AETHERPD_PACKAGE_TESTDATA="${CMAKE_SOURCE_DIR}/tools/pd-waveform/boot/testdata")
+target_link_libraries(aetherpd_installation_dialog_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+add_test(NAME aetherpd_installation_dialog_test COMMAND aetherpd_installation_dialog_test)
+set_tests_properties(aetherpd_installation_dialog_test PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free credentials/HTTP injection through the actual radio model and panel.
 add_executable(aetherpd_dialog_test
     tests/aetherpd_dialog_test.cpp
@@ -11468,6 +11479,7 @@ set(AETHER_SETTINGS_CONSUMERS
     aetherpd_installation_coordinator_test
     aetherpd_session_test
     aetherpd_dialog_test
+    aetherpd_installation_dialog_test
     session_control_test
     audio_control_routing_test
     dax_tx_backend_test

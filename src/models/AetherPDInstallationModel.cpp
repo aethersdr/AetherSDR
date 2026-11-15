@@ -131,10 +131,19 @@ bool AetherPDInstallationModel::offer(const Coordinator::Prepared& package, cons
     emit changed();
     return true;
 }
-bool AetherPDInstallationModel::approve()
+std::optional<AetherPDInstallationModel::Preview> AetherPDInstallationModel::preview() const
+{
+    const auto plan = aetherpd::parseInstallationPlan(m_plan);
+    if (!plan) { return std::nullopt; }
+    return Preview{m_plan, plan->serial, plan->firmware, plan->previousDigest, plan->candidateDigest,
+        plan->candidateKey, plan->planDigest, m_carrier, m_archiveSha256};
+}
+bool AetherPDInstallationModel::approve(const QByteArray& displayedPlan)
 {
     if (QThread::currentThread() != thread() || m_state != State::AwaitingApproval || !m_package || !m_load || !m_factory) { return false; }
+    if (displayedPlan.isEmpty() || displayedPlan != m_plan) { return false; }
     if (!current()) { unavailable(Failure::SessionChanged); return false; }
+    if (m_radio->isRadioTransmitting()) { return false; }
     m_state = State::LoadingCredential;
     const quint64 generation = ++m_generation;
     const QPointer<AetherPDInstallationModel> self(this);

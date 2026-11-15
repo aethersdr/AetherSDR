@@ -1816,5 +1816,11 @@
   "note": "Receive-only Data2G monitor fed mono 24 kHz audio from the AX.25 receive model's existing tap; decode runs on its own worker with a bounded queue and generation retirement. No radio protocol, no audio source of its own and no transmit authority.",
   "split": "",
   "confidence": "high"
+ },
+ "models/AetherPDInstallationModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Radio-owned AetherPD installation workflow and immutable approval preview for AetherSDR's own shim protocol. Upload/removal uses typed RadioModel controls; Flex-specific carrier/profile provisioning remains in installer/backend components. No vendor wire emitter in the UI.",
+  "split": "",
+  "confidence": "high"
  }
 }

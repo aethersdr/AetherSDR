@@ -2290,3 +2290,27 @@ release publication or installed-radio proof: qualified shipping catalogue entri
 operator-panel wiring, first-install trust, ARMv7 delivery and full live process
 graph qualification remain open. Only the ARM64 carrier profile can currently
 reach the model's preparation path.
+
+### Operator approval panel (development)
+
+The existing AetherPD dialog observes the radio-owned installation model. It
+shows the exact target, firmware, release/attempt identities, fixed helper/unit
+scope, temporary carrier and public archive hash. `Approve update` passes the
+exact displayed plan back to the model; an empty/replaced plan is rejected before
+credential lookup. Both the panel and model refuse approval during transmission;
+the coordinator still checks again after asynchronous credential lookup.
+
+The panel distinguishes payload commitment/rollback from cleanup confirmation.
+Cancel before admission requests no radio changes; cancellation after admission
+does not assert rollback. Closing a panel preserves its radio-owned job; reopening
+observes that job. A window bound to an old control session cannot approve or
+cancel an attempt in a new connection. Application exit/crash recovery remains
+unqualified. Package selection is explicitly unavailable until a qualified pinned
+catalogue is supplied; the panel does not permit arbitrary package/key import.
+
+UI tests use injected packages, radio state, credentials and replies. They prove
+preview/approval ordering, stale-plan/session refusal, TX gating, window lifetime,
+terminal-result presentation and readable layout. The terminal presentation tests
+inject coordinator terminal signals; they do not prove live commitment or cleanup.
+The offscreen preview and targeted sanitizers are component evidence, not a
+running operator instance or screen-reader/cross-platform qualification.

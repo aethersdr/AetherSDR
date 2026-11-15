@@ -519,6 +519,27 @@ retry Start, calibration or Stop automatically after a lost reply. The released
 Remote Access package alone does not supply the AetherPD installation required
 by these controls.
 
+The **AetherPD service update** section shows a prepared update's target radio,
+firmware, planned changes and authenticated package identifiers. Qualified package
+selection is not yet available in this development build; **Approve update** stays
+disabled until a verified plan has been prepared for the current connection.
+
+- **Approve update** approves exactly the displayed plan, then loads the saved
+  radio credential and starts installation. Approval is unavailable while the
+  radio is transmitting. An update does not transmit or arm calibration.
+- **Cancel update** cancels download/preparation or requests installer cleanup.
+  Canceling after installation has started does not guarantee rollback.
+- Closing the window leaves the update owned by the current radio connection.
+  Reopening shows its current progress. Keep AetherSDR running until the outcome
+  and temporary-installer cleanup are reported; recovery after application exit
+  is not yet qualified.
+
+A confirmed update and confirmed cleanup are separate results. If cleanup is
+unconfirmed, the window says so even when the radio confirmed the new payload.
+A connection change requires reopening the window; an old window cannot approve
+a plan for the replacement connection. Fixed boot/session helpers remain installed
+for reboot and local IQ setup; temporary delivery and upgrade workers are retired.
+
 Signing out or replacing the admin token also stops the shim's owned AetherPD
 session and cancels calibration. Signing in again does not restart correction
 or rearm calibration. A rejected sign-out or failed token update leaves the

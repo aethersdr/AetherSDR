@@ -10,6 +10,7 @@
 namespace AetherSDR {
 class RadioSetupControlTestAccess {
 public:
+    static void installationModel(RadioModel& radio, std::unique_ptr<AetherPDInstallationModel> model);
     static void observe(RadioModel& radio, const RadioDelta& observation)
     { radio.applyRadioChanges(observation); }
     static void band(RadioModel& radio, int id)

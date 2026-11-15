@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T11:02:06.098771+00:00",
+  "updated_utc": "2026-11-15T11:24:39.521576+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Wire qualified catalogue selection and exact-plan operator approval into the existing panel; qualify compatible signed PDUPGR02 packages through the complete coordinator on8600. Keep initial trust, app-crash cleanup, actual6300 and all original production gates open.",
+  "next_action": "Prepare a compatible signed PDUPGR02 development candidate and independently pinned application selection, then qualify the complete operator/coordinator upgrade on8600. Shipping catalogue, initial trust, app-crash cleanup, actual6300 and all original production requirements remain open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -334,6 +334,23 @@
       "Full live PDUPGR02 coordinator and cleanup qualification; initial-install trust.",
       "App-exit/crash recovery; ARMv7 privilege delivery and real6300 qualification.",
       "All original P1-P10 DSP/PR4770/RF/stock APD and release requirements."
+    ]
+  },
+  "desktop_installation_panel": {
+    "status": "component_and_offscreen_ui_validated_not_production_ready",
+    "evidence": "installation-panel-development/validation.json under evidence_root",
+    "implemented": [
+      "Existing AetherPD panel observes installation preparation and progress.",
+      "Exact preview bytes required by approve; old/replaced plans and transmitting radio refuse approval.",
+      "Shows fixed persistent helpers, temporary executables, target/hash identities and separate update/cleanup results.",
+      "Closing a panel preserves the radio-owned job; stale windows cannot approve a new connection."
+    ],
+    "validation": "Three registered tests, targeted sanitizer run, documentation build, boundary checks and offscreen visual inspection passed. Initial negative layout evidence retained.",
+    "remaining": [
+      "Qualified shipping package catalogue/selection and complete application/live workflow qualification.",
+      "Initial-install trust, ARMv7 provisioning and actual6300 qualification.",
+      "App-exit/crash cleanup recovery and full public process graph qualification.",
+      "All original P1-P10 DSP, PR4770, RF/stock APD and release gates."
     ]
   }
 }

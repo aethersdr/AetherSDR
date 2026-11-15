@@ -8,6 +8,8 @@
 
 class QLabel;
 class QPushButton;
+class QPlainTextEdit;
+class QTimer;
 
 namespace AetherSDR {
 
@@ -26,6 +28,9 @@ public slots:
 private:
     void refresh();
     void render();
+    void renderInstallation();
+    void approveInstallation();
+    void cancelInstallation();
     void request(aetherpd::Operation operation);
     bool current() const;
 
@@ -37,6 +42,12 @@ private:
     bool m_loading{false};
     bool m_closed{false};
     QString m_notice;
+    QByteArray m_displayedPlan;
+    QLabel* m_installState{nullptr};
+    QPlainTextEdit* m_installPlan{nullptr};
+    QPushButton* m_installApprove{nullptr};
+    QPushButton* m_installCancel{nullptr};
+    QTimer* m_installRefresh{nullptr};
     QLabel* m_state{nullptr};
     QLabel* m_detail{nullptr};
     QLabel* m_receipt{nullptr};

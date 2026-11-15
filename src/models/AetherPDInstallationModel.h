@@ -31,7 +31,13 @@ public:
     bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
     ~AetherPDInstallationModel() override;
     bool offer(const Coordinator::Prepared& package, const RadioControlSession& session);
-    bool approve();
+    struct Preview {
+        QByteArray plan;
+        QString serial, firmware, previousDigest, candidateDigest, candidateKey, planDigest;
+        QString carrierName, archiveSha256;
+    };
+    std::optional<Preview> preview() const;
+    bool approve(const QByteArray& displayedPlan);
     void cancel();
     void reconcile();
     State state() const { return m_state; }
