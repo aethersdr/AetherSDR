@@ -59,8 +59,8 @@ bool HostCwTextKeyer::play(const TxCoordinator::Request& sender, const QString& 
         m_run = std::make_shared<char>();
         m_keyer = std::make_unique<CwxLocalKeyer>();
         const std::weak_ptr<char> run = m_run;
-        // Model thread; `this` outlives every live run token.
-        const std::function<void()> onRefused = [this, run] { refused(run); };
+        // Model thread. A live run token means `this` is alive: endRun() drops it before the keyer goes.
+        const std::function<void()> onRefused = [this, run] { if (!run.expired()) { refused(run); } };
         RadioModel* model = m_model.data();
         // Worker thread: derive() and the queued hops take no model state.
         m_keyer->setOnKeyDownChange(
@@ -75,7 +75,7 @@ bool HostCwTextKeyer::play(const TxCoordinator::Request& sender, const QString& 
             });
         // Queued behind the run's last key-up, so the model sees that edge first.
         m_keyer->setOnDrained([model, this, run] {
-            QMetaObject::invokeMethod(model, [this, run] { drained(run); }, Qt::QueuedConnection);
+            QMetaObject::invokeMethod(model, [this, run] { if (!run.expired()) { drained(run); } }, Qt::QueuedConnection);
         });
     }
     m_done.push_back(std::move(done));
