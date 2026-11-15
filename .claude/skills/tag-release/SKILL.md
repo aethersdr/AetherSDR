@@ -373,7 +373,7 @@ tag push to the asset's `created_at`:
 | Apple Silicon DMG | 15–19 min |
 | Windows setup, ZIP and `.msixupload` | 27–40 min |
 | Intel DMG | 30–42 min (July's Intel legs took 1.7–2 h) |
-| PDF manual and its `.asc` | no record yet: started by the release, not the tag (below) |
+| PDF manual | no record yet: started by the release, not the tag (below) |
 
 Poll every few minutes; read `conclusion`, not `status`. The Intel leg is the
 one that fails: v26.7.4.1's succeeded on attempt 2 a day later; v26.7.2's
@@ -693,10 +693,10 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 | Sign Release Artifacts | <url> | — | success | workflow_run, after AppImage |
 | Sign Release Artifacts | <url> | — | skipped | workflow_run, Windows red |
 | Docs | <url> | 1 | success | release: published; manual PDF attached |
-| Release Offload | <url> | — | success | approved <time>; 15 files moved / n/a (before v26.11.4) |
+| Release Offload | <url> | — | success | approved <time>; 15 files moved (14 for a hotfix) / n/a (before v26.11.4) |
 Re-run or dispatched by hand: <what, when> / none.
 
-### Assets (14 on the page + 15 on updates.aethersdr.com from v26.11.4; 24 / 23 for a hotfix before)
+### Assets (from v26.11.4: 14 on the page + 15 on updates.aethersdr.com, 14 for a hotfix; before: 24 / 23 for a hotfix)
 - [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (source tarball and SHA256SUMS: same upload as their .asc)
 - … one line per expected asset, ticked or **missing** …
 - [x] AetherSDR-X.Y.Z.0-Windows-x64.msixupload — version checked / n/a (hotfix)
