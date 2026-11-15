@@ -167,7 +167,7 @@ SliceDelta seamSlice()
 // How many capabilitiesChanged the model emits across ONE connect edge. The
 // #4599 defect class is a connection installed per backend whose sender AND
 // receiver both outlive it, so it gains a live copy per family switch and this
-// count multiplies. The number itself does not matter — only that twelve
+// count multiplies. The number itself does not matter — only that sixteen
 // switches do not change it.
 int capabilityEmissionsForOneConnect(RadioModel& model, const char* label)
 {
@@ -213,6 +213,8 @@ int main(int argc, char** argv)
             QStringLiteral("icom"), QStringLiteral("rtl"),  QStringLiteral("flex"),
             QStringLiteral("hl2"),  QStringLiteral("sim"),  QStringLiteral("icom"),
             QStringLiteral("flex"), QStringLiteral("anan"), QStringLiteral("flex"),
+            QStringLiteral("aetherd"), QStringLiteral("sim"), QStringLiteral("aetherd"),
+            QStringLiteral("flex"),
         };
         std::printf("-- cold cycle\n");
         for (const QString& family : cycle) {
@@ -220,14 +222,14 @@ int main(int argc, char** argv)
         }
 
         // 3. #4599's defect class: per-backend wiring must not accumulate across
-        //    those twelve switches. A connection installed in setupBackend()
+        //    those sixteen switches. A connection installed in setupBackend()
         //    whose sender and receiver are both `this` survives
         //    teardownBackend() and gains one live copy per switch; its symptom
         //    is N capabilitiesChanged per connect edge.
         std::printf("-- accumulation check (#4599 defect class)\n");
         g_phase.store("accumulation");
         const int afterCycleCaps = capabilityEmissionsForOneConnect(model, "accumulation");
-        std::printf("  after 12 switches: %d capabilitiesChanged on one connect edge\n",
+        std::printf("  after 16 switches: %d capabilitiesChanged on one connect edge\n",
                     afterCycleCaps);
         check(afterCycleCaps == baselineCaps,
               QStringLiteral("per-connect capabilitiesChanged does not grow with switches (%1 -> %2)")
