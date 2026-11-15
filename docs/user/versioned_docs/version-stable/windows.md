@@ -49,6 +49,7 @@ There is no built-in DAX audio driver on Windows. The DAX applet says so: "No bu
 - **Menus** are behind the **☰** button at the left of the title bar. Alt+letter mnemonics (Alt+F, Alt+S, …) still open each menu. F11 toggles full screen. See [Menu Reference](./menu-reference.md).
 - **Radio Setup** is **Settings → Radio Setup...**.
 - **Window frame:** a Qt-drawn frame with the system shadow and resize borders, with AetherSDR's own minimize, maximize and close buttons.
+- **Snap:** drag the title bar to a screen edge to snap the window to that half or corner, the same as any other window; Windows then offers Snap Assist to fill the rest of the screen. **Win+Left**, **Win+Right** and **Win+Up** snap it from the keyboard. Dragging works on the title bar's empty background — over the **☰** button, the radio tabs, the audio buttons and volume sliders, and the caption buttons a drag does what that control does instead. The logo and the labels that have their own hover text still move the window, but do not start a snap; drag from the empty background to snap. Hovering over the maximize button does not show the Snap Layouts flyout ([#6224](https://github.com/aethersdr/AetherSDR/issues/6224)).
 - **GPU choice on hybrid laptops:** the discrete GPU is used by default. The integrated GPU is listed in **Display → SYSTEM → GPU:** but grayed out ("disabled (#1921)"), because it crashes when a panadapter is popped out or docked. See [GPU Rendering](./gpu-rendering.md).
 - **Noise reduction:** **BNR** (NVIDIA Maxine, on an NVIDIA RTX/GeForce GPU) is available on Windows; its runtime comes as a single self-contained download. **MNR** is macOS only and is grayed out. See [BNR GPU Noise Removal](./bnr-gpu-noise-removal.md) and [DSP Noise Mitigation](./dsp-noise-mitigation.md).
 - **Copy Assist** can use a **Vulkan** GPU (NVIDIA, AMD or Intel). See [Copy Assist](./copy-assist.md).
@@ -66,7 +67,7 @@ There is no built-in DAX audio driver on Windows. The DAX applet says so: "No bu
 | What | Location |
 |---|---|
 | Settings database (`AetherSDR.db`), backups, quarantine | `%LOCALAPPDATA%\AetherSDR\` |
-| Application logs and support bundles (installer or portable) | `%LOCALAPPDATA%\AetherSDR\logs\` (newest log also linked as an `aethersdr.log` shortcut) |
+| Application logs and support bundles (installer or portable) | `%LOCALAPPDATA%\AetherSDR\logs\` (application logs are named `aethersdr-<date>-<time>.log`) |
 | Application logs and support bundles (Microsoft Store) | Usually `%LOCALAPPDATA%\Packages\<package-family>\LocalCache\Local\AetherSDR\logs\`; use the path **Support & Diagnostics** shows |
 | NR2 FFTW wisdom | `%APPDATA%\AetherSDR\aethersdr_fftw_wisdom` |
 | BNR NVIDIA runtime | `%LOCALAPPDATA%\AetherSDR\AetherSDR\nvidia-afx\current\` |

@@ -1051,9 +1051,10 @@ void TailnetShimDialog::reset()
     ask.get()->setInformativeText(
         m_native
             ? tr("Resetting uninstalls and reinstalls the remote-access waveform, so the radio "
-                 "can be signed in again with a new code.")
+                 "can be signed in again with a new code.\n\n%1").arg(offTailnetWarning())
             : tr("Resetting removes and reinstalls the remote-access container: the radio leaves "
-                 "your tailnet now, and you sign it in again with a new code."));
+                 "your tailnet now, and you sign it in again with a new code.\n\n%1")
+                  .arg(offTailnetWarning()));
     // Return keeps what is on the radio; resetting takes a click.
     ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
     QPushButton* go = ask.get()->addButton(tr("Reset"), CanonMessageBox::Role::Destructive);
@@ -1079,9 +1080,11 @@ void TailnetShimDialog::updateRadioShim()
     ask.get()->setInformativeText(
         m_native
             ? tr("Updating uninstalls and reinstalls the remote-access waveform, so the radio "
-                 "leaves your tailnet and you sign it in again with a new code.")
+                 "leaves your tailnet and you sign it in again with a new code.\n\n%1")
+                  .arg(offTailnetWarning())
             : tr("Updating removes and reinstalls the remote-access container, so the radio "
-                 "leaves your tailnet and you sign it in again with a new code."));
+                 "leaves your tailnet and you sign it in again with a new code.\n\n%1")
+                  .arg(offTailnetWarning()));
     ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
     QPushButton* go = ask.get()->addButton(tr("Update"), CanonMessageBox::Role::Destructive);
     ask.get()->exec();
@@ -1100,7 +1103,7 @@ void TailnetShimDialog::signOut()
         tr("Remote sessions end now, and the radio leaves your tailnet."), this);
     ask.get()->setInformativeText(
         tr("To connect it again, open this window on the radio's local network and scan the "
-           "new code."));
+           "new code.\n\n%1").arg(offTailnetWarning()));
     ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
     QPushButton* go = ask.get()->addButton(tr("Disconnect"), CanonMessageBox::Role::Destructive);
     ask.get()->exec();

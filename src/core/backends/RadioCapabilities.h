@@ -1,12 +1,16 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "SessionControlRequest.h"
 #include "CwReceiveControl.h"
 #include "SpotRequest.h"
+#include "FileTransferRequest.h"
+#include "WaveformRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
 #include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
+#include "AudioControlRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -33,6 +37,18 @@ struct TxPowerBand {
     double lowHz = 0.0;
     double highHz = 0.0;
     double maxWatts = 0.0;
+};
+
+// The transmit output is chosen on its own (#4954). Engaged, it moves only on an
+// explicit TX antenna choice: hamlib set_ant writes the RX antenna alone and a
+// band-stack recall leaves it. Absent, both write it as before.
+struct IndependentTxAntenna {
+    // TX antenna tokens with no forward-power detector behind them (HL2: RF1).
+    // On these the TX applet labels its power and SWR gauges "not measured"
+    // rather than presenting about 0 W as a reading. Empty: every output is
+    // measured.
+    QStringList unmeteredOutputs;
+    bool operator==(const IndependentTxAntenna&) const = default;
 };
 
 // A backend-declared native band. The canonical name remains the model/UI key;
@@ -85,6 +101,12 @@ struct ReceiveDspControl {
     // An entry narrows a declared feature to a subset of the qualified modes.
     // An absent entry uses all modes; an empty entry disables that feature.
     QMap<Feature, QStringList> featureModes;
+    // Headless admission provenance for slice.setAgcThreshold/NoiseBlanker/
+    // NoiseReduction/Rit. Unknown keeps the record GUI-only: aetherd refuses.
+    // Last, so existing positional initializers keep their meaning.
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    // Largest |RIT offset| slice.setRit admits; 0 = RIT is not offered headless.
+    int maximumRitOffsetHz = 0;
     bool supports(Feature feature, const QString& mode) const
     {
         const auto restriction = featureModes.constFind(feature);
@@ -93,9 +115,11 @@ struct ReceiveDspControl {
     }
 };
 
-// Session-wide receive BFO pitch, dispatched through setCwPitch and confirmed
-// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path.
+// Session-wide receive BFO pitch, dispatched through setCwPitch and reported
+// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path;
+// the model's pitch is bypassed only under ReceiveControlPolicy::Confirmed.
 struct ReceiveCwPitchControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     int minimumHz = 100;
     int maximumHz = 6000;
     int stepHz = 10;
@@ -103,6 +127,20 @@ struct ReceiveCwPitchControl {
 struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
+};
+// radioSession.setRadioSpeaker: the receiver's audio played on the radio's own speaker
+// (a radio with one, fed from this host), dispatched through requestRadioSpeakerAudio()
+// and reported through radioSpeakerAudioReported().
+struct RadioSpeakerControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+};
+// panadapter.setRfGain: setPanRfGain()'s range in dB, reported back through
+// panRfGainChanged. A backend whose stage is an attenuator declares it negated.
+struct ReceivePanRfGainControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    int minimumDb = 0;
+    int maximumDb = 0;
+    int stepDb = 1;
 };
 // Typed pre-monitor sliceAudioFrameReady export; grants no TX, IQ or control verb.
 struct ReceiveAudioExport {
@@ -428,17 +466,14 @@ struct RadioCapabilities {
     }
 
 
-    // Per-pan band/segment zoom: `display pan set <panId> band_zoom=<0|1>` and
-    // `segment_zoom=` (#4057). Absent refuses: every surface that can issue the
-    // write asks gui/PanZoomModeGate.h, so a radio with no such verb never shows a
-    // zoom control that moves without effect (HERMES.md §17). A record so a radio
-    // answering only one of the two keys can gain a field here.
+    // Per-pan band/segment zoom. Flex has radio-owned mode flags; Icom scope
+    // radios use native span detents. Absent refuses every surface through
+    // gui/PanZoomModeGate.h.
     struct PanZoomModes {
-        // The verb that carries both modes, recorded so the declaration names
-        // what it grants rather than being a bare presence bit. DIAGNOSTIC, in
-        // exactly TwoToneGenerator::selectionCommand's sense below: the gate
-        // branches on this record being ENGAGED and never on the string.
+        enum class Control { RadioFlags, NativeScopeSpan };
         QString setCommand;
+        Control control = Control::RadioFlags;
+        QVector<int> nativeWidthsHz;
     };
     std::optional<PanZoomModes> panZoomModes;
 
@@ -457,6 +492,8 @@ struct RadioCapabilities {
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
+    std::optional<ReceivePanRfGainControl> receivePanRfGainControl;
+    std::optional<RadioSpeakerControl> radioSpeakerControl;
     // Engaged when the radio can deliver a wideband converter view; see the
     // struct above for why absence is the right default and what it means.
     std::optional<WidebandConverterView> widebandConverterView;
@@ -495,6 +532,10 @@ struct RadioCapabilities {
     // band. Empty means txPowerMaxWatts applies everywhere. The ranges are
     // inclusive and expressed in Hz, matching the tuning fields above.
     QVector<TxPowerBand> txPowerBands;
+
+    // See IndependentTxAntenna. Read by RigctlProtocol::cmdSetAnt() and
+    // RadioModel::recallBandStack().
+    std::optional<IndependentTxAntenna> independentTxAntenna;
 
     // Who owns the drive value TransmitModel::rfPower() carries (#5518). Absent: no
     // drive at all (Sim, RTL). Radio: parsed back off the wire (Flex `transmit
@@ -663,6 +704,8 @@ struct RadioCapabilities {
     // lock may be global and may also follow front-panel changes.
     bool hasRadioDialLock = false;
     bool hasRemoteOnControl = false; // client can configure wake-on-network
+    std::optional<FileTransferControl> fileTransferControl;
+    std::optional<WaveformControl> waveformControl;
     bool canUpgradeFirmware = false; // client can upload radio firmware
     bool hasSmartLink = false;       // client has the SmartLink/WAN service and pin store
     bool hasLicenseInfo = false;     // radio exposes SmartSDR entitlement details
@@ -671,6 +714,8 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    // Desktop session bootstrap; does not advertise daemon methods or TX rights.
+    std::optional<SessionControl> sessionControl;
     std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
@@ -800,6 +845,13 @@ struct RadioCapabilities {
     // above: RadioCapabilities is at its frozen boolean count (#5262 M2).
     struct AdcFrontEnd {};
     std::optional<AdcFrontEnd> adcFrontEnd;
+
+    // Engaged: the backend observes its own converter and emits
+    // frontEndOverloadChanged, so aetherd publishes the frontEndOverload
+    // resource. Absent: no reading exists and none is offered. A record, not a
+    // bool, because the boolean count is frozen (#5262 M2).
+    struct FrontEndOverloadObservation {};
+    std::optional<FrontEndOverloadObservation> frontEndOverloadObservation;
 
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an
@@ -933,6 +985,8 @@ struct RadioCapabilities {
     // Discrete DAX IQ request rates in Hz. Empty means unsupported or unknown.
     // Applied by the existing DaxIqModel command path, including stream restore.
     QList<int> daxIqSampleRates;
+    std::optional<AudioStreamControl> audioStreamControl;
+    std::optional<GraphicEqControl> radioGraphicEqControl;
 
     // Audio DSP runs inside the radio via command-plane verbs (Flex: NR/NB/ANF/NRL/
     // ANFL/ANFT, APD, wideband NB, 8-band hardware EQ `eq RXsc`/`eq TXsc`). False for
@@ -1013,8 +1067,8 @@ struct RadioCapabilities {
     std::optional<WaveformEnvControl> waveformEnvControl;
     // The radio keeps its own list of NTP time sources that a client can list,
     // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
-    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
-    // page; maxSources is the radio's ceiling.
+    // every platform, FLEX-6000 included). Engaged gates NtpSourceRequest and the
+    // Radio Setup Time page; maxSources is the radio's ceiling.
     struct NtpSourceControl { int maxSources{10}; };
     std::optional<NtpSourceControl> ntpSourceControl;
 

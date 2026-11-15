@@ -8,6 +8,7 @@
 
 #include <QLocale>
 #include <QMetaObject>
+#include <QPointer>
 #include <QStringList>
 #include <QtGlobal>
 
@@ -2090,9 +2091,13 @@ QString RigctlProtocol::cmdSetAnt(const QString& arg)
     const int mask = a.toInt(&ok);
     if (a.isEmpty() || !ok || mask < 0) return rprt(-1);
     const QString name = antMaskToName(mask, slice->rxAntennaList());
-    QMetaObject::invokeMethod(slice, [slice, name]() {
+    // Read on the model's thread at the moment of the write: a radio whose TX
+    // output is its own choice (IndependentTxAntenna) keeps it.
+    QMetaObject::invokeMethod(slice, [slice, name, model = QPointer<RadioModel>(m_model)]() {
         slice->setRxAntenna(name);
-        slice->setTxAntenna(name);
+        if (!model || !model->backendCapabilities().independentTxAntenna) {
+            slice->setTxAntenna(name);
+        }
     }, Qt::QueuedConnection);
     return rprt(0);
 }

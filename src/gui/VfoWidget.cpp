@@ -2387,7 +2387,7 @@ void VfoWidget::buildTabContent()
                 markLbl->setStyleSheet(kDimLabel);
                 markLbl->setAlignment(Qt::AlignCenter);
                 lblRow->addWidget(markLbl, 1);
-                auto* shiftLbl = new QLabel("Space");
+                auto* shiftLbl = new QLabel("Shift");
                 shiftLbl->setStyleSheet(kDimLabel);
                 shiftLbl->setAlignment(Qt::AlignCenter);
                 lblRow->addWidget(shiftLbl, 1);
@@ -2414,7 +2414,8 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(markPlus);
 
                 auto markDown = [this] {
-                    if (m_slice) m_slice->setRttyMark(m_slice->rttyMark() - MARK_STEP);
+                    if (m_slice && m_slice->rttyMark() >= MARK_STEP)
+                        m_slice->setRttyMark(m_slice->rttyMark() - MARK_STEP);
                 };
                 auto markUp = [this] {
                     if (m_slice) m_slice->setRttyMark(m_slice->rttyMark() + MARK_STEP);
@@ -2426,7 +2427,7 @@ void VfoWidget::buildTabContent()
 
                 selRow->addSpacing(4);
 
-                // Space selector: ◀ 170 ▶
+                // Shift selector: ◀ 170 ▶
                 auto* shiftMinus = new TriBtn(TriBtn::Left);
                 selRow->addWidget(shiftMinus);
                 m_shiftLabel = new ScrollableLabel("170");
@@ -2437,7 +2438,8 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(shiftPlus);
 
                 auto shiftDown = [this] {
-                    if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
+                    if (m_slice && m_slice->rttyShift() >= SHIFT_STEP)
+                        m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
                 };
                 auto shiftUp = [this] {
                     if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() + SHIFT_STEP);
@@ -3162,6 +3164,7 @@ void VfoWidget::buildTabContent()
         lbl->setStyleSheet(kLabelStyle);
         row->addWidget(lbl);
         m_daxCmb = new GuardedComboBox;
+        m_daxCmb->setObjectName(QStringLiteral("vfoDaxChannel"));
         populateDaxCombo();  // capacity-gated; rebuilt on connect (setRadioModel)
         AetherSDR::applyComboStyle(m_daxCmb);
         row->addWidget(m_daxCmb, 1);
@@ -3665,24 +3668,26 @@ void VfoWidget::applyRadioSideDspVisibility()
     const auto controls = m_radioModel && m_radioModel->isConnected()
         ? m_radioModel->backendCapabilities().receiveDspControl : std::nullopt;
     using Feature = ReceiveDspControl::Feature;
+    // A declared record decides per feature: an undeclared one is hidden, a
+    // declared one shows and its mode gating is the availability restriction.
     const auto supplied = [&controls](Feature feature, bool legacy) {
         return controls ? controls->features.contains(feature) : legacy;
     };
-    m_nrBtn->setVisible(m_nrModeOk && (controls || supplied(Feature::Nr, m_hasRadioSideDsp)));
+    m_nrBtn->setVisible(m_nrModeOk && supplied(Feature::Nr, m_hasRadioSideDsp));
     // NB is the one member of the trio that does NOT need the radio to run its
     // own DSP: on a direct-sampling backend this host blanks the IQ itself, so
     // the button drives something real. OR'd rather than replaced, because on a
     // Flex the blanker is still the radio's — see
     // RadioCapabilities::hasHostNoiseBlanker.
-    m_nbBtn->setVisible(m_nbModeOk && (controls || supplied(Feature::Nb, m_hasRadioSideDsp || m_hasHostNoiseBlanker)));
-    m_anfBtn->setVisible(m_anfModeOk && (controls || supplied(Feature::Anf, m_hasRadioSideDsp)));
+    m_nbBtn->setVisible(m_nbModeOk && supplied(Feature::Nb, m_hasRadioSideDsp || m_hasHostNoiseBlanker));
+    m_anfBtn->setVisible(m_anfModeOk && supplied(Feature::Anf, m_hasRadioSideDsp));
     // The LMS/FFT three carry a SECOND capability on top of the first. A radio
     // can run its own DSP without running FlexRadio's — see
     // RadioCapabilities::hasLmsNoiseFilters.
     m_nrlBtn->setVisible(m_nrlModeOk && m_hasRadioSideDsp && m_hasLmsNoiseFilters);
     m_anflBtn->setVisible(m_anflModeOk && m_hasRadioSideDsp && m_hasLmsNoiseFilters);
     m_anftBtn->setVisible(m_anftModeOk && m_hasRadioSideDsp && m_hasLmsNoiseFilters);
-    m_mnBtn->setVisible(m_mnModeOk && (controls || supplied(Feature::ManualNotch, m_hasRadioSideDsp && m_hasManualNotch)));
+    m_mnBtn->setVisible(m_mnModeOk && supplied(Feature::ManualNotch, m_hasRadioSideDsp && m_hasManualNotch));
     if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
 }
 
@@ -4866,6 +4871,24 @@ float VfoWidget::signalDbmToMeterFraction(float dbm)
     return 1.0f;
 }
 
+void VfoWidget::updateMeterIfPixelsChanged()
+{
+    const QRect bar = meterBarRect();
+    const int fill = static_cast<int>(m_signalMeterFraction * bar.width());
+    const bool sameScale = bar == m_lastRequestedMeterBar
+        && m_relativeSignal == m_lastRequestedMeterRelative;
+    if (!m_collapsed && !m_smartMtr && sameScale && fill == m_lastRequestedMeterFill) {
+        // The smoother still advances at its normal cadence. An identical
+        // integer fill width has no new pixels to paint, on either backend.
+        // Numeric labels retain their own QWidget update notifications.
+        return;
+    }
+    m_lastRequestedMeterBar = bar;
+    m_lastRequestedMeterFill = fill;
+    m_lastRequestedMeterRelative = m_relativeSignal;
+    update();
+}
+
 void VfoWidget::updateSignalMeterTarget()
 {
     if (m_relativeSignal) {
@@ -4882,7 +4905,7 @@ void VfoWidget::updateSignalMeterTarget()
     if (m_smartMtr || (m_relativeSignal && !m_relativeSignalValid)) {
         m_signalMeterAnimation.stop();
         m_signalMeterFraction = m_targetSignalMeterFraction;
-        if (!m_smartMtr) { update(); }
+        if (!m_smartMtr) { updateMeterIfPixelsChanged(); }
         return;
     }
 
@@ -4891,7 +4914,7 @@ void VfoWidget::updateSignalMeterTarget()
         if (m_signalMeterAnimation.isActive()) {
             m_signalMeterAnimation.stop();
         }
-        update();
+        updateMeterIfPixelsChanged();
         return;
     }
 
@@ -4932,7 +4955,7 @@ void VfoWidget::animateSignalMeter()
         m_signalMeterFraction += delta * alpha;
     }
 
-    update();
+    updateMeterIfPixelsChanged();
 }
 
 // ── Slice connection ──────────────────────────────────────────────────────────
@@ -6980,8 +7003,13 @@ void VfoWidget::populateDaxCombo()
     const int want = (dc >= 1 && dc <= n) ? dc : 0;
     m_daxCmb->clear();
     QStringList items{QStringLiteral("Off")};
-    for (int i = 1; i <= n; ++i)
-        items << QString::number(i);
+    for (int i = 1; i <= n; ++i) {
+        // A program on the radio holding a channel (#7139): still selectable,
+        // but choosing it takes the channel from that program.
+        const QString holder = m_radioModel ? m_radioModel->daxChannelReservedBy(i) : QString();
+        items << (holder.isEmpty() ? QString::number(i)
+                                   : QStringLiteral("%1 (%2)").arg(i).arg(holder));
+    }
     m_daxCmb->addItems(items);
     m_daxCmb->setCurrentIndex(want);
 }
@@ -7054,6 +7082,8 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         disconnect(m_radioModel, &RadioModel::infoChanged,
                    this, &VfoWidget::populateDaxCombo);
         disconnect(m_radioModel, &RadioModel::connectionStateChanged,
+                   this, &VfoWidget::populateDaxCombo);
+        disconnect(m_radioModel, &RadioModel::reservedDaxChanged,
                    this, &VfoWidget::populateDaxCombo);
         disconnect(m_radioModel, &RadioModel::capabilitiesChanged,
                    this, nullptr);
@@ -7175,6 +7205,8 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         connect(m_radioModel, &RadioModel::infoChanged,
                 this, &VfoWidget::populateDaxCombo);
         connect(m_radioModel, &RadioModel::connectionStateChanged,
+                this, &VfoWidget::populateDaxCombo);
+        connect(m_radioModel, &RadioModel::reservedDaxChanged,
                 this, &VfoWidget::populateDaxCombo);
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
                 [this](bool connected, const RadioCapabilities& caps) {
@@ -7439,7 +7471,7 @@ QStringList VfoWidget::rxAntennaOptions() const
     }
 
     if (m_radioModel) {
-        for (const QString& ant : m_radioModel->knownAntennaTokens()) {
+        for (const QString& ant : m_radioModel->rxAntennaMenuTokens()) {
             append(ant);
         }
     }

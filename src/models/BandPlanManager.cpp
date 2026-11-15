@@ -8,6 +8,8 @@
 #include <QJsonObject>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace AetherSDR {
 
@@ -134,6 +136,85 @@ QStringList BandPlanManager::availablePlans() const
     for (const auto& p : m_plans)
         names << p.name;
     return names;
+}
+
+std::optional<BandPlanManager::Region>
+BandPlanManager::zoomRegionAt(double frequencyMhz, bool segment) const
+{
+    if (!std::isfinite(frequencyMhz) || frequencyMhz <= 0.0) {
+        return std::nullopt;
+    }
+
+    QVector<Region> regions;
+    regions.reserve(m_segments.size());
+    for (const Segment& entry : m_segments) {
+        if (std::isfinite(entry.lowMhz) && std::isfinite(entry.highMhz)
+            && entry.lowMhz > 0.0 && entry.highMhz > entry.lowMhz) {
+            regions.append({entry.lowMhz, entry.highMhz});
+        }
+    }
+    std::sort(regions.begin(), regions.end(), [](const Region& a, const Region& b) {
+        return a.lowMhz < b.lowMhz;
+    });
+
+    int selected = -1;
+    double narrowest = std::numeric_limits<double>::infinity();
+    bool selectedStartsHere = false;
+    // Compared in whole Hz, so a converted frequency a ulp off a shared edge
+    // still picks the segment that begins there.
+    const auto wholeHz = [](double mhz) { return std::llround(mhz * 1.0e6); };
+    for (int i = 0; i < regions.size(); ++i) {
+        const Region& region = regions.at(i);
+        const double width = region.highMhz - region.lowMhz;
+        const auto hz = wholeHz(frequencyMhz);
+        const bool startsHere = wholeHz(region.lowMhz) == hz;
+        if (wholeHz(region.lowMhz) <= hz && hz <= wholeHz(region.highMhz)
+            && (selected < 0 || (startsHere && !selectedStartsHere)
+                || (startsHere == selectedStartsHere && width < narrowest))) {
+            selected = i;
+            narrowest = width;
+            selectedStartsHere = startsHere;
+        }
+    }
+    // Plans list allocations as segments rather than named bands. Within an
+    // amateur band, even channel gaps (60 m) are much smaller than 10% of the
+    // carrier; the gaps to the adjacent amateur bands exceed that threshold.
+    // Use the plan's edges, never the US-only BandDefs table. This grouping is
+    // for zoom display only and must never become a TX permission test.
+    const double maxGapMhz = frequencyMhz * 0.1;
+    if (selected < 0 && !segment) {
+        // Between two segments of one band (a 60 m channel gap): the band
+        // still contains the frequency.
+        for (int i = 0; i + 1 < regions.size(); ++i) {
+            if (regions.at(i).highMhz < frequencyMhz && frequencyMhz < regions.at(i + 1).lowMhz
+                && regions.at(i + 1).lowMhz - regions.at(i).highMhz <= maxGapMhz) {
+                selected = i;
+                break;
+            }
+        }
+    }
+    if (selected < 0) {
+        return std::nullopt;
+    }
+    if (segment) {
+        return regions.at(selected);
+    }
+    int first = selected;
+    int last = selected;
+    while (first > 0
+           && regions.at(first).lowMhz - regions.at(first - 1).highMhz <= maxGapMhz) {
+        --first;
+    }
+    while (last + 1 < regions.size()
+           && regions.at(last + 1).lowMhz - regions.at(last).highMhz <= maxGapMhz) {
+        ++last;
+    }
+    Region result = regions.at(selected);
+    for (int i = first; i <= last; ++i) {
+        result.lowMhz = std::min(result.lowMhz, regions.at(i).lowMhz);
+        result.highMhz = std::max(result.highMhz, regions.at(i).highMhz);
+    }
+    return result;
 }
 
 QVector<BandPlanManager::Region>

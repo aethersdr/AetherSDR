@@ -89,7 +89,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 
 ## Spotting & Tools
 
-- [SpotHub](./spothub.md) — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM, EiBi, SpotCollector, Smart Spot Filtering
+- [SpotHub](./spothub.md) — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM, EiBi, DXLab SpotCollector via Commander, Smart Spot Filtering
 - [AetherMap](./psk-reporter-map.md) — Who hears you: 2D map or 3D globe, weather radar, night lights
 - [AetherSweep](./aethersweep.md) — In-panadapter SWR analyzer with CSV export
 - [Net Scheduler](./net-scheduler.md) — Recurring net reminders with one-click Tune Now

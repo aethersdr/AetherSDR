@@ -73,6 +73,12 @@ When an imported net matches one you already have, choose:
 - **Overwrite** — replace yours with the imported one.
 - **Import as new** — keep both.
 
+Imports reject presets whose mode, repeater direction or tone mode contains
+spaces, control characters or other invalid token characters, or exceeds 64
+characters. The error identifies the net and field to correct; the existing
+schedule stays unchanged. Safe waveform mode names are preserved even when
+they are outside the common choices.
+
 ## Reference
 
 ### The schedule list

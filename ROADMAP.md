@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.11.1
+## Current cycle: post-v26.11.2
 
 ### In flight
 
@@ -51,7 +51,11 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   spots, physical outputs, pan zoom and RX antenna, tuning step and net
   corrections (raw Flex commands above the seam 215 → 192), then slice
   lifecycle, split routing, TX-slice assignment and full duplex, then
-  panadapter/waterfall lifecycle and every existing display control. These are
+  panadapter/waterfall lifecycle and every existing display control. v26.11.2
+  moved CW and CWX, radio administration (Remote On, multiFLEX and reboot)
+  with CW receive auto-tune, and band-stack recall with the CAT tuning step,
+  and aetherd now constructs only the Hermes-Lite 2's receive side and finds one
+  at a given address. These are
   scoped M4 increments, not completion of the daemon or the thin UI. Remaining:
   per-client propagation, transmit for SmartLink and the other families,
   transmit audio transport, and a replacement thin UI client — UI code still
@@ -117,9 +121,10 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   front-end options to Radio Setup → Radio and added discovery per distinct
   attached IPv4 subnet. v26.10.4 delivered parts 2 and 3 of RFC #6209: the receive band-pass
   filters can follow the tuned frequency and the speaker amplifier mutes on its
-  own, and discovery logs its bind and send failures. The codec is
-  multi-DDC capable but `AnanBackend` still drives one; remaining is the
-  `AnanRxDsp` fan-out, then transmit.
+  own, and discovery logs its bind and send failures. v26.11.2 runs the
+  receiver on DDC2, leaving DDC0 and DDC1 free, and keeps the AGC per radio.
+  The codec is multi-DDC capable but `AnanBackend` still drives one receiver;
+  remaining is the `AnanRxDsp` fan-out, then transmit.
 - **RTL-SDR — experimental, receive-only** — `librtlsdr` discovery with one
   panadapter and one host-demodulated slice (AM, FM, SSB, CW) on builds carrying
   the libraries, from v26.9.2. v26.9.3 added a bounded receiver lifecycle
@@ -150,7 +155,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   cycle — a cross-top-level reparent is the #2495/#4617/#4319 crash lineage, so
   moves go through one deliberate menu path for now), and field time on real
   stations against the Classic shell.
-- **Hermes-Lite 2 — from experimental to supported** — the backend arrived
+- **Hermes-Lite 2 — supported in the desktop application** — the backend arrived
   experimental in v26.7.4 and grew most of the way to parity in v26.8.1: four
   independent receivers, the SSB voice chain, CW/RTTY decoding and the QSO
   recorder, AX.25 packet with an on-air-proven mailbox, band switching with
@@ -197,11 +202,21 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   in Waterfall client-owned on HL2, and observes hardware PTT without keying
   the host. v26.10.4 reads the N2ADR IO board's status registers over the
   I2C read path, and v26.11.1 runs the receive filter in DSB, CW, CWL and FM.
-  Keyed rendering and hardware-PTT validation remain outstanding.
-  **The experimental → supported call itself is still open**; what remains
-  before making it is the rest of panadapter/waterfall parity with the Flex
-  path, arming automatic RF gain by default, and field time on the TXA chain
-  beyond one station. Two known costs are on the record rather than hidden: CW
+  v26.11.2 dims and refuses the controls it cannot serve (MON, VOX, Two Tone,
+  supply voltage) on every route, keys only inside a running session, primes
+  the transmit IQ queue so an over no longer drops to keyed zeros, and reads
+  the gateware as major.minor. Keyed rendering and hardware-PTT validation remain outstanding.
+  **The Hermes-Lite 2 is now Supported** ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257), approved):
+  board id 6 over Ethernet / openHPSDR Protocol 1, gateware 74, in the desktop
+  application. aetherd, other gateware, other boards and the wider Hermes-Lite
+  family keep their current status. Windows is not certified until a
+  Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Field time follows the
+  label: at least 20 h on the air on a released build, from at least two
+  stations (one not ON8ST's), over at least two weeks, with no open
+  supported-model bug, each station posting hours, modes, OS, version,
+  gateware and board on #5678. Remaining work is the rest of
+  panadapter/waterfall parity with the Flex path and arming automatic RF gain
+  by default. Two known costs are on the record rather than hidden: CW
   keeps linear phase, at 4096 taps (85 ms onset) until a notch or a narrow
   passband needs 8192, and the 0.6–1.1 s pan-bandwidth rebuild is off the audio
   path but still a wait.
@@ -217,7 +232,8 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   window and the CTR2 window's message boxes. v26.11.1 adds Callsign Lookup,
   FreeDV Reporter, Net Scheduler and Memory Channels as workspaces, and MQTT
   Settings, Keyboard Shortcuts, Ulanzi Dial — Control Mapping and the Reset
-  Settings confirmation as dialogs. Remaining: the other surfaces,
+  Settings confirmation as dialogs, and v26.11.2 Theme Editor, Support &
+  Diagnostics and the Help guides. Remaining: the other surfaces,
   one PR at a time, then a single flip of the base tokens to canon values.
 - **Radio connection workspace** ([RFC #6561](https://github.com/aethersdr/AetherSDR/issues/6561), approved) —
   Locations, operator profiles and SmartLink accounts in one connection
@@ -355,6 +371,8 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 - [#6079](https://github.com/aethersdr/AetherSDR/issues/6079) — Optional Digital FM reception and program metadata
 - [#6712](https://github.com/aethersdr/AetherSDR/issues/6712) — RF-KIT applet: optional TUNE button, ATU indicator, Error banner and one-click RESET
 - [#6725](https://github.com/aethersdr/AetherSDR/issues/6725) — ANAN-G2: diversity reception on the synchronized DDC0/DDC1 pair
+- [#6863](https://github.com/aethersdr/AetherSDR/issues/6863) — TCI IQ from host-demodulating backends: a per-slice IQ tap on IRadioBackend
+- [#7092](https://github.com/aethersdr/AetherSDR/issues/7092) — KPA500 four-state main-screen status indicator
 
 **Interface and workflow**
 
@@ -370,7 +388,6 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 - [#6677](https://github.com/aethersdr/AetherSDR/issues/6677) — Compact Memory drawer sizing and icon-revealed live search
 - [#6690](https://github.com/aethersdr/AetherSDR/issues/6690) — AetherModem instances, fixed RX assignment, and a receive-only APRS iGate
 - [#6742](https://github.com/aethersdr/AetherSDR/issues/6742) — Title bar radio tabs: the three most recent radios, every other radio in a drawer (amends RFC #4764)
-- [#6790](https://github.com/aethersdr/AetherSDR/issues/6790) — Radio tab: AT chip and quality-coloured status dot while adaptive frame-rate throttle is on
 - [#6816](https://github.com/aethersdr/AetherSDR/issues/6816) — Light TGXL STANDBY indicator amber (consistent with applet STANDBY key)
 
 **Project infrastructure**
@@ -379,12 +396,25 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 - [#4496](https://github.com/aethersdr/AetherSDR/issues/4496) — In-repo multilingual user documentation generator — bridge-driven, 5 languages
 - [#2884](https://github.com/aethersdr/AetherSDR/issues/2884) — feat(smartlink): migrate Auth0 from ROPG to Authorization Code + PKCE on dedicated client
 - [#6232](https://github.com/aethersdr/AetherSDR/issues/6232) — Official Windows ARM64 build and release support
+- [#6964](https://github.com/aethersdr/AetherSDR/issues/6964) — Release pages carry only what people download; signatures, symbols and update payloads move to updates.aethersdr.com
+- [#7039](https://github.com/aethersdr/AetherSDR/issues/7039) — Choose simulator and authorized hardware targets for agent validation
 
 ### Recently shipped
 
 Highlights from the current cycle (v26.11.x). Earlier releases and the
 complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 
+- **AetherWSPR** — a receive-only WSPR receiver that runs on the radio, with
+  spots in SpotHub, on the panadapter and on AetherMap, and optional WSPRnet
+  upload; Remote Access shim 0.5.2 carries it to a remote AetherSDR (v26.11.2).
+- **NTP time sources** — the radio's SmartSDR 4.3.16 NTP sources, managed from
+  Radio Setup → Radio → Time on FLEX-8000, Aurora, ML and CL radios (v26.11.2).
+- **OTRSP and TCI Line Out** — two-slice RX focus and TX selection for contest
+  loggers, Line Out recording for TCI clients, and more TCI replies in 2.1's
+  units (v26.11.2).
+- **Hermes-Lite 2 controls that refuse instead of pretending** — MON, VOX, Two
+  Tone and supply telemetry dimmed with a reason on every route, and keying
+  only inside a running session (v26.11.2).
 - **Install update on Windows, macOS and Linux** — the Updates window downloads
   the newest release and swaps it in as AetherSDR exits, with Restart to update,
   rollback and signed release tarballs; Linux installs through

@@ -781,6 +781,56 @@ void MainWindow::wireSpotSubsystem()
             m_wsprFeed->start(m_radioModel.radioAddress());
         }
     });
+
+    // The radio reports the WSPR receiver's slice as ours (#7139), so ask the
+    // receiver which one it is: before registering, whose reply carries the
+    // slice statuses, and again whenever a slice appears, since the receiver
+    // may have just made one.
+    m_radioModel.setRegistrationGate([this](const QHostAddress& radio, std::function<void()> proceed) {
+        readWsprReceiverSlice(radio, std::move(proceed));
+    });
+    wspr::reserveReceiverSlice(m_wsprFeed, &m_radioModel, tr("WSPR receiver"));
+    connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel*) {
+        QTimer::singleShot(kWsprSliceRecheckMs, this, [this] {
+            if (m_radioModel.isConnected()) {
+                readWsprReceiverSlice(m_radioModel.radioAddress(), {});
+            }
+        });
+    });
+}
+
+void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done)
+{
+    if (m_radioModel.isWan() || !wspr::reachableAddress(radio)) {
+        if (done) done();
+        return;
+    }
+    // A client of its own: reads can overlap, and each ends on its own.
+    auto* client = new WsprAgentClient(this);
+    client->setRadioAddress(radio);
+    auto finish = std::make_shared<std::function<void(int)>>();
+    *finish = [this, client, done = std::move(done)](int sliceIndex) {
+        client->disconnect(this);
+        client->cancel();
+        client->deleteLater();
+        if (sliceIndex >= 0) {
+            m_radioModel.reserveSlice(sliceIndex, tr("WSPR receiver"));
+        }
+        if (done) done();
+    };
+    // Once: taken out before it runs, so it never runs while being destroyed.
+    auto call = [finish](int sliceIndex) {
+        if (auto run = std::exchange(*finish, nullptr)) {
+            run(sliceIndex);
+        }
+    };
+    connect(client, &WsprAgentClient::statusReceived, this,
+            [call](const WsprStatus& status) { call(status.sliceIndex); });
+    connect(client, &WsprAgentClient::requestFailed, this,
+            [call](const QString&, const QString&, bool) { call(-1); });
+    QTimer::singleShot(kWsprSliceReadMs, client, [call] { call(-1); });
+    // Spots from now on: none, so the reply stays small.
+    client->fetchStatus(QDateTime::currentSecsSinceEpoch());
 }
 
 } // namespace AetherSDR

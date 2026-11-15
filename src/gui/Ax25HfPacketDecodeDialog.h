@@ -43,6 +43,8 @@ class AprsMessenger;
 class AprsStationList;
 class AudioEngine;
 class DStarModemPage;
+class Data2gMonitorPage;
+class Data2gReceiveModel;
 class HeardList;
 class KissTncServer;
 #ifdef HAVE_MQTT
@@ -317,6 +319,11 @@ private:
     QWidget* m_digiPage{nullptr};
     QWidget* m_terminalPage{nullptr};
     DStarModemPage* m_dstarPage{nullptr};
+    // HF Data (RFC #7159): a receive-only Data2G monitor fed from m_receive's
+    // tap. Both stay null in a build without the Data2G core.
+    std::unique_ptr<Data2gReceiveModel> m_data2g;
+    Data2gMonitorPage* m_data2gPage{nullptr};
+    QPushButton* m_data2gTab{nullptr};
 #ifdef HAVE_MQTT
     QPointer<MqttClient> m_mqtt;
 #endif

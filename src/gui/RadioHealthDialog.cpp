@@ -1,5 +1,9 @@
 #include "RadioHealthDialog.h"
 
+#include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
+#include "FramelessResizer.h"
 #include "core/ThemeManager.h"
 #include "core/backends/HealthSnapshotMerge.h"
 #include "models/RadioModel.h"
@@ -9,8 +13,10 @@
 #include <QFont>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHideEvent>
 #include <QLabel>
 #include <QPushButton>
+#include <QShowEvent>
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -25,30 +31,81 @@ namespace {
 // would re-render identical values.
 constexpr int kRefreshIntervalMs = 500;
 
+// The window's labels and button on the canon palette; the register table
+// takes the shared canonTableRules() after it.
+constexpr const char* kRadioHealthStyle = R"(
+QLabel {
+    background: transparent;
+    color: {{color.canon.inkSoft}};
+}
+QLabel#radioHealthIntro,
+QLabel#radioHealthStatus {
+    color: {{color.canon.muted}};
+}
+QPushButton {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+    border: 1px solid {{color.canon.lineHi}};
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{color.canon.nested}};
+    color: {{color.canon.aqua}};
+}
+QPushButton:focus {
+    border-color: {{color.canon.aqua}};
+}
+)";
+
+// Canon ink on the selection band (canonTableRules() sets no text colour) and
+// the table's paddings.
+constexpr const char* kRadioHealthTableStyle = R"(
+QTableView::item:selected {
+    color: {{color.canon.ink}};
+}
+QTableView::item {
+    padding: 2px 6px;
+}
+QHeaderView::section {
+    padding: 5px 6px;
+}
+)";
+
 }  // namespace
 
 RadioHealthDialog::RadioHealthDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog(QStringLiteral("Radio Health"),
-                       QStringLiteral("RadioHealthDialogGeometry"), parent)
+    : CanonWindow(QStringLiteral("Radio Health"), parent, Kind::Workspace)
     , m_model(model)
 {
-    theme::setContainer(this, QStringLiteral("dialog/radioHealth"));
-    setMinimumSize(460, 460);
-    resize(520, 620);
+    setObjectName(QStringLiteral("RadioHealthDialog"));
+    theme::setContainer(this, QStringLiteral("canon/radioHealth"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("RadioHealthDialogGeometry"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return QString::fromLatin1(kRadioHealthStyle) + canonTableRules()
+             + QString::fromLatin1(kRadioHealthTableStyle) + canonScrollBarRules();
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setSpacing(8);
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(10);
+    root->addWidget(makeCanonHeader(QStringLiteral("Radio Health")));
 
     auto* intro = new QLabel(
         tr("Health and status registers reported by the connected radio. "
            "A dash means the radio has not reported that value — which is not "
            "the same as a value of zero."));
+    intro->setObjectName(QStringLiteral("radioHealthIntro"));
     intro->setWordWrap(true);
-    ThemeManager::instance().applyStyleSheet(intro,
-        "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     root->addWidget(intro);
 
     m_table = new QTableWidget(0, 2);
+    m_table->setObjectName(QStringLiteral("radioHealthTable"));
+    m_table->setAccessibleName(tr("Radio health registers"));
     m_table->setHorizontalHeaderLabels({tr("Register"), tr("Value")});
     m_table->verticalHeader()->setVisible(false);
     m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -57,41 +114,48 @@ RadioHealthDialog::RadioHealthDialog(RadioModel* model, QWidget* parent)
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setAlternatingRowColors(true);
     m_table->setShowGrid(false);
-    ThemeManager::instance().applyStyleSheet(m_table, "QTableWidget {"
-        "  background: {{color.background.0}};"
-        "  alternate-background-color: {{color.background.1}};"
-        "  color: {{color.text.primary}};"
-        "  border: 1px solid {{color.background.2}};"
-        "  font-size: 11px;"
-        "}"
-        "QHeaderView::section {"
-        "  background: {{color.background.1}};"
-        "  color: {{color.text.secondary}};"
-        "  border: 0px;"
-        "  padding: 4px;"
-        "}");
     root->addWidget(m_table, 1);
 
     auto* buttonRow = new QHBoxLayout;
     m_statusLabel = new QLabel;
-    ThemeManager::instance().applyStyleSheet(m_statusLabel,
-        "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    m_statusLabel->setObjectName(QStringLiteral("radioHealthStatus"));
+    m_statusLabel->setTextFormat(Qt::PlainText);
     buttonRow->addWidget(m_statusLabel, 1);
     auto* copyBtn = new QPushButton(tr("Copy"));
+    copyBtn->setObjectName(QStringLiteral("radioHealthCopy"));
     copyBtn->setAutoDefault(false);
     connect(copyBtn, &QPushButton::clicked, this, &RadioHealthDialog::copyToClipboard);
     buttonRow->addWidget(copyBtn);
-    auto* closeBtn = new QPushButton(tr("Close"));
-    closeBtn->setAutoDefault(false);
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    buttonRow->addWidget(closeBtn);
     root->addLayout(buttonRow);
+
+    // 40 px taller than before for the canon header, and never narrower than
+    // the layout needs.
+    setMinimumSize(QSize(460, 500).expandedTo(minimumSizeHint()));
+    resize(520, 660);
 
     m_refreshTimer = new QTimer(this);
     m_refreshTimer->setInterval(kRefreshIntervalMs);
     connect(m_refreshTimer, &QTimer::timeout, this, &RadioHealthDialog::refresh);
-    m_refreshTimer->start();
+}
+
+bool RadioHealthDialog::isRefreshing() const
+{
+    return m_refreshTimer->isActive();
+}
+
+// Poll only while shown. Esc and Ctrl+W close through QDialog::done(), which
+// hides without a close event, so the hide is where polling stops.
+void RadioHealthDialog::showEvent(QShowEvent* event)
+{
+    CanonWindow::showEvent(event);
     refresh();
+    m_refreshTimer->start();
+}
+
+void RadioHealthDialog::hideEvent(QHideEvent* event)
+{
+    m_refreshTimer->stop();
+    CanonWindow::hideEvent(event);
 }
 
 QString RadioHealthDialog::formatValue(const QVariant& v)

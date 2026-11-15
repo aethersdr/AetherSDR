@@ -227,11 +227,11 @@ void RadioConnection::injectFaultStatus(const QString& line)
 void RadioConnection::emitSyntheticStatus(const QString& line)
 {
     // Parse the raw status line into (object, kvs) exactly as the real receive
-    // path does, then emit statusReceived — so RadioModel sees an identical
-    // payload to a live radio's. (RFC #4288 Stage 3)
+    // path does, then emit it — so RadioModel sees an identical payload to a
+    // live radio's. (RFC #4288 Stage 3)
     const ParsedMessage msg = CommandParser::parseLine(line);
     if (msg.type == MessageType::Status) {
-        emit statusReceived(msg.object, msg.kvs);
+        emit lineReceived(msg, m_lineEpoch.load());
     }
 }
 
@@ -408,10 +408,18 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
         << " totalMs=" << totalTimer.elapsed();
 }
 
+bool RadioConnection::writeSessionCommand(quint32 seq, const QString& command,
+                                          quint64 generation, const SessionCommandGuard& guard)
+{
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
+    writeCommand(seq, command);
+    return true;
+}
+
 bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& command,
     quint64 generation, const SessionCommandGuard& guard)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return false; }
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
     if (m_commandSinkForTest) {
         m_commandSinkForTest(seq, command);
         return true;
@@ -493,11 +501,10 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                 }
             }
             if (!echo.isEmpty()) {
-                // Defer the echo to the next event-loop cycle. Emitting
-                // statusReceived synchronously here re-enters SliceModel, which
-                // can re-emit the mode intent → back into writeCommand → infinite
-                // recursion → crash. A real radio's echo also arrives async (over
-                // the socket), so this matches reality and breaks the loop.
+                // Defer the echo to the next event-loop cycle, as a real radio's
+                // arrives over the socket. A synchronous echo once re-entered
+                // SliceModel (mode intent → writeCommand → recursion); the status
+                // ingress hop is queued now, and the deferral keeps it that way.
                 const QString line =
                     QStringLiteral("SDE300001|slice 0 client_handle=0xDE300001 %1")
                         .arg(echo.join(QLatin1Char(' ')));
@@ -712,7 +719,7 @@ void RadioConnection::processLine(const QString& line)
     }
 
     ParsedMessage msg = CommandParser::parseLine(line);
-    emit messageReceived(msg);
+    emit lineReceived(msg, m_lineEpoch.load());
 
     switch (msg.type) {
     case MessageType::Version: {
@@ -758,9 +765,6 @@ void RadioConnection::processLine(const QString& line)
     }
     case MessageType::Response:
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
-        break;
-    case MessageType::Status:
-        emit statusReceived(msg.object, msg.kvs);
         break;
     default:
         break;
