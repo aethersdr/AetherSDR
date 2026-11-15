@@ -334,6 +334,7 @@ void testDisconnectMidMessage()
                          dropped += key == QLatin1String("cw-text-queued-dropped") ? 1 : 0;
                      });
     f.radio.transmitModel().setCwSpeed(20);
+    check("disconnect: the HL2 connection has its engine", f.radio.hasHostCwTextEngineForTest());
     check("disconnect: accepted", a.send(QStringLiteral("MMMMMMMMMM")));
     check("disconnect: a second sender waits", b.send(QStringLiteral("MMMM")));
     check("disconnect: the first key-down arrives", pumpUntil([&] { return !f.edges.empty(); }, 2000));
@@ -349,6 +350,7 @@ void testDisconnectMidMessage()
     check("disconnect: the key is up when forceDisconnect() returns, every edge since a key-up", onlyUps);
     pumpFor(800);
     check("disconnect: nothing keys afterwards, the waiting sender included", f.edges.size() == after);
+    check("disconnect: the engine is destroyed with the session", !f.radio.hasHostCwTextEngineForTest());
     check("disconnect: the engine closed: its run is over and the waiting text discarded, not replayed",
           dropped == 0);
     check("disconnect: no further text is accepted", !a.send(QStringLiteral("E")));
@@ -674,6 +676,7 @@ void testRadioSideKeyerUnchanged()
     QObject::connect(&f.radio.cwxModel(), &CwxModel::transmissionRequested,
                      [&](const QString& text, int) { requested << text; });
     check("radio-side: hasHostCwTextKeyer() is false", !f.radio.hasHostCwTextKeyer());
+    check("radio-side: no host engine is created", !f.radio.hasHostCwTextEngineForTest());
     check("radio-side: accepted", a.send(QStringLiteral("CQ TEST")));
     pumpFor(300);
     check("radio-side: the text goes through CWX", requested == QStringList{QStringLiteral("CQ TEST")});

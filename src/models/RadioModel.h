@@ -2242,6 +2242,7 @@ public:
     {
         applyBackendTransmitDelta(delta);
     }
+    bool hasHostCwTextEngineForTest() const { return m_hostCwText != nullptr; }
     void emitBackendSliceChangedForTest(int sliceId, const SliceDelta& delta)
     {
         if (m_backend) {
