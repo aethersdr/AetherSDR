@@ -888,6 +888,8 @@ set(CORE_SOURCES
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
     src/core/control/ControlCredentials.cpp   # explicit credential identity, not TX grants
+    src/core/control/ControlPairing.cpp  # aetherd remote clients: pairing (aetherd-remote-clients.md)
+    src/core/control/VaultPairingIssuer.cpp  # aetherd remote clients: paired credentials into the vault
     src/core/control/ControlCredentialVault.cpp # OS-vault-only, explicit provisioning composition
     src/core/control/ControlCredentialProvisioner.cpp
     src/core/control/ControlInputPump.cpp     # bounded input turns and terminal authority lifetime
@@ -982,6 +984,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomModels.cpp    # IcomCIV Phase 5 (per-model capability table)
     src/core/backends/icom/IcomControls.cpp  # the CI-V control registry (controls.map / controls.scrub)
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
+    src/core/backends/icom/IcomCivBackend_DualReceiver.cpp
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
@@ -1025,7 +1028,6 @@ set(CORE_SOURCES
     src/core/ClientEq.cpp
     src/core/ClientComp.cpp
     src/core/ClientGate.cpp
-    src/core/ClientDeEss.cpp
     src/core/ClientTube.cpp
     src/core/ClientPudu.cpp
     src/core/ClientPuduMonitor.cpp
@@ -1281,6 +1283,7 @@ set(MODEL_SOURCES
     src/models/DecoderAudioModel.cpp
     src/models/Ax25ReceiveModel.cpp
     src/models/Data2gReceiveModel.cpp
+    src/models/Data2gSessionModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
@@ -1398,6 +1401,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/gui/PanadapterMessageOverlay.h
+    src/gui/StatusBarMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
     src/gui/WindowRepaintScheduler.cpp
     src/gui/SpectrumWidget.cpp
@@ -1512,6 +1516,7 @@ set(GUI_SOURCES
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/FavoritesPickerDialog.cpp
     src/gui/RxApplet.cpp
+    src/gui/BandApplet.cpp
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/AnalogMeterFaceTheme.cpp
@@ -1578,9 +1583,6 @@ set(GUI_SOURCES
     src/gui/ClientGateEditor.cpp
     src/gui/StripGatePanel.cpp
     src/gui/ClientGateLevelView.cpp
-    src/gui/ClientDeEssApplet.cpp
-    src/gui/ClientDeEssCurveWidget.cpp
-    src/gui/StripDeEssPanel.cpp
     src/gui/ClientTubeApplet.cpp
     src/gui/ClientTubeCurveWidget.cpp
     src/gui/ClientTubeEditor.cpp
@@ -1911,9 +1913,11 @@ if(ENABLE_DATA2G)
         target_link_libraries(aether_data2g_core PUBLIC zlibstatic)
     endif()
 
-    # The AetherSDR side of the seam: Qt-free, receive only.
+    # The AetherSDR side of the seam, Qt-free. Neither class has a radio: the
+    # session adapter only asks to key, and nothing is wired to that request yet.
     add_library(aether_hfdata STATIC
         src/core/hfdata/Data2gMonitor.cpp
+        src/core/hfdata/Data2gSession.cpp
     )
     target_include_directories(aether_hfdata PUBLIC ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(aether_hfdata PUBLIC cxx_std_20)
@@ -2013,8 +2017,8 @@ target_compile_definitions(aethercore PRIVATE
     AETHER_UPDATE_DEV_OVERRIDES=$<BOOL:${AETHER_UPDATE_DEV_OVERRIDES}>)
 target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
 if(ENABLE_DATA2G)
-    # models: Data2gReceiveModel. Without it the model still builds and
-    # reports itself unavailable.
+    # models: Data2gReceiveModel, Data2gSessionModel. Without it the models
+    # still build and report themselves unavailable.
     target_link_libraries(aethercore PRIVATE aether_hfdata)
     target_compile_definitions(aethercore PRIVATE HAVE_DATA2G)
 endif()
@@ -2874,6 +2878,7 @@ if(Qt6WebSockets_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_WEBSOCKETS)
     target_sources(aethercore PRIVATE
         src/core/FreeDvClient.cpp
+        src/core/control/RemoteControlServer.cpp  # aetherd network listener (aetherd-remote-clients.md)
     )
     target_sources(AetherSDR PRIVATE
         src/gui/FreeDvReporterDialog.cpp

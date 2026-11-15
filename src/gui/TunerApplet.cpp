@@ -33,7 +33,9 @@ constexpr const char* kTunerAppletSettingsKey = "TunerApplet";
 QJsonObject readTunerAppletSettings()
 {
     const QString json = AppSettings::instance().value(kTunerAppletSettingsKey, QString()).toString();
-    if (json.isEmpty()) return {};
+    if (json.isEmpty()) {
+        return {};
+    }
     QJsonParseError error;
     const auto document = QJsonDocument::fromJson(json.toUtf8(), &error);
     if (error.error != QJsonParseError::NoError || !document.isObject()) {
@@ -1124,11 +1126,10 @@ void TunerApplet::setTunerModel(TunerModel* model)
             this, &TunerApplet::updateSourceIndicator);
     updateSourceIndicator(m_model->hasDirectConnection());
 
-    // Antenna switch: show buttons only when direct connection is active AND
-    // the TGXL reports antA (models without a switch never send antA).
+    // The direct info response identifies the 3-way antenna switch.
     auto updateAntVisible = [this]() {
-        m_antContainer->setVisible(m_model->hasDirectConnection()
-                                   && m_model->hasAntennaSwitch());
+        const bool visible = m_model->hasDirectConnection() && m_model->hasAntennaSwitch();
+        m_antContainer->setVisible(visible);
     };
     connect(m_model, &TunerModel::portsChanged, this, &TunerApplet::updatePortRows);
     // stateChanged carries the port->antenna map, which arrives after the
@@ -1180,6 +1181,7 @@ void TunerApplet::setTunerModel(TunerModel* model)
     });
 
     connect(m_model, &TunerModel::directConnectionChanged, this, updateAntVisible);
+    connect(m_model, &TunerModel::stateChanged, this, updateAntVisible);
     connect(m_model, &TunerModel::antennaAChanged, this, [this, updateAntVisible](int antA) {
         updateAntVisible();
         updateAntennaButtons(antA);
@@ -1370,13 +1372,18 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak, float /
     powerGauge->setValue(fwdPower);
     auto* swrGauge = static_cast<HGauge*>(m_swrGauge);
     if (swr == 1.0f) {
-        if (m_swrHighRange) setSwrHighRange(false);
+        if (m_swrHighRange) {
+            setSwrHighRange(false);
+        }
     } else if (fwdPower >= 5.0f && !m_swrHighRange && swr > 3.0f) {
         setSwrHighRange(true);
     }
     // At idle, 0 dB return loss means no usable SWR measurement, not a full red bar.
-    if (fwdPower >= 5.0f) swrGauge->setValue(swr);
-    else swrGauge->setValueImmediate(1.0f);
+    if (fwdPower >= 5.0f) {
+        swrGauge->setValue(swr);
+    } else {
+        swrGauge->setValueImmediate(1.0f);
+    }
     // MAX stays parsed in the model, but is not displayed until hardware settles its meaning.
     // Use the device's own peak when present: `fwd` is a sparse instant sample
     // (on voice it mostly reads near zero while `peak` reads the envelope). The
@@ -1410,7 +1417,9 @@ void TunerApplet::setPowerHighRange(bool high)
 
 void TunerApplet::setFixedPowerRange(bool fixed)
 {
-    if (fixed == m_fixedPowerRange) return;
+    if (fixed == m_fixedPowerRange) {
+        return;
+    }
     auto& settings = AppSettings::instance();
     if (!settings.storeWritable()) {
         qWarning() << "TunerApplet: cannot save power range; settings store is not writable";
@@ -1445,7 +1454,9 @@ void TunerApplet::setSwrHighRange(bool high)
 void TunerApplet::updateMeterAccessibility(bool force)
 {
     if (!force && m_accessibleReadoutClock.isValid()
-            && m_accessibleReadoutClock.elapsed() < kMeterReadoutUpdateMs) return;
+            && m_accessibleReadoutClock.elapsed() < kMeterReadoutUpdateMs) {
+        return;
+    }
     m_accessibleReadoutClock.restart();
     const QString power = tr("Forward power %1 W; full scale %2 W.")
         .arg(m_fwdPower, 0, 'f', 0).arg(m_fixedPowerRange ? 600 : m_powerHighRange ? 2000 : 200);

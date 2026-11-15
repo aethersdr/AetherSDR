@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/RadioCapabilities.h"
+
 #include <QString>
 
 #include <optional>
@@ -39,8 +41,22 @@ inline ExperimentalRadioIdentityHold experimentalRadioIdentityHold(
                            : ExperimentalRadioIdentityHold::UntilTimeout;
 }
 
+// The supported Hermes-Lite 2 (#7257): gateware major 74 on a board that does
+// not name itself. A family of "hl2" already means board id 6 over Ethernet /
+// Protocol 1: both places that build an HL2 RadioInfo drop any other board.
+// Reads the backend's typed board identity (#7311), never the display label: a
+// reworded or translated "Gateware" cannot change the tier. Absent identity
+// stays experimental.
+inline bool isSupportedHl2Identity(
+    const std::optional<RadioCapabilities::BoardIdentity>& identity)
+{
+    return identity && identity->board == QLatin1String("hl2")
+        && identity->gatewareMajor == 74;
+}
+
 inline std::optional<ExperimentalRadioDescriptor> experimentalRadioDescriptor(
-    const QString& family, const QString& model = {})
+    const QString& family, const QString& model = {},
+    const std::optional<RadioCapabilities::BoardIdentity>& boardIdentity = std::nullopt)
 {
     const QString normalized = family.trimmed().toLower();
     if (normalized == QLatin1String("icom")) {
@@ -58,6 +74,10 @@ inline std::optional<ExperimentalRadioDescriptor> experimentalRadioDescriptor(
             QStringLiteral("ShowExperimentalRadioNoticeIcomV1")};
     }
     if (normalized == QLatin1String("hl2")) {
+        // Other gateware and other boards remain experimental.
+        if (isSupportedHl2Identity(boardIdentity)) {
+            return std::nullopt;
+        }
         return ExperimentalRadioDescriptor{
             QStringLiteral("Hermes-Lite 2"),
             QStringLiteral("ShowExperimentalRadioNoticeHl2V1")};

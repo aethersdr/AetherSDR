@@ -39,7 +39,7 @@ jobs:
     outputs:
       publish-flight: ${{ steps.store-plan.outputs.publishFlight }}
       release-artifacts: ${{ steps.store-plan.outputs.releaseArtifacts }}
-      production-draft: ${{ steps.store-plan.outputs.productionDraft }}
+      production-submission: ${{ steps.store-plan.outputs.productionDraft }}
       store-eligible: ${{ steps.store-plan.outputs.storeEligible }}
       msix-version: ${{ steps.store-plan.outputs.msixVersion }}
       sign: ${{ steps.sign-plan.outputs.sign }}
@@ -64,7 +64,7 @@ jobs:
 
       # Resolve publication intent before building or authenticating. A manual
       # tag dispatch is still manual: it cannot attach public release assets
-      # or stage a production Store draft.
+      # or create a production Store submission.
       - name: Plan Store build
         id: store-plan
         env:
@@ -898,8 +898,8 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
-          # .msixupload is the Partner Center upload artifact (manual Store
-          # submission for now — see docs/WINDOWS-STORE-MSIX.md). It's a
+          # .msixupload is the Partner Center upload artifact (see
+          # docs/WINDOWS-STORE-MSIX.md). It's a
           # maintainer-only package; the raw .msix is intentionally left off
           # the public release because CI builds it unsigned (-SkipSign) and
           # an unsigned .msix can't be sideloaded by end users. The .msix is
@@ -920,23 +920,24 @@ jobs:
   # repository VARIABLE is set. The plan rejects manual tag dispatches and
   # forks for this path; manual flight requests have their own job below.
   #
-  # The submission is staged as a DRAFT (publish-store.ps1 passes
-  # --noCommit): the package uploads to Partner Center but certification is
-  # NOT started. A maintainer reviews the pending submission and clicks
-  # "Submit to Store". CI never publishes to the live channel on its own.
+  # AETHERSDR_STORE_AUTO_PUBLISH=true arms the existing direct publish call.
+  # Microsoft handles submission processing; an unset secret keeps draft mode.
   #
   # Free-product only (AetherSDR qualifies). The app must already be live in
   # the Store. One-time Entra/Partner Center setup is in
   # docs/WINDOWS-STORE-MSIX.md.
   # ----------------------------------------------------------------------
-  stage-store-draft:
-    name: Stage Microsoft Store submission
+  publish-store-production:
+    name: Publish Microsoft Store production
     needs: [build-windows, package-windows]
-    if: needs.build-windows.outputs.production-draft == 'true'
+    if: needs.build-windows.outputs.production-submission == 'true'
     runs-on: windows-latest
     environment: release
     permissions:
       contents: read
+    concurrency:
+      group: microsoft-store-production
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -954,21 +955,24 @@ jobs:
         with:
           version: v0.4.2
 
-      - name: Stage Microsoft Store submission (draft)
+      - name: Publish Microsoft Store package
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
           SELLER_ID: ${{ secrets.SELLER_ID }}
           AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
+          AETHERSDR_STORE_AUTO_PUBLISH: ${{ secrets.AETHERSDR_STORE_AUTO_PUBLISH }}
         run: |
           msstore --version
+          if ($LASTEXITCODE -ne 0) { throw "Microsoft Store CLI version check failed." }
           msstore reconfigure `
             --tenantId $env:AZURE_AD_TENANT_ID `
             --sellerId $env:SELLER_ID `
             --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
-          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -UploadTimeoutSeconds 300
+          if ($LASTEXITCODE -ne 0) { throw "Microsoft Store CLI authentication failed." }
+          & .\packaging\windows\invoke-store-production.ps1
 
       # msstore keeps the client secret in Windows Credential Manager and its
       # settings under LocalAppData; `msstore reconfigure --reset` needs an

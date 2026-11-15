@@ -64,7 +64,7 @@ public:
     int     antennaA()  const { return m_antennaA; }  // 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3, -1=unknown
     float   fwdPower()  const { return m_fwdPower; }  // forward power in watts (from direct TGXL status)
     float   swr()       const { return m_swr; }       // SWR ratio (from direct TGXL status)
-    bool    hasAntennaSwitch() const { return m_oneByThree; }  // true for TGXL 3x1 model (one_by_three=1)
+    bool    hasAntennaSwitch() const;
     bool    isPresent() const { return !m_handle.isEmpty() || m_directPresence; }
     bool    hasDirectConnection() const;
 
@@ -182,7 +182,7 @@ private:
     int     m_antennaA{-1};   // 0-indexed antenna port (-1 = unknown)
     float   m_fwdPower{0.0f};  // forward power in watts (from direct TGXL status)
     float   m_fwdPeak{0.0f};   // device-side peak power in watts (TGXL `peak`)
-    float   m_maxPower{0.0f};  // zero means no tuning-solution limit reported
+    float   m_maxPower{0.0f};  // reported MAX in watts; display semantics unverified
     float   m_swr{1.0f};      // SWR ratio (from direct TGXL status)
     bool    m_oneByThree{false}; // true for TGXL 3x1 model (from one_by_three=1)
 

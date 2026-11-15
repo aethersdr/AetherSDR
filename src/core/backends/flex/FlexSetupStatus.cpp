@@ -125,6 +125,16 @@ std::optional<SetupStatusObservation> decodeFlexSetupStatus(
             if (!bit) { return {}; }
             value.bit = *bit;
         } else if (words.size() != 2) { return {}; }
+        // Passthrough data (FlexLib v4.3.16 UsbPassthroughCable.ParseStatus).
+        // The KV split is on the first '=', so the base64 padding survives.
+        if (const auto data = fields.constFind(QStringLiteral("data:base64")); data != fields.cend()) {
+            if (words.size() != 2 || data->size() > 8192) { return {}; }
+            const auto decoded = QByteArray::fromBase64Encoding(data->toLatin1(),
+                QByteArray::AbortOnBase64DecodingErrors);
+            if (!decoded) { return {}; }
+            value.passthroughData = *decoded;
+        }
+        value.textData = fields.contains(QStringLiteral("data:text"));
         value.type = choice(fields, QStringLiteral("type"), {QStringLiteral("cat"), QStringLiteral("bit"),
             QStringLiteral("bcd"), QStringLiteral("vbcd"), QStringLiteral("bcd_vbcd"),
             QStringLiteral("ldpa"), QStringLiteral("passthrough"), QStringLiteral("invalid")});

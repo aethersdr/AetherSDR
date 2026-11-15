@@ -37,7 +37,7 @@ namespace {
 
 // What the shared canon dialog sheet (ModemChrome::Look::Canon: fields,
 // buttons, the canon check box, the progress bar) leaves out: tabs and group
-// boxes as MQTT Settings has them; selection ink on the path fields (#6917);
+// boxes as MQTT Settings has them; a cyan selection on the path fields;
 // the intro and status lines; and the path fields' right-click menus,
 // children of the fields that the sheet's transparent rule would otherwise
 // leave with no panel.

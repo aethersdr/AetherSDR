@@ -17,18 +17,13 @@
 #include "models/TunerModel.h"
 #include "core/TgxlConnection.h"
 #include "core/backends/TunerDelta.h"
-#include "core/AppSettings.h"
-#include "TestSettingsProfile.h"
 
-#include <QAction>
 #include <QApplication>
 #include <QDeadlineTimer>
 #include <QLabel>
 #include <QMetaObject>
 #include <QFontMetrics>
 #include <QImage>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QPushButton>
 
 #include <cstdio>
@@ -85,15 +80,8 @@ bool aVisibleKeyReads(QWidget* applet, const QString& caption)
 
 int main(int argc, char** argv)
 {
-    TestSettingsProfile profile(QStringLiteral("tgxl-docked-parity"));
-    if (!profile.isValid()) return 1;
     qputenv("AETHER_AUTOMATION", "1");  // HGauge publishes its range for assertions.
     QApplication app(argc, argv);
-    auto& settings = AppSettings::instance();
-    settings.load();
-    CHECK(settings.storeWritable());
-    settings.setValue(QStringLiteral("TunerApplet"), QStringLiteral("{\"futureSetting\":true}"));
-    settings.save();
 
     TunerModel model;
     model.setHandle(QStringLiteral("0x2000"));
@@ -105,204 +93,6 @@ int main(int argc, char** argv)
     settle();
 
     CHECK(!applet.isFloating());
-
-    // Both gauges range from telemetry, independent of the station's amplifier.
-    {
-        TunerApplet meters;
-        HGauge* power = nullptr;
-        HGauge* swr = nullptr;
-        for (auto* widget : meters.findChildren<QWidget*>()) {
-            auto* gauge = dynamic_cast<HGauge*>(widget);
-            if (!gauge) continue;
-            if (gauge->accessibleName() == QLatin1String("Forward power")) power = gauge;
-            if (gauge->accessibleName() == QLatin1String("SWR")) swr = gauge;
-        }
-        CHECK(power && swr);
-        if (power && swr) {
-            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-            CHECK(swr->property("gaugeTicks").toString() == QLatin1String("1.0,1.5,2.0,2.5,3.0"));
-            meters.setDeviceMeters(200.0f, 3.0f, 3000.0f, 3000.0f);
-            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-            power->resize(200, 24);
-            CHECK(power->peakHeld());
-            meters.setDeviceMeters(200.0f, 3.0f, 0.0f, 0.0f);
-            CHECK(!power->peakHeld());
-            const QImage withoutLimit = power->grab().toImage();
-            meters.setDeviceMeters(200.0f, 3.0f, 0.0f, 3000.0f);
-            const QImage withLimit = power->grab().toImage();
-            CHECK(withLimit == withoutLimit); // MAX parsing must not draw an unverified marker.
-            meters.setDeviceMeters(0.0f, 1.0f, 0.000000001f, 0.0f);
-            CHECK(!power->peakHeld());
-            meters.setDeviceMeters(0.0f, 1.0f, 0.5f, 0.0f);
-            CHECK(power->peakHeld());
-            meters.setDeviceMeters(0.0f, 1.0f, 0.49f, 0.0f);
-            CHECK(!power->peakHeld());
-            meters.setDeviceMeters(200.01f, 3.01f, 0.0f, 0.0f);
-            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-            CHECK(power->property("gaugeTicks").toString() == QLatin1String("0,500,1K,1K5,2K"));
-            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
-            CHECK(swr->property("gaugeTicks").toString() == QLatin1String("1.0,3.0,5.0,7.0,10.0"));
-            meters.setDeviceMeters(1.0f, 1.01f, 0.0f, 0.0f);
-            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
-            meters.setDeviceMeters(0.5f, 1.01f, 0.0f, 0.0f);
-            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-            meters.setDeviceMeters(0.49f, 1.0f, 0.0f, 0.0f);
-            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-            settle(400);
-            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-            CHECK(spin([&] { return power->property("gaugeMax").toFloat() == 200.0f; }, 1000));
-            meters.setDeviceMeters(0.0f, 4.0f, 0.0f, 0.0f);
-            CHECK(swr->value() == 1.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-            for (float fwd : {800.0f, 0.14f, 0.14f, 0.14f, 950.0f, 0.14f, 0.14f, 600.0f}) {
-                meters.setDeviceMeters(fwd, 1.3f, 1000.0f, 1750.0f);
-                CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-                settle(20);
-            }
-            settle(800); // The last positive sample cancelled the idle return.
-            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-            meters.setDeviceMeters(0.14f, 99.9f, 1000.0f, 1750.0f);
-            CHECK(spin([&] { return power->property("gaugeMax").toFloat() == 200.0f; }, 1500));
-            CHECK(!power->accessibleDescription().contains(QStringLiteral("MAX")));
-            CHECK(power->accessibleDescription().contains(QStringLiteral("200 W")));
-            CHECK(swr->value() == 1.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-
-            // The relay idle reading cannot latch high, but valid high SWR can.
-            settle(1100);
-            meters.setRadioMeters(0.0f, 99.9f);
-            meters.setRadioMeters(100.0f, 1.002f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-            meters.setRadioMeters(100.0f, 4.0f);
-            CHECK(swr->value() == 4.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
-            meters.setRadioMeters(0.0f, 99.9f);
-            CHECK(swr->value() == 1.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
-            meters.setRadioMeters(0.0f, 1.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-
-            TunerModel meterModel;
-            TgxlConnection direct;
-            meterModel.setDirectConnection(&direct);
-            meters.setTunerModel(&meterModel);
-            CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
-                                            Q_ARG(QString, QStringLiteral("V1.2.17"))));
-            meters.setDeviceMeters(800.0f, 4.0f, 1000.0f, 1750.0f);
-            CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 10.0f);
-            CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
-            CHECK(power->property("gaugeMax").toFloat() == 200.0f);
-            CHECK(swr->property("gaugeMax").toFloat() == 3.0f);
-            CHECK(!power->accessibleDescription().contains(QStringLiteral("MAX")));
-            meters.setRadioMeters(100.0f, 1.3f);
-            CHECK(power->value() == 100.0f); // Disconnect also releases the direct freshness gate.
-
-            auto* automatic = meters.findChild<QAction*>(QStringLiteral("tunerPowerAuto"));
-            auto* fixed = meters.findChild<QAction*>(QStringLiteral("tunerPower600"));
-            CHECK(automatic && fixed);
-            if (automatic && fixed) {
-                CHECK(automatic->isChecked());
-                meters.setDeviceMeters(800.0f, 1.3f, 1000.0f, 1750.0f);
-                meters.setDeviceMeters(0.0f, 1.0f, 0.0f, 0.0f); // Auto idle timer is pending.
-                fixed->trigger();
-                CHECK(fixed->isChecked());
-                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
-                CHECK(power->property("gaugeYellowStart").toFloat() == 400.0f);
-                CHECK(power->property("gaugeRedStart").toFloat() == 500.0f);
-                CHECK(power->property("gaugeTicks").toString() == QLatin1String("0,200,400,600"));
-                meters.show();
-                meters.resize(260, 200);
-                settle();
-                QFont tickFont = power->font();
-                tickFont.setPixelSize(9); // Docked HGauge tick font.
-                const QFontMetrics metrics(tickFont);
-                const int labelWidth = qMax(metrics.horizontalAdvance(QStringLiteral("200")),
-                    qMax(metrics.horizontalAdvance(QStringLiteral("400")),
-                         metrics.horizontalAdvance(QStringLiteral("600"))));
-                for (bool narrow : {true, false}) {
-                    // Choose widths from the actual font so the same edge case is exercised on every platform.
-                    power->resize((narrow ? 4 : 10) * labelWidth + 8, power->height());
-                    const QImage actual = power->grab().toImage().copy(0, 0, power->width(), 12);
-                    power->setTickLabelCollisionAvoidanceEnabled(false);
-                    const QVector<HGauge::Tick> expected = narrow
-                        ? QVector<HGauge::Tick>{{0, "0"}, {200, "200"}, {600, "600"}}
-                        : QVector<HGauge::Tick>{{0, "0"}, {200, "200"}, {400, "400"}, {600, "600"}};
-                    power->setRange(0.0f, 600.0f, 500.0f, expected, 400.0f);
-                    const QImage reference = power->grab().toImage().copy(0, 0, power->width(), 12);
-                    CHECK(actual == reference);
-                    int previousRight = -2;
-                    for (const auto& tick : expected) {
-                        const int textWidth = metrics.horizontalAdvance(tick.label);
-                        const int x = qBound(2, int(tick.value / 600.0f * power->width())
-                                                    - textWidth / 2,
-                                             power->width() - textWidth - 4);
-                        if (x < previousRight + 2) {
-                            std::fprintf(stderr, "Tick %s overlaps: gauge=%d x=%d previousRight=%d\n",
-                                         qPrintable(tick.label), power->width(), x, previousRight);
-                            ++g_failures;
-                        }
-                        previousRight = x + textWidth;
-                    }
-                    power->setRange(0.0f, 600.0f, 500.0f,
-                                    {{0, "0"}, {200, "200"}, {400, "400"}, {600, "600"}}, 400.0f);
-                    power->setTickLabelCollisionAvoidanceEnabled(true);
-                }
-                settle(900);
-                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
-                QString persisted;
-                CHECK(settings.readAppRowFromDisk(QStringLiteral("TunerApplet"), persisted));
-                const auto document = QJsonDocument::fromJson(persisted.toUtf8()).object();
-                CHECK(document.value(QStringLiteral("powerRange")).toString() == QLatin1String("fixed600"));
-                CHECK(document.value(QStringLiteral("futureSetting")).toBool());
-                {
-                    settings.load();
-                    TunerApplet restored;
-                    auto* restoredFixed = restored.findChild<QAction*>(QStringLiteral("tunerPower600"));
-                    CHECK(restoredFixed && restoredFixed->isChecked());
-                    bool foundPower = false;
-                    for (auto* widget : restored.findChildren<QWidget*>()) {
-                        auto* gauge = dynamic_cast<HGauge*>(widget);
-                        if (gauge && gauge->accessibleName() == QLatin1String("Forward power")) {
-                            foundPower = true;
-                            CHECK(gauge->property("gaugeMax").toFloat() == 600.0f);
-                        }
-                    }
-                    CHECK(foundPower);
-                }
-                meters.setDeviceMeters(1200.0f, 1.3f, 1300.0f, 1750.0f);
-                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
-                CHECK(power->accessibleDescription().contains(QStringLiteral("600 W")));
-                automatic->trigger();
-                CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-                CHECK(qAbs(power->filledFraction() - 0.6f) < 0.00001f);
-                fixed->trigger();
-                CHECK(power->filledFraction() == 1.0f);
-                meters.setDeviceMeters(100.0f, 1.3f, 0.0f, 0.0f);
-                automatic->trigger();
-                CHECK(power->property("gaugeMax").toFloat() == 200.0f);
-                CHECK(qAbs(power->filledFraction() - 0.5f) < 0.00001f);
-                fixed->trigger();
-                CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
-                                                Q_ARG(QString, QStringLiteral("V1.2.17"))));
-                CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
-                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
-                CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
-                                                Q_ARG(QString, QStringLiteral("V1.2.17"))));
-                meters.setDeviceMeters(700.0f, 1.3f, 0.0f, 0.0f);
-                CHECK(power->property("gaugeMax").toFloat() == 600.0f);
-                automatic->trigger();
-                CHECK(power->property("gaugeMax").toFloat() == 2000.0f);
-                CHECK(settings.readAppRowFromDisk(QStringLiteral("TunerApplet"), persisted));
-                CHECK(QJsonDocument::fromJson(persisted.toUtf8()).object()
-                    .value(QStringLiteral("powerRange")).toString() == QLatin1String("auto"));
-            }
-        }
-    }
 
     // The indicator follows the direct connection's authenticated state,
     // while the radio relay can keep the rest of the tuner panel live.

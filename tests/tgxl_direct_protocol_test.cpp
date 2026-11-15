@@ -153,8 +153,11 @@ int main(int argc, char** argv)
     model.setDirectConnection(&conn);
     QSignalSpy ports(&model, &TunerModel::portsChanged);
 
-    // Firmware 1.2.17 reported max=0.00 on a fresh session and 62.43 after
-    // transmission (~1,750 W). This capture alone does not establish its meaning.
+    // `max` is a running maximum the tuner latches across transmissions, not a
+    // rating: a live TGXL on firmware 1.2.17 was captured reporting max=0.00
+    // on a freshly-opened session and 62.43 after a transmit. Nothing here
+    // asserts on it; it is carried so the frame stays the shape the device
+    // sends.
     peer->write("S230|status fwd=21.42 peak=21.42 max=62.43 swr=-60.0000 "
                 "pttA=0 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
                 "bypassA=0 bypassRxA=0 antA=0 "

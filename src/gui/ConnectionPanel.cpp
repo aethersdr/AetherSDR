@@ -1,4 +1,5 @@
 #include "ConnectionPanel.h"
+#include "ExperimentalRadioSupport.h"
 #include "core/AppSettings.h"
 #include "models/ConnectionWorkspace.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
@@ -11,6 +12,7 @@
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
 #include "core/NetworkPathResolver.h"
+#include "core/RemoteSession.h"
 #include "ComboStyle.h"   // shared themed combo look (painted arrow)
 #include "FramelessResizer.h"
 #include "CanonIndicators.h"
@@ -2416,9 +2418,18 @@ void ConnectionPanel::onLocalConnectClicked()
     // (there the span IS the data rate), and unconditionally writing False here
     // meant that ceiling could never engage on the HL2's only discovery path.
     // (#4470)
+    // A Flex discovered at a tailnet address is not on the LAN: there the
+    // slow-link concession is meaningful, so apply the user's remote preference
+    // (the value the Connection options checkbox starts from) instead.
     if (info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) == 0) {
         auto& settings = AppSettings::instance();
-        settings.setValue("LowBandwidthConnect", "False");
+        if (AetherSDR::isRemoteRadioSession(false, info)) {
+            settings.setValue("LowBandwidthConnect",
+                settings.value("LowBandwidthRemotePreferred",
+                               settings.value("LowBandwidthConnect", "False")));
+        } else {
+            settings.setValue("LowBandwidthConnect", "False");
+        }
         settings.save();
     }
 
@@ -2732,7 +2743,11 @@ void ConnectionPanel::populateIcomCivCombo()
             QStringLiteral("%1").arg(model.civAddress, 2, 16, QLatin1Char('0')).toUpper();
         // "%1 — %2" is populateSerialPortCombo's own label idiom, with the raw
         // value in userData so the read-back never has to re-parse the label.
-        m_manualIcomCivCombo->addItem(QStringLiteral("%1 — %2").arg(name, hex), hex);
+        const bool experimental = experimentalRadioDescriptor(QStringLiteral("icom"), name).has_value();
+        const QString label = experimental
+            ? tr("%1 — %2 (experimental)").arg(name, hex)
+            : QStringLiteral("%1 — %2").arg(name, hex);
+        m_manualIcomCivCombo->addItem(label, hex);
     }
     // TRAILING sentinel, and the read-back below relies on it being last.
     m_manualIcomCivCombo->addItem(tr("Custom..."), QStringLiteral("__custom__"));

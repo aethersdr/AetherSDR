@@ -35,6 +35,11 @@
 
 #include <cstdio>
 #include <functional>
+#include "gui/AppletRailMetrics.h"
+
+// A fit check at the rail's own 260 px can pass while the real docked width
+// clips: the scrollbar track comes off it.
+static constexpr int kDockedAppletWidth = AetherSDR::AppletRailMetrics::kStackedApplet;
 
 using namespace AetherSDR;
 
@@ -554,10 +559,11 @@ int main(int argc, char** argv)
             CHECK(floatInset >= 6);
             CHECK(floatInset < 20);
 
-            // Docked, at the rail's own width (AppletPanel is 260 px wide):
-            // the indicator ends the HL/Vdd row.
+            // Docked, at the width a stacked applet actually gets — the rail
+            // is 260 px but the scrollbar track comes off it, so 260 here
+            // passed while the real docked width clipped (#7077).
             applet.setFloating(false);
-            settle(QSize(260, 380));
+            settle(QSize(kDockedAppletWidth, 380));
             gridHolds();
             CHECK(abreast(vdd, source));
             CHECK(applet.width() - at(source).x() - source->width() < 20);

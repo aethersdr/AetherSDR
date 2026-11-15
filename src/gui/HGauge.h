@@ -266,13 +266,6 @@ public:
         update();
     }
 
-    void setLimitMarker(float value, const QColor& color) {
-        if (m_limitValue == value && m_limitColor == color) return;
-        m_limitValue = value;
-        m_limitColor = color;
-        update();
-    }
-
     void setPeakAtEdgesEnabled(bool enabled) {
         m_peakAtEdges = enabled;
         update();
@@ -298,7 +291,9 @@ public:
     }
 
     void setTickLabelCollisionAvoidanceEnabled(bool enabled) {
-        if (m_avoidTickLabelCollisions == enabled) return;
+        if (m_avoidTickLabelCollisions == enabled) {
+            return;
+        }
         m_avoidTickLabelCollisions = enabled;
         update();
     }
@@ -478,8 +473,9 @@ protected:
                 if (m_extraZoneColor.isValid()) {
                     int extraX = static_cast<int>(((m_extraZoneStart - m_min) / (m_max - m_min)) * barW);
                     int extraW = qMin(fillW, redX) - extraX;
-                    if (extraW > 0)
+                    if (extraW > 0) {
                         p.fillRect(barX + extraX + 1, barY + 1, extraW, barH - 2, m_extraZoneColor);
+                    }
                 }
 
                 // Red portion (above red zone)
@@ -490,10 +486,6 @@ protected:
             }
         }
 
-        const bool limitVisible = m_limitValue > 0.0f && m_limitColor.isValid();
-        const float limitFraction = qBound(0.0f, (m_limitValue - m_min) / (m_max - m_min), 1.0f);
-        const int limitX = qBound(barX + 1, barX + static_cast<int>(limitFraction * barW), barX + barW - 2);
-        bool markersOverlap = false;
         // Peak-hold marker (thin white vertical line)
         if (m_peakEnabled) {
             float peakFrac = qBound(0.0f, (m_peakValue - m_min) / (m_max - m_min), 1.0f);
@@ -502,21 +494,13 @@ protected:
             // the bar's own gradient, especially while it is decaying.
             // Reversed mode reads the peak as the lowest value (most
             // compression) but draws the same marker.
-            if (m_peakAtEdges && m_peakValue > m_min)
+            if (m_peakAtEdges && m_peakValue > m_min) {
                 peakX = qBound(barX + 1, peakX, barX + barW - 2);
-            if (peakX > barX && peakX < barX + barW - 1) {
-                markersOverlap = limitVisible && peakX == limitX;
-                p.setPen(QPen(QColor(0xff, 0xff, 0xff), kPeakMarkerW));
-                p.drawLine(peakX, barY + 1, peakX,
-                           markersOverlap ? barY + barH / 2 - 1 : barY + barH - 2);
             }
-        }
-
-        if (limitVisible) {
-            // Shared positions retain both colors without moving either value off scale.
-            p.setPen(QPen(m_limitColor, kPeakMarkerW));
-            p.drawLine(limitX, markersOverlap ? barY + barH / 2 : barY + 1,
-                       limitX, barY + barH - 2);
+            if (peakX > barX && peakX < barX + barW - 1) {
+                p.setPen(QPen(QColor(0xff, 0xff, 0xff), kPeakMarkerW));
+                p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
+            }
         }
 
         // Tick labels along the top
@@ -530,7 +514,9 @@ protected:
             return qBound(2, tx - tw / 2, w - tw - 4);
         };
         int lastLabel = m_ticks.size() - 1;
-        while (lastLabel >= 0 && m_ticks[lastLabel].label.isEmpty()) --lastLabel;
+        while (lastLabel >= 0 && m_ticks[lastLabel].label.isEmpty()) {
+            --lastLabel;
+        }
         const int lastLeft = lastLabel >= 0 ? labelLeft(m_ticks[lastLabel]) : w;
         int previousRight = -2;
         for (int i = 0; i < m_ticks.size(); ++i) {
@@ -789,8 +775,6 @@ private:
     float m_peakValue{0.0f};
     bool  m_peakEnabled{false};
     bool  m_peakAtEdges{false};
-    float m_limitValue{0.0f};
-    QColor m_limitColor;
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
     bool  m_avoidTickLabelCollisions{false};

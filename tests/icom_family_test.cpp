@@ -17,6 +17,7 @@
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
+#include "core/backends/hl2/MetisProtocol.h"
 #include "models/BandDefs.h"
 #include "models/DeclaredBands.h"
 #include "models/SliceModel.h"
@@ -27,6 +28,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <string>
+#include <type_traits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -149,7 +152,66 @@ int main(int argc, char** argv)
               == ExperimentalRadioIdentityHold::None,
           "non-Icom families classify on the connected edge");
     check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
-          "Hermes-Lite 2 is identified as an experimental radio family");
+          "an HL2 with no gateware identity is classified as experimental");
+
+    // The supported HL2 (#7257): gateware 74 on a board that does not name
+    // itself. The tier reads the backend's typed board identity (#7311), built
+    // here from the discovery reply through the same pure mapping the backend
+    // publishes; the display label is not an input at all.
+    const auto hl2Identity = [](std::uint8_t major, std::optional<std::uint8_t> minor) {
+        hl2::DiscoveryReply reply;
+        reply.boardId = 0x06;
+        reply.gatewareVersion = major;
+        reply.gatewareMinor = minor;
+        const std::string version = hl2::gatewareVersionText(reply);
+        RadioCapabilities::BoardIdentity identity;
+        identity.board = QString::fromLatin1(hl2::boardIdFor(
+            hl2::boardForGatewareMinor(hl2::gatewareMinorFromVersionText(version))));
+        if (const auto parsed = hl2::gatewareMajorFromVersionText(version)) {
+            identity.gatewareMajor = *parsed;
+        }
+        return identity;
+    };
+    const auto hl2DescriptorFor = [&](std::uint8_t major, std::optional<std::uint8_t> minor) {
+        return experimentalRadioDescriptor(QStringLiteral("hl2"), QStringLiteral("Hermes-Lite 2"),
+                                           hl2Identity(major, minor));
+    };
+    check(!hl2DescriptorFor(74, 3),
+          "board id 6 with stock gateware 74.3 is not classified as experimental");
+    check(!hl2DescriptorFor(74, std::nullopt),
+          "board id 6 with gateware 74 and no minor is not classified as experimental");
+    check(hl2DescriptorFor(73, 3).has_value(),
+          "an HL2 on gateware 73 remains experimental");
+    check(hl2DescriptorFor(75, 3).has_value(),
+          "an HL2 on gateware 75 remains experimental");
+    check(hl2DescriptorFor(74, hl2::kGatewareMinorSquareSdr2).has_value(),
+          "a SQUARE SDR 2 that names itself remains experimental, even on gateware 74");
+    check(hl2DescriptorFor(75, hl2::kGatewareMinorSquareSdr2).has_value(),
+          "a SQUARE SDR 2 on its own 75.52 gateware remains experimental");
+    check(hl2DescriptorFor(74, hl2::kGatewareMinorSquare3).has_value(),
+          "a SQUARE 3 that names itself remains experimental");
+    check(experimentalRadioDescriptor(QStringLiteral("hl2"), QStringLiteral("Hermes-Lite 2"),
+                                      std::nullopt)
+              .has_value(),
+          "an HL2 whose backend declares no board identity remains experimental");
+    check(experimentalRadioDescriptor(
+              QStringLiteral("hl2"), QStringLiteral("Hermes-Lite 2"),
+              RadioCapabilities::BoardIdentity{QStringLiteral("hl2"), std::nullopt})
+              .has_value(),
+          "an HL2 with no reported gateware major remains experimental");
+    check(experimentalRadioDescriptor(
+              QStringLiteral("anan"), QString(),
+              RadioCapabilities::BoardIdentity{QStringLiteral("hl2"), 74})
+              .has_value(),
+          "the HL2 gateware rule does not promote another family");
+    // The acceptance line of #7311: the tier has no label input, so a reworded
+    // or translated "Gateware" cannot reach it. A four-string call, the shape
+    // the label rode in on, no longer compiles.
+    static_assert(!std::is_invocable_v<decltype(experimentalRadioDescriptor),
+                                       QString, QString, QString, QString>,
+                  "experimentalRadioDescriptor() must take no display label");
+    static_assert(!std::is_invocable_v<decltype(isSupportedHl2Identity), QString, QString>,
+                  "isSupportedHl2Identity() must take no display label");
     check(ananNotice && ananNotice->displayName == QStringLiteral("ANAN-G2"),
           "ANAN-G2 is identified as an experimental radio family");
     check(!experimentalRadioDescriptor(QStringLiteral("flex")),
@@ -628,7 +690,7 @@ int main(int argc, char** argv)
             tunerModels.push_back(model.civAddress);
         }
     }
-    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0x98, 0x8E, 0x94, 0xB6},
+    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0x98, 0xB2, 0x8E, 0x94, 0xB6},
           "each evidenced internal/external-tuner model opts into tuner control");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
@@ -914,7 +976,7 @@ int main(int argc, char** argv)
     check(icom::modelForName("IC-705") == icom::modelForName("ic705"),
           "and all of them are the same model");
     check(icom::modelForName("") == nullptr, "an empty name resolves nothing");
-    check(icom::modelForName("IC-7760") == nullptr,
+    check(icom::modelForName("IC-9999") == nullptr,
           "a model absent from the table resolves nothing - which is the case "
           "only the broadcast address query can rescue");
 
