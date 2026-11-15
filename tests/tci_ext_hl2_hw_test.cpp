@@ -488,6 +488,7 @@ void serverBehaviour()
         server.setHl2HardwareChangesAllowed(true);
         a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;"
                "aethersdr_hl2_filter_board:none,false;");
+        // The RX/TX board leaves the HPF as it stood (true).
         check(backend->hwSets.size() == setsBefore + 1 && backend->filterBoard == 1,
               "turned on again, a set applies and the next is held in the window");
         server.setHl2HardwareChangesAllowed(false);
@@ -495,8 +496,8 @@ void serverBehaviour()
         got = a.take();
         check(backend->hwSets.size() == setsBefore + 1 && backend->filterBoard == 1
                   && warnings == warningsBefore + 2
-                  && got == QStringList({QStringLiteral("aethersdr_hl2_filter_board:n2adr_rxtx,false;"),
-                                         QStringLiteral("aethersdr_hl2_filter_board:n2adr_rxtx,false;")}),
+                  && got == QStringList({QStringLiteral("aethersdr_hl2_filter_board:n2adr_rxtx,true;"),
+                                         QStringLiteral("aethersdr_hl2_filter_board:n2adr_rxtx,true;")}),
               "a set held when the setting goes off is not applied; the sender gets what stands");
         if (got.size() != 2) {
             dump("a", got);
