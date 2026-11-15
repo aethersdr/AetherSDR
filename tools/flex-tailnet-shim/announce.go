@@ -285,6 +285,11 @@ type Announcer struct {
 	targets     []netip.Addr
 	selectedFor netip.Addr
 	report      []AnnouncePeer
+	// The devices last fetched from the tailnet, so a changed setting is
+	// applied at once rather than after the next fetch; and the setting's
+	// generation, so a selection made under the old one is discarded.
+	peers []tailPeer
+	gen   uint64
 	// Connected discovery helpers, and the last announcement forwarded
 	// (rewritten), for a helper that connects.
 	helpers  map[*helperConn]bool
@@ -517,7 +522,7 @@ func (a *Announcer) Attach(self netip.Addr, send func([]byte, netip.AddrPort) er
 	if a.link != nil {
 		a.link.cancel()
 	}
-	a.link, a.targets, a.report, a.selectedFor = link, nil, nil, netip.Addr{}
+	a.link, a.targets, a.report, a.selectedFor, a.peers = link, nil, nil, netip.Addr{}, nil
 	a.mu.Unlock()
 	go a.keepSelecting(ctx, link)
 }
@@ -527,7 +532,7 @@ func (a *Announcer) Detach() error {
 	if a.link != nil {
 		a.link.cancel()
 	}
-	a.link, a.targets, a.report = nil, nil, nil
+	a.link, a.targets, a.report, a.peers = nil, nil, nil, nil
 	for h := range a.helpers {
 		h.conn.Close()
 	}
@@ -675,17 +680,52 @@ func writeAnswer(c net.Conn, verdict string) bool {
 	return err == nil
 }
 
-// Refresh re-selects the devices now, after a setting changed.
+// Refresh re-selects the devices after a setting changed. It applies the
+// change at once to the devices last fetched, so the status that answers
+// the change already shows it and an announcement sent meanwhile follows
+// it, then asks for a fresh fetch. Fetching takes seconds on a radio's CPU;
+// the status read in between used to show the old setting.
 func (a *Announcer) Refresh() {
 	a.mu.Lock()
 	link := a.link
+	a.gen++
+	gen := a.gen
+	peers := append([]tailPeer(nil), a.peers...)
 	a.mu.Unlock()
-	if link != nil {
-		select {
-		case link.refresh <- struct{}{}:
-		default:
-		}
+	if link == nil {
+		return
 	}
+	if peers != nil {
+		mode, only := link.mode()
+		a.apply(link, gen, peers, mode, only)
+	}
+	select {
+	case link.refresh <- struct{}{}:
+	default:
+	}
+}
+
+// apply selects from peers under the given setting and keeps the result,
+// unless the link has changed or a newer setting arrived since gen was
+// read: a selection made under the old setting must not replace one made
+// under the new. It returns the targets and whether they were kept.
+func (a *Announcer) apply(link *announceLink, gen uint64, peers []tailPeer, mode string, only []string) ([]netip.Addr, bool) {
+	a.mu.Lock()
+	radioIP := a.radioIP
+	helpers := map[netip.Addr]bool{}
+	for h := range a.helpers {
+		helpers[h.addr] = true
+	}
+	a.mu.Unlock()
+	station := a.stationNets(radioIP)
+	targets, report := selectTargets(peers, mode, only, station, helpers)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.link != link || a.gen != gen {
+		return targets, false
+	}
+	a.targets, a.report, a.selectedFor = targets, report, radioIP
+	return targets, true
 }
 
 func (a *Announcer) keepSelecting(ctx context.Context, link *announceLink) {
@@ -706,22 +746,18 @@ func (a *Announcer) keepSelecting(ctx context.Context, link *announceLink) {
 		peers, err := link.peers(pctx)
 		cancel()
 		if err == nil {
-			mode, only := link.mode()
+			// The generation is read before the setting: a setting changed
+			// after this read bumps it, so this selection is discarded and
+			// the refresh that change queued selects again.
 			a.mu.Lock()
-			radioIP := a.radioIP
-			helpers := map[netip.Addr]bool{}
-			for h := range a.helpers {
-				helpers[h.addr] = true
-			}
-			a.mu.Unlock()
-			station := a.stationNets(radioIP)
-			targets, report := selectTargets(peers, mode, only, station, helpers)
-			a.mu.Lock()
+			gen := a.gen
 			if a.link == link {
-				a.targets, a.report, a.selectedFor = targets, report, radioIP
+				a.peers = append([]tailPeer(nil), peers...)
 			}
 			a.mu.Unlock()
-			if !slicesEqualAddr(targets, last) {
+			mode, only := link.mode()
+			targets, kept := a.apply(link, gen, peers, mode, only)
+			if kept && !slicesEqualAddr(targets, last) {
 				log.Printf("announce: announcing the radio to %d tailnet device(s) (%s)", len(targets), mode)
 				last = targets
 			}

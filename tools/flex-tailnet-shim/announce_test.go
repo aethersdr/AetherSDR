@@ -661,3 +661,123 @@ func TestAnnouncerHelperFeed(t *testing.T) {
 		t.Fatalf("helper not closed on detach: %v", err)
 	}
 }
+
+// settingForTest is the announcement setting a test's node holds.
+type settingForTest struct {
+	mu   sync.Mutex
+	mode string
+	only []string
+}
+
+func (s *settingForTest) set(mode string, only ...string) {
+	s.mu.Lock()
+	s.mode, s.only = mode, only
+	s.mu.Unlock()
+}
+
+func (s *settingForTest) get() (string, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mode, append([]string(nil), s.only...)
+}
+
+func deviceStates(a *Announcer) string {
+	var parts []string
+	for _, d := range a.Status().Devices {
+		parts = append(parts, fmt.Sprintf("%s:%v/%s", d.ID, d.Announced, d.Skipped))
+	}
+	return strings.Join(parts, " ")
+}
+
+var twoAwayDevices = []tailPeer{
+	{ID: "nA", Name: "a", Online: true, IP: netip.MustParseAddr("100.64.0.2")},
+	{ID: "nB", Name: "b", Online: true, IP: netip.MustParseAddr("100.64.0.3")},
+}
+
+// TestRefreshShowsTheNewSettingAtOnce: the status read straight after a
+// setting changes shows it, though the tailnet's device list is still being
+// fetched (seconds on a radio's CPU), and nothing more is sent to a device
+// the new setting leaves out.
+func TestRefreshShowsTheNewSettingAtOnce(t *testing.T) {
+	setting := &settingForTest{mode: announceAll}
+	var fetches atomic.Int32
+	a := &Announcer{Interfaces: func() []netip.Prefix { return nil }}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(ctx context.Context) ([]tailPeer, error) {
+			if fetches.Add(1) == 1 {
+				return append([]tailPeer(nil), twoAwayDevices...), nil
+			}
+			<-ctx.Done() // every later fetch is still running
+			return nil, ctx.Err()
+		}, setting.get)
+	defer a.Detach()
+	waitFor(t, "the first selection", func() bool { return deviceStates(a) == "nA:true/ nB:true/" })
+
+	for _, tc := range []struct {
+		mode string
+		only []string
+		want string
+	}{
+		{announceOff, nil, "nA:false/off nB:false/off"},
+		{announceAll, nil, "nA:true/ nB:true/"},
+		{announceOnly, []string{"nB"}, "nA:false/not chosen nB:true/"},
+	} {
+		setting.set(tc.mode, tc.only...)
+		a.Refresh()
+		if got := deviceStates(a); got != tc.want {
+			t.Errorf("%s %v: status straight after the change %q, want %q", tc.mode, tc.only, got, tc.want)
+		}
+		a.mu.Lock()
+		n := len(a.targets)
+		a.mu.Unlock()
+		if want := strings.Count(tc.want, ":true"); n != want {
+			t.Errorf("%s %v: sending to %d device(s), want %d", tc.mode, tc.only, n, want)
+		}
+	}
+}
+
+// TestSelectionUnderTheOldSettingIsDiscarded: a selection that read the
+// setting just before it changed doesn't replace the one the change made.
+func TestSelectionUnderTheOldSettingIsDiscarded(t *testing.T) {
+	setting := &settingForTest{mode: announceAll}
+	var fetches atomic.Int32
+	var armed atomic.Bool
+	third := make(chan struct{})
+	a := &Announcer{Interfaces: func() []netip.Prefix { return nil }}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(ctx context.Context) ([]tailPeer, error) {
+			switch fetches.Add(1) {
+			case 1:
+			case 2:
+				armed.Store(true) // the setting this pass reads is about to change
+			case 3:
+				close(third)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return append([]tailPeer(nil), twoAwayDevices...), nil
+		}, func() (string, []string) {
+			if armed.CompareAndSwap(true, false) {
+				// The operator turns announcing off just after this pass read
+				// "every device": its selection is now out of date.
+				setting.set(announceOff)
+				a.Refresh()
+				return announceAll, nil
+			}
+			return setting.get()
+		})
+	defer a.Detach()
+	waitFor(t, "the first selection", func() bool { return deviceStates(a) == "nA:true/ nB:true/" })
+	a.Refresh() // start the second pass
+	select {
+	case <-third:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the third fetch never started")
+	}
+	if got, want := deviceStates(a), "nA:false/off nB:false/off"; got != want {
+		t.Errorf("status %q after a pass under the old setting, want %q", got, want)
+	}
+}
