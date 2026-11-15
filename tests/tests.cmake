@@ -558,6 +558,17 @@ target_include_directories(control_remote_pairing_test PRIVATE src)
 target_link_libraries(control_remote_pairing_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME control_remote_pairing_test COMMAND control_remote_pairing_test)
 
+# aetherd's LAN advertisement (aetherd-remote-backend.md §1): the probe format,
+# the reply's contents and size, the rate bound, and the source-address and
+# WireGuard-interface filters, socket-free; then one probe over 127.0.0.1 to a
+# responder bound on an EPHEMERAL port (never the fixed 4996). Skips (77) when
+# it cannot bind.
+add_executable(aetherd_discovery_responder_test tests/aetherd_discovery_responder_test.cpp)
+target_include_directories(aetherd_discovery_responder_test PRIVATE src)
+target_link_libraries(aetherd_discovery_responder_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME aetherd_discovery_responder_test COMMAND aetherd_discovery_responder_test)
+set_tests_properties(aetherd_discovery_responder_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
 # grants observation only; no control or transmit capability may appear.
