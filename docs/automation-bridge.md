@@ -1274,7 +1274,9 @@ automation audio capture, which needs `AETHER_AUTOMATION=1` at launch. Without
 it each of those stages reports `INCONCLUSIVE — audio capture unavailable` with
 the engine's reason, publishes no levels, and does not key. A capture that arms
 but returns no audio is reported as a missing receive-audio path, not as a
-quiet band.
+quiet band, and `rx-sidebands` then reports `summary.pattern: no-audio`.
+`sideband` reports a refused key as INCONCLUSIVE with `keyConfirmed: false`,
+and does not key its second leg.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 

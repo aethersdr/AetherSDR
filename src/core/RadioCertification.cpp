@@ -2245,6 +2245,9 @@ void RadioCertification::stageRxSidebands(const Options& o)
     // No audio at all is a missing audio path, not a quiet band: the
     // carrier caveat above is only true of modes that captured something.
     if (!silentModes.isEmpty()) {
+        // The pattern is renamed with the concern: a silent mode counts as
+        // "not recovered", so the switch above can name a pass.
+        patternName = QStringLiteral("no-audio");
         concern = QStringLiteral(
             "INCONCLUSIVE — the capture armed but returned no audio in %1. The "
             "output tap delivered nothing, which is a missing receive-audio path, "
@@ -2574,8 +2577,11 @@ void RadioCertification::stageSideband(const Options& o)
     // Armed BEFORE the key: with no capture there is nothing to measure, so
     // the stage does not transmit at all.
     QString captureError;
+    // A refused key leaves both legs unkeyed receive audio. The second leg is
+    // not keyed after the first refusal: the answer is already INCONCLUSIVE.
+    bool keyRefused = false;
     auto capture = [&](const QString& mode, double& fsOut) -> std::vector<float> {
-        if (!captureError.isEmpty())
+        if (!captureError.isEmpty() || keyRefused)
             return {};
         if (auto* slice = m_radio->slice(0))
             slice->setMode(mode);
@@ -2584,7 +2590,8 @@ void RadioCertification::stageSideband(const Options& o)
                         &captureError)) {
             return {};
         }
-        keyViaOperatorPath(true);
+        if (!keyViaOperatorPath(true))
+            keyRefused = true;
         spin(o.settleMs);
         keyViaOperatorPath(false);
         m_audio->stopAutomationAudioCapture();
@@ -2687,13 +2694,19 @@ void RadioCertification::stageSideband(const Options& o)
             {QStringLiteral("frames"), static_cast<int>(oppSb.size())}}},
         {QStringLiteral("matchedMinusOppositeDb"), db(sameTone) - db(oppTone)},
         {QStringLiteral("receiverSaturated"), saturated},
+        {QStringLiteral("keyConfirmed"), !keyRefused},
     };
 
     // Saturation check first: our own TX over a few inches of coax overloads the
     // receiver (measured +7.3 dBFS) and makes the sidebands read alike. An
     // overloaded measurement must decline to answer, not report inversion.
     QString concern;
-    if (sameSb.empty() || oppSb.empty()) {
+    if (keyRefused) {
+        concern = QStringLiteral(
+            "INCONCLUSIVE — the key was refused, so no leg was transmitted and "
+            "the captures are unkeyed receive audio; they say nothing about "
+            "sideband agreement");
+    } else if (sameSb.empty() || oppSb.empty()) {
         concern = QStringLiteral(
             "no receive audio captured while transmitting. The TX audio monitor "
             "may not be implemented for this backend, in which case this stage "

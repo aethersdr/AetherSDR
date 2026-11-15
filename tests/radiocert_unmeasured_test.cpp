@@ -313,6 +313,27 @@ void testCaptureArmedButSilent()
               && usb.value(QStringLiteral("overallRmsDb")).isNull(),
           "silent: an empty capture has frames 0 and no -240 dB levels");
 
+    const QString pattern = s.rxSidebands.value(QStringLiteral("measured")).toObject()
+                                .value(QStringLiteral("summary")).toObject()
+                                .value(QStringLiteral("pattern")).toString();
+    check(pattern == QLatin1String("no-audio"),
+          "silent: rx-sidebands summary.pattern says no-audio, matching its concern");
+
+    // No TxController, so the first leg's key is refused: unkeyed receive
+    // audio is no sideband comparison, and the second leg is not keyed.
+    const QString sb = concernOf(s.sideband);
+    check(sb.contains(QLatin1String("INCONCLUSIVE"))
+              && sb.contains(QLatin1String("key was refused")),
+          "silent: sideband is INCONCLUSIVE when the key was refused");
+    check(!sb.contains(QLatin1String("TX audio monitor"))
+              && !sb.contains(QLatin1String("DISAGREE")),
+          "silent: sideband blames neither the TX monitor nor the TX chain");
+    check(s.sideband.value(QStringLiteral("measured")).toObject()
+                  .value(QStringLiteral("keyConfirmed")).toBool(true) == false,
+          "silent: sideband reports keyConfirmed false");
+    check(s.keyRefusals == 1,
+          "silent: sideband stops keying after the first refused key");
+
     const QString life = concernOf(s.lifecycle);
     check(life.contains(QLatin1String("INCONCLUSIVE"))
               && life.contains(QLatin1String("no audio before")),
