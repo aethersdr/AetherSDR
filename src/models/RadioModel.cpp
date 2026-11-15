@@ -9117,10 +9117,10 @@ void RadioModel::evaluateNetworkQuality()
     int currentErrors = 0;
     int currentPackets = 0;
     if (const auto snapshot = backendReceiveTelemetry()) {
-        currentErrors = snapshot->errors;
+        currentErrors = snapshot->breaks;
         currentPackets = snapshot->packets;
     } else if (m_panStream) {
-        currentErrors = m_panStream->packetErrorCount();
+        currentErrors = m_panStream->packetSequenceBreakCount();
         currentPackets = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
         currentErrors = saturatingInt(m_linkStats.rxPacketsLost);
@@ -9163,10 +9163,10 @@ void RadioModel::evaluateNetworkQuality()
 void RadioModel::resetNetworkHealthSamples()
 {
     if (const auto snapshot = backendReceiveTelemetry()) {
-        m_lastErrorCount = snapshot->errors;
+        m_lastErrorCount = snapshot->breaks;
         m_lastPacketCount = snapshot->packets;
     } else if (m_panStream) {
-        m_lastErrorCount = m_panStream->packetErrorCount();
+        m_lastErrorCount = m_panStream->packetSequenceBreakCount();
         m_lastPacketCount = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
         m_lastErrorCount = saturatingInt(m_linkStats.rxPacketsLost);
@@ -9568,7 +9568,8 @@ ReceiveStreamStats::Counters RadioModel::categoryStats(ReceiveStreamStats::Categ
         && int(PanadapterStream::CatCount) == int(ReceiveStreamStats::Count),
         "the two stream-category enums are mapped by ordinal");
     const auto counters = m_panStream->categoryStats(static_cast<PanadapterStream::StreamCategory>(cat));
-    return {counters.bytes, counters.packets, counters.errors, counters.late};
+    return {counters.bytes, counters.packets, counters.errors,
+            counters.late, counters.reordered, counters.breaks};
 }
 
 QVector<PanadapterStream::AudioStreamDiagnostics> RadioModel::audioStreamDiagnostics() const

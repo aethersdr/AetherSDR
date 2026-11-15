@@ -1834,5 +1834,11 @@
   "note": "Receive-only Data2G monitor fed mono 24 kHz audio from the AX.25 receive model's existing tap; decode runs on its own worker with a bounded queue and generation retirement. No radio protocol, no audio source of its own and no transmit authority.",
   "split": "",
   "confidence": "high"
+ },
+ "core/backends/flex/VitaRxReorder.h": {
+  "tag": "vendor(flex)",
+  "note": "Bounded Flex VITA count/timestamp receive ordering and loss resolution; private to the Flex stream path.",
+  "split": "",
+  "confidence": "high"
  }
 }
