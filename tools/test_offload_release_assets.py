@@ -85,9 +85,10 @@ class FakeGitHub:
 
 
 class FakeBucket:
-    def __init__(self, fail_on: str | None = None, corrupt: str | None = None) -> None:
+    def __init__(self, fail_on: str | None = None, corrupt: str | None = None,
+                 flip: str | None = None) -> None:
         self.objects: dict[str, bytes] = {}
-        self.fail_on, self.corrupt = fail_on, corrupt
+        self.fail_on, self.corrupt, self.flip = fail_on, corrupt, flip
 
     def put_file(self, key, path, content_type, cache_control):
         if self.fail_on and key.endswith(self.fail_on):
@@ -95,6 +96,8 @@ class FakeBucket:
         data = path.read_bytes()
         if self.corrupt and key.endswith(self.corrupt):
             data = data[:-1]
+        if self.flip and key.endswith(self.flip):
+            data = data[:-1] + bytes([data[-1] ^ 0x01])
         self.objects[key] = data
 
     def digest(self, key):
@@ -288,6 +291,14 @@ class Offload(unittest.TestCase):
         gh = FakeGitHub(KEPT + MOVED)
         with self.assertRaises(o.OffloadError):
             run(gh, FakeBucket(corrupt="msixupload"))
+        self.assertEqual(gh.deleted, [])
+
+    def test_a_copy_of_the_same_length_with_other_bytes_deletes_nothing(self):
+        # Only the bucket's SHA-256 tells these apart: size and served size match.
+        gh = FakeGitHub(KEPT + MOVED)
+        with self.assertRaises(o.OffloadError) as e:
+            run(gh, FakeBucket(flip="Windows-x64-symbols.tar.xz"))
+        self.assertIn("the bucket holds", str(e.exception))
         self.assertEqual(gh.deleted, [])
 
     def test_a_copy_not_served_publicly_deletes_nothing(self):
