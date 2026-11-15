@@ -984,6 +984,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomModels.cpp    # IcomCIV Phase 5 (per-model capability table)
     src/core/backends/icom/IcomControls.cpp  # the CI-V control registry (controls.map / controls.scrub)
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
+    src/core/backends/icom/IcomCivBackend_DualReceiver.cpp
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
@@ -1027,7 +1028,6 @@ set(CORE_SOURCES
     src/core/ClientEq.cpp
     src/core/ClientComp.cpp
     src/core/ClientGate.cpp
-    src/core/ClientDeEss.cpp
     src/core/ClientTube.cpp
     src/core/ClientPudu.cpp
     src/core/ClientPuduMonitor.cpp
@@ -1588,9 +1588,6 @@ set(GUI_SOURCES
     src/gui/ClientGateEditor.cpp
     src/gui/StripGatePanel.cpp
     src/gui/ClientGateLevelView.cpp
-    src/gui/ClientDeEssApplet.cpp
-    src/gui/ClientDeEssCurveWidget.cpp
-    src/gui/StripDeEssPanel.cpp
     src/gui/ClientTubeApplet.cpp
     src/gui/ClientTubeCurveWidget.cpp
     src/gui/ClientTubeEditor.cpp

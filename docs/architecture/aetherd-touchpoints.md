@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 291 touchpoint headers (235 core, 56 models) — 291/291 tagged, 0/291 converted.
+**Totals:** 290 touchpoint headers (234 core, 56 models) — 290/290 tagged, 0/290 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -19,9 +19,9 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherTxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply. | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
 | `core/AppActivity.h` | 3 | ui-support — Process-lifetime activity hold (App Nap opt-out on macOS, process power-throttling opt-out on Windows; never blocks sleep) and startStreamThread(), the High-QoS thread start for stream threads; app plumbing, not radio state. | unconverted |
-| `core/AppSettings.h` | 111 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
+| `core/AppSettings.h` | 110 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
 | `core/AudioDevicePreferencePolicy.h` | 1 | ui-support — Header-only policy over PC audio device ids: whether a device-list change keeps the engine's device, falls back to the system default or returns to the saved device, and whether a selection is written to the saved id (#6040); also which enumerable ids count as present and which as arrivals. Host audio, no radio state. | unconverted |
-| `core/AudioEngine.h` | 48 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
+| `core/AudioEngine.h` | 46 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
 | `core/AudioOutputRouter.h` | 1 | ui-support — Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state | unconverted |
 | `core/AutomationBridgeSettings.h` | 3 | ui-support — Owned configuration for the agent automation bridge (enabled / txAllowed / txAck / readOnly) under one nested key; the secret token lives in the OS keychain, not here. Dev and test tooling — same home decision as core/AutomationServer.h. NOTE for RFC §6: txAllowed() is read as a TX-guard input by BOTH AutomationServer and Hl2Backend, so this header is a step-4 consolidation target. | unconverted |
 | `core/AutomationServer.h` | 3 | ui-support — QLocalServer GUI-automation/test bridge (dumpTree/grab/invoke on QWidgets); dev tooling, stays in gui shell | unconverted |
@@ -31,11 +31,10 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/CallsignUtils.h` | 1 | universal — Stateless callsign parsing/validation helpers; radio-agnostic. | unconverted |
 | `core/CatPort.h` | 2 | ui-support — CAT server (TCP+PTY, rigctld/TS-2000/FlexCAT dialects) for external apps; desktop integration, needs a home | unconverted |
 | `core/ClientComp.h` | 13 | universal — Client-side TX dynamics DSP (compressor/limiter/drive/phase rotator + GR meters); radio-agnostic engine DSP. | unconverted |
-| `core/ClientDeEss.h` | 9 | universal — Client TX DSP de-esser (sidechain bandpass + dynamics, meters); radio-agnostic engine DSP chain stage | unconverted |
 | `core/ClientDisplaySettings.h` | 1 | ui-support — Radio-scoped client persistence for locally shaped display state (waterfall cadence, FFT FPS, the dBm range) under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state. | unconverted |
 | `core/ClientEq.h` | 16 | universal — Client-side parametric EQ DSP in AudioEngine (RX/TX paths); radio-agnostic engine DSP, no vendor protocol ties. | unconverted |
 | `core/ClientFinalLimiter.h` | 1 | universal — Final-stage brickwall limiter in client TX DSP chain (ceiling/trim/DC-block + meters); radio-agnostic DSP. | unconverted |
-| `core/ClientGate.h` | 12 | universal — Client TX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters) — radio-agnostic engine DSP. | unconverted |
+| `core/ClientGate.h` | 9 | universal — Client RX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters); the TX gate is retired (RN2 replaces it) — radio-agnostic engine DSP. | unconverted |
 | `core/ClientPudu.h` | 11 | universal — Client-side TX audio exciter (PooDoo dual-band DSP) — engine TX DSP chain module, no radio-family coupling | unconverted |
 | `core/ClientPuduMonitor.h` | 1 | universal — TX-audio monitor: record/replay post-DSP client TX chain output without keying; radio-agnostic DSP feature | unconverted |
 | `core/ClientQuindarTone.h` | 1 | universal — Engine-side TX DSP stage: Quindar tone/Morse intro-outro on PTT; works over any radio's TX audio path. | unconverted |
@@ -177,7 +176,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 2 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 194 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 191 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |

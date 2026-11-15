@@ -64,7 +64,6 @@ class TxVoiceProcessor;
 class ClientEq;
 class ClientComp;
 class ClientGate;
-class ClientDeEss;
 class ClientTube;
 class ClientPudu;
 class ClientPuduMonitor;
@@ -197,6 +196,7 @@ public:
     int  rxPan() const { return m_rxPan.load(); }
     void  setRxBufferCapMs(int ms) { m_rxBufferCapMs.store(qBound(50, ms, 1000)); }
     int   rxBufferCapMs() const { return m_rxBufferCapMs.load(); }
+    void setReceiveJitterBuffer(int prefillMs, int bufferCapMs);
     void setReceivePresentationDelays(
         int flexDelayMs,
         int kiwiDelayMs,
@@ -443,17 +443,16 @@ public:
     ClientComp* clientCompTx() { return m_clientCompTx.get(); }
     ClientComp* clientCompRx() { return m_clientCompRx.get(); }
 
-    // Client-side TX downward expander / noise gate (#1661 Phase 2).
+    // Client-side RX downward expander / noise gate (#1661 Phase 2); the TX
+    // side is retired (RN2 replaces it).
     // Single DSP module with an Expander ↔ Gate mode toggle that
     // snaps ratio + floor to known-good presets.
-    ClientGate* clientGateTx() { return m_clientGateTx.get(); }
     ClientGate* clientGateRx() { return m_clientGateRx.get(); }
 
     // Client-side TX de-esser (#1661 Phase 3).  Sidechain-filtered
     // dynamics: a user-tunable bandpass feeds the envelope detector,
     // broadband attenuation (capped at amountDb) is applied when
     // sibilant energy crosses threshold.
-    ClientDeEss* clientDeEssTx() { return m_clientDeEssTx.get(); }
 
     // Client-side TX dynamic tube saturator (#1661 Phase 4).  Three
     // selectable curves, bipolar envelope-driven drive, tilt tone
@@ -515,9 +514,10 @@ public:
     // order (TxChainLayout): 1..15, with None ending the list.
     enum class TxChainStage : uint8_t {
         None   = 0,   // sentinel / end-of-list marker
-        Gate   = 1,
+        Gate   = 1,   // retired: AetherTX has no gate (RN2 replaced it); kept so
+                      // orders saved before still decode, and dropped on load
         Eq     = 2,
-        DeEss  = 3,
+        DeEss  = 3,   // retired, as Gate: AetherTX has no de-esser
         Comp   = 4,
         Tube   = 5,
         Enh    = 6,   // PUDU slot
@@ -569,6 +569,13 @@ public:
     // appended, as on load, so a stage is bypassed by its processor's
     // enable flag, never by leaving it out.  Persists what was packed.
     void setTxChainStages(const QVector<TxChainStage>& stages);
+    // A chain order from stage names, as the settings file and profiles store
+    // it. The retired "Gate" and "DeEss" are dropped; unknown names are
+    // skipped. An order that names a retired stage and is otherwise the old
+    // default (Eq, Comp, Tube, Enh, Reverb) is a pre-retirement default the
+    // operator never changed, so it becomes today's default. Empty when no
+    // name parses.
+    static QVector<TxChainStage> txChainFromNames(const QStringList& names);
     QVector<TxChainStage> txChainStages() const;
 
     // ── Master TX bypass ─────────────────────────────────────────
@@ -612,15 +619,14 @@ public:
     void saveClientCompRxSettings() const;
     void saveClientCompSettings() const;
 
-    // Client-side TX gate — persistence mirrors the compressor.
-    void loadClientGateSettings();
+    // Client-side RX gate — persistence mirrors the compressor. AetherTX
+    // has no gate (RN2 replaces it) and no de-esser; migrateRetiredTxStages()
+    // carries an enabled TX gate over to RN2 once, and
+    // dropRetiredSettingsKeys() removes both stages' other keys.
     void loadClientGateRxSettings();
     void saveClientGateRxSettings() const;
-    void saveClientGateSettings() const;
+    void migrateRetiredTxStages();
 
-    // Client-side TX de-esser — persistence.
-    void loadClientDeEssSettings();
-    void saveClientDeEssSettings() const;
     // RX-side counterpart (#2425).
 
     // Client-side TX dynamic tube — persistence.
@@ -1349,6 +1355,7 @@ private:
     std::unique_ptr<Resampler> m_lineOutLeftResampler;
     std::unique_ptr<Resampler> m_lineOutRightResampler;
     void drainRxAudio(qsizetype freeBytes);
+    void drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedBytes);
     bool retireInvalidPcmSources();
     void queueLegacyKiwiAudioData(const QByteArray& pcm24kStereoFloat);
     void queueKiwiAudioData(const QString& sourceId, const QByteArray& pcm24kStereoFloat);
@@ -1442,10 +1449,8 @@ private:
     std::unique_ptr<ClientComp> m_clientCompTx;
     std::unique_ptr<ClientComp> m_clientCompRx;
     // Client-side TX downward expander / noise gate.
-    std::unique_ptr<ClientGate> m_clientGateTx;
     std::unique_ptr<ClientGate> m_clientGateRx;
     // Client-side TX de-esser.
-    std::unique_ptr<ClientDeEss> m_clientDeEssTx;
     // Client-side TX tube saturator.
     std::unique_ptr<ClientTube> m_clientTubeTx;
     std::unique_ptr<ClientTube> m_clientTubeRx;
@@ -1472,7 +1477,7 @@ private:
     // Generalised TX DSP chain, packed by TxChainLayout (4 bits per slot)
     // so the audio thread loads the full order in a single atomic read per
     // block. TxChainStage::None terminates the list; unused slots are zero.
-    // Default canonical order: [Gate, Eq, DeEss, Comp, Tube, Enh, Reverb].
+    // Default canonical order: [Tube, Eq, Comp, Enh, Reverb].
     std::atomic<uint64_t> m_txChainPacked{0};
     // Master-bypass snapshot — the stages that were enabled at the
     // moment setTxBypassed(true) was called.  Used solely to restore
@@ -1593,6 +1598,9 @@ private:
     QString           m_externalKiwiReceivePresentationDelaySourceId;
     int               m_externalKiwiReceivePresentationDelayMs{0};
     std::atomic<bool> m_rxPresentationPrebuffering{false};
+    std::atomic<int> m_rxJitterPrefillMs{0};
+    std::atomic<int> m_rxJitterCapMs{0};
+    std::atomic<bool> m_rxJitterPrebuffering{false};
     std::atomic<bool> m_kiwiSdrPrebuffering{false};
     std::vector<std::unique_ptr<ExternalRxAudioSourceState>> m_externalKiwiSources;
     std::atomic<qsizetype> m_rxBufferBytes{0};

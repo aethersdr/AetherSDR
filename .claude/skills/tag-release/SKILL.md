@@ -1,6 +1,6 @@
 ---
 name: tag-release
-description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store submission is committed, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows and the signing runs, verifies the twenty-five-asset set on the files, reads the Store publish step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
+description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store submission is committed, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows and the signing runs, verifies the twenty-four-asset set on the files, reads the Store publish step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
 ---
 
 # Tag the release — tag, publish, watch, verify, announce
@@ -15,9 +15,11 @@ which). Nine deliverables, in this order:
    the title that equals the tag's first line and the derived notes.
 4. **The three build workflows and the signing runs watched to conclusion** —
    re-run or dispatched by hand where the record says they stall.
-5. **The asset set verified on the files** — twenty-five assets (twenty-four
-   for a hotfix), every `.asc` postdating what it signs, `SHA256SUMS.txt`, one
-   artifact signature and the manual's signature actually checked with `gpg`.
+5. **The asset set verified on the files** — twenty-four assets (twenty-three
+   for a hotfix), every `.asc` postdating what it signs, `SHA256SUMS.txt` (which
+   now lists the PDF manual, RFC #6964) and one artifact signature actually
+   checked with `gpg`. Releases through v26.11.2 carry 25/24 assets, the
+   manual's `.pdf.asc` among them.
 6. **The Microsoft Store step read** — production submission committed (or a
    draft staged when the switch is off), or the reason it failed
    and the recovery, stated.
@@ -154,7 +156,7 @@ ask" question, so the questions are batched once.
   component is a **hotfix**: `packaging/windows/get-store-build-plan.ps1`
   returns `storeEligible = false`, so the Windows job attaches the installer
   and the portable ZIP but builds **no `.msixupload`** and stages nothing —
-  twenty-four assets, not twenty-five, the Store skipped by design, the release body
+  twenty-three assets, not twenty-four, the Store skipped by design, the release body
   in the hotfix shape, and the notes covering one fix.
 - **Refuse a version that already exists.** Both must be empty:
 
@@ -385,8 +387,9 @@ pending). Each run is skipped by its own `if` unless the triggering build
 waits up to 30 minutes for the eight GPG-signable assets (both AppImages,
 both Linux release tarballs, both macOS app tarballs, the setup.exe, the
 portable ZIP), checks out the **tag** for the source tarball, writes
-`SHA256SUMS.txt` over exactly nine files (the eight plus the source tarball —
-DMGs and the `.msixupload` are deliberately absent), signs
+`SHA256SUMS.txt` over exactly ten files (the eight, the source tarball and
+the PDF manual — DMGs and the `.msixupload` are deliberately absent; releases
+through v26.11.2 list nine, without the manual), signs
 everything and uploads with `--clobber`. Its runs execute on the default
 branch, so `gh run list --branch vX.Y.Z` never shows them:
 
@@ -422,17 +425,23 @@ as it is).
 **Docs** runs on `release: published`, so creating the release (step 2)
 starts it, not the tag push. "Render PDF manual for release" checks out the
 tag and typesets `AetherSDR-Manual-vX.Y.Z.pdf` from the tag's
-`docs/user/docs/`. "Attach PDF manual to release" runs in the `release`
-environment, so it waits for the same approval as the signing workflows; it
-signs the PDF with the release key (the same `GPG_PRIVATE_KEY`/`GPG_PASSPHRASE`
-secrets as `sign-release.yml`), verifies the signature and uploads the PDF and
-its `.asc` together. Then "Resolve what to deploy", "Build docs site for
+`docs/user/docs/`. "Attach PDF manual to release" uploads the PDF with
+no approval gate and no signature of its own: from releases after v26.11.2,
+`sign-release.yml` lists the PDF in `SHA256SUMS.txt`, so `SHA256SUMS.txt.asc`
+covers it (RFC #6964). Releases through v26.11.2 carry a `.pdf.asc`. Then "Resolve what to deploy", "Build docs site for
 deploy" and "Deploy docs site" publish docs.aethersdr.com from the tag, through
 the `cloudflare-pages` environment, with `/AetherSDR-Manual.pdf` redirected to
 the PDF just attached. A pre-release attaches the PDF but deploys nothing. Its
 runs execute on the tag; read its conclusion with the build workflows. A red run is re-run once
-without asking (`gh run rerun <id> --failed`): it builds nothing the other
-workflows depend on.
+without asking (`gh run rerun <id> --failed`). Signing depends on it now: when
+a Docs run attaches or replaces the PDF after signing, Sign Release Artifacts
+starts again by itself and parks at the `release` approval, like the build
+runs. Its `plan` job signs when the signed `SHA256SUMS.txt` misses the
+manual's current hash, or when a build artifact is unsigned or newer than the
+sums (a Docs-triggered run can displace a pending build-triggered one). It
+skips before any build has attached anything, and for a tag that signs the
+manual apart. A red `plan` means a read failed; re-run it. Approve it, and confirm the re-signed `SHA256SUMS.txt` lists the
+manual's current hash.
 
 **The Windows run's colour includes the Store step** ("Publish Microsoft Store
 package", in the "Publish Microsoft Store production" job, is not
@@ -516,7 +525,7 @@ By hand, the same thing is:
 ```sh
 gh release download vX.Y.Z --dir "$SCRATCH/dl" --pattern 'SHA256SUMS.txt*' --pattern '*source.tar.gz*' --pattern '*x86_64.AppImage*' --pattern 'AetherSDR-Manual-*'
 gpg --import docs/RELEASE-SIGNING-KEY.pub.asc
-(cd "$SCRATCH/dl" && gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt && sha256sum -c --ignore-missing SHA256SUMS.txt && gpg --verify AetherSDR-vX.Y.Z-source.tar.gz.asc AetherSDR-vX.Y.Z-source.tar.gz && gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc AetherSDR-Manual-vX.Y.Z.pdf)
+(cd "$SCRATCH/dl" && gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt && sha256sum -c --ignore-missing SHA256SUMS.txt && gpg --verify AetherSDR-vX.Y.Z-source.tar.gz.asc AetherSDR-vX.Y.Z-source.tar.gz)
 tar -xzOf "$SCRATCH/dl/AetherSDR-vX.Y.Z-source.tar.gz" AetherSDR-vX.Y.Z/CMakeLists.txt | grep 'project(AetherSDR VERSION'
 ```
 
@@ -650,11 +659,11 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 | Docs | <url> | 1 | success | release: published; manual PDF signed and attached |
 Re-run or dispatched by hand: <what, when> / none.
 
-### Assets (25 / 24 for a hotfix)
+### Assets (24 / 23 for a hotfix)
 - [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (source tarball and SHA256SUMS: same upload as their .asc)
 - … one line per expected asset, ticked or **missing** …
 - [x] AetherSDR-X.Y.Z.0-Windows-x64.msixupload — version checked / n/a (hotfix)
-SHA256SUMS.txt covers: the nine expected files. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> OK, `gpg --verify <artifact>.asc` OK, `gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
+SHA256SUMS.txt covers: the ten expected files, the manual included. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> (the manual among them) OK, `gpg --verify <artifact>.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
 
 ### Store
 Committed: yes — in certification, nothing to click / draft staged (switch off) — Submit to Store is the maintainer's click / **no** — step failed: "<quoted reason>". Recovery: <as step 5>. / n/a (hotfix).

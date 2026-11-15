@@ -460,6 +460,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/test_publish_update_manifest.py
 
+      # When a PDF manual attached after signing needs a re-sign, and which
+      # tags list it in SHA256SUMS.txt (RFC #6964).
+      - name: Release manual signing
+        if: ${{ !cancelled() }}
+        run: python tools/test_release_manual_signing.py
+
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:
       # main gains colours from unrelated UI merges, so a frozen baseline goes

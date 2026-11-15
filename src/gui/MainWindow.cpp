@@ -93,7 +93,6 @@
 #include "ClientCompEditor.h"
 #include "ClientGateApplet.h"
 #include "ClientGateEditor.h"
-#include "ClientDeEssApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientTubeEditor.h"
 #include "ClientPuduApplet.h"
@@ -105,7 +104,6 @@
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientTube.h"
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
@@ -3145,12 +3143,6 @@ void MainWindow::onTxChainStageEnabledChanged(
     } else if (stage == AudioEngine::TxChainStage::Comp) {
         if (m_appletPanel->clientCompApplet())
             m_appletPanel->clientCompApplet()->refreshEnableFromEngine();
-    } else if (stage == AudioEngine::TxChainStage::Gate) {
-        if (m_appletPanel->clientGateApplet())
-            m_appletPanel->clientGateApplet()->refreshEnableFromEngine();
-    } else if (stage == AudioEngine::TxChainStage::DeEss) {
-        if (m_appletPanel->clientDeEssApplet())
-            m_appletPanel->clientDeEssApplet()->refreshEnableFromEngine();
     } else if (stage == AudioEngine::TxChainStage::Tube) {
         if (m_appletPanel->clientTubeApplet())
             m_appletPanel->clientTubeApplet()->refreshEnableFromEngine();
@@ -3216,17 +3208,11 @@ ClientGateEditor* MainWindow::ensureClientGateEditor()
         m_clientGateEditor = new ClientGateEditor(m_audio, this);
         setEditorFramelessMode(m_clientGateEditor, framelessWindowEnabled());
         connect(m_clientGateEditor, &ClientGateEditor::bypassToggled,
-                this, [this](ClientGateEditor::Side side, bool bypassed) {
+                this, [this](bool bypassed) {
             if (!m_appletPanel) return;
-            if (side == ClientGateEditor::Side::Tx) {
-                // TX applet visibility is independent of bypass state.
-                if (m_appletPanel->clientGateTxApplet())
-                    m_appletPanel->clientGateTxApplet()->refreshEnableFromEngine();
-            } else {
-                if (m_appletPanel->clientGateRxApplet())
-                    m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
-                m_appletPanel->setAppletVisible("GATE-RX", !bypassed);
-            }
+            if (m_appletPanel->clientGateRxApplet())
+                m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
+            m_appletPanel->setAppletVisible("GATE-RX", !bypassed);
             if (m_appletPanel->clientChainApplet())
                 m_appletPanel->clientChainApplet()->refreshFromEngine();
         });
@@ -6031,8 +6017,11 @@ void MainWindow::buildUI()
     // Called synchronously here, before the event loop starts, so that legacy
     // float migration singleShot(0) timers posted inside AppletPanel::makeEntry()
     // cannot call saveState() and overwrite ContainerTree before we read it.
+    // "gate" and "dess" were AetherTX's gate and de-esser tiles, both retired:
+    // a layout saved before must not bring them back as empty shells.
     if (m_appletPanel && m_appletPanel->containerManager())
-        m_appletPanel->containerManager()->restoreState();
+        m_appletPanel->containerManager()->restoreState(
+            {QStringLiteral("gate"), QStringLiteral("dess")});
 
     // Set initial splitter sizes: CWX=0, DVK=0 (both hidden), center=stretch, right=310
     const int centerWidth = qMax(400, width() - 310);

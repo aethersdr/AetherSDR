@@ -1,5 +1,4 @@
 #include "core/ClientTube.h"
-#include "core/ClientGate.h"
 #include "core/RNNoiseFilter.h"
 #include "core/Resampler.h"
 #include "core/TxChainLayout.h"
@@ -18,7 +17,6 @@
 #include <vector>
 
 using AetherSDR::ClientTube;
-using AetherSDR::ClientGate;
 using AetherSDR::RNNoiseFilter;
 using AetherSDR::Resampler;
 using AetherSDR::TxVoiceProcessor;
@@ -729,7 +727,7 @@ void testChannelStripRunsAt48k()
 }
 
 // A stage past the eighth slot still runs: the order is 16 four-bit slots.
-// Eight Gate slots with no gate processor are pass-through; the tube sits in
+// Eight retired Gate slots are pass-through; the tube sits in
 // the ninth, which a one-byte-per-slot order could not hold, and a tenth
 // entry shares its byte so a byte-wide decode cannot find it either.
 void testNinthSlotStageRuns()
@@ -1101,26 +1099,24 @@ void testDisabledRnnoiseIsNotDereferencedDuringPrepare()
            prepared && processed);
 }
 
+// The latency report: RNNoise's frame, and nothing for the retired gate even
+// when a saved order still carries its slot.
 void testLatencyAccounting()
 {
-    ClientGate gate;
-    gate.setEnabled(true);
-    gate.setLookaheadMs(2.0f);
     RNNoiseFilter rnnoise(
         RNNoiseFilter::OutputMode::ProcessedMono,
         RNNoiseFilter::RateDomain::Native48k);
 
     TxVoiceProcessor processor;
     TxVoiceProcessor::Processors processors;
-    processors.gate = &gate;
     processor.setProcessors(processors);
     processor.setRnnoise(&rnnoise);
     processor.setStageOrder(packedSingleStage(TxVoiceProcessor::Stage::Gate));
     processor.setRnnoiseEnabled(true);
     processor.prepare(48000, 480);
 
-    report("latency report includes RNNoise frame plus gate lookahead",
-           processor.latencyFrames() == 394 + 480 + 96,
+    report("latency report includes the RNNoise frame and no gate term",
+           processor.latencyFrames() == 394 + 480,
            "frames=" + std::to_string(processor.latencyFrames()));
 }
 

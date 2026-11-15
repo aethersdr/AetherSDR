@@ -245,12 +245,6 @@
   "split": "",
   "confidence": "high"
  },
- "core/ClientDeEss.h": {
-  "tag": "universal",
-  "note": "Client TX DSP de-esser (sidechain bandpass + dynamics, meters); radio-agnostic engine DSP chain stage",
-  "split": "",
-  "confidence": "high"
- },
  "core/ClientDisplaySettings.h": {
   "tag": "ui-support",
   "note": "Radio-scoped client persistence for locally shaped display state (waterfall cadence, FFT FPS, the dBm range) under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
@@ -271,7 +265,7 @@
  },
  "core/ClientGate.h": {
   "tag": "universal",
-  "note": "Client TX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters) \u2014 radio-agnostic engine DSP.",
+  "note": "Client RX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters); the TX gate is retired (RN2 replaces it) \u2014 radio-agnostic engine DSP.",
   "split": "",
   "confidence": "high"
  },

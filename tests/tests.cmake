@@ -360,7 +360,7 @@ set_tests_properties(nnr_model_publication_test PROPERTIES TIMEOUT 120)
 
 add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
     src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
-    src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
+    src/core/ClientComp.cpp src/core/ClientTube.cpp
     src/core/ClientPudu.cpp src/core/ClientPhaseRotator.cpp)
 target_include_directories(rx_client_effects_test PRIVATE src)
 add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
@@ -829,6 +829,12 @@ add_executable(backend_capability_revision_test tests/backend_capability_revisio
 target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
+
+# Shared MAIN/SUB backend with injected CI-V and PCM; no sockets or radio.
+add_executable(icom_dual_receiver_test tests/icom_dual_receiver_test.cpp)
+target_include_directories(icom_dual_receiver_test PRIVATE src tests)
+target_link_libraries(icom_dual_receiver_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_dual_receiver_test COMMAND icom_dual_receiver_test)
 
 # #5347: injected Icom model profiles, no session/transport/device.
 add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
@@ -1746,16 +1752,9 @@ add_test(NAME icom_power_clamp_model_test COMMAND icom_power_clamp_model_test)
 #   cmake --build build --target icom_live_probe
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
-    tests/icom_live_probe.cpp
-    src/core/TxCoordinator.cpp
-    src/core/backends/icom/IcomSession.cpp
-    src/core/backends/icom/IcomStream.cpp
-    src/core/backends/icom/IcomProtocol.cpp
-    src/core/backends/icom/CivCodec.cpp
-    src/core/backends/icom/IcomScope.cpp
-    src/core/backends/icom/IcomAudio.cpp)
+    tests/icom_live_probe.cpp)
 target_include_directories(icom_live_probe PRIVATE src)
-target_link_libraries(icom_live_probe PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(icom_live_probe PRIVATE aethercore Qt6::Core Qt6::Network)
 
 # IcomCIV live CI-V ADDRESS probe — also REQUIRES A REAL RADIO, also EXCLUDE_FROM_ALL.
 # Drives IcomCivBackend (not IcomSession) because the address resolution under
@@ -5633,12 +5632,6 @@ add_executable(client_gate_test
     src/core/ClientGate.cpp
 )
 target_include_directories(client_gate_test PRIVATE src)
-
-add_executable(client_deess_test
-    tests/client_deess_test.cpp
-    src/core/ClientDeEss.cpp
-)
-target_include_directories(client_deess_test PRIVATE src)
 
 add_executable(client_tube_test
     tests/client_tube_test.cpp
@@ -11051,10 +11044,10 @@ add_executable(client_dsp_knob_dispatch_test
     src/gui/ClientGateCurveWidget.cpp
     src/gui/ClientTubeApplet.cpp
     src/gui/ClientTubeCurveWidget.cpp
-    src/gui/ClientDeEssApplet.cpp
-    src/gui/ClientDeEssCurveWidget.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
+    src/gui/StripTubePanel.cpp
+    src/gui/ClientLevelMeter.cpp
     src/gui/EditorFramelessTitleBar.cpp
 )
 target_include_directories(client_dsp_knob_dispatch_test PRIVATE src tests)
@@ -11564,6 +11557,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandstack_cat_controls_test
     two_tone_tune_gate_test
     tx_output_metering_test
+    icom_dual_receiver_test
     update_controller_test
     update_installer_test
     update_stager_test

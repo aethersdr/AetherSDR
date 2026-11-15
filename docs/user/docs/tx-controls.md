@@ -270,10 +270,10 @@ The audio controls stay in place as the timer appears and fades. In minimal mode
 
 ## Using AetherTX (Aetherial Audio)
 
-The client-side transmit voice chain — gate with RN2, EQ, split-band
-de-esser, compressor with Drive/Phase, tube, AetherVoice exciter, reverb and
-the final output stage with brickwall limiter, DC block, test tone and
-Quindar tones — lives in the **AetherTX** window, **Tools → AetherTX...**
+The client-side transmit voice chain — RN2 microphone denoising, Tube, EQ,
+Compressor with Drive/Phase, AetherVoice Exciter, Reverb, and Final Output —
+lives in the **AetherTX** window, **Tools → AetherTX...** Final Output includes
+the brickwall limiter, DC block, test tone, and Quindar tones.
 AetherTX needs a computer microphone (Mic source **PC**).
 
 See [Aetherial Audio](./aetherial-audio.md) for the stage reference and profiles.

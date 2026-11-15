@@ -13,7 +13,7 @@ all run through the same DSP chain:
 
 - **RX speaker path**: radio audio from `PanadapterStream` is decoded to 24 kHz
   float32 stereo and handed to `AudioEngine::feedAudioData()`. RX noise
-  reduction, RX client EQ/Gate/Comp/DeEss/Tube/PUDU, output trim, optional
+  reduction, RX client EQ/Gate/Comp/Tube/PUDU, output trim, optional
   24 kHz to 48 kHz upsampling, metering, scopes, and speaker buffering happen
   in `AudioEngine`.
 - **Local sidetone / Quindar local output**: CW sidetone and local Quindar
@@ -125,7 +125,7 @@ When receiving, the current ordering is:
    each side's own content and an immediate pan is preferred over the shared
    mask and mono envelope that used to hold the balance.
 3. `writeAudio()` runs the client RX strip in this fixed order:
-   `ClientEqRx`, `ClientGateRx`, `ClientCompRx`, `ClientDeEssRx`,
+   `ClientEqRx`, `ClientGateRx`, `ClientCompRx`,
    `ClientTubeRx`, `ClientPuduRx`.
 4. The RX EQ analyzer tap is taken after RX EQ and before the remaining RX strip.
    It averages L/R to mono for the analyzer buffer.
@@ -372,7 +372,7 @@ flowchart TD
     I --> J["Input SRC when needed<br/>device rate -> fixed 48 kHz DSP rate<br/>duplicate mono to L/R"]
     J --> K["Optional TX RN2 at native 48 kHz"]
     K --> L["Optional 48 kHz test tone"]
-    L --> M["User-ordered 48 kHz float strip<br/>Gate / EQ / DeEss / Comp / Tube / PUDU / Reverb"]
+    L --> M["User-ordered 48 kHz float strip<br/>Tube / EQ / Comp / PUDU / Reverb"]
     M --> N["PC mic gain -> Quindar -> final limiter<br/>48 kHz float32 stereo"]
     N --> O["Independent L/R egress SRC<br/>48 kHz -> 24 kHz float32"]
     O --> P["Linked TPDF dither + round-to-nearest<br/>quantize once to 24 kHz stereo Int16"]
@@ -525,8 +525,9 @@ After capture channel canonicalization, `onTxAudioReady()` uses this ordering:
 5. **Test tone**: `ClientTxTestTone` can replace the mic signal with a generated
    48 kHz float32 stereo tone before the user voice strip.
 6. **Voice DSP strip**: `TxVoiceProcessor::processChannelStrip()` runs float32
-   processors directly in the user-selected order. The default order is Gate,
-   EQ, DeEss, Comp, Tube, PUDU, Reverb.
+   processors directly in the user-selected order. The default order is Tube,
+   EQ, Comp, PUDU, Reverb (the TX gate and de-esser are retired; RN2 runs
+   ahead of the strip).
 7. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates the
    48 kHz float samples. It is not a boost stage.
 8. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones at
@@ -798,7 +799,7 @@ flowchart TD
 ```
 
 DAX/TCI TX audio is intentionally separate from the PC mic voice strip. It is
-not run through client voice EQ, compression, gate, de-esser, tube, PUDU,
+not run through client voice RN2, tube, EQ, compression, PUDU,
 reverb, Quindar insertion, or the final voice limiter. Digital-mode tones and
 TCI audio must not be modified by those voice effects.
 
@@ -914,7 +915,7 @@ Radio-provided taps:
 | RX NR entry | `AudioEngine::feedAudioData()` | float32 stereo | float32 stereo | 24 kHz | 2 | Optional NR; bypassed while radio is transmitting |
 | RX NR2 | `AudioEngine::processNr2()` | float32 stereo | float32 stereo | producer rate | 2 | One `SpectralNR` estimate and mask per channel |
 | RX BNR | `NvidiaAfxFilter::process()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz -> 24 kHz, or native 48 kHz | 2 | One AFX denoiser effect per channel |
-| RX client strip | `AudioEngine::writeAudio()` | float32 stereo | float32 stereo | 24 kHz | 2 | EQ, Gate, Comp, DeEss, Tube, PUDU |
+| RX client strip | `AudioEngine::writeAudio()` | float32 stereo | float32 stereo | 24 kHz | 2 | EQ, Gate, Comp, Tube, PUDU |
 | RX output upsample | `AudioEngine::resampleStereo()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz | 2 | Uses separate L/R resamplers to preserve pan |
 | RX output gain stages | `AudioEngine::processMixedRxAudioData()` | float32 stereo | float32 stereo | 24 or 48 kHz | 2 | Optional RX boost, then output trim, whichever NR method ran; post-chain scope |
 | Speaker write | RX drain timer in `AudioEngine::startRxStream()` | float32 stereo buffers | `QAudioSink` writes | 24 or 48 kHz | 2 | Caps buffers and mixes RADE decoded speech |
@@ -924,7 +925,7 @@ Radio-provided taps:
 | PC mic channel canonicalization | `TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo()` | Int16 mono/stereo | duplicated-stereo Int16 | negotiated device rate | 1 or 2 -> 1 -> 2 | Auto selects stronger one-sided stereo channel or averages balanced stereo; no SRC here |
 | Voice float conversion / ingress SRC | `TxVoiceProcessor::processCapturedInt16()` | duplicated-stereo Int16 | float32 stereo | device rate -> 48 kHz when needed | 2 -> 1 -> 2 | Converts to float once; stateful mono r8brain SRC; native 48 kHz skips SRC |
 | TX RN2 | `RNNoiseFilter::process48kStereo(input, output)` | float32 stereo | float32 stereo | 48 kHz | 2 -> 1 -> 2 | Optional mic denoiser in `Native48k` rate domain; reuses caller-owned output storage |
-| PC mic voice strip | `TxVoiceProcessor::processChannelStrip()` | float32 stereo | float32 stereo | 48 kHz | 2 | Ordered Gate/EQ/DeEss/Comp/Tube/PUDU/Reverb |
+| PC mic voice strip | `TxVoiceProcessor::processChannelStrip()` | float32 stereo | float32 stereo | 48 kHz | 2 | Ordered Tube/EQ/Comp/PUDU/Reverb |
 | PC mic gain | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | float32 stereo | 48 kHz | 2 | 0..100 maps to 0.0..1.0 attenuation |
 | Quindar TX insertion | `ClientQuindarTone::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | Inserts tones before final limiter |
 | Final voice limiter | `ClientFinalLimiter::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | DC block, output trim, linked peak limiting |
@@ -998,7 +999,7 @@ warning before it is discarded and regenerated.
 | `AudioEngine::txPostChainScopeReady`, TX voice | `AudioEngine::emitTxPostChainScopeFromInt16Stereo()` | Final 24 kHz Int16 representation, post limiter/SRC/quantization and final monitor tap | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::txPostChainScopeReady`, TX DAX/TCI/RADE | `AudioEngine::emitTxPostChainScopeFromFloat32Stereo()` | Pre-packetization digital bypass audio | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::rxPostChainScopeReady` | `AudioEngine::emitRxPostChainScopeFromFloat32Stereo()` | Non-BNR: after RX strip, upsample, boost, and trim; BNR: after BNR resample/trim; before buffer append | Average L/R | float PCM scope samples, sample rate |
-| RX EQ analyzer | `AudioEngine::tapClientEqRxStereo()` | After RX EQ, before RX Gate/Comp/DeEss/Tube/PUDU | Average L/R | float mono analyzer samples |
+| RX EQ analyzer | `AudioEngine::tapClientEqRxStereo()` | After RX EQ, before RX Gate/Comp/Tube/PUDU | Average L/R | float mono analyzer samples |
 | TX EQ analyzer | `AudioEngine::tapClientEqTxFloat32()` | After TX EQ or EQ bypass inside the 48 kHz TX strip | Average L/R for stereo | float mono analyzer samples |
 | macOS DAX RX level | `VirtualAudioBridge::feedDaxAudio()` | After DAX RX gain, before shared-memory write | Left channel only | Linear RMS |
 | macOS DAX TX level | `VirtualAudioBridge::readTxAudio()` | After DAX TX gain, before `txAudioReady()` | Left channel only | Linear RMS |
