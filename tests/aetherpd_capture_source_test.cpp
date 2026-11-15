@@ -374,6 +374,15 @@ int main(int argc, char** argv)
             continue;
         }
         QThread::msleep(25); QCoreApplication::processEvents();
+        if (fault == 0) {
+            // A cold fit may still be running at six seconds on the 8600.
+            // The measurement source is bounded independently at eight seconds.
+            QThread::msleep(6100);
+            QCoreApplication::processEvents();
+            const bool pending = errors == 0 && network.last && !network.last->aborted;
+            ok &= check(pending, "cold fit was canceled before the bounded source window ended");
+            if (!pending) { source.stop(); continue; }
+        }
         status["measurement"] = QJsonObject{{"source_id", "000000000000001f"}, {"tones", true}};
         network.last->complete(200, encode(status));
         ok &= check(network.sent.back().request.url().path().endsWith("/capture"), "ready source did not start capture");

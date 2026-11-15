@@ -65,6 +65,7 @@ private:
     QByteArray m_bytes;
     quint64 m_generation{0};
     int m_chunk{0};
+    int m_captureBudgetMs{0};
     bool m_running{false};
     bool m_gate{false};
     bool m_checkingReady{false};

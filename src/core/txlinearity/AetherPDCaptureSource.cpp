@@ -21,6 +21,9 @@ Q_LOGGING_CATEGORY(lcAetherPDCapture, "aether.waveform.capture", QtWarningMsg)
 namespace {
 constexpr qint64 kMaxReplyBytes = 8192;
 constexpr int kCaptureTimeoutMs = 6000;
+// Includes cold alignment and WDSP's first fit within the native eight-second
+// measurement source. The independent TX lease and source expiry still bound RF.
+constexpr int kMeasurementCaptureTimeoutMs = 8000;
 }
 
 AetherPDCaptureSource::AetherPDCaptureSource(QObject* parent)
@@ -41,6 +44,7 @@ void AetherPDCaptureSource::initialize()
     m_ownedNetwork.setParent(this);
     m_deadline.setParent(this);
     m_deadline.setSingleShot(true);
+    m_deadline.setTimerType(Qt::PreciseTimer);
     connect(&m_deadline, &QTimer::timeout, this, &AetherPDCaptureSource::captureTimeout);
     connect(m_network, &QObject::destroyed, this, [this] {
         m_network = nullptr;
@@ -170,8 +174,9 @@ void AetherPDCaptureSource::beginCapture()
     m_bytes.clear();
     m_chunk = 0;
     m_age.start();
-    m_deadline.start(kCaptureTimeoutMs);
     m_waitingForTones = m_measurementSourceId && !m_checkingReady;
+    m_captureBudgetMs = m_waitingForTones ? kMeasurementCaptureTimeoutMs : kCaptureTimeoutMs;
+    m_deadline.start(m_captureBudgetMs);
     send(m_waitingForTones ? *aetherpd::request(aetherpd::Operation::Status) : aetherpd::captureBeginRequest());
 }
 
@@ -234,7 +239,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
         || (!m_gate && !m_checkingReady)) { return; }
     pending = nullptr;
     if (!sessionCurrent()) { fail("IQ capture session is no longer current"); return; }
-    if (!m_age.isValid() || m_age.elapsed() > kCaptureTimeoutMs) { captureTimeout(); return; }
+    if (!m_age.isValid() || m_age.elapsed() >= m_captureBudgetMs) { captureTimeout(); return; }
     const QByteArray body = reply->read(kMaxReplyBytes + 1);
     if (body.size() > kMaxReplyBytes || reply->error() != QNetworkReply::NoError
         || reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {

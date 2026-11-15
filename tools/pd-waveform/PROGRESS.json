@@ -922,5 +922,16 @@
       "Four-frame IMD and sustained repeatability remain unproven.",
       "All P1-P10 final candidate and actual6300 production gates remain."
     ]
+  },
+  "measurement_capture_budget": {
+    "production_ready": false,
+    "status": "component_verified_live_pending",
+    "evidence": "capture-budget-development/validation.json under evidence_root",
+    "change": "Measurement capture waits up to eight seconds; receive capture remains six seconds. Native source expiry and independent unkey bounds unchanged. All native readiness predicates retained.",
+    "remaining": [
+      "One bounded live measurement with rebuilt desktop",
+      "Four-frame IMD and matched correction comparison",
+      "All P1-P10 production qualification gates"
+    ]
   }
 }

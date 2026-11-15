@@ -550,7 +550,10 @@ ADC headroom or calibrated output power.
    explicit RF action. An independent cleanup helper must be ready before the
    original-session TX request is dispatched. The source emits four seconds of
    alignment noise followed by 710/1900 Hz tones, for at most eight seconds.
-   Capture waits for the guarded tone interval and collects four frames.
+   Capture waits for the guarded tone interval and collects four frames. A cold
+   correction fit can use most of the source window; capture waits within that
+   eight-second window and reports a failure if enough qualified frames do not
+   arrive. The independent transmit cutoff remains in force.
 5. **Stop measurement** requests release of that measurement. Closing the
    window also requests stop; it does not stop AetherPD correction. A pending
    release remains visible on reopening. An unused source arm expires after
