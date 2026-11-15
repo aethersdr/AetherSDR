@@ -65,6 +65,7 @@ namespace {
 constexpr const char* kRemoteTierId = "remote";
 constexpr const char* kCustomTierId = "custom";
 constexpr const char* kSherpaTierId = "sherpa";
+constexpr const char* kNoneTierId = "none";
 // Live preview recognizers (setting AsrLivePreviewRecognizer). sherpa-onnx is the
 // default; Apple's is the alternative on macOS 26+.
 constexpr const char* kPreviewSherpa = "sherpa";
@@ -146,6 +147,11 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_settings->addTier(QString::fromLatin1(kSherpaTierId), tr("sherpa-onnx model…"));
     }
     m_settings->addTier(QString::fromLatin1(kRemoteTierId), tr("Remote server…"));
+    // No model at all: the live preview's text is the transcript. Only where
+    // a preview recognizer can run.
+    if (sherpaLivePreviewSupported() || appleLivePreviewSupported()) {
+        m_settings->addTier(QString::fromLatin1(kNoneTierId), tr("None (live preview only)"));
+    }
 
     // Remember a previously-picked custom model so its filename shows in the list
     // (and the file-picker defaults to it) across restarts.
@@ -408,7 +414,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_settings, &CopyAssistSettingsDialog::labelSpeakersToggled, this, [this](bool on) {
         CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
-        if (!m_constructed) {
+        // Under None the box is greyed and the engine has no segments to label;
+        // the saved choice applies when buildEngine() replays it for a model.
+        if (!m_constructed || m_backend == AsrBackendKind::None) {
             return;
         }
         m_asr->setSpeakerLabelingEnabled(on);
@@ -536,6 +544,12 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         }
         // Same as the VAD and speaker models: say why, and turn the option off
         // so every Enable does not try (and fail) again.
+        if (m_backend == AsrBackendKind::None) {
+            // The preview is the transcript and cannot be turned off, so
+            // retrying would loop: stop, and say why.
+            abandonEnable(tr("Live preview model download failed: %1").arg(err));
+            return;
+        }
         m_panel->setStatus(tr("Live preview model download failed: %1").arg(err));
         CopyAssistSettings::setValue(QStringLiteral("AsrLivePreview"), QStringLiteral("False"));
         m_settings->setLivePreviewChecked(false);
@@ -1215,6 +1229,10 @@ void CopyAssistController::buildEngine()
     case AsrBackendKind::SherpaOnnx:
         m_asr = new AsrEngine(sherpaOnnxBackendFactory(), segConfig, this);
         break;
+    case AsrBackendKind::None:
+        m_asr = new AsrEngine(noAsrBackendFactory(), segConfig, this);
+        m_asr->setLivePreviewTranscribes(true);
+        break;
     }
     m_tap = new AsrAudioTap(m_audio, m_asr, this);
     refreshNativeInput();
@@ -1260,7 +1278,7 @@ void CopyAssistController::buildEngine()
             [this](const QString& text, float confidence, int speaker, quint64 segmentId) {
                 // Prefix a speaker label ([A], [B]…) when labeling is on.
                 const QString labeled =
-                    m_settings->labelSpeakers() && speaker >= 0
+                    speakerLabelsOn() && speaker >= 0
                         ? QStringLiteral("[%1] %2").arg(QChar(u'A' + speaker)).arg(text)
                         : text;
                 m_panel->commitText(segmentId, labeled, confidence);
@@ -1309,10 +1327,7 @@ void CopyAssistController::applyLivePreview()
     if (m_asr == nullptr) {
         return;
     }
-    const bool on =
-        CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
-            .toString()
-        == QStringLiteral("True");
+    const bool on = livePreviewOn();
     LivePreviewFactory factory;
     bool usingSherpa = false;
     if (on) {
@@ -1341,6 +1356,21 @@ void CopyAssistController::applyLivePreview()
     m_asr->setLivePreviewFactory(std::move(factory));
 }
 
+bool CopyAssistController::speakerLabelsOn() const
+{
+    // Speakers are labelled from the model's segments; None has none.
+    return m_backend != AsrBackendKind::None && m_settings->labelSpeakers();
+}
+
+bool CopyAssistController::livePreviewOn() const
+{
+    // With no model the preview is the transcript, whatever the setting says.
+    return m_backend == AsrBackendKind::None
+           || CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
+                      .toString()
+                  == QStringLiteral("True");
+}
+
 QString CopyAssistController::livePreviewRecognizer() const
 {
     const QString sherpaId = QString::fromLatin1(kPreviewSherpa);
@@ -1357,10 +1387,7 @@ QString CopyAssistController::livePreviewRecognizer() const
 
 bool CopyAssistController::previewModelWanted() const
 {
-    const bool on =
-        CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
-            .toString()
-        == QStringLiteral("True");
+    const bool on = livePreviewOn();
     return m_enabled && on && livePreviewRecognizer() == QLatin1String(kPreviewSherpa)
            && sherpaLivePreviewSupported();
 }
@@ -1371,10 +1398,7 @@ bool CopyAssistController::previewLanguageMismatch() const
     if (m_backend == AsrBackendKind::SherpaOnnx) {
         return false;
     }
-    const bool on =
-        CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
-            .toString()
-        == QStringLiteral("True");
+    const bool on = livePreviewOn();
     if (!on || livePreviewRecognizer() != QLatin1String(kPreviewSherpa)
         || !sherpaLivePreviewSupported()) {
         return false;
@@ -1481,6 +1505,9 @@ AsrBackendKind CopyAssistController::backendForTier(const QString& tierId)
     if (tierId == QString::fromLatin1(kSherpaTierId)) {
         return AsrBackendKind::SherpaOnnx;
     }
+    if (tierId == QString::fromLatin1(kNoneTierId)) {
+        return AsrBackendKind::None;
+    }
     // A catalog tier routes by its declared engine family; the "custom" file and
     // any unknown id fall through to local whisper.
     if (const AsrModelTier* tier = AsrModelCatalog::tierById(tierId)) {
@@ -1513,6 +1540,16 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     m_settings->setLanguageSelectorVisible(kind != AsrBackendKind::SherpaOnnx);
     // Context-carry is whisper-only; keep the header toggle enabled only there.
     m_panel->setContextCarryAvailable(kind == AsrBackendKind::Whisper);
+    // With no model the live preview is the transcript: it cannot be off.
+    m_settings->setLivePreviewRequired(
+        kind == AsrBackendKind::None,
+        tr("With no model, the live preview's text is the transcript, so it stays on."));
+    // Speakers are told apart from a model's segments; None has none. The
+    // operator's choice is kept and returns with the next model.
+    m_settings->setSpeakerLabelsUnavailable(
+        kind == AsrBackendKind::None,
+        tr("Speaker labels need a model. With None they are off; your setting comes "
+           "back when you choose a model."));
 
     // Leaving the remote backend clears the persisted auto-connect flag so the
     // next launch starts on the local engine.
@@ -1573,7 +1610,7 @@ void CopyAssistController::beginEnable()
     // Idempotent — a model already loaded into this engine is a no-op, and a
     // download already in flight is left alone. Runs before the ASR-model
     // status lines below so the headline stays the whisper/remote load.
-    if (m_settings->labelSpeakers()) {
+    if (speakerLabelsOn()) {
         ensureSpeakerModel();
     }
     ensurePreviewModelIfWanted(); // first Enable with the sherpa preview on
@@ -1581,6 +1618,10 @@ void CopyAssistController::beginEnable()
         // No local model to fetch — the remote endpoint is contacted per
         // utterance. load() just marks the backend ready.
         m_panel->setStatus(tr("Connecting to remote server…"));
+        m_asr->setModelPath(QString());
+    } else if (m_backend == AsrBackendKind::None) {
+        // Nothing to load; the preview recognizer (and its model download,
+        // started above) does the work.
         m_asr->setModelPath(QString());
     } else if (m_tierId == QString::fromLatin1(kCustomTierId)) {
         // User-supplied model: load the picked file directly, bypassing the
@@ -1824,6 +1865,11 @@ void CopyAssistController::queueSpeakerModelLoad(const QString& path)
     }
 
     m_desiredSpeakerModelPath = path;
+    if (m_backend == AsrBackendKind::None) {
+        // A download that finishes after a switch to None: remember the file
+        // for the next model's engine (buildEngine() replays it), load nothing.
+        return;
+    }
     m_asr->setSpeakerLabelingEnabled(m_settings->labelSpeakers());
     if (m_speakerLoad.isPending(path)) {
         m_panel->setStatus(tr("Preparing speaker model…"));
@@ -1892,7 +1938,7 @@ void CopyAssistController::replaySpeakerConfiguration()
     // before its queued completion reaches us, so begin the new instance with a
     // clean per-engine state and explicitly replay the latest user intent.
     m_speakerLoad.resetForEngineReplacement();
-    const bool labelSpeakers = m_settings->labelSpeakers();
+    const bool labelSpeakers = speakerLabelsOn();
     m_asr->setSpeakerLabelingEnabled(labelSpeakers);
     if (!labelSpeakers) {
         return;

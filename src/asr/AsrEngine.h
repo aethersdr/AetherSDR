@@ -27,6 +27,11 @@ class SpeakerEmbedder;
 // Factory that constructs an ASR backend. Invoked on the worker thread so the
 // backend (and any model context) lives entirely there.
 using AsrBackendFactory = std::function<std::unique_ptr<IAsrBackend>()>;
+
+// A backend that loads at once and decodes nothing, for the "None" model:
+// the segmenter still finds the edges, and the live preview's finals are the
+// transcript (AsrEngine::setLivePreviewTranscribes).
+AsrBackendFactory noAsrBackendFactory();
 // Creates a fully loaded speaker embedder on the ASR worker thread. Production
 // uses the default loader; tests may inject a deterministic slow loader to
 // prove model preparation never occupies the caller thread.
@@ -75,8 +80,10 @@ public:
 signals:
     // Emitted from the recogniser's own threads.
     void previewResult(qint64 startSample, qint64 endSample, const QString& text, bool isFinal,
-                       quint64 generation);
+                       float confidence, quint64 generation);
     void previewState(int state, const QString& message, quint64 generation);
+    // Every final up to `sample` has been delivered (one per finalizeThrough).
+    void previewFinalized(qint64 sample, quint64 generation);
 
 private:
     LivePreviewFactory m_factory;
@@ -288,6 +295,13 @@ public:
     // live; an empty factory turns it off.
     void setLivePreviewFactory(LivePreviewFactory factory);
     bool isLivePreviewEnabled() const { return m_livePreviewEnabled; }
+    // The "None" model: the live preview's final text is the transcript. Each
+    // segment's block is emitted through finalText, with the recogniser's
+    // confidence, once the recogniser has finalised through the segment's
+    // edge; the backend's own results (noAsrBackendFactory: none) are ignored.
+    // Provisional text still goes to previewText.
+    void setLivePreviewTranscribes(bool on) { m_livePreviewTranscribes = on; }
+    bool livePreviewTranscribes() const { return m_livePreviewTranscribes; }
     // The generation previewText currently carries (livePreviewReset moves it).
     quint64 previewGeneration() const { return m_generation; }
 
@@ -359,6 +373,7 @@ private:
     LivePreviewFeeder* m_feeder = nullptr;
     LivePreviewAssembler m_previewAssembler;
     bool m_livePreviewEnabled = false;
+    bool m_livePreviewTranscribes = false;
     // Audio handed to the worker since the last reset(), in 16 kHz samples:
     // the timeline that segment edges and preview results share. Dropped
     // chunks (backlog ceiling) are not counted, so it has no gaps.

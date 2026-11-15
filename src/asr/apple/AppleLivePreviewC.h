@@ -19,9 +19,14 @@ extern "C" {
 //        2 = failed (message says why; the session produces nothing more).
 typedef void (*aether_lp_state_cb)(void* ctx, int32_t state, const char* utf8Message);
 // isFinal: 1 for text the engine will not revise, 0 for provisional text that
-// a later result starting at the same position replaces.
+// a later result starting at the same position replaces. confidence: for a
+// final, Apple's transcription confidence (0-1, averaged over the text);
+// negative when there is none.
 typedef void (*aether_lp_text_cb)(void* ctx, const char* utf8Text, int64_t startSample,
-                                  int64_t endSample, int32_t isFinal);
+                                  int64_t endSample, int32_t isFinal, float confidence);
+// Once per aether_lp_finalize_through(), with its sample, after the final
+// results up to it.
+typedef void (*aether_lp_finalized_cb)(void* ctx, int64_t sample);
 
 // 1 when this OS and machine can run the session at all (macOS 26+ and
 // SpeechTranscriber.isAvailable); 0 otherwise. Cheap; no model work.
@@ -31,7 +36,7 @@ int32_t aether_lp_is_supported(void);
 // means the system language). Returns NULL when unsupported. Callbacks run on
 // arbitrary threads and never after aether_lp_destroy() returns.
 void* aether_lp_create(const char* language, void* ctx, aether_lp_text_cb onText,
-                       aether_lp_state_cb onState);
+                       aether_lp_state_cb onState, aether_lp_finalized_cb onFinalized);
 
 // Mono float samples at 16 kHz in [-1, 1]. Dropped until the session is ready.
 void aether_lp_feed(void* session, const float* samples, int32_t count, int64_t startSample);

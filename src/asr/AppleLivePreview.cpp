@@ -20,7 +20,7 @@ public:
     {
         const QByteArray lang = language.toUtf8();
         m_session = aether_lp_create(lang.constData(), this, &AppleLivePreview::onText,
-                                     &AppleLivePreview::onState);
+                                     &AppleLivePreview::onState, &AppleLivePreview::onFinalized);
     }
 
     ~AppleLivePreview() override
@@ -43,13 +43,22 @@ public:
     }
 
 private:
-    static void onText(void* ctx, const char* text, int64_t start, int64_t end, int32_t isFinal)
+    static void onText(void* ctx, const char* text, int64_t start, int64_t end, int32_t isFinal,
+                       float confidence)
     {
         auto* self = static_cast<AppleLivePreview*>(ctx);
         if (self->m_callbacks.onResult) {
             self->m_callbacks.onResult(
                 {static_cast<qint64>(start), static_cast<qint64>(end),
-                 QString::fromUtf8(text), isFinal != 0});
+                 QString::fromUtf8(text), isFinal != 0, confidence});
+        }
+    }
+
+    static void onFinalized(void* ctx, int64_t sample)
+    {
+        auto* self = static_cast<AppleLivePreview*>(ctx);
+        if (self->m_callbacks.onFinalized) {
+            self->m_callbacks.onFinalized(static_cast<qint64>(sample));
         }
     }
 

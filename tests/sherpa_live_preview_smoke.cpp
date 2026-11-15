@@ -22,6 +22,8 @@
 //     word in two ("backgr" + "ound") keeps the count but not the words;
 //   - D re-split at least one final and its words match C's within 5%: the
 //     words after a late edge move to the next final rather than vanish;
+//   - every finalizeThrough is acknowledged once, after the finals up to it,
+//     and finals carry a confidence (the mean token probability);
 //   - both runs share one factory, and B's session starts in a fifth of the
 //     time A's took: the model loads once, not per session.
 
@@ -58,6 +60,11 @@ struct Run {
     bool tiled = true;
     bool provisionalInOrder = true;
     int reissued = 0;   // finals that replaced an earlier one (a late edge split it)
+    int requested = 0;  // finalizeThrough calls
+    int acknowledged = 0;
+    bool ackAfterFinals = true; // each acknowledgement came after the finals it covers
+    double confidenceSum = 0.0;
+    int confidenceCount = 0;    // non-empty finals that carried a confidence in [0, 1]
     QString text;
     qint64 startMs = 0; // creating the session (the first one loads the model)
 };
@@ -107,11 +114,19 @@ Run run(const LivePreviewFactory& factory, const std::vector<float>& pcm, qint64
             if (finals.count(r.startSample) != 0) {
                 ++out.reissued;
             }
+            if (!r.text.isEmpty() && r.confidence >= 0.0f && r.confidence <= 1.0f) {
+                out.confidenceSum += r.confidence;
+                ++out.confidenceCount;
+            }
             finals[r.startSample] = {r.endSample, r.text};
             finalEnd = std::max(finalEnd, r.endSample);
         } else if (finalEnd >= 0 && r.startSample < finalEnd) {
             out.provisionalInOrder = false;
         }
+    };
+    cb.onFinalized = [&](qint64 sample) {
+        ++out.acknowledged;
+        out.ackAfterFinals = out.ackAfterFinals && finalEnd >= sample;
     };
     cb.onState = [](LivePreviewState s, const QString& m) {
         if (s == LivePreviewState::Failed) {
@@ -134,6 +149,7 @@ Run run(const LivePreviewFactory& factory, const std::vector<float>& pcm, qint64
         const qint64 fed = qint64(off) + n;
         if (lagSamples >= 0 && fed >= nextSplit + lagSamples) {
             preview->finalizeThrough(nextSplit);
+            ++out.requested;
             if (lateEdge > 0) {
                 lateAt = nextSplit;
             }
@@ -141,10 +157,12 @@ Run run(const LivePreviewFactory& factory, const std::vector<float>& pcm, qint64
         }
         if (lateAt >= 0 && fed >= lateAt + 16000) {
             preview->finalizeThrough(lateAt - lateEdge);
+            ++out.requested;
             lateAt = -1;
         }
     }
     preview->finalizeThrough(qint64(pcm.size()));
+    ++out.requested;
     // A split waits for a little audio past it, as it would get in the app.
     const std::vector<float> after(16000, 0.0f);
     preview->feed(after.data(), int(after.size()), qint64(pcm.size()));
@@ -216,6 +234,18 @@ int main(int argc, char** argv)
            "splitting keeps words whole: A and B match the unsplit run (within 5%)");
     expect(d.reissued > 0 && errD * 20 <= c.finalWords,
            "a late edge re-splits the last final and loses no words (D within 5% of C)");
+    const bool acks = a.acknowledged == a.requested && b.acknowledged == b.requested
+                      && c.acknowledged == c.requested && d.acknowledged == d.requested;
+    std::printf("finalize requests acknowledged: A %d/%d, B %d/%d, C %d/%d, D %d/%d\n",
+                a.acknowledged, a.requested, b.acknowledged, b.requested, c.acknowledged,
+                c.requested, d.acknowledged, d.requested);
+    expect(acks && a.ackAfterFinals && b.ackAfterFinals && c.ackAfterFinals && d.ackAfterFinals,
+           "every finalize request is acknowledged once, after the finals it covers");
+    std::printf("mean final confidence: A %.2f over %d finals\n",
+                a.confidenceCount > 0 ? a.confidenceSum / a.confidenceCount : -1.0,
+                a.confidenceCount);
+    expect(a.confidenceCount > 0 && a.confidenceSum / a.confidenceCount > 0.3,
+           "finals carry the recogniser's confidence");
     expect(b.startMs * 5 < a.startMs,
            "a second session from the same factory reuses the loaded model");
     std::printf(g_failures == 0 ? "sherpa live preview smoke: ALL PASS\n"

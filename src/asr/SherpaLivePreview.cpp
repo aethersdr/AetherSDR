@@ -3,9 +3,13 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStringList>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -155,9 +159,9 @@ public:
             // The caller re-anchored (a jump in its timeline): close the text
             // where the old audio ended and start over at the new position.
             if (m_pendingSplit >= 0) {
-                split(std::exchange(m_pendingSplit, -1));
+                splitAndAck(std::exchange(m_pendingSplit, -1));
             }
-            split(m_fedEnd);
+            splitAndAck(m_fedEnd);
             restart(startSample);
             m_reportOrigin = startSample;
             m_lastFinal = {};
@@ -170,13 +174,14 @@ public:
         m_fedEnd = startSample + count;
         publishProvisional();
         if (m_pendingSplit >= 0 && m_fedEnd - m_pendingSplit >= kLookahead) {
-            split(std::exchange(m_pendingSplit, -1));
+            splitAndAck(std::exchange(m_pendingSplit, -1));
         }
     }
 
     void finalizeThrough(qint64 sample) override
     {
         if (m_stream == nullptr) {
+            acknowledge(sample);
             return;
         }
         const qint64 at = std::min(sample, m_fedEnd);
@@ -185,17 +190,19 @@ public:
             // 10 s forcing ran first): split that final again at the edge, so
             // its words after the edge move to the next block.
             resplitLastFinal(at);
+            acknowledge(sample);
             return;
         }
+        m_unacknowledged.push_back({at, sample});
         // Two splits pending: make the earlier one now, without waiting.
         if (m_pendingSplit >= 0 && m_pendingSplit != at) {
-            split(std::min(m_pendingSplit, at));
+            splitAndAck(std::min(m_pendingSplit, at));
             m_pendingSplit = std::max(m_pendingSplit, at);
         } else {
             m_pendingSplit = at;
         }
         if (m_pendingSplit >= 0 && m_fedEnd - m_pendingSplit >= kLookahead) {
-            split(std::exchange(m_pendingSplit, -1));
+            splitAndAck(std::exchange(m_pendingSplit, -1));
         }
     }
 
@@ -204,6 +211,8 @@ private:
         qint64 start = 0;     // its first token, on the caller's timeline
         qint64 lastToken = 0; // its last token
         QString text;
+        double probSum = 0.0; // its tokens' probabilities, summed (words(true) only)
+        int probCount = 0;
     };
     struct Final {
         qint64 start = -1;
@@ -251,6 +260,27 @@ private:
             }
         }
         return best;
+    }
+
+    void acknowledge(qint64 sample)
+    {
+        if (m_callbacks.onFinalized) {
+            m_callbacks.onFinalized(sample);
+        }
+    }
+
+    // Splits at `at`, then acknowledges every finalize request it settled.
+    void splitAndAck(qint64 at)
+    {
+        split(at);
+        auto settled = std::stable_partition(
+            m_unacknowledged.begin(), m_unacknowledged.end(),
+            [at](const std::pair<qint64, qint64>& r) { return r.first > at; });
+        const std::vector<std::pair<qint64, qint64>> done(settled, m_unacknowledged.end());
+        m_unacknowledged.erase(settled, m_unacknowledged.end());
+        for (const auto& r : done) {
+            acknowledge(r.second);
+        }
     }
 
     void split(qint64 at)
@@ -331,16 +361,22 @@ private:
     void deliverFinal(Final f)
     {
         QStringList words;
+        double probSum = 0.0;
+        int probCount = 0;
         for (const Word& w : f.words) {
             words << w.text;
+            probSum += w.probSum;
+            probCount += w.probCount;
         }
+        // The mean token probability, as whisper's confidence is.
+        const float confidence = probCount > 0 ? static_cast<float>(probSum / probCount) : -1.0f;
         const qint64 start = f.start;
         const qint64 end = f.end;
         m_lastFinal = std::move(f);
         if (m_callbacks.onResult) {
             // Always delivered, even empty: it supersedes the provisional text
             // for this span.
-            m_callbacks.onResult({start, end, words.join(QLatin1Char(' ')), true});
+            m_callbacks.onResult({start, end, words.join(QLatin1Char(' ')), true, confidence});
         }
     }
 
@@ -387,18 +423,30 @@ private:
     }
 
     // The stream's words, minus those before m_keepFrom (heard while priming).
+    // withProbs also fills each word's token probabilities, from the result's
+    // JSON ("ys_probs", log probabilities); only finals need them.
     // Token times are seconds from the stream's start (a stream is never
     // reset, only replaced, so that start is m_origin). A token opens a word
     // when it starts with a space (SentencePiece's U+2581, which the C API may
     // already have turned into one). A model without token times gives its
     // whole text as one word.
-    std::vector<Word> words() const
+    std::vector<Word> words(bool withProbs = false) const
     {
         std::vector<Word> out;
         const SherpaOnnxOnlineRecognizerResult* r =
             SherpaOnnxGetOnlineStreamResult(m_recognizer, m_stream);
         if (r == nullptr) {
             return out;
+        }
+        QJsonArray logProbs;
+        if (withProbs && r->json != nullptr) {
+            logProbs = QJsonDocument::fromJson(QByteArray(r->json))
+                           .object()
+                           .value(QStringLiteral("ys_probs"))
+                           .toArray();
+            if (logProbs.size() != r->count) {
+                logProbs = {};
+            }
         }
         if (r->timestamps == nullptr) {
             const QString text = QString::fromUtf8(r->text).simplified();
@@ -427,6 +475,10 @@ private:
                     out.back().text += token;
                     out.back().lastToken = t;
                 }
+                if (!dropping && !out.empty() && !logProbs.isEmpty()) {
+                    out.back().probSum += std::exp(logProbs.at(i).toDouble());
+                    ++out.back().probCount;
+                }
             }
         }
         SherpaOnnxDestroyOnlineRecognizerResult(r);
@@ -438,7 +490,7 @@ private:
     // there is none).
     std::vector<Word> wordsSplitAt(qint64 at, qint64* lastTokenAt, qint64* nextWordAt) const
     {
-        std::vector<Word> before = words();
+        std::vector<Word> before = words(true);
         const auto after = std::find_if(before.begin(), before.end(),
                                         [at](const Word& w) { return w.start >= at; });
         if (after != before.end()) {
@@ -463,6 +515,8 @@ private:
     std::vector<float> m_audio; // [m_origin, m_fedEnd)
     QString m_lastText;
     Final m_lastFinal;          // for a late edge inside it
+    // Finalize requests not yet acknowledged: (split position, sample asked for).
+    std::vector<std::pair<qint64, qint64>> m_unacknowledged;
 };
 
 } // namespace

@@ -576,7 +576,11 @@ void LivePreviewFeeder::feed(const QVector<float>& monoSamples, int sampleRate,
         // engine can drop a session's late results after a reset.
         LivePreviewCallbacks callbacks;
         callbacks.onResult = [this, generation](const LivePreviewResult& r) {
-            emit previewResult(r.startSample, r.endSample, r.text, r.isFinal, generation);
+            emit previewResult(r.startSample, r.endSample, r.text, r.isFinal, r.confidence,
+                               generation);
+        };
+        callbacks.onFinalized = [this, generation](qint64 sample) {
+            emit previewFinalized(sample, generation);
         };
         auto saidWhy = std::make_shared<bool>(false);
         callbacks.onState = [this, generation, saidWhy](LivePreviewState state,
@@ -624,11 +628,38 @@ void LivePreviewFeeder::feed(const QVector<float>& monoSamples, int sampleRate,
 
 void LivePreviewFeeder::finalizeThrough(qint64 sample, quint64 generation)
 {
-    if (generation != m_generation || !m_preview) {
+    if (generation != m_generation) {
+        return;
+    }
+    if (!m_preview) {
+        // Nothing to finalise, so nothing is pending through here either.
+        emit previewFinalized(sample, generation);
         return;
     }
     m_preview->finalizeThrough(sample);
     m_lastFinalize = std::max(m_lastFinalize, sample);
+}
+
+// ---- noAsrBackendFactory ---------------------------------------------------
+
+namespace {
+
+class NoAsrBackend final : public IAsrBackend {
+public:
+    bool load(const QString&, QString*) override { return m_loaded = true; }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>&, QString*) override { return {}; }
+    void unload() override { m_loaded = false; }
+
+private:
+    bool m_loaded = false;
+};
+
+} // namespace
+
+AsrBackendFactory noAsrBackendFactory()
+{
+    return [] { return std::make_unique<NoAsrBackend>(); };
 }
 
 // ---- AsrEngine -------------------------------------------------------------
@@ -702,6 +733,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(m_worker, &AsrWorker::segmentText, this,
             [this](const QString& text, float confidence, int speaker, quint64 generation,
                    const PcmEpochLease& source, quint64 segmentId) {
+                if (m_livePreviewTranscribes) { return; } // the preview commits instead
                 if (!m_enabled || generation != m_generation
                     || (source.stream().source != 0 && !source.current())) { return; }
                 m_previewAssembler.resolve(segmentId);
@@ -740,6 +772,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
             });
     connect(m_worker, &AsrWorker::segmentDiscarded, this,
             [this](quint64 segmentId, quint64 generation) {
+                if (m_livePreviewTranscribes) { return; } // no backend: every segment "fails"
                 if (!m_enabled || generation != m_generation) { return; }
                 m_previewAssembler.resolve(segmentId);
                 emit previewDiscarded(segmentId, m_generation);
@@ -811,12 +844,30 @@ void AsrEngine::startPreviewThread()
     // Emitted from the recogniser's own threads, so these are queued here.
     connect(m_feeder, &LivePreviewFeeder::previewResult, this,
             [this](qint64 start, qint64 end, const QString& text, bool isFinal,
-                   quint64 generation) {
+                   float confidence, quint64 generation) {
                 if (!m_enabled || !m_livePreviewEnabled || generation != m_generation) {
                     return;
                 }
-                if (const auto update = m_previewAssembler.addResult(start, end, text, isFinal)) {
+                if (const auto update =
+                        m_previewAssembler.addResult(start, end, text, isFinal, confidence)) {
                     emit previewText(update->block, update->text, m_generation);
+                }
+            });
+    connect(m_feeder, &LivePreviewFeeder::previewFinalized, this,
+            [this](qint64 sample, quint64 generation) {
+                if (!m_livePreviewTranscribes || !m_enabled || !m_livePreviewEnabled
+                    || generation != m_generation) {
+                    return;
+                }
+                for (const auto& done : m_previewAssembler.commitThrough(sample)) {
+                    if (done.text.isEmpty()) {
+                        emit previewDiscarded(done.block, m_generation);
+                    } else {
+                        // No recogniser confidence: the neutral high value the
+                        // sherpa backend uses, so the text reads normally.
+                        emit finalText(done.text, done.confidence >= 0.0f ? done.confidence : 0.9f,
+                                       -1, done.block);
+                    }
                 }
             });
     connect(m_feeder, &LivePreviewFeeder::previewState, this,

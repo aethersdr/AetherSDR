@@ -43,6 +43,8 @@ Model weights are **not bundled**. The selected model downloads the first time y
 
 **sherpa-onnx model…** (Linux and macOS builds that include sherpa-onnx) runs a non-whisper offline model such as Zipformer, Moonshine or Paraformer. Point it at the extracted model folder. These are much faster than whisper on CPU and ARM, so they are the practical choice on a Raspberry Pi.
 
+**None (live preview only)** runs no model at all: the [live preview](#live-preview) recognizer's text is the transcript. It is the lightest choice, for a computer that cannot keep up with even the smallest whisper model, such as a Raspberry Pi. The preview turns on by itself and cannot be turned off while None is chosen. Its words are less accurate than whisper's on a noisy signal, but they come within about a second of each pause instead of waiting for a decode. Listed wherever a preview recognizer can run.
+
 ### GPU acceleration
 
 The model runs on the GPU when one is available, otherwise on the CPU:
@@ -135,6 +137,8 @@ Copy Assist can show a quick first look at what is being said while the selected
 
 Apple speech recognition is listed on Macs only. A listed recognizer your computer cannot run is shown dimmed, with the reason.
 
+With **None (live preview only)** as the model, the preview is the transcript. Gray italic text still shows words that may change. When the speaker pauses, or the **Buffer** fills, that stretch becomes ordinary transcript text. It is colored by the recognizer's own confidence, saved to the transcript file, and read by a screen reader, like any model's text. Kroko's confidence reads lower than whisper's for the same copy, so expect more yellow; Apple's reads about the same. Speaker labels need a model, so **Label speakers** is grayed out with None. Its setting is kept and comes back when you choose a model.
+
 ### The Queue readout
 
 The status line shows **Queue: N s** — seconds of received audio not yet transcribed. It stays near zero when the engine keeps up and climbs (amber, then red) when it cannot, for example a large model on a Raspberry Pi.
@@ -165,7 +169,7 @@ The ⚙ button opens a small modeless settings window that can stay open while y
 
 | Setting | What it does |
 |---|---|
-| **Model** | Which speech model runs (see [Models](#models)). Also **Custom model…**, **sherpa-onnx model…** and **Remote server…**. |
+| **Model** | Which speech model runs (see [Models](#models)). Also **Custom model…**, **sherpa-onnx model…**, **Remote server…** and **None (live preview only)**. |
 | **Compute** | Which device runs the model: a GPU or the CPU. Shows **Detecting…** while GPU discovery runs in the background. |
 | **Language** | The spoken language to transcribe (multilingual models only). |
 | **Save transcript to a file** | Appends each finished utterance as a timestamped line. A date is inserted before the extension, so `net.txt` writes to `net-2026-07-21.txt` and rolls over daily. A frequency marker line is written when ASR starts, on every retune, and at the top of each day's file. |
@@ -200,7 +204,8 @@ The engine cannot keep up with the audio. Once the backlog reaches twice the Buf
 
 1. Choose a smaller model in **⚙ → Model**, or a sherpa-onnx model on CPU or ARM.
 2. Or use a **Remote server…** on a faster machine.
-3. Or set a longer **Buffer**.
+3. Or choose **None (live preview only)**, which has no decode to fall behind.
+4. Or set a longer **Buffer**.
 
 ### Copy Assist runs on the CPU instead of the GPU
 
@@ -240,7 +245,7 @@ If you built AetherSDR yourself and the reason says the build has no sherpa-onnx
 
 ### The live preview shows nothing
 
-- On first use with Kroko, the status line shows the model downloading. If the download fails, it says why and turns the preview off; turn it on again to retry.
+- On first use with Kroko, the status line shows the model downloading. If the download fails, it says why and turns the preview off; turn it on again to retry. With **None (live preview only)**, a failed download turns Copy Assist off instead; press **Enable** to retry.
 - With Apple's recognizer, the status line reports a language it does not support (see [Live preview](#live-preview) for the list). Pick a supported **Language** instead. Its first use of a language may also download Apple's speech model.
 - The preview only appears while Copy Assist is **Enabled** and audio is arriving.
 

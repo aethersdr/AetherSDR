@@ -16,6 +16,8 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QImage>
+#include <QLineEdit>
 #include <QFormLayout>
 #include <QLabel>
 #include <QJsonDocument>
@@ -27,6 +29,7 @@
 #include <QSlider>
 #include <QStandardItemModel>
 
+#include <algorithm>
 #include <cstdio>
 #include <optional>
 
@@ -312,6 +315,24 @@ int main(int argc, char** argv)
                "speaker toggle + path round-trip");
         expect(!spkSpy.isEmpty() && spkSpy.last().at(0).toBool(),
                "labelSpeakersToggled(true) emitted");
+
+        // The "None" model: greyed with the reason, the choice kept underneath.
+        auto* spkBox = dlg.findChild<QCheckBox*>(QStringLiteral("CopyAssistLabelSpeakers"));
+        auto* spkPath = dlg.findChild<QLineEdit*>(QStringLiteral("CopyAssistSpeakerPath"));
+        spkSpy.clear();
+        dlg.setSpeakerLabelsUnavailable(true, QStringLiteral("Speaker labels need a model"));
+        expect(spkBox && spkPath && spkBox->isChecked() && !spkBox->isEnabled()
+                   && !spkPath->isEnabled() && dlg.labelSpeakers() && spkSpy.isEmpty(),
+               "unavailable greys the speaker controls but keeps the check, without emitting");
+        expect(spkBox && spkBox->accessibleDescription() == QStringLiteral("Speaker labels need a model")
+                   && spkBox->toolTip().contains(QStringLiteral("need a model"))
+                   && spkBox->toolTip().contains(QStringLiteral("ONNX")),
+               "the reason reaches a screen reader and joins the usual tooltip");
+        dlg.setSpeakerLabelsUnavailable(false, QString());
+        expect(spkBox && spkBox->isChecked() && spkBox->isEnabled() && spkPath->isEnabled()
+                   && spkBox->accessibleDescription().isEmpty()
+                   && !spkBox->toolTip().contains(QStringLiteral("need a model")) && spkSpy.isEmpty(),
+               "a model again restores the speaker controls as they were");
 
         QSignalSpy thrSpy(&dlg, &CopyAssistSettingsDialog::speakerThresholdChanged);
         dlg.setSpeakerThreshold(65);
@@ -741,6 +762,22 @@ int main(int argc, char** argv)
                    "available re-enables it and clears the reason");
             expect(recognizer != nullptr && recognizer->isEnabled(),
                    "and re-enables the recognizer choice");
+
+            // The "None" model: the preview is the transcript.
+            dlg.setLivePreviewChecked(false);
+            liveSpy.clear();
+            dlg.setLivePreviewRequired(true, QStringLiteral("No model: the preview is it"));
+            expect(box->isChecked() && !box->isEnabled() && liveSpy.isEmpty(),
+                   "required shows the box checked and locked, without emitting");
+            expect(box->accessibleDescription() == QStringLiteral("No model: the preview is it")
+                       && box->toolTip().contains(QStringLiteral("No model")),
+                   "the reason it is locked reaches a screen reader and the tooltip");
+            expect(!dlg.livePreviewChecked() && recognizer != nullptr && recognizer->isEnabled(),
+                   "the operator's own choice is kept, and the recognizer stays choosable");
+            dlg.setLivePreviewRequired(false, QString());
+            expect(!box->isChecked() && box->isEnabled() && box->accessibleDescription().isEmpty()
+                       && liveSpy.isEmpty(),
+                   "another model brings the operator's choice back");
         }
     }
 
@@ -802,6 +839,38 @@ int main(int argc, char** argv)
                 .toString()
                 .isEmpty(),
            "dialog geometry is persisted on close");
+
+    // ---- A greyed control looks grey under the main window's text colour ---
+    // The app's sheet sets a text colour that holds in every state; without
+    // the dialog's own :disabled rule, None's greyed Label speakers kept full
+    // ink. Brightest text pixel, right of the indicator.
+    {
+        QWidget host;
+        host.setStyleSheet(QStringLiteral("QWidget { color: #ffffff; background: #000000; }"));
+        auto* themed = new CopyAssistSettingsDialog(&host);
+        themed->setLabelSpeakers(false);
+        themed->show();
+        app.processEvents();
+        auto* spk = themed->findChild<QCheckBox*>(QStringLiteral("CopyAssistLabelSpeakers"));
+        const auto brightestText = [&] {
+            const QImage img = spk->grab().toImage();
+            int best = 0;
+            for (int y = 0; y < img.height(); ++y) {
+                for (int x = 24; x < img.width(); ++x) {
+                    best = std::max(best, qGray(img.pixel(x, y)));
+                }
+            }
+            return best;
+        };
+        const int enabledInk = spk ? brightestText() : -1;
+        themed->setSpeakerLabelsUnavailable(true, QStringLiteral("Speaker labels need a model"));
+        app.processEvents();
+        const int greyedInk = spk ? brightestText() : -1;
+        std::printf("       label ink enabled=%d greyed=%d\n", enabledInk, greyedInk);
+        expect(spk && enabledInk > 200 && greyedInk < enabledInk - 60,
+               "a greyed control is drawn grey under an inherited text colour");
+        themed->close();
+    }
 
     std::printf(g_failures == 0 ? "\nCopy Assist settings dialog: ALL PASS\n"
                                 : "\nCopy Assist settings dialog: %d FAILURE(S)\n",

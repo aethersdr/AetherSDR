@@ -26,6 +26,12 @@ public:
         quint64 block = 0;
         QString text;
     };
+    // A block whose text is final, for AsrEngine::setLivePreviewTranscribes.
+    struct Committed {
+        quint64 block = 0;
+        QString text;
+        float confidence = -1.0f; // negative when no final carried one
+    };
 
     void reset();
 
@@ -46,7 +52,15 @@ public:
     // nothing when the result belongs to an already-resolved block or changes
     // nothing on screen.
     std::optional<Update> addResult(qint64 startSample, qint64 endSample, const QString& text,
-                                    bool isFinal);
+                                    bool isFinal, float confidence = -1.0f);
+
+    // The recogniser has finalised everything through `sample`. When a closed
+    // block ends exactly there (the edge that block's finalize asked for), it
+    // and every older closed block are complete: returns each one's finals in
+    // audio order, with their confidence averaged by word, and resolves them.
+    // Returns nothing for any other position, such as the 10 s forcing: an
+    // edge reported late may still split the last final there.
+    std::vector<Committed> commitThrough(qint64 sample);
 
     // Segment `id` has been decoded (or discarded): its block, and any older
     // one, no longer takes preview text.
@@ -65,8 +79,12 @@ private:
     // last returned for it.
     std::optional<Update> render(quint64 block, Content& c);
 
+    struct Final {
+        QString text;
+        float confidence = -1.0f;
+    };
     struct Content {
-        std::map<qint64, QString> finals; // by start sample
+        std::map<qint64, Final> finals;   // by start sample
         qint64 provisionalStart = -1;
         QString provisional;
         QString shown;                    // last text returned for this block

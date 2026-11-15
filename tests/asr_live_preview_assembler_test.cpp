@@ -4,6 +4,8 @@
 
 #include "asr/LivePreviewAssembler.h"
 
+#include <cmath>
+
 #include <cstdio>
 
 using AetherSDR::LivePreviewAssembler;
@@ -151,6 +153,40 @@ int main()
         a.addResult(0, 2 * kSec, QStringLiteral("hello"), false);
         expect(a.closeBlock(0, 5 * kSec).empty(),
                "a close with nothing past the edge reports no change");
+    }
+
+    {
+        // The "None" model: the preview's finals are the transcript, committed
+        // when the recogniser has finalised through a block's edge.
+        LivePreviewAssembler a;
+        a.addResult(0, 2 * kSec, QStringLiteral("one two three"), true, 0.9f);
+        a.addResult(2 * kSec, 4 * kSec, QStringLiteral("four"), true, 0.5f);
+        a.closeBlock(0, 4 * kSec);
+        a.addResult(4 * kSec, 5 * kSec, QStringLiteral("five"), false);
+        expect(a.commitThrough(3 * kSec).empty(),
+               "finalised through a position that is no block's edge commits nothing");
+        const auto done = a.commitThrough(4 * kSec);
+        expect(done.size() == 1 && done[0].block == 0
+                   && done[0].text == QStringLiteral("one two three four"),
+               "finalised through a block's edge commits its finals in audio order");
+        expect(!done.empty() && std::abs(done[0].confidence - 0.8f) < 1e-4f,
+               "the committed confidence is the finals' mean, weighted by words");
+        expect(!a.addResult(1 * kSec, 2 * kSec, QStringLiteral("late"), true).has_value(),
+               "a committed block takes no more text");
+        expect(is(a.addResult(4 * kSec, 6 * kSec, QStringLiteral("five six"), false), 1,
+                  "five six"),
+               "the open block's provisional text is not committed with it");
+    }
+    {
+        LivePreviewAssembler a;
+        a.addResult(0, 1 * kSec, QStringLiteral("first"), true);
+        a.closeBlock(0, 1 * kSec);
+        a.closeBlock(1, 3 * kSec);
+        const auto done = a.commitThrough(3 * kSec);
+        expect(done.size() == 2 && done[0].block == 0 && done[0].text == QStringLiteral("first")
+                   && done[0].confidence < 0.0f && done[1].block == 1 && done[1].text.isEmpty(),
+               "a later edge commits every older block too, empty ones included, and no "
+               "confidence when none was given");
     }
 
     if (g_failures == 0) {

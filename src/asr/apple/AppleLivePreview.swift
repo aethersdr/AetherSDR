@@ -13,10 +13,14 @@ import Foundation
 import Speech
 
 private let kRate: Double = 16000
+/// How long finalized() waits after finalize(through:) returns, so the final
+/// results it published reach the sink first (they travel on another task).
+private let kResultsGrace: Duration = .milliseconds(150)
 
 public typealias TextCallback = @convention(c) (
-    UnsafeMutableRawPointer?, UnsafePointer<CChar>?, Int64, Int64, Int32) -> Void
+    UnsafeMutableRawPointer?, UnsafePointer<CChar>?, Int64, Int64, Int32, Float) -> Void
 public typealias StateCallback = @convention(c) (UnsafeMutableRawPointer?, Int32, UnsafePointer<CChar>?) -> Void
+public typealias FinalizedCallback = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Void
 
 /// Delivers callbacks until closed. The lock is held while a callback runs, so
 /// close() returning means no callback is in flight and none will start.
@@ -26,18 +30,29 @@ private final class Sink: @unchecked Sendable {
     private let ctx: UnsafeMutableRawPointer?
     private let onText: TextCallback
     private let onState: StateCallback
+    private let onFinalized: FinalizedCallback
 
-    init(ctx: UnsafeMutableRawPointer?, onText: TextCallback, onState: StateCallback) {
+    init(ctx: UnsafeMutableRawPointer?, onText: TextCallback, onState: StateCallback,
+         onFinalized: FinalizedCallback) {
         self.ctx = ctx
         self.onText = onText
         self.onState = onState
+        self.onFinalized = onFinalized
     }
 
-    func text(_ s: String, _ start: Int64, _ end: Int64, final isFinal: Bool) {
+    func text(_ s: String, _ start: Int64, _ end: Int64, final isFinal: Bool,
+              confidence: Float) {
         lock.lock()
         defer { lock.unlock() }
         guard open else { return }
-        s.withCString { onText(ctx, $0, start, end, isFinal ? 1 : 0) }
+        s.withCString { onText(ctx, $0, start, end, isFinal ? 1 : 0, confidence) }
+    }
+
+    func finalized(_ sample: Int64) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard open else { return }
+        onFinalized(ctx, sample)
     }
 
     func state(_ code: Int32, _ message: String) {
@@ -71,6 +86,21 @@ func regionalLocale(for language: String, current: Locale, supported: [Locale]) 
 
 private func samples(_ t: CMTime) -> Int64 {
     Int64((t.seconds * kRate).rounded())
+}
+
+/// Apple's transcription confidence over the text, weighted by characters;
+/// -1 when no run carries one.
+@available(macOS 26, *)
+private func confidence(of text: AttributedString) -> Float {
+    var sum = 0.0
+    var weight = 0
+    for run in text.runs {
+        guard let c = run.transcriptionConfidence else { continue }
+        let n = text[run.range].characters.count
+        sum += c * Double(n)
+        weight += n
+    }
+    return weight > 0 ? Float(sum / Double(weight)) : -1
 }
 
 @available(macOS 26, *)
@@ -121,7 +151,7 @@ private final class Session: @unchecked Sendable {
         }
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
                                             reportingOptions: [.volatileResults, .fastResults],
-                                            attributeOptions: [])
+                                            attributeOptions: [.transcriptionConfidence])
         // A request can come back even when the model is installed; installing
         // is then a quick no-op, so this only reports a download it cannot rule out.
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
@@ -153,7 +183,8 @@ private final class Session: @unchecked Sendable {
             do {
                 for try await r in transcriber.results {
                     sink.text(String(r.text.characters), samples(r.range.start),
-                              samples(r.range.end), final: r.isFinal)
+                              samples(r.range.end), final: r.isFinal,
+                              confidence: r.isFinal ? confidence(of: r.text) : -1)
                 }
             } catch {
                 sink.state(2, "Live preview stopped: \(error.localizedDescription)")
@@ -163,14 +194,19 @@ private final class Session: @unchecked Sendable {
         try await analyzer.start(inputSequence: stream)
 
         let (positions, finalizes) = AsyncStream<Int64>.makeStream()
-        let finalizeTask = Task {
+        let finalizeTask = Task { [sink] in
             var last = Int64.min
             for await sample in positions {
                 // A position at or before one already finalised splits nothing.
-                guard sample > last else { continue }
-                last = sample
-                try? await analyzer.finalize(
-                    through: CMTime(value: sample, timescale: CMTimeScale(kRate)))
+                if sample > last {
+                    last = sample
+                    try? await analyzer.finalize(
+                        through: CMTime(value: sample, timescale: CMTimeScale(kRate)))
+                    // finalize(through:) returns once the results are published,
+                    // but the results task may not have passed them on yet.
+                    try? await Task.sleep(for: kResultsGrace)
+                }
+                sink.finalized(sample)
             }
         }
 
@@ -239,7 +275,13 @@ private final class Session: @unchecked Sendable {
         lock.lock()
         let finalizes = self.finalizes
         lock.unlock()
-        finalizes?.yield(sample)
+        if let finalizes {
+            finalizes.yield(sample)
+        } else {
+            // Not started yet: audio fed so far was dropped, so nothing is
+            // waiting to be finalised.
+            sink.finalized(sample)
+        }
     }
 
     func stop() {
@@ -280,11 +322,13 @@ public func aether_lp_is_supported() -> Int32 {
 
 @_cdecl("aether_lp_create")
 public func aether_lp_create(_ language: UnsafePointer<CChar>?, _ ctx: UnsafeMutableRawPointer?,
-                             _ onText: TextCallback?, _ onState: StateCallback?) -> UnsafeMutableRawPointer? {
+                             _ onText: TextCallback?, _ onState: StateCallback?,
+                             _ onFinalized: FinalizedCallback?) -> UnsafeMutableRawPointer? {
     guard #available(macOS 26, *), SpeechTranscriber.isAvailable,
-          let onText, let onState else { return nil }
+          let onText, let onState, let onFinalized else { return nil }
     let session = Session(language: language.map { String(cString: $0) } ?? "",
-                          sink: Sink(ctx: ctx, onText: onText, onState: onState))
+                          sink: Sink(ctx: ctx, onText: onText, onState: onState,
+                                     onFinalized: onFinalized))
     session.start()
     return Unmanaged.passRetained(Handle(session)).toOpaque()
 }

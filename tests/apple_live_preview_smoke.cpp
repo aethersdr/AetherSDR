@@ -1,7 +1,10 @@
 // Manual smoke test for the Apple live-preview bridge (macOS 26+): feeds a
 // 16 kHz mono float32 WAV through ILivePreview at real-time pace in 20 ms
-// chunks and prints every result with the delay since its audio ended.
-// Needs a real recording and the on-device model, so it is not a CTest.
+// chunks and prints every result with the delay since its audio ended, and
+// each final's confidence. Fails unless every finalizeThrough is acknowledged
+// and no final arrives after the acknowledgement that covers it (the "None"
+// model commits on that acknowledgement). Needs a real recording and the
+// on-device model, so it is not a CTest.
 //
 //   apple_live_preview_smoke <file.16k.wav> [seconds] [language]
 
@@ -13,6 +16,7 @@
 #include <QThread>
 
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -51,13 +55,30 @@ int main(int argc, char** argv)
     QElapsedTimer clock;
     bool ready = false;
     int results = 0;
+    int acks = 0;
+    int lateFinals = 0;  // finals that arrived after an acknowledgement covering them
+    qint64 acked = -1;
     LivePreviewCallbacks cb;
     cb.onResult = [&](const LivePreviewResult& r) {
         const std::lock_guard<std::mutex> lock(mu);
         ++results;
-        std::printf("%7.2f s  %s [%6.2f-%6.2f] %s\n", clock.elapsed() / 1000.0,
+        if (r.isFinal && !r.text.trimmed().isEmpty() && r.startSample < acked) {
+            ++lateFinals;
+        }
+        std::printf("%7.2f s  %s [%6.2f-%6.2f] %s%s\n", clock.elapsed() / 1000.0,
                     r.isFinal ? "FINAL" : "prov ", r.startSample / 16000.0,
-                    r.endSample / 16000.0, qPrintable(r.text));
+                    r.endSample / 16000.0, qPrintable(r.text),
+                    r.isFinal ? qPrintable(QStringLiteral("  (confidence %1)")
+                                               .arg(double(r.confidence), 0, 'f', 2))
+                              : "");
+        std::fflush(stdout);
+    };
+    cb.onFinalized = [&](qint64 sample) {
+        const std::lock_guard<std::mutex> lock(mu);
+        ++acks;
+        acked = std::max(acked, sample);
+        std::printf("%7.2f s  finalized through %.2f\n", clock.elapsed() / 1000.0,
+                    sample / 16000.0);
         std::fflush(stdout);
     };
     cb.onState = [&](LivePreviewState s, const QString& m) {
@@ -84,6 +105,7 @@ int main(int argc, char** argv)
     clock.start();
     constexpr int kChunk = 320; // 20 ms
     qint64 lastFinalize = 0;
+    int requested = 0;
     for (size_t off = 0; off < pcm.size(); off += kChunk) {
         const int n = static_cast<int>(std::min<size_t>(kChunk, pcm.size() - off));
         const qint64 dueMs = static_cast<qint64>((off + n) / 16);
@@ -94,11 +116,25 @@ int main(int argc, char** argv)
         if (static_cast<qint64>(off + n) - lastFinalize >= 10 * 16000) {
             lastFinalize = static_cast<qint64>(off + n);
             preview->finalizeThrough(lastFinalize);
+            ++requested;
         }
     }
     preview->finalizeThrough(static_cast<qint64>(pcm.size()));
-    QThread::msleep(1500);
+    ++requested;
+    // Apple finalises through a position only once audio past it arrives, as
+    // it always does in the app: keep feeding silence for 2 s.
+    const std::vector<float> quiet(kChunk, 0.0f);
+    for (qint64 at = static_cast<qint64>(pcm.size()); at < qint64(pcm.size()) + 32000;
+         at += kChunk) {
+        while (clock.elapsed() < (at + kChunk) / 16) {
+            QThread::msleep(1);
+        }
+        preview->feed(quiet.data(), kChunk, at);
+    }
+    QThread::msleep(500);
     preview.reset(); // no callback may run after this
-    std::printf("done: %d results\n", results);
-    return results > 0 ? 0 : 1;
+    std::printf("done: %d results, %d/%d finalize requests acknowledged, %d finals after "
+                "their acknowledgement\n",
+                results, acks, requested, lateFinals);
+    return results > 0 && acks == requested && lateFinals == 0 ? 0 : 1;
 }

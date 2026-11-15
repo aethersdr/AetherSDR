@@ -34,6 +34,7 @@ enum class AsrBackendKind {
     Whisper,    // local whisper.cpp (a catalog tier or a user "custom" file)
     Remote,     // RemoteAsrBackend over HTTP
     SherpaOnnx, // sherpa-onnx offline model (a user-picked model directory)
+    None,       // no model: the live preview's text is the transcript
 };
 
 // Per-engine state for a queued speaker-embedder load. Download/verification
@@ -141,6 +142,8 @@ private:
     void applyLivePreview(); // switch the engine's live preview to the saved setting
     // The recognizer the preview uses: the stored choice, or the other one when
     // this computer cannot run the stored one.
+    bool livePreviewOn() const; // the setting, or forced on by the None model
+    bool speakerLabelsOn() const; // the setting, unless the None model has no segments
     QString livePreviewRecognizer() const;
     // Copy Assist is on with the sherpa preview, so its model is needed now.
     bool previewModelWanted() const;

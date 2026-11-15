@@ -449,6 +449,82 @@ int main(int argc, char** argv)
                "segment edges stay on the preview's timeline when the worker skips audio");
     }
 
+    // ---- The "None" model: the preview's finals are the transcript ---------
+    {
+        auto log = std::make_shared<FakeLog>();
+        AsrEngine engine(noAsrBackendFactory());
+        engine.setLivePreviewTranscribes(true);
+        expect(readyEngine(engine), "a None engine loads with no model");
+        engine.setLivePreviewFactory(fakeFactory(log));
+        QSignalSpy finals(&engine, &AsrEngine::finalText);
+        QSignalSpy previews(&engine, &AsrEngine::previewText);
+        QSignalSpy discarded(&engine, &AsrEngine::previewDiscarded);
+        pushUtterance(engine);
+        expect(awaitFinalize(*log), "the segment's close finalises the preview at its edge");
+        LivePreviewCallbacks cb;
+        qint64 edge = 0;
+        {
+            const std::lock_guard<std::mutex> lock(log->mu);
+            if (!log->sessions.empty()) {
+                cb = log->sessions.back();
+            }
+            edge = log->finalizes.empty() ? 0 : log->finalizes.front();
+        }
+        if (!cb.onResult || !cb.onFinalized) {
+            expect(false, "a None preview session exists to fire from");
+            return 1;
+        }
+        waitFor([] { return false; }, 300); // let the backend's empty "decode" land
+        expect(discarded.isEmpty() && finals.isEmpty(),
+               "the no-op backend's empty result neither commits nor discards the block");
+        fireFromThread(cb, 0, edge, "hello there", true);
+        LivePreviewResult late{edge, edge + 800, QStringLiteral("next"), false};
+        std::thread([cb, late] { cb.onResult(late); }).join();
+        waitFor([&] { return previews.count() >= 2; }, 3000);
+        expect(finals.isEmpty(), "final preview text waits for the recogniser's say-so");
+        {
+            LivePreviewResult withConfidence{0, edge, QStringLiteral("hello there"), true, 0.7f};
+            std::thread([cb, withConfidence, edge] {
+                cb.onResult(withConfidence);
+                cb.onFinalized(edge);
+            }).join();
+        }
+        expect(finals.wait(3000) && finals.count() == 1, "finalised through the edge, it commits");
+        if (!finals.isEmpty()) {
+            const QList<QVariant> f = finals.first();
+            expect(f.at(0).toString() == QStringLiteral("hello there")
+                       && std::abs(f.at(1).toFloat() - 0.7f) < 1e-4f && f.at(2).toInt() == -1
+                       && f.at(3).toULongLong() == 0,
+                   "as segment 0's final text, with the recogniser's confidence and no speaker");
+        }
+        bool nextStillGray = false;
+        for (const QList<QVariant>& p : previews) {
+            nextStillGray = nextStillGray || p.at(1).toString() == QStringLiteral("next");
+        }
+        expect(nextStillGray && finals.count() == 1,
+               "provisional text after the edge stays a preview");
+
+        // A second utterance whose final carries no confidence.
+        pushUtterance(engine);
+        const bool second = waitFor([&] {
+            const std::lock_guard<std::mutex> lock(log->mu);
+            return log->finalizes.size() >= 2;
+        }, 3000);
+        qint64 edge2 = 0;
+        {
+            const std::lock_guard<std::mutex> lock(log->mu);
+            edge2 = second ? log->finalizes[1] : 0;
+        }
+        std::thread([cb, edge, edge2] {
+            cb.onResult({edge, edge2, QStringLiteral("over"), true});
+            cb.onFinalized(edge2);
+        }).join();
+        expect(second && finals.wait(3000) && finals.count() == 2
+                   && finals.last().at(0).toString() == QStringLiteral("over")
+                   && std::abs(finals.last().at(1).toFloat() - 0.9f) < 1e-4f,
+               "a final without a confidence commits at the neutral 0.9");
+    }
+
     // ---- Off, then on again: the old session's text stays gone -------------
     {
         auto log = std::make_shared<FakeLog>();

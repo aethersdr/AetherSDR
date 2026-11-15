@@ -78,8 +78,9 @@ launch** button appear under **Compute** (see *GPU acceleration*).
 - **Show a live preview while the model decodes** — **off by default**. Gray
   provisional text appears within about a second of speech and is replaced,
   segment by segment, by the selected backend's final text. Works with every
-  backend; the transcript file and screen readers get finals only. Dimmed, with
-  the reason, where no recognizer is available. See *Live preview* under
+  backend; the transcript file and screen readers get finals only. With no
+  model (**None (live preview only)**) it is forced on and its own finals are
+  the transcript. Dimmed, with the reason, where no recognizer is available. See *Live preview* under
   Architecture.
   - **Preview recognizer** — which streaming recognizer draws the gray text:
     - **Kroko streaming, English (sherpa-onnx)**, the default. The first Enable
@@ -297,6 +298,22 @@ Select **"Remote server…"** in the model picker (⚙ settings) and enter the e
 model name. AetherSDR ships **no server and no default endpoint**; cloud
 endpoints are entirely opt-in and user-configured.
 
+## No model (live preview only)
+
+**"None (live preview only)"** in the model picker runs no backend: the live
+preview recognizer's final text is the transcript. It is listed wherever a
+preview recognizer can run. Choosing it forces the preview on (the setting
+shows checked and locked, with the reason in its accessible description, and
+the operator's own choice comes back with any other model). Speakers are told
+apart from a model's segments, so **Label speakers** greys out the same way:
+its check mark is kept, the reason is in its tooltip and accessible
+description, and the speaker model is neither loaded nor fetched until another
+model is chosen. It suits hardware
+that cannot keep up with even whisper tiny: on a Raspberry Pi 5, tiny with the
+preview on dropped about a quarter of continuous speech, and Kroko's text was
+often more accurate than tiny's. See *No model* under *Live preview* for how
+it works.
+
 ## Architecture (contributors)
 
 ASR lives in its own static library **`aetherasr`** (Qt Core/Network +
@@ -324,8 +341,8 @@ AudioEngine (aethercore, 24 kHz post-NR RX, or pre-NR when opted in)
 
 ### Live preview
 
-The backend still produces every final word. A streaming recogniser only fills
-the wait for a segment to close:
+The backend still produces every final word (except with no model, below). A
+streaming recogniser only fills the wait for a segment to close:
 
 ```
 AsrEngine (main thread)
@@ -400,6 +417,27 @@ large-v3-turbo score 22.7%. Other sherpa-onnx streaming models were measured
 and rejected: NeMo fast-conformer 80 ms / 480 ms (71% / 87%), Nemotron 0.6B
 160 ms (56–65%, 30–70% of a core), Parakeet unified 560 ms (cannot keep up on
 CPU). They lose whole stretches of weak signal; a +12 dB feed did not help.
+
+**No model (`AsrEngine::setLivePreviewTranscribes`).** The engine runs on
+`noAsrBackendFactory()`, a backend that loads at once and decodes nothing, so
+the segmenter still finds the edges and nothing else changes upstream. The
+worker's empty results are ignored. Every `finalizeThrough` is acknowledged
+(`LivePreviewCallbacks::onFinalized`) once the finals up to it have been
+delivered; when the acknowledged position is a closed block's own edge, that
+block and any older ones are complete, and the assembler hands them over
+(`commitThrough`) as `finalText`, so the panel colors them, the transcript
+file gets them and screen readers read them, as with any backend. Provisional
+text stays gray. Only an edge's own acknowledgement commits: one from the
+10 s forcing could arrive before a late edge has split its last final. The
+confidence is the recognizer's: sherpa's is the mean token probability from
+Kroko's `ys_probs`, the same measure whisper uses (Kroko's reads lower: 0.75
+on the clean demo clip, 0.52–0.74 on off-air recordings); Apple's is its
+transcription confidence averaged over the text (0.97 on the demo clip). A
+final without one commits at the neutral 0.9 the sherpa backend uses. Apple
+acknowledges 150 ms after `finalize(through:)` returns, because its final
+results travel on another task; in testing they always arrived first even
+without the wait. Speaker labels need a backend's segments and are not
+produced.
 
 **sherpa-onnx (`SherpaLivePreview.cpp`).** An online transducer with its own
 endpointing off: the segmenter's edges and the 10 s forcing decide where text
@@ -511,19 +549,27 @@ WAV(s)) validate the Silero VAD and the speaker embedder end-to-end. Real GPU/CP
 
 Live preview: `asr_live_preview_assembler_test` (block assignment and
 resolution, pure) and `asr_live_preview_engine_test` (feed timeline,
-finalisation at close, delivery during a slow decode, generations, off/unavailable),
-both with a fake recogniser; `copy_assist_panel_test` (drafts painted, not in
+finalisation at close, delivery during a slow decode, generations, off/unavailable,
+no model: commit on the edge's acknowledgement with the recogniser's confidence),
+both with a fake recogniser; `copy_assist_failure_test` (None is listed only
+where a recognizer runs, builds a transcribing engine, locks the preview on and
+greys speaker labels) and `copy_assist_settings_dialog_test` (the locked and
+greyed states keep the operator's choice); `copy_assist_panel_test` (drafts painted, not in
 the document, no accessibility text events, scroll range, generations);
 `asr_model_manager_test` (bundles: fetch, cached, partly cached, failure
 stops the bundle, mixed folders, corrupt file); `asr_live_preview_assembler_test`
-also covers a segment edge reported after the recogniser ran past it. The real recognizers are
+also covers a segment edge reported after the recogniser ran past it, a
+re-split final, and committing blocks for the no-model mode. The real recognizers are
 exercised by hand: `apple_live_preview_smoke <file.16k.wav> [seconds]
-[language]` (macOS 26+) and `sherpa_live_preview_smoke <model-dir>
+[language]` (macOS 26+; prints each result with its confidence and fails
+unless every finalize request is acknowledged and no final arrives after its
+acknowledgement) and `sherpa_live_preview_smoke <model-dir>
 <file.16k.wav> [seconds]` (checks the finals tile the timeline, that
 splitting behind the feed loses no words, that split text matches an unsplit
 decode within 5% word error, so no word is cut in two, that a late segment
-edge re-splits the last final without losing words, and that a second
-session reuses the loaded model), each on a 16 kHz mono float32 WAV. The
+edge re-splits the last final without losing words, that every finalize
+request is acknowledged once and after its finals, that finals carry a
+confidence, and that a second session reuses the loaded model), each on a 16 kHz mono float32 WAV. The
 word checks hold on clean speech such as `resources/demo_voice.wav` (looped
 to a minute or more); off-air recordings differ more, because a split
 changes what a noisy decode hears.

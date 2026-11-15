@@ -80,6 +80,11 @@ public:
     void setLivePreviewChecked(bool on);
     bool livePreviewChecked() const;
     void setLivePreviewAvailable(bool available, const QString& reason);
+    // The "None" model: the preview is the transcript, so the box shows
+    // checked and can't be cleared, with the reason. The operator's own choice
+    // (setLivePreviewChecked / livePreviewChecked) is kept underneath and
+    // comes back when another model is chosen.
+    void setLivePreviewRequired(bool required, const QString& reason);
     QWidget* livePreviewControl() const;
     // Which recogniser draws the preview (id + human label). An unavailable one
     // stays listed but dimmed and unselectable, with its reason in the item's
@@ -105,6 +110,11 @@ public:
     // Per-utterance speaker labeling (A/B/C…) via a speaker-embedding .onnx.
     void setLabelSpeakers(bool on);
     bool labelSpeakers() const;
+    // The "None" model has no segments to tell speakers apart: the speaker
+    // controls grey out, with the reason, but keep the operator's choice, so
+    // it is back as it was when another model is chosen. labelSpeakers() still
+    // reports that choice; the controller decides whether it applies.
+    void setSpeakerLabelsUnavailable(bool unavailable, const QString& reason);
     void setSpeakerModelPath(const QString& path);
     QString speakerModelPath() const;
     // Cosine match threshold as a percent 0–100 (higher = stricter → more, finer
@@ -153,6 +163,12 @@ private:
     QCheckBox* m_useSilero = nullptr;
     QCheckBox* m_livePreview = nullptr;
     QString m_livePreviewToolTip;
+    bool m_livePreviewWanted = false;    // the operator's choice
+    bool m_livePreviewAvailable = true;
+    QString m_livePreviewUnavailableReason;
+    bool m_livePreviewRequired = false;
+    QString m_livePreviewRequiredReason;
+    void refreshLivePreview();
     QComboBox* m_previewRecognizer = nullptr;
     QString m_previewRecognizerToolTip;
     void updatePreviewRecognizerDescription();
@@ -161,6 +177,10 @@ private:
     QLineEdit* m_vadPath = nullptr;
     QPushButton* m_vadBrowse = nullptr;
     QCheckBox* m_labelSpeakers = nullptr;
+    QString m_labelSpeakersToolTip;
+    bool m_speakerLabelsUnavailable = false;
+    QString m_speakerLabelsUnavailableReason;
+    void refreshSpeakerLabels();
     QLineEdit* m_spkPath = nullptr;
     QPushButton* m_spkBrowse = nullptr;
     QSlider* m_spkThreshold = nullptr;

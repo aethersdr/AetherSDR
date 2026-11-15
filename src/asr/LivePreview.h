@@ -10,7 +10,8 @@ namespace AetherSDR {
 
 // A streaming recogniser that shows provisional text while the selected ASR
 // backend is still waiting for its segment to close (docs/asr-copy-assist.md,
-// "Live preview"). It never produces Copy Assist's final text.
+// "Live preview"). With the "None" model there is no backend, and its final
+// results become Copy Assist's transcript (AsrEngine::setLivePreviewTranscribes).
 //
 // Positions are 16 kHz sample indices on AsrEngine's timeline. LivePreviewFeeder
 // owns the object and calls it from its own thread; results arrive through
@@ -27,6 +28,9 @@ struct LivePreviewResult {
     // rest. Provisional: a later result starting at the same position
     // replaces it.
     bool isFinal = false;
+    // Finals only: how sure the recogniser is, 0-1 on the same scale as the
+    // backends' (the mean token probability), or negative when it cannot say.
+    float confidence = -1.0f;
 };
 
 enum class LivePreviewState { Preparing, Ready, Failed };
@@ -34,6 +38,9 @@ enum class LivePreviewState { Preparing, Ready, Failed };
 struct LivePreviewCallbacks {
     std::function<void(const LivePreviewResult&)> onResult;
     std::function<void(LivePreviewState, const QString& message)> onState;
+    // Once per finalizeThrough(sample), with that sample, after every final
+    // result up to it has been delivered through onResult.
+    std::function<void(qint64 sample)> onFinalized;
 };
 
 class ILivePreview {

@@ -1,5 +1,7 @@
 #include "asr/LivePreviewAssembler.h"
 
+#include <QStringList>
+
 #include <algorithm>
 
 namespace AetherSDR {
@@ -70,7 +72,7 @@ std::vector<LivePreviewAssembler::Update> LivePreviewAssembler::closeBlock(quint
 
 std::optional<LivePreviewAssembler::Update>
 LivePreviewAssembler::addResult(qint64 startSample, qint64 endSample, const QString& text,
-                                bool isFinal)
+                                bool isFinal, float confidence)
 {
     if (startSample < m_resolvedEnd) {
         return std::nullopt;
@@ -88,7 +90,7 @@ LivePreviewAssembler::addResult(qint64 startSample, qint64 endSample, const QStr
 
     Content& c = m_content[block];
     if (isFinal) {
-        c.finals[startSample] = text;
+        c.finals[startSample] = {text, confidence};
         // A final supersedes the provisional text it covers.
         if (c.provisionalStart >= startSample && c.provisionalStart < endSample) {
             c.provisionalStart = -1;
@@ -132,7 +134,7 @@ std::optional<LivePreviewAssembler::Update> LivePreviewAssembler::render(quint64
             joined += c.provisional + QLatin1Char(' ');
             provisionalPlaced = true;
         }
-        joined += t + QLatin1Char(' ');
+        joined += t.text + QLatin1Char(' ');
     }
     if (!provisionalPlaced) {
         joined += c.provisional;
@@ -143,6 +145,44 @@ std::optional<LivePreviewAssembler::Update> LivePreviewAssembler::render(quint64
     }
     c.shown = joined;
     return Update{block, joined};
+}
+
+std::vector<LivePreviewAssembler::Committed> LivePreviewAssembler::commitThrough(qint64 sample)
+{
+    std::vector<Committed> out;
+    const bool edge = std::any_of(m_closedEnd.begin(), m_closedEnd.end(),
+                                  [sample](const auto& e) { return e.second == sample; });
+    if (!edge) {
+        return out;
+    }
+    quint64 last = 0;
+    for (const auto& [id, end] : m_closedEnd) {
+        if (end > sample) {
+            break;
+        }
+        last = id;
+        Committed done{id, {}, -1.0f};
+        double weighted = 0.0;
+        int words = 0;
+        if (const auto it = m_content.find(id); it != m_content.end()) {
+            for (const auto& [start, f] : it->second.finals) {
+                done.text += f.text + QLatin1Char(' ');
+                const int n = static_cast<int>(
+                    f.text.split(QLatin1Char(' '), Qt::SkipEmptyParts).size());
+                if (f.confidence >= 0.0f && n > 0) {
+                    weighted += double(f.confidence) * n;
+                    words += n;
+                }
+            }
+        }
+        done.text = done.text.simplified();
+        if (words > 0) {
+            done.confidence = static_cast<float>(weighted / words);
+        }
+        out.push_back(std::move(done));
+    }
+    resolve(last);
+    return out;
 }
 
 void LivePreviewAssembler::resolve(quint64 id)
