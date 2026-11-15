@@ -1313,6 +1313,11 @@ private:
     void pushCwPaddleState(const QString& source = {},
                            quint64 traceId = 0, quint64 sourceMs = 0);
     bool handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // The CW, PTT-hold and Monitor-hold handlers, in that order.
+    bool dispatchMomentaryKey(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // A sided Ctrl/Shift/Alt event as per-side edges through
+    // dispatchMomentaryKey(); nullopt when the side is unknown (#7354).
+    std::optional<bool> handleSidedModifierEvent(QKeyEvent* keyEvent, QEvent::Type eventType);
     bool handleScopedCwMomentaryShortcut(const QString& action, bool press,
                                          const std::shared_ptr<TxController>& controller,
                                          bool keyboard = true);
@@ -2233,6 +2238,7 @@ private:
     bool m_serialCwPaddleHeld{false};
     void captureLocalCwPaddleInput(bool held);
     bool m_cwRightPaddleActive{false};
+    ShortcutSidedModifierTracker m_sidedModifiers;
     QPointer<QWidget> m_sliderShortcutLease;
     QTimer m_sliderShortcutLeaseTimer;
     struct SwrSweepSample {
