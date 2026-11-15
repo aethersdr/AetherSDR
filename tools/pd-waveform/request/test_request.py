@@ -105,6 +105,13 @@ class RequestTest(unittest.TestCase):
         (self.path/'config').chmod(0o644);p,_=self.start();self.result(p,3)
         (self.path/'config').chmod(0o600);(self.path/'config').rename(self.path/'other');(self.path/'config').symlink_to('other');p,_=self.start();self.result(p,3)
         p,_=self.start(['arbitrary-command']);self.result(p,2)
+    def test_standalone_first_install_without_private_configuration_refused(self):
+        (self.path/'config').unlink()
+        p=subprocess.run(['setpriv','--inh-caps=-all',str(self.path/'pd-request')],
+                         env={},capture_output=True,text=True,timeout=3)
+        self.assertEqual(p.returncode,3,p.stderr)
+        self.assertEqual(p.stdout,'');self.assertEqual(p.stderr,'')
+        self.assertEqual({x.name for x in self.path.iterdir()},{'pd-request'})
     def test_production_entry_refuses_local_user(self):
         if os.getuid()==78666:self.skipTest('test user equals production waveform user')
         p=subprocess.run([str(PRODUCTION)],capture_output=True,text=True,timeout=3);self.assertEqual(p.returncode,2)

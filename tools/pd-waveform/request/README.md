@@ -23,6 +23,38 @@ RAM handoff to the fixed native requester and carrier credential receivers.
 Public-path upgrade and rollback tests exercise that handoff. Initial-install
 trust and the complete operator installation workflow remain unfinished.
 
+### Standalone first-install admission check (2026-11-15)
+
+A new no-configuration requester test and no-predecessor installer test passed
+alongside their existing suites (10 requester and 27 worker cases). The worker
+receives valid signed fixture inputs in an isolated filesystem but refuses with
+exit 3 when no predecessor exists, before creating the persistent store or
+service units. This confirms that the current worker is a migration worker;
+it does not implement installation onto an empty system.
+
+The manual `probe_first_install.c` wrapper runs the production ARM64 requester
+as an ordinary native waveform. It includes only a public, non-authorizing
+configuration fixture, no signed worker or release. It bounds the requester to
+two seconds and serves one metadata-only report on port 49183, with a 90-second
+process lifetime. `probe_first_install.py` uses only the normal waveform API
+for upload/removal; it never calls the installed shim or diagnostics bridge.
+The caller must supply the reviewed package SHA256.
+
+On the 8600, the 96,015-byte probe upload was accepted, but no report appeared
+within 120 seconds. Uninstall was acknowledged and the probe was absent from
+the subsequent public waveform inventory. This does not establish native
+startup, the requester's exit code, or deletion of cached upload files. Do not
+attribute this timeout to the earlier extraction-permissions result without
+new launch evidence. No installer execution, installed-service stop, reboot,
+IQ setup or RF was requested. Evidence is
+`fresh-install-admission-20261115/result.json` under the evidence root in
+`../PROGRESS.json`.
+
+Fresh-install completion requires both an authorization path independent of an
+installed shim and a transaction that provisions a new identity and recovers
+without a predecessor. Neither the passing refusal tests nor this public
+upload admission attempt qualify those missing operations.
+
 The production entry accepts no command-line arguments or radio commands. It
 requires UID 78666/GID 20 and empty effective, permitted and inheritable
 capabilities, reads its private sibling `config`, and admits one connection on

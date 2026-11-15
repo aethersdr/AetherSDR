@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T16:29:40.145343+00:00",
+  "updated_utc": "2026-11-15T18:41:13.142160+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -44,11 +44,10 @@
     "LP100A deferred",
     "No GitHub issues; local tracking",
     "No AetherTX or settings restore",
-    "RF only within explicitly authorized bounded bench limits",
-    "No new live tests during this checkpoint"
+    "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Run bounded GUI measurement with batched capture, preserving independent unkey and capture/source provenance; qualify model readiness before claiming corrected IMD. Continue full P1-P10 scope.",
+  "next_action": "Implement and qualify first-install bootstrap authorization and a no-predecessor installation transaction; resolve standalone native launch before changing the existing installation. Preserve prior upgrade/RF evidence and full P1-P10 scope.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1019,6 +1018,35 @@
       "Complete retained-model four-frame measurement after full cooldown, then matched correction-off/on comparisons.",
       "Cold-start correction currently takes most of the eight-second source; do not lower frame requirements or silently extend RF deadlines.",
       "All remaining P1-P10 final-candidate, stock-APD, packaging and actual FLEX-6300 gates remain open. LP-100A integration stays deferred."
+    ]
+  },
+  "fresh_install_admission": {
+    "status": "fresh_install_not_supported; live_standalone_startup_unconfirmed",
+    "evidence": "fresh-install-admission-20261115/result.json under evidence_root",
+    "local_checks": {
+      "worker": {
+        "passed": 27,
+        "log": "worker-tests.log",
+        "no_predecessor_result": 3,
+        "persistent_store_or_unit_changes": false
+      },
+      "requester": {
+        "passed": 10,
+        "log": "request-tests.log",
+        "no_configuration_result": 3
+      }
+    },
+    "live_result": "Ordinary waveform upload accepted; no standalone probe report within 120 seconds. Uninstall acknowledged; probe absent from subsequent public inventory. No installed shim or host-root delivery used. No RF.",
+    "limitations": [
+      "No successful fresh installation, privilege handoff, or DAX IQ capture was exercised by this probe.",
+      "No RF commands, installed-service stop, persistent installation changes or reboot were requested.",
+      "Public uninstall acknowledgement and absent inventory do not prove deletion of cached firmware upload files."
+    ],
+    "remaining": [
+      "Establish fresh bootstrap authorization without installed-shim credentials and without secrets in public upload archives.",
+      "Implement explicit fresh-install transaction with initial identity provisioning and failure recovery that does not require a predecessor.",
+      "Determine why the standalone public native probe did not become observable; do not infer its exit code from timeout.",
+      "Then perform clean-state installation and reboot/IQ qualification with recoverable backups."
     ]
   }
 }

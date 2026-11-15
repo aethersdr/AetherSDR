@@ -100,6 +100,17 @@ class WorkerTest(unittest.TestCase):
  def test_bootstrap_returns_without_stopping_predecessor(self):
   self.invoke('bootstrap');self.assertEqual(self.state()['old_running'],1);self.assertNotIn('stop:before',self.events())
   self.assertTrue(self.capsule.exists());self.assertTrue((self.root/'etc/systemd/system/multi-user.target.wants/aetherpd-recover.service').is_symlink())
+ def test_fresh_install_without_predecessor_is_unsupported(self):
+  # The current worker implements migration. A valid signed release and
+  # approval must not turn a missing predecessor into a fresh installation.
+  shutil.rmtree(self.fixture/'old')
+  (self.fixture/'model').write_bytes(struct.pack('=5i',0,0,0,0,0))
+  self.invoke('bootstrap',expected=3)
+  self.assertEqual(list(self.state().values()),[0,0,0,0,0])
+  self.assertEqual(self.events(),['identity'])
+  self.assertFalse(self.store.exists());self.clean()
+  self.assertEqual(list((self.root/'etc/systemd/system').iterdir()),[])
+  self.assertEqual(list((self.root/'var/lib/smartsdr').iterdir()),[])
  def test_forward_commit_removes_temporary_authority(self):
   self.invoke('bootstrap');self.invoke();state=self.state();self.assertEqual([state[k] for k in ['old_present','old_running','new_running','enabled']],[0,0,1,1]);self.clean()
   self.assertEqual((self.store/'transaction').read_bytes(),b'PDTXN001'+self.plan+struct.pack('>I',5))
