@@ -10883,6 +10883,36 @@ add_test(NAME vfo_dsp_launcher_width_test
 set_tests_properties(vfo_dsp_launcher_width_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The VFO DSP tab's RTTY Mark/Shift ◀ ▶ and label scroll stay inside the app's
+# range (#7093). Same socket-free build as the launcher-width test above.
+add_executable(vfo_rtty_step_limits_test
+    tests/vfo_rtty_step_limits_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_rtty_step_limits_test PRIVATE src)
+target_link_libraries(vfo_rtty_step_limits_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_rtty_step_limits_test
+         COMMAND vfo_rtty_step_limits_test)
+set_tests_properties(vfo_rtty_step_limits_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free NRS requests/readback through the production bridge dispatcher,
 # model, Flex encoder and VFO. Firmware/status/transport are injected; no listener.
 add_executable(nrs_level_range_test
