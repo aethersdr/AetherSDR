@@ -1186,7 +1186,7 @@ void TunerApplet::syncFromModel()
     // accessible name is that word too.
     // operate=1, bypass=0 → OPERATE  (green)
     // operate=1, bypass=1 → BYPASS   (orange)
-    // operate=0           → STANDBY  (default)
+    // operate=0           → STANDBY  (amber, kStandbyActiveStyle)
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool operate = m_model->isOperate();
     const bool bypass = m_model->isBypass();

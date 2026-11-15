@@ -7815,10 +7815,8 @@ void MainWindow::wireMeters()
     connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
     // TGXL/PGXL indicator: two-line — label on top, state smaller below.
-    // Colors use semantic tokens per RFC #6816:
-    //   OPERATE = color.accessory.indicator.operate.foreground (green, same as today)
-    //   BYPASS  = color.accessory.indicator.bypass.foreground  (amber, same as today)
-    //   STANDBY = color.accessory.key.standby.foreground (amber) — distinct from BYPASS
+    // OPERATE green, BYPASS amber, STANDBY the standby key's amber (RFC #6816),
+    // each from its own token so a theme can separate them.
     auto setIndicatorStyle = [](QLabel* nameLbl, QLabel* stateLbl,
                                 const QString& state, const QString& colorToken) {
         ThemeManager::instance().applyStyleSheet(nameLbl,
