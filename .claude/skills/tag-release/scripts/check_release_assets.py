@@ -49,8 +49,8 @@ def signables(tarballs: bool, app_tarballs: bool = True) -> tuple[str, ...]:
     them, the macOS app tarballs only once its macOS DMG build made them."""
     return tuple(s for s in SIGNABLE
                  if (tarballs or s not in LINUX_TARBALLS) and (app_tarballs or s not in APP_TARBALLS))
-# Started by publishing the release, not by the tag push: it typesets, signs
-# and attaches the PDF manual.
+# Started by publishing the release, not by the tag push: it typesets and
+# attaches the PDF manual (and, on releases before RFC #6964, signs it).
 DOCS_WORKFLOW = "Docs"
 STORE_STEP = "Publish Microsoft Store package"
 
@@ -278,7 +278,20 @@ def release_makes_app_tarballs(repo: str, v: str) -> bool:
     return "--app-tarball" in proc.stdout
 
 
-def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: bool = True) -> list[str]:
+def release_sums_manual(repo: str, v: str) -> bool:
+    """Whether the tag's own signing workflow lists the PDF manual in
+    SHA256SUMS.txt (RFC #6964): from then on the manual has no .asc of its own,
+    and SHA256SUMS.txt.asc is its signature. Earlier releases sign it apart."""
+    proc = run([_tool("gh"), "api", f"repos/{repo}/contents/.github/workflows/sign-release.yml?ref={v}",
+                "-H", "Accept: application/vnd.github.raw"], check=False)
+    if proc.returncode != 0:
+        report("WARN", "the tag's signing workflow read", "could not read it; expecting the manual in SHA256SUMS.txt")
+        return True
+    return "AetherSDR-Manual-" in proc.stdout
+
+
+def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: bool = True,
+                    manual_in_sums: bool = True) -> list[str]:
     bare = ".".join(v.lstrip("v").split(".")[:3])  # 26.9.5 and 26.9.5.0 both package as 26.9.5.0
     names = [f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-aarch64.AppImage",
              *([f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-aarch64.tar.zst"] if tarballs else []),
@@ -286,7 +299,8 @@ def expected_assets(v: str, hotfix: bool, tarballs: bool = True, app_tarballs: b
              f"AetherSDR-{v}-macOS-apple-silicon.dmg", f"AetherSDR-{v}-macOS-intel.dmg",
              f"AetherSDR-{v}-Windows-x64-setup.exe", f"AetherSDR-{v}-Windows-x64-portable.zip",
              f"AetherSDR-{v}-source.tar.gz", "SHA256SUMS.txt", f"AetherSDR-Manual-{v}.pdf"]
-    signed = [n + ".asc" for n in names if not n.endswith(".dmg")]
+    manual = f"AetherSDR-Manual-{v}.pdf"
+    signed = [n + ".asc" for n in names if not n.endswith(".dmg") and not (manual_in_sums and n == manual)]
     out = names + signed
     if not hotfix:
         out.append(f"AetherSDR-{bare}.0-Windows-x64.msixupload")
@@ -303,9 +317,9 @@ def expected_symbol_assets(v: str) -> list[str]:
 
 
 def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
-                 app_tarballs: bool = True) -> dict[str, dict[str, Any]]:
+                 app_tarballs: bool = True, manual_in_sums: bool = True) -> dict[str, dict[str, Any]]:
     assets = {a["name"]: a for a in rel.get("assets", [])}
-    want = expected_assets(v, hotfix, tarballs, app_tarballs)
+    want = expected_assets(v, hotfix, tarballs, app_tarballs, manual_in_sums)
     missing = [n for n in want if n not in assets]
     n_want = len(want)
     if missing:
@@ -325,10 +339,11 @@ def check_assets(rel: dict[str, Any], v: str, hotfix: bool, tarballs: bool,
         report("FAIL" if bad else "WARN", "no unexpected assets", ", ".join(extra))
     # The six CI-built binaries are attached by other workflows before the
     # signing job runs, so their .asc must be strictly newer. The source tarball and
-    # SHA256SUMS.txt (the signing job) and the manual PDF (the Docs workflow)
-    # are uploaded in the same `gh release upload` as their signatures, so
-    # their timestamps tie (either order, within a few seconds); only a real
-    # gap there means a re-sign clobbered one file and not the other.
+    # SHA256SUMS.txt (the signing job), and the manual PDF on releases that
+    # sign it apart (the Docs workflow), are uploaded in the same
+    # `gh release upload` as their signatures, so their timestamps tie (either
+    # order, within a few seconds); only a real gap there means a re-sign
+    # clobbered one file and not the other.
     built = [f"AetherSDR-{v}-{s}" for s in signables(tarballs, app_tarballs)]
     late, gaps = [], []
     for n in want:
@@ -375,7 +390,7 @@ def sha256(path: Path) -> str:
 
 
 def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Namespace, tarballs: bool,
-                    app_tarballs: bool = True) -> None:
+                    app_tarballs: bool = True, manual_in_sums: bool = True) -> None:
     if args.skip_download:
         report("SKIP", "download and verify signatures and checksums", "--skip-download")
         return
@@ -383,7 +398,7 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
     ddir.mkdir(parents=True, exist_ok=True)
     patterns = ["SHA256SUMS.txt", "SHA256SUMS.txt.asc", f"AetherSDR-{v}-source.tar.gz", f"AetherSDR-{v}-source.tar.gz.asc",
                 f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-x86_64.AppImage.asc",
-                f"AetherSDR-Manual-{v}.pdf", f"AetherSDR-Manual-{v}.pdf.asc"]
+                f"AetherSDR-Manual-{v}.pdf", *([] if manual_in_sums else [f"AetherSDR-Manual-{v}.pdf.asc"])]
     if tarballs:
         # The in-app full download for Linux: its bytes and signature too.
         patterns += [f"AetherSDR-{v}-x86_64.tar.zst", f"AetherSDR-{v}-x86_64.tar.zst.asc"]
@@ -412,10 +427,13 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
             if m:
                 entries[m.group(2)] = m.group(1)
         want = [f"AetherSDR-{v}-{s}" for s in signables(tarballs, app_tarballs)] + [f"AetherSDR-{v}-source.tar.gz"]
+        if manual_in_sums:
+            want.append(f"AetherSDR-Manual-{v}.pdf")
+        covers = f"SHA256SUMS.txt covers exactly the {len(want)} {'files (signables, source, manual)' if manual_in_sums else 'signable files'}"
         if sorted(entries) == sorted(want):
-            report("PASS", f"SHA256SUMS.txt covers exactly the {len(want)} signable files")
+            report("PASS", covers)
         else:
-            report("FAIL", f"SHA256SUMS.txt covers exactly the {len(want)} signable files",
+            report("FAIL", covers,
                    f"listed: {', '.join(sorted(entries)) or '(none)'}\nexpected: {', '.join(want)}")
         bad, checked = [], []
         for name, digest in entries.items():
@@ -450,7 +468,9 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
         for name in ["SHA256SUMS.txt", f"AetherSDR-{v}-source.tar.gz", f"AetherSDR-{v}-x86_64.AppImage",
                      *([f"AetherSDR-{v}-x86_64.tar.zst"] if tarballs else []),
                      *([f"AetherSDR-{v}-macOS-apple-silicon.app.tar.zst"] if app_tarballs else []),
-                     f"AetherSDR-Manual-{v}.pdf"]:
+                     # With the manual in SHA256SUMS.txt, the sha256 check above
+                     # plus SHA256SUMS.txt.asc is its verification.
+                     *([] if manual_in_sums else [f"AetherSDR-Manual-{v}.pdf"])]:
             sig = ddir / (name + ".asc")
             if not sig.exists() or not (ddir / name).exists():
                 report("SKIP", f"gpg --verify {name}.asc", "not downloaded")
@@ -584,8 +604,9 @@ def main(argv: list[str] | None = None) -> int:
     if rel:
         tarballs = release_makes_tarballs(args.repo, v)
         app_tarballs = release_makes_app_tarballs(args.repo, v)
-        assets = check_assets(rel, v, hotfix, tarballs, app_tarballs)
-        check_downloads(args.repo, v, assets, args, tarballs, app_tarballs)
+        manual_in_sums = release_sums_manual(args.repo, v)
+        assets = check_assets(rel, v, hotfix, tarballs, app_tarballs, manual_in_sums)
+        check_downloads(args.repo, v, assets, args, tarballs, app_tarballs, manual_in_sums)
     check_store(args.repo, windows_run, hotfix)
 
     fails = [r for r in results if r[0] == "FAIL"]

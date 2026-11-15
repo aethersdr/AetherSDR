@@ -1,7 +1,8 @@
 name: Sign Release Artifacts
 
 # GPG signs Linux AppImages and release tarballs, Windows binaries, and source
-# archives.
+# archives. SHA256SUMS.txt also lists the PDF manual (Docs attaches it), which
+# is verified through SHA256SUMS.txt.asc rather than a signature of its own.
 # macOS artifacts are signed via Apple codesign + notarization.
 
 on:
@@ -116,6 +117,12 @@ jobs:
           if grep -q -- '--app-tarball' .github/workflows/macos-dmg.yml; then
             app="macOS-apple-silicon.app.tar.zst macOS-intel.app.tar.zst"
           fi
+          # The PDF manual, when the tag has the docs site that renders it
+          # (the same test docs.yml uses).
+          pdf=
+          if [ -f tools/docs/build_pdf.py ] && [ -f docs/user/sidebars.js ]; then
+            pdf="AetherSDR-Manual-${TAG}.pdf"
+          fi
           base="$want"
           for i in $(seq 1 90); do
             names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
@@ -135,6 +142,20 @@ jobs:
                      fi ;;
                 esac
               done
+            fi
+            # Docs attaches it after the release is published. It is waited
+            # for only while a Docs run for the tag can still attach it, the
+            # same rule as the macOS tarballs above.
+            if [ -n "$pdf" ]; then
+              case "$names" in
+                *"$pdf"*) want="$want $pdf" ;;
+                *) docs=$(gh run list --workflow Docs --event release --branch "$TAG" --limit 1 --json status --jq '.[0].status // ""')
+                   if [ -n "$docs" ] && [ "$docs" != completed ]; then
+                     want="$want $pdf"
+                   else
+                     echo "::warning::$pdf is not attached and no Docs run for $TAG can still attach it; SHA256SUMS.txt will not list it."
+                   fi ;;
+              esac
             fi
             missing=
             for w in $want; do
@@ -159,7 +180,7 @@ jobs:
           mkdir -p artifacts
           gh release download "$TAG" \
             --dir artifacts --pattern '*.AppImage' --pattern '*.tar.zst' \
-            --pattern '*.exe' --pattern '*.zip'
+            --pattern '*.exe' --pattern '*.zip' --pattern 'AetherSDR-Manual-*.pdf'
 
       - name: Generate source archive
         env:
@@ -184,6 +205,8 @@ jobs:
         run: |
           sha256sum -- * > SHA256SUMS.txt
 
+      # Every file SHA256SUMS.txt lists gets a detached signature except the
+      # PDF manual, whose only signature is SHA256SUMS.txt.asc.
       - name: Sign artifacts (detached .asc)
         env:
           GNUPGHOME: ${{ runner.temp }}/gnupg

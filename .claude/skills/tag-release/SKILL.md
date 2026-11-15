@@ -422,11 +422,10 @@ as it is).
 **Docs** runs on `release: published`, so creating the release (step 2)
 starts it, not the tag push. "Render PDF manual for release" checks out the
 tag and typesets `AetherSDR-Manual-vX.Y.Z.pdf` from the tag's
-`docs/user/docs/`. "Attach PDF manual to release" runs in the `release`
-environment, so it waits for the same approval as the signing workflows; it
-signs the PDF with the release key (the same `GPG_PRIVATE_KEY`/`GPG_PASSPHRASE`
-secrets as `sign-release.yml`), verifies the signature and uploads the PDF and
-its `.asc` together. Then "Resolve what to deploy", "Build docs site for
+`docs/user/docs/`. "Attach PDF manual to release" uploads the PDF with
+no approval gate and no signature of its own: from releases after v26.11.2,
+`sign-release.yml` lists the PDF in `SHA256SUMS.txt`, so `SHA256SUMS.txt.asc`
+covers it (RFC #6964). Releases through v26.11.2 carry a `.pdf.asc`. Then "Resolve what to deploy", "Build docs site for
 deploy" and "Deploy docs site" publish docs.aethersdr.com from the tag, through
 the `cloudflare-pages` environment, with `/AetherSDR-Manual.pdf` redirected to
 the PDF just attached. A pre-release attaches the PDF but deploys nothing. Its
