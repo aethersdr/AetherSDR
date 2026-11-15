@@ -7433,40 +7433,100 @@ void AudioEngine::saveClientReverbSettings()
     emit clientReverbStateChanged();
 }
 
+namespace {
+// The final limiter's configuration, one object under one root key
+// (Principle V). The four flat keys it replaces are migrated once.
+constexpr auto kFinalLimiterKey = "ClientFinalLimiterTx";
+constexpr const char* kLegacyFinalLimiterKeys[] = {
+    "ClientFinalLimiterTxEnabled", "ClientFinalLimiterTxCeilingDb",
+    "ClientFinalLimiterTxOutputTrimDb", "ClientFinalLimiterTxDcBlock",
+};
+} // namespace
+
 void AudioEngine::loadClientFinalLimiterSettings()
 {
     if (!m_clientFinalLimiterTx) return;
     auto& s = AppSettings::instance();
-    // Default OFF: SmartSDR has no client-side brickwall limiter, so a fresh
-    // install with the limiter on at a -1 dBFS ceiling produces noticeably
-    // less forward power than SmartSDR for the same mic level (radio's SW ALC
-    // sees ~1 dB less peak to set its working point off of).  The limiter is
-    // still available for users who want headroom protection when running
-    // hot Comp/Tube/PUDU/Reverb settings — they can flip LIM on in the
-    // Aetherial Final Output Stage panel.  Existing users whose setting was
-    // already persisted keep their previous behavior.
-    m_clientFinalLimiterTx->setEnabled(
-        s.value("ClientFinalLimiterTxEnabled", "False").toString() == "True");
-    m_clientFinalLimiterTx->setCeilingDb(
-        s.value("ClientFinalLimiterTxCeilingDb", "-1.0").toFloat());
-    m_clientFinalLimiterTx->setOutputTrimDb(
-        s.value("ClientFinalLimiterTxOutputTrimDb", "0.0").toFloat());
-    m_clientFinalLimiterTx->setDcBlockEnabled(
-        s.value("ClientFinalLimiterTxDcBlock", "True").toString() == "True");
+
+    // One-time migration from the legacy flat keys: an installation keeps
+    // the on/off, ceiling, trim and DC block it saved, and gets the
+    // look-ahead default, which had no flat key. Once the object exists it
+    // wins, and a flat key that comes back (an older settings import) goes.
+    if (s.contains(kFinalLimiterKey)) {
+        bool stale = false;
+        for (const char* key : kLegacyFinalLimiterKeys) {
+            if (s.contains(key)) {
+                s.remove(key);
+                stale = true;
+            }
+        }
+        if (stale) {
+            s.save();
+        }
+    } else {
+        bool anyLegacy = false;
+        for (const char* key : kLegacyFinalLimiterKeys) {
+            anyLegacy = anyLegacy || s.contains(key);
+        }
+        if (anyLegacy) {
+            QJsonObject migrated;
+            if (s.contains("ClientFinalLimiterTxEnabled")) {
+                migrated["enabled"] =
+                    s.value("ClientFinalLimiterTxEnabled").toString() == "True";
+            }
+            if (s.contains("ClientFinalLimiterTxCeilingDb")) {
+                migrated["ceilingDb"] =
+                    s.value("ClientFinalLimiterTxCeilingDb").toDouble();
+            }
+            if (s.contains("ClientFinalLimiterTxOutputTrimDb")) {
+                migrated["outputTrimDb"] =
+                    s.value("ClientFinalLimiterTxOutputTrimDb").toDouble();
+            }
+            if (s.contains("ClientFinalLimiterTxDcBlock")) {
+                migrated["dcBlock"] =
+                    s.value("ClientFinalLimiterTxDcBlock").toString() == "True";
+            }
+            s.setValue(kFinalLimiterKey, QString::fromUtf8(
+                QJsonDocument(migrated).toJson(QJsonDocument::Compact)));
+            for (const char* key : kLegacyFinalLimiterKeys) {
+                s.remove(key);
+            }
+            s.save();
+        }
+    }
+
+    QJsonObject o;
+    const auto doc = QJsonDocument::fromJson(
+        s.value(kFinalLimiterKey, "{}").toString().toUtf8());
+    if (doc.isObject()) {
+        o = doc.object();
+    }
+    // Default ON at a -0.5 dBFS ceiling with 1.5 ms look-ahead (maintainer
+    // ruling 2026-11-15, superseding #3004's default-off). The look-ahead
+    // makes it a true brickwall on the 48 kHz samples, and the ceiling sits
+    // half a dB under full scale so it costs little drive against SmartSDR.
+    // A field the operator saved is read back unchanged.
+    m_clientFinalLimiterTx->setEnabled(o.value("enabled").toBool(true));
+    m_clientFinalLimiterTx->setCeilingDb(static_cast<float>(
+        o.value("ceilingDb").toDouble(ClientFinalLimiter::kDefaultCeilingDb)));
+    m_clientFinalLimiterTx->setLookaheadMs(static_cast<float>(
+        o.value("lookaheadMs").toDouble(ClientFinalLimiter::kDefaultLookaheadMs)));
+    m_clientFinalLimiterTx->setOutputTrimDb(static_cast<float>(
+        o.value("outputTrimDb").toDouble(0.0)));
+    m_clientFinalLimiterTx->setDcBlockEnabled(o.value("dcBlock").toBool(true));
 }
 
 void AudioEngine::saveClientFinalLimiterSettings() const
 {
     if (!m_clientFinalLimiterTx) return;
-    auto& s = AppSettings::instance();
-    s.setValue("ClientFinalLimiterTxEnabled",
-        m_clientFinalLimiterTx->isEnabled() ? QString("True") : QString("False"));
-    s.setValue("ClientFinalLimiterTxCeilingDb",
-        QString::number(m_clientFinalLimiterTx->ceilingDb()));
-    s.setValue("ClientFinalLimiterTxOutputTrimDb",
-        QString::number(m_clientFinalLimiterTx->outputTrimDb()));
-    s.setValue("ClientFinalLimiterTxDcBlock",
-        m_clientFinalLimiterTx->dcBlockEnabled() ? QString("True") : QString("False"));
+    QJsonObject o;
+    o["enabled"]      = m_clientFinalLimiterTx->isEnabled();
+    o["ceilingDb"]    = m_clientFinalLimiterTx->ceilingDb();
+    o["lookaheadMs"]  = m_clientFinalLimiterTx->lookaheadMs();
+    o["outputTrimDb"] = m_clientFinalLimiterTx->outputTrimDb();
+    o["dcBlock"]      = m_clientFinalLimiterTx->dcBlockEnabled();
+    AppSettings::instance().setValue(kFinalLimiterKey, QString::fromUtf8(
+        QJsonDocument(o).toJson(QJsonDocument::Compact)));
 }
 
 // Aetherial Tube Pre-Amp TX — nested-JSON persistence (Principle V).
