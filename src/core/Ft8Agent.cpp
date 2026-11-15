@@ -1,5 +1,10 @@
 #include "Ft8Agent.h"
 
+#include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -201,6 +206,43 @@ bool reachableAddress(const QHostAddress& address)
     }
     static const QPair<QHostAddress, int> tailnet = QHostAddress::parseSubnet(QStringLiteral("100.64.0.0/10"));
     return address.isPrivateUse() || address.isLinkLocal() || address.isInSubnet(tailnet);
+}
+
+QString writeBundledPackage(const Ft8Package::Pin& pin, const QString& dir, QString* error)
+{
+    const auto matches = [&pin](const QByteArray& bytes) {
+        return bytes.size() == pin.size
+            && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex() == QByteArray(pin.sha256);
+    };
+    const QString target = QDir(dir).filePath(QString::fromLatin1(pin.fileName));
+    QFile existing(target);
+    if (existing.open(QIODevice::ReadOnly) && existing.size() == pin.size && matches(existing.readAll())) {
+        return target;   // already written and intact
+    }
+    existing.close();
+    QFile bundled(QString::fromLatin1(pin.resource));
+    const QByteArray bytes = bundled.open(QIODevice::ReadOnly) ? bundled.read(pin.size + 1) : QByteArray();
+    if (!matches(bytes)) {
+        if (error) {
+            *error = QObject::tr("This AetherSDR's FT8 receiver is damaged, so nothing was installed.");
+        }
+        return {};
+    }
+    if (!QDir().mkpath(dir)) {
+        if (error) {
+            *error = QObject::tr("The FT8 receiver could not be unpacked for installing.");
+        }
+        return {};
+    }
+    QFile out(target);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) || out.write(bytes) != bytes.size()) {
+        if (error) {
+            *error = QObject::tr("The FT8 receiver could not be unpacked for installing.");
+        }
+        return {};
+    }
+    out.close();
+    return target;
 }
 
 }  // namespace ft8

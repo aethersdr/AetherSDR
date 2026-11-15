@@ -99,6 +99,31 @@ struct Ft8Status {
     QList<Ft8Spot> spots;
 };
 
+// The receiver's package, shipped inside AetherSDR so the Waveforms window
+// can install it without the operator finding a file. Same shape as
+// WsprPackage: the bytes are pinned by size and SHA-256 and checked before
+// anything is sent to the radio, so a damaged resource installs nothing.
+//
+// ⚠ Rebuild with `tools/ft8-agent/build.py --armv7-only` ON LINUX, copy the
+// result to resources/waveforms/, and bump the version, hash and size here
+// together. A package built on Windows installs and then silently never
+// runs -- only the zip container differs, and nothing reports the problem.
+//
+// There is no container pin yet: the ARM64 image needs the flex-tailnet-shim
+// mkimage helper, which this tree does not carry, so FLEX-8000 and Aurora
+// are not served by this installer.
+struct Ft8Package {
+    struct Pin {
+        const char* resource;
+        const char* fileName;
+        const char* sha256;
+        qint64 size;
+    };
+    static constexpr const char* kVersion = "0.1.0";
+    static constexpr Pin kLegacy{":/waveforms/AetherFT8.ssdr_waveform", "AetherFT8.ssdr_waveform",
+                                 "6fb17ea2730563c37067e1b732229026430728f309b3e6080335f5f704c653f0", 105182};
+};
+
 // GET and POST /v1/config. A strict subset of WsprConfig: no hopping, no
 // gray-line width, no decode depth, and no upload -- the agent has no
 // uploader at all, because an outbound connection from the radio is its own
@@ -139,6 +164,11 @@ QByteArray configJson(const Ft8Config& config);
 // The receiver answers LAN callers only: a private, link-local or Tailscale
 // (100.64.0.0/10) IPv4 address.
 bool reachableAddress(const QHostAddress& address);
+
+// Write the bundled package to `dir` and return its path, or empty with
+// `error` set when the shipped bytes do not match the pin. Mirrors
+// wspr::writeBundledPackage.
+QString writeBundledPackage(const Ft8Package::Pin& pin, const QString& dir, QString* error);
 
 }  // namespace ft8
 }  // namespace AetherSDR

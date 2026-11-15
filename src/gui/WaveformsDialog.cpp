@@ -11,6 +11,7 @@
 #include "core/RadioHealthClient.h"
 #include "core/RadioHealthPackage.h"
 #include "core/AetherGpsPackage.h"
+#include "core/Ft8Agent.h"
 #include "core/WsprAgent.h"
 #include "TailnetShimDialog.h"
 #include "Ft8ConfigureWindow.h"
@@ -1388,6 +1389,12 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // The WSPR receiver ships inside AetherSDR, pinned like the health tools.
     m_installWsprAction = installMenu->addAction(
         tr("WSPR Receiver"), this, &WaveformsDialog::onInstallWsprClicked);
+    // The FT8 receiver ships the same way. Without this entry the only route
+    // was "Legacy Waveform..." pointed at a file the operator had to find --
+    // and the package is not on their disk, so in practice there was no route
+    // at all from the UI.
+    m_installFt8Action = installMenu->addAction(
+        tr("FT8 Receiver"), this, &WaveformsDialog::onInstallFt8Clicked);
     installMenu->addSeparator();
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
@@ -1667,6 +1674,28 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
         return;
     }
     installRemoteAccess(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::onInstallFt8Clicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    // Legacy only: see the note on Ft8Package for why there is no container
+    // pin yet, so a FLEX-8000 or Aurora is not served by this entry.
+    QString error;
+    const QString path = ft8::writeBundledPackage(
+        Ft8Package::kLegacy,
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-ft8-%1").arg(QString::fromLatin1(Ft8Package::kVersion)),
+        &error);
+    if (path.isEmpty()) {
+        ScopedChildWidget<CanonMessageBox> box(tr("FT8 Receiver Not Installed"), error, this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
+        box.get()->exec();
+        return;
+    }
+    installWaveformPath(false, path, m_radioModel, m_radioModel->controlSession());
 }
 
 void WaveformsDialog::onInstallWsprClicked()

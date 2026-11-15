@@ -43,6 +43,7 @@ private slots:
     void onInstallRemoteAccessClicked();
     // The WSPR receiver (tools/wspr-agent), bundled in AetherSDR.
     void onInstallWsprClicked();
+    void onInstallFt8Clicked();
     // Removes an older WSPR receiver and installs the bundled one, for
     // WsprConfigureWindow's Update, which then puts its settings back.
     // `done(false)`: the removal or the install didn't start.
@@ -107,6 +108,7 @@ private:
     QAction*           m_installDockerAction{nullptr};
     QAction*           m_installRemoteAccessAction{nullptr};
     QAction*           m_installWsprAction{nullptr};
+    QAction*           m_installFt8Action{nullptr};
     struct RowNotice {
         QString text;
         QString tone;      // "pending", "ok" or "error"
