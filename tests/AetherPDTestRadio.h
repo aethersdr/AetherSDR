@@ -3,6 +3,7 @@
 #include "AetherPDTestNetwork.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
+#include "models/AetherPDMeasurementModel.h"
 
 namespace AetherSDR {
 class SessionControlTestAccess {
@@ -16,6 +17,10 @@ public:
         model.m_panStream = pointer->panStream();
         model.m_connection->m_commandSinkForTest = [](quint32, const QString&) {};
         model.m_aetherPDModel = std::make_unique<AetherPDModel>(network);
+    }
+    static void measurement(RadioModel& model, Network& network)
+    {
+        model.m_aetherPDMeasurementModel = std::make_unique<AetherPDMeasurementModel>(model, network);
     }
     static void begin(RadioModel& model, quint32 handle = 7)
     {

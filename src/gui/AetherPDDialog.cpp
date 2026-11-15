@@ -1,4 +1,5 @@
 #include "AetherPDDialog.h"
+#include "AetherPDMeasurementDialog.h"
 
 #include "CanonIndicators.h"
 #include "models/AetherPDInstallationModel.h"
@@ -115,6 +116,15 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     m_cancel = button(tr("Cancel calibration"), "pdCancel", 1, 1);
     m_restore = button(tr("Restore receive"), "pdRestore", 2, 0);
     m_refresh = button(tr("Refresh"), "pdRefresh", 2, 1);
+    m_measurementOpen = button(tr("Measure linearity…"), "pdMeasurement", 3, 0);
+    connect(m_measurementOpen, &QPushButton::clicked, this, [this] {
+        if (!current()) { return; }
+        if (!m_measurement) {
+            m_measurement = new AetherPDMeasurementDialog(m_radio, this);
+            m_measurement->setAttribute(Qt::WA_DeleteOnClose);
+        }
+        m_measurement->showAndActivate();
+    });
     auto* done = new QPushButton(tr("Done"), bodyWidget());
     done->setObjectName(QStringLiteral("pdDone"));
     done->setAccessibleName(tr("Done"));
@@ -319,6 +329,8 @@ void AetherPDDialog::render()
             : tr("No current status is available. The request may have failed or its reply may have been lost; controls are not retried automatically.");
     }
     const QPointer<AetherPDDialog> alive(this);
+    enable(m_measurementOpen, valid && !installing, tr("A current radio session without an active service update is required."));
+    if (!alive) { return; }
     enable(m_refresh, valid && !m_loading && !pending, tr("Wait for the pending request, or reopen this window for the current connection."));
     if (!alive) { return; }
     enable(m_start, active && !installing && (!pending || pending == Operation::Status) && (!status || !status->available),
@@ -487,7 +499,10 @@ void AetherPDDialog::renderInstallation()
 
 void AetherPDDialog::done(int result)
 {
+    const QPointer<AetherPDDialog> alive(this);
     m_closed = true;
+    if (m_measurement) { m_measurement->reject(); }
+    if (!alive) { return; }
     ++m_loadGeneration;
     CanonWindow::done(result);
 }

@@ -3,8 +3,14 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AetherPDDialog.h"
+#include "gui/AetherPDMeasurementDialog.h"
+#include "models/SliceModel.h"
+#include "core/TxKeyingMarker.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QPlainTextEdit>
 #include <QLabel>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -21,9 +27,17 @@ int main(int argc, char** argv)
     using namespace AetherSDR::aetherpd;
     using Access = SessionControlTestAccess;
     AppSettings::instance().load();
-    Network network;
+    Network network, captureNetwork;
     RadioModel radio;
     Access::install(radio, network);
+    check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "injected receive slice created");
+    SliceDelta station;
+    station.txSlice = true; station.mode = QStringLiteral("USB");
+    station.frequency = 7.15; station.txAntenna = QStringLiteral("ANT1");
+    radio.slice(0)->applyChanges(station);
+    TransmitDelta power; power.rfPower = 5;
+    radio.applyBackendTransmitDeltaForTest(power);
+    Access::measurement(radio, captureNetwork);
     Access::begin(radio);
     const QString token(43, u'a');
     std::function<void(const QString&)> loaded;
@@ -108,6 +122,79 @@ int main(int argc, char** argv)
     ok &= check(label("pdState") == QStringLiteral("Measurement tones armed — waiting for your transmission")
         && button(*dialog, "pdCancel")->isEnabled() && !button(*dialog, "pdArm")->isEnabled()
         && network.sent.size() == beforeMeasurement, "measurement status neither keys nor rearms and keeps source cancel available");
+    button(*dialog, "pdMeasurement")->click();
+    AetherPDMeasurementDialog* measurement = dialog->findChild<AetherPDMeasurementDialog*>();
+    ok &= check(measurement && captureNetwork.sent.empty(), "opening measurement sends no helper or capture request");
+    const auto mb = [measurement](const char* name) { return measurement->findChild<QPushButton*>(QString::fromLatin1(name)); };
+    ok &= check(mb("pdMeasureTransmit")->property(kTxKeyingProperty).toBool()
+        && !mb("pdMeasureTransmit")->isEnabled() && !mb("pdMeasurePrepare")->isEnabled(),
+        "measurement key control is marked and initially unavailable");
+    measurement->findChild<QCheckBox*>(QStringLiteral("pdMeasureDummyLoad"))->setChecked(true);
+    measurement->findChild<QDoubleSpinBox*>(QStringLiteral("pdMeasurePowerLimit"))->setValue(10);
+    ok &= check(!mb("pdMeasurePrepare")->isEnabled(), "source capability without identity cannot prepare from UI");
+    measurementStatus["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}};
+    button(*dialog, "pdRefresh")->click();
+    network.last->complete(200, QJsonDocument(measurementStatus).toJson());
+    ok &= check(mb("pdMeasurePrepare")->isEnabled(), "observed original source enables explicit receive preparation");
+    mb("pdMeasurePrepare")->click();
+    ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::CheckingReceive
+        && captureNetwork.sent.size() == 1 && !mb("pdMeasureTransmit")->isEnabled(),
+        "UI preparation uses real station configuration and receive-only capture");
+    const QString id = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const auto encode = [](const QJsonObject& o) { return QJsonDocument(o).toJson(QJsonDocument::Compact); };
+    captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"},
+        {"sample_rate_hz", 48000}, {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
+        {"keyed", false}, {"correcting", false}, {"first_receive_ns", "1000000000"}, {"last_receive_ns", "1341000000"},
+        {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));
+    for (int i = 0; i < 32; ++i) {
+        captureNetwork.last->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
+            {"iq_f32le", QString::fromLatin1(QByteArray(4096, '\0').toBase64())}}));
+    }
+    ok &= check(mb("pdMeasureTransmit")->isEnabled()
+        && radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::Ready,
+        "complete receive frame enables explicit transmit only");
+    const QString readyText = measurement->findChild<QLabel*>(QStringLiteral("pdMeasureState"))->text();
+    ok &= check(readyText.contains("7.150000 MHz") && readyText.contains("ANT1")
+        && readyText.contains("nominal setting 5 W") && readyText.contains("abort limit 10.0 W"),
+        "ready display identifies the original station and separates drive from abort limit");
+    const auto bridge = std::make_shared<TxController>(&radio);
+    TxKeyingAction::Prepared queued = prepareTxKeyingAction(mb("pdMeasureTransmit"), bridge, "click", {});
+    ok &= check(bool(queued), "measurement supplies a scoped automation action");
+    const size_t beforeQueued = captureNetwork.sent.size();
+    bridge->invalidate();
+    if (queued) { queued(); }
+    ok &= check(captureNetwork.sent.size() == beforeQueued
+        && radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::Ready,
+        "revoked automation input cannot launch a helper or key");
+    const auto delayedBridge = std::make_shared<TxController>(&radio);
+    TxKeyingAction::Prepared oldPreparation = prepareTxKeyingAction(mb("pdMeasureTransmit"), delayedBridge, "click", {});
+    const QString screenshotPath = qEnvironmentVariable("AETHER_PD_MEASUREMENT_SCREENSHOT");
+    if (!screenshotPath.isEmpty()) {
+        measurement->resize(680, 700);
+        QCoreApplication::processEvents();
+        ok &= check(measurement->grab().save(screenshotPath), "measurement preview saved");
+    }
+    mb("pdMeasureStop")->click();
+    mb("pdMeasurePrepare")->click();
+    ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::CheckingReceive,
+        "a new preparation can follow canceled readiness");
+    captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"},
+        {"sample_rate_hz", 48000}, {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
+        {"keyed", false}, {"correcting", false}, {"first_receive_ns", "2000000000"}, {"last_receive_ns", "2341000000"},
+        {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));
+    for (int i = 0; i < 32; ++i) {
+        captureNetwork.last->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
+            {"iq_f32le", QString::fromLatin1(QByteArray(4096, '\0').toBase64())}}));
+    }
+    const size_t beforeOldPreparation = captureNetwork.sent.size();
+    ok &= check(bool(oldPreparation) && mb("pdMeasureTransmit")->isEnabled(), "replacement preparation is independently ready");
+    if (oldPreparation) { oldPreparation(); }
+    ok &= check(captureNetwork.sent.size() == beforeOldPreparation
+        && radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::Ready,
+        "queued authorization for an older preparation cannot start its replacement");
+    measurement->reject();
+    ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::Idle,
+        "closing measurement cancels preparation without stopping correction");
     const size_t beforeClose = network.sent.size();
     dialog->reject();
     loaded(token);

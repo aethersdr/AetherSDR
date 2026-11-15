@@ -3,7 +3,7 @@
 This development path supplies raw feedback for the PR 4770 analyzer. It is
 implemented in the DSP, its owning Go process, the authenticated HTTP relay
 and the desktop capture adapter/controller. The measurement model composes
-the production TX lease; the operator GUI remains unfinished. It has local C/Go/HTTP and adapter/controller/analyzer
+the production TX lease; the development operator GUI exposes the composed workflow. It has local C/Go/HTTP and adapter/controller/analyzer
 integration evidence, not live-radio qualification.
 
 The DSP observes its existing guarded local DAX IQ stream before decimation
@@ -339,7 +339,7 @@ must arm a non-renewable independent cutoff before dispatching through the
 existing TX gate; the controller's 25 ms timer is not that cutoff.
 
 **The development `AetherPDRunLease` is component-tested but not live-qualified
-or wired into the operator measurement UI.** The controller unit tests inject a
+in the operator measurement UI.** The controller unit tests inject a
 lease; the model integration test exercises the real adapter and TX gate. Its
 `Released` observation must confirm release of the original
 TX operation; successful enqueueing of an unkey command is insufficient. The
@@ -452,7 +452,8 @@ evidence. They also exercise frequency and power changes, cancellation during
 helper startup, destruction during capture, over-power abort and retained
 cooldown. These are component results, not firmware or RF-cutoff qualification.
 
-The operator measurement UI/export remains unfinished; LP-100A integration
+The development operator window now composes explicit source arm, receive
+preparation, scoped transmission, stop and atomic JSON export. LP-100A integration
 is deferred by the operator;
 the current model consumes radio telemetry only. No live run of this workflow
 is qualified. Final bench
@@ -460,3 +461,39 @@ tests must measure capture overhead and correction continuity on the 8600;
 actual Linux 2.6/Cortex-A8 qualification remains required. Validate the raw
 DAX IQ full-scale convention before interpreting magnitude 1.0 as ADC
 clipping; relative spectral ratios alone do not establish that calibration.
+
+
+## Development operator window
+
+**Measure linearity…** opens a separate canon window from AetherPD. It uses the
+radio-owned measurement controller, retains pending release across window close,
+and snapshots JSON before opening the asynchronous save dialog. QSaveFile commits
+the result atomically. Export contains raw-IQ spectrum units and explicitly named
+per-tone, fundamental-derived PEP and sampled-peak references, with noise-floor
+and clipping uncertainty. Nominal radio power is separate from the measured
+forward-power abort limit. No IQ absolute-scale calibration is inferred.
+
+Preparation derives fixed source tones and four requested averages from the
+current TX slice. Allowed regions come from the selected BandPlanManager plan
+and operator license-class filter. This is a software preflight, not permission
+to transmit; the normal radio TX gate still applies. Changing plan selection or
+license filter invalidates the original preparation.
+
+The marked Transmit control supplies a scoped automation action. It captures
+both the original input and preparation ID before queueing. Revocation or a new
+preparation rejects the old callback. That input lifetime remains part of the
+model/lease fence through helper startup and the run. The independent helper's
+bounded cleanup remains required; the bridge's desktop watchdog alone does not
+qualify the independently granted measurement operation. Closing requests stop
+but does not claim RF release or stop correction. An unused arm remains bounded
+by its original 30-second expiry unless explicitly canceled.
+
+The UI and export require installed-radio qualification, including four-frame
+transfer time within the tone window and real backend release evidence. A local
+injected-transport test is not evidence of those hardware properties.
+
+After all frames have been accepted, normal unkey cancels the bounded source.
+The model therefore permits the same source to be ended while waiting for
+qualified release and analyzing the retained capture. Its ID, radio session
+and station metadata must still match. Ended sources remain inadmissible for
+preparation, keying and further capture.

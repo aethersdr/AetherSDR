@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T13:57:34.331423+00:00",
+  "updated_utc": "2026-11-15T14:19:56.325229+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Wire the verified source/capture/controller path into operator measurement controls and export, then qualify the installed final DAX IQ workflow with FDX off. Preserve all outstanding P1-P10 requirements.",
+  "next_action": "Build/install the matching signed candidate and qualify the ordinary four-frame DAX IQ measurement with FDX off on the8600; add narrow explicit correction selection for matched A/B and preserve the full P1-P10 scope.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -656,6 +656,38 @@
       "ARM builds are compile checks, not execution on a 6300.",
       "Operator measurement controls/export remain unfinished.",
       "Full P1-P10 scope including first-install/6000, final process faults/reboot, sustained RF/stock APD and release gates remains."
+    ],
+    "installed_source_unchanged": "1316e4d80e7b5666e3a7579542086b67367e4f03"
+  },
+  "measurement_operator_workflow": {
+    "status": "desktop_workflow_implemented_and_component_tested_not_installed_or_RF_qualified",
+    "production_ready": false,
+    "evidence": "measurement-ui-development/validation.json under evidence_root",
+    "completed": [
+      "Separate development measurement window with explicit source arm, receive-only preparation, TX, stop, and atomic JSON export.",
+      "Four-frame 48 kHz local DAX IQ configuration from the current TX slice and selected band-plan/license regions.",
+      "Original operator input and preparation identity captured before automation queueing; revocation and replacement reject stale TX.",
+      "Ready display identifies original frequency, antenna, nominal setting and separately selected forward-power abort limit.",
+      "Results withheld until qualified release; normal source cancellation on unkey does not discard already-complete matching captures.",
+      "Export retains source/capture identities, raw-IQ spectrum, per-tone and both PEP conventions, noise flags and unknown ADC/full-scale calibration."
+    ],
+    "checks": {
+      "full_AetherSDR_build": true,
+      "focused_ctests": 3,
+      "scoped_desktop_ASan_UBSan_LSan": true,
+      "old_preparation_guard_mutation_detected": true,
+      "rendered_preview_inspected": true,
+      "docs_build": true,
+      "engine_boundary_new_blockers": 0,
+      "test_registration": "passed",
+      "a11y_findings": 0
+    },
+    "remaining": [
+      "Install the matching native/shim/desktop candidate and qualify the real four-frame measurement and independent release path on the 8600.",
+      "Ordinary operator correction on/off selection for matched A/B measurements is still absent; native correction currently selected at startup through AETHER_PD_CORRECT.",
+      "Qualify real telemetry behavior, capture/HTTP timing, source settling, ADC headroom and corrected/uncorrected repeatability.",
+      "No live GUI bridge or RF validation of this new window yet; current evidence uses injected transports and offscreen rendering.",
+      "Full P1-P10: first-install trust, 6000 adapter and actual6300, final process faults/reboot, DSP/cold-start, sustained RF/stockAPD comparison, platform/release gates."
     ],
     "installed_source_unchanged": "1316e4d80e7b5666e3a7579542086b67367e4f03"
   }

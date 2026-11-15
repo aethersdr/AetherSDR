@@ -483,8 +483,8 @@ Tailscale service does not install the experimental AetherPD waveform.
 Development diagnostics can also retrieve a short raw DAX IQ snapshot from
 the session already running on the radio. This does not transmit or change
 the IQ stream. Snapshots expire and cannot be retrieved after the session is
-stopped or replaced. The analyzer window is not yet connected to this capture
-path; this is not a released measurement feature.
+stopped or replaced. The development **Measure linearity…** window uses this
+raw DAX IQ path. It is not a released or hardware-qualified measurement feature.
 
 In development builds with a prepared local AetherPD session, authenticated
 stop ends the process owned by that shim. A stop request is acknowledged
@@ -526,11 +526,43 @@ credential for the connected radio. Opening it reads status only.
 If a development measurement client arms the shared source, the window can
 show **Measurement tones armed — waiting for your transmission**.
 **Cancel calibration** also cancels that source. An arm receipt does not
-confirm transmission or correction. The integrated measurement controls are
-still in development. The development measurement client uses raw DAX IQ
-and accepts frames only from its original armed source after the alignment
-noise has ended. This timing check does not establish ADC headroom or
-calibrated output power; the feedback attenuation still needs qualification.
+confirm transmission or correction.
+
+In the development AetherPD window, **Measure linearity…** opens the measurement
+controls. This workflow remains under qualification; it does not establish
+ADC headroom or calibrated output power.
+
+1. Connect the dummy load and attenuated feedback path, select your TX slice,
+   frequency, mode and power, and leave FDX off. Confirm **Dummy load connected;
+   feedback attenuation checked**.
+2. Choose **Measured forward-power abort limit (W)**. This is a measured-power
+   cutoff, not a command to change radio drive. The nominal radio power setting
+   must be within the limit. The active band plan and license-class filter must
+   cover both the tones and the wider alignment-noise band.
+3. Click **Arm measurement source**, then **Prepare receive check** once the
+   arm is observed. These actions do not transmit. Preparation downloads a
+   complete receive-only IQ frame.
+4. Click **Transmit measurement** within two seconds of readiness. This is the
+   explicit RF action. An independent cleanup helper must be ready before the
+   original-session TX request is dispatched. The source emits four seconds of
+   alignment noise followed by 710/1900 Hz tones, for at most eight seconds.
+   Capture waits for the guarded tone interval and collects four frames.
+5. **Stop measurement** requests release of that measurement. Closing the
+   window also requests stop; it does not stop AetherPD correction. A pending
+   release remains visible on reopening. An unused source arm expires after
+   30 seconds, or **Cancel source** withdraws it immediately.
+6. Results appear only after confirmed release of the original transmission.
+   **Export result…** saves JSON with the station settings, source and capture
+   identities, timestamps, correction state, spectrum, noise limitations and
+   reference conventions. IMD is labeled both per tone and relative to
+   fundamental-derived PEP; the separately measured sample-peak reference is
+   retained in the export. Raw IQ levels are not calibrated dBFS or watts.
+
+No source arm or transmission is retried automatically. A changed source,
+frequency, power, session, band-plan selection or revoked original automation
+input cancels the preparation or run. A new receive check is needed after
+readiness expires. Changing correction state requires a separately prepared
+run; compare exported runs made with matching station settings.
 
 **Status unknown** means there is no fresh observation. The window does not
 retry Start, calibration or Stop automatically after a lost reply. The released

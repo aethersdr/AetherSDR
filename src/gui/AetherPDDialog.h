@@ -12,6 +12,7 @@ class QPlainTextEdit;
 class QTimer;
 
 namespace AetherSDR {
+class AetherPDMeasurementDialog;
 
 // Observes the current radio's PD service; calibration arm never keys RF.
 class AetherPDDialog : public CanonWindow {
@@ -35,6 +36,7 @@ private:
     void request(aetherpd::Operation operation);
     bool current() const;
 
+    QPointer<AetherPDMeasurementDialog> m_measurement;
     QPointer<RadioModel> m_radio;
     RadioControlSession m_session;
     QString m_serial;
@@ -54,6 +56,7 @@ private:
     QLabel* m_detail{nullptr};
     QLabel* m_receipt{nullptr};
     QLabel* m_message{nullptr};
+    QPushButton* m_measurementOpen{nullptr};
     QPushButton* m_refresh{nullptr};
     QPushButton* m_start{nullptr};
     QPushButton* m_arm{nullptr};

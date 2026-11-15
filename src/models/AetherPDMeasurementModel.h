@@ -4,6 +4,7 @@
 #include "core/txlinearity/TxLinearityController.h"
 #include "core/txlinearity/TxLinearityTelemetry.h"
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QObject>
 #include <QPointer>
@@ -35,15 +36,21 @@ public:
         QString transmitAntenna;
         int powerSetting{0}; // Radio-reported nominal watts, not measured output.
         QDateTime completedAtUtc;
+        quint64 sourceId{0};
     };
     explicit AetherPDMeasurementModel(RadioModel& radio);
     AetherPDMeasurementModel(RadioModel& radio, QNetworkAccessManager& network);
     ~AetherPDMeasurementModel() override;
     bool prepare(const RadioControlSession& session, const txlin::LinearityRunConfig& config,
                  const txlin::RunRequest& request, bool dummyLoadConfirmed);
-    bool start(const RadioControlSession& session);
+    bool prepareCurrent(const RadioControlSession& session, double maxForwardWatts, bool dummyLoadConfirmed);
+    QByteArray exportResult() const;
+    QString resultSummary() const;
+    QString preparationSummary() const;
+    bool start(const RadioControlSession& session, std::function<bool()> operatorCurrent = {});
     bool stop(const RadioControlSession& session);
     void poll();
+    quint64 preparationId() const { return m_generation; }
     State state() const;
     QString status() const;
     const std::optional<Result>& result() const { return m_result; }
@@ -64,6 +71,7 @@ private:
     txlin::TxLinearityTelemetry m_telemetry;
     RadioControlSession m_session{};
     std::function<bool()> m_current;
+    std::function<bool()> m_operatorCurrent;
     QPointer<SliceModel> m_slice;
     std::vector<QMetaObject::Connection> m_stationConnections;
     quint64 m_generation{0};
@@ -78,6 +86,8 @@ private:
     QTimer m_observer;
     State m_publishedState{State::Idle};
     QString m_notice;
+    std::optional<QString> m_bandPlanName;
+    QString m_licenseClass;
     std::optional<Result> m_result;
 };
 } // namespace AetherSDR

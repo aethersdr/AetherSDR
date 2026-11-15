@@ -5126,7 +5126,7 @@ set_tests_properties(aetherpd_session_test PROPERTIES TIMEOUT 30)
 # Installer preview/approval UI with injected credentials and HTTP, no sockets.
 add_executable(aetherpd_installation_dialog_test
     tests/aetherpd_installation_dialog_test.cpp
-    src/gui/AetherPDDialog.cpp src/gui/CanonWindow.cpp ${THEME_TEST_RESOURCES})
+    src/gui/AetherPDDialog.cpp src/gui/AetherPDMeasurementDialog.cpp src/gui/CanonWindow.cpp ${THEME_TEST_RESOURCES})
 target_include_directories(aetherpd_installation_dialog_test PRIVATE src tests)
 target_compile_definitions(aetherpd_installation_dialog_test PRIVATE
     AETHERPD_PACKAGE_TESTDATA="${CMAKE_SOURCE_DIR}/tools/pd-waveform/boot/testdata")
@@ -5138,6 +5138,7 @@ set_tests_properties(aetherpd_installation_dialog_test PROPERTIES TIMEOUT 30 ENV
 add_executable(aetherpd_dialog_test
     tests/aetherpd_dialog_test.cpp
     src/gui/AetherPDDialog.cpp
+    src/gui/AetherPDMeasurementDialog.cpp
     src/gui/CanonWindow.cpp
     ${THEME_TEST_RESOURCES}
 )

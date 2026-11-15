@@ -8,6 +8,7 @@
 #include "models/AetherPDMeasurementModel.h"
 #include "TxLinearityTestSignals.h"
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include "TestEventLoop.h"
 #include "TxTestAuthority.h"
@@ -948,7 +949,7 @@ void aetherPDMeasurementWorkflow()
         }
         return encode({{"capture_id", captureId}, {"offset", index * 512}, {"iq_f32le", QString::fromLatin1(raw.toBase64())}});
     };
-    for (int scenario = 0; scenario < 9; ++scenario) {
+    for (int scenario = 0; scenario < 11; ++scenario) {
         RadioConnection connection;
         AetherPDTest::Network controlNetwork, measurementNetwork;
         Fixture f;
@@ -1038,7 +1039,8 @@ void aetherPDMeasurementWorkflow()
         TxCoordinator::StopRequest proof;
         f.backend->stopWriter = [&](const auto&, const auto& stopped) { proof = stopped; };
         const auto detach = qScopeGuard([&] { f.backend->stopWriter = {}; });
-        check(model->start(session) && !f.commands.contains("mox:on"),
+        bool operatorCurrent = true;
+        check(model->start(session, [&] { return operatorCurrent; }) && !f.commands.contains("mox:on"),
               "explicit measurement start waits for helper readiness");
         const int budget = QJsonDocument::fromJson(measurementNetwork.sent.back().body).object().value("cleanup_after_ms").toInt();
         const QByteArray observing = encode({{"test_id", captureId}, {"state", "observing"},
@@ -1049,8 +1051,9 @@ void aetherPDMeasurementWorkflow()
             TxOperationIntegrationTestAccess::transmitDelta(f.radio, power);
         }
         if (scenario == 3) { model->stop(session); }
+        if (scenario == 9) { operatorCurrent = false; model->poll(); }
         begin->complete(200, observing);
-        if (scenario == 2 || scenario == 3) {
+        if (scenario == 2 || scenario == 3 || scenario == 9) {
             check(!f.commands.contains("mox:on"), "late helper response cannot key after power change or cancellation");
         } else {
             measurementNetwork.last->complete(200, observing);
@@ -1064,7 +1067,10 @@ void aetherPDMeasurementWorkflow()
                 check(proof.valid(), "measurement destruction requests original operation cleanup");
                 continue;
             }
-            if (scenario == 5) {
+            if (scenario == 10) {
+                operatorCurrent = false; model->poll();
+                check(proof.valid(), "original operator authorization loss requests owned cleanup");
+            } else if (scenario == 5) {
                 meters.updateValueByName("TX", "FWDPWR", 11.f);
                 model->poll();
             } else {
@@ -1078,8 +1084,18 @@ void aetherPDMeasurementWorkflow()
                 for (int i = 0; i < 32; ++i) { measurementNetwork.last->complete(200, chunk(i)); }
             }
         }
-        check(model->state() == State::Releasing && !model->result() && proof.valid(),
+        check(model->state() == State::Releasing && !model->result() && model->exportResult().isEmpty() && proof.valid(),
               "measurement holds result until exact transmission stop evidence");
+        if (scenario == 0) {
+            QJsonObject ended = sourceStatus;
+            ended["calibration_state"] = "canceled";
+            ended["calibration_samples_left"] = 0;
+            ended["state"] = "idle";
+            check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "unkey source status requested");
+            controlNetwork.last->complete(200, encode(ended));
+            check(model->state() == State::Releasing && !model->result(),
+                "normal source cancellation on unkey still waits for exact release proof");
+        }
         TxOperationIntegrationTestAccess::stopEvidence(f.radio,
             {proof, std::make_shared<const std::atomic<bool>>(true), TxCoordinator::monotonicMs() + 1000});
         model->poll();
@@ -1090,6 +1106,28 @@ void aetherPDMeasurementWorkflow()
                       && result->powerSetting == 5 && result->mode == "USB" && result->transmitAntenna == "ANT1"
                       && result->measurement.captures.size() == 1 && !result->measurement.fullScaleKnown,
                   "composed workflow preserves measurement and station provenance");
+            const QJsonObject exported = QJsonDocument::fromJson(model->exportResult()).object();
+            const QJsonObject measured = exported.value("measurement").toObject();
+            check(exported.value("schema").toString() == "aetherpd-linearity-v1"
+                && exported.value("source_id").toString() == "0000000000000001"
+                && exported.value("nominal_power_setting_w").toInt() == 5
+                && !exported.value("full_scale_known").toBool(true)
+                && !measured.value("clipping_known").toBool(true)
+                && measured.value("spectrum_db_raw_iq").toArray().size() == 16384
+                && exported.value("captures").toArray().size() == 1,
+                "export preserves source, station, spectra and unknown calibration after release");
+            for (const QJsonValue& value : measured.value("products").toArray()) {
+                const QJsonObject product = value.toObject();
+                if (product.value("order").toInt() == 3) {
+                    check(std::abs(product.value("dbc_per_tone").toDouble() + 40) < .1
+                        && std::abs(product.value("dbc_fundamental_pep").toDouble() + 46.0206) < .1
+                        && product.contains("dbc_sampled_pep") && product.contains("noise_limited"),
+                        "export distinguishes both PEP references and noise-limited evidence");
+                }
+            }
+            check(model->resultSummary().contains("ADC headroom unknown")
+                && model->resultSummary().contains("dBc per tone / fundamental-derived PEP"),
+                "operator summary names reference conventions and calibration uncertainty");
             if (result && result->measurement.measurement) {
                 for (const txlin::ImdProduct& product : result->measurement.measurement->products) {
                     if (product.order == 3) {
@@ -1097,7 +1135,12 @@ void aetherPDMeasurementWorkflow()
                     }
                 }
             }
-            check(!model->prepare(session, config, request, true), "persistent measurement controller preserves TX cooldown");
+            check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "next arm status requested");
+            QJsonObject nextArm = sourceStatus;
+            nextArm["measurement"] = QJsonObject{{"source_id", "0000000000000002"}, {"tones", false}};
+            controlNetwork.last->complete(200, encode(nextArm));
+            check(!model->prepare(session, config, request, true) && model->status().contains("Cooling down"),
+                "persistent measurement controller preserves TX cooldown for a fresh arm");
         } else {
             check(model->result() && !model->result()->measurement.measurement
                       && !model->result()->measurement.error.empty(),
