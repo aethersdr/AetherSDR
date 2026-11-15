@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T15:07:57.706020+00:00",
+  "updated_utc": "2026-11-15T15:10:33.798818+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Build/install the matching signed candidate and qualify the ordinary four-frame DAX IQ measurement with FDX off on the8600; add narrow explicit correction selection for matched A/B and preserve the full P1-P10 scope.",
+  "next_action": "Install the signed candidate carrying bounded native cancellation diagnostics, identify the source cancellation during the ordinary GUI measurement, and complete four-frame keyed capture and explicit correction A/B. Preserve all remaining P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -702,6 +702,11 @@
   "measurement_installed_rf": {
     "status": "idle_preflight_fixed_brief_key_then_source_canceled_no_IMD_result",
     "evidence": "measurement-rf-live/validation.json under evidence_root",
+    "production_ready": false
+  },
+  "source_cancel_diagnostics": {
+    "status": "three_native_regressions_and_ARMv7_ARM64_builds_passed_not_installed",
+    "evidence": "source-cancel-development/validation.json under evidence_root",
     "production_ready": false
   }
 }

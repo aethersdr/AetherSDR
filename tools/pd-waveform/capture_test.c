@@ -133,7 +133,7 @@ int main(void)
     assert(!measurement_tones_ready(&w,kNow+700000000)); // stale IQ
     assert(!measurement_tones_ready(&w,kNow-1)); // clock reversal
     assert(!measurement_tones_ready(&w,w.calibration.deadline_ns));
-    disarm_bounded_test(&w);assert(!measurement_tones_ready(&w,kNow+520000000));
+    disarm_bounded_test(&w, "test_cancel");assert(!measurement_tones_ready(&w,kNow+520000000));
     puts("PASS: raw IQ snapshot, ownership, continuity, expiry and waveform tap");
     return 0;
 }

@@ -596,8 +596,27 @@ static void log_alignment_evidence(const struct alignment_evidence* evidence)
     if (evidence->line[0]) { logf_("%s", evidence->line); }
 }
 
-static void disarm_bounded_test(wf_t* w)
+static void log_bounded_source_end(const wf_t* w, const char* reason)
 {
+    if (w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING ||
+        (w->test_f1 > 0 && w->test_duration_samples)) {
+        // One bounded retirement record captures the source and stream state.
+        // This does not log packets or change cancellation policy.
+        logf_("bounded source ended: reason=%s source=%016llx phase=%s keyed=%d tx_on=%d "
+              "samples_left=%d generated=%llu iq_frames=%llu iq_starts=%llu iq_stale=%llu "
+              "iq_invalid=%llu iq_age_ns=%lld tx_discontinuities=%llu tx_rejected=%llu deadlines=%llu",
+              reason, (unsigned long long)w->calibration.source_id, pd_calibration_name(&w->calibration),
+              w->keyed, w->tx_on, w->calibration.samples_left, (unsigned long long)w->generated_samples,
+              (unsigned long long)w->local_iq.frames, (unsigned long long)w->local_iq.starts,
+              (unsigned long long)w->local_iq.stale, (unsigned long long)w->local_iq.invalid,
+              (long long)w->local_iq.last_age_ns, (unsigned long long)w->tx_guard.discontinuities,
+              (unsigned long long)w->tx_rejected, (unsigned long long)w->tx_deadline_faults);
+    }
+}
+
+static void disarm_bounded_test(wf_t* w, const char* reason)
+{
+    log_bounded_source_end(w, reason);
     w->measurement_tone_sent_ns = 0;
     pd_calibration_cancel(&w->calibration);
     if (w->test_duration_samples) {
@@ -782,7 +801,7 @@ static void start_feedback(wf_t* w)
 
 static void set_keyed(wf_t* w, int keyed, int clean_unkey)
 {
-    if (!keyed && w->keyed) { disarm_bounded_test(w); }
+    if (!keyed && w->keyed) { disarm_bounded_test(w, "unkey"); }
     if (keyed == w->keyed) {
         return;
     }
@@ -805,6 +824,7 @@ static void set_keyed(wf_t* w, int keyed, int clean_unkey)
             (!w->calibration_control || !w->calibration_software_owner ||
              (!w->correct && w->calibration.purpose==PD_SOURCE_CALIBRATION) || native_apd_blocked(w) || w->active_slice<0 ||
              w->local_iq.last_valid_ns<=0 || cal_now<w->local_iq.last_valid_ns || cal_now-w->local_iq.last_valid_ns>100000000)) {
+            log_bounded_source_end(w, "keying_ineligible");
             w->measurement_tone_sent_ns = 0;
             pd_calibration_cancel(&w->calibration);
         }
@@ -838,7 +858,7 @@ static void set_keyed(wf_t* w, int keyed, int clean_unkey)
 
 static void model_changed(wf_t* w)
 {
-    if (w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING) { disarm_bounded_test(w); }
+    if (w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING) { disarm_bounded_test(w, "model_changed"); }
     local_feedback_invalidate(w, 1);
     reference_restart(w);
     pd_core_set_keyed(w->core, w->keyed && w->active_slice >= 0 && !native_apd_blocked(w));
@@ -954,14 +974,14 @@ static void api_line(wf_t* w, char* l)
             if (present) {
                 uint32_t value=0;if (present!=1 || !calibration_handle(owner,&value)) { value=0; }
                 if (value!=w->calibration_slice_owner[idx] && idx==w->active_slice &&
-                    (w->calibration.phase==PD_CAL_ARMED || w->calibration.phase==PD_CAL_RUNNING)) { disarm_bounded_test(w); }
+                    (w->calibration.phase==PD_CAL_ARMED || w->calibration.phase==PD_CAL_RUNNING)) { disarm_bounded_test(w, "slice_owner_changed"); }
                 w->calibration_slice_owner[idx]=value;
             }
             if (kv(m,"in_use",v,sizeof(v)) && !strcmp(v,"0")) { w->calibration_slice_owner[idx]=0; }
         }
         char mode[16] = "";
         if (idx == w->active_slice && kv(m, "in_use", v, sizeof(v)) && !strcmp(v, "0")) {
-            disarm_bounded_test(w);
+            disarm_bounded_test(w, "slice_removed");
             w->tx_on = 0;
             set_keyed(w, 0, 0);
             w->active_slice = -1;
@@ -988,7 +1008,7 @@ static void api_line(wf_t* w, char* l)
                 else if (!w->local_iq_mode && !w->daxiq_sid && w->api >= 0)
                     w->seq_daxiq = api_send(w, "stream create type=dax_iq daxiq_channel=%d", w->daxiq_ch);
             } else if (strcmp(mode, WF_MODE) && w->active_slice == idx) {
-                disarm_bounded_test(w);
+                disarm_bounded_test(w, "pd_mode_released");
                 logf_("PD released by slice %d", idx);
                 w->active_slice = -1;
                 w->tx_on = 0;
@@ -1113,7 +1133,7 @@ static void api_line(wf_t* w, char* l)
         w->calibration_software_owner=complete && w->calibration_gui && handle==w->calibration_gui && !strcmp(source,"SW") && !reason[0] && !strcmp(allowed,"1") &&
             (!strcmp(mode,"TRANSMITTING") || !strcmp(mode,"PTT_REQUESTED"));
         if (w->calibration.phase==PD_CAL_ARMED || w->calibration.phase==PD_CAL_RUNNING) {
-            if (!complete || (!w->calibration_idle && !w->calibration_software_owner)) { disarm_bounded_test(w); }
+            if (!complete || (!w->calibration_idle && !w->calibration_software_owner)) { disarm_bounded_test(w, "interlock_ineligible"); }
         }
         int admitting = !strcmp(v, "TRANSMITTING") || !strcmp(v, "PTT_REQUESTED");
         if (!admitting && strcmp(v, "READY") && strcmp(v, "UNKEY_REQUESTED")) {
@@ -1122,7 +1142,7 @@ static void api_line(wf_t* w, char* l)
         if (admitting && !w->tx_on) {
             reference_restart(w);
         }
-        if (!admitting && w->tx_on) { disarm_bounded_test(w); }
+        if (!admitting && w->tx_on) { disarm_bounded_test(w, "tx_admission_ended"); }
         w->tx_on = admitting;
         set_keyed(w, !strcmp(v, "TRANSMITTING"), !strcmp(v, "UNKEY_REQUESTED"));
         return;
@@ -1405,7 +1425,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         }
         w->n_tx_pkts++;
         if (w->calibration.phase == PD_CAL_RUNNING &&
-            !pd_calibration_tick(&w->calibration, pd_iq_monotonic_ns())) { disarm_bounded_test(w); }
+            !pd_calibration_tick(&w->calibration, pd_iq_monotonic_ns())) { disarm_bounded_test(w, "source_deadline"); }
         // Transmit: the radio's mic stream, while the operator transmits.
         double iq[2 * MAX_SAMPLES];
         for (int k = 0; k < pairs; k++) {
@@ -1440,7 +1460,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
                 q = weight*q + (1-weight)*mq;
                 if (w->keyed) {
                     pd_calibration_consume(&w->calibration, 1);
-                    if (--w->test_left == 0) { disarm_bounded_test(w); }
+                    if (--w->test_left == 0) { disarm_bounded_test(w, "source_samples_complete"); }
                 }
             }
             double a = hypot(i, q);
@@ -1538,7 +1558,7 @@ static void reset_histories(wf_t* w)
 
 static void local_feedback_invalidate(wf_t* w, int fault)
 {
-    if (fault && (w->test_started || w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING)) { disarm_bounded_test(w); }
+    if (fault && (w->test_started || w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING)) { disarm_bounded_test(w, "feedback_invalidated"); }
     ++w->correction_resets;
     pd_core_invalidate(w->core);
     w->transport_pending = 0;
@@ -1595,7 +1615,7 @@ static void local_feedback_suspend_transport(wf_t* w)
         local_feedback_invalidate(w, 1);
         return;
     }
-    if (w->test_started || w->calibration.phase==PD_CAL_ARMED || w->calibration.phase==PD_CAL_RUNNING) { disarm_bounded_test(w); }
+    if (w->test_started || w->calibration.phase==PD_CAL_ARMED || w->calibration.phase==PD_CAL_RUNNING) { disarm_bounded_test(w, "transport_suspended"); }
     ++w->correction_resets;
     w->warm_start_armed = w->warm_started = 0;
     w->transport_pending = 1;
@@ -1880,7 +1900,7 @@ static struct pd_calibration_reply operator_calibration_command(wf_t* w,
             // explicitly admitted new arm and its replay counter.
             struct pd_calibration accepted=w->calibration;
             w->test_started=0;model_changed(w);w->calibration=accepted;
-        } else if (request[0]=='X') { disarm_bounded_test(w); }
+        } else if (request[0]=='X') { disarm_bounded_test(w, "operator_cancel"); }
     }
     return reply;
 }
@@ -2723,7 +2743,7 @@ int main(int argc, char** argv)
         if (poll(pf, (nfds_t)np, 200) < 0 && errno != EINTR)
             break;
         if (pd_owner_closed(owner)) {
-            disarm_bounded_test(&w);logf_("shim session ended");break;
+            disarm_bounded_test(&w, "shim_session_ended");logf_("shim session ended");break;
         }
         if (w.local_iq_mode && !local_feedback_poll(&w)) {
             logf_("local IQ transport failed");
@@ -2757,7 +2777,7 @@ int main(int argc, char** argv)
             ssize_t n = read(w.api, w.rbuf + w.rlen, sizeof w.rbuf - w.rlen - 1);
             if (n <= 0) {
                 logf_("radio closed the API connection");
-                disarm_bounded_test(&w);
+                disarm_bounded_test(&w, "api_closed");
                 close(w.api);
                 w.api = -1;
                 w.tx_on = 0;
@@ -2789,7 +2809,7 @@ int main(int argc, char** argv)
                 w.rlen = 0;   // a line longer than the buffer: drop it
         }
         if ((w.calibration.phase == PD_CAL_ARMED || w.calibration.phase == PD_CAL_RUNNING) &&
-            !pd_calibration_tick(&w.calibration, pd_iq_monotonic_ns())) { disarm_bounded_test(&w); }
+            !pd_calibration_tick(&w.calibration, pd_iq_monotonic_ns())) { disarm_bounded_test(&w, "source_deadline"); }
         if (calibration>=0 && (pf[6].revents&POLLIN)) {
             for (unsigned batch=0;batch<4;++batch) {
                 unsigned char request[10];ssize_t size=recv(calibration,request,sizeof(request),MSG_DONTWAIT);

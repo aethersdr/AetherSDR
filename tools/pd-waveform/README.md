@@ -123,7 +123,8 @@ WDSP and musl notices accompany the generated waveform package. Corresponding
 sources are here and in `third_party/wdsp`; no FFTW library is linked.
 
 Managed operator calibration uses a separate `AETHER_PD_CALIBRATION_FD`
-private datagram pair. It accepts only nine-byte `A`(arm) or `X`(cancel)
+private datagram pair. It accepts only nine-byte `A`(calibrate), `M`(measure)
+or `X`(cancel)
 requests followed by a nonzero monotonic BE64 counter; replies contain the
 counter and a one-byte result. Status FD7 retains its read-only protocol.
 The managed Go launcher creates the pair and forwards the prepared GUI handle
@@ -135,6 +136,11 @@ A sample limit and per-packet monotonic deadline checks bound generation.
 Neither arming nor cancellation keys the radio; cancellation removes the source.
 Saved per-band transmit settings do not change the live power value or cancel
 an arm. A change to live transmit power still cancels calibration.
+Measurement uses the same bounded source without invalidating the learned PA
+model. Source retirement logs a fixed reason, source identity, phase and stream
+counters once; subsequent inactive packets do not repeat the record. These
+diagnostics distinguish admission, configuration, continuity and deadline
+cancellation without changing any source limit or automatically rearming it.
 
 Recovery is not complete: losing the leased radio API connection removes the
 active PD slice on the tested FLEX-8600, even without PTT. The independent
