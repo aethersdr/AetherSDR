@@ -18,11 +18,8 @@
 //              --gain 0                dB applied to the input before both runs
 //              --hl2 0|1               also measure through the HL2 modulator
 //              --hl2-alc 0|1           HL2 ALC in that measurement (default 0)
-// Gate:        --gate-threshold -40 --gate-ratio 2.5 --gate-release 80
-//              --gate-hold 20 --gate-floor -15 --gate-return 3 --gate-mode 0|1
 // EQ:          --eq-hpf 80             a 24 dB/oct high-pass band
 //              --eq-p1-freq 500 --eq-p1-gain 2 --eq-p1-q 1   peaking bands p1..p4
-// De-esser:    --deess-freq 5000 --deess-q 2 --deess-threshold -25 --deess-amount -6
 // Compressor:  --comp-threshold -20 --comp-ratio 4 --comp-attack 20
 //              --comp-release 150 --comp-knee 6 --comp-makeup 5
 //              --comp-drive 0 --comp-phase 0 --comp-ceiling -1 (its limiter)
@@ -34,8 +31,8 @@
 //
 // Any flag of a stage turns that stage on in the processed run; the rest keep
 // the stage's own defaults. An unknown flag is an error, so a typo cannot
-// switch a stage on with defaults behind the operator's back. Stage order is the shipped default: Gate, EQ,
-// De-esser, Compressor, Tube, Exciter.
+// switch a stage on with defaults behind the operator's back. Stage order is the shipped default: Tube, EQ,
+// Compressor, Exciter.
 //
 // -DTX_PAPR_HARNESS_NO_HL2 builds it without the HL2 modulator (and so
 // without WDSP or the rest of aethercore): TxVoiceProcessor, the Client*
@@ -43,10 +40,8 @@
 // gate is measured on a board that cannot build the whole tree.
 
 #include "core/ClientComp.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
 #include "core/ClientFinalLimiter.h"
-#include "core/ClientGate.h"
 #include "core/ClientPudu.h"
 #include "core/ClientTube.h"
 #include "core/TxChainLayout.h"
@@ -218,13 +213,6 @@ const char* const kKnownKeys[] = {
     "gain",
     "hl2",
     "hl2-alc",
-    "gate-threshold",
-    "gate-ratio",
-    "gate-release",
-    "gate-hold",
-    "gate-floor",
-    "gate-return",
-    "gate-mode",
     "eq-hpf",
     "eq-p1-freq",
     "eq-p1-gain",
@@ -238,10 +226,6 @@ const char* const kKnownKeys[] = {
     "eq-p4-freq",
     "eq-p4-gain",
     "eq-p4-q",
-    "deess-freq",
-    "deess-q",
-    "deess-threshold",
-    "deess-amount",
     "comp-threshold",
     "comp-ratio",
     "comp-attack",
@@ -286,9 +270,7 @@ struct Settings {
 };
 
 struct Chain {
-    ClientGate gate;
     ClientEq eq;
-    ClientDeEss deEss;
     ClientComp comp;
     ClientTube tube;
     ClientPudu pudu;
@@ -296,9 +278,7 @@ struct Chain {
 
     void configure(const Settings& s, bool processed)
     {
-        gate.setEnabled(false);
         eq.setEnabled(false);
-        deEss.setEnabled(false);
         comp.setEnabled(false);
         tube.setEnabled(false);
         pudu.setEnabled(false);
@@ -308,18 +288,6 @@ struct Chain {
             return;
         }
 
-        if (s.any("gate-")) {
-            // Mode first: switching it snaps ratio and floor.
-            gate.setMode(s.get("gate-mode", 0) > 0.5 ? ClientGate::Mode::Gate
-                                                     : ClientGate::Mode::Expander);
-            gate.setThresholdDb(s.get("gate-threshold", -40));
-            gate.setRatio(s.get("gate-ratio", 2.5));
-            gate.setReleaseMs(s.get("gate-release", 80));
-            gate.setHoldMs(s.get("gate-hold", 20));
-            gate.setFloorDb(s.get("gate-floor", -15));
-            gate.setReturnDb(s.get("gate-return", 3));
-            gate.setEnabled(true);
-        }
         if (s.any("eq-")) {
             int bands = 0;
             if (s.has("eq-hpf")) {
@@ -343,13 +311,6 @@ struct Chain {
             }
             eq.setActiveBandCount(bands);
             eq.setEnabled(bands > 0);
-        }
-        if (s.any("deess-")) {
-            deEss.setFrequencyHz(s.get("deess-freq", 5000));
-            deEss.setQ(s.get("deess-q", 2));
-            deEss.setThresholdDb(s.get("deess-threshold", -25));
-            deEss.setAmountDb(s.get("deess-amount", -6));
-            deEss.setEnabled(true);
         }
         if (s.any("comp-")) {
             comp.setThresholdDb(s.get("comp-threshold", -20));
@@ -407,17 +368,14 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
 
     TxVoiceProcessor processor;
     TxVoiceProcessor::Processors processors;
-    processors.gate = &chain->gate;
     processors.eq = &chain->eq;
-    processors.deEss = &chain->deEss;
     processors.comp = &chain->comp;
     processors.tube = &chain->tube;
     processors.pudu = &chain->pudu;
     processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
     using Stage = TxVoiceProcessor::Stage;
-    const std::vector<Stage> stages{Stage::Gate, Stage::Eq,   Stage::DeEss,
-                                    Stage::Comp, Stage::Tube, Stage::Enh};
+    const std::vector<Stage> stages{Stage::Tube, Stage::Eq, Stage::Comp, Stage::Enh};
     uint64_t order = 0;
     if (!TxChainLayout::pack(stages, order)) {
         std::fprintf(stderr, "the stage order does not fit the packed chain\n");
