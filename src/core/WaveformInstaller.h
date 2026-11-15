@@ -51,6 +51,12 @@ public:
     // Emits progressChanged() during transfer and finished() on completion.
     void installDockerWaveform(const QString& filePath, std::optional<RadioControlSession> session = {});
 
+    // The enclosing installation owns this reservation through its final
+    // cleanup. Upload completion/cancellation does not release it. A missing,
+    // expired or foreign reservation is refused without acquiring another.
+    void installReservedDockerWaveform(const QString& filePath, const RadioControlSession& session,
+                                      const FileTransferHandle& reservation);
+
     // Abort an in-progress install.
     void cancel();
 
@@ -77,7 +83,8 @@ private:
 
     using Generation = WaveformUploadState::Generation;
 
-    void beginInstall(const QString& filePath, PackageKind kind, std::optional<RadioControlSession> session);
+    void beginInstall(const QString& filePath, PackageKind kind, std::optional<RadioControlSession> session,
+                      std::optional<FileTransferHandle> reservation = {});
     static PackagePreparationResult preparePackage(const QString& filePath,
                                                     PackageKind kind,
                                                     qint64 expectedSize);
@@ -96,6 +103,7 @@ private:
     QPointer<RadioModel> m_model;
     RadioControlSession m_session{};
     FileTransferHandle m_transfer;
+    bool m_ownsTransfer{true};
     QTcpSocket* m_socket{nullptr};
     QByteArray m_fileData;
     QString m_fileName;

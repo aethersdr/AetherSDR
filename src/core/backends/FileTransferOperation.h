@@ -17,6 +17,8 @@ public:
     bool current() const { return m_guard.current(); }
     void cancel() const { m_guard.cancel(); }
     const FileTransferGuard& guard() const { return m_guard; }
+    bool reservedFor(FileTransferPurpose purpose, const RadioControlSession& session) const
+    { return m_purpose == purpose && m_session == session; }
 private:
     FileTransferGuard m_guard;
     QDeadlineTimer m_settleDeadline{0};

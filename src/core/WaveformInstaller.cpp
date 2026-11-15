@@ -62,6 +62,12 @@ void WaveformInstaller::installDockerWaveform(const QString& filePath, std::opti
     beginInstall(filePath, PackageKind::Docker, session);
 }
 
+void WaveformInstaller::installReservedDockerWaveform(const QString& filePath, const RadioControlSession& session,
+                                                      const FileTransferHandle& reservation)
+{
+    beginInstall(filePath, PackageKind::Docker, session, reservation);
+}
+
 WaveformInstaller::PackagePreparationResult WaveformInstaller::preparePackage(
     const QString& filePath,
     PackageKind kind,
@@ -123,7 +129,8 @@ WaveformInstaller::PackagePreparationResult WaveformInstaller::preparePackage(
     return result;
 }
 
-void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, std::optional<RadioControlSession> session)
+void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, std::optional<RadioControlSession> session,
+                                     std::optional<FileTransferHandle> reservation)
 {
     const QPointer<WaveformInstaller> alive(this);
     if (isInstalling()) {
@@ -136,6 +143,11 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, 
     }
 
     m_session = session.value_or(m_model->controlSession());
+    if (reservation && (!*reservation || !m_model->fileTransferCurrent(*reservation)
+        || !(*reservation)->reservedFor(FileTransferPurpose::DockerWaveform, m_session))) {
+        emit finished(false, tr("Original installation reservation is unavailable."));
+        return;
+    }
     const QFileInfo fileInfo(filePath);
     const QString fileName = fileInfo.fileName();
     if (!transferTokenValid(fileName, 255)) {
@@ -163,6 +175,8 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, 
     }
 
     m_fileName = fileName;
+    m_transfer = reservation.value_or(FileTransferHandle{});
+    m_ownsTransfer = !reservation.has_value();
     m_packageKind = kind;
     m_uploadPort = 0;
     m_uploadConnected = false;
@@ -209,8 +223,8 @@ void WaveformInstaller::requestUploadPort(Generation generation)
     if (!m_uploadState.isCurrent(generation)) { return; }
     const FileTransferPurpose purpose = m_packageKind == PackageKind::Legacy
         ? FileTransferPurpose::LegacyWaveform : FileTransferPurpose::DockerWaveform;
-    if (m_model) { m_transfer = m_model->beginFileTransfer(purpose, this, m_session, operationBudgetMs(m_fileSize)); }
-    if (!m_transfer) {
+    if (m_model && m_ownsTransfer) { m_transfer = m_model->beginFileTransfer(purpose, this, m_session, operationBudgetMs(m_fileSize)); }
+    if (!m_model || !m_model->fileTransferCurrent(m_transfer)) {
         finishOperation(generation, false, tr("Transfer unavailable, busy, or original radio session ended."));
         return;
     }
@@ -440,9 +454,12 @@ void WaveformInstaller::finishOperation(Generation generation,
     m_finishing = true;
     m_idleTimeout.stop();
     m_uploadState.invalidate();
-    if (m_model) { m_model->finishFileTransfer(m_transfer, m_uploadConnected ? 3000 : 0); }
-    else if (m_transfer) { m_transfer->cancel(); }
+    if (m_ownsTransfer) {
+        if (m_model) { m_model->finishFileTransfer(m_transfer, m_uploadConnected ? 3000 : 0); }
+        else if (m_transfer) { m_transfer->cancel(); }
+    }
     m_transfer.reset();
+    m_ownsTransfer = true;
     destroySocket(!success);
     m_fileData.clear();
     m_uploadPort = 0;

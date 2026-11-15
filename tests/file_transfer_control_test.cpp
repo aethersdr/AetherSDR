@@ -2,12 +2,20 @@
 // writer is pinned in session_control_test.
 #include "RadioSetupControlFixture.h"
 #include "core/FirmwareUploader.h"
+#include "core/WaveformInstaller.h"
 #include "core/backends/FileTransferOperation.h"
 #include <QCoreApplication>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QtTest>
 
 using namespace AetherSDR;
 namespace AetherSDR {
+class WaveformInstallerTestAccess {
+public:
+    static void finish(WaveformInstaller& uploader, bool success)
+    { uploader.finishOperation(uploader.m_activeGeneration, success, {}); }
+};
 class FirmwareUploaderTestAccess {
 public:
     // A radio-settled failure after bytes were sent, which releases the
@@ -55,6 +63,81 @@ struct Fixture {
 class FileTransferControlTest final : public QObject {
     Q_OBJECT
 private slots:
+    void reservedWaveformUploadKeepsTransactionOwnership()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("carrier.tar.gz"));
+        QFile image(path);
+        QVERIFY(image.open(QIODevice::WriteOnly));
+        QCOMPARE(image.write(QByteArray::fromHex("1f8b0000")), qint64(4));
+        image.close();
+        for (const int outcome : {0, 1, 2, 3}) {
+            Fixture f;
+            f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
+            const FileTransferHandle reservation = f.begin(FileTransferPurpose::DockerWaveform);
+            QVERIFY(reservation);
+            auto upload = std::make_unique<WaveformInstaller>(&f.model);
+            upload->installReservedDockerWaveform(path, f.model.controlSession(), reservation);
+            // Inspect the real typed command admission, but do not answer it:
+            // no TCP socket can open. Inject only the final uploader event.
+            QTRY_COMPARE(f.commands.size(), 1);
+            if (outcome < 2) { WaveformInstallerTestAccess::finish(*upload, outcome == 0); }
+            else if (outcome == 2) { upload->cancel(); }
+            else { upload.reset(); }
+            QVERIFY(f.model.fileTransferCurrent(reservation));
+            QVERIFY(!f.begin(FileTransferPurpose::LegacyWaveform));
+            f.model.finishFileTransfer(reservation);
+            QVERIFY(f.begin(FileTransferPurpose::LegacyWaveform));
+        }
+    }
+
+    void invalidWaveformReservationNeverReacquires()
+    {
+        Fixture f;
+        f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
+        WaveformInstaller uploader(&f.model);
+        QSignalSpy done(&uploader, &WaveformInstaller::finished);
+        uploader.installReservedDockerWaveform(QStringLiteral("unused.tar.gz"), f.model.controlSession(), {});
+        QCOMPARE(done.size(), 1);
+        QVERIFY(!done.last().first().toBool());
+        const FileTransferHandle wrongPurpose = f.begin(FileTransferPurpose::LegacyWaveform);
+        QVERIFY(wrongPurpose);
+        uploader.installReservedDockerWaveform(QStringLiteral("unused.tar.gz"), f.model.controlSession(), wrongPurpose);
+        QCOMPARE(done.size(), 2);
+        QVERIFY(f.model.fileTransferCurrent(wrongPurpose));
+        f.model.finishFileTransfer(wrongPurpose);
+        const FileTransferHandle expired = f.begin(FileTransferPurpose::DockerWaveform);
+        QVERIFY(expired);
+        expired->cancel();
+        uploader.installReservedDockerWaveform(QStringLiteral("unused.tar.gz"), f.model.controlSession(), expired);
+        QCOMPARE(done.size(), 3);
+        QVERIFY(f.commands.isEmpty());
+        QVERIFY(f.begin(FileTransferPurpose::LegacyWaveform));
+    }
+
+    void revokedWaveformReservationDuringPreparationNeverReacquires()
+    {
+        QTemporaryDir directory;
+        const QString path = directory.filePath(QStringLiteral("carrier.tar.gz"));
+        QFile image(path);
+        QVERIFY(image.open(QIODevice::WriteOnly));
+        QCOMPARE(image.write(QByteArray::fromHex("1f8b0000")), qint64(4));
+        image.close();
+        Fixture f;
+        f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
+        const FileTransferHandle reservation = f.begin(FileTransferPurpose::DockerWaveform);
+        QVERIFY(reservation);
+        WaveformInstaller uploader(&f.model);
+        QSignalSpy done(&uploader, &WaveformInstaller::finished);
+        uploader.installReservedDockerWaveform(path, f.model.controlSession(), reservation);
+        reservation->cancel();
+        QTRY_COMPARE(done.size(), 1);
+        QVERIFY(!done.first().first().toBool());
+        QVERIFY(f.commands.isEmpty());
+        QVERIFY(f.begin(FileTransferPurpose::LegacyWaveform));
+    }
+
     void encodeEveryPurpose()
     {
         using P = FileTransferPurpose;
