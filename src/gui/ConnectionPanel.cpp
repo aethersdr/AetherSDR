@@ -1969,8 +1969,10 @@ QString ConnectionPanel::formatLocalRadioLabel(const RadioInfo& radio) const
     if (radio.family == QLatin1String(kFamilyAetherd)) {
         // A remote aetherd (docs/aetherd-remote-backend.md §3): never "in use",
         // and the operator is told there is no spectrum or audio yet.
-        const QString model = radio.model.trimmed().isEmpty() ? tr("Radio") : radio.model.trimmed();
-        const QString title = tr("%1 — remote engine (%2)").arg(model, radio.nickname.trimmed());
+        // Until the engine has advertised, the radio behind it is not known.
+        const QString title = radio.model.trimmed().isEmpty()
+            ? tr("Remote engine (%1)").arg(radio.nickname.trimmed())
+            : tr("%1 — remote engine (%2)").arg(radio.model.trimmed(), radio.nickname.trimmed());
         QString detail = tr("Mirrors the engine at %1 • tuning and receive controls, no spectrum or audio yet")
                              .arg(radio.address.toString());
         if (!aetherd::RemoteEngineStore::persistentStoreAvailable()) {
@@ -6037,7 +6039,6 @@ RadioInfo ConnectionPanel::remoteEngineRadioInfo(const aetherd::RemoteEngineReco
     info.address = QHostAddress(url.host());
     info.port = quint16(url.port());
     info.nickname = record.name.isEmpty() ? url.host() : record.name;
-    info.model = QStringLiteral("Remote engine");
     if (const auto advert = m_remoteEngineAdverts.constFind(record.engineId);
         advert != m_remoteEngineAdverts.constEnd() && !advert->model.isEmpty()) {
         info.model = advert->model;
