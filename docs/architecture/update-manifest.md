@@ -31,11 +31,15 @@ upload. `latest/` is promoted only over an older release, re-read just before
 the write, and the publish job runs one at a time across tags, so an older
 release's run can never roll it back.
 
-Bundles and full payloads stay on GitHub Releases, so every URL the manifest
-names is under `https://github.com/aethersdr/AetherSDR/releases/download/<tag>/`,
-inside the prefix the app's download allowlist already enforces
-(`UpdateChecker::isTrustedDownloadUrl`). The publish job refuses to sign a
-manifest that names anything else, or another release.
+Every URL a manifest names is one file of the release it describes, under
+`https://github.com/aethersdr/AetherSDR/releases/download/<tag>/` or
+`https://updates.aethersdr.com/releases/<tag>/` (RFC #6964), with no query,
+fragment or further path segment. `UpdateChecker::isTrustedPayloadUrl` enforces
+this in the app, and one URL outside it rejects the whole manifest. The app reads
+`latest/manifest-v2.json`. Copies from before that change read
+`latest/manifest.json` and accept only the GitHub prefix, so that manifest names
+GitHub files alone. The publish job refuses to sign a manifest that names anything
+else, or another release.
 
 **Telemetry boundary.** RFC #5304 asked that no project-owned endpoint see
 clients. The update check still goes only to `api.github.com`; this host is

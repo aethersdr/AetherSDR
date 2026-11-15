@@ -427,6 +427,44 @@ private slots:
                 p[QStringLiteral("full")] = f;
             });
         })));   // an encoded traversal: refused by the app's one download allowlist
+        QVERIFY(parses(with([&](QJsonObject& o) {
+            payload0(o, [](QJsonObject& p) {
+                QJsonObject f = p[QStringLiteral("full")].toObject();
+                f[QStringLiteral("url")] =
+                    QStringLiteral("https://updates.aethersdr.com/releases/v26.10.3/") + f[QStringLiteral("asset")].toString();
+                p[QStringLiteral("full")] = f;
+            });
+        })));   // the same file on updates.aethersdr.com
+        QVERIFY(!parses(with([&](QJsonObject& o) {
+            payload0(o, [](QJsonObject& p) {
+                QJsonObject f = p[QStringLiteral("full")].toObject();
+                f[QStringLiteral("url")] = QStringLiteral("https://updates.aethersdr.com/releases/v26.10.2/AetherSDR.zip");
+                p[QStringLiteral("full")] = f;
+            });
+        })));   // another release on updates.aethersdr.com
+        QVERIFY(!parses(with([&](QJsonObject& o) {
+            payload0(o, [](QJsonObject& p) {
+                QJsonArray qs = p[QStringLiteral("patches")].toArray();
+                QJsonObject q = qs[0].toObject();
+                QJsonObject b = q[QStringLiteral("bundle")].toObject();
+                b[QStringLiteral("url")] = QStringLiteral("https://updates.aethersdr.com/releases/v26.10.3/sub/x.update.tar");
+                q[QStringLiteral("bundle")] = b;
+                qs[0] = q;
+                p[QStringLiteral("patches")] = qs;
+            });
+        })));   // one bad patch URL refuses the whole manifest
+        QVERIFY(parses(with([&](QJsonObject& o) {
+            payload0(o, [](QJsonObject& p) {
+                QJsonArray qs = p[QStringLiteral("patches")].toArray();
+                QJsonObject q = qs[0].toObject();
+                QJsonObject b = q[QStringLiteral("bundle")].toObject();
+                b[QStringLiteral("url")] =
+                    QStringLiteral("https://updates.aethersdr.com/releases/v26.10.3/") + b[QStringLiteral("asset")].toString();
+                q[QStringLiteral("bundle")] = b;
+                qs[0] = q;
+                p[QStringLiteral("patches")] = qs;
+            });
+        })));   // a patch bundle on updates.aethersdr.com
         QVERIFY(!parses(with([&](QJsonObject& o) { op(o, 2, "window_log", 32); })));
         QVERIFY(!parses(with([&](QJsonObject& o) { op(o, 2, "path", QStringLiteral("../AetherSDR.exe")); })));
         QVERIFY(!parses(with([&](QJsonObject& o) { op(o, 2, "path", QStringLiteral("/etc/passwd")); })));
@@ -521,6 +559,38 @@ private slots:
         mac.platform = QStringLiteral("macos");
         QCOMPARE(UpdateStager::choose(m, mac, {}, &p, &q), D::NoPayload);
         QCOMPARE(UpdateStager::choose(m, request(QStringLiteral("26.10.2.0")), {}, &p, &q), D::Patch);
+    }
+
+    // The legacy latest/manifest.json that copies without the bridge read:
+    // full downloads only, published for every release so its tag stays
+    // GitHub's latest.
+    void legacyFullOnlyManifestStagesAFullDownload()
+    {
+        QJsonObject o = fixtureManifest();
+        QJsonArray payloads = o[QStringLiteral("payloads")].toArray();
+        for (int i = 0; i < payloads.size(); ++i) {
+            QJsonObject p = payloads[i].toObject();
+            p[QStringLiteral("patches")] = QJsonArray();
+            payloads[i] = p;
+        }
+        o[QStringLiteral("payloads")] = payloads;
+        UpdateManifest m;
+        QString problem;
+        QVERIFY2(UpdateManifest::parse(bytes(o), &m, &problem), qPrintable(problem));
+        const UpdateManifest::Payload* p = nullptr;
+        const UpdateManifest::Patch* q = nullptr;
+        using D = UpdateStager::Decision;
+        QCOMPARE(UpdateStager::choose(m, request(), {}, &p, &q), D::FullDownload);
+        QVERIFY(p && !q);
+        UpdateStager::Request stale = request();
+        stale.githubLatestTag = QStringLiteral("v26.10.4");
+        QCOMPARE(UpdateStager::choose(m, stale, {}, &p, &q), D::NotLatest);
+    }
+
+    void manifestUrlIsTheBridgeManifest()
+    {
+        QCOMPARE(QString::fromLatin1(UpdateStager::kManifestUrl),
+                 QStringLiteral("https://updates.aethersdr.com/latest/manifest-v2.json"));
     }
 
     // ── Apply ───────────────────────────────────────────────────────────
