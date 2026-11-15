@@ -159,7 +159,11 @@ func NewAPI(n *Node) http.Handler {
 	}
 
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, n.Status())
+		st := n.Status()
+		if !n.checkToken(bearer(r)) {
+			st.hideDevices()
+		}
+		writeJSON(w, http.StatusOK, st)
 	})
 
 	mux.HandleFunc("POST /v1/provision", func(w http.ResponseWriter, r *http.Request) {

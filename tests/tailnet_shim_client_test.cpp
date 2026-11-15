@@ -590,6 +590,15 @@ int main(int argc, char** argv)
                          "an offline device's skipped reason");
             ok &= expect(d[3].skipped == QStringLiteral("at the station"), "at the station reason");
         }
+        ok &= expect(a && !a->announceDevicesHidden, "a status read with the token isn't hidden");
+        // Read without the admin token: the shim leaves the devices out and
+        // says so (#6984, condition 3).
+        const auto hidden = tailnetshim::parseStatus(
+            R"({"version":"0.5.5","state":"running","provisioned":true,"announce":"only",
+                "announce_to":[],"announcement":{"heard":"","devices":[],"devices_hidden":true}})");
+        ok &= expect(hidden && hidden->announceSupported && hidden->announceDevicesHidden
+                         && hidden->announce == QStringLiteral("only") && hidden->announceDevices.isEmpty(),
+                     "devices_hidden parses, and the mode still shows");
         const auto none = tailnetshim::parseStatus(running);
         ok &= expect(none && !none->announceSupported && none->announceDevices.isEmpty()
                          && none->announce == QStringLiteral("all"),

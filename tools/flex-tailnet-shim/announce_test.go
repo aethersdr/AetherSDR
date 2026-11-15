@@ -891,3 +891,55 @@ func TestHelperMustPassTheDeviceChecks(t *testing.T) {
 		t.Errorf("after Off, the helper wasn't closed: %v", err)
 	}
 }
+
+// TestStatusHidesDevicesWithoutToken: anyone on the station LAN can read
+// GET /v1/status, so without the admin token it leaves out what names the
+// tailnet's devices (the device list, the ticked IDs, a refused helper's
+// name) and says so; the mode stays. With the token it is all there
+// (#6984, condition 3).
+func TestStatusHidesDevicesWithoutToken(t *testing.T) {
+	const token = "test-admin-token"
+	n := newTestNode(t, token)
+	n.Announcer = &Announcer{}
+	h := NewAPI(n)
+	const lan = "192.168.1.10:5000"
+	if rec := call(t, h, "PUT", "/v1/announce", lan, token, `{"announce":"only","announce_to":["nWin"]}`); rec.Code != 200 {
+		t.Fatalf("setting: got %d", rec.Code)
+	}
+	n.Announcer.mu.Lock()
+	n.Announcer.report = []AnnouncePeer{{ID: "nWin", Name: "pauls-pc", OS: "windows", Online: true, Announced: true}}
+	n.Announcer.helperRefused = &HelperRefusal{From: "pauls-mac", Reason: "the radio's announcement is off"}
+	n.Announcer.mu.Unlock()
+
+	read := func(presented string) (Status, string) {
+		t.Helper()
+		rec := call(t, h, "GET", "/v1/status", lan, presented, "")
+		if rec.Code != 200 {
+			t.Fatalf("status: got %d", rec.Code)
+		}
+		var st Status
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		return st, rec.Body.String()
+	}
+	for _, presented := range []string{"", "wrong-token"} {
+		st, body := read(presented)
+		for _, name := range []string{"pauls-pc", "pauls-mac", "nWin"} {
+			if strings.Contains(body, name) {
+				t.Errorf("token %q: status names %q: %s", presented, name, body)
+			}
+		}
+		if !st.Announcement.DevicesHidden || st.Announce != announceOnly {
+			t.Errorf("token %q: devices_hidden %v, announce %q", presented, st.Announcement.DevicesHidden, st.Announce)
+		}
+		if r := st.Announcement.HelperRefused; r == nil || r.Reason != "the radio's announcement is off" {
+			t.Errorf("token %q: the refusal's reason should stay: %+v", presented, r)
+		}
+	}
+	st, _ := read(token)
+	if st.Announcement.DevicesHidden || len(st.Announcement.Devices) != 1 || fmt.Sprint(st.AnnounceTo) != "[nWin]" ||
+		st.Announcement.HelperRefused == nil || st.Announcement.HelperRefused.From != "pauls-mac" {
+		t.Errorf("with the token: %+v, announce_to %v", st.Announcement, st.AnnounceTo)
+	}
+}

@@ -550,7 +550,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
             // While a sign-in is waited on, the status reply fetches the
             // login too (showStatus), which keeps a restarted join's code
             // current.
-            m_client.fetchStatus();
+            m_client.fetchStatus(m_adminToken);
         }
     });
 
@@ -612,6 +612,10 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
         m_tokenLoaded = true;
         updateControls();
         maybeSignInUnasked();   // the status may have arrived first
+        // A status read before the token was known left out the devices.
+        if (!m_adminToken.isEmpty() && m_lanReachable && !m_busy) {
+            m_client.fetchStatus(m_adminToken);
+        }
     });
     refresh();
 }
@@ -692,7 +696,7 @@ void TailnetShimDialog::refresh()
         return;
     }
     setBusy(true, tr("Checking…"));
-    m_client.fetchStatus();
+    m_client.fetchStatus(m_adminToken);
 }
 
 void TailnetShimDialog::setBusy(bool busy, const QString& what)
@@ -1189,6 +1193,14 @@ void TailnetShimDialog::showAnnouncement(const TailnetShimStatus& st)
         const QSignalBlocker c(m_announceOff);
         mode->setChecked(true);
     }
+
+    // Read without the admin token, the status leaves the devices out.
+    setWrapped(m_announceEmpty,
+               st.announceDevicesHidden
+                   ? tr("Your tailnet's devices are listed only on the computer that set up "
+                        "remote access on this radio.")
+                   : tr("No other devices on the tailnet yet."),
+               m_cardTextWidth);
 
     // One row per device, then one per chosen ID the shim no longer lists, so
     // it can be unticked.

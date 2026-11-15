@@ -105,6 +105,7 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
         st.announceTo = fieldList(o, QStringLiteral("announce_to"));
         const QJsonObject a = ann.toObject();
         st.announceHeard = field(a, QStringLiteral("heard"));
+        st.announceDevicesHidden = a.value(QStringLiteral("devices_hidden")).toBool();
         for (const QJsonValue& v : a.value(QStringLiteral("devices")).toArray()) {
             if (st.announceDevices.size() == kMaxAnnounceDevices) {
                 break;
@@ -418,13 +419,13 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
     });
 }
 
-void TailnetShimClient::fetchStatus()
+void TailnetShimClient::fetchStatus(const QString& adminToken)
 {
     // One status request at a time: polling must not stack them up.
     if (m_statusReply) {
         return;
     }
-    m_statusReply = send(QStringLiteral("GET"), QStringLiteral("/v1/status"), {}, {});
+    m_statusReply = send(QStringLiteral("GET"), QStringLiteral("/v1/status"), {}, adminToken);
     handle(m_statusReply, QStringLiteral("status"));
 }
 

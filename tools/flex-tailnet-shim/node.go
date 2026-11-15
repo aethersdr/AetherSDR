@@ -1054,6 +1054,21 @@ type Status struct {
 	Announcement AnnounceStatus `json:"announcement"`
 }
 
+// hideDevices leaves out what names the tailnet's devices, for a status
+// read without the admin token: anyone on the station LAN can read it
+// (#6984, condition 3). The setting itself stays, so the card can still
+// show which mode is on.
+func (st *Status) hideDevices() {
+	st.AnnounceTo = []string{}
+	st.Announcement.Devices = []AnnouncePeer{}
+	st.Announcement.DevicesHidden = true
+	if st.Announcement.HelperRefused != nil {
+		r := *st.Announcement.HelperRefused
+		r.From = ""
+		st.Announcement.HelperRefused = &r
+	}
+}
+
 func (n *Node) Status() Status {
 	st := n.statusLocked()
 	st.Approved = n.approvedRoutes()

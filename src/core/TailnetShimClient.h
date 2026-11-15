@@ -79,6 +79,9 @@ struct TailnetShimStatus {
     QStringList announceTo;                    // node IDs kept whatever the mode
     QString announceHeard;                     // RFC 3339; empty: never heard
     QList<TailnetShimAnnouncePeer> announceDevices;
+    // The status was read without the admin token, so the shim left out the
+    // devices and the ticked IDs (#6984, condition 3).
+    bool announceDevicesHidden{false};
 };
 
 // A provisioning reply. authUrl is set for a sign-in by QR code (no auth
@@ -158,7 +161,9 @@ public:
 
     void setRadioAddress(const QHostAddress& address) { m_address = address; }
 
-    void fetchStatus();
+    // With the admin token the status names the tailnet's devices; without
+    // it the shim leaves them out (announceDevicesHidden).
+    void fetchStatus(const QString& adminToken = {});
     void fetchLogin(const QString& adminToken);
     void provision(const QString& authKey, const QString& hostname,
                    const QStringList& allow, const QStringList& routes,

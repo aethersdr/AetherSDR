@@ -902,6 +902,9 @@ type AnnounceStatus struct {
 	// 3339); empty if it never has been, in which case nothing is sent.
 	Heard   string         `json:"heard"`
 	Devices []AnnouncePeer `json:"devices"`
+	// DevicesHidden: the status was read without the admin token, so the
+	// devices, the ticked IDs and a refused helper's name are left out.
+	DevicesHidden bool `json:"devices_hidden,omitempty"`
 	// HelperRefused: the last discovery helper refused, and why.
 	HelperRefused *HelperRefusal `json:"helper_refused,omitempty"`
 }
