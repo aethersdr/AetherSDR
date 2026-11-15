@@ -99,11 +99,12 @@ void ClientCfcApplet::syncFromEngine()
         m_precomp->setValue(cfc->precompDb());
         m_postGain->setValue(cfc->postGainDb());
     }
-    const QString reason =
-        cfc->postEqEnabled() ? QString{} : tr("Post gain applies only with Post-EQ on");
-    m_postGain->setEnabled(cfc->postEqEnabled());
-    m_postGain->setToolTip(reason);
-    m_postGain->setAccessibleDescription(reason);
+    // Adjustable either way, so it can be set before Post-EQ is turned on.
+    const QString note = cfc->postEqEnabled()
+        ? tr("Gain after the post-EQ")
+        : tr("Gain after the post-EQ; takes effect when Post-EQ is on");
+    m_postGain->setToolTip(note);
+    m_postGain->setAccessibleDescription(note);
     m_fftLabel->setText(tr("FFT %1\n%2 ms")
                             .arg(cfc->fftSize())
                             .arg(std::lround(cfc->fftSize() * 1000.0 / 48000.0)));

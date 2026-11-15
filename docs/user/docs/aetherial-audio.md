@@ -364,7 +364,7 @@ the curves are straight lines in frequency.
 | **Freq** (per band) | 10 to 9990 Hz | Where the band sits |
 | **Pre-comp** | 0 to 20 dB | Compression added at every frequency alike |
 | **Post-EQ** | On / Off | Applies the post-EQ curve and **Post** gain. Default off |
-| **Post** | −20 to +20 dB | Gain after the post-EQ; works only with Post-EQ on |
+| **Post** | −20 to +20 dB | Gain after the post-EQ. You can set it any time; it takes effect when Post-EQ is on |
 | **FFT size** | 1024 to 16384 | Frequency resolution, and the delay CFC adds (below) |
 
 **FFT size and delay.** CFC analyses your voice in blocks, and every block costs

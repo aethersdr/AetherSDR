@@ -226,11 +226,12 @@ void StripCfcPanel::syncControlsFromEngine()
         m_postEq->setChecked(cfc->postEqEnabled());
         m_fft->setValue(fftIndex(cfc->fftSize()));
     }
-    const QString reason =
-        cfc->postEqEnabled() ? QString{} : tr("Post gain applies only with Post-EQ on");
-    m_postGain->setEnabled(cfc->postEqEnabled());
-    m_postGain->setToolTip(reason);
-    m_postGain->setAccessibleDescription(reason);
+    // Adjustable either way, so it can be set before Post-EQ is turned on.
+    const QString note = cfc->postEqEnabled()
+        ? tr("Gain after the post-EQ")
+        : tr("Gain after the post-EQ; takes effect when Post-EQ is on");
+    m_postGain->setToolTip(note);
+    m_postGain->setAccessibleDescription(note);
     updateFftLabel(cfc->fftSize());
     if (m_curve->selectedBand() < 0) {
         m_curve->setSelectedBand(0);
