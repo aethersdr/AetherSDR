@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T09:13:37.108610+00:00",
+  "updated_utc": "2026-11-15T09:17:11.408820+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Verify ordinary status publication after an authorized reboot of the rolled-back installation, then a healthy successor upgrade from the retained management/previous-payload lineage. Continue operator coordinator and first-install/6000/full production gates.",
+  "next_action": "Qualify a healthy successor upgrade after the observed rollback and kernel reboot, accounting for retained J management with selected I payload. Then wire the ordinary operator installation coordinator; first-install/6000 provisioning and the full production plan remain open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -108,8 +108,31 @@
     "limitations": [
       "Candidate process exit42 was not independently read from the host journal; terminal rollback alone does not establish the exact failure phase",
       "Current management/control generation was not independently inventoried; rollback can retain J management with I payload by design",
-      "Reboot and next upgrade after rollback remain unqualified for this path",
-      "Operator workflow, first-install/6000 provisioning, full process inventory, DSP/PR4770/RF and release gates remain"
+      "Operator workflow, first-install/6000 provisioning, full process inventory, DSP/PR4770/RF and release gates remain",
+      "A healthy successor upgrade after this rollback/reboot remains unqualified; one reboot does not qualify power loss or 6300"
     ]
+  },
+  "rollback_reboot_persistence": {
+    "passed": true,
+    "evidence": "public-rollback-monitor-development/reboot-01/result.json under evidence_root",
+    "one_reboot_command": true,
+    "kernel_boot_id_changed": true,
+    "boot_id_after": "b303b156-5e4f-4954-8522-8f6a8a1bd6d9",
+    "shim_ready_s": 66.424,
+    "identity_preserved": true,
+    "ordinary_monitor_terminal": {
+      "elapsed_ms": 52423,
+      "event": "terminal",
+      "plan_digest": "ddb4bf911844b68901a51750d9fb4f1aec4eac2ef08af8f025c9c2c154a8918c",
+      "reason": "None",
+      "state": "RolledBack"
+    },
+    "after_radio": {
+      "connected": true,
+      "transmitting": false,
+      "fullDuplex": false,
+      "txPower": 0
+    },
+    "scope": "One authorized FLEX-8600 kernel reboot after rollback. Not physical power-loss, interrupted-transaction, or FLEX-6300 qualification. Existing diagnostic container read only the boot ID; no host-root job was installed."
   }
 }

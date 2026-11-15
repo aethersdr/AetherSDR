@@ -2132,3 +2132,16 @@ under the evidence root. The candidate's actual exit status was not independentl
 read from the host journal, so the observed terminal rollback does not identify
 its exact failure phase. Reboot, successor upgrade, process inventory and the
 remaining operator/6000/production gates still require their own evidence.
+
+The rolled-back installation then passed one authorized radio reboot through the
+FlexLib `radio reboot` command. Both control/shim APIs were observed down, and
+the kernel boot ID changed. The shim started without a new install or session
+request, the ordinary monitor matched the same **RolledBack** plan after startup,
+and the saved identity was preserved. The shim reached its running state at
+66.424 s after the reboot command; AetherSDR reconnected, unkeyed, FDX off and
+TX power 0. The existing diagnostic container read only the kernel boot ID;
+no host-root job or persistent query helper was installed. Evidence is
+`public-rollback-monitor-development/reboot-01/result.json` under the evidence
+root. This establishes one kernel-reboot case, not physical power loss,
+interrupted-transaction recovery, a healthy successor after rollback, or 6300
+hardware behavior.
