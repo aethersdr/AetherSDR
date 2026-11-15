@@ -49,6 +49,7 @@
 #include "core/ClientGate.h"
 #include "core/ClientPudu.h"
 #include "core/ClientTube.h"
+#include "core/TxChainLayout.h"
 #include "core/TxVoiceProcessor.h"
 #include "core/dsp/SsbEnvelopeMeter.h"
 #ifndef TX_PAPR_HARNESS_NO_HL2
@@ -82,16 +83,19 @@ namespace {
 bool readWav48(const char* path, std::vector<float>& mono, std::string& error)
 {
     QFile file(QString::fromLocal8Bit(path));
-    if (!file.open(QIODevice::ReadOnly)) { error = "cannot open input"; return false; }
+    if (!file.open(QIODevice::ReadOnly)) {
+        error = "cannot open input";
+        return false;
+    }
     const QByteArray bytes = file.readAll();
-    if (bytes.size() < 12 || std::memcmp(bytes.constData(), "RIFF", 4) != 0
-        || std::memcmp(bytes.constData() + 8, "WAVE", 4) != 0) {
+    if (bytes.size() < 12 || std::memcmp(bytes.constData(), "RIFF", 4) != 0 ||
+        std::memcmp(bytes.constData() + 8, "WAVE", 4) != 0) {
         error = "not a RIFF/WAVE file";
         return false;
     }
     auto u16 = [&](qsizetype at) {
-        return static_cast<uint16_t>(static_cast<uint8_t>(bytes[at])
-                                     | static_cast<uint8_t>(bytes[at + 1]) << 8);
+        return static_cast<uint16_t>(static_cast<uint8_t>(bytes[at]) |
+                                     static_cast<uint8_t>(bytes[at + 1]) << 8);
     };
     auto u32 = [&](qsizetype at) {
         return static_cast<uint32_t>(u16(at)) | static_cast<uint32_t>(u16(at + 2)) << 16;
@@ -107,18 +111,29 @@ bool readWav48(const char* path, std::vector<float>& mono, std::string& error)
             channels = u16(at + 10);
             rate = u32(at + 12);
             bits = u16(at + 22);
-            if (format == 0xFFFE && size >= 40) format = u16(at + 32);  // extensible
+            if (format == 0xFFFE && size >= 40) {
+                format = u16(at + 32); // extensible
+            }
         } else if (std::memcmp(bytes.constData() + at, "data", 4) == 0) {
             dataAt = at + 8;
             dataSize = static_cast<uint32_t>(std::min<qsizetype>(size, bytes.size() - dataAt));
         }
         at += 8 + size + (size & 1);
     }
-    if (dataAt < 0 || channels == 0) { error = "no fmt or data chunk"; return false; }
-    if (rate != 48000) { error = "sample rate is not 48000 Hz (resample first)"; return false; }
+    if (dataAt < 0 || channels == 0) {
+        error = "no fmt or data chunk";
+        return false;
+    }
+    if (rate != 48000) {
+        error = "sample rate is not 48000 Hz (resample first)";
+        return false;
+    }
     const bool pcm16 = format == 1 && bits == 16;
     const bool float32 = format == 3 && bits == 32;
-    if (!pcm16 && !float32) { error = "only PCM16 and float32 are supported"; return false; }
+    if (!pcm16 && !float32) {
+        error = "only PCM16 and float32 are supported";
+        return false;
+    }
 
     const std::size_t frameBytes = static_cast<std::size_t>(channels) * (bits / 8);
     const std::size_t frames = dataSize / frameBytes;
@@ -140,8 +155,11 @@ std::vector<float> synthesizeVoice(double seconds)
 {
     constexpr double kFs = 48000.0;
     constexpr double kPi = 3.14159265358979323846;
-    const double formants[5][3] = {{730, 1090, 2440}, {270, 2290, 3010}, {530, 1840, 2480},
-                                   {300, 870, 2240}, {660, 1720, 2410}};
+    const double formants[5][3] = {{730, 1090, 2440},
+                                   {270, 2290, 3010},
+                                   {530, 1840, 2480},
+                                   {300, 870, 2240},
+                                   {660, 1720, 2410}};
     const double bandwidths[3] = {80, 100, 140};
     const double weights[3] = {1.0, 0.6, 0.35};
     // xorshift64, not <random>: the standard distributions are
@@ -151,7 +169,7 @@ std::vector<float> synthesizeVoice(double seconds)
         rngState ^= rngState << 13;
         rngState ^= rngState >> 7;
         rngState ^= rngState << 17;
-        return static_cast<double>(rngState >> 11) * 0x1.0p-53 - 0.5;  // [-0.5, 0.5)
+        return static_cast<double>(rngState >> 11) * 0x1.0p-53 - 0.5; // [-0.5, 0.5)
     };
 
     const std::size_t total = static_cast<std::size_t>(seconds * kFs);
@@ -162,15 +180,18 @@ std::vector<float> synthesizeVoice(double seconds)
     for (std::size_t n = 0; n < total; ++n) {
         const std::size_t s = n / syllable;
         const double* vowel = formants[(s * 3) % 5];
-        const bool talking = (s % 7) != 5 && (s % 7) != 6;  // two pauses per seven
+        const bool talking = (s % 7) != 5 && (s % 7) != 6; // two pauses per seven
         const double pos = static_cast<double>(n % syllable) / static_cast<double>(syllable);
         const double target = talking ? std::pow(std::sin(kPi * pos), 0.6) : 0.0;
         envelope += (target - envelope) * 0.002;
-        const double f0 = 115.0 * (1.0 + 0.08 * std::sin(2.0 * kPi * 0.7 * n / kFs))
-                        * (1.0 + 0.01 * uniform());
+        const double f0 =
+            115.0 * (1.0 + 0.08 * std::sin(2.0 * kPi * 0.7 * n / kFs)) * (1.0 + 0.01 * uniform());
         phase += f0 / kFs;
         double excitation = 0.0;
-        if (phase >= 1.0) { phase -= 1.0; excitation = 1.0; }
+        if (phase >= 1.0) {
+            phase -= 1.0;
+            excitation = 1.0;
+        }
         const double x = excitation * envelope + 0.002 * uniform();
         double acc = 0.0;
         for (int i = 0; i < 3; ++i) {
@@ -185,23 +206,63 @@ std::vector<float> synthesizeVoice(double seconds)
         peak = std::max(peak, std::fabs(acc));
     }
     std::vector<float> result(total);
-    for (std::size_t n = 0; n < total; ++n)
-        result[n] = static_cast<float>(0.5 * out[n] / std::max(peak, 1e-12));  // -6 dBFS peak
+    for (std::size_t n = 0; n < total; ++n) {
+        result[n] = static_cast<float>(0.5 * out[n] / std::max(peak, 1e-12)); // -6 dBFS peak
+    }
     return result;
 }
 
 const char* const kKnownKeys[] = {
-    "low", "high", "gain", "hl2", "hl2-alc",
-    "gate-threshold", "gate-ratio", "gate-release", "gate-hold", "gate-floor", "gate-return",
-    "gate-mode", "eq-hpf",
-    "eq-p1-freq", "eq-p1-gain", "eq-p1-q", "eq-p2-freq", "eq-p2-gain", "eq-p2-q",
-    "eq-p3-freq", "eq-p3-gain", "eq-p3-q", "eq-p4-freq", "eq-p4-gain", "eq-p4-q",
-    "deess-freq", "deess-q", "deess-threshold", "deess-amount",
-    "comp-threshold", "comp-ratio", "comp-attack", "comp-release", "comp-knee", "comp-makeup",
-    "comp-drive", "comp-phase", "comp-ceiling",
-    "tube-drive", "tube-model", "tube-tone", "tube-bias", "tube-drywet", "tube-output",
-    "exciter-air", "exciter-mix", "exciter-low-mix", "exciter-mode",
-    "lim-ceiling", "trim",
+    "low",
+    "high",
+    "gain",
+    "hl2",
+    "hl2-alc",
+    "gate-threshold",
+    "gate-ratio",
+    "gate-release",
+    "gate-hold",
+    "gate-floor",
+    "gate-return",
+    "gate-mode",
+    "eq-hpf",
+    "eq-p1-freq",
+    "eq-p1-gain",
+    "eq-p1-q",
+    "eq-p2-freq",
+    "eq-p2-gain",
+    "eq-p2-q",
+    "eq-p3-freq",
+    "eq-p3-gain",
+    "eq-p3-q",
+    "eq-p4-freq",
+    "eq-p4-gain",
+    "eq-p4-q",
+    "deess-freq",
+    "deess-q",
+    "deess-threshold",
+    "deess-amount",
+    "comp-threshold",
+    "comp-ratio",
+    "comp-attack",
+    "comp-release",
+    "comp-knee",
+    "comp-makeup",
+    "comp-drive",
+    "comp-phase",
+    "comp-ceiling",
+    "tube-drive",
+    "tube-model",
+    "tube-tone",
+    "tube-bias",
+    "tube-drywet",
+    "tube-output",
+    "exciter-air",
+    "exciter-mix",
+    "exciter-low-mix",
+    "exciter-mode",
+    "lim-ceiling",
+    "trim",
 };
 
 struct Settings {
@@ -210,8 +271,11 @@ struct Settings {
     bool any(const char* prefix) const
     {
         const std::size_t n = std::strlen(prefix);
-        for (const auto& [key, value] : values)
-            if (key.compare(0, n, prefix) == 0) return true;
+        for (const auto& [key, value] : values) {
+            if (key.compare(0, n, prefix) == 0) {
+                return true;
+            }
+        }
         return false;
     }
     float get(const char* key, double fallback) const
@@ -240,7 +304,9 @@ struct Chain {
         pudu.setEnabled(false);
         limiter.setEnabled(false);
         limiter.setDcBlockEnabled(false);
-        if (!processed) return;
+        if (!processed) {
+            return;
+        }
 
         if (s.any("gate-")) {
             // Mode first: switching it snaps ratio and floor.
@@ -265,7 +331,9 @@ struct Chain {
             }
             for (int i = 1; i <= 4; ++i) {
                 const std::string prefix = "eq-p" + std::to_string(i) + "-";
-                if (!s.any(prefix.c_str())) continue;
+                if (!s.any(prefix.c_str())) {
+                    continue;
+                }
                 ClientEq::BandParams peak;
                 peak.type = ClientEq::FilterType::Peak;
                 peak.freqHz = s.get((prefix + "freq").c_str(), 1000);
@@ -298,8 +366,9 @@ struct Chain {
         }
         if (s.any("tube-")) {
             const int model = static_cast<int>(s.get("tube-model", 0));
-            tube.setModel(model == 2 ? ClientTube::Model::C
-                          : model == 1 ? ClientTube::Model::B : ClientTube::Model::A);
+            tube.setModel(model == 2       ? ClientTube::Model::C
+                              : model == 1 ? ClientTube::Model::B
+                                           : ClientTube::Model::A);
             tube.setDriveDb(s.get("tube-drive", 6));
             tube.setTone(s.get("tube-tone", 0));
             tube.setBiasAmount(s.get("tube-bias", 0));
@@ -322,12 +391,12 @@ struct Chain {
 };
 
 struct Run {
-    std::vector<float> transport;      // left channel at 24 kHz, before int16
+    std::vector<float> transport; // left channel at 24 kHz, before int16
     int latencyFrames48{0};
-    double postChainPeak{0.0};         // 48 kHz, after the chain, before Final Output
-    double postLimiterPeakDb{-200.0};  // 48 kHz, after Final Output
-    std::size_t int16Clips{0};         // transport samples at or over full scale
-    double meanBlockUs{0.0};           // processFloat48 per 10 ms block
+    double postChainPeak{0.0};        // 48 kHz, after the chain, before Final Output
+    double postLimiterPeakDb{-200.0}; // 48 kHz, after Final Output
+    std::size_t int16Clips{0};        // transport samples at or over full scale
+    double meanBlockUs{0.0};          // processFloat48 per 10 ms block
     double maxBlockUs{0.0};
 };
 
@@ -347,15 +416,20 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
     using Stage = TxVoiceProcessor::Stage;
+    const std::vector<Stage> stages{Stage::Gate, Stage::Eq,   Stage::DeEss,
+                                    Stage::Comp, Stage::Tube, Stage::Enh};
     uint64_t order = 0;
-    int slot = 0;
-    for (Stage st : {Stage::Gate, Stage::Eq, Stage::DeEss, Stage::Comp, Stage::Tube, Stage::Enh})
-        order |= static_cast<uint64_t>(st) << (8 * slot++);
+    if (!TxChainLayout::pack(stages, order)) {
+        std::fprintf(stderr, "the stage order does not fit the packed chain\n");
+        return {};
+    }
     processor.setStageOrder(order);
 
-    constexpr int kBlock = 480;  // 10 ms at 48 kHz
+    constexpr int kBlock = 480; // 10 ms at 48 kHz
     Run run;
-    if (!processor.prepare(TxVoiceProcessor::kDspRate, kBlock)) return run;
+    if (!processor.prepare(TxVoiceProcessor::kDspRate, kBlock)) {
+        return run;
+    }
     processor.setMeasurementCaptureEnabled(true);
     run.latencyFrames48 = processor.latencyFrames();
 
@@ -364,29 +438,37 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     double totalUs = 0.0;
     std::size_t blocks = 0;
     for (std::size_t at = 0; at + kBlock <= input.size(); at += kBlock) {
-        for (int i = 0; i < kBlock; ++i)
+        for (int i = 0; i < kBlock; ++i) {
             stereo[i * 2] = stereo[i * 2 + 1] = input[at + static_cast<std::size_t>(i)];
+        }
         const auto t0 = std::chrono::steady_clock::now();
         const bool ok = processor.processFloat48(stereo.data(), kBlock, transport);
-        const double us = std::chrono::duration<double, std::micro>(
-            std::chrono::steady_clock::now() - t0).count();
+        const double us =
+            std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0)
+                .count();
         totalUs += us;
         run.maxBlockUs = std::max(run.maxBlockUs, us);
         ++blocks;
-        if (!ok) continue;
+        if (!ok) {
+            continue;
+        }
 
         const QByteArray& strip = processor.postChannelStripFloat48Stereo();
         const auto* post = reinterpret_cast<const float*>(strip.constData());
-        for (qsizetype i = 0; i < strip.size() / static_cast<qsizetype>(sizeof(float)); ++i)
-            run.postChainPeak = std::max(run.postChainPeak, static_cast<double>(std::fabs(post[i])));
-        run.postLimiterPeakDb = std::max(run.postLimiterPeakDb,
-                                         static_cast<double>(chain->limiter.outputPeakDb()));
+        for (qsizetype i = 0; i < strip.size() / static_cast<qsizetype>(sizeof(float)); ++i) {
+            run.postChainPeak =
+                std::max(run.postChainPeak, static_cast<double>(std::fabs(post[i])));
+        }
+        run.postLimiterPeakDb =
+            std::max(run.postLimiterPeakDb, static_cast<double>(chain->limiter.outputPeakDb()));
         const QByteArray& floats = processor.transportFloat32Stereo();
         const auto* samples = reinterpret_cast<const float*>(floats.constData());
         const int frames = static_cast<int>(floats.size() / (2 * sizeof(float)));
         for (int i = 0; i < frames; ++i) {
             const float v = samples[i * 2];
-            if (std::fabs(v) >= 32767.0f / 32768.0f) ++run.int16Clips;
+            if (std::fabs(v) >= 32767.0f / 32768.0f) {
+                ++run.int16Clips;
+            }
             run.transport.push_back(v);
         }
     }
@@ -400,8 +482,7 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
 // (its channel is non-blocking; feeding it faster starves it), so this takes
 // as long as the audio lasts. Returns IQ at 48 kHz with the channel's 48.7 ms
 // priming (mute ramp and fill) dropped.
-std::vector<std::complex<float>> runHl2(const std::vector<float>& transport,
-                                        const Settings& s,
+std::vector<std::complex<float>> runHl2(const std::vector<float>& transport, const Settings& s,
                                         unsigned long long* faults)
 {
     hl2::Hl2TxDsp tx;
@@ -420,52 +501,57 @@ std::vector<std::complex<float>> runHl2(const std::vector<float>& transport,
     std::vector<std::complex<float>> iq;
     QObject::connect(&tx, &hl2::Hl2TxDsp::iqReady, &tx,
                      [&](const std::vector<std::complex<float>>& block) {
-        iq.insert(iq.end(), block.begin(), block.end());
-    });
-    constexpr std::size_t kChunk = 240;  // 10 ms at 24 kHz
+                         iq.insert(iq.end(), block.begin(), block.end());
+                     });
+    constexpr std::size_t kChunk = 240; // 10 ms at 24 kHz
     for (std::size_t at = 0; at < transport.size(); at += kChunk) {
         const std::size_t n = std::min(kChunk, transport.size() - at);
         std::vector<float> chunk(n);
         for (std::size_t i = 0; i < n; ++i) {
             const float v = std::clamp(transport[at + i], -1.0f, 32767.0f / 32768.0f);
-            chunk[i] = std::round(v * 32768.0f) / 32768.0f;  // the int16 hop
+            chunk[i] = std::round(v * 32768.0f) / 32768.0f; // the int16 hop
         }
         tx.processAudioBlock(chunk, TxAudioSource::Microphone, authority.context);
-        std::this_thread::sleep_for(std::chrono::duration<double>(
-            static_cast<double>(n) / cfg.inputSampleRateHz));
+        std::this_thread::sleep_for(
+            std::chrono::duration<double>(static_cast<double>(n) / cfg.inputSampleRateHz));
     }
     *faults = tx.modulatorFaultBlocks();
     constexpr std::size_t kPriming = 2336;
-    if (iq.size() <= kPriming) return {};
+    if (iq.size() <= kPriming) {
+        return {};
+    }
     return {iq.begin() + static_cast<std::ptrdiff_t>(kPriming), iq.end()};
 }
 #endif
 
-double dbfs(double linear) { return 20.0 * std::log10(std::max(linear, 1e-9)); }
+double dbfs(double linear)
+{
+    return 20.0 * std::log10(std::max(linear, 1e-9));
+}
 
 void printRow(const char* label, const SsbEnvelopeReport& r, bool iq)
 {
     if (iq) {
-        std::printf("%-26s %8s %8.3f %8.2f %8.2f %8.2f %8s %8s\n", label, "-",
-                    dbfs(r.envelopePeak), dbfs(r.activeEnvelopeRms), r.activePaprDb,
-                    r.activeP999PaprDb, "-", "-");
+        std::printf("%-26s %8s %8.3f %8.2f %8.2f %8.2f %8s %8s\n", label, "-", dbfs(r.envelopePeak),
+                    dbfs(r.activeEnvelopeRms), r.activePaprDb, r.activeP999PaprDb, "-", "-");
     } else {
-        std::printf("%-26s %8.2f %8.3f %8.2f %8.2f %8.2f %8.2f %8.1f\n", label,
-                    dbfs(r.audioPeak), dbfs(r.envelopePeak), dbfs(r.activeEnvelopeRms),
-                    r.activePaprDb, r.activeP999PaprDb, r.envelopeOverAudioPeakDb,
-                    r.outOfBandDbc);
+        std::printf("%-26s %8.2f %8.3f %8.2f %8.2f %8.2f %8.2f %8.1f\n", label, dbfs(r.audioPeak),
+                    dbfs(r.envelopePeak), dbfs(r.activeEnvelopeRms), r.activePaprDb,
+                    r.activeP999PaprDb, r.envelopeOverAudioPeakDb, r.outOfBandDbc);
     }
 }
 
 void printGain(const SsbEnvelopeReport& base, const SsbEnvelopeReport& proc, bool iq)
 {
-    std::printf("%-26s talk-power gain %+.2f dB active, %+.2f dB p99.9, %+.2f dB whole signal",
-                "", base.activePaprDb - proc.activePaprDb,
+    std::printf("%-26s talk-power gain %+.2f dB active, %+.2f dB p99.9, %+.2f dB whole signal", "",
+                base.activePaprDb - proc.activePaprDb,
                 base.activeP999PaprDb - proc.activeP999PaprDb, base.paprDb - proc.paprDb);
     // OOB as a change: the raw figure mostly measures what the recording
     // already carries outside the passband (a voice's fundamental sits under
     // 300 Hz), not what the processing added.
-    if (!iq) std::printf("; OOB change %+.1f dB", proc.outOfBandDbc - base.outOfBandDbc);
+    if (!iq) {
+        std::printf("; OOB change %+.1f dB", proc.outOfBandDbc - base.outOfBandDbc);
+    }
     std::printf("\n\n");
 }
 
@@ -474,12 +560,14 @@ std::vector<std::uint8_t> shifted(const std::vector<std::uint8_t>& mask, long bl
     std::vector<std::uint8_t> out(mask.size(), 0);
     for (std::size_t b = 0; b < mask.size(); ++b) {
         const long to = static_cast<long>(b) + blocks;
-        if (to >= 0 && to < static_cast<long>(out.size())) out[static_cast<std::size_t>(to)] = mask[b];
+        if (to >= 0 && to < static_cast<long>(out.size())) {
+            out[static_cast<std::size_t>(to)] = mask[b];
+        }
     }
     return out;
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -496,7 +584,9 @@ int main(int argc, char** argv)
         }
         const std::string key = argv[i] + 2;
         bool known = false;
-        for (const char* k : kKnownKeys) known = known || key == k;
+        for (const char* k : kKnownKeys) {
+            known = known || key == k;
+        }
         char* end = nullptr;
         const double value = std::strtod(argv[i + 1], &end);
         if (!known || end == argv[i + 1] || *end != '\0') {
@@ -526,7 +616,9 @@ int main(int argc, char** argv)
         return 2;
     }
     const double gain = std::pow(10.0, settings.get("gain", 0) / 20.0);
-    for (auto& v : input) v = static_cast<float>(v * gain);
+    for (auto& v : input) {
+        v = static_cast<float>(v * gain);
+    }
 
     const SsbPassband band{settings.get("low", 300), settings.get("high", 2700)};
     const Run baseline = runChain(input, settings, false);
@@ -536,34 +628,41 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::printf("input %s, %.2f s, passband %.0f..%.0f Hz, transport 24 kHz int16\n",
-                argv[1], static_cast<double>(input.size()) / 48000.0, band.lowHz, band.highHz);
+    std::printf("input %s, %.2f s, passband %.0f..%.0f Hz, transport 24 kHz int16\n", argv[1],
+                static_cast<double>(input.size()) / 48000.0, band.lowHz, band.highHz);
     std::printf("settings:");
-    for (const auto& [key, value] : settings.values) std::printf(" --%s %g", key.c_str(), value);
+    for (const auto& [key, value] : settings.values) {
+        std::printf(" --%s %g", key.c_str(), value);
+    }
     std::printf("%s\n", settings.values.empty() ? " (none: both runs bypassed)" : "");
     std::printf("added latency: baseline %.1f ms, processed %.1f ms\n",
                 baseline.latencyFrames48 / 48.0, processed.latencyFrames48 / 48.0);
     for (const Run* r : {&baseline, &processed}) {
         double transportPeak = 0.0;
-        for (float v : r->transport) transportPeak = std::max(transportPeak, static_cast<double>(std::fabs(v)));
+        for (float v : r->transport) {
+            transportPeak = std::max(transportPeak, static_cast<double>(std::fabs(v)));
+        }
         std::printf("%-9s peaks: after chain %6.2f dBFS, after Final Output %6.2f dBFS, "
                     "transport %6.2f dBFS, int16 clips %zu\n",
                     r == &baseline ? "baseline" : "processed", dbfs(r->postChainPeak),
                     r->postLimiterPeakDb, dbfs(transportPeak), r->int16Clips);
-        std::printf("%-9s CPU: %.1f us mean, %.1f us worst per 10 ms block (%.2f%% / %.2f%% of real time)\n",
-                    "", r->meanBlockUs, r->maxBlockUs, r->meanBlockUs / 100.0, r->maxBlockUs / 100.0);
+        std::printf("%-9s CPU: %.1f us mean, %.1f us worst per 10 ms block (%.2f%% / %.2f%% of "
+                    "real time)\n",
+                    "", r->meanBlockUs, r->maxBlockUs, r->meanBlockUs / 100.0,
+                    r->maxBlockUs / 100.0);
     }
     std::printf("\n%-26s %8s %8s %8s %8s %8s %8s %8s\n", "run / radio", "audio", "env pk",
                 "act rms", "PAPR", "p99.9", "env/aud", "OOB");
-    std::printf("%-26s %8s %8s %8s %8s %8s %8s %8s\n", "", "dBFS", "dBFS", "dBFS", "dB", "dB",
-                "dB", "dBc");
+    std::printf("%-26s %8s %8s %8s %8s %8s %8s %8s\n", "", "dBFS", "dBFS", "dBFS", "dB", "dB", "dB",
+                "dBc");
 
     // Both runs are scored over the bypassed run's active blocks, shifted by
     // any latency the processing adds (20 ms blocks).
-    const long shiftBlocks = std::lround(
-        (processed.latencyFrames48 - baseline.latencyFrames48) / 48.0 / 20.0);
+    const long shiftBlocks =
+        std::lround((processed.latencyFrames48 - baseline.latencyFrames48) / 48.0 / 20.0);
     for (const auto phase : {SsbFilterPhase::Linear, SsbFilterPhase::Minimum}) {
-        const char* name = phase == SsbFilterPhase::Linear ? "linear filter" : "minimum-phase filter";
+        const char* name =
+            phase == SsbFilterPhase::Linear ? "linear filter" : "minimum-phase filter";
         std::vector<std::uint8_t> mask;
         const auto base = measureSsbEnvelope(baseline.transport.data(), baseline.transport.size(),
                                              24000.0, band, phase, 1023, nullptr, &mask);
@@ -597,7 +696,8 @@ int main(int argc, char** argv)
         printGain(base, proc, true);
         if (baseFaults || procFaults) {
             std::printf("WARNING: modulator fault blocks %llu / %llu (starved or late); "
-                        "rerun on an idle machine\n", baseFaults, procFaults);
+                        "rerun on an idle machine\n",
+                        baseFaults, procFaults);
         }
     }
 #endif

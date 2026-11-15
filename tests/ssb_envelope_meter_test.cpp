@@ -13,23 +13,25 @@
 #include <utility>
 #include <vector>
 
-using AetherSDR::SsbEnvelopeReport;
-using AetherSDR::SsbFilterPhase;
-using AetherSDR::SsbPassband;
 using AetherSDR::designSsbFilter;
 using AetherSDR::measureIqEnvelope;
 using AetherSDR::measureSsbEnvelope;
+using AetherSDR::SsbEnvelopeReport;
+using AetherSDR::SsbFilterPhase;
+using AetherSDR::SsbPassband;
 
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
-constexpr double kRate = 24000.0;  // the Flex transport rate
+constexpr double kRate = 24000.0; // the Flex transport rate
 int g_failed = 0;
 
 void report(const char* name, bool ok, const std::string& detail = {})
 {
     std::printf("%s %-64s %s\n", ok ? "[ OK ]" : "[FAIL]", name, detail.c_str());
-    if (!ok) ++g_failed;
+    if (!ok) {
+        ++g_failed;
+    }
 }
 
 std::string fmt(const char* format, double a, double b = 0.0)
@@ -54,8 +56,7 @@ std::vector<float> tones(const std::vector<std::pair<double, double>>& hzAndAmpl
     return out;
 }
 
-SsbEnvelopeReport measure(const std::vector<float>& x,
-                          SsbPassband band = {},
+SsbEnvelopeReport measure(const std::vector<float>& x, SsbPassband band = {},
                           SsbFilterPhase phase = SsbFilterPhase::Linear)
 {
     return measureSsbEnvelope(x.data(), x.size(), kRate, band, phase);
@@ -64,22 +65,23 @@ SsbEnvelopeReport measure(const std::vector<float>& x,
 double magnitudeAt(const std::vector<std::complex<double>>& h, double hz)
 {
     std::complex<double> acc(0.0, 0.0);
-    for (std::size_t n = 0; n < h.size(); ++n)
+    for (std::size_t n = 0; n < h.size(); ++n) {
         acc += h[n] * std::polar(1.0, -2.0 * kPi * hz * static_cast<double>(n) / kRate);
+    }
     return std::abs(acc);
 }
 
-}  // namespace
+} // namespace
 
 int main()
 {
     // A single in-band tone has a constant envelope equal to its amplitude.
     {
         const auto r = measure(tones({{1000.0, 0.5}}, 1.0));
-        report("single tone: envelope equals amplitude",
-               std::fabs(r.envelopePeak - 0.5) < 0.005, fmt("peak %.4f", r.envelopePeak));
-        report("single tone: peak-to-average ratio is 0 dB",
-               std::fabs(r.paprDb) < 0.05, fmt("%.3f dB", r.paprDb));
+        report("single tone: envelope equals amplitude", std::fabs(r.envelopePeak - 0.5) < 0.005,
+               fmt("peak %.4f", r.envelopePeak));
+        report("single tone: peak-to-average ratio is 0 dB", std::fabs(r.paprDb) < 0.05,
+               fmt("%.3f dB", r.paprDb));
     }
 
     // Two equal tones: the envelope swings 0..2A with RMS sqrt(2)A, 3.01 dB.
@@ -88,10 +90,10 @@ int main()
     const auto twoTone = tones({{700.0, 0.25}, {1900.0, 0.25}}, 1.0);
     const auto usb = measure(twoTone);
     {
-        report("two tone: envelope peak is 2A",
-               std::fabs(usb.envelopePeak - 0.5) < 0.005, fmt("peak %.4f", usb.envelopePeak));
-        report("two tone: peak-to-average ratio is 3.01 dB",
-               std::fabs(usb.paprDb - 3.0103) < 0.05, fmt("%.3f dB", usb.paprDb));
+        report("two tone: envelope peak is 2A", std::fabs(usb.envelopePeak - 0.5) < 0.005,
+               fmt("peak %.4f", usb.envelopePeak));
+        report("two tone: peak-to-average ratio is 3.01 dB", std::fabs(usb.paprDb - 3.0103) < 0.05,
+               fmt("%.3f dB", usb.paprDb));
         report("two tone: no envelope overshoot over the audio peak",
                std::fabs(usb.envelopeOverAudioPeakDb) < 0.05,
                fmt("%.3f dB", usb.envelopeOverAudioPeakDb));
@@ -101,8 +103,8 @@ int main()
     {
         const auto lsb = measure(twoTone, {-2700.0, -300.0});
         report("lower sideband envelope matches the upper sideband",
-               std::fabs(lsb.paprDb - usb.paprDb) < 0.01
-                   && std::fabs(lsb.envelopePeak - usb.envelopePeak) < 0.001,
+               std::fabs(lsb.paprDb - usb.paprDb) < 0.01 &&
+                   std::fabs(lsb.envelopePeak - usb.envelopePeak) < 0.001,
                fmt("LSB %.4f dB, USB %.4f dB", lsb.paprDb, usb.paprDb));
     }
 
@@ -110,9 +112,9 @@ int main()
     // band-limited to its 500/1500/2500 Hz harmonics peaks near 1.18 as audio,
     // but its envelope peaks at (4/pi)(1 + 1/3 + 1/5) = 1.952.
     {
-        const auto square = tones({{500.0, 4.0 / kPi},
-                                   {1500.0, 4.0 / (3.0 * kPi)},
-                                   {2500.0, 4.0 / (5.0 * kPi)}}, 1.0, true);
+        const auto square =
+            tones({{500.0, 4.0 / kPi}, {1500.0, 4.0 / (3.0 * kPi)}, {2500.0, 4.0 / (5.0 * kPi)}},
+                  1.0, true);
         const auto r = measure(square);
         const double expected = 4.0 / kPi * (1.0 + 1.0 / 3.0 + 1.0 / 5.0);
         report("square wave: envelope peak is the harmonic sum",
@@ -126,11 +128,11 @@ int main()
     // 300..2700 Hz passband, reads -20 dBc.
     {
         const auto r = measure(tones({{1000.0, 0.5}, {6000.0, 0.05}}, 1.0));
-        report("out-of-band tone 20 dB down reads -20 dBc",
-               std::fabs(r.outOfBandDbc + 20.0) < 0.3, fmt("%.2f dBc", r.outOfBandDbc));
+        report("out-of-band tone 20 dB down reads -20 dBc", std::fabs(r.outOfBandDbc + 20.0) < 0.3,
+               fmt("%.2f dBc", r.outOfBandDbc));
         const auto clean = measure(tones({{1000.0, 0.5}}, 1.0));
-        report("in-band tone alone has no out-of-band energy",
-               clean.outOfBandDbc < -60.0, fmt("%.1f dBc", clean.outOfBandDbc));
+        report("in-band tone alone has no out-of-band energy", clean.outOfBandDbc < -60.0,
+               fmt("%.1f dBc", clean.outOfBandDbc));
     }
 
     // The minimum-phase model keeps the magnitude response and moves the
@@ -141,7 +143,8 @@ int main()
         bool sameMagnitude = true;
         double worst = 0.0;
         for (double hz : {500.0, 1000.0, 1500.0, 2000.0, 2500.0}) {
-            const double d = std::fabs(20.0 * std::log10(magnitudeAt(min, hz) / magnitudeAt(lin, hz)));
+            const double d =
+                std::fabs(20.0 * std::log10(magnitudeAt(min, hz) / magnitudeAt(lin, hz)));
             worst = std::max(worst, d);
             sameMagnitude = sameMagnitude && d < 0.05;
         }
@@ -153,7 +156,9 @@ int main()
             for (std::size_t n = 0; n < h.size(); ++n) {
                 const double e = std::norm(h[n]);
                 total += e;
-                if (n < h.size() / 4) front += e;
+                if (n < h.size() / 4) {
+                    front += e;
+                }
             }
             return front / total;
         };
@@ -171,7 +176,9 @@ int main()
     // which costs ~0.16 dB here; a whole-signal figure would be off by 3 dB.
     {
         auto burst = tones({{700.0, 0.25}, {1900.0, 0.25}}, 2.0);
-        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n) burst[n] = 0.0f;
+        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n) {
+            burst[n] = 0.0f;
+        }
         const auto r = measure(burst);
         report("active ratio ignores silence",
                std::fabs(r.activePaprDb - 3.0103) < 0.3 && r.paprDb > 5.5,
@@ -184,20 +191,24 @@ int main()
     // baseline's mask they do not.
     {
         auto burst = tones({{700.0, 0.25}, {1900.0, 0.25}}, 2.0);
-        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n) burst[n] = 0.0f;
+        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n) {
+            burst[n] = 0.0f;
+        }
         std::vector<std::uint8_t> mask;
         const auto base = measureSsbEnvelope(burst.data(), burst.size(), kRate, {},
                                              SsbFilterPhase::Linear, 1023, nullptr, &mask);
         auto lifted = burst;
-        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n)
-            lifted[n] = static_cast<float>(0.02 * std::cos(2.0 * kPi * 1100.0 * static_cast<double>(n) / kRate));
-        const auto own = measureSsbEnvelope(lifted.data(), lifted.size(), kRate, {},
-                                            SsbFilterPhase::Linear);
+        for (std::size_t n = burst.size() / 2; n < burst.size(); ++n) {
+            lifted[n] = static_cast<float>(
+                0.02 * std::cos(2.0 * kPi * 1100.0 * static_cast<double>(n) / kRate));
+        }
+        const auto own =
+            measureSsbEnvelope(lifted.data(), lifted.size(), kRate, {}, SsbFilterPhase::Linear);
         const auto shared = measureSsbEnvelope(lifted.data(), lifted.size(), kRate, {},
                                                SsbFilterPhase::Linear, 1023, &mask);
         report("shared mask keeps lifted pauses out of the active RMS",
-               std::fabs(shared.activePaprDb - base.activePaprDb) < 0.05
-                   && own.activePaprDb > shared.activePaprDb + 2.0,
+               std::fabs(shared.activePaprDb - base.activePaprDb) < 0.05 &&
+                   own.activePaprDb > shared.activePaprDb + 2.0,
                fmt("shared %.2f dB, own gate %.2f dB", shared.activePaprDb, own.activePaprDb));
     }
 
@@ -206,8 +217,8 @@ int main()
         std::vector<std::complex<float>> iq(static_cast<std::size_t>(kRate));
         for (std::size_t n = 0; n < iq.size(); ++n) {
             const double t = static_cast<double>(n) / kRate;
-            iq[n] = std::complex<float>(std::polar(0.25, 2.0 * kPi * 700.0 * t)
-                                        + std::polar(0.25, 2.0 * kPi * 1900.0 * t));
+            iq[n] = std::complex<float>(std::polar(0.25, 2.0 * kPi * 700.0 * t) +
+                                        std::polar(0.25, 2.0 * kPi * 1900.0 * t));
         }
         const auto r = measureIqEnvelope(iq.data(), iq.size(), kRate);
         report("IQ two tone: peak-to-average ratio is 3.01 dB",
