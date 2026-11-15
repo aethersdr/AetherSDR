@@ -1970,6 +1970,16 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
+    // The board this connect's gateware names (#7311). Only while connected:
+    // m_gatewareBoard and m_gatewareMajor are what the last connectRadio() loaded.
+    if (m_connected) {
+        RadioCapabilities::BoardIdentity identity;
+        identity.board = QString::fromLatin1(hl2::boardIdFor(m_gatewareBoard));
+        identity.gatewareMajor = m_gatewareMajor;
+        c.boardIdentity = identity;
+    } else {
+        c.boardIdentity = std::nullopt;
+    }
     // No repeater duplex and no tone encode, although the TXA build keys FM:
     // hasFmRepeaterOffset defaults true and this backend overrides no
     // repeater-offset setter, and no tone control reaches TXA's CTCSS encoder,
@@ -2432,8 +2442,7 @@ void Hl2Backend::startConnect(const RadioConnectRequest& request)
     // fields are start() parameters — the dither bit rides the config register
     // the very first frame carries, and the codec decides whether that frame's
     // audio slot may hold anything at all.
-    loadHardwareOptions(
-        hl2::gatewareMinorFromVersionText(request.version.toStdString()));
+    loadBoardIdentity(request.version);
     // AND RECONCILE THE TWO DOCUMENTS BEFORE ANYTHING IS COMPUTED FROM THEM.
     // The calibration and the hardware options are separate rows, loaded by the
     // two independent calls above and written by two independent operations, so
@@ -5301,6 +5310,15 @@ void Hl2Backend::applyAtuTuneRequest(bool tuning)
                       && m_txRoute == hl2::TxRoute::Ant;
     QMetaObject::invokeMethod(m_metis, "setAtuTuneRequest", Qt::QueuedConnection,
                               Q_ARG(bool, request));
+}
+
+void Hl2Backend::loadBoardIdentity(const QString& gatewareVersion)
+{
+    // The board and the gateware major both come from the discovery reply's
+    // version ("74.3"), never from its display label (#7311).
+    const std::string text = gatewareVersion.toStdString();
+    m_gatewareMajor = hl2::gatewareMajorFromVersionText(text);
+    loadHardwareOptions(hl2::gatewareMinorFromVersionText(text));
 }
 
 void Hl2Backend::loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor)

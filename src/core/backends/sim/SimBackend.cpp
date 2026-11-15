@@ -319,6 +319,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.radioGraphicEqControl = std::nullopt;
     // The demo cannot key at all (Principle VI), let alone synthesise tones.
     caps.twoToneGenerator = std::nullopt;
+    caps.boardIdentity = std::nullopt;  // no hardware board
     caps.firmwareUpdateSource = std::nullopt;  // synthetic radio; nothing to compare.
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();

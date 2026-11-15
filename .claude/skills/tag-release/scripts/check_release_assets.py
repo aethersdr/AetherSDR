@@ -52,7 +52,7 @@ def signables(tarballs: bool, app_tarballs: bool = True) -> tuple[str, ...]:
 # Started by publishing the release, not by the tag push: it typesets, signs
 # and attaches the PDF manual.
 DOCS_WORKFLOW = "Docs"
-STORE_STEP = "Stage Microsoft Store submission (draft)"
+STORE_STEP = "Publish Microsoft Store package"
 
 results: list[tuple[str, str, str]] = []
 
@@ -498,15 +498,15 @@ def _find_key() -> Path | None:
 
 def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> None:
     if hotfix:
-        report("INFO", "Microsoft Store", "hotfix: no .msixupload, nothing staged by design")
+        report("INFO", "Microsoft Store", "hotfix: no .msixupload, nothing submitted by design")
         return
     if not windows_run:
-        report("SKIP", "Microsoft Store staging step", "no Windows Installer run")
+        report("SKIP", "Microsoft Store publish step", "no Windows Installer run")
         return
     view = gh_json("run", "view", "--repo", repo, str(windows_run["databaseId"]), "--json", "jobs") or {}
-    # The MSIX is built in package-windows and attached and staged in
-    # release-windows (#6288), so collect steps across the run's jobs and
-    # remember which job owns each.
+    # The MSIX is built in package-windows, attached in release-windows
+    # (#6288) and submitted in publish-store-production, so collect steps
+    # across the run's jobs and remember which job owns each.
     jobs = view.get("jobs", [])
     if not any(j["name"] == "release-windows" for j in jobs):
         report("FAIL", "Windows release-windows job found")
@@ -522,9 +522,6 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
         report("PASS" if c == "success" else "FAIL", f"Windows step: {name}", c or "not found")
     s = steps.get(STORE_STEP)
     c = s["conclusion"] if s else None
-    if c == "success":
-        report("PASS", f"Windows step: {STORE_STEP}", "draft staged — Submit to Store is the maintainer's click in Partner Center")
-        return
     if c == "skipped" or s is None:
         report("WARN", f"Windows step: {STORE_STEP}", f"{c or 'not present'} — AETHERSDR_STORE_PRODUCT_ID unset, or the plan marked the version Store-ineligible (check the run's warning annotation)")
         return
@@ -532,6 +529,17 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
     log = run([_tool("gh"), "run", "view", "--repo", repo, "--job", str(job["databaseId"]), "--log"], check=False).stdout
     lines = [re.sub(r"^[^\t]*\t[^\t]*\t", "", ln) for ln in log.splitlines()]
     lines = [re.sub(r"\x1b\[[0-9;]*m", "", ln) for ln in lines]
+    if c == "success":
+        # AETHERSDR_STORE_AUTO_PUBLISH is a write-only secret, so the
+        # publisher's closing line is the only readback of which mode ran.
+        if any("Microsoft Store submission committed successfully" in ln for ln in lines):
+            detail = "production submission committed to certification (AETHERSDR_STORE_AUTO_PUBLISH armed); nothing to click"
+        elif any("Microsoft Store submission staged successfully" in ln for ln in lines):
+            detail = "draft staged — AETHERSDR_STORE_AUTO_PUBLISH not armed; Submit to Store is the maintainer's click in Partner Center"
+        else:
+            detail = "succeeded, but the log has neither the committed nor the staged line; read the job log"
+        report("PASS", f"Windows step: {STORE_STEP}", detail)
+        return
     start = next((i for i, ln in enumerate(lines) if "Running: msstore publish" in ln and "msixupload" in ln and "aether-store-test" not in ln), None)
     excerpt = ""
     if start is not None:
@@ -539,7 +547,7 @@ def check_store(repo: str, windows_run: dict[str, Any] | None, hotfix: bool) -> 
         keep = [t for t in tail if t.strip() and not t.startswith(("Retrieving", "This seems", "AppId", "✅"))]
         excerpt = "\n".join(keep[:12])
     recovery = ("recovery: a maintainer deletes or submits the in-progress submission in Partner Center, then uploads the "
-                "attached .msixupload by hand; a re-run or a dispatch will NOT stage production")
+                "attached .msixupload by hand; a re-run or a dispatch will NOT submit production")
     if "Ingestion API can only update" in excerpt:
         why = "Partner Center holds a portal-created in-progress submission"
     elif "Azure blob" in excerpt and "0%" in excerpt:

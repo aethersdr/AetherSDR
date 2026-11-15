@@ -1,0 +1,4 @@
+interface:
+  display_name: "MergeWatch"
+  short_description: "Report release merges and CI timing comparisons"
+  default_prompt: "Use $mergewatch to report release-cycle merge counts and compare build and test times with five merges from the previous release."

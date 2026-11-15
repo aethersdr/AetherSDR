@@ -90,6 +90,7 @@ signals:
     void cableRemoved(const QString& serialNumber);
     void cableChanged(const QString& serialNumber);
     void controlRequested(const AetherSDR::UsbCableRequest& request);
+    void passthroughDataReceived(const QString& serialNumber, const QByteArray& bytes);
 
 private:
     quint64 m_changeRevision{0};

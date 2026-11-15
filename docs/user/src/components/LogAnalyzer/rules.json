@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7904,
+          "line": 7908,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7825,
+          "line": 7829,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7876,
+          "line": 7880,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7732,
+          "line": 7736,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 9087,
+          "line": 9095,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8123,
+          "line": 8131,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,17 +227,17 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8101,
+          "line": 8109,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 246,
+          "line": 258,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8180,
+          "line": 8188,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -254,7 +254,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 184,
+          "line": 196,
           "text": "capped by net.core.rmem_max"
         }
       ]
@@ -262,8 +262,8 @@
     {
       "id": "vita-sequence-errors",
       "severity": "warning",
-      "title": "Packets from the radio were lost or arrived out of order",
-      "explanation": "AetherSDR counted gaps in the VITA-49 packet sequence of a stream from the radio (audio, FFT, waterfall, meter or DAX). Lost or reordered packets cause audio dropouts and gaps in the waterfall. Wi-Fi, a busy switch or a VPN between the radio and the computer are the usual causes.",
+      "title": "A radio stream has missing packets or DAX order breaks",
+      "explanation": "Audio, FFT, waterfall and meter packets still missing after the short reorder wait are counted here. Reordered arrivals are reported separately in Network Diagnostics. DAX remains in arrival order and counts sequence breaks. Wi-Fi, a busy switch or a VPN can disrupt delivery.",
       "match": {
         "substring": "PanadapterStream: VITA-49 sequence errors on"
       },
@@ -271,7 +271,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/VitaSequenceLossReport.h",
-          "line": 125,
+          "line": 124,
           "text": "PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
         }
       ]
@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 8975,
+          "line": 9039,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9206,
+          "line": 9270,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9258,
+          "line": 9322,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1524,
+          "line": 1526,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 2003,
+          "line": 2211,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 12883,
+          "line": 12903,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -713,7 +713,7 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 7807,
+          "line": 7871,
           "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 3055,
+          "line": 3064,
           "text": "HL2: could not open the UDP socket"
         }
       ]

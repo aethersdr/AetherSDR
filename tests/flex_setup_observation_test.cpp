@@ -76,6 +76,16 @@ void parserSemantics()
     }
     check(!decode("usb_cable SN not_removed", {}), "removal is an exact object action");
     check(!decode("usb_cable " + QString(129, 's'), {{"type", "cat"}}), "USB identifiers are bounded");
+    const auto reply = decode("usb_cable SN", {{"data:base64", "OzAwMDAuMDA="}});
+    check(reply && reply->usbCable.passthroughData == QByteArray(";0000.00") && !reply->usbCable.type
+        && !reply->usbCable.textData, "passthrough data decodes, padding kept, and sets no cable field");
+    check(!decode("usb_cable SN", {{"data:base64", "not*base64"}})
+        && !decode("usb_cable SN", {{"data:base64", QString(8193, 'A')}})
+        && !decode("usb_cable SN bit 0", {{"data:base64", "UA=="}}),
+          "malformed, oversized and bit-line passthrough data is rejected");
+    const auto textReply = decode("usb_cable SN", {{"data:text", ";0000"}});
+    check(textReply && textReply->usbCable.textData && !textReply->usbCable.passthroughData,
+          "text-mode data is marked and carries no bytes");
     const auto feature = decode("license feature", {{"name", " Future_Feature "}, {"enabled", "1"}});
     check(feature && feature->license.name == "future_feature" && feature->license.reason == "unknown",
           "valid unknown license features remain diagnostic observations");

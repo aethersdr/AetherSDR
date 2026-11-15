@@ -11,6 +11,7 @@
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
 #include "core/NetworkPathResolver.h"
+#include "core/RemoteSession.h"
 #include "ComboStyle.h"   // shared themed combo look (painted arrow)
 #include "FramelessResizer.h"
 #include "CanonIndicators.h"
@@ -2416,9 +2417,18 @@ void ConnectionPanel::onLocalConnectClicked()
     // (there the span IS the data rate), and unconditionally writing False here
     // meant that ceiling could never engage on the HL2's only discovery path.
     // (#4470)
+    // A Flex discovered at a tailnet address is not on the LAN: there the
+    // slow-link concession is meaningful, so apply the user's remote preference
+    // (the value the Connection options checkbox starts from) instead.
     if (info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) == 0) {
         auto& settings = AppSettings::instance();
-        settings.setValue("LowBandwidthConnect", "False");
+        if (AetherSDR::isRemoteRadioSession(false, info)) {
+            settings.setValue("LowBandwidthConnect",
+                settings.value("LowBandwidthRemotePreferred",
+                               settings.value("LowBandwidthConnect", "False")));
+        } else {
+            settings.setValue("LowBandwidthConnect", "False");
+        }
         settings.save();
     }
 

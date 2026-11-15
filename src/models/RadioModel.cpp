@@ -8,6 +8,8 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include "core/AudioCompressionPolicy.h"
+#include "core/RemoteSession.h"
+#include "core/TailscaleInterface.h"
 #include "core/NetworkMtuPolicy.h"
 #include "core/TailnetAddress.h"
 #include "core/GuiClientIdentityPolicy.h"
@@ -4237,6 +4239,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     cancelRadioWake();
     releaseWanStatus();
     m_wanConn = nullptr;  // LAN mode
+    m_sessionOverTailscale = false;
     resetRadioObservations();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
@@ -4410,6 +4413,7 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
         m_wanConn->disconnect(this);
 
     m_wanConn = wan;
+    m_sessionOverTailscale = false;
     resetRadioObservations();
     const QPointer<RadioModel> setupOwner(this);
     const quint64 setupGeneration = m_setupObservationGeneration + 1;
@@ -8038,8 +8042,12 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         // the connection's local address is written on its own thread, and
         // this reply is ordered after the socket connected, so reading it now
         // is safe where reading it later from Radio Setup would not be.
-        m_pathOverTailnet = reachedOverTailnet(
-            radioAddress(), m_connection ? m_connection->localAddress() : QHostAddress());
+        const QHostAddress localAddress =
+            m_connection ? m_connection->localAddress() : QHostAddress();
+        m_pathOverTailnet = reachedOverTailnet(radioAddress(), localAddress);
+        // IP Configuration's gate wants the transport, not the address range:
+        // the interface this end is bound to (core/TailscaleInterface.h).
+        m_sessionOverTailscale = !isWan() && connectionOverTailscale(localAddress);
         const int mtu = networkMtuParam();
         requestStartupSetup({RadioSetupField::NetworkMtu, mtu});
         // Enable keepalive (matches FlexLib behavior) — ping timer starts in startNetworkMonitor()
@@ -9129,10 +9137,10 @@ void RadioModel::evaluateNetworkQuality()
     int currentErrors = 0;
     int currentPackets = 0;
     if (const auto snapshot = backendReceiveTelemetry()) {
-        currentErrors = snapshot->errors;
+        currentErrors = snapshot->breaks;
         currentPackets = snapshot->packets;
     } else if (m_panStream) {
-        currentErrors = m_panStream->packetErrorCount();
+        currentErrors = m_panStream->packetSequenceBreakCount();
         currentPackets = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
         currentErrors = saturatingInt(m_linkStats.rxPacketsLost);
@@ -9175,10 +9183,10 @@ void RadioModel::evaluateNetworkQuality()
 void RadioModel::resetNetworkHealthSamples()
 {
     if (const auto snapshot = backendReceiveTelemetry()) {
-        m_lastErrorCount = snapshot->errors;
+        m_lastErrorCount = snapshot->breaks;
         m_lastPacketCount = snapshot->packets;
     } else if (m_panStream) {
-        m_lastErrorCount = m_panStream->packetErrorCount();
+        m_lastErrorCount = m_panStream->packetSequenceBreakCount();
         m_lastPacketCount = m_panStream->packetTotalCount();
     } else if (m_linkStats.reported) {
         m_lastErrorCount = saturatingInt(m_linkStats.rxPacketsLost);
@@ -9416,7 +9424,18 @@ void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
 
 bool RadioModel::usesRemoteNetworkThresholds() const
 {
-    return m_wanConn != nullptr || m_lastInfo.isRouted;
+    return isRemoteSession();
+}
+
+bool RadioModel::isRemoteSession() const
+{
+    return isRemoteRadioSession(isWan(), m_lastInfo);
+}
+
+bool RadioModel::isRemoteForIpConfiguration() const
+{
+    return AetherSDR::isRemoteForIpConfiguration(isWan(), m_lastInfo.isRouted,
+                                                 m_sessionOverTailscale);
 }
 
 QString RadioModel::networkQuality() const
@@ -9580,7 +9599,8 @@ ReceiveStreamStats::Counters RadioModel::categoryStats(ReceiveStreamStats::Categ
         && int(PanadapterStream::CatCount) == int(ReceiveStreamStats::Count),
         "the two stream-category enums are mapped by ordinal");
     const auto counters = m_panStream->categoryStats(static_cast<PanadapterStream::StreamCategory>(cat));
-    return {counters.bytes, counters.packets, counters.errors, counters.late};
+    return {counters.bytes, counters.packets, counters.errors,
+            counters.late, counters.reordered, counters.breaks};
 }
 
 QVector<PanadapterStream::AudioStreamDiagnostics> RadioModel::audioStreamDiagnostics() const
@@ -11956,7 +11976,7 @@ QString RadioModel::gpsNtpServerAddress() const
     if (!m_automationGpsNtpServerAddress.isEmpty()) {
         return m_automationGpsNtpServerAddress;
     }
-    if (!capabilities().hasNtpServer || isWan() || m_lastInfo.isRouted
+    if (!capabilities().hasNtpServer || isRemoteSession()
         || m_lastInfo.address.isNull()) {
         return {};
     }
