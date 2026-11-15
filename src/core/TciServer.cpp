@@ -4178,7 +4178,9 @@ void TciServer::broadcastStatus()
         }
     }
 
-    // Broadcast RX/TX sensor telemetry to clients that enabled them
+    // Broadcast RX/TX sensor telemetry to clients that enabled them. Whether
+    // this station is keyed is the same for every client.
+    const bool txKeyed = txSensorsKeyed(*m_model);
     for (auto& cs : m_clients) {
         if (cs.rxSensorsEnabled) {
             for (auto* s : m_model->slices()) {
@@ -4195,7 +4197,7 @@ void TciServer::broadcastStatus()
                 }
             }
         }
-        if (cs.txSensorsEnabled && txSensorsKeyed(*m_model)) {
+        if (cs.txSensorsEnabled && txKeyed) {
             // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
             // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
             // peak; index-based parsers safely ignore the extra field.
