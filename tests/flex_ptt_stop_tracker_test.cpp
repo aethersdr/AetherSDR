@@ -97,6 +97,9 @@ void capturedSequenceAndHandoff()
     check(h.coordinator.confirmStopped(candidate), "test-injected candidate crosses coordinator stop barrier");
     check(!h.tracker.evidence(h.now).valid(), "acknowledgment retires the candidate token");
     h.now += 6000;
+    h.tracker.poll(h.now);
+    check(h.tracker.phase() == Phase::Idle && h.tracker.failure() == Failure::None,
+          "acknowledged stop restores readiness before a new operation is acquired");
     const auto next = h.coordinator.acquire(h.other, h.now);
     check(next.accepted() && h.tracker.begin(next.operation, 103, h.now),
           "fresh actor and sequence can begin after acknowledgment, even after old timeout");

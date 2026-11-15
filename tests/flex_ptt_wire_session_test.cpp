@@ -62,6 +62,23 @@ void noDispatch()
     check(acquiredOnly.commands.isEmpty() && acquiredOnly.evidence.valid(acquiredOnly.now), "release without any key request is locally provable");
 }
 
+void acknowledgedStopRemainsReady()
+{
+    Harness h;
+    h.key(); h.keyReadback(); h.cancel(); h.stopWire(); h.stopReadback();
+    check(h.coordinator.confirmStopped(h.evidence.request), "consume original stop proof");
+    h.now += FlexPttStopTracker::kTransitionTimeoutMs + 1;
+    h.wire.poll(h.now);
+    check(h.wire.ready() && !h.wire.needsPolling(),
+          "consumed stop remains ready beyond old deadline without acquiring another grant");
+    check(h.commands == QStringList{"xmit 1", "xmit 0"},
+          "readiness recovery sends no keying command");
+    h.feed(u"S0|interlock tx_allowed=0");
+    check(!h.wire.ready(), "new partial status still withdraws readiness after consumed stop");
+    h.feed(kIdle);
+    check(h.wire.ready(), "complete fresh idle restores pre-admission readiness");
+}
+
 void protocolEligibility()
 {
     for (QStringView version : {u"1.4.0.0", u"1.4.9.12345", u"1.4.2147483647.0"}) {
@@ -187,6 +204,7 @@ void partialAndStale()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    acknowledgedStopRemainsReady();
     protocolEligibility();
     protocolLossRetainsStop();
     noDispatch();

@@ -83,7 +83,9 @@ bool FlexPttStopTracker::advanceClock(qint64 nowMs)
     if (!onThread() || m_phase == Phase::Disconnected || m_phase == Phase::Failed) {
         return false;
     }
-    if (m_phase == Phase::Confirmed && !m_stop.valid() && !m_operation.permitsCleanup()) {
+    // Admission reads readiness before acquiring the next operation. A consumed
+    // proof must retire its deadline even while the old cleanup epoch is current.
+    if (m_phase == Phase::Confirmed && m_operation.hasConfirmedStop()) {
         m_phase = Phase::Idle;
         m_deadlineMs = 0;
         m_operation = {};

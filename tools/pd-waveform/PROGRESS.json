@@ -933,5 +933,24 @@
       "Four-frame IMD and matched correction comparison",
       "All P1-P10 production qualification gates"
     ]
+  },
+  "capture_budget_installed_rf": {
+    "production_ready": false,
+    "status": "three_qualified_snapshots_four_required",
+    "evidence": "capture-budget-live/measurement-10-validation.json under evidence_root",
+    "next": "Validate retained-model measurement after repairing post-stop admission. No complete IMD result yet."
+  },
+  "post_stop_readiness": {
+    "production_ready": false,
+    "status": "regression_reproduced_component_fix_verified_live_pending",
+    "evidence": "capture-budget-development/readiness-*.log and capture-budget-live/measurement-11-events.json under evidence_root",
+    "root_cause": "Confirmed stop retained its timeout until a subsequent operation changed the cleanup generation. Admission checked readiness before acquiring that next operation.",
+    "change": "Retire tracker stop deadline after the coordinator acknowledges the exact stop. No RF command emitted or automatic retry.",
+    "live_attempt_11": "Receive checks passed but admission refused; no xmit command or RF. Session explicitly stopped; no warm test executed.",
+    "remaining": [
+      "Live repeat-operation qualification",
+      "Four-frame measurement and matched correction comparison",
+      "All P1-P10 production gates"
+    ]
   }
 }

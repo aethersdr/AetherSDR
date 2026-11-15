@@ -555,7 +555,9 @@ ADC headroom or calibrated output power.
    eight-second window and reports a failure if enough qualified frames do not
    arrive. The independent transmit cutoff remains in force.
 5. **Stop measurement** requests release of that measurement. Closing the
-   window also requests stop; it does not stop AetherPD correction. A pending
+   window also requests stop; it does not stop AetherPD correction. After confirmed
+   release, another measurement requires a fresh arm and receive check; it does
+   not require reconnecting the desktop. A pending
    release remains visible on reopening. An unused source arm expires after
    30 seconds, or **Cancel source** withdraws it immediately.
 6. Results appear only after confirmed release of the original transmission.
