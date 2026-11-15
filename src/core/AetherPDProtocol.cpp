@@ -439,10 +439,16 @@ std::optional<QString> installationField(const QByteArray& bytes, bool firmware)
 
 std::optional<InstallationPlan> parseInstallationPlan(const QByteArray& approved)
 {
-    if (approved.size() != 352 || !approved.startsWith("PDUPGR01")) { return std::nullopt; }
+    if (approved.size() != 352) { return std::nullopt; }
+    const bool attempt = approved.startsWith("PDUPGR02");
+    if (attempt) {
+        if (approved.mid(56, 32) == QByteArray(32, '\0')
+            || approved.mid(88, 60) != QByteArray(60, '\0')) { return std::nullopt; }
+    } else if (!approved.startsWith("PDUPGR01")) { return std::nullopt; }
     InstallationPlan plan;
     for (const qsizetype offset : {qsizetype(8), qsizetype(148)}) {
-        const QByteArray record = approved.mid(offset, 140);
+        QByteArray record = approved.mid(offset, 140);
+        if (attempt && offset == 8) { record.replace(48, 92, approved.mid(196, 92)); }
         const quint32 profile = qFromBigEndian<quint32>(record.constData() + 8);
         const std::optional<QString> firmware = installationField(record.mid(48, 28), true);
         const std::optional<QString> serial = installationField(record.mid(76, 64), false);
@@ -464,6 +470,14 @@ std::optional<InstallationPlan> parseInstallationPlan(const QByteArray& approved
     if (!installationHex(plan.previousKey) || !installationHex(plan.candidateKey)) { return std::nullopt; }
     plan.planDigest = QString::fromLatin1(QCryptographicHash::hash(approved, QCryptographicHash::Blake2b_256).toHex());
     return plan;
+}
+
+std::optional<QByteArray> installationAttempt(const QByteArray& plan, const QByteArray& nonce)
+{
+    if (!parseInstallationPlan(plan) || nonce.size() != 32 || nonce == QByteArray(32, '\0')) {
+        return std::nullopt;
+    }
+    return QByteArray("PDUPGR02") + plan.mid(8, 48) + nonce + QByteArray(60, '\0') + plan.mid(148);
 }
 
 std::optional<InstallationObservation> parseInstallationObservation(const QByteArray& json)

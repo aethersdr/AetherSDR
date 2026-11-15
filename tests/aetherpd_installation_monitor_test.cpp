@@ -126,6 +126,48 @@ bool monitorChecks()
     if (!plan) { return false; }
     const QByteArray committed = encode(observation(*plan));
     {
+        const auto first = installationAttempt(bytes, QByteArray(32, char(4)));
+        const auto second = installationAttempt(bytes, QByteArray(32, char(5)));
+        if (!check(first && second, "distinct attempts encoded")) { return false; }
+        const auto firstPlan = parseInstallationPlan(*first);
+        const auto secondPlan = parseInstallationPlan(*second);
+        if (!check(firstPlan && secondPlan, "attempt plans parsed")) { return false; }
+        QFile attemptFixture(QStringLiteral(AETHERPD_INSTALLATION_TESTDATA_DIR "/approved-attempt.hex"));
+        ok &= check(attemptFixture.open(QIODevice::ReadOnly)
+            && QByteArray::fromHex(attemptFixture.readAll().trimmed()) == *second, "Python and Qt encode identical attempts");
+        for (const int phase : {4, 7}) {
+            QFile mirror(QStringLiteral(AETHERPD_INSTALLATION_TESTDATA_DIR "/attempt-%1.hex").arg(phase));
+            ok &= check(mirror.open(QIODevice::ReadOnly), "native attempt mirror fixture readable");
+            const QByteArray raw = QByteArray::fromHex(mirror.readAll().trimmed());
+            ok &= check(raw.size() == 204 && raw.startsWith("PDVIEW01")
+                && raw.mid(16, 32).toHex() == secondPlan->planDigest.toLatin1(), "native publication and Qt bind identical attempt digest");
+        }
+        ok &= check(firstPlan->candidateDigest == secondPlan->candidateDigest
+            && firstPlan->previousDigest == secondPlan->previousDigest
+            && firstPlan->planDigest != secondPlan->planDigest, "same releases have distinct transaction identities");
+        ok &= check(!installationAttempt(bytes, QByteArray(32, '\0'))
+            && !installationAttempt(bytes, QByteArray(31, 'x'))
+            && !installationAttempt("bad", QByteArray(32, 'x')), "invalid attempt inputs refused");
+        for (const int offset : {0, 8, 16, 20, 88, 147, 148, 156, 160, 287}) {
+            QByteArray bad = *second; bad[offset] = char(0xff);
+            ok &= check(!parseInstallationPlan(bad), "malformed attempt identity/padding refused");
+        }
+        QByteArray zero = *second; zero.replace(56, 32, QByteArray(32, '\0'));
+        ok &= check(!parseInstallationPlan(zero), "zero attempt refused");
+        qint64 clock = 0;
+        Network net;
+        Monitor monitor(net, [&] { return clock; });
+        ok &= check(monitor.begin(address, token, *second), "new attempt monitor began");
+        net.last->complete(200, encode(observation(*firstPlan, false)));
+        ok &= check(monitor.state() == MonitorState::Waiting, "same-package prior rollback cannot finish new attempt");
+        clock = 500; monitor.poll();
+        net.last->complete(200, encode(observation(*firstPlan, true)));
+        ok &= check(monitor.state() == MonitorState::Waiting, "same-package prior commit cannot finish new attempt");
+        clock = 1000; monitor.poll();
+        net.last->complete(200, encode(observation(*secondPlan)));
+        ok &= check(monitor.state() == MonitorState::Committed, "only current attempt commits");
+    }
+    {
         qint64 clock = 0;
         Network net;
         Monitor monitor(net, [&] { return clock; });

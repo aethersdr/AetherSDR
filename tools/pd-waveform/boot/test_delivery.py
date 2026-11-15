@@ -74,6 +74,17 @@ class DeliveryTest(unittest.TestCase):
     def test_upgrade_executes_only_verified_bytes_and_fixed_descriptor_interface(self):
         self.check()
 
+    def test_attempt_plan_is_bound_to_delivery_consent(self):
+        self.plan=upgrade.encode(1,'4.3.16.42034','fixture-8600',bundle.blake(self.previous),
+            bundle.blake(self.candidate),self.old_key,self.key,attempt=bytes([7])*32)
+        self.prepare();self.check()
+        stale=self.consent
+        self.plan=upgrade.encode(1,'4.3.16.42034','fixture-8600',bundle.blake(self.previous),
+            bundle.blake(self.candidate),self.old_key,self.key,attempt=bytes([8])*32)
+        self.prepare()
+        (self.root/'consent').write_bytes(stale)
+        self.check(3)
+
     def test_install_has_its_distinct_fixed_descriptor_interface(self):
         target=approval.encode(1,'4.3.16.42034','fixture-8600',bundle.blake(self.candidate))
         self.plan=migration.encode(target,'a'*64,'b'*64,bytes(range(32)))

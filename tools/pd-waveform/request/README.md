@@ -185,7 +185,7 @@ desktop installation UI remain separate qualification requirements.
 `src/core/AetherPDInstallRequestClient` owns one already-approved upgrade's
 authenticated HTTP request. The coordinator must verify the distributed
 artifacts, obtain exact-plan consent, and supply the RAM-only `PDXFER01` record
-and approved `PDUPGR01` bytes. The client validates their plan digest and profile
+and approved `PDUPGR01`/`PDUPGR02` bytes. The client validates their plan digest and profile
 binding and derives the public request ID locally before sending anything.
 Its public-record helper contains no private request key. Callers must not put
 the private record in a package, settings, logs or command-line arguments.

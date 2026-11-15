@@ -257,6 +257,17 @@ class UpgradeTest(unittest.TestCase):
             data = bytearray(self.good); data[i] = 1
             self.write(self.approved, data); self.call(expected=1)
 
+    def test_attempt_plan_validates_target_and_canonical_nonce(self):
+        plan = upgrade.encode(1, FIRMWARE, SERIAL, *map(bundle.blake, self.artifacts), *self.keys,
+                              attempt=bytes(range(32)))
+        self.write(self.approved, plan)
+        self.call(stage=True)
+        for offset in [0, 8, 16, 20, 88, 147, 148, 156, 160, 196, 224, 287]:
+            bad = bytearray(plan); bad[offset] ^= 1
+            self.write(self.approved, bad); self.call(expected=1)
+        bad = bytearray(plan); bad[56:88] = bytes(32)
+        self.write(self.approved, bad); self.call(expected=1)
+
     def test_changed_either_release_refused(self):
         for p, original in zip(self.paths, self.artifacts):
             for offset in [0, release.MANIFEST, len(original)-1]:

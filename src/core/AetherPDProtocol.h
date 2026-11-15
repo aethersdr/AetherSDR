@@ -82,7 +82,7 @@ std::optional<Request> testRequest(TestOperation operation, const QString& testI
 std::optional<QByteArray> testBeginBody(int cleanupAfterMs);
 std::optional<TestObservation> parseTestObservation(const QByteArray& json);
 
-// Derived from the exact operator-approved PDUPGR01 bytes. This parser grants
+// Derived from the exact operator-approved PDUPGR01/PDUPGR02 bytes. This parser grants
 // no installation authority and does not authenticate a release or consent.
 struct InstallationPlan {
     QString planDigest;
@@ -105,6 +105,9 @@ struct InstallationObservation {
 };
 enum class InstallationMatch { Committed, RolledBack, OtherPlan, Mismatch };
 std::optional<InstallationPlan> parseInstallationPlan(const QByteArray& approved);
+// Create before operator approval; retain these exact bytes for every retry of
+// delivery/observation. A new installation attempt needs a fresh random nonce.
+std::optional<QByteArray> installationAttempt(const QByteArray& plan, const QByteArray& nonce);
 std::optional<InstallationObservation> parseInstallationObservation(const QByteArray& json);
 InstallationMatch matchInstallation(const InstallationPlan& plan, const InstallationObservation& observed);
 

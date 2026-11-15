@@ -66,6 +66,26 @@ class UpgradeTransactionTest(unittest.TestCase):
         self.assertEqual((self.root/'selected').read_bytes(), b'1')
         self.assertEqual((self.root/'identity').read_bytes(), b'latest')
 
+    def test_same_package_new_attempt_after_rollback(self):
+        self.good = upgrade.encode(1, '4.3.16.42034', 'fixture-8600',
+                                   bytes(32), bytes([1])*32, bytes([2])*32, bytes([3])*32,
+                                   attempt=bytes([4])*32)
+        self.write(self.approved, self.good)
+        self.call(10, 'fail:activate')
+        before = self.events()
+        self.call(10)
+        self.assertEqual(self.events()[len(before):], ['cleanup'])
+        # A new operator-approved attempt can retry identical signed releases.
+        self.capsule.mkdir(mode=0o700)
+        self.good = upgrade.encode(1, '4.3.16.42034', 'fixture-8600',
+                                   bytes(32), bytes([1])*32, bytes([2])*32, bytes([3])*32,
+                                   attempt=bytes([5])*32)
+        self.write(self.approved, self.good)
+        before = self.events()
+        self.call()
+        self.assertEqual(self.events()[len(before):], ['quiesce', 'select', 'activate', 'cleanup'])
+        self.assertEqual(self.phase(), 4)
+
     def test_each_failed_forward_callback_rolls_back(self):
         for step in ['quiesce', 'select', 'activate']:
             with self.subTest(step=step):

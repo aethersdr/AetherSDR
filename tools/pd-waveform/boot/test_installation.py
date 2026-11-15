@@ -85,6 +85,29 @@ class InstallationTest(unittest.TestCase):
             self.assertEqual(p.stat().st_mode & 0o7777, 0o444)
             self.assertFalse((self.runtime/'.installation.new').exists())
 
+    def test_attempt_nonce_reaches_public_mirror(self):
+        self.invoke()
+        previous = (self.runtime/'installation').read_bytes()
+        old_digest = self.digest
+        self.plan = upgrade.encode(1, '4.3.16.42034', 'fixture-8600', bytes([1])*32,
+                                   bytes([9])*32, bytes([2])*32, bytes([3])*32, attempt=bytes([5])*32)
+        self.digest = hashlib.blake2b(self.plan, digest_size=32).digest()
+        parent = self.store/'upgrade-generations'
+        (parent/old_digest.hex()).rename(parent/self.digest.hex())
+        self.control = parent/self.digest.hex()/'control'
+        self.write(parent/self.digest.hex()/'pair/approved', self.plan)
+        self.write(self.store/'upgrade-generation', b'PDGEN001'+self.digest)
+        for phase in [7, 4]:
+            self.phase(phase)
+            self.invoke()
+            actual = (self.runtime/'installation').read_bytes()
+            self.assertEqual(actual, self.expected(phase))
+            self.assertNotEqual(actual[16:48], previous[16:48])
+            if EXPORT_FIXTURES is not None:
+                EXPORT_FIXTURES.mkdir(parents=True, exist_ok=True)
+                (EXPORT_FIXTURES/'approved-attempt.hex').write_text(self.plan.hex()+'\n')
+                (EXPORT_FIXTURES/('attempt-'+str(phase)+'.hex')).write_text(actual.hex()+'\n')
+
     def test_native_publication_read_by_go(self):
         if GO_SHIM is None:
             self.skipTest('--go-shim required for native-to-Go interoperability test')

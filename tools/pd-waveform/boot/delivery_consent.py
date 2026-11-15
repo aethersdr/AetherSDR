@@ -36,10 +36,12 @@ def encode(envelope, plan):
         if plan!=migration.encode(plan[8:148],plan[148:212].decode('ascii'),plan[212:276].decode('ascii'),plan[276:]):
             raise ValueError('invalid installation plan')
     else:
-        if len(plan)!=352 or plan[:8]!=b'PDUPGR01':
+        if len(plan)!=352 or plan[:8] not in (b'PDUPGR01', b'PDUPGR02'):
             raise ValueError('invalid upgrade plan')
-        previous=target(plan[8:148]);candidate=target(plan[148:288])
-        if previous[:3]!=candidate[:3] or plan!=upgrade.encode(*candidate[:3],previous[3],candidate[3],plan[288:320],plan[320:352]):
+        attempt=plan[56:88] if plan[:8]==b'PDUPGR02' else None
+        previous=target(plan[8:56]+plan[196:288] if attempt is not None else plan[8:148])
+        candidate=target(plan[148:288])
+        if previous[:3]!=candidate[:3] or plan!=upgrade.encode(*candidate[:3],previous[3],candidate[3],plan[288:320],plan[320:352],attempt=attempt):
             raise ValueError('invalid upgrade transition')
     if candidate[0]!=(1 if arch==64 else 2) or candidate[3]!=envelope[56:88]:
         raise ValueError('envelope and plan target different releases')

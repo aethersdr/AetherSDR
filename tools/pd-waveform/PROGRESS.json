@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T09:53:41.302684+00:00",
+  "updated_utc": "2026-11-15T10:08:17.190797+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Implement the operator coordinator using the now-tested desktop components; retain the shared file-transfer reservation through cleanup and distinguish prior same-plan terminal state from the current attempt before live qualification. Full P1-P10 scope remains open.",
+  "next_action": "Implement the original-session desktop installation coordinator using the tested reserved uploader, request client, public carrier, authenticated upload and attempt-bound monitor. Generate/freeze PDUPGR02 before consent; qualify compatible signed worker/boot and full cleanup graph on 8600. Full P1-P10 scope remains open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -228,6 +228,36 @@
       "Prevent a prior terminal observation for the same approved plan from being attributed to a new attempt. Existing monitor matches installed plan/release, not an attempt nonce; previous proofs used distinct plans.",
       "Live qualification of new per-request carrier name and final desktop graph.",
       "First-install trust, 6000 privilege delivery, actual 6300 and all other P1-P10 requirements remain."
+    ]
+  },
+  "installation_attempt_development": {
+    "updated_utc": "2026-11-15T10:08:17.190797+00:00",
+    "base_commit": "cac0351aacda66eaf7b732e89a40b59086ec705c",
+    "status": "component_checks_passed_not_deployed",
+    "changes": [
+      "Caller-owned carrier upload reservation tests use the supported FLEX-8600 fixture.",
+      "PDUPGR02 carries a nonzero 32-byte attempt nonce in the unchanged 352-byte record, preserving legacy journal reading.",
+      "Native approval, consent, journal and mirror plus Qt plan construction/matching bind the attempt."
+    ],
+    "checks": {
+      "transfer_ctest": "2 passed",
+      "desktop_install_ctest": "3 passed; monitor rerun with independent native fixtures passed",
+      "native_upgrade": "60 passed",
+      "native_transaction": "20 passed",
+      "native_delivery": "28 passed",
+      "native_installation": "12 passed, 1 skipped (optional Go interoperability)",
+      "sanitizers": "Qt monitor and 20 native transaction tests passed with ASAN/UBSAN and leak detection",
+      "cross_builds": "ARM64 and Cortex-A8 ARMv7 production boot executables built; not executed on target"
+    },
+    "negative_evidence": [
+      "Initial transfer test run: three new cases refused Docker reservation because fixture model was FLEX-6700; fixed by selecting FLEX-8600, no production admission change.",
+      "installation-test.log preserves failed non-tmpfs test using /tmp, which is tmpfs. installation-disk-test.log reruns on confirmed btrfs and passes."
+    ],
+    "limits": [
+      "No radio access, transmission, upload or deployment in this change.",
+      "Installed K and its legacy worker do not establish PDUPGR02 support. New compatible signed worker/boot packaging and live upgrade/rollback/reboot proof remain.",
+      "Coordinator must generate and freeze random attempt before operator approval; reconnect/delivery retry must retain it.",
+      "Full coordinator, trust distribution, first install, 6000 privilege delivery and hardware, DSP/PR4770/RF and all original production gates remain."
     ]
   }
 }

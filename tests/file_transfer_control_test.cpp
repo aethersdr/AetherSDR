@@ -74,6 +74,7 @@ private slots:
         image.close();
         for (const int outcome : {0, 1, 2, 3}) {
             Fixture f;
+            f.backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
             f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
             const FileTransferHandle reservation = f.begin(FileTransferPurpose::DockerWaveform);
             QVERIFY(reservation);
@@ -95,6 +96,7 @@ private slots:
     void invalidWaveformReservationNeverReacquires()
     {
         Fixture f;
+        f.backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
         f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
         WaveformInstaller uploader(&f.model);
         QSignalSpy done(&uploader, &WaveformInstaller::finished);
@@ -125,6 +127,7 @@ private slots:
         QCOMPARE(image.write(QByteArray::fromHex("1f8b0000")), qint64(4));
         image.close();
         Fixture f;
+        f.backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
         f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
         const FileTransferHandle reservation = f.begin(FileTransferPurpose::DockerWaveform);
         QVERIFY(reservation);

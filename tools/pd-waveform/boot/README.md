@@ -136,7 +136,7 @@ Shipping signing-key custody and rotation are still open release requirements.
 The installed candidate remains unchanged while this controller is developed.
 
 The `pd_upgrade` component implements read-only preflight and private staging
-for that controller. Its352-byte `PDUPGR01` approval binds two complete release
+for that controller. Its352-byte `PDUPGR01`/`PDUPGR02` approval binds two complete release
 digests, two public keys and the same radio profile, firmware and serial. The
 candidate key must equal the independently authenticated bootstrap's expected
 key; a key supplied in an approval is not its own trust authority. Both releases
@@ -144,6 +144,26 @@ must authenticate. The previous release must match the actual installed boot
 executable, selected payload, installed trust marker, licenses and both copies
 of the fixed service definitions. Inspection holds a shared committed-install
 lease; it refuses an unfinished or exclusively locked migration.
+
+New operator-approved attempts use `PDUPGR02`. Its size and release/key offsets
+remain unchanged. Bytes56–87 contain a nonzero32-byte random attempt nonce;
+bytes88–147 are zero. The previous target's firmware and serial are shared with
+the candidate target at bytes196–287, instead of being duplicated. Both profile
+fields, both target headers and reserved fields still validate normally. The
+nonce is public and grants no authority. Generate it before approval, bind the
+exact plan to the delivery consent, and retain it through delivery retries and
+status polling. A newly approved retry after rollback uses a fresh nonce with
+the same signed releases; it does not require repackaging those releases.
+
+The existing exact-plan digest binds the attempt through staging, recovery,
+generation selection, the terminal journal and the public installation mirror.
+Replaying one attempt retains terminal recovery/cleanup behavior. A fresh
+attempt follows the actual selected release/key; an old terminal observation
+cannot complete it. `PDUPGR01` remains readable for installed journals and
+recovery. Older workers cannot accept version2 plans: provision compatible
+signed worker/boot code and never fall back to version1 to bypass a refusal.
+The host fixtures exercise version2; installed-radio and power-loss
+qualification of this format remain pending.
 
 Staging requires a new protected directory. It records approval, then copies
 only the fixed `previous` and `candidate` release members. Each directory also
@@ -517,7 +537,7 @@ Build with `build.py --upgrade-worker --arch arm64 --public-key <key>
 --management-release <signed-release> --output <directory>` (or `armv7`). The
 build enforces the capsule's 512 KiB executable limit. Host namespace fixtures
 use `--worker-fixture`; hardware adapters are never linked into radio builds.
-The `--bootstrap` entry receives protected `PDUPGR01` approval on FD3 and signed
+The `--bootstrap` entry receives protected `PDUPGR01`/`PDUPGR02` approval on FD3 and signed
 previous/candidate releases on FD4/5. It verifies the original committed
 installation, exact embedded candidate, both releases and live target. Before
 copying the pair it budgets remaining staging, full worker/intent copies,
@@ -2070,7 +2090,7 @@ operator workflow remain unfinished.
 
 `AetherPDInstallationMonitor` is a core-only, read-only monitor for one approved
 upgrade. It derives identity, both selected-release alternatives, publisher keys
-and the BLAKE2b-256 plan digest from the exact 352-byte `PDUPGR01` record. Parsing
+and the BLAKE2b-256 plan digest from the exact 352-byte `PDUPGR01`/`PDUPGR02` record. Parsing
 that record does not authenticate release bytes or establish operator consent;
 the installation coordinator must supply the already-approved record.
 
