@@ -2206,3 +2206,31 @@ publisher authentication, credential lookup and operator UI wiring, process-wide
 ownership through window closure, compatible signed packaging, installed-radio
 qualification and cross-platform release checks remain open. This carrier path
 is ARM64; it is not the FLEX-6000 privilege adapter or hardware qualification.
+
+`AetherPDInstallationModel`, owned by `RadioModel`, now holds the pending
+approval and active coordinator independently of the presenting window.
+`offer()` freezes the prepared plan and original radio session without reading
+a credential or sending a request. Explicit `approve()` loads that serial's
+existing Remote Access token through `TailnetShimTokenStore`, with a ten-second
+local deadline. Late replies after cancellation, timeout, session replacement,
+or destruction cannot start a job. Missing credentials never trigger alternate
+provisioning. The callback rechecks radio address, serial and firmware; the
+coordinator also refuses admission while the radio reports transmitting.
+
+Prepared approvals share a single-use claim across copies. Once admitted, a
+second coordinator cannot reuse that approval/request key; a newly approved
+installation retry needs a fresh `prepare()` result. Local delivery and status
+retries within the admitted coordinator retain the same attempt bytes. The model
+retains only the public plan/preview after handing off or finishing; private
+prepared data is released. Completion includes the outcome and separate cleanup
+confirmation. RadioModel destroys the installation model before tearing down
+its other members, so the coordinator can retire its local transfer reservation
+safely. Application exit still abandons asynchronous remote cleanup; durable
+public cleanup recovery remains a production requirement.
+
+The model has component tests for approval-before-credential ordering, duplicate
+and late credential callbacks, timeout/missing credentials, changed identity,
+active-TX refusal, cancellation through cleanup, single-use approval copies, and
+radio-owned lifetime. It is not yet wired to a package-selection/approval panel.
+Authenticated package loading, complete operator UI, installed qualification,
+application-crash recovery and the remaining production gates are still open.

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T10:23:54.413827+00:00",
+  "updated_utc": "2026-11-15T10:36:47.040434+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Wire original-session credentials and operator/job ownership into the tested coordinator; build compatible signed PDUPGR02 worker/boot packages and qualify the complete coordinator graph on 8600, including unique carrier publication/removal. Full P1-P10 scope remains open.",
+  "next_action": "Integrate authenticated package loading and explicit operator preview/approval with the radio-owned installation model; qualify compatible signed PDUPGR02 packages through the complete coordinator on 8600. Preserve explicit app-crash cleanup, 6000 provisioning/hardware and all original P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -283,5 +283,29 @@
       "6000 privilege adapter, actual6300 qualification and all other P1-P10 requirements."
     ],
     "radio_actions": "none; no RF, network calls to radio or installation"
+  },
+  "installation_job_model_development": {
+    "updated_utc": "2026-11-15T10:36:47.040434+00:00",
+    "base_commit": "bad344868155d4843ecc53233daa65aa96406904",
+    "status": "credential_job_model_component_checks_passed_not_deployed",
+    "checks": [
+      "Registered coordinator/model harness and existing AetherPD session suite passed.",
+      "Targeted ASAN/UBSAN/leak checks: 18 cases passed, instrumenting model, coordinator, request client and harness against the current unsanitized engine archive. Not full-engine sanitizer qualification.",
+      "Late token replies, missing token, deadline, cancellation, identity/session changes, active-TX admission refusal, single-use prepared copies and RadioModel ownership exercised with injected transport/credential loader."
+    ],
+    "gates": {
+      "engine": 0,
+      "commands": 0,
+      "capabilities": 0,
+      "manifest": 0,
+      "registration": 0
+    },
+    "limitations": [
+      "No real credential lookup or radio requests in these tests.",
+      "Package publisher authentication/loading and visible operator selection/approval UI are not yet wired.",
+      "Live PDUPGR02 upgrade, rollback, cancellation, reboot and unique carrier-name qualification remain.",
+      "Application exit/crash public cleanup recovery, 6000 privilege provisioning, actual6300 hardware and all remaining P1-P10 gates remain."
+    ],
+    "radio_actions": "none; no RF or installation"
   }
 }

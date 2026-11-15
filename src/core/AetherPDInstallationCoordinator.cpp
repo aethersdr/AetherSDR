@@ -40,6 +40,7 @@ std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoo
     const auto attempt = aetherpd::installationAttempt(inputs[1], randomBytes());
     if (!attempt) { return std::nullopt; }
     Prepared prepared;
+    prepared.m_started = std::make_shared<std::atomic_bool>(false);
     prepared.m_inputs = inputs;
     prepared.m_inputs[1] = *attempt;
     QByteArray receipt("PDDELIV1");
@@ -111,7 +112,9 @@ AetherPDInstallationCoordinator::~AetherPDInstallationCoordinator()
 QString AetherPDInstallationCoordinator::requestId() const { return m_request->requestId(); }
 bool AetherPDInstallationCoordinator::current() const
 {
-    return m_carrier && m_model && m_model->controlSessionCurrent(m_session) && m_model->fileTransferCurrent(m_reservation);
+    return m_carrier && m_model && m_model->controlSessionCurrent(m_session)
+        && m_model->serial() == m_serial && m_model->version() == m_firmware
+        && m_model->fileTransferCurrent(m_reservation);
 }
 bool AetherPDInstallationCoordinator::carrierPresent(bool containersOnly) const
 {
@@ -129,11 +132,11 @@ void AetherPDInstallationCoordinator::setState(State state)
 bool AetherPDInstallationCoordinator::begin(const Prepared& approved, const RadioControlSession& session, const QString& token)
 {
     if (QThread::currentThread() != thread() || m_state != State::Idle || !m_model
-        || !m_carrier || m_model->thread() != thread() || m_carrier->thread() != thread()
+        || m_model->isRadioTransmitting() || !m_carrier || m_model->thread() != thread() || m_carrier->thread() != thread()
         || !m_model->controlSessionCurrent(session) || !aetherpd::validAdminToken(token)
         || !aetherpd::lanAddress(m_model->radioAddress())) { return false; }
     const auto plan = aetherpd::parseInstallationPlan(approved.m_inputs[1]);
-    if (!plan || !approved.m_inputs[1].startsWith("PDUPGR02") || plan->serial != m_model->serial()
+    if (!plan || !approved.m_started || approved.used() || !approved.m_inputs[1].startsWith("PDUPGR02") || plan->serial != m_model->serial()
         || plan->firmware != m_model->version() || approved.m_image.archive.isEmpty()) { return false; }
     const qint64 now = m_now();
     if (now < 0 || now > std::numeric_limits<qint64>::max() - kLifetimeMs - kCleanupMs) { return false; }
@@ -141,7 +144,11 @@ bool AetherPDInstallationCoordinator::begin(const Prepared& approved, const Radi
     if (carrierPresent()) { m_prepared = {}; return false; }
     m_reservation = m_model->beginFileTransfer(FileTransferPurpose::DockerWaveform, this, session, 600'000);
     if (!m_reservation) { m_prepared = {}; return false; }
+    if (approved.m_started->exchange(true)) {
+        m_model->finishFileTransfer(m_reservation); m_reservation.reset(); m_prepared = {}; return false;
+    }
     m_session = session;
+    m_serial = plan->serial; m_firmware = plan->firmware;
     m_token = token;
     m_lastNow = now;
     m_deadline = now + kLifetimeMs;

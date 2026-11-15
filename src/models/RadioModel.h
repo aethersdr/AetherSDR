@@ -77,6 +77,7 @@
 namespace AetherSDR {
 class TxController;
 class AetherPDMeasurementModel;
+class AetherPDInstallationModel;
 class WanConnection;
 class FlexStatusIngress;
 struct TxBandDelta;
@@ -167,6 +168,7 @@ public:
     TunerModel&       tunerModel()       { return m_tunerModel; }
     TransmitModel&    transmitModel()    { return m_transmitModel; }
     AetherPDMeasurementModel& aetherPDMeasurementModel();
+    AetherPDInstallationModel& aetherPDInstallationModel();
     const AetherPDModel& aetherPDModel() const { return *m_aetherPDModel; }
     bool attachAetherPD(const RadioControlSession& session, const QString& adminToken);
     std::function<bool()> bindAetherPDCapture(const RadioControlSession& session,
@@ -2339,6 +2341,7 @@ private:
     TransmitModel    m_transmitModel;
     std::unique_ptr<AetherPDModel> m_aetherPDModel;
     std::unique_ptr<AetherPDMeasurementModel> m_aetherPDMeasurementModel;
+    std::unique_ptr<AetherPDInstallationModel> m_aetherPDInstallationModel;
     // Transitional desktop actor: existing integrations still enter through
     // the desktop methods. Independent daemon clients use separate granted
     // actors on the same coordinator and cannot obtain this desktop actor.

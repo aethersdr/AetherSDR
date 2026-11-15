@@ -1,5 +1,6 @@
 #include "RadioModel.h"
 #include "AetherPDMeasurementModel.h"
+#include "AetherPDInstallationModel.h"
 #include "core/backends/FileTransferOperation.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include <QScopedValueRollback>
@@ -3065,6 +3066,8 @@ AprsDigipeaterModel* RadioModel::aprsDigipeater()
 
 RadioModel::~RadioModel()
 {
+    if (m_aetherPDInstallationModel) { m_aetherPDInstallationModel->blockSignals(true); }
+    m_aetherPDInstallationModel.reset();
     if (m_aetherPDMeasurementModel) { m_aetherPDMeasurementModel->blockSignals(true); }
     m_sessionCommands.retireSession();
     m_aetherPDModel->blockSignals(true);

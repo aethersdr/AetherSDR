@@ -1,5 +1,6 @@
 #include "RadioModel.h"
 #include "AetherPDMeasurementModel.h"
+#include "AetherPDInstallationModel.h"
 
 #include <QPointer>
 #include <QThread>
@@ -12,6 +13,14 @@ AetherPDMeasurementModel& RadioModel::aetherPDMeasurementModel()
         m_aetherPDMeasurementModel = std::make_unique<AetherPDMeasurementModel>(*this);
     }
     return *m_aetherPDMeasurementModel;
+}
+
+AetherPDInstallationModel& RadioModel::aetherPDInstallationModel()
+{
+    if (!m_aetherPDInstallationModel) {
+        m_aetherPDInstallationModel = std::make_unique<AetherPDInstallationModel>(*this);
+    }
+    return *m_aetherPDInstallationModel;
 }
 
 bool RadioModel::attachAetherPD(const RadioControlSession& session, const QString& adminToken)

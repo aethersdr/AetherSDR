@@ -11,6 +11,7 @@
 #include <QTemporaryFile>
 #include <QTimer>
 #include <functional>
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -31,11 +32,13 @@ public:
         QString carrierName() const { return m_image.containerName; }
         QString carrierSha256() const { return m_image.archiveSha256; }
         QByteArray approvedPlan() const { return m_inputs[1]; }
+        bool used() const { return m_started && m_started->load(); }
     private:
         friend class AetherPDInstallationCoordinator;
         AetherPDInstallUpload::Inputs m_inputs;
         aetherpd::CarrierImage m_image;
         QByteArray m_privateConfig;
+        std::shared_ptr<std::atomic_bool> m_started;
     };
     enum class State { Idle, Requesting, UploadingCarrier, WaitingForCarrier, UploadingInputs, WaitingForCommit, Cleaning, Finished };
     Q_ENUM(State)
@@ -78,6 +81,7 @@ private:
     RadioControlSession m_session{};
     FileTransferHandle m_reservation;
     Prepared m_prepared;
+    QString m_serial, m_firmware;
     QString m_token;
     std::unique_ptr<AetherPDCarrierUpload> m_ownedCarrier;
     QPointer<AetherPDCarrierUpload> m_carrier;

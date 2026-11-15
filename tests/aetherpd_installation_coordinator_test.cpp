@@ -7,6 +7,7 @@
 #include "core/AetherPDInstallRequestClient.h"
 #include "core/AetherPDProtocol.h"
 #include "core/backends/AetherPDCarrierUpload.h"
+#include "models/AetherPDInstallationModel.h"
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -96,6 +97,125 @@ struct Fixture {
 class CoordinatorTest : public QObject {
     Q_OBJECT
 private slots:
+    void modelOwnsApprovalAndIgnoresLateCredentialAfterCancel()
+    {
+        Fixture f; const auto package = prepare(); QVERIFY(package);
+        std::function<void(const QString&)> deliver;
+        int loads = 0, creates = 0;
+        AetherPDInstallationModel model(f.model,
+            [&](const QString& serial, QObject*, auto callback) { QCOMPARE(serial, QStringLiteral("fixture-8600")); ++loads; deliver = std::move(callback); },
+            [&](RadioModel& radio) { ++creates; return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        QVERIFY(model.offer(*package, f.model.controlSession()));
+        QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty());
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QVERIFY(model.approve()); QVERIFY(!model.approve()); QCOMPARE(loads, 1);
+        model.cancel(); deliver(QString(43, u'a'));
+        QCOMPARE(creates, 0); QVERIFY(f.network.sent.empty());
+        QCOMPARE(model.outcome(), std::optional(Coordinator::Outcome::Canceled));
+        QVERIFY(model.cleanupConfirmed()); QCOMPARE(model.approvedPlan(), package->approvedPlan());
+    }
+    void credentialIsBoundToOriginalSessionAndSingleUse()
+    {
+        Fixture f; const auto package = prepare(); QVERIFY(package);
+        std::function<void(const QString&)> deliver;
+        int creates = 0;
+        AetherPDInstallationModel model(f.model,
+            [&](const QString&, QObject*, auto callback) { deliver = std::move(callback); },
+            [&](RadioModel& radio) { ++creates; return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve());
+        RadioSetupControlTestAccess::replaceConnectionGeneration(f.model);
+        deliver(QString(43, u'a'));
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
+        QCOMPARE(creates, 0); QVERIFY(f.network.sent.empty());
+        QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve());
+        deliver(QString(43, u'a')); deliver(QString(43, u'b'));
+        QCOMPARE(creates, 1); QCOMPARE(f.network.sent.size(), size_t(1));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Running);
+        QVERIFY(!model.offer(*package, f.model.controlSession()));
+    }
+    void missingCredentialAndDeadlineNeverStartInstallation()
+    {
+        Fixture f; const auto package = prepare(); QVERIFY(package);
+        std::function<void(const QString&)> deliver;
+        AetherPDInstallationModel model(f.model,
+            [&](const QString&, QObject*, auto callback) { deliver = std::move(callback); },
+            [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve()); deliver({});
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::NoCredential);
+        QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve());
+        auto* deadline = model.findChild<QTimer*>(); QVERIFY(deadline);
+        QVERIFY(QMetaObject::invokeMethod(deadline, "timeout", Qt::DirectConnection));
+        deliver(QString(43, u'a'));
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::CredentialTimeout);
+        QVERIFY(f.network.sent.empty());
+    }
+    void lateCredentialCannotStartDuringTransmit()
+    {
+        Fixture f; const auto package = prepare(); QVERIFY(package);
+        std::function<void(const QString&)> deliver;
+        AetherPDInstallationModel model(f.model,
+            [&](const QString&, QObject*, auto callback) { deliver = std::move(callback); },
+            [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve());
+        RadioSetupControlTestAccess::transmitting(f.model, true);
+        deliver(QString(43, u'a'));
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::StartRefused);
+        QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+    }
+    void radioOwnsJobModelIndependentlyOfView()
+    {
+        QPointer<AetherPDInstallationModel> job;
+        {
+            RadioModel radio;
+            job = &radio.aetherPDInstallationModel();
+            {
+                QObject view;
+                connect(job, &AetherPDInstallationModel::changed, &view, [] {});
+            }
+            QVERIFY(job); QCOMPARE(job.data(), &radio.aetherPDInstallationModel());
+        }
+        QVERIFY(job.isNull());
+    }
+    void runningModelTracksCancellationThroughConfirmedCleanup()
+    {
+        Fixture f; const auto package = prepare(); QVERIFY(package);
+        Coordinator* job = nullptr;
+        AetherPDInstallationModel model(f.model,
+            [](const QString&, QObject*, auto callback) { callback(QString(43, u'a')); },
+            [&](RadioModel& radio) {
+                auto created = std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; });
+                job = created.get(); return created;
+            });
+        QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve()); QVERIFY(job);
+        model.cancel(); QCOMPARE(model.state(), AetherPDInstallationModel::State::Canceling);
+        f.network.last->complete(202, QJsonDocument(QJsonObject{{"state", "awaiting_inputs"},
+            {"request_id", job->requestId()}, {"installation_committed", false}, {"port", 48995}}).toJson());
+        job->poll(); f.network.last->complete(404, "{}"); job->poll();
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
+        QCOMPARE(model.outcome(), std::optional(Coordinator::Outcome::Canceled));
+        QVERIFY(model.cleanupConfirmed()); QVERIFY(!model.active());
+        QCOMPARE(model.approvedPlan(), package->approvedPlan());
+        const Coordinator::Prepared copy = *package;
+        QVERIFY(copy.used());
+        QVERIFY(!model.offer(copy, f.model.controlSession()));
+        QVERIFY(!f.begin(copy));
+        const auto next = prepare(); QVERIFY(next);
+        QVERIFY(model.offer(*next, f.model.controlSession()));
+    }
+    void changedIdentityRetiresRunningJobWithoutRemoval()
+    {
+        Fixture f; const auto package = prepare(); QVERIFY(package);
+        AetherPDInstallationModel model(f.model,
+            [](const QString&, QObject*, auto callback) { callback(QString(43, u'a')); },
+            [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&f] { return f.clock; }); });
+        QVERIFY(model.offer(*package, f.model.controlSession())); QVERIFY(model.approve());
+        RadioSetupControlTestAccess::identity(f.model, "replacement", "4.3.16.42034");
+        model.reconcile();
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
+        QCOMPARE(model.outcome(), std::optional(Coordinator::Outcome::Unconfirmed));
+        QVERIFY(!model.cleanupConfirmed()); QVERIFY(f.transfers.isEmpty());
+        QVERIFY(f.network.last->aborted);
+    }
     void preparationBindsFreshAttempt()
     {
         const auto first = prepare(), second = prepare();
