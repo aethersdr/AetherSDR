@@ -10,6 +10,8 @@
 #include <QPointer>
 #include <QTimer>
 
+#include <array>
+
 class QNetworkReply;
 
 namespace AetherSDR::txlin {
@@ -39,14 +41,17 @@ private:
     void initialize();
     void abandon();
     void beginCapture();
-    void send(const aetherpd::Request& request);
-    void finish(QNetworkReply* reply, quint64 generation);
+    void send(const aetherpd::Request& request, int chunk = -1);
+    void finish(QNetworkReply* reply, quint64 generation, int chunk);
     void fail(const std::string& reason);
+    void captureTimeout();
     bool sessionCurrent() const;
 
     QNetworkAccessManager m_ownedNetwork;
     QPointer<QNetworkAccessManager> m_network;
     QPointer<QNetworkReply> m_reply;
+    static constexpr int kChunkCount = aetherpd::kCaptureSamples / aetherpd::kCaptureChunkSamples;
+    std::array<QPointer<QNetworkReply>, kChunkCount> m_chunkReplies;
     QTimer m_deadline;
     QElapsedTimer m_age;
     QHostAddress m_address;

@@ -70,15 +70,27 @@ private:
 };
 class Network final : public QNetworkAccessManager {
 public:
-    struct Sent { Operation method; QNetworkRequest request; QByteArray body; };
+    struct Sent { Operation method; QNetworkRequest request; QByteArray body; QPointer<Reply> reply; };
     std::vector<Sent> sent;
     QPointer<Reply> last;
+    Reply* captureChunk(int index) const
+    {
+        const QString suffix = QStringLiteral("/%1").arg(index);
+        for (auto it = sent.rbegin(); it != sent.rend(); ++it) {
+            const QString path = it->request.url().path();
+            if (path.startsWith(QStringLiteral("/v1/aetherpd/capture/")) && path.endsWith(suffix)) {
+                return it->reply;
+            }
+        }
+        return nullptr;
+    }
 protected:
     QNetworkReply* createRequest(Operation method, const QNetworkRequest& request, QIODevice* body) override
     {
-        sent.push_back({method, request, body ? body->readAll() : QByteArray{}});
+        sent.push_back({method, request, body ? body->readAll() : QByteArray{}, {}});
         std::unique_ptr<Reply> reply = std::make_unique<Reply>(request, this);
         last = reply.get();
+        sent.back().reply = last;
         return reply.release(); // QObject parent owns the returned reply.
     }
 };

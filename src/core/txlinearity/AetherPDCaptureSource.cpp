@@ -6,15 +6,18 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QLoggingCategory>
 #include <QThread>
 #include <QUrl>
 #include <QtEndian>
 
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <utility>
 
 namespace AetherSDR::txlin {
+Q_LOGGING_CATEGORY(lcAetherPDCapture, "aether.waveform.capture", QtWarningMsg)
 namespace {
 constexpr qint64 kMaxReplyBytes = 8192;
 constexpr int kCaptureTimeoutMs = 6000;
@@ -38,7 +41,7 @@ void AetherPDCaptureSource::initialize()
     m_ownedNetwork.setParent(this);
     m_deadline.setParent(this);
     m_deadline.setSingleShot(true);
-    connect(&m_deadline, &QTimer::timeout, this, [this] { fail("IQ capture timed out"); });
+    connect(&m_deadline, &QTimer::timeout, this, &AetherPDCaptureSource::captureTimeout);
     connect(m_network, &QObject::destroyed, this, [this] {
         m_network = nullptr;
         if (m_running) { fail("IQ capture transport was destroyed"); }
@@ -62,13 +65,17 @@ void AetherPDCaptureSource::abandon()
     m_checkingReady = false;
     m_waitingForTones = false;
     m_readyCallback = {};
-    QPointer<QNetworkReply> reply = m_reply;
-    m_reply = nullptr;
-    if (reply) {
-        disconnect(reply, nullptr, this, nullptr);
-        reply->abort();
-        if (reply) { reply->deleteLater(); }
-    }
+    const QPointer<QNetworkReply> controlReply = std::exchange(m_reply, {});
+    const auto chunks = std::exchange(m_chunkReplies, {});
+    const auto retire = [this](QPointer<QNetworkReply> reply) {
+        if (reply) {
+            disconnect(reply, nullptr, this, nullptr);
+            reply->abort();
+            if (reply) { reply->deleteLater(); }
+        }
+    };
+    retire(controlReply);
+    for (const QPointer<QNetworkReply>& reply : chunks) { retire(reply); }
 }
 
 void AetherPDCaptureSource::stop()
@@ -168,7 +175,7 @@ void AetherPDCaptureSource::beginCapture()
     send(m_waitingForTones ? *aetherpd::request(aetherpd::Operation::Status) : aetherpd::captureBeginRequest());
 }
 
-void AetherPDCaptureSource::send(const aetherpd::Request& descriptor)
+void AetherPDCaptureSource::send(const aetherpd::Request& descriptor, int chunk)
 {
     if (!sessionCurrent()) { fail("IQ capture session is no longer current"); return; }
     QUrl url;
@@ -180,16 +187,35 @@ void AetherPDCaptureSource::send(const aetherpd::Request& descriptor)
     request.setTransferTimeout(descriptor.timeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     request.setRawHeader("Authorization", "Bearer " + m_token.toLatin1());
-    m_reply = descriptor.method == "GET" ? m_network->get(request) : m_network->post(request, QByteArray{});
-    QNetworkReply* reply = m_reply;
+    QElapsedTimer requestAge;
+    requestAge.start();
+    QNetworkReply* reply = descriptor.method == "GET" ? m_network->get(request) : m_network->post(request, QByteArray{});
+    QPointer<QNetworkReply>& pending = chunk < 0 ? m_reply : m_chunkReplies[chunk];
+    pending = reply;
     const quint64 generation = m_generation;
     reply->setReadBufferSize(kMaxReplyBytes + 1);
-    connect(reply, &QIODevice::readyRead, this, [this, reply, generation] {
-        if (generation == m_generation && m_reply == reply && reply->bytesAvailable() > kMaxReplyBytes) {
+    connect(reply, &QIODevice::readyRead, this, [this, reply, generation, chunk] {
+        const QPointer<QNetworkReply>& pending = chunk < 0 ? m_reply : m_chunkReplies[chunk];
+        if (generation == m_generation && pending == reply && reply->bytesAvailable() > kMaxReplyBytes) {
             fail("IQ capture response exceeded its size limit");
         }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, generation] { finish(reply, generation); });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, requestAge, chunk] {
+        qCDebug(lcAetherPDCapture) << "IQ request completed" << reply->url().path()
+            << "request_ms" << requestAge.elapsed() << "capture_ms" << (m_age.isValid() ? m_age.elapsed() : -1)
+            << "chunks" << m_chunk << "waiting_tones" << m_waitingForTones
+            << "http" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt()
+            << "error" << reply->error() << "bytes" << reply->bytesAvailable();
+        finish(reply, generation, chunk);
+    });
+}
+
+void AetherPDCaptureSource::captureTimeout()
+{
+    qCWarning(lcAetherPDCapture) << "IQ capture deadline expired"
+        << "capture_ms" << (m_age.isValid() ? m_age.elapsed() : -1) << "waiting_tones" << m_waitingForTones
+        << "manifest" << m_manifest.has_value() << "chunks" << m_chunk;
+    fail("IQ capture timed out");
 }
 
 void AetherPDCaptureSource::fail(const std::string& reason)
@@ -200,14 +226,15 @@ void AetherPDCaptureSource::fail(const std::string& reason)
     if (running && callback) { callback(reason); }
 }
 
-void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation)
+void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int chunk)
 {
     reply->deleteLater();
-    if (m_reply != reply || generation != m_generation || !m_running
+    QPointer<QNetworkReply>& pending = chunk < 0 ? m_reply : m_chunkReplies[chunk];
+    if (pending != reply || generation != m_generation || !m_running
         || (!m_gate && !m_checkingReady)) { return; }
-    m_reply = nullptr;
+    pending = nullptr;
     if (!sessionCurrent()) { fail("IQ capture session is no longer current"); return; }
-    if (!m_age.isValid() || m_age.elapsed() > kCaptureTimeoutMs) { fail("IQ capture timed out"); return; }
+    if (!m_age.isValid() || m_age.elapsed() > kCaptureTimeoutMs) { captureTimeout(); return; }
     const QByteArray body = reply->read(kMaxReplyBytes + 1);
     if (body.size() > kMaxReplyBytes || reply->error() != QNetworkReply::NoError
         || reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {
@@ -242,17 +269,22 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation)
                 || (!m_checkingReady && !m_manifest->measurement->tones)))) {
             fail("IQ capture does not match the expected key state, rate or center"); return;
         }
-        m_bytes.reserve(8 * aetherpd::kCaptureSamples);
-    } else {
-        const std::optional<QByteArray> bytes = aetherpd::parseCaptureChunk(body, *m_manifest, m_chunk);
-        if (!bytes) { fail("IQ capture chunk was invalid or belonged to another snapshot"); return; }
-        m_bytes.append(*bytes);
-        ++m_chunk;
-    }
-    if (m_chunk < aetherpd::kCaptureSamples / aetherpd::kCaptureChunkSamples) {
-        send(*aetherpd::captureChunkRequest(*m_manifest, m_chunk));
+        m_bytes.resize(8 * aetherpd::kCaptureSamples);
+        // Queue one fixed snapshot, allowing the network worker to make progress
+        // without a GUI event-loop round trip between every 512-sample chunk.
+        const QPointer<AetherPDCaptureSource> guard(this);
+        for (int index = 0; index < kChunkCount; ++index) {
+            send(*aetherpd::captureChunkRequest(*m_manifest, index), index);
+            if (!guard || generation != m_generation || !m_running) { return; }
+        }
         return;
     }
+    const std::optional<QByteArray> bytes = aetherpd::parseCaptureChunk(body, *m_manifest, chunk);
+    if (!bytes) { fail("IQ capture chunk was invalid or belonged to another snapshot"); return; }
+    std::memcpy(m_bytes.data() + chunk * 8 * aetherpd::kCaptureChunkSamples,
+                bytes->constData(), static_cast<std::size_t>(bytes->size()));
+    ++m_chunk;
+    if (m_chunk < kChunkCount) { return; }
     m_deadline.stop();
     if (m_bytes.size() != 8 * aetherpd::kCaptureSamples) {
         fail("IQ capture was incomplete"); return;

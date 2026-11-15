@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T16:02:05.894514+00:00",
+  "updated_utc": "2026-11-15T16:29:40.145343+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Measure per-phase and per-chunk desktop capture timing without RF, distinguish tone wait from retrieval, and remove the actual bottleneck while retaining source/capture provenance and bounded keying. Then finish four-frame RF captures, ordinary correction A/B and all P1-P10 requirements.",
+  "next_action": "Run bounded GUI measurement with batched capture, preserving independent unkey and capture/source provenance; qualify model readiness before claiming corrected IMD. Continue full P1-P10 scope.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -834,5 +834,24 @@
       "Older-generation proofs do not qualify this final candidate, reboot/failure matrix or real6300."
     ],
     "next": "Measure per-phase and per-chunk desktop capture timing without RF, distinguish tone wait from retrieval, and remove the actual bottleneck while retaining source/capture provenance and bounded keying."
+  },
+  "capture_batch": {
+    "production_ready": false,
+    "status": "component_and_five_live_receive_captures_verified",
+    "evidence": "capture-meter-development/validation.json under evidence_root",
+    "completed": "Queue all 32 fixed-size chunk reads for one validated snapshot; assemble by requested offset and abort every outstanding read on cancellation or failure. No server, RF, rate, size, or deadline changes.",
+    "live_receive_frame_ms": [
+      383,
+      389,
+      406,
+      378,
+      383
+    ],
+    "first_source_arm_not_observed": true,
+    "remaining": [
+      "Finish keyed four-frame capture and corrected/uncorrected IMD results; no RF performed in this pass.",
+      "Diagnose intermittent GUI source-arm admission; initial failed attempt retained.",
+      "All existing P1-P10 production exit criteria remain."
+    ]
   }
 }

@@ -76,7 +76,7 @@ void setup(AetherPDCaptureSource& source, int& frames, int& errors)
 void completeCapture(Network& network)
 {
     network.last->complete(200, encode(manifest()));
-    for (int i = 0; i < 32; ++i) { network.last->complete(200, chunk(i)); }
+    for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
 }
 
 QByteArray twoToneChunk(int index)
@@ -126,7 +126,7 @@ int main(int argc, char** argv)
         request.tone1Hz = 7150750; request.tone2Hz = 7151875; request.allocations = {{7000000, 7300000}};
         ok &= check(controller.prepare(options, request), "real adapter/controller prepare failed");
         network.last->complete(200, encode(receiveManifest()));
-        for (int i = 0; i < 32; ++i) { network.last->complete(200, chunk(i)); }
+        for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
         ok &= check(ready == 1 && finished == 0 && network.sent.size() == 33,
                     "real receive readiness published measurement or started another capture");
         const std::shared_ptr<CaptureTestLease> lease = std::make_shared<CaptureTestLease>();
@@ -134,7 +134,7 @@ int main(int argc, char** argv)
                     "explicit bounded run did not start");
         now += 50; controller.poll();
         network.last->complete(200, encode(manifest()));
-        for (int i = 0; i < 32; ++i) { network.last->complete(200, twoToneChunk(i)); }
+        for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, twoToneChunk(i)); }
         QCoreApplication::processEvents();
         ok &= check(lease->releases == 1 && finished == 0 && network.sent.size() == 66,
                     "real adapter result escaped unkey confirmation or repeated after stop");
@@ -160,9 +160,9 @@ int main(int argc, char** argv)
         ok &= check(source.checkReceiveReady([&] { ++ready; }), "readiness check refused");
         ok &= check(!source.checkReceiveReady([&] { ++ready; }), "overlapping readiness accepted");
         network.last->complete(200, encode(receiveManifest()));
-        for (int i = 0; i < 31; ++i) { network.last->complete(200, chunk(i)); }
+        for (int i = 0; i < 31; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
         ok &= check(ready == 0 && frames == 0 && errors == 0, "partial IQ granted readiness");
-        network.last->complete(200, chunk(31));
+        network.captureChunk(31)->complete(200, chunk(31));
         QCoreApplication::processEvents();
         ok &= check(ready == 1 && frames == 0 && errors == 0 && network.sent.size() == 33,
                     "readiness published a frame, repeated or did not complete");
@@ -183,7 +183,7 @@ int main(int argc, char** argv)
         source.setSession(QHostAddress(QStringLiteral("192.168.50.100")), kToken, [&] { return current; });
         ok &= check(source.start(config()) && source.checkReceiveReady([&] { ++ready; }), "cancellation fixture failed");
         network.last->complete(200, encode(receiveManifest()));
-        for (int i = 0; i < 31; ++i) { network.last->complete(200, chunk(i)); }
+        for (int i = 0; i < 31; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
         QPointer<Reply> old = network.last;
         if (action == 0) { source.stop(); }
         if (action == 1) { source.setGateOpen(false); }
@@ -210,8 +210,8 @@ int main(int argc, char** argv)
             if (!timers.empty()) { QMetaObject::invokeMethod(timers[0], "timeout", Qt::DirectConnection); }
         } else { network.last->complete(200, encode(body)); }
         if (fault == 5) {
-            for (int i = 0; i < 31; ++i) { network.last->complete(200, chunk(i)); }
-            network.last->complete(200, chunk(30));
+            for (int i = 0; i < 31; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
+            network.captureChunk(31)->complete(200, chunk(30));
         }
         QCoreApplication::processEvents();
         ok &= check(ready == 0 && frames == 0 && errors == 1, "invalid or incomplete receive snapshot granted readiness");
@@ -224,7 +224,7 @@ int main(int argc, char** argv)
         ok &= check(source->start(config()) && source->checkReceiveReady([&] { ++ready; source.reset(); }),
                     "readiness destruction fixture failed");
         network.last->complete(200, encode(receiveManifest()));
-        for (int i = 0; i < 32; ++i) { network.last->complete(200, chunk(i)); }
+        for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
         QCoreApplication::processEvents();
         ok &= check(!source && ready == 1 && frames == 0 && errors == 0 && network.sent.size() == 33,
                     "readiness callback destruction revived source");
@@ -247,7 +247,8 @@ int main(int argc, char** argv)
         });
         ok &= check(source.start(config()), "analyzer fixture start failed"); source.setGateOpen(true);
         network.last->complete(200, encode(manifest()));
-        for (int i = 0; i < 32; ++i) { network.last->complete(200, twoToneChunk(i)); }
+        ok &= check(network.sent.size() == 33, "all bounded chunk requests must be queued before any completes");
+        for (int i = 31; i >= 0; --i) { network.captureChunk(i)->complete(200, twoToneChunk(i)); }
         ok &= check(frames == 1 && errors == 0, "analyzer did not receive one complete frame");
     }
     {
@@ -291,14 +292,14 @@ int main(int argc, char** argv)
         setup(source, frames, errors);
         ok &= check(source.start(config()), "fixture start failed"); source.setGateOpen(true);
         network.last->complete(200, encode(manifest()));
-        network.last->complete(200, chunk(0));
+        network.captureChunk(0)->complete(200, chunk(0));
         QPointer<Reply> old = network.last;
         if (action == 0) { source.stop(); }
         if (action == 1) { source.setGateOpen(false); }
         if (action == 2) { source.setSession(QHostAddress(QStringLiteral("192.168.50.100")), kToken, [] { return true; }); }
         ok &= check(old && old->aborted, "stop/gate/session change did not abort pending request");
         old->complete(200, chunk(1));
-        ok &= check(frames == 0 && errors == 0 && network.sent.size() == 3, "late reply escaped old capture");
+        ok &= check(frames == 0 && errors == 0 && network.sent.size() == 33, "late reply escaped old capture");
         if (action == 1) {
             source.setGateOpen(true);
             ok &= check(network.sent.back().method == QNetworkAccessManager::PostOperation, "gate reopen reused partial capture");
@@ -382,10 +383,42 @@ int main(int argc, char** argv)
         if (fault) {
             ok &= check(errors == 1 && frames == 0, "changed source or mixed tone frame admitted");
         } else {
-            for (int chunkIndex = 0; chunkIndex < 32; ++chunkIndex) { network.last->complete(200, chunk(chunkIndex)); }
+            for (int chunkIndex = 0; chunkIndex < 32; ++chunkIndex) { network.captureChunk(chunkIndex)->complete(200, chunk(chunkIndex)); }
             ok &= check(frames == 1 && errors == 0, "matching steady-source capture missing");
         }
         source.stop();
+    }
+    for (int fault = 0; fault < 5; ++fault) {
+        Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0;
+        setup(source, frames, errors);
+        ok &= check(source.start(config()), "parallel fault fixture start failed");
+        source.setGateOpen(true);
+        network.last->complete(200, encode(manifest()));
+        ok &= check(network.sent.size() == 33, "parallel snapshot has wrong request bound");
+        std::array<QPointer<Reply>, 32> pending;
+        for (int i = 0; i < 32; ++i) { pending[i] = network.captureChunk(i); }
+        if (!pending[17]) { return 1; }
+        pending[17]->complete(200, chunk(17));
+        QMetaObject::invokeMethod(pending[17], "finished", Qt::DirectConnection);
+        ok &= check(frames == 0 && errors == 0, "duplicate completion advanced a partial capture");
+        if (fault == 0) { pending[9]->complete(200, chunk(10)); }
+        if (fault == 1) { pending[9]->complete(401, "{}"); }
+        if (fault == 2) { pending[9]->complete(200, QByteArray(8193, 'x')); }
+        if (fault == 3) {
+            const QList<QTimer*> timers = source.findChildren<QTimer*>(QString(), Qt::FindDirectChildrenOnly);
+            QMetaObject::invokeMethod(timers[0], "timeout", Qt::DirectConnection);
+        }
+        if (fault == 4) { source.stop(); }
+        const int expectedErrors = fault == 4 ? 0 : 1;
+        for (int i = 0; i < 32; ++i) {
+            if (i != 17 && (i != 9 || fault >= 3)) {
+                ok &= check(pending[i] && pending[i]->aborted, "fault left another queued chunk active");
+            }
+            if (pending[i]) { QMetaObject::invokeMethod(pending[i], "finished", Qt::DirectConnection); }
+        }
+        QCoreApplication::processEvents();
+        ok &= check(frames == 0 && errors == expectedErrors && network.sent.size() == 33,
+                    "parallel fault emitted a frame, repeated error, or retried");
     }
     return ok ? 0 : 1;
 }

@@ -171,7 +171,7 @@ int main(int argc, char** argv)
         {"keyed", false}, {"correcting", false}, {"first_receive_ns", "1000000000"}, {"last_receive_ns", "1341000000"},
         {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));
     for (int i = 0; i < 32; ++i) {
-        captureNetwork.last->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
+        captureNetwork.captureChunk(i)->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
             {"iq_f32le", QString::fromLatin1(QByteArray(4096, '\0').toBase64())}}));
     }
     ok &= check(mb("pdMeasureTransmit")->isEnabled()
@@ -207,7 +207,7 @@ int main(int argc, char** argv)
         {"keyed", false}, {"correcting", false}, {"first_receive_ns", "2000000000"}, {"last_receive_ns", "2341000000"},
         {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));
     for (int i = 0; i < 32; ++i) {
-        captureNetwork.last->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
+        captureNetwork.captureChunk(i)->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
             {"iq_f32le", QString::fromLatin1(QByteArray(4096, '\0').toBase64())}}));
     }
     const size_t beforeOldPreparation = captureNetwork.sent.size();

@@ -1004,10 +1004,10 @@ void aetherPDMeasurementWorkflow()
         check(model->state() == State::CheckingReceive && !f.commands.contains("mox:on"),
               "measurement preparation is receive-only");
         measurementNetwork.last->complete(200, manifest(false));
-        for (int i = 0; i < 31; ++i) { measurementNetwork.last->complete(200, chunk(i)); }
+        for (int i = 0; i < 31; ++i) { measurementNetwork.captureChunk(i)->complete(200, chunk(i)); }
         check(model->state() == State::CheckingReceive && !model->start(session),
               "partial receive capture cannot start a measurement");
-        measurementNetwork.last->complete(200, chunk(31));
+        measurementNetwork.captureChunk(31)->complete(200, chunk(31));
         check(model->state() == State::Ready && measurementNetwork.sent.size() == 33
                   && !f.commands.contains("mox:on") && !model->result(),
               "complete receive capture grants readiness without keying or publishing a result");
@@ -1081,7 +1081,7 @@ void aetherPDMeasurementWorkflow()
                 running["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", true}};
                 measurementNetwork.last->complete(200, encode(running));
                 measurementNetwork.last->complete(200, manifest(true));
-                for (int i = 0; i < 32; ++i) { measurementNetwork.last->complete(200, chunk(i)); }
+                for (int i = 0; i < 32; ++i) { measurementNetwork.captureChunk(i)->complete(200, chunk(i)); }
             }
         }
         check(model->state() == State::Releasing && !model->result() && model->exportResult().isEmpty() && proof.valid(),
