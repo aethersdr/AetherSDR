@@ -30,6 +30,7 @@
 #endif
 #include "core/AppSettings.h"
 #include "core/BandStackSettings.h"
+#include "core/CwxMacroTemplateSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/ShutdownTrace.h"
 #include "core/CwTrace.h"
@@ -2930,6 +2931,12 @@ RadioModel::RadioModel(QObject* parent)
     m_cwxModel.setTextSender([this](const QString& text, int wpm) {
         Q_UNUSED(wpm);
         return dispatchCwxText(text, m_cwxCommandOperation);
+    });
+    m_cwxModel.setMacroTemplateStore({
+        [this](int idx) { return CwxMacroTemplateSettings::load(settingsScope(), idx); },
+        [this](int idx, const QString& typed) {
+            CwxMacroTemplateSettings::save(settingsScope(), idx, typed);
+        },
     });
     connect(&m_cwxModel, &CwxModel::requestRejected, this, [this](const QString& reason) {
         emit radioMessageReceived(reason, MessageSeverity::Warning);

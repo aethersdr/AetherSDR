@@ -62,6 +62,21 @@ public:
     // bridge) is not passed through this; send() keys it as received.
     std::optional<QString> resolveForSend(const QString& text);
 
+    // A {CALL} macro is kept by the app: the radio's shared slot holds the
+    // typed text without the placeholder, so another client never keys
+    // "{CALL}". The typed text is saved per radio through this store and laid
+    // over the radio's text only while the slot still equals its portable
+    // form. An empty text passed to save removes the entry.
+    struct MacroTemplateStore {
+        std::function<QString(int idx)> load;                      // 0-based
+        std::function<void(int idx, const QString& typed)> save;   // 0-based
+    };
+    void setMacroTemplateStore(MacroTemplateStore store) { m_macroTemplates = std::move(store); }
+    static bool hasCallPlaceholder(const QString& text);
+    // The text with every {CALL} removed. Where that would leave two spaces
+    // together, or a space at the start or end, one space goes too.
+    static QString withoutCallPlaceholder(const QString& text);
+
     // Read-only TX availability for text keying (#5422). RadioModel wires this
     // to TransmitModel::admitsCwxSend() so no text is queued while TUNE is
     // active (the radio would key it at TUNE power). Unset = always available.
@@ -167,6 +182,11 @@ signals:
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
+    // What the radio's slot holds for a typed macro: speed marks and {CALL} removed.
+    QString portableMacroText(const QString& typed) const;
+    // The text to keep for a slot the radio reports: the saved typed text while
+    // its portable form equals the report, else the report (and the saved copy goes).
+    QString macroTextFor(int idx, const QString& reported);
     TransmissionPermit admitTransmission(const TransmissionRoute& route = {});
     void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit,
                           const TransmissionRoute& route = {});
@@ -201,6 +221,7 @@ private:
     int     m_drainEpoch{0};     // bumped on ESC/clear/disconnect (#3949)
     QString m_macros[12];
     QString m_dxCall;
+    MacroTemplateStore m_macroTemplates;
 };
 
 } // namespace AetherSDR
