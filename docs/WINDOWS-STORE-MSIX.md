@@ -246,7 +246,9 @@ On an upstream `v*` tag push, the Windows Installer workflow builds the package
 and runs **Publish Microsoft Store production** in the existing `release`
 environment. `invoke-store-production.ps1` reads the arming secret there and
 passes `-Commit -CommitProduction` to `publish-store.ps1` when it is exactly
-`true`. If the secret is unset or disabled, the upload remains draft-only.
+`true`. If the secret is unset or disabled, the upload remains draft-only. An
+armed run that finds no `.msixupload` fails rather than finishing green with
+nothing submitted.
 
 The armed path makes one call with the pinned Microsoft Store CLI v0.4.2:
 
@@ -259,7 +261,10 @@ polling. Microsoft handles package validation, submission processing,
 certification and publication using the app's existing Store configuration.
 The CLI's exit status determines success or failure.
 
-Production submissions run one at a time without cancelling an active upload.
+Production jobs share one concurrency group, so an active upload is never
+cancelled. GitHub keeps only one pending run per group, though: if two tags
+queue behind a running upload, the newer one replaces the older, which then has
+to be re-run by hand.
 The existing routing limits production to upstream release tag pushes with the
 configured product ID; manual dispatches and forks do not publish production.
 
@@ -382,6 +387,10 @@ The single operational switch is the Actions secret
 `AETHERSDR_STORE_AUTO_PUBLISH=true`. It supplies both `-Commit` and
 `-CommitProduction` automatically; no operator needs to pass these flags for a
 release. Removing the secret or setting it to `false` restores draft uploads.
+Secrets are write-only, so the switch's state can't be read in the GitHub UI.
+The publish step's `Mode : COMMIT` or `Mode : DRAFT` line is the readback.
+GitHub also masks a secret's value in the job log, so any literal `true` that
+step prints appears as `***`.
 The publisher retains its existing explicit production/flight distinction:
 `-Commit` alone requires a flight, while production uses both switches.
 
