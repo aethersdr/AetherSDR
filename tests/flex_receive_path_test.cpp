@@ -80,6 +80,27 @@ public:
         snapshot.categories[ReceiveStreamStats::Spectrum] = {2048, 20, 1};
         backend.m_receiveData->telemetry(snapshot);
     }
+    static void ingest(PanadapterStream& stream, int sequence, qint64 nowMs)
+    {
+        QByteArray packet(28 + 240 * 2, '\0');
+        auto* raw = reinterpret_cast<uchar*>(packet.data());
+        qToBigEndian<quint32>(0x38500000u | (quint32(sequence & 15) << 16), raw);
+        qToBigEndian<quint32>(0x04000008, raw + 4);
+        qToBigEndian<quint32>(0x0123, raw + 12);
+        stream.m_rxReorderNowForTest = nowMs;
+        stream.processDatagram(packet);
+    }
+    static void expire(PanadapterStream& stream, qint64 nowMs)
+    {
+        stream.m_rxReorderNowForTest = nowMs;
+        stream.flushRxReorder();
+    }
+    static void resetScore(RadioModel& radio) { radio.resetNetworkHealthSamples(); }
+    static int scoreGaps(RadioModel& radio)
+    {
+        radio.evaluateNetworkQuality();
+        return radio.m_packetLossWindowErrors;
+    }
     static void publishTelemetry(PanadapterStream& stream)
     {
         stream.publishReceiveTelemetry();
@@ -193,6 +214,57 @@ void latePacketTelemetry()
           && radio.categoryStats(ReceiveStreamStats::Waterfall).late == 2,
           "retirement preserves cumulative late-packet counts");
 }
+void reorderTelemetry()
+{
+    RadioModel radio;
+    auto* backend = dynamic_cast<FlexBackend*>(radio.backend());
+    check(backend != nullptr, "Flex backend available for reorder telemetry");
+    if (!backend) { return; }
+    PanadapterStream* stream = backend->panStream();
+    FlexReceiveDataTestAccess::begin(*backend);
+    const auto publish = [&](bool initial) {
+        QMetaObject::invokeMethod(stream, [&] {
+            if (initial) {
+                FlexReceiveDataTestAccess::ingest(*stream, 0, 0);
+            } else {
+                FlexReceiveDataTestAccess::ingest(*stream, 2, 1);
+                FlexReceiveDataTestAccess::ingest(*stream, 1, 2);
+                FlexReceiveDataTestAccess::ingest(*stream, 5, 3);
+                FlexReceiveDataTestAccess::expire(*stream, 33);
+            }
+            FlexReceiveDataTestAccess::publishTelemetry(*stream);
+        }, Qt::BlockingQueuedConnection);
+        drain();
+    };
+    publish(true);
+    FlexReceiveDataTestAccess::resetScore(radio);
+    publish(false);
+    const auto counters = radio.categoryStats(ReceiveStreamStats::Audio);
+    check(radio.packetDropCount() == 2 && radio.packetTotalCount() == 4
+          && counters.errors == 2 && counters.reordered == 1 && counters.breaks == 1,
+          "production reordering and missing counts cross the telemetry seam separately");
+    check(FlexReceiveDataTestAccess::scoreGaps(radio) == 1,
+          "the live Flex snapshot scores one gap for two missing packets");
+    FlexReceiveDataTestAccess::resetScore(radio);
+    check(FlexReceiveDataTestAccess::scoreGaps(radio) == 0,
+          "reset establishes the gap baseline rather than the missing-packet baseline");
+    ReceiveStreamStats::Counters loss;
+    loss.packets = 3;
+    loss.errors = 2;
+    check(loss.expectedPackets(ReceiveStreamStats::Spectrum) == 5
+          && loss.lossPercent(ReceiveStreamStats::Spectrum) == 40.0,
+          "diagnostic loss uses missing divided by received plus missing");
+    check(loss.expectedPackets(ReceiveStreamStats::Dax) == 3
+          && std::abs(loss.lossPercent(ReceiveStreamStats::Dax) - 200.0 / 3) < .001,
+          "DAX keeps arrival-order sequence-break accounting");
+    loss.packets = 0;
+    check(loss.lossPercent(ReceiveStreamStats::Audio) == 100.0,
+          "complete loss cannot exceed one hundred percent");
+    loss.errors = 0;
+    check(loss.lossPercent(ReceiveStreamStats::Audio) == 0.0,
+          "empty diagnostic counters report zero loss");
+}
+
 }
 int main(int argc, char** argv)
 {
@@ -201,6 +273,7 @@ int main(int argc, char** argv)
     nestedDelivery();
     meterClock();
     latePacketTelemetry();
+    reorderTelemetry();
     RadioModel radio;
     auto* backend = dynamic_cast<FlexBackend*>(radio.backend());
     check(backend != nullptr, "production Flex backend available");

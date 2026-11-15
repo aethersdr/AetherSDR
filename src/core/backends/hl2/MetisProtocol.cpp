@@ -603,7 +603,17 @@ std::string gatewareVersionText(const DiscoveryReply& reply)
     return text;
 }
 
-std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) noexcept
+namespace {
+
+// gatewareVersionText()'s "major[.minor]", split once for both readers so the
+// two cannot drift in what they accept. nullopt unless every part present is
+// one to three digits; a part's range is the reader's to check.
+struct VersionTextParts {
+    std::string_view major;
+    std::optional<std::string_view> minor;
+};
+
+std::optional<VersionTextParts> splitVersionText(std::string_view text) noexcept
 {
     const auto isDigits = [](std::string_view part) {
         return !part.empty() && part.size() <= 3
@@ -611,22 +621,47 @@ std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) 
                            [](char c) { return c >= '0' && c <= '9'; });
     };
     const std::size_t dot = text.find('.');
-    if (dot == std::string_view::npos) {
+    VersionTextParts parts{text.substr(0, dot), std::nullopt};
+    if (dot != std::string_view::npos) {
+        parts.minor = text.substr(dot + 1);
+    }
+    if (!isDigits(parts.major) || (parts.minor && !isDigits(*parts.minor))) {
         return std::nullopt;
     }
-    const std::string_view major = text.substr(0, dot);
-    const std::string_view minor = text.substr(dot + 1);
-    if (!isDigits(major) || !isDigits(minor)) {
-        return std::nullopt;
-    }
+    return parts;
+}
+
+// One to three digits, already checked, as a byte. nullopt above 255.
+std::optional<std::uint8_t> versionPartByte(std::string_view digits) noexcept
+{
     int value = 0;
-    for (const char c : minor) {
+    for (const char c : digits) {
         value = value * 10 + (c - '0');
     }
     if (value > 0xFF) {
         return std::nullopt;
     }
     return static_cast<std::uint8_t>(value);
+}
+
+}  // namespace
+
+std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) noexcept
+{
+    const auto parts = splitVersionText(text);
+    if (!parts || !parts->minor) {
+        return std::nullopt;
+    }
+    return versionPartByte(*parts->minor);
+}
+
+std::optional<std::uint8_t> gatewareMajorFromVersionText(std::string_view text) noexcept
+{
+    const auto parts = splitVersionText(text);
+    if (!parts) {
+        return std::nullopt;
+    }
+    return versionPartByte(parts->major);
 }
 
 std::string gatewareVersionLabel(const DiscoveryReply& reply)

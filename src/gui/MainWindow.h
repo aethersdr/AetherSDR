@@ -127,6 +127,7 @@ class QAbstractSlider;
 class QMediaDevices;
 class QPushButton;
 class QShowEvent;
+class QWindow;
 class QSystemTrayIcon;
 
 #include "gui/ClientEqApplet.h"   // ClientEqApplet::Path enum used in
@@ -389,6 +390,15 @@ protected:
     void restoreNativeClientRect(const QString& role);
     // Windows 11: colour the DWM window border to color.background.app.
     void applyWindowsFrameColor();
+    // Inset the central widget and status bar by the non-client resize band,
+    // which Qt reports as zero on Windows 11 (#7077). The band is a
+    // per-monitor device-pixel figure, so this re-runs whenever it can move.
+    void applyNonClientBandInsets();
+    // Qt delivers DevicePixelRatioChange to event(), never to changeEvent().
+    bool event(QEvent* event) override;
+    // The QWindow applyNonClientBandInsets() is connected to; setWindowFlags()
+    // re-creates the handle, so the connection is re-made per show.
+    QPointer<QWindow> m_bandInsetWindow;
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
     void closeEvent(QCloseEvent* event) override;
@@ -475,6 +485,9 @@ private:
     void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
     void updateStatusBarMinimumWidth();
+    // Pin the frameless size grip to the bottom-right corner inside the
+    // window's contents margins, so it clears the non-client band.
+    void positionSizeGrip();
 
     // Audio thread helpers — invoke AudioEngine methods on the worker thread (#502)
     void audioStartRx();
@@ -503,6 +516,7 @@ private:
     // than tuning it somewhere it hears nothing. A backend that reports no
     // range leaves every band enabled (the Flex behaviour).
     void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    void applyTuningRangeToBandApplet() const;
     // Push RadioCapabilities' notch fields into one panadapter: the +TNF
     // button's visibility, the right-click add/remove entries, the depth and
     // permanence submenus, and the width clamps on drag-resize.

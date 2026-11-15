@@ -106,9 +106,11 @@ constexpr int kNetworkTooltipWidthPx = 300;
 // Distinct name (not an overload of formatNetworkSeqErrors): an
 // anonymous-namespace overload would hide the namespace-scope two-int
 // overload from unqualified lookup inside this TU.
-QString formatCategorySeqErrors(const ReceiveStreamStats::Counters& stats)
+QString formatCategorySeqErrors(const ReceiveStreamStats::Counters& stats,
+                               ReceiveStreamStats::Category category)
 {
-    return formatNetworkSeqErrors(stats.errors, stats.packets);
+    return QString("%1 / %2 packets (%3%)").arg(stats.errors).arg(stats.expectedPackets(category))
+        .arg(stats.lossPercent(category), 0, 'f', 2);
 }
 
 QString networkTooltipSection(const QString& title)
@@ -233,12 +235,14 @@ QString buildNetworkTooltip(const RadioModel& model,
 
     html += networkTooltipSection(QStringLiteral("PACKET INTEGRITY"));
     html += networkTooltipRow(
-        QStringLiteral("Recent loss (%1 s)").arg(model.packetLossWindowSeconds()),
+        (model.hasStreamCategoryStats() ? QStringLiteral("Recent gap events (%1 s)")
+                                       : QStringLiteral("Recent loss (%1 s)"))
+            .arg(model.packetLossWindowSeconds()),
         formatNetworkSeqErrors(model.packetLossWindowDrops(),
                                model.packetLossWindowPackets()));
     html += networkTooltipRow(
-        QStringLiteral("Session sequence gaps"),
-        formatNetworkSeqErrors(model.packetDropCount(), model.packetTotalCount()));
+        QStringLiteral("Session missing packets / DAX breaks"),
+        QStringLiteral("%1 (%2 received)").arg(model.packetDropCount()).arg(model.packetTotalCount()));
 
     // Per-category counters are a property of the VITA-49 multiplex, where each
     // category is a separately-sequenced stream sharing one socket. A transport
@@ -246,13 +250,17 @@ QString buildNetworkTooltip(const RadioModel& model,
     // rows of "0 / 0 packets" would read as five dead streams rather than as a
     // distinction that does not apply.
     if (model.hasStreamCategoryStats()) {
-        html += networkTooltipSection(QStringLiteral("STREAM SEQUENCE GAPS"));
-        html += networkTooltipRow(QStringLiteral("Audio"), formatCategorySeqErrors(audioStats));
-        html += networkTooltipRow(QStringLiteral("FFT"), formatCategorySeqErrors(fftStats));
+        html += networkTooltipSection(QStringLiteral("MISSING PACKETS / DAX BREAKS"));
+        html += networkTooltipRow(QStringLiteral("Audio"),
+                                  formatCategorySeqErrors(audioStats, ReceiveStreamStats::Audio));
+        html += networkTooltipRow(QStringLiteral("FFT"),
+                                  formatCategorySeqErrors(fftStats, ReceiveStreamStats::Spectrum));
         html += networkTooltipRow(QStringLiteral("Waterfall"),
-                                  formatCategorySeqErrors(waterfallStats));
-        html += networkTooltipRow(QStringLiteral("Meters"), formatCategorySeqErrors(meterStats));
-        html += networkTooltipRow(QStringLiteral("DAX"), formatCategorySeqErrors(daxStats));
+                                  formatCategorySeqErrors(waterfallStats, ReceiveStreamStats::Waterfall));
+        html += networkTooltipRow(QStringLiteral("Meters"),
+                                  formatCategorySeqErrors(meterStats, ReceiveStreamStats::Meter));
+        html += networkTooltipRow(QStringLiteral("DAX"),
+                                  formatCategorySeqErrors(daxStats, ReceiveStreamStats::Dax));
     }
 
     html += networkTooltipSection(QStringLiteral("UDP TRAFFIC"));

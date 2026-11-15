@@ -622,6 +622,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // setTune() drives the ordinary TUNE producer: one sine wave. There is no
     // CI-V route for a two-tone selection on any profiled model.
     c.twoToneGenerator = std::nullopt;
+    // The model name from CI-V 19 00 is this family's identity; no board record.
+    c.boardIdentity = std::nullopt;
     c.firmwareUpdateSource = std::nullopt;  // reports no firmware version to compare.
     c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
     // setVox implements enable/gain only; setTxMonitor writes MON and its level.
