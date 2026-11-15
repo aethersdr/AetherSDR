@@ -560,9 +560,9 @@ The page traces the envelope peak over the last five seconds against the
 **Passband.** The stage's bandpass follows your radio's TX filter, 50 Hz inside
 each edge, so the radio's filter does not reshape the envelope after it. The
 readout under the knobs shows the passband in force. Changing the TX filter
-while you talk is seamless. The passband stops at 3950 Hz and is never
-narrower than 500 Hz, so with a wider (ESSB) TX filter, or one narrower than
-600 Hz, it no longer matches the radio's.
+while you talk is seamless. ESSB filters are followed up to the radio's
+10 kHz maximum. The passband is never narrower than 500 Hz, so with a TX
+filter narrower than 600 Hz it no longer matches the radio's.
 
 **Delay.** Peak control adds about 33 ms.
 

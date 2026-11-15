@@ -32,7 +32,7 @@ public:
     static constexpr float kMaxOutputDb = 0.0f;
     static constexpr float kDefaultOutputDb = -1.0f;
     static constexpr float kMinPassbandHz = 100.0f;
-    static constexpr float kMaxPassbandHz = 3950.0f;
+    static constexpr float kMaxPassbandHz = 9950.0f;  // a 10 kHz ESSB filter, less the margin
     static constexpr float kMinWidthHz = 500.0f;
     static constexpr float kDefaultLowHz = 150.0f;
     static constexpr float kDefaultHighHz = 2850.0f;
@@ -57,7 +57,7 @@ public:
     float outputDb() const noexcept;
 
     // GUI thread; safe beside prepare() on the engine thread, since every
-    // block hand-off is an atomic exchange. Clamped to 100..3950 Hz and at
+    // block hand-off is an atomic exchange. Clamped to 100..9950 Hz and at
     // least 500 Hz wide. Once prepared, builds the new block here and the
     // audio thread crossfades to it.
     void setPassband(float lowHz, float highHz);

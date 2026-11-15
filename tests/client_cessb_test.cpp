@@ -59,16 +59,16 @@ std::unique_ptr<ClientCessb> makeStage(float clipDb, bool cessb, float outputDb)
     return s;
 }
 
-// A voiced-speech stand-in: a 140 Hz fundamental and its harmonics to 2.8 kHz,
+// A voiced-speech stand-in: a 140 Hz fundamental and its harmonics to `topHz`,
 // all in cosine phase so the waveform is peaky, under a 4 Hz syllable swell.
-std::vector<float> voice(double seconds, double amplitude)
+std::vector<float> voice(double seconds, double amplitude, double topHz = 2800.0)
 {
     const int n = static_cast<int>(seconds * kRate);
     std::vector<float> out(static_cast<std::size_t>(n));
     for (int i = 0; i < n; ++i) {
         const double t = i / kRate;
         double v = 0.0;
-        for (int h = 1; h * 140.0 < 2800.0; ++h) {
+        for (int h = 1; h * 140.0 < topHz; ++h) {
             v += std::cos(2.0 * kPi * 140.0 * h * t) / std::sqrt(static_cast<double>(h));
         }
         const double swell = 0.55 + 0.45 * std::sin(2.0 * kPi * 4.0 * t);
@@ -183,8 +183,9 @@ void testEnvelopeBound()
         }
     }
 
-    // The range limits, and the passband the 8600's 50..4000 Hz SSB filter
-    // gives (100..3950). Against a radio filter only 50 Hz wider the last
+    // The range limits, the passband the 8600's 50..4000 Hz SSB filter gives
+    // (100..3950), and ESSB filters to the Flex's 10 kHz maximum with a voice
+    // that reaches them. Against a radio filter only 50 Hz wider the last
     // bandpass leaves a little overshoot, so the bound there is 0.75 dB.
     struct Limit {
         float clip;
@@ -192,15 +193,18 @@ void testEnvelopeBound()
         double radioLow;
         double radioHigh;
         double tolerance;
+        double voiceTopHz;
     };
-    for (const Limit& l : {Limit{20.0f, -1.0f, 100.0, 2900.0, 0.5},
-                           Limit{6.0f, 0.0f, 100.0, 2900.0, 0.5},
-                           Limit{6.0f, -12.0f, 100.0, 2900.0, 0.5},
-                           Limit{6.0f, -1.0f, 50.0, 4000.0, 0.75},
-                           Limit{20.0f, -1.0f, 50.0, 4000.0, 0.75}}) {
+    for (const Limit& l : {Limit{20.0f, -1.0f, 100.0, 2900.0, 0.5, 2800.0},
+                           Limit{6.0f, 0.0f, 100.0, 2900.0, 0.5, 2800.0},
+                           Limit{6.0f, -12.0f, 100.0, 2900.0, 0.5, 2800.0},
+                           Limit{6.0f, -1.0f, 50.0, 4000.0, 0.75, 2800.0},
+                           Limit{20.0f, -1.0f, 50.0, 4000.0, 0.75, 2800.0},
+                           Limit{6.0f, -1.0f, 50.0, 6000.0, 0.75, 7000.0},
+                           Limit{6.0f, -1.0f, 50.0, 10000.0, 0.75, 11000.0}}) {
         auto s = makeStage(l.clip, true, l.ceiling);
         s->followRadioFilter(static_cast<int>(l.radioLow), static_cast<int>(l.radioHigh));
-        auto audio = voice(2.0, 0.9);
+        auto audio = voice(2.0, 0.9, l.voiceTopHz);
         run(*s, audio);
         const auto r = AetherSDR::measureSsbEnvelope(audio.data() + skip, audio.size() - skip,
                                                      kRate, {l.radioLow, l.radioHigh},
@@ -268,6 +272,10 @@ void testPassband()
            fmt("%.2f dB", db(peakOf(wide, wide.size() / 2) / 0.05)));
     s->followRadioFilter(3000, 2000);
     report("an inverted radio filter is ignored", s->lowHz() == 100.0f && s->highHz() == 3950.0f);
+    s->followRadioFilter(50, 10000);
+    report("follows a 10 kHz ESSB filter at 100..9950",
+           s->lowHz() == 100.0f && s->highHz() == 9950.0f,
+           fmt("%.0f..%.0f", s->lowHz(), s->highHz()));
 }
 
 void testRuntimeSwap()
@@ -334,9 +342,9 @@ void testClamps()
     s.setPassband(0.0f, 100.0f);
     report("passband floor 100 Hz, at least 500 Hz wide",
            s.lowHz() == 100.0f && s.highHz() == 600.0f, fmt("%.0f..%.0f", s.lowHz(), s.highHz()));
-    s.setPassband(3800.0f, 9000.0f);
-    report("passband ceiling 3950 Hz, at least 500 Hz wide",
-           s.lowHz() == 3450.0f && s.highHz() == 3950.0f, fmt("%.0f..%.0f", s.lowHz(), s.highHz()));
+    s.setPassband(9800.0f, 15000.0f);
+    report("passband ceiling 9950 Hz, at least 500 Hz wide",
+           s.lowHz() == 9450.0f && s.highHz() == 9950.0f, fmt("%.0f..%.0f", s.lowHz(), s.highHz()));
 }
 
 void testReenableClean()
