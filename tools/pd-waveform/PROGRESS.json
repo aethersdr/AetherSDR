@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T15:29:16.402412+00:00",
+  "updated_utc": "2026-11-15T15:44:43.458513+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Install the signed candidate carrying bounded native cancellation diagnostics, identify the source cancellation during the ordinary GUI measurement, and complete four-frame keyed capture and explicit correction A/B. Preserve all remaining P1-P10 gates.",
+  "next_action": "Install the signed DSP GUI binding candidate and repeat the receive-only source arm check; diagnose any refusal using the new native gate diagnostic. Resolve the unbound lease-guardian observer and receive completion, then perform bounded keyed four-frame capture and explicit correction A/B. Preserve all P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -710,8 +710,33 @@
     "production_ready": false
   },
   "receive_observer_gui_context": {
-    "status": "bound_context_fix_component_tests_passed_not_installed",
+    "status": "installed_8600_GUI_start_and_registration_passed_source_arm_refused",
     "evidence": "source-cancel-live/validation.json under evidence_root",
-    "production_ready": false
+    "production_ready": false,
+    "latest_evidence": "bound-observer-live/installation-committed.json, receive-check-events.json and session-journal.txt under evidence_root",
+    "latest_result": "Ordinary GUI exact release upgrade committed with installer cleanup; native session registered. Measurement source arm refused before RF; Stop retired DSP/IQ/ARP but receive recovery timed out and retained capability-free controls."
+  },
+  "dsp_gui_binding": {
+    "production_ready": false,
+    "installed": false,
+    "change": "Verify separate DSP and unkey GUI bindings before descriptor handoff; log new rejected source arms without replay log duplication.",
+    "checks": {
+      "native_session_handoff": true,
+      "session_asan_ubsan_lsan": true,
+      "missing_DSP_bind_mutation_detected": true,
+      "armv7_launcher_build": true,
+      "arm64_launcher_build": true,
+      "focused_ctests": [
+        "pd_calibration_control_test",
+        "pd_calibration_dispatch_test",
+        "pd_capture_test"
+      ]
+    },
+    "limitations": [
+      "No live qualification of this DSP binding change yet.",
+      "Lease guardian fresh observer remains unbound; receive recovery warning remains unresolved.",
+      "No RF or new correction/IMD evidence."
+    ],
+    "evidence": "dsp-binding-development/validation.json under evidence_root"
   }
 }

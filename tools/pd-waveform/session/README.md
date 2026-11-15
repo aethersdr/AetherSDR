@@ -389,9 +389,12 @@ handle; neither is an executable, address, PID or scheduling parameter.
 
 A forked child closes unrelated descriptors, becomes UID78666/GID20 with empty
 supplementary groups and zero capabilities/bounding set, then opens exactly
-two TCP connections to `127.0.0.1:4992`. It leaves the DSP lease untouched,
-binds the independent unkey connection to the validated UUID and requires the
-bind acknowledgment to identify the selected GUI handle. It sends the same
+two TCP connections to `127.0.0.1:4992`. It binds both the DSP lease and the
+independent unkey connection to the validated UUID and requires each bind
+acknowledgment to identify the selected GUI handle. The two sockets must have
+distinct non-GUI client handles. Firmware 4.3.16 reports a different interlock
+context on an unbound socket; that context cannot admit the owned source.
+It sends the same
 bind once more with the guardian's fixed sequence910000, leaving that reply
 unread for the existing guardian's independent admission check. It creates a fresh
 pipe for the independent guardian. This child sends those four descriptors
@@ -403,7 +406,9 @@ validated before either API connection is opened. This keeps rejected layouts
 from leaving a pending guardian bind reply. Unexpected reply sequences are
 rejected; they are never accepted as evidence for the current transaction.
 The bind reader stops at its complete reply line, preserving any following
-status bytes for the guardian.
+status bytes for the DSP or guardian. Socket-free injected-transport checks
+cover both binding commands, rejected or mismatched replies, duplicate client
+handles, and withholding the guardian's pending bind until both checks pass.
 
 The parent accepts one exact-size, versioned, four-descriptor message from its
 own child, rejects truncated ancillary data and mismatched identity, waits for

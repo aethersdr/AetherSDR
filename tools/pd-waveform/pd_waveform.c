@@ -1893,7 +1893,15 @@ static struct pd_calibration_reply operator_calibration_command(wf_t* w,
         w->local_iq.frames>0 && w->daxiq_sid && w->tx_mhz>0 && w->pan_mhz>0 &&
         w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns && now-w->local_iq.last_valid_ns<=100000000 &&
         !(w->test_f1>0);
+    uint64_t previous_nonce=w->calibration.nonce;
     struct pd_calibration_reply reply=pd_calibration_command(&w->calibration,request,(size_t)size,now,eligible);
+    if (w->calibration.nonce>previous_nonce && reply.result==PD_CAL_BLOCKED && size==9 && request && (request[0]=='A' || request[0]=='M')) {
+        logf_("source arm refused: purpose=%c control=%d idle=%d gui=%08x keyed=%d tx_on=%d api=%d leased=%d registered=%d slice=%d owner=%08x correction=%d native_apd=%d local_iq=%d frames=%llu stream=%08x tx_mhz=%.6f pan_mhz=%.6f iq_age_ns=%lld test_active=%d",
+            request[0],w->calibration_control,w->calibration_idle,w->calibration_gui,w->keyed,w->tx_on,w->api>=0,w->api_leased,w->tx_in!=0,
+            w->active_slice,w->active_slice>=0 && w->active_slice<16?w->calibration_slice_owner[w->active_slice]:0,
+            w->correct,native_apd_blocked(w),w->local_iq_mode,(unsigned long long)w->local_iq.frames,w->daxiq_sid,w->tx_mhz,w->pan_mhz,
+            (long long)(w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns?now-w->local_iq.last_valid_ns:-1),w->test_f1>0);
+    }
     if (reply.applied && reply.result==PD_CAL_OK) {
         if (request[0]=='A') {
             // Model invalidation cancels an old arm; retain this

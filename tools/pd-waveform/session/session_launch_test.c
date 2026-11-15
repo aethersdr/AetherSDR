@@ -6,6 +6,53 @@
 #endif
 #include <assert.h>
 
+static unsigned bind_sent,bind_observed;
+static int bind_fault;
+static const char bind_id[]="05C2BC29-2162-5C24-A535-3C7AE6AA7B85";
+static int bind_send(int fd,const char* text)
+{
+    assert(bind_sent<3);
+    assert(fd==(bind_sent?42:41));
+    char expected[128];
+    snprintf(expected,sizeof(expected),"C%d|client bind client_id=%s\n",bind_sent==2?910000:kBind,bind_id);
+    assert(!strcmp(text,expected));
+    assert(bind_observed==(bind_sent==2?2:bind_sent));
+    ++bind_sent;
+    return bind_fault!=(int)bind_sent;
+}
+static int bind_observe(int fd,struct stream_state* state)
+{
+    assert(bind_observed<2 && fd==(bind_observed?42:41));
+    assert(bind_sent==bind_observed+1 && state->issued==1 && state->gui==0x22222222);
+    unsigned client=bind_observed?0x33333333:0x11111111;
+    unsigned gui=0x22222222,code=0;
+    if(bind_fault==4 && !bind_observed){gui=0x44444444;}
+    if(bind_fault==5 && bind_observed){gui=0x44444444;}
+    if(bind_fault==6 && !bind_observed){code=1;}
+    if(bind_fault==7 && bind_observed){client=0x11111111;}
+    if(bind_fault==8){client=0x22222222;}
+    char reply[96];int n=snprintf(reply,sizeof(reply),"H%08x\nR970101|%x|0x%08x\n",client,code,gui);
+    struct stream_input input={0};++bind_observed;
+    return feed(state,&input,(const unsigned char*)reply,(size_t)n);
+}
+static void both_api_bindings(void)
+{
+    const struct session_bind_io io={bind_send,bind_observe};uint32_t client=0;
+    bind_sent=bind_observed=0;bind_fault=0;
+    assert(session_bind_apis(41,42,0x22222222,bind_id,&client,&io));
+    assert(bind_sent==3 && bind_observed==2 && client==0x33333333);
+    for(bind_fault=1;bind_fault<=8;++bind_fault){
+        bind_sent=bind_observed=0;client=0;
+        assert(!session_bind_apis(41,42,0x22222222,bind_id,&client,&io));
+        assert(bind_sent<3 || bind_fault==3);
+    }
+    bind_sent=bind_observed=0;
+    assert(!session_bind_apis(41,42,0,bind_id,&client,&io));
+    assert(!session_bind_apis(41,42,0x22222222,"bad\ncommand",&client,&io));
+    assert(!session_bind_apis(41,41,0x22222222,bind_id,&client,&io));
+    assert(!bind_sent && !bind_observed);
+}
+
 static unsigned open_descriptors(void)
 {
     DIR* directory=opendir("/proc/self/fd");assert(directory);unsigned count=0;struct dirent* entry;
@@ -27,6 +74,7 @@ static void send_bad(int channel,const int* fds,unsigned count,unsigned bytes,co
 }
 int main(void)
 {
+    both_api_bindings();
     int protocol[2];assert(!socketpair(AF_UNIX,SOCK_STREAM,0,protocol));
     const char reply[]="V1.4.0.0\nH11111111\nR970101|0|0x22222222\nS";
     assert(send(protocol[0],reply,sizeof(reply)-1,MSG_NOSIGNAL)==sizeof(reply)-1);

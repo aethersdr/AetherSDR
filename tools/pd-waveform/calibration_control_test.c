@@ -110,6 +110,15 @@ int main(void)
     w.local_iq.last_valid_ns=1;assert(request(&w,'M',21).result==PD_CAL_BLOCKED);
     w.local_iq.last_valid_ns=pd_iq_monotonic_ns();assert(request(&w,'M',22).applied);
     api_line(&w,other);assert(w.calibration.phase==PD_CAL_CANCELED && !w.test_f1);
+    // The unbound socket's complete RECEIVE status is not the selected
+    // GUI's READY admission. Binding must precede DSP startup.
+    api_line(&w,idle);w.local_iq.last_valid_ns=pd_iq_monotonic_ns();
+    char unbound[]="S0|interlock state=RECEIVE tx_client_handle=0x00000000 source= reason= tx_allowed=0";
+    api_line(&w,unbound);
+    assert(request(&w,'M',23).result==PD_CAL_BLOCKED && !w.keyed && !w.test_f1);
+    api_line(&w,idle);w.local_iq.last_valid_ns=pd_iq_monotonic_ns();
+    assert(request(&w,'M',24).applied && !w.keyed && !w.test_f1);
+    assert(request(&w,'X',25).applied);
     pd_acquire_destroy(w.acquire); pd_core_destroy(w.core);
     pd_align_destroy(w.align); pd_eq_destroy(w.eq); pd_eq_destroy(w.trusted_eq);
     free(w.ref.buf); free(w.fbk.buf); free(w.acq_tx); free(w.acq_rx);

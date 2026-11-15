@@ -104,25 +104,44 @@ static int session_observe_bind(int api,struct stream_state* state)
         }
     }
 }
+struct session_bind_io {
+    int (*send_command)(int,const char*);
+    int (*observe)(int,struct stream_state*);
+};
+static int session_bind_apis(int lease,int unkey,uint32_t gui,const char* id,uint32_t* client,const struct session_bind_io* io)
+{
+    if(!gui || !client_id(id) || lease==unkey){return 0;}
+    char bind[128];int n=snprintf(bind,sizeof(bind),"C%d|client bind client_id=%s\n",kBind,id);
+    if(n<=0 || n>=(int)sizeof(bind)){return 0;}
+    const int sockets[]={lease,unkey};uint32_t lease_client=0;
+    for(unsigned i=0;i<2;++i){
+        struct stream_state state={.gui=gui,.issued=1};
+        if(!io->send_command(sockets[i],bind) || !io->observe(sockets[i],&state) ||
+           state.failed || !(state.replies&1) || !state.client || state.client==gui || state.client==lease_client){
+            char diagnostic[192];int length=snprintf(diagnostic,sizeof(diagnostic),"AetherPD %s GUI bind failed: client=%08x gui=%08x issued=%u replies=%u parser_failed=%d\n",i?"unkey":"DSP",state.client,state.gui,state.issued,state.replies,state.failed);
+            if(length>0 && length<(int)sizeof(diagnostic)){(void)write(2,diagnostic,(size_t)length);}return 0;
+        }
+        if(!i){lease_client=state.client;}else{*client=state.client;}
+    }
+    // Each non-GUI socket needs its own binding for the radio's per-GUI
+    // interlock state. Verify both before handing either to its consumer.
+    // The existing guardian requires its own pending bind acknowledgment.
+    // Our earlier transaction verifies the GUI identity; this identical bind
+    // leaves sequence910000 unread for the guardian's independent admission.
+    n=snprintf(bind,sizeof(bind),"C910000|client bind client_id=%s\n",id);
+    return n>0 && n<(int)sizeof(bind) && io->send_command(unkey,bind);
+}
 static void session_api_child(int channel,uint32_t gui,const char* id)
 {
     const int kept[]={channel};
     if(!prepared_close_except(kept,1,-1) || !drop_root()){_exit(30);}
     int lease=session_connect(),unkey=session_connect(),life[2];
     if(lease<0 || unkey<0 || pipe2(life,O_CLOEXEC)){_exit(31);}
-    struct stream_state state={.gui=gui};
-    char bind[128];int n=snprintf(bind,sizeof(bind),"C%d|client bind client_id=%s\n",kBind,id);
-    if(n<=0 || n>=(int)sizeof(bind) || !issue(unkey,&state,1,bind) || !session_observe_bind(unkey,&state) || state.client==gui){
-        char diagnostic[192];int length=snprintf(diagnostic,sizeof(diagnostic),"AetherPD GUI bind failed: client=%08x gui=%08x issued=%u replies=%u parser_failed=%d\n",state.client,state.gui,state.issued,state.replies,state.failed);
-        if(length>0 && length<(int)sizeof(diagnostic)){(void)write(2,diagnostic,(size_t)length);}_exit(32);
-    }
-    // The existing guardian requires its own pending bind acknowledgment.
-    // Our earlier transaction verifies the GUI identity; this identical bind
-    // leaves sequence910000 unread for the guardian's independent admission.
-    n=snprintf(bind,sizeof(bind),"C910000|client bind client_id=%s\n",id);
-    if(n<=0 || n>=(int)sizeof(bind) || !command(unkey,bind)){_exit(32);}
+    uint32_t client=0;
+    const struct session_bind_io io={command,session_observe_bind};
+    if(!session_bind_apis(lease,unkey,gui,id,&client,&io)){_exit(32);}
     const int fds[]={lease,unkey,life[1],life[0]};
-    _exit(session_send_apis(channel,fds,state.client,gui)?0:33);
+    _exit(session_send_apis(channel,fds,client,gui)?0:33);
 }
 static int session_prepare_apis(int fds[4],uint32_t* client,uint32_t gui,const char* id)
 {
