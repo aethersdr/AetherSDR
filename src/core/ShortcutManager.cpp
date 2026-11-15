@@ -9,6 +9,16 @@
 #include <QWidget>
 #include <QDebug>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -362,6 +372,44 @@ void ShortcutManager::clearBinding(const QString& actionId)
     emit bindingsChanged();
 }
 
+void ShortcutManager::markHoldKeyAction(const QString& actionId)
+{
+    if (auto* a = action(actionId))
+        a->holdKey = true;
+}
+
+QString ShortcutManager::bindingRefusal(const Action& action, const QKeySequence& key)
+{
+    if (key.isEmpty() || !isShortcutSidedKey(key[0].key()))
+        return {};
+    if (key.count() != 1 || key[0].keyboardModifiers() != Qt::NoModifier)
+        return QStringLiteral("A left/right modifier key cannot be combined with "
+                              "other keys.");
+    if (!action.holdKey)
+        return QStringLiteral("Left/right modifier keys can only trigger hold actions "
+                              "(CW keys, PTT hold, Monitor hold).");
+    return {};
+}
+
+std::optional<quint8> shortcutPollSidedModifierState()
+{
+#ifdef Q_OS_WIN
+    static constexpr struct { Qt::Key key; int vk; } kVks[] = {
+        {kShortcutKeyLeftCtrl, VK_LCONTROL},   {kShortcutKeyRightCtrl, VK_RCONTROL},
+        {kShortcutKeyLeftShift, VK_LSHIFT},    {kShortcutKeyRightShift, VK_RSHIFT},
+        {kShortcutKeyLeftAlt, VK_LMENU},       {kShortcutKeyRightAlt, VK_RMENU},
+    };
+    quint8 down = 0;
+    for (const auto& k : kVks) {
+        if (::GetKeyState(k.vk) < 0)
+            down |= shortcutSidedKeyBit(k.key);
+    }
+    return down;
+#else
+    return std::nullopt;
+#endif
+}
+
 void ShortcutManager::resetToDefaults()
 {
     for (auto& a : m_actions) {
@@ -537,6 +585,17 @@ ShortcutImportResult ShortcutManager::importBindingsCsv(const QByteArray& bytes)
                                  .arg(importedActionLines.value(actionIndex))
                                  .arg(m_actions.at(actionIndex).displayName);
             continue;
+        }
+        if (record.customized) {
+            const QString refusal =
+                bindingRefusal(m_actions.at(actionIndex), record.shortcut);
+            if (!refusal.isEmpty()) {
+                result.errors << QStringLiteral("Line %1: %2 (%3, %4).")
+                                     .arg(record.lineNumber)
+                                     .arg(refusal, m_actions.at(actionIndex).displayName,
+                                          shortcutKeyText(record.shortcut));
+                continue;
+            }
         }
         importedActionLines.insert(actionIndex, record.lineNumber);
         pending << PendingBinding{

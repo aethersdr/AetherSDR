@@ -9,6 +9,8 @@
 #include <QStringList>
 #include <QVector>
 #include <functional>
+#include <iterator>
+#include <optional>
 #include "models/TxController.h"
 
 namespace AetherSDR {
@@ -118,24 +120,17 @@ inline Qt::Key shortcutSidedKeyFor(ShortcutNativePlatform platform, int key,
         return Qt::Key_unknown;
     switch (platform) {
     case ShortcutNativePlatform::Windows:
-        // VK_LCONTROL.. when the sender supplies them (SendInput), else the
-        // scan code with the extended-key bit (0x100) marking the right key.
-        switch (nativeVirtualKey) {
-        case 0xA0: return kShortcutKeyLeftShift;
-        case 0xA1: return kShortcutKeyRightShift;
-        case 0xA2: return kShortcutKeyLeftCtrl;
-        case 0xA3: return kShortcutKeyRightCtrl;
-        case 0xA4: return kShortcutKeyLeftAlt;
-        case 0xA5: return kShortcutKeyRightAlt;
-        default: break;
-        }
-        switch (nativeScanCode & 0x1ffu) {
-        case 0x01d: return kShortcutKeyLeftCtrl;
-        case 0x11d: return kShortcutKeyRightCtrl;
-        case 0x02a: return kShortcutKeyLeftShift;
-        case 0x036: return kShortcutKeyRightShift;
-        case 0x038: return kShortcutKeyLeftAlt;
-        case 0x138: return kShortcutKeyRightAlt;
+        // Qt passes the generic VK_CONTROL/VK_SHIFT/VK_MENU as the virtual
+        // key, and the scan code with 0xE000 set for an extended (right-hand)
+        // key: right Ctrl is 0xE01D (qwindowskeymapper.cpp getScancode()).
+        // Right Shift is not extended; it has its own scan code, 0x36.
+        switch (nativeScanCode & 0xe0ffu) {
+        case 0x001d: return kShortcutKeyLeftCtrl;
+        case 0xe01d: return kShortcutKeyRightCtrl;
+        case 0x002a: return kShortcutKeyLeftShift;
+        case 0x0036: return kShortcutKeyRightShift;
+        case 0x0038: return kShortcutKeyLeftAlt;
+        case 0xe038: return kShortcutKeyRightAlt;
         default: return Qt::Key_unknown;
         }
     case ShortcutNativePlatform::MacOS:
@@ -245,6 +240,104 @@ inline QKeySequence shortcutKeyFromText(const QString& text,
     return QKeySequence::fromString(text, format);
 }
 
+// One bit per sided key, in kShortcutSidedKeys order.
+inline quint8 shortcutSidedKeyBit(int key)
+{
+    for (int i = 0; i < int(std::size(kShortcutSidedKeys)); ++i) {
+        if (kShortcutSidedKeys[i].key == key)
+            return quint8(1u << i);
+    }
+    return 0;
+}
+
+// Both sides of the modifier a sided key belongs to (Left|Right Ctrl, ...).
+inline quint8 shortcutSidedGroupMask(int key)
+{
+    const Qt::Key generic = shortcutSidedKeyGeneric(key);
+    quint8 mask = 0;
+    for (const auto& s : kShortcutSidedKeys) {
+        if (shortcutSidedKeyGeneric(s.key) == generic)
+            mask |= shortcutSidedKeyBit(s.key);
+    }
+    return mask;
+}
+
+struct ShortcutSidedEdge {
+    Qt::Key key;
+    bool press;
+    bool operator==(const ShortcutSidedEdge&) const = default;
+};
+
+// Turns the modifier events a platform delivers into one press and one
+// release per physical side (#7354). The platforms hide edges differently:
+// - Cocoa reports a modifier only when the aggregate flag changes, so with
+//   both Ctrl keys down the second press and first release never arrive.
+//   A release for a side never seen pressed therefore means "this modifier
+//   is fully up": observe() releases both sides, so a paddle or PTT hold on
+//   the hidden side cannot stay keyed (Principle VI).
+// - Windows records modifiers by the generic VK, so the second Ctrl press of
+//   a squeeze is never delivered. sync() diffs the per-side key state the
+//   caller reads from the OS against the last known state instead.
+class ShortcutSidedModifierTracker {
+public:
+    QList<ShortcutSidedEdge> observe(Qt::Key key, bool press)
+    {
+        const quint8 bit = shortcutSidedKeyBit(key);
+        if (!bit)
+            return {};
+        if (press) {
+            m_down |= bit;
+            return {{key, true}};
+        }
+        if (m_down & bit) {
+            m_down &= quint8(~bit);
+            return {{key, false}};
+        }
+        const quint8 group = shortcutSidedGroupMask(key);
+        m_down &= quint8(~group);
+        QList<ShortcutSidedEdge> edges;
+        for (const auto& s : kShortcutSidedKeys) {
+            if (group & shortcutSidedKeyBit(s.key))
+                edges.append({s.key, false});
+        }
+        return edges;
+    }
+
+    // `down` is the OS's per-side state; only the bits in `group` (the
+    // modifier this event is about) are compared, so a key the OS reports
+    // without a Qt event (AltGr's synthetic left Ctrl) is not invented.
+    // Releases come first so a side swap never holds both momentarily.
+    QList<ShortcutSidedEdge> sync(quint8 down, quint8 group)
+    {
+        const quint8 now = down & group;
+        const quint8 was = m_down & group;
+        QList<ShortcutSidedEdge> edges;
+        for (const auto& s : kShortcutSidedKeys) {
+            const quint8 bit = shortcutSidedKeyBit(s.key);
+            if ((was & bit) && !(now & bit))
+                edges.append({s.key, false});
+        }
+        for (const auto& s : kShortcutSidedKeys) {
+            const quint8 bit = shortcutSidedKeyBit(s.key);
+            if (!(was & bit) && (now & bit))
+                edges.append({s.key, true});
+        }
+        m_down = quint8((m_down & ~group) | now);
+        return edges;
+    }
+
+    void reset() { m_down = 0; }
+    quint8 down() const { return m_down; }
+
+private:
+    quint8 m_down{0};
+};
+
+// The OS's current per-side modifier state as shortcutSidedKeyBit() bits, on
+// a platform where Qt's own events hide edges and the OS can be asked
+// (Windows: GetKeyState); std::nullopt elsewhere.
+std::optional<quint8> shortcutPollSidedModifierState();
+
 class ShortcutManager : public QObject {
     Q_OBJECT
 public:
@@ -267,6 +360,10 @@ public:
         TxController::Activity txActivity{TxController::Activity::Mox};
         std::function<void(const TxController::Input&)> txHandler;
         ShortcutPolicy policy{ShortcutPolicy::Operating};
+        bool holdKey{false};      // driven press/release by the momentary
+                                  // event-filter handlers (CW keys, PTT and
+                                  // Monitor hold); the only actions a sided
+                                  // key can trigger (#7354)
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);
@@ -284,6 +381,10 @@ public:
     // Binding management
     void setBinding(const QString& actionId, const QKeySequence& key);
     void clearBinding(const QString& actionId);
+    void markHoldKeyAction(const QString& actionId);
+    // Why `key` cannot trigger `action`, or empty when it can. A sided key
+    // reaches only the momentary handlers, bare (#7354).
+    static QString bindingRefusal(const Action& action, const QKeySequence& key);
     void resetToDefaults();
 
     // Persistence

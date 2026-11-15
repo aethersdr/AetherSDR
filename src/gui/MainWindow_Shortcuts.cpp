@@ -167,17 +167,6 @@ bool MainWindow::handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eve
     const QKeySequence seq = shortcutSequenceFromKeyEvent(keyEvent);
     const auto* action = m_shortcutManager.actionForKey(seq);
 
-    // Which side a modifier key read as, from what native data (#7354): the
-    // Windows extended-scan-code bit is the field a tester has to confirm.
-    if (isShortcutModifierKey(keyEvent->key())) {
-        qCDebug(lcCw).noquote().nospace()
-            << "Modifier key " << (eventType == QEvent::KeyPress ? "press" : "release")
-            << " key=0x" << QString::number(keyEvent->key(), 16)
-            << " scan=0x" << QString::number(keyEvent->nativeScanCode(), 16)
-            << " vk=0x" << QString::number(keyEvent->nativeVirtualKey(), 16)
-            << " -> " << shortcutKeyText(seq);
-    }
-
     CwAction cwAction = CwAction::None;
     if (action) {
         if (action->id == QLatin1String(kCwStraightKeyActionId))
@@ -600,6 +589,61 @@ bool MainWindow::keyEventMatchesActionBaseKey(const char* actionId,
 }
 
 
+bool MainWindow::dispatchMomentaryKey(QKeyEvent* keyEvent, QEvent::Type eventType)
+{
+    if (handleCwMomentaryShortcut(keyEvent, eventType))
+        return true;
+    // PTT (Hold) — resolves its (rebindable) key through ShortcutManager
+    // rather than a hardcoded Space, so reassigning it actually moves the
+    // transmit key (#3879).
+    if (handlePttHoldShortcut(keyEvent, eventType))
+        return true;
+    // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
+    // same missing-released-signal reason.
+    return handleSplitMonitorShortcut(keyEvent, eventType);
+}
+
+std::optional<bool> MainWindow::handleSidedModifierEvent(QKeyEvent* keyEvent,
+                                                         QEvent::Type eventType)
+{
+    if (!keyEvent || keyEvent->isAutoRepeat() || !isShortcutModifierKey(keyEvent->key())
+        || isShortcutSidedKey(keyEvent->key())
+        || dynamic_cast<const TxInputKeyEvent*>(keyEvent))
+        return std::nullopt;
+    if (eventType != QEvent::KeyPress && eventType != QEvent::KeyRelease)
+        return std::nullopt;
+    const Qt::Key side = shortcutSidedKeyFromEvent(keyEvent);
+    if (side == Qt::Key_unknown)
+        return std::nullopt;   // no native side: the generic key path
+
+    const bool press = eventType == QEvent::KeyPress;
+    const std::optional<quint8> osDown = shortcutPollSidedModifierState();
+    const QList<ShortcutSidedEdge> edges = osDown
+        ? m_sidedModifiers.sync(*osDown, shortcutSidedGroupMask(side))
+        : m_sidedModifiers.observe(side, press);
+
+    // The Windows extended-scan-code bit and the OS key state are what a
+    // tester has to confirm, so log them with the edges they produced.
+    QStringList edgeText;
+    for (const auto& e : edges)
+        edgeText << QString::fromLatin1(e.press ? "+" : "-") + shortcutKeyText(QKeySequence(e.key));
+    qCDebug(lcCw).noquote().nospace()
+        << "Modifier key " << (press ? "press" : "release")
+        << " key=0x" << QString::number(keyEvent->key(), 16)
+        << " scan=0x" << QString::number(keyEvent->nativeScanCode(), 16)
+        << " vk=0x" << QString::number(keyEvent->nativeVirtualKey(), 16)
+        << " side=" << shortcutKeyText(QKeySequence(side))
+        << (osDown ? " os=0x" + QString::number(*osDown, 16) : QString())
+        << " edges=[" << edgeText.join(QLatin1Char(' ')) << "]";
+
+    bool consumed = false;
+    for (const auto& e : edges) {
+        QKeyEvent edge(e.press ? QEvent::KeyPress : QEvent::KeyRelease, e.key, Qt::NoModifier);
+        consumed |= dispatchMomentaryKey(&edge, edge.type());
+    }
+    return consumed;
+}
+
 void MainWindow::failSafeMomentaryKeyingToRx(const char* reason)
 {
     // Principle VI fail-safe: a held momentary-keying key whose KeyRelease is
@@ -608,6 +652,8 @@ void MainWindow::failSafeMomentaryKeyingToRx(const char* reason)
     // every deactivation: bail out unless something is actually keyed.
     // Whoever was holding it, the fail-safe owns the release from here.
     m_dialPttHoldActive = false;
+    // A release that never arrives leaves its side marked down; forget it.
+    m_sidedModifiers.reset();
 
     const bool anyActive = m_pttHoldActive || m_cwStraightKeyActive
         || m_cwLeftPaddleActive || m_cwRightPaddleActive;
@@ -901,19 +947,14 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             return true;
         }
 
-        if (handleCwMomentaryShortcut(ke, event->type()))
+        // A Ctrl/Shift/Alt whose side is known reaches the hold handlers as
+        // one edge per physical side instead (#7354).
+        if (const auto sided = handleSidedModifierEvent(ke, event->type())) {
+            if (*sided)
+                return true;
+        } else if (dispatchMomentaryKey(ke, event->type())) {
             return true;
-
-        // PTT (Hold) — resolves its (rebindable) key through ShortcutManager
-        // rather than a hardcoded Space, so reassigning it actually moves the
-        // transmit key (#3879).
-        if (handlePttHoldShortcut(ke, event->type()))
-            return true;
-
-        // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
-        // same missing-released-signal reason.
-        if (handleSplitMonitorShortcut(ke, event->type()))
-            return true;
+        }
 
         // After every hold handler, so a hold's release always ends it. With
         // shortcuts off a bound key reaches the focused widget, but never a
@@ -1830,6 +1871,11 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction(kCwRightPaddleActionId, kCwRightPaddleActionName, "CW",
         QKeySequence(), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
+    // The momentary handlers drive these press/release; they are the only
+    // actions a left/right modifier key can trigger (#7354).
+    for (const char* id : {kPttHoldActionId, kSplitMonitorActionId, kCwStraightKeyActionId,
+                           kCwLeftPaddleActionId, kCwRightPaddleActionId})
+        m_shortcutManager.markHoldKeyAction(QLatin1String(id));
 
     // ── EQ ──────────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("tx_eq_toggle", "TX EQ Toggle", "EQ",

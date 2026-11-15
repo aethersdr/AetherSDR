@@ -123,6 +123,16 @@ int main(int argc, char** argv)
                        QKeySequence(Qt::Key_Escape), {});
     mgr.registerAction(kMute, QStringLiteral("Mute"), QStringLiteral("Audio"),
                        QKeySequence(), {});
+    // #7354: hold actions a left/right modifier key may trigger, and one it
+    // may not.
+    mgr.registerAction(QStringLiteral("cwkey"), QStringLiteral("Straight Key"),
+                       QStringLiteral("CW"), QKeySequence(), {});
+    mgr.registerAction(QStringLiteral("cwdit"), QStringLiteral("Left Paddle"),
+                       QStringLiteral("CW"), QKeySequence(), {});
+    mgr.markHoldKeyAction(QStringLiteral("cwkey"));
+    mgr.markHoldKeyAction(QStringLiteral("cwdit"));
+    mgr.registerAction(QStringLiteral("band_up"), QStringLiteral("Band Up"),
+                       QStringLiteral("Band"), QKeySequence(), {});
     mgr.loadBindings();
 
     ShortcutDialog dlg(&mgr);
@@ -368,6 +378,67 @@ int main(int argc, char** argv)
             EXPECT_TRUE(ground == want);
             combo->hidePopup();
         }
+    }
+
+    // ---- #7354: left/right modifier caps ----
+    if (map && combo) {
+        mgr.resetToDefaults();
+        // Walk the map with the keyboard until `key` is the selected cap.
+        const auto selectCap = [map](Qt::Key key) {
+            map->setFocus();
+            QTest::keyClick(map, Qt::Key_Home);
+            for (int i = 0; i < 200; ++i) {
+                QTest::keyClick(map, Qt::Key_Return);
+                if (map->selectedKey() == key)
+                    return true;
+                QTest::keyClick(map, Qt::Key_Right);
+            }
+            return false;
+        };
+        auto* keyLabel = dlg.findChild<QLabel*>(QStringLiteral("shortcutKeyLabel"));
+        QPushButton* clear = nullptr;
+        for (QPushButton* b : dlg.findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("Clear"))
+                clear = b;
+        }
+        EXPECT_TRUE(keyLabel && clear);
+
+        // A non-hold action is refused on a sided cap, with a notice.
+        EXPECT_TRUE(selectCap(kShortcutKeyLeftAlt));
+        const int bandIdx = combo->findData(QStringLiteral("band_up"));
+        Answer refused;
+        answerNextBox(refused, [](CanonMessageBox& box) { box.close(); });
+        combo->setCurrentIndex(bandIdx);
+        emit combo->activated(bandIdx);
+        EXPECT_TRUE(refused.opened);
+        EXPECT_TRUE(refused.title == QStringLiteral("Cannot Assign Key"));
+        EXPECT_TRUE(mgr.action(QStringLiteral("band_up"))->currentKey.isEmpty());
+        EXPECT_TRUE(combo->currentData().toString().isEmpty());
+
+        // A hold action binds to the sided cap without asking.
+        EXPECT_TRUE(selectCap(kShortcutKeyLeftCtrl));
+        const int ditIdx = combo->findData(QStringLiteral("cwdit"));
+        Answer none;
+        answerNextBox(none, [](CanonMessageBox& box) { box.close(); });
+        emit combo->activated(ditIdx);
+        QTest::qWait(10);
+        EXPECT_TRUE(!none.opened);
+        EXPECT_TRUE(mgr.action(QStringLiteral("cwdit"))->currentKey
+                    == QKeySequence(kShortcutKeyLeftCtrl));
+        EXPECT_TRUE(keyLabel && keyLabel->text() == QStringLiteral("Left Ctrl"));
+
+        // A cap with no binding of its own shows the shared plain binding,
+        // says so, and Clear clears that shared binding.
+        mgr.setBinding(QStringLiteral("cwkey"), QKeySequence(Qt::Key_Control));
+        EXPECT_TRUE(selectCap(kShortcutKeyRightCtrl));
+        EXPECT_TRUE(keyLabel && keyLabel->text().startsWith(QStringLiteral("Right Ctrl (plain "))
+                    && keyLabel->text().endsWith(QStringLiteral(", both sides)")));
+        EXPECT_TRUE(combo->currentData().toString() == QStringLiteral("cwkey"));
+        if (clear)
+            clear->click();
+        EXPECT_TRUE(mgr.action(QStringLiteral("cwkey"))->currentKey.isEmpty());
+        EXPECT_TRUE(mgr.action(QStringLiteral("cwdit"))->currentKey
+                    == QKeySequence(kShortcutKeyLeftCtrl));
     }
 
     if (g_failures == 0) {
