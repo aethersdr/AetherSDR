@@ -55,6 +55,11 @@ void CwxLocalKeyer::setOnKeyDownChange(KeyDownCallback cb)
     m_onKeyDownChange = std::move(cb);
 }
 
+void CwxLocalKeyer::setOnDrained(std::function<void()> cb)
+{
+    m_onDrained = std::move(cb);
+}
+
 void CwxLocalKeyer::start(const QString& text, int wpm)
 {
     if (text.isEmpty() || wpm <= 0) return;
@@ -75,11 +80,22 @@ void CwxLocalKeyer::start(const QString& text, int wpm)
     }
 }
 
+int CwxLocalKeyer::pendingChars() const
+{
+    std::lock_guard<std::mutex> lk(m_mu);
+    int n = m_playingChars;
+    for (const Pending& p : m_queue) {
+        n += static_cast<int>(p.text.size());
+    }
+    return n;
+}
+
 void CwxLocalKeyer::stop()
 {
     {
         std::lock_guard<std::mutex> lk(m_mu);
         m_queue.clear();
+        m_playingChars = 0;
     }
     m_abort.store(true, std::memory_order_release);
     if (m_spawnWorker) {
@@ -141,11 +157,15 @@ void CwxLocalKeyer::scheduleNext()
                 p = m_queue.dequeue();
                 havePending = true;
             }
+            m_playingChars = havePending ? static_cast<int>(p.text.size()) : 0;
         }
         if (!havePending) {
             m_running = false;
             resetEpoch();
             keyUpIfDown();
+            if (m_onDrained) {
+                m_onDrained();
+            }
             return;
         }
         // In live mode each keystroke arrives as a separate Pending entry.
@@ -292,6 +312,10 @@ void CwxLocalKeyer::workerLoop()
                 m_elements.clear();
                 resetEpoch();
                 m_running = false;
+                {
+                    std::lock_guard<std::mutex> lk(m_mu);
+                    m_playingChars = 0;
+                }
                 break;
             }
         }

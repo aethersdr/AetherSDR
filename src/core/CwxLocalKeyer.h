@@ -14,7 +14,8 @@
 namespace AetherSDR {
 
 // Local Morse keyer: dit/dah events from CWX text for the sidetone, at the same
-// WPM as the radio's keyer (informational; the radio makes the on-air CW).
+// WPM as the radio's keyer (informational; the radio makes the on-air CW), or,
+// through HostCwTextKeyer, the host-keyed elements on a radio with no text buffer.
 // The schedule runs on a worker thread waiting on absolute steady_clock deadlines
 // via an interruptible condition_variable, not a QTimer, whose event-loop
 // coalescing clips elements (#3623), as IambicKeyer does.
@@ -37,6 +38,9 @@ public:
     // Install before start().  Called on the worker thread — the receiver must
     // be lock-free.
     void setOnKeyDownChange(KeyDownCallback cb);
+    // Install before start(). Called on the worker thread after a run's last
+    // key-up when the queue has drained, never after stop(); lock-free receiver.
+    void setOnDrained(std::function<void()> cb);
 
     // Append a transmission segment.  Spawns the worker thread on first use; if
     // a segment is already playing, the new text is queued and plays when the
@@ -54,6 +58,10 @@ public:
     // scheduleNext()). Route through m_mu if ever promoted to a live
     // cross-thread query. (#3623 review)
     bool isIdle() const { return m_elements.isEmpty() && !m_running; }
+
+    // Characters not yet fully keyed: every queued segment plus the whole of
+    // the one playing, until it ends or is stopped. Thread-safe.
+    int pendingChars() const;
 
 protected:
     // Test seam: a subclass constructed with spawnWorker=false drives the
@@ -97,6 +105,7 @@ private:
     int           m_nextWaitMs{0};   // last wait armTimer() recorded
 
     KeyDownCallback m_onKeyDownChange;
+    std::function<void()> m_onDrained;
     bool            m_lastEmittedKeyDown{false};
 
     // Cross-thread control.  m_queue is guarded by m_mu; the flags are atomic.
@@ -105,6 +114,7 @@ private:
     mutable std::mutex      m_mu;
     std::condition_variable m_cv;
     QQueue<Pending>         m_queue;
+    int                     m_playingChars{0};   // guarded by m_mu
     std::atomic<bool>       m_workerStarted{false};
     std::atomic<bool>       m_abort{false};
     std::atomic<bool>       m_shutdown{false};

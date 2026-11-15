@@ -7601,6 +7601,15 @@ target_link_libraries(cw_text_capability_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME cw_text_capability_test COMMAND cw_text_capability_test)
 
+# #7146 part 2: the host CW text engine in RadioModel behind CwxModel: timing,
+# per-element gates, the queue between senders, scoped and clear-all stops,
+# paddle takeover. Injected backend, no socket, nothing keyed.
+add_executable(host_cw_text_engine_test tests/host_cw_text_engine_test.cpp)
+target_include_directories(host_cw_text_engine_test PRIVATE src tests)
+target_link_libraries(host_cw_text_engine_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME host_cw_text_engine_test COMMAND host_cw_text_engine_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp

@@ -50,6 +50,7 @@
 #include "TnfModel.h"
 #include "SpotModel.h"
 #include "CwxModel.h"
+#include "HostCwTextKeyer.h"
 #include "core/TxCoordinator.h"
 #include "DvkModel.h"
 #include "UsbCableModel.h"
@@ -510,6 +511,13 @@ public:
     // so it keeps the permissive disconnected rule. The one check every text-CW
     // surface asks once it can reach the host engine (#7146).
     bool hasCwTextKeyer() const;
+    // Send-time preflight for host-keyed text, as pure reads with no notice;
+    // each element still passes a paddle's per-edge gates. BreakInOffUnkeyed:
+    // break-in is off and no MOX/PTT is held, so the backend would not raise
+    // MOX. Tuning: a CW key-down is refused while TUNE is active.
+    enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited,
+                                   Tuning, BreakInOffUnkeyed };
+    HostCwTextRefusal hostCwTextRefusal() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
     int cwTextMinWpm() const;
@@ -1021,6 +1029,8 @@ public:
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
     TxCoordinator::Producer registerTxProducer();
+    // A producer under `input`'s actor, for a sequencer keying on its behalf.
+    TxCoordinator::Producer registerTxProducerFor(const TxCoordinator::Request& input);
     // Trusted local operator control surface. UI buttons and equivalent
     // keyboard/MIDI toggles share this producer; external clients must bring
     // their own lifetime instead of borrowing it.
@@ -1054,9 +1064,14 @@ public:
                            const QString& debugSource = {}, quint64 debugTraceId = 0,
                            quint64 debugSourceMs = 0);
     bool producerRequestHasWork(const TxCoordinator::Request& request) const;
+    // Host CW text passes hostTextGates: a key-down is refused unless the TX
+    // slice is in CW, TUNE is off and, with break-in off, MOX/PTT is held.
+    // onDownRefused runs on the model thread when a key-down is not forwarded.
     void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                 const QString& source, quint64 traceId, quint64 sourceMs,
-                                std::chrono::steady_clock::time_point scheduledAt);
+                                std::chrono::steady_clock::time_point scheduledAt,
+                                bool hostTextGates = false,
+                                std::function<void()> onDownRefused = {});
     bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
     void abortTxProducerInputs(const TxCoordinator::Producer& producer,
                                TransmitModel::PttSource source);
@@ -2487,6 +2502,14 @@ private:
     bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
+    bool hostCwTextRoute() const;
+    bool admitHostCwx(const TxCoordinator::Request& request, const QString& text,
+                      const std::function<void()>& onAdmitted, int macroIndex, bool live, bool& held);
+    ReceiveDispatch dispatchHostCwxRequest(const CwTextRequest& request);
+    bool dispatchHostCwText(const TxCoordinator::Request& request, const QString& text, int wpm);
+    void startWaitingHostCwx();
+    void hostCwTextEnded(const TxCoordinator::Request& sender, bool refused);
+    void createHostCwTextKeyer();
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
     void applyBackendTransmitDelta(const TransmitDelta& delta);
@@ -2498,6 +2521,10 @@ private:
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
     CwxModel         m_cwxModel;
+    // Created on connect of a backend with hostCwKeyingControl; closed, key up,
+    // in resetTxOperations() while the coordinator can still deliver the key-up.
+    std::unique_ptr<HostCwTextKeyer> m_hostCwText;
+    bool m_hostCwTextEdge{false};   // a host-text element is being dispatched, not a paddle
     DvkModel         m_dvkModel;
     NavtexModel         m_navtexModel;
     UsbCableModel       m_usbCableModel;
