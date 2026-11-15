@@ -3845,6 +3845,21 @@ add_executable(tx_chain_settings_test tests/tx_chain_settings_test.cpp)
 target_include_directories(tx_chain_settings_test PRIVATE src tests)
 target_link_libraries(tx_chain_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME tx_chain_settings_test COMMAND tx_chain_settings_test)
+# The offline SSB envelope meter the transmit-dynamics stages are measured with
+# (RFC #4836 Stage 0): closed-form envelopes of synthetic signals, either
+# sideband, linear- and minimum-phase radio filter models. Keys nothing.
+add_executable(ssb_envelope_meter_test tests/ssb_envelope_meter_test.cpp)
+target_include_directories(ssb_envelope_meter_test PRIVATE src)
+target_link_libraries(ssb_envelope_meter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ssb_envelope_meter_test COMMAND ssb_envelope_meter_test)
+
+# not registered: explicit opt-in diagnostic. Measures a local 48 kHz voice
+# recording through the real TX voice processor, bypassed and processed, and
+# prints the SSB envelope figures of the 24 kHz transport output. No radio, no
+# sockets, no keying. Never part of the default build or the CTest graph.
+add_executable(tx_papr_harness EXCLUDE_FROM_ALL tools/tx_papr_harness.cpp)
+target_include_directories(tx_papr_harness PRIVATE src)
+target_link_libraries(tx_papr_harness PRIVATE aethercore Qt6::Core)
 
 add_executable(tx_voice_processor_test
     tests/tx_voice_processor_test.cpp
