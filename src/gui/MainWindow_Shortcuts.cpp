@@ -612,29 +612,35 @@ std::optional<bool> MainWindow::handleSidedModifierEvent(QKeyEvent* keyEvent,
         return std::nullopt;
     if (eventType != QEvent::KeyPress && eventType != QEvent::KeyRelease)
         return std::nullopt;
-    const Qt::Key side = shortcutSidedKeyFromEvent(keyEvent);
-    if (side == Qt::Key_unknown)
-        return std::nullopt;   // no native side: the generic key path
-
     const bool press = eventType == QEvent::KeyPress;
+    const Qt::Key side = shortcutSidedKeyFromEvent(keyEvent);
     const std::optional<quint8> osDown = shortcutPollSidedModifierState();
-    const QList<ShortcutSidedEdge> edges = osDown
-        ? m_sidedModifiers.sync(*osDown, shortcutSidedGroupMask(side))
-        : m_sidedModifiers.observe(side, press);
-
-    // The Windows extended-scan-code bit and the OS key state are what a
-    // tester has to confirm, so log them with the edges they produced.
-    QStringList edgeText;
-    for (const auto& e : edges)
-        edgeText << QString::fromLatin1(e.press ? "+" : "-") + shortcutKeyText(QKeySequence(e.key));
+    // The native fields and the OS key state are what a tester has to
+    // confirm, so log them for every modifier event, decoded or not.
     qCDebug(lcCw).noquote().nospace()
         << "Modifier key " << (press ? "press" : "release")
         << " key=0x" << QString::number(keyEvent->key(), 16)
         << " scan=0x" << QString::number(keyEvent->nativeScanCode(), 16)
         << " vk=0x" << QString::number(keyEvent->nativeVirtualKey(), 16)
-        << " side=" << shortcutKeyText(QKeySequence(side))
-        << (osDown ? " os=0x" + QString::number(*osDown, 16) : QString())
-        << " edges=[" << edgeText.join(QLatin1Char(' ')) << "]";
+        << " side=" << (side == Qt::Key_unknown ? QStringLiteral("unknown")
+                                                : shortcutKeyText(QKeySequence(side)))
+        << (osDown ? " os=0x" + QString::number(*osDown, 16) : QString());
+    if (side == Qt::Key_unknown)
+        return std::nullopt;   // no native side: the generic key path
+
+    if (!m_sidedModifiers.acceptDelivery(keyEvent->timestamp(), side, press))
+        return false;
+
+    const QList<ShortcutSidedEdge> edges = osDown
+        ? m_sidedModifiers.sync(side, press, *osDown)
+        : m_sidedModifiers.observe(side, press);
+    if (lcCw().isDebugEnabled()) {
+        QStringList edgeText;
+        for (const auto& e : edges)
+            edgeText << QString::fromLatin1(e.press ? "+" : "-")
+                            + shortcutKeyText(QKeySequence(e.key));
+        qCDebug(lcCw).noquote() << "Modifier edges:" << edgeText.join(QLatin1Char(' '));
+    }
 
     bool consumed = false;
     for (const auto& e : edges) {

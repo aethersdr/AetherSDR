@@ -276,8 +276,11 @@ struct ShortcutSidedEdge {
 //   is fully up": observe() releases both sides, so a paddle or PTT hold on
 //   the hidden side cannot stay keyed (Principle VI).
 // - Windows records modifiers by the generic VK, so the second Ctrl press of
-//   a squeeze is never delivered. sync() diffs the per-side key state the
-//   caller reads from the OS against the last known state instead.
+//   a squeeze is never delivered, and the first of two held Shift keys sends
+//   no key-up. sync() reads the other side from the OS on every event of
+//   that modifier.
+// Feed each delivered event once: the app event filter sees an unconsumed
+// event again at every widget it propagates through.
 class ShortcutSidedModifierTracker {
 public:
     QList<ShortcutSidedEdge> observe(Qt::Key key, bool press)
@@ -303,14 +306,20 @@ public:
         return edges;
     }
 
-    // `down` is the OS's per-side state; only the bits in `group` (the
-    // modifier this event is about) are compared, so a key the OS reports
-    // without a Qt event (AltGr's synthetic left Ctrl) is not invented.
-    // Releases come first so a side swap never holds both momentarily.
-    QList<ShortcutSidedEdge> sync(quint8 down, quint8 group)
+    // Windows: the delivered event's own edge is applied first, since it
+    // happened even if the OS state read now is already past it (a quick
+    // tap's press and release can be flushed together). The other side of
+    // the same modifier comes from `down`, the OS's per-side state; other
+    // modifiers are not compared, so AltGr's synthetic left Ctrl (which Qt
+    // never reports) is not invented. Releases come first.
+    QList<ShortcutSidedEdge> sync(Qt::Key key, bool press, quint8 down)
     {
-        const quint8 now = down & group;
-        const quint8 was = m_down & group;
+        const quint8 own = shortcutSidedKeyBit(key);
+        if (!own)
+            return {};
+        const quint8 others = quint8(shortcutSidedGroupMask(key) & ~own);
+        const quint8 now = quint8((down & others) | (press ? own : 0));
+        const quint8 was = quint8(m_down & (others | own));
         QList<ShortcutSidedEdge> edges;
         for (const auto& s : kShortcutSidedKeys) {
             const quint8 bit = shortcutSidedKeyBit(s.key);
@@ -322,15 +331,34 @@ public:
             if (!(was & bit) && (now & bit))
                 edges.append({s.key, true});
         }
-        m_down = quint8((m_down & ~group) | now);
+        m_down = quint8((m_down & ~(others | own)) | now);
         return edges;
     }
 
-    void reset() { m_down = 0; }
+    // False for a repeat of the event delivered last (same timestamp, key
+    // and direction): the app event filter sees an unconsumed event again
+    // at every widget it propagates through.
+    bool acceptDelivery(quint64 timestamp, Qt::Key key, bool press)
+    {
+        const Delivery d{timestamp, key, press};
+        if (m_last && *m_last == d)
+            return false;
+        m_last = d;
+        return true;
+    }
+
+    void reset() { m_down = 0; m_last.reset(); }
     quint8 down() const { return m_down; }
 
 private:
+    struct Delivery {
+        quint64 timestamp;
+        Qt::Key key;
+        bool press;
+        bool operator==(const Delivery&) const = default;
+    };
     quint8 m_down{0};
+    std::optional<Delivery> m_last;
 };
 
 // The OS's current per-side modifier state as shortcutSidedKeyBit() bits, on

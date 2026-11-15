@@ -432,7 +432,14 @@ void ShortcutManager::loadBindings()
         // `persisted`, so this stays a contains() gate rather than a
         // value(key, default) fallback.
         if (s.contains(key)) {
-            a.currentKey = shortcutKeyFromText(s.value(key).toString());
+            const QKeySequence saved = shortcutKeyFromText(s.value(key).toString());
+            if (const QString refusal = bindingRefusal(a, saved); !refusal.isEmpty()) {
+                qWarning().noquote() << "ShortcutManager: ignoring saved binding"
+                                     << shortcutKeyText(saved) << "for" << a.id << "-"
+                                     << refusal;
+                continue;
+            }
+            a.currentKey = saved;
             a.persisted = true;
         }
     }

@@ -679,6 +679,19 @@ int main(int argc, char** argv)
         ok &= expect(xkb.observe(R, false) == edges({{R, false}}), "xkb: R up");
         ok &= expect(xkb.down() == 0, "xkb: nothing left down");
 
+        // The app filter sees an unconsumed release again at each widget it
+        // propagates through; the repeat must not look like an unseen side.
+        ShortcutSidedModifierTracker filter;
+        ok &= expect(filter.acceptDelivery(10, R, true), "first delivery accepted");
+        (void)filter.observe(R, true);
+        ok &= expect(filter.acceptDelivery(20, L, true), "L press accepted");
+        (void)filter.observe(L, true);
+        ok &= expect(filter.acceptDelivery(30, L, false), "L release accepted");
+        (void)filter.observe(L, false);
+        ok &= expect(!filter.acceptDelivery(30, L, false), "the same L release again is a repeat");
+        ok &= expect(filter.down() == shortcutSidedKeyBit(R), "R stays down through the repeat");
+        ok &= expect(filter.acceptDelivery(40, L, true), "a later L press is new");
+
         // Cocoa: L down, R down, L up, R up delivers only "press L" and
         // "release R" (flagsChanged sees the aggregate Control flag). The
         // release must still drop L, or a paddle/PTT hold stays keyed.
@@ -699,25 +712,30 @@ int main(int argc, char** argv)
         ok &= expect(cocoaShift.down() == shortcutSidedKeyBit(kShortcutKeyLeftShift),
                      "cocoa: Left Shift still down");
 
-        // Windows: Qt delivers L down, L up, R up (the second press is
-        // swallowed by its key recorder); the OS per-side state carries the
-        // rest. Each delivered Ctrl event syncs the Ctrl group only.
+        // Windows: Qt delivers L down, L up, R up (its key recorder swallows
+        // the second press); the OS per-side state supplies the other side.
         const quint8 bl = shortcutSidedKeyBit(L), br = shortcutSidedKeyBit(R);
-        const quint8 ctrl = shortcutSidedGroupMask(L);
-        ok &= expect(ctrl == (bl | br), "Ctrl group is both Ctrl sides");
+        ok &= expect(shortcutSidedGroupMask(L) == (bl | br), "Ctrl group is both Ctrl sides");
         ShortcutSidedModifierTracker win;
-        ok &= expect(win.sync(bl, ctrl) == edges({{L, true}}), "win: L down");
-        ok &= expect(win.sync(br, ctrl) == edges({{L, false}, {R, true}}),
+        ok &= expect(win.sync(L, true, bl) == edges({{L, true}}), "win: L down");
+        ok &= expect(win.sync(L, false, br) == edges({{L, false}, {R, true}}),
                      "win: on L up the squeezed R press appears, release first");
-        ok &= expect(win.sync(0, ctrl) == edges({{R, false}}), "win: R up");
-        ok &= expect(win.sync(bl | br, ctrl) == edges({{L, true}, {R, true}}),
-                     "win: both down in one batch");
-        ok &= expect(win.sync(0, ctrl) == edges({{L, false}, {R, false}}),
-                     "win: both up in one batch");
+        ok &= expect(win.sync(R, false, 0) == edges({{R, false}}), "win: R up");
+        // A quick tap whose press and release are flushed together: the OS
+        // already reads up when the press arrives. The event's own edge wins.
+        ok &= expect(win.sync(L, true, 0) == edges({{L, true}}), "win: fast tap press still keys");
+        ok &= expect(win.sync(L, false, 0) == edges({{L, false}}), "win: fast tap release");
+        // Two held Shifts: Windows sends no key-up for the first released.
+        // The last one's key-up releases both.
+        const Qt::Key LS = kShortcutKeyLeftShift, RS = kShortcutKeyRightShift;
+        const quint8 bls = shortcutSidedKeyBit(LS), brs = shortcutSidedKeyBit(RS);
+        (void)win.sync(LS, true, bls);
+        (void)win.sync(RS, true, bls | brs);
+        ok &= expect(win.sync(RS, false, 0) == edges({{LS, false}, {RS, false}}),
+                     "win: the last Shift key-up releases both Shifts");
         // AltGr: Windows holds a synthetic left Ctrl that Qt never reports.
         // An Alt event must not turn it into a Left Ctrl press.
-        const quint8 alt = shortcutSidedGroupMask(kShortcutKeyRightAlt);
-        ok &= expect(win.sync(bl | shortcutSidedKeyBit(kShortcutKeyRightAlt), alt)
+        ok &= expect(win.sync(kShortcutKeyRightAlt, true, bl | shortcutSidedKeyBit(kShortcutKeyRightAlt))
                          == edges({{kShortcutKeyRightAlt, true}}),
                      "win: AltGr's synthetic left Ctrl is not a press");
         win.reset();
@@ -750,6 +768,22 @@ int main(int argc, char** argv)
                      "Shift+Left Ctrl is refused");
         ok &= expect(ShortcutManager::bindingRefusal(*band, QKeySequence(Qt::Key_F5)).isEmpty(),
                      "an ordinary key is unaffected");
+
+        // A saved sided binding the dialog would refuse is ignored at load.
+        // Right Alt: no other action here holds it, so duplicate
+        // normalization cannot mask the refusal.
+        AppSettings::instance().setValue(QStringLiteral("Shortcut_band_up"),
+                                         QStringLiteral("Right Alt"));
+        AppSettings::instance().setValue(QStringLiteral("Shortcut_cwdah"),
+                                         QStringLiteral("Right Ctrl"));
+        mgr.loadBindings();
+        ok &= expect(mgr.action(QStringLiteral("cwdah"))->currentKey
+                         == QKeySequence(kShortcutKeyRightCtrl),
+                     "a saved sided binding on a hold action loads");
+        ok &= expect(mgr.action(QStringLiteral("band_up"))->currentKey.isEmpty(),
+                     "a saved sided binding on a non-hold action is ignored");
+        AppSettings::instance().remove(QStringLiteral("Shortcut_band_up"));
+        AppSettings::instance().remove(QStringLiteral("Shortcut_cwdah"));
 
         const QByteArray header =
             "FORMAT_VERSION,ACTION_ID,ACTION_NAME,CATEGORY,SHORTCUT,CUSTOMIZED\n";

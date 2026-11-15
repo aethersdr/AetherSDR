@@ -73,7 +73,7 @@ The keyboard map binds the left and right **CTRL**, **SHIFT** and **ALT** keys s
 
 Platform limits for a squeeze (both paddles held):
 
-- **Windows** does not report the second Ctrl press while the first is held. AetherSDR reads each side's state from Windows on every Ctrl event, so the squeezed paddle is recognized when the other one changes, not at the moment it is pressed.
+- **Windows** does not report the second Ctrl press while the first is held, and with both Shift keys held it does not report the first one released. AetherSDR reads the other side's state from Windows on every event of that modifier, so the hidden edge is recognized when the other key changes, not at the moment it happens.
 - **macOS** reports nothing for the second Ctrl while the first is held, so a squeeze cannot be keyed. Releasing the last Ctrl always releases both paddles.
 - **Linux** reports every press and release.
 
