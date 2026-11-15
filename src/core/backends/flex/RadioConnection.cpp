@@ -463,8 +463,10 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                     const QString line =
                         QStringLiteral("SDE300001|slice 0 client_handle=0xDE300001 "
                                        "RF_frequency=%1").arg(mhz, 0, 'f', 6);
-                    QTimer::singleShot(0, this, [this, line] {
-                        if (m_syntheticDemo) emitSyntheticStatus(line);
+                    QTimer::singleShot(0, this, [this, line, generation = m_sessionGeneration.load()] {
+                        if (m_syntheticDemo && generation == m_sessionGeneration) {
+                            emitSyntheticStatus(line);
+                        }
                     });
                     emit demoVfoChanged(mhz);
                 }
@@ -508,8 +510,10 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                 const QString line =
                     QStringLiteral("SDE300001|slice 0 client_handle=0xDE300001 %1")
                         .arg(echo.join(QLatin1Char(' ')));
-                QTimer::singleShot(0, this, [this, line] {
-                    if (m_syntheticDemo) emitSyntheticStatus(line);
+                QTimer::singleShot(0, this, [this, line, generation = m_sessionGeneration.load()] {
+                    if (m_syntheticDemo && generation == m_sessionGeneration) {
+                        emitSyntheticStatus(line);
+                    }
                 });
             }
             emit commandResponse(seq, 0, QString());

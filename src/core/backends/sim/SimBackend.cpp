@@ -1,4 +1,5 @@
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/flex/FlexLanSession.h"
 #include "core/AppActivity.h"
 
 #include <QtEndian>
@@ -75,10 +76,11 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
 
-    // Re-emit wire errors as the interface's own signal (as FlexBackend does).
-    // connected and disconnected are re-emitted by the ordered handlers below.
-    connect(m_connection, &RadioConnection::errorOccurred,
-            this, &IRadioBackend::connectionError);
+    m_statusIngress.bind(m_connection);
+    m_lanSession = std::make_unique<FlexLanSession>(m_connection, m_panStream, &m_statusIngress);
+    connect(m_lanSession.get(), &FlexLanSession::starting, this, &IRadioBackend::connectionSessionStarting);
+    connect(m_lanSession.get(), &FlexLanSession::errorOccurred, this, &IRadioBackend::connectionError);
+    connect(m_lanSession.get(), &FlexLanSession::versionReceived, this, &IRadioBackend::connectionVersionReceived);
 
     // Route the synthetic wire's demo intents back into this backend: ANF/NB to the
     // mixer, VFO/mode to the seam slice intents (the demo SliceModel's intent path
@@ -101,24 +103,26 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // ordered handler (#6095): gate and pan list are set before connected(), so a
     // slot sees isConnected() and a pan it creates is not reset; the base class
     // bumps pcmSession() on connected(), so the startSession() capture follows it.
-    connect(m_connection, &RadioConnection::connected, this, [this]() {
+    connect(m_lanSession.get(), &FlexLanSession::connected, this, [this]() {
         m_connected = true;
         // The wire script claims pan 0; dynamic creates append (#4887 ph 4).
         m_wirePanIds = QStringList{wirePanIdFor(0)};
         m_pansAwaitingGeometry.clear();
         pushPanIndicesToSource();
+        const QPointer<SimBackend> alive(this);
         emit connected();
+        if (!alive || !m_connected || !m_lanSession->isConnected()) { return; }
         QMetaObject::invokeMethod(m_signalSource, [source = m_signalSource, session = pcmSession()] {
             source->startSession(session);
         },
                                   Qt::QueuedConnection);
-        QTimer::singleShot(150, this, [this]() {
-            if (m_connected) emitInitialState();
+        QTimer::singleShot(150, this, [this, session = pcmSession()]() {
+            if (m_connected && session == pcmSession()) { emitInitialState(); }
         });
     });
     // One handler closes the forward gate and THEN announces disconnected()
     // (#6084), so no queued worker row can be delivered in between.
-    connect(m_connection, &RadioConnection::disconnected, this, [this]() {
+    connect(m_lanSession.get(), &FlexLanSession::disconnected, this, [this]() {
         m_connected = false;
         m_wirePanIds.clear();
         m_pansAwaitingGeometry.clear();
@@ -132,7 +136,7 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // after RadioModel has claimed the pan or the geometry is cached by index and
     // the pane starts blank. The zero-timer hop runs after RadioModel has handled
     // the accepted line, regardless of connection order.
-    m_statusIngress.bind(m_connection);
+
     m_statusIngress.setDecodeValues(false);   // the native producer owns the values
     // Identity only: a TGXL named in replayed captured status.
     connect(&m_statusIngress, &FlexStatusIngress::tunerChanged, this, &IRadioBackend::tunerChanged);
@@ -173,8 +177,8 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
         const QString panId = line.object.section(QLatin1Char(' '), 2, 2).toLower();
         if (!m_pansAwaitingGeometry.remove(panId))
             return;
-        QTimer::singleShot(0, this, [this, panId]() {
-            if (!m_connected)
+        QTimer::singleShot(0, this, [this, panId, session = pcmSession()]() {
+            if (!m_connected || session != pcmSession())
                 return;
             emit panCenterBandwidthChanged(panId, m_sliceFreqMhz,
                                            kDemoPanBandwidthMhz);
@@ -185,6 +189,7 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
 
 SimBackend::~SimBackend()
 {
+    m_lanSession.reset();
     // Mirror FlexBackend teardown: sever our lifecycle observation first, then
     // tear down connection (BlockingQueued disconnect → deleteLater → thread
     // quit/wait), then panStream — the #502 order.
@@ -437,8 +442,15 @@ RadioCapabilities SimBackend::capabilities() const
     return caps;
 }
 
-void SimBackend::connectRadio(const RadioConnectRequest& /*request*/)
+void SimBackend::connectRadio(const RadioConnectRequest& request)
 {
+    if (!request.serial.isEmpty()) {
+        if (m_connected || m_lanSession->active()) { return; }
+        RadioConnectRequest demo = request;
+        demo.serial = demoSerial();
+        m_lanSession->connectRadio(demo);
+        return;
+    }
     if (m_connected) {
         return;   // idempotent — a second connect is a no-op, not a reset
     }
@@ -454,31 +466,31 @@ void SimBackend::connectRadio(const RadioConnectRequest& /*request*/)
 
 void SimBackend::disconnectRadio()
 {
+    disconnectRadio({});
+}
+
+void SimBackend::disconnectRadio(const RadioDisconnectRequest& request)
+{
     retirePcmStreams();
-    if (!m_connected) {
+    if (m_lanSession->active()) {
+        m_lanSession->disconnectRadio(request);
         return;
     }
-    QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop,
-                              Qt::QueuedConnection);
+    if (!m_connected) { return; }
+    QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop, Qt::QueuedConnection);
     m_connected = false;
     emit sliceRemoved(kSliceId);
+    emit disconnected();
+}
 
-    // Tear the synthetic connection down too: RadioModel treats the vended
-    // RadioConnection as the live link (Route A hybrid), so it must not stay
-    // Connected after `sim disconnect`. Its synthetic branch emits disconnected(),
-    // reaching RadioModel::onDisconnected and our ctor handler, which re-emits it
-    // on the seam.
-    // Only that branch reports the disconnect, so delegate only when we were dialled
-    // through it; a bare connectRadio() (unit test) disconnects here. Queued.
-    if (m_connection && m_connection->isSyntheticDemo()) {
-        QMetaObject::invokeMethod(m_connection,
-                                  [conn = m_connection] { conn->disconnectFromRadio(); });
-        // No emit here: that teardown comes back as RadioConnection::disconnected,
-        // which our ctor re-emits as IRadioBackend::disconnected. Emitting now
-        // would report the same disconnect twice on the seam.
-    } else {
-        emit disconnected();
-    }
+std::optional<ConnectionSession> SimBackend::connectionSession() const
+{
+    return m_lanSession->snapshot();
+}
+
+ReceiveTransportResult SimBackend::startReceiveTransport(bool rebind)
+{
+    return m_lanSession->startReceiveTransport(rebind);
 }
 
 bool SimBackend::isConnected() const { return m_connected; }
@@ -804,7 +816,7 @@ bool SimBackend::applyFault(const QString& fault, const QVariant& arg)
         // Queued, so the caller's extensionResult precedes disconnected() on the
         // bare path too (rule 6). Until it lands isConnected() stays true: a sim
         // verb in the same turn passes the gate, a same-turn connectRadio() no-ops.
-        QMetaObject::invokeMethod(this, &SimBackend::disconnectRadio, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this] { disconnectRadio(); }, Qt::QueuedConnection);
         return true;
     }
     if (f == QLatin1String("malformed")) {

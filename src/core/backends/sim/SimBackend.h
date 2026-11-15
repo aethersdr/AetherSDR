@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QSet>
@@ -19,6 +21,7 @@ class QThread;
 namespace AetherSDR {
 
 class RadioConnection;
+class FlexLanSession;
 class PanadapterStream;
 
 // SimBackend — native in-process synthetic radio (demo mode, RFC #4288). Speaks
@@ -42,6 +45,9 @@ public:
     bool ownsRxAudio() const override { return true; }
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
+    void disconnectRadio(const RadioDisconnectRequest& request) override;
+    std::optional<ConnectionSession> connectionSession() const override;
+    ReceiveTransportResult startReceiveTransport(bool rebind = false) override;
     bool isConnected() const override;
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
@@ -217,6 +223,7 @@ private:
     // driven entirely through these — SimBackend's own delta emission above is
     // the pure-Path-A skeleton kept for the unit tests, dormant on the live path.
     FlexStatusIngress m_statusIngress;
+    std::unique_ptr<FlexLanSession> m_lanSession;
     RadioConnection*  m_connection{nullptr};   // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};
     PanadapterStream* m_panStream{nullptr};    // owned; lives on m_networkThread

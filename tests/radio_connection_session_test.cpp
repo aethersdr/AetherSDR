@@ -503,6 +503,28 @@ private slots:
         QCOMPARE(connected.size(), 1);
         connection.disconnectFromRadio();
     }
+    void deferredDemoCommandsKeepTheirOriginalSession()
+    {
+        RadioConnection connection;
+        RadioConnectionSessionTestAccess::attach(connection);
+        RadioConnectionSessionTestAccess::beginDemo(connection);
+        QTRY_VERIFY(connection.isConnected());
+        QSignalSpy statuses(&connection, &RadioConnection::lineReceived);
+        connection.writeCommand(1, QStringLiteral("slice tune 0 7.244"));
+        connection.writeCommand(2, QStringLiteral("slice set 0 mode=LSB filter_lo=-2800"));
+        connection.disconnectFromRadio();
+        RadioConnectionSessionTestAccess::beginDemo(connection);
+        QTRY_VERIFY(connection.isConnected());
+        QTest::qWait(100); // drain command echoes and both sessions' initial bursts
+        for (const QList<QVariant>& status : statuses) {
+            const ParsedMessage message = status.at(0).value<ParsedMessage>();
+            QVERIFY(message.kvs.value(QStringLiteral("RF_frequency")) != QLatin1String("7.244000"));
+            QVERIFY(message.kvs.value(QStringLiteral("mode")) != QLatin1String("LSB"));
+            QVERIFY(message.kvs.value(QStringLiteral("filter_lo")) != QLatin1String("-2800"));
+        }
+        connection.disconnectFromRadio();
+    }
+
     void newDemoSessionResetsOldBytes()
     {
         RadioConnection connection;

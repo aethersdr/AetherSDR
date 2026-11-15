@@ -3030,6 +3030,7 @@ private:
     // See isConnectAttemptInFlight(). Set by the connect entry points, cleared
     // by every way an attempt can end.
     bool      m_connectAttemptActive{false};
+    quint64   m_connectionIntentRevision{0};
     bool      m_forcedDisconnectInProgress{false};
     GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next

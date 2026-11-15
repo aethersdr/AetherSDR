@@ -22,6 +22,7 @@ namespace AetherSDR {
 class FirmwareStager;
 
 class RadioConnection;
+class FlexLanSession;
 class WanConnection;
 class PanadapterStream;
 class FlexReceiveData;
@@ -163,6 +164,9 @@ public:
     void retireReceiveData() override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
+    void disconnectRadio(const RadioDisconnectRequest& request) override;
+    std::optional<ConnectionSession> connectionSession() const override;
+    ReceiveTransportResult startReceiveTransport(bool rebind = false) override;
     bool isConnected() const override;
     ReceiveDispatch requestRadioNickname(const QString& nickname,
                                          NicknameCompletion completion = {}) override;
@@ -292,6 +296,7 @@ private:
     ReceiveTelemetry m_receiveTelemetry;
     std::unique_ptr<FlexCwControls> m_cwControls;
     FlexStatusIngress m_statusIngress;
+    std::unique_ptr<FlexLanSession> m_lanSession;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
