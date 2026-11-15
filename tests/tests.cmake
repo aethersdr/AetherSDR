@@ -4944,11 +4944,17 @@ else()
 endif()
 add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 
-# One remote-session predicate (WAN, routed or tailnet address), header-only.
+# Remote-session predicates (bandwidth defaults; IP Configuration), header-only.
 add_executable(remote_session_test tests/remote_session_test.cpp)
 target_include_directories(remote_session_test PRIVATE src)
 target_link_libraries(remote_session_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME remote_session_test COMMAND remote_session_test)
+
+# Tailscale-interface check for IP Configuration's gate, injected interfaces.
+add_executable(tailscale_interface_test tests/tailscale_interface_test.cpp)
+target_include_directories(tailscale_interface_test PRIVATE src)
+target_link_libraries(tailscale_interface_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME tailscale_interface_test COMMAND tailscale_interface_test)
 
 # In-radio tailnet shim client: wire parsing and request bodies, socket-free.
 add_executable(tailnet_shim_client_test

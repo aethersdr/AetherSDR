@@ -1698,7 +1698,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     }
     if (m_ipDhcpButton) {
         const QString tip = ipConfigUnavailableReason(
-            caps.hasClientNetworkConfig, m_model->isRemoteSession());
+            caps.hasClientNetworkConfig, m_model->isRemoteForIpConfiguration());
         const bool canConfigure = tip.isEmpty();
         const QString sessionKey = connected
             ? QStringLiteral("%1:%2").arg(m_model->family(), m_model->serial())
@@ -2629,7 +2629,7 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
 
     const bool isStatic = m_model->hasStaticIp();
     const QString unavailableTip = ipConfigUnavailableReason(
-        m_model->backendCapabilities().hasClientNetworkConfig, m_model->isRemoteSession());
+        m_model->backendCapabilities().hasClientNetworkConfig, m_model->isRemoteForIpConfiguration());
     const bool canConfigure = unavailableTip.isEmpty();
 
     auto* dhcpBtn = new QPushButton("DHCP");
@@ -2679,8 +2679,12 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     m_staticGatewayEdit = staticGw;
     staticGw->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticGw, 3, 1);
-    for (QLineEdit* edit : {staticIp, staticMask, staticGw})
+    for (QLineEdit* edit : {staticIp, staticMask, staticGw}) {
         edit->setFixedWidth(180);
+        // A dimmed field says why; validateInputs owns the tips otherwise.
+        edit->setToolTip(unavailableTip);
+        edit->setAccessibleDescription(unavailableTip);
+    }
 
     gvbox->addLayout(fieldsGrid);
     for (auto* lbl : group->findChildren<QLabel*>())
@@ -2751,6 +2755,13 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
             [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn, validateInputs] {
         validateInputs(false);
         if (!applyBtn->isEnabled()) { return; }
+        // Re-check the gate at the write: a session's Tailscale transport is
+        // learned at GUI-client registration, after the dialog may have gated.
+        if (!ipConfigUnavailableReason(m_model->backendCapabilities().hasClientNetworkConfig,
+                                       m_model->isRemoteForIpConfiguration()).isEmpty()) {
+            applyBtn->setEnabled(false);
+            return;
+        }
         if (dhcpBtn->isChecked()) {
             m_model->requestRadioSetup({SetupField::Dhcp, std::monostate{}});
             qDebug() << "RadioSetupDialog: network set to DHCP";

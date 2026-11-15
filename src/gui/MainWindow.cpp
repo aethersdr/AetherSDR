@@ -6824,7 +6824,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // broadcasts never reach the client by design (#3420).  Routed and
     // SmartLink/WAN sessions cannot receive local broadcasts at all, so flag
     // them as "remote" to fully quiesce discovery rather than just pausing the
-    // re-bind churn. A radio reached at a tailnet address is remote too.
+    // re-bind churn. A radio discovered at a tailnet address (the shim's
+    // forwarded announcement) does receive them; it is quiesced to free UDP
+    // 4992 for SmartSDR on the same computer (#6984 §5), which also stops the
+    // radio list's stale sweep for the session, as on a routed one.
     const bool remoteConnection = m_radioModel.isRemoteSession();
     m_discovery.setConnected(connected, remoteConnection);
 

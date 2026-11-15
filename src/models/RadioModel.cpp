@@ -8,6 +8,8 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include "core/AudioCompressionPolicy.h"
+#include "core/RemoteSession.h"
+#include "core/TailscaleInterface.h"
 #include "core/NetworkMtuPolicy.h"
 #include "core/TailnetAddress.h"
 #include "core/GuiClientIdentityPolicy.h"
@@ -4226,6 +4228,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     cancelRadioWake();
     releaseWanStatus();
     m_wanConn = nullptr;  // LAN mode
+    m_sessionOverTailscale = false;
     resetRadioObservations();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
@@ -4399,6 +4402,7 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
         m_wanConn->disconnect(this);
 
     m_wanConn = wan;
+    m_sessionOverTailscale = false;
     resetRadioObservations();
     const QPointer<RadioModel> setupOwner(this);
     const quint64 setupGeneration = m_setupObservationGeneration + 1;
@@ -8025,8 +8029,12 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         // the connection's local address is written on its own thread, and
         // this reply is ordered after the socket connected, so reading it now
         // is safe where reading it later from Radio Setup would not be.
-        m_pathOverTailnet = reachedOverTailnet(
-            radioAddress(), m_connection ? m_connection->localAddress() : QHostAddress());
+        const QHostAddress localAddress =
+            m_connection ? m_connection->localAddress() : QHostAddress();
+        m_pathOverTailnet = reachedOverTailnet(radioAddress(), localAddress);
+        // IP Configuration's gate wants the transport, not the address range:
+        // the interface this end is bound to (core/TailscaleInterface.h).
+        m_sessionOverTailscale = !isWan() && connectionOverTailscale(localAddress);
         const int mtu = networkMtuParam();
         requestStartupSetup({RadioSetupField::NetworkMtu, mtu});
         // Enable keepalive (matches FlexLib behavior) — ping timer starts in startNetworkMonitor()
@@ -9409,6 +9417,12 @@ bool RadioModel::usesRemoteNetworkThresholds() const
 bool RadioModel::isRemoteSession() const
 {
     return isRemoteRadioSession(isWan(), m_lastInfo);
+}
+
+bool RadioModel::isRemoteForIpConfiguration() const
+{
+    return AetherSDR::isRemoteForIpConfiguration(isWan(), m_lastInfo.isRouted,
+                                                 m_sessionOverTailscale);
 }
 
 QString RadioModel::networkQuality() const

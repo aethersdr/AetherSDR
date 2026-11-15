@@ -35,5 +35,14 @@ int main()
     check(!isRemoteRadioSession(false, RadioInfo{}),
           "an unset address is not tailnet");
 
+    // Radio Setup's IP Configuration: SmartLink, routed or a confirmed
+    // Tailscale session, never the address alone.
+    check(!isRemoteForIpConfiguration(false, false, false),
+          "a direct session not over Tailscale keeps IP Configuration");
+    check(isRemoteForIpConfiguration(true, false, false), "SmartLink dims IP Configuration");
+    check(isRemoteForIpConfiguration(false, true, false), "a routed session dims IP Configuration");
+    check(isRemoteForIpConfiguration(false, false, true),
+          "a session over Tailscale dims IP Configuration");
+
     return ok ? 0 : 1;
 }

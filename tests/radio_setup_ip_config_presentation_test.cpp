@@ -118,6 +118,17 @@ int main(int argc, char** argv)
         check(d.accessibleDescription() == reason && s.accessibleDescription() == reason
                   && a.accessibleDescription() == reason,
               "remote reason is mirrored to the accessible descriptions");
+        check(i.toolTip() == reason && m.toolTip() == reason && g.toolTip() == reason
+                  && i.accessibleDescription() == reason && m.accessibleDescription() == reason
+                  && g.accessibleDescription() == reason,
+              "the dimmed address fields carry the reason too");
+
+        applyIpConfigPresentation(remoteState, QStringLiteral("flex:R"), true, false,
+                                  QStringLiteral("192.0.2.4"), {}, {},
+                                  &d, &s, &i, &m, &g, &a, QString());
+        check(i.toolTip().isEmpty() && i.accessibleDescription().isEmpty()
+                  && d.toolTip().isEmpty(),
+              "a configurable session clears the reason");
     }
 
     return ok ? 0 : 1;
