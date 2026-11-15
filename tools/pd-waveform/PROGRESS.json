@@ -909,5 +909,18 @@
       "Sandbox broad test run failed on restricted Unix socket getsockopt; host tests passed.",
       "The first diagnostic candidate is superseded before deployment; replacement must include this shim fix."
     ]
+  },
+  "tone_window_installed_rf": {
+    "production_ready": false,
+    "status": "live_cleanup_fixes_verified_first_fit_exceeds_desktop_capture_wait",
+    "evidence": "tone-window-live/validation.json under evidence_root",
+    "source_commit": "2a014d9e1757e2a02a94e586f18aeff7e84bf121",
+    "release_sha256": "2725467fa6a8ec3b9e1d4b3ad93338265140a4e92af7cd350e99964df8aba0a4",
+    "remaining": [
+      "Reconcile six-second desktop capture timeout with cold first-fit calculation inside existing eight-second native source and independent9.5-second unkey bound.",
+      "Do not weaken fresh-IQ/source/alignment/correction checks.",
+      "Four-frame IMD and sustained repeatability remain unproven.",
+      "All P1-P10 final candidate and actual6300 production gates remain."
+    ]
   }
 }
