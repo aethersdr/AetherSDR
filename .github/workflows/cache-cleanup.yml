@@ -19,7 +19,8 @@ name: Cache cleanup
 # retention does much of the same work for free.
 #
 # One cause is handled here — SUPERSEDED main entries. ci.yml saves a compiler
-# cache on every green main build, keyed on run_id because actions/cache entries
+# cache for Windows/macOS, and Full Suite writes the Linux compiler cache.
+# Keys include run_id (or a macOS timestamp) because actions/cache entries
 # are immutable. Restores resolve through restore-keys to the MOST RECENT match,
 # so the moment run N+1 saves, run N's entry is unreachable — and being
 # unreachable it is never accessed again, so nothing refreshes its LRU position
@@ -36,7 +37,7 @@ name: Cache cleanup
 # ccache and sccache both compress their own objects, so the entry is ~95% of
 # the directory, not the ~55% that earlier estimate assumed.)
 #
-# So a main CI run writes ~4.3 GiB across its four compiler caches, ~9.2x/day
+# At those measured sizes, main's workflows wrote ~4.3 GiB across four caches, ~9.2x/day
 # — ~40 GiB/day of entries that are unreachable within the hour. Unmanaged,
 # that pins the repo at its allowance on its own, holding a few hours of
 # caches nothing will ever read.
@@ -49,7 +50,7 @@ name: Cache cleanup
 
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [CI, Full Suite]
     types: [completed]
   # Daily, plus on demand. See sweep-dead-refs for why this is scheduled
   # rather than fired from `pull_request: closed`.
@@ -59,8 +60,8 @@ on:
 
 # actions:write is the only elevated scope and it cannot reach anything outside
 # the cache API. It lives in this workflow rather than as a step in ci.yml
-# specifically so ci.yml keeps `contents: read` — nothing that compiles
-# PR-authored code ever holds a write scope.
+# specifically so PR compilation in ci.yml keeps `contents: read`. Full Suite
+# builds only main/manual refs and retains its existing issue-report scope.
 #
 # pull-requests:read is a read scope, needed only by sweep-dead-refs to ask
 # whether a PR is still open. Listing it is not optional: naming ANY scope in a
@@ -110,8 +111,8 @@ jobs:
           # been ONE such cold build; the insurance was causing them weekly.
           #
           # The sparse case the insurance guarded against is closed by the
-          # `success()` gate on the Linux and Windows saves (ci.yml, "Save
-          # ccache objects" / "Save sccache objects"). It is NOT closed on
+          # successful-build gate on the Linux save (full-suite.yml) and the
+          # `success()` gate on the Windows save (ci.yml). It is NOT closed on
           # macOS: ci.yml's "Set up ccache" step documents that the
           # ccache-action saves from a post-job hook with no `success()` half,
           # so a failed main build there can still write a sparse entry and
@@ -119,7 +120,7 @@ jobs:
           # lightest config and one cold macOS rebuild is the whole cost. If a
           # corrupt entry ever lands on any prefix, `gh cache delete` it and
           # take the one cold rebuild; do not go back to 2 without re-doing
-          # the budget in ci.yml's CCACHE_MAXSIZE comment.
+          # the budget in full-suite.yml's CCACHE_MAXSIZE comment.
           KEEP: "1"
         run: |
           set -euo pipefail

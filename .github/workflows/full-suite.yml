@@ -1,22 +1,10 @@
 name: Full Suite
 
-# The ONLY gating run of the whole test suite (#5032).
-#
-# ci.yml runs no Linux tests on a pull request — its gate is frozen to a
-# handful of platform-only tests (.github/ci-test-gate.txt). Before this
-# workflow the full suite ran in exactly one place, sanitizers.yml, weekly and
-# non-gating, and a test that shipped red in v26.8.3 (#5031) went through both
-# holes at once: no PR job selected it, and the weekly run it would have failed
-# was four days away. This closes the window from "up to a week" to "minutes
-# after the merge": every push to main builds RelWithDebInfo — the same
-# configuration ci.yml's build job uses, ccache-warm — and runs `ctest` with
-# no -R filter. A red run here means main is red, full stop.
-#
-# Two things it is NOT. Not a PR gate — it runs post-merge, so it catches
-# rather than prevents (a PR-time full run is #5032's option 2 and wants
-# measuring on a runner first). And not the sanitizer lane: same tests, no
-# instrumentation, so it fails on what a test asserts rather than on what a
-# sanitizer sees; sanitizers.yml keeps that job, weekly.
+# The sole Linux build and full-suite verdict for every push to main.
+# The PR Linux gate in ci.yml builds production targets; this job builds the
+# entire default graph, runs unfiltered CTest, and publishes the shared Linux
+# compiler/dependency caches. Keep its configuration aligned with that PR gate.
+# Sanitizers remain a separate scheduled lane.
 
 on:
   push:
@@ -55,7 +43,74 @@ jobs:
     timeout-minutes: 90
     env:
       CCACHE_DIR: /ccache
-      CCACHE_MAXSIZE: 2000M
+      # 1500M, revised twice. Read both steps before touching it again.
+      #
+      # 1000M -> 2000M (#5008, 2026-08-15). At 1000M this cache was FULL and
+      # evicting internally — the last green main run before that change:
+      #
+      #   Cache size (GB):  1.0 /  1.0 (95.41%)   Hits 2082/2210 (94.21%)
+      #
+      # A cold build settles at ~0.7 GB, but this entry does not hold one
+      # build: it accumulates objects across ~9.2 main merges a day. At 1.0 GB
+      # it only ever represented a narrow window of recent main, and a PR
+      # branched from a day-old main took misses on objects that had fallen
+      # out of ccache rather than out of the GitHub cache. 2000M fixed that:
+      # main runs 2026-09-01..05 report Hits 99.2–99.7%, PR runs 91–99%.
+      #
+      # 2000M -> 1500M (#5548 item 5, 2026-09-10). The #5008 budget assumed
+      # entries compress to ~55% of the ccache directory. They do not: ccache
+      # already compresses its objects, so the entry is ~95% of the directory
+      # — a full 2000M cache saved as a ~1.88 GiB entry (measured on every
+      # main save 2026-09-01..05). With the other caches also at their caps
+      # (sccache-windows 1.02 GiB, canary 0.94, macOS 0.44) and cache-cleanup
+      # keeping two of each, main alone held ~10.4 GiB against the 10 GiB
+      # allowance. GitHub evicted by LRU, this entry went first because it was
+      # the largest, and every main run until the next green save was a cold
+      # build: 27–37 min instead of 3–6, ten times between 2026-09-06 and
+      # 2026-09-10. cache-cleanup.yml now keeps one entry per prefix, which
+      # alone brings main to ~6.1 GiB; 1500M trims the largest entry further
+      # without giving back the whole 2000M window. Judge it by the "ccache
+      # stats" step: if main's hit rate settles below the ~99% seen at 2000M,
+      # the window is too narrow again and the budget below has room to go
+      # back up. If "Cache size" sits at 100% with a large `Cleanups` count
+      # AND the hit rate holds, leave it — a full cache that still hits is
+      # working as designed.
+      #
+      # Raised for THIS job only. The other two are not constrained and would
+      # pay transfer time for nothing — do not raise them on symmetry grounds:
+      #   check-macos     0.3 / 0.5 GB (57.63%)
+      #   check-windows   628 MiB / 1 GiB (61%)
+      #
+      # Budget at 1500M, against the repo's 10 GiB cache allowance, with
+      # cache-cleanup.yml's KEEP=1. Entry sizes are MEASURED on refs/heads/main
+      # from the "Save" steps, except Linux which is extrapolated from the
+      # ~95% ratio at the new cap:
+      #   Linux    ~1.4 GiB entry x 1 retained  = 1.4 GiB
+      #   Windows  ~1.02 GiB x 1                = 1.0 GiB
+      #   macOS    ~0.44 GiB x 1                = 0.4 GiB
+      #   canary   ~0.94 GiB x 1                = 0.9 GiB
+      #   deps (Qt 1.3, install-qt 0.4, DeepFilterNet, FFTW, qtkeychain)
+      #                                         ~ 1.8 GiB
+      #                                         --------
+      #                                         ~ 5.5 GiB
+      # That is the post-prune FLOOR, not what LRU evaluates. prune-main runs
+      # on workflow_run AFTER a main save, so between the save and the prune
+      # every prefix briefly holds two entries — a transient peak of about
+      # (1.4+1.02+0.44+0.94)x2 + 1.8 = ~9.4 GiB, and main runs are not
+      # serialised (cancel-in-progress is off for main), so those windows can
+      # overlap. Budget against the peak, not the floor.
+      # The canary line is system-libs-canary.yml's cache; it was missed by an
+      # earlier revision of this table and by cache-cleanup.yml's PREFIXES
+      # alike, so if you add a compiler cache in ANY workflow, add it to both.
+      # Dependency caches were also written on PR refs until #5548 item 1
+      # (~1.7 GiB per open PR that missed — ~12 GiB with the four open PRs
+      # measured on 2026-09-10, still over the line even after the prune
+      # change). Since item 1 they restore on PR and save on main only, so
+      # the figure above is the whole steady state; anything on refs/pull or
+      # refs/tags is transient and cache-cleanup.yml's sweep reclaims it.
+      # See "Compiler-cache strategy" at the bottom of ci.yml for why only
+      # main writes an entry, and cache-cleanup.yml for what prunes the rest.
+      CCACHE_MAXSIZE: 1500M
 
     steps:
       - name: Free runner disk
@@ -72,13 +127,9 @@ jobs:
       - name: Ensure RTL-SDR build dependency is present
         run: dpkg -s librtlsdr-dev >/dev/null 2>&1 || (apt-get update && apt-get install -y librtlsdr-dev)
 
-      # RESTORE only, never save. ci.yml's build job is the single writer for
-      # this key; this job reads whatever the prefix currently resolves to —
-      # usually the objects that job saved for a recent commit, not
-      # necessarily this one, since both are triggered by the same push and
-      # the restore is a prefix match. That is a hit-rate question, never a
-      # correctness one: ccache is content-addressed, so a stale entry is a
-      # miss rather than a wrong object.
+      # Read the newest main cache. Only this workflow's successful main-push
+      # builds publish this prefix; ccache validates individual objects even
+      # when concurrently running commits restore an older entry.
       - name: Restore ccache objects
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -87,8 +138,8 @@ jobs:
           restore-keys: |
             ccache-linux-build-
 
-      - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore DeepFilterNet3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -98,11 +149,15 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
+      - name: Zero ccache stats
+        run: ccache --zero-stats
+
       - name: Configure
         id: configure
         run: |
-          # -g1 to match ci.yml's build job, whose ccache this restores; the
-          # reason is there.
+          # Shared core avoids copying it into each test executable. Line-table
+          # debug info preserves file:line backtraces without full debug size.
+          # ci.yml's Linux PR configuration matches this cache-producing build.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
             -DAETHER_SHARED_CORE=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
@@ -111,6 +166,14 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
             cat configure.log
+            exit 1
+          }
+          cat configure.log
+          # An ON request can silently fall back when Qt private headers are
+          # missing. Keep the former main CI guard in the sole Linux builder.
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
             exit 1
           }
 
@@ -143,6 +206,7 @@ jobs:
           echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
 
       - name: ccache stats
+        if: always()
         run: ccache --show-stats
 
       # Unfiltered, serial, and the exit code is the verdict. Serial because
@@ -486,6 +550,30 @@ jobs:
               });
               core.notice(`Opened #${created.data.number}`);
             }
+
+      # Publish at the end so workflow_run cleanup follows the save promptly.
+      # A test failure must not freeze a fully built compiler cache. Preserve
+      # the former CI policy: only a successful complete main-push build writes;
+      # PRs, manual runs, failed builds, and cancellations remain read-only.
+      - name: Save DeepFilterNet3
+        if: >-
+          !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' && steps.build.outcome == 'success' &&
+          steps.cache-deepfilter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: third_party/deepfilter
+          key: ${{ steps.cache-deepfilter.outputs.cache-primary-key }}
+
+      - name: Save ccache objects
+        if: >-
+          !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          # Entries are immutable; the prefix restore selects the newest save.
+          key: ccache-linux-build-${{ github.run_id }}
 
       - name: Fail the job if any test failed
         if: ${{ !cancelled() && steps.ctest.outputs.exit != '0' }}

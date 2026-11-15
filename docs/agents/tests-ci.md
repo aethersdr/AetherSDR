@@ -90,6 +90,24 @@ A source-text pin is acceptable only for a claim no behavioural seam can reach
 and the test must say which claim that is. A pin that duplicates a
 behavioural check, or guards only a comment, is retired.
 
+## Linux build ownership and caches
+
+`ci.yml`'s `build` job runs only for pull requests. `full-suite.yml` owns the
+single Linux CI/full-suite compilation for each main push, followed by the
+unfiltered test verdict and existing failure attribution. Keep every main
+commit's Full Suite run: do not add a concurrency group that cancels or
+replaces older commits. Windows/macOS main validation remains in `ci.yml`.
+
+Full Suite publishes `ccache-linux-build-<run_id>` and the Linux DeepFilterNet
+cache only after a successful complete build on a main push. Saves happen at
+the end of the job, even when CTest failed, so test regressions do not freeze
+the compiler cache and cleanup can follow publication promptly. The final
+failure step still makes that test verdict red. Manual runs are restore-only.
+`cache-cleanup.yml` watches both CI and Full Suite completions; retain both.
+The Linux cache cap is 1500M in both jobs; its repository-wide budget is
+recorded beside Full Suite's cap. Configure flags must match between the two
+Linux jobs so PRs can reuse the main compiler cache.
+
 ## CI image
 
 CI runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest`. **If you add a

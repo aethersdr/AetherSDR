@@ -317,6 +317,8 @@ commits required, CODEOWNERS review required, conversations must be resolved,
 stale approvals are dismissed on push, branches auto-delete after merge. CI
 runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest`; a new
 `find_package(...)` needs its `-dev` package in `.github/docker/Dockerfile`.
+Main Linux validation builds once in Full Suite and retains a test verdict for
+every commit; CI's Linux `build` job is PR-only. Windows/macOS still run in CI.
 Test registration, the frozen per-PR test gate, and gate integrity:
 [`docs/agents/tests-ci.md`](docs/agents/tests-ci.md).
 

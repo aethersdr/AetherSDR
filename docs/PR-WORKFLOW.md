@@ -36,11 +36,40 @@ merging. The reasoning:
 - Forcing every PR to rebase after every other merge cost ~15–25 min
   of CI per stale PR per batch day, which adds up fast when AetherClaude
   is processing a queue of triaged issues.
-- Post-merge CI on `main` runs on every commit (see
-  [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and
-  [`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml)), so
-  semantic conflicts that slip through three-way merge are caught on
-  the merged result within ~10 min.
+- Post-merge validation runs on every commit: Windows/macOS in
+  [CI](../.github/workflows/ci.yml), and the Linux build plus all registered
+  tests in [Full Suite](../.github/workflows/full-suite.yml). These runs keep
+  each commit's verdict, so semantic conflicts are checked on the merged
+  result. The separate CodeQL and system-library canary push runs allow a
+  newer main commit to supersede an older scan.
+
+---
+
+## CI from PR to main
+
+![AetherSDR CI flow: PR checks and review lead to a main commit, with one Linux CI/full-suite build and a retained verdict for every commit.](assets/ci-flow-linux-build-once.png)
+
+A branch push to an open PR starts Linux, Windows and macOS validation plus
+static checks and applicable documentation jobs. A newer push to that PR
+cancels its superseded runs. Build new tests locally: the Linux PR gate builds
+production targets, and the full test suite runs after merge.
+
+After the squash merge, every main commit gets its own **Full Suite** run:
+configure, build the entire Linux default graph once, then run unfiltered,
+serial CTest. Full Suite is the sole writer of the shared Linux compiler and
+DeepFilterNet caches. Its cache saves run after testing when compilation
+succeeded, even if a test failed; that preserves the warm build cache without
+changing the red test verdict. Failed builds and cancelled/manual runs do not
+publish these caches. Cache cleanup follows Full Suite completion.
+
+The Linux `build` job in CI is PR-only; it is skipped on main. Windows and
+macOS retain their post-merge CI runs. Full Suite has no supersession
+cancellation or shared concurrency group: another merge cannot discard an
+older commit's full-suite verdict or failure attribution.
+
+CodeQL and the system-library canary retain their independent builds. Their
+main-push groups cancel superseded scans, while scheduled/manual groups stay
+separate. Release packaging remains a separate tag/manual path.
 
 ---
 
