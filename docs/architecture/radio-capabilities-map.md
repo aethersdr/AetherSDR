@@ -297,6 +297,29 @@ consumer never names a family.
 | Flex | — | Structural: the radio computes the panadapter and sends the result, so there is no raw converter stream on the host to build a wideband view from |
 | Icom / RTL / Sim | — | No such stream |
 
+Read by `BandscopeDialog` (the Tools ▸ Wideband Bandscope window) and by nothing
+else. **The record is what gates the menu entry** — not `family == "hl2"`, which
+is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam
+and whose sanctioned alternative is exactly this.
+
+**The levels the window draws are on the same scale as the `ADC peak
+(uncalibrated pre-DDC dBFS)` health row**, which is a true time-domain peak of
+the same block. `BandscopeDialog` adds `ClientEqFftAnalyzer::
+coherentGainCorrectionDb()` to every bin before drawing, because the analyzer's
+own normalisation is the unwindowed one and leaves its bins 6.02 dB low — a
+detail the EQ editor never had to care about and this window cannot avoid, since
+comparing against the converter's clip threshold is the whole point of it. The
+two readouts agree for a single carrier; a broadband signal spreads its energy
+over bins, so the peak *bin* sits below the peak *sample* by however wide the
+signal is. Both are uncalibrated, and neither has been checked against a
+converter driven to a known level.
+
+`wideband_converter_view_test` pins the record's contents, its absence while
+disconnected, and that it names a verb the backend answers. Connected publication
+remains a hardware-verification gap. `bandscope_analyzer_test` pins the analyzer's
+dB scale and correction; `bandscope_trace_render_test` feeds known records through
+the production dialog and checks its displayed peak level and frequency.
+
 ### Firmware update source
 
 `firmwareUpdateSource` is the optional record for *"this radio's firmware version
@@ -353,29 +376,6 @@ translated without changing any tier.
 |---|---|---|
 | HL2 | ✅ **while connected**: `board` from `hl2::boardIdFor(boardForGatewareMinor(minor))` (`"hl2"`, `"square-sdr-2"`, `"square-3"`), `gatewareMajor` from the discovery version (`"74.3"` → 74; absent when not reported) | Supported means `board == "hl2"` and `gatewareMajor == 74`; anything else, or no record, stays experimental |
 | Flex / Icom / ANAN / RTL / Sim | — | No tier reads a board identity; Icom's tier reads the CI-V-derived `model` |
-
-Read by `BandscopeDialog` (the Tools ▸ Wideband Bandscope window) and by nothing
-else. **The record is what gates the menu entry** — not `family == "hl2"`, which
-is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam
-and whose sanctioned alternative is exactly this.
-
-**The levels the window draws are on the same scale as the `ADC peak
-(uncalibrated pre-DDC dBFS)` health row**, which is a true time-domain peak of
-the same block. `BandscopeDialog` adds `ClientEqFftAnalyzer::
-coherentGainCorrectionDb()` to every bin before drawing, because the analyzer's
-own normalisation is the unwindowed one and leaves its bins 6.02 dB low — a
-detail the EQ editor never had to care about and this window cannot avoid, since
-comparing against the converter's clip threshold is the whole point of it. The
-two readouts agree for a single carrier; a broadband signal spreads its energy
-over bins, so the peak *bin* sits below the peak *sample* by however wide the
-signal is. Both are uncalibrated, and neither has been checked against a
-converter driven to a known level.
-
-`wideband_converter_view_test` pins the record's contents, its absence while
-disconnected, and that it names a verb the backend answers. Connected publication
-remains a hardware-verification gap. `bandscope_analyzer_test` pins the analyzer's
-dB scale and correction; `bandscope_trace_render_test` feeds known records through
-the production dialog and checks its displayed peak level and frequency.
 
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|

@@ -572,8 +572,10 @@ private:
     // A suggested field is not persisted until a hw.set names it (#6806).
     hl2::GatewareBoard m_gatewareBoard = hl2::GatewareBoard::Unknown;
     // The gateware major from the same connect's version text; published with
-    // the board as RadioCapabilities::boardIdentity (#7311).
-    std::optional<std::uint8_t> m_gatewareMajor;
+    // the board as RadioCapabilities::boardIdentity (#7311). Held in the
+    // record's type; the parser's 8-bit result (the wire width) widens on
+    // assignment in loadBoardIdentity().
+    std::optional<int> m_gatewareMajor;
     bool m_hwCodecSuggested = false;
     bool m_hwFilterBoardSuggested = false;
     // The connect-time identity from RadioConnectRequest::version: sets

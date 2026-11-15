@@ -1446,7 +1446,11 @@ add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
 # trip, the read-modify-write that keeps a newer build's field alive, and the
 # empty-serial case that would otherwise write the family-wide default row.
 # Needs AppSettings and therefore Qt, which is why it is a second target rather
-# than more of the pure-policy one above. Still socket-free and radio-free.
+# than more of the pure-policy one above. Still socket-free and radio-free: the
+# two connectRadio() calls (§4f) take the boardMaxRx seam and are abandoned in
+# the same turn, so MetisClient::start() never runs. They still wait out the
+# WDSP channel opens (TestDspBuildWait.h), which on a cold FFTW wisdom cache
+# can take tens of seconds; that is the planner, not a hang in this test.
 add_executable(hl2_hardware_document_test
     tests/hl2_hardware_document_test.cpp)
 target_include_directories(hl2_hardware_document_test PRIVATE src tests)

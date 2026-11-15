@@ -1952,9 +1952,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     if (m_connected) {
         RadioCapabilities::BoardIdentity identity;
         identity.board = QString::fromLatin1(hl2::boardIdFor(m_gatewareBoard));
-        if (m_gatewareMajor) {
-            identity.gatewareMajor = *m_gatewareMajor;
-        }
+        identity.gatewareMajor = m_gatewareMajor;
         c.boardIdentity = identity;
     } else {
         c.boardIdentity = std::nullopt;

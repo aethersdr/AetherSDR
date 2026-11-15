@@ -19,8 +19,12 @@
 //   4. An older build must not replace a document with a newer schema.
 //
 // Socket-free and radio-free: nothing here binds, discovers or connects.
-// (aethersdr/AetherSDR#5867 review follow-up.)
+// (aethersdr/AetherSDR#5867 review follow-up.) §4f's two connectRadio() calls
+// use the hl2_backend_session_scope_test seam: boardMaxRx skips the unicast
+// probe and disconnectRadio() in the same turn supersedes the DSP build, so
+// MetisClient::start() never runs.
 
+#include "TestDspBuildWait.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
@@ -75,6 +79,39 @@ struct Hl2BoardIdentityTestAccess {
         backend.m_connected = false;
         p.disconnected = backend.capabilities().boardIdentity;
         return p;
+    }
+    // The same record, but through connectRadio() itself, so the call that
+    // feeds RadioConnectRequest::version into loadBoardIdentity() is pinned.
+    // boardMaxRx skips the unicast probe and disconnectRadio() in the same turn
+    // supersedes the DSP build, so MetisClient::start() never runs and nothing
+    // binds (the hl2_backend_session_scope_test seam).
+    struct ThroughConnect {
+        std::optional<RadioCapabilities::BoardIdentity> identity;
+        bool dspBuildFinished = false;
+    };
+    static ThroughConnect identityThroughConnect(Hl2Backend& backend,
+                                                 const QString& version)
+    {
+        bool finished = false;
+        const QMetaObject::Connection done = QObject::connect(
+            &backend, &Hl2Backend::dspSetupFinished, &backend,
+            [&finished] { finished = true; });
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1; never contacted
+        req.port = 1024;
+        req.version = version;
+        req.params.insert(QStringLiteral("boardMaxRx"), 4);
+        backend.connectRadio(req);
+        backend.m_connected = true;
+        ThroughConnect out;
+        out.identity = backend.capabilities().boardIdentity;
+        backend.m_connected = false;
+        backend.disconnectRadio();
+        out.dspBuildFinished = test::awaitDspBuild("hl2_hardware_document_test",
+                                                   [&] { return finished; });
+        // `finished` is this frame's; nothing may write it after we return.
+        QObject::disconnect(done);
+        return out;
     }
 };
 }  // namespace AetherSDR::hl2
@@ -549,6 +586,30 @@ int main(int argc, char** argv)
         check(tierFor(QStringLiteral("74.53")).has_value(), "a SQUARE 3 on 74: experimental");
         check(tierFor(QString()).has_value(), "no reported version: experimental");
         check(tierFor(QStringLiteral("74x")).has_value(), "a malformed version: experimental");
+
+        {
+            hl2::Hl2Backend connecting;
+            const auto stockConnect =
+                hl2::Hl2BoardIdentityTestAccess::identityThroughConnect(
+                    connecting, QStringLiteral("74.3"));
+            check(stockConnect.dspBuildFinished, "the superseded DSP build finishes");
+            check(stockConnect.identity && stockConnect.identity->board == QStringLiteral("hl2")
+                      && stockConnect.identity->gatewareMajor == 74,
+                  "connectRadio() with version 74.3 publishes hl2 / 74");
+            // The next connect on the same backend reports no version: the
+            // previous radio's major must not survive into it.
+            const auto unknownConnect =
+                hl2::Hl2BoardIdentityTestAccess::identityThroughConnect(
+                    connecting, QString());
+            check(unknownConnect.dspBuildFinished, "and the second build finishes");
+            check(unknownConnect.identity && !unknownConnect.identity->gatewareMajor,
+                  "a reconnect with no version publishes no gateware major");
+            check(experimentalRadioDescriptor(QStringLiteral("hl2"),
+                                              QStringLiteral("Hermes-Lite 2"),
+                                              unknownConnect.identity)
+                      .has_value(),
+                  "so that reconnect is experimental, not the last radio's tier");
+        }
     }
 
     // ---- 5. an invalid scope is inert in both directions -------------------
