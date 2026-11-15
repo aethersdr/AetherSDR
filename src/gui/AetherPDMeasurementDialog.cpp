@@ -40,7 +40,8 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     layout->setContentsMargins(24, 24, 24, 24);
     layout->addWidget(makeCanonHeader(tr("Linearity measurement")));
     auto* hint = new QLabel(tr("Experimental · local DAX IQ · FDX off. Select your frequency, ANT1 dummy load and "
-        "attenuated RXA feedback before arming. The source runs four seconds of alignment noise, then "
+        "attenuated RXA feedback before arming. Assign IQ Ch 1 to the feedback panadapter in its DAX panel, "
+        "start AetherPD, then select PD mode on your TX slice. The source runs four seconds of alignment noise, then "
         "710/1900 Hz tones, for at most eight seconds. Prepare checks reception; only Transmit keys RF."), bodyWidget());
     hint->setWordWrap(true);
     layout->addWidget(hint);
@@ -97,11 +98,20 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
             "QPushButton:disabled { color: {{color.canon.muted}}; }"
             "QPushButton:hover,QPushButton:focus { border-color: {{color.canon.aqua}}; }") + canonIndicatorRules() + canonSpinArrowRules();
     });
-    connect(m_arm, &QPushButton::clicked, this, [this] {
-        if (current()) { m_radio->requestAetherPD(m_session, aetherpd::Operation::ArmMeasurement); }
+    const auto requestSource = [this](aetherpd::Operation operation) {
+        if (!current()) { return; }
+        const QPointer<AetherPDMeasurementDialog> alive(this);
+        m_notice.clear();
+        const bool submitted = m_radio->requestAetherPD(m_session, operation);
+        if (!alive) { return; }
+        if (!submitted && m_notice.isEmpty()) { m_notice = tr("Source request was not submitted. Check the current connection and service status."); }
+        render();
+    };
+    connect(m_arm, &QPushButton::clicked, this, [requestSource] {
+        requestSource(aetherpd::Operation::ArmMeasurement);
     });
-    connect(m_cancelSource, &QPushButton::clicked, this, [this] {
-        if (current()) { m_radio->requestAetherPD(m_session, aetherpd::Operation::CancelCalibration); }
+    connect(m_cancelSource, &QPushButton::clicked, this, [requestSource] {
+        requestSource(aetherpd::Operation::CancelCalibration);
     });
     connect(m_prepare, &QPushButton::clicked, this, &AetherPDMeasurementDialog::prepare);
     connect(m_stop, &QPushButton::clicked, this, &AetherPDMeasurementDialog::stop);
@@ -124,6 +134,21 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
         return [alive, controller, input, preparation] { if (alive) { alive->transmit(controller, input, preparation); } };
     });
     if (radio) {
+        connect(&radio->aetherPDModel(), &AetherPDModel::operationFailed, this,
+            [this](aetherpd::Operation operation, AetherPDClient::Failure failure) {
+                if (!current() || (operation != aetherpd::Operation::ArmMeasurement
+                    && operation != aetherpd::Operation::CancelCalibration)) { return; }
+                if (operation == aetherpd::Operation::CancelCalibration) {
+                    m_notice = tr("Source cancellation is not confirmed. Check service status; Stop AetherPD ends the owned source.");
+                } else if (failure == AetherPDClient::Failure::Refused || failure == AetherPDClient::Failure::InvalidRequest) {
+                    m_notice = tr("Measurement source request refused. Check PD mode, feedback panadapter IQ Ch 1, fresh DAX IQ and the transmit interlock.");
+                } else if (failure == AetherPDClient::Failure::Busy) {
+                    m_notice = tr("Measurement source request was not submitted because another request is pending.");
+                } else {
+                    m_notice = tr("Measurement source arm is not confirmed. Check service status or use Cancel source before trying again.");
+                }
+                render();
+            });
         connect(&radio->aetherPDMeasurementModel(), &AetherPDMeasurementModel::changed, this, &AetherPDMeasurementDialog::render);
         connect(&radio->aetherPDModel(), &AetherPDModel::changed, this, &AetherPDMeasurementDialog::render);
         connect(&radio->aetherPDInstallationModel(), &AetherPDInstallationModel::changed, this, &AetherPDMeasurementDialog::render);
