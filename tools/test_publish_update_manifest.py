@@ -235,6 +235,44 @@ class PublicRead(Base):
                         pub.PublicStore().get("latest/manifest.json")
                     self.assertIn(expect, str(ctx.exception))
 
+    def test_size_without_content_length_reads_the_range_total(self) -> None:
+        """An edge that answers HEAD with no Content-Length (chunked or
+        compressed framing) is asked for one byte, and Content-Range gives
+        the total. Only if both are missing is the size unknown."""
+        def answer(head: dict, ranged: dict):
+            seen = []
+
+            class R:
+                def __init__(self, h):
+                    self.headers = h
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+            def urlopen(req, timeout=None):
+                seen.append((req.get_method(), req.get_header("Range")))
+                return R(head if req.get_method() == "HEAD" else ranged)
+            return urlopen, seen
+
+        urlopen, seen = answer({"Content-Length": "1200"}, {})
+        with mock.patch.object(pub.urllib.request, "urlopen", urlopen):
+            self.assertEqual(pub.PublicStore().size("releases/v1/x.tar"), 1200)
+        self.assertEqual(seen, [("HEAD", None)])
+        urlopen, seen = answer({}, {"Content-Range": "bytes 0-0/1200"})
+        with mock.patch.object(pub.urllib.request, "urlopen", urlopen):
+            self.assertEqual(pub.PublicStore().size("releases/v1/x.tar"), 1200)
+        self.assertEqual(seen, [("HEAD", None), ("GET", "bytes=0-0")])
+        for ranged in ({}, {"Content-Range": "bytes 0-0/*"}):
+            urlopen, _ = answer({}, ranged)
+            with mock.patch.object(pub.urllib.request, "urlopen", urlopen):
+                self.assertIsNone(pub.PublicStore().size("releases/v1/x.tar"))
+        urlopen, _ = answer({"Content-Length": "lots"}, {})
+        with mock.patch.object(pub.urllib.request, "urlopen", urlopen), self.assertRaises(pub.PublishError):
+            pub.PublicStore().size("releases/v1/x.tar")
+
     def test_check_reports_a_failed_read_as_incomplete(self) -> None:
         """Before publishing, a failed read means "publish" (which repairs),
         not a dead job; after publishing, "incomplete" fails the check."""
@@ -425,6 +463,54 @@ class TwoManifests(Base):
             pub.publish(other, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=self.payload_dir())
         self.assertEqual(other.objects[key], b"a different build of the same bundle")
         self.assertFalse([k for k in other.objects if "manifest" in k])
+
+    def test_a_percent_encoded_url_is_refused(self) -> None:
+        """No payload URL carries an escape, so the raw prefix tests in
+        r2_assets/payload_base can't disagree with the decoded one."""
+        for url in (self.R2 + "v26.10.4%2Fx.update.tar", self.R2 + "v26.10.4/a%2Fb.update.tar",
+                    self.R2 + "v26.10.4/x%2eupdate.tar", pub.DOWNLOAD_BASE + "v26.10.4/x%20y.tar"):
+            m = self.body("v26.10.4", V2, self.R2)
+            m["payloads"][0]["patches"][0]["bundle"]["url"] = url
+            # The decoded name, so the asset-name check passes and only the
+            # escape itself can refuse it.
+            m["payloads"][0]["patches"][0]["bundle"]["asset"] = pub.urllib.parse.unquote(url).rsplit("/", 1)[1]
+            with self.subTest(url=url), self.assertRaises(pub.PublishError):
+                pub.validate_manifest(json.dumps(m).encode(), "v26.10.4", V2)
+
+    def test_r2_assets_and_payload_base_agree_with_validation(self) -> None:
+        for base in (pub.DOWNLOAD_BASE, self.R2):
+            m = self.body("v26.10.4", V2, base)
+            pub.validate_manifest(json.dumps(m).encode(), "v26.10.4", V2)
+            urls = [a["url"] for a, _ in pub.payload_assets(m)]
+            on_r2 = [u for u in urls if pub.one_file_under(u, self.R2, "v26.10.4")]
+            self.assertEqual([a["url"] for a in pub.r2_assets(m, "v26.10.4")], on_r2)
+            self.assertEqual(pub.payload_base(m), "r2" if base == self.R2 else "github")
+
+    def test_a_malformed_manifest_is_a_publish_error(self) -> None:
+        def shaped(edit):
+            m = self.body("v26.10.4", V2)
+            edit(m)
+            return m
+        cases = {
+            "no full": lambda m: m["payloads"][0].pop("full"),
+            "full not an object": lambda m: m["payloads"][0].__setitem__("full", "x.zip"),
+            "full without url": lambda m: m["payloads"][0]["full"].pop("url"),
+            "patch without bundle": lambda m: m["payloads"][0]["patches"][0].pop("bundle"),
+            "bundle url not a string": lambda m: m["payloads"][0]["patches"][0]["bundle"].__setitem__("url", 7),
+            "patches not a list": lambda m: m["payloads"][0].__setitem__("patches", {}),
+            "payload not an object": lambda m: m.__setitem__("payloads", ["x"]),
+        }
+        for label, edit in cases.items():
+            m = shaped(edit)
+            with self.subTest(label):
+                with self.assertRaises(pub.PublishError):
+                    pub.validate_manifest(json.dumps(m).encode(), "v26.10.4", V2)
+                with self.assertRaises(pub.PublishError):
+                    pub.r2_assets(m, "v26.10.4")
+                with self.assertRaises(pub.PublishError):
+                    pub.payload_base(m)
+        with self.assertRaises(pub.PublishError):
+            pub.validate_manifest(b"[1, 2]", "v26.10.4", V2)
 
     def test_a_payload_must_be_served_under_its_own_name(self) -> None:
         m = self.body("v26.10.4", bundle_base=self.R2)

@@ -18,10 +18,13 @@ Outputs, in --out (RFC #6964):
                                 URLs are on --payload-base (github: this
                                 release's GitHub page; r2: updates.aethersdr.com
                                 releases/<tag>/); `full` is always on the page.
-  manifest.json                 the same, with every `patches` empty and only
-                                GitHub URLs: what copies without the R2 bridge
-                                (v26.11.1, v26.11.2) read. Built for every
-                                release, so its tag always matches GitHub's latest.
+  manifest.json                 what copies without the R2 bridge (v26.11.1,
+                                v26.11.2) read, GitHub URLs only: identical to
+                                manifest-v2.json with --payload-base github,
+                                and with every `patches` empty with r2 (those
+                                copies can't fetch from updates.aethersdr.com).
+                                Built for every release, so its tag always
+                                matches GitHub's latest.
   <payload>-from-<tag>.update.tar   one bundle per (payload, earlier release)
 
 Each Linux payload's `full` is the release tarball, AetherSDR-<tag>-<arch>.tar.zst,

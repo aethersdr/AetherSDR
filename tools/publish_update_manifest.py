@@ -97,21 +97,44 @@ class PublicStore:
             raise PublishError(f"GET {PUBLIC_BASE}{key}: {type(e).__name__}: {e}") from None
 
     def size(self, key: str) -> int | None:
-        """The served object's length, from a HEAD, or None if absent."""
-        req = urllib.request.Request(PUBLIC_BASE + key, method="HEAD",
-                                     headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT})
+        """The served object's length, or None if absent. From a HEAD's
+        Content-Length; when the edge answers without one (chunked or
+        compressed framing), from a one-byte ranged GET's Content-Range."""
+        headers = self._headers(key, "HEAD")
+        if headers is None:
+            return None
+        length = headers.get("Content-Length")
+        if length is not None:
+            return self._int(length, key)
+        ranged = self._headers(key, "GET", {"Range": "bytes=0-0", "Accept-Encoding": "identity"})
+        if ranged is None:
+            return None
+        total = (ranged.get("Content-Range") or "").rpartition("/")[2]
+        return self._int(total, key) if total and total != "*" else None
+
+    @staticmethod
+    def _int(value: str, key: str) -> int:
+        try:
+            return int(value)
+        except ValueError:
+            raise PublishError(f"{PUBLIC_BASE}{key}: unreadable length {value!r}") from None
+
+    def _headers(self, key: str, method: str, extra: dict[str, str] | None = None):
+        """The response headers of one request, or None on a 404."""
+        req = urllib.request.Request(PUBLIC_BASE + key, method=method,
+                                     headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT,
+                                              **(extra or {})})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                length = r.headers.get("Content-Length")
-                return int(length) if length is not None else None
+                return r.headers
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
-            raise PublishError(f"HEAD {PUBLIC_BASE}{key}: HTTP {e.code}") from None
+            raise PublishError(f"{method} {PUBLIC_BASE}{key}: HTTP {e.code}") from None
         except urllib.error.URLError as e:
-            raise PublishError(f"HEAD {PUBLIC_BASE}{key}: {e.reason}") from None
-        except (OSError, http.client.HTTPException, ValueError) as e:
-            raise PublishError(f"HEAD {PUBLIC_BASE}{key}: {type(e).__name__}: {e}") from None
+            raise PublishError(f"{method} {PUBLIC_BASE}{key}: {e.reason}") from None
+        except (OSError, http.client.HTTPException) as e:
+            raise PublishError(f"{method} {PUBLIC_BASE}{key}: {type(e).__name__}: {e}") from None
 
     def put(self, key: str, data: bytes, content_type: str, cache_control: str) -> None:
         raise PublishError("the public store is read-only")
@@ -236,14 +259,37 @@ def served(store, prefix: str, public_key: Path,
         return None
 
 
+def payload_assets(m: dict) -> list[tuple[dict, bool]]:
+    """Every asset a manifest names, each with whether it is a patch bundle.
+    A manifest that isn't shaped this way is refused here, with a
+    PublishError rather than a KeyError or TypeError traceback."""
+    if not isinstance(m, dict):
+        raise PublishError("the manifest is not a JSON object")
+    payloads = m.get("payloads") or []
+    if not isinstance(payloads, list):
+        raise PublishError("payloads is not a list")
+    out: list[tuple[dict, bool]] = []
+    for i, p in enumerate(payloads):
+        if not isinstance(p, dict):
+            raise PublishError(f"payload {i} is not an object")
+        full = p.get("full")
+        if not isinstance(full, dict) or not isinstance(full.get("url"), str):
+            raise PublishError(f"payload {i} has no full download with a url")
+        out.append((full, False))
+        patches = p.get("patches", [])
+        if not isinstance(patches, list):
+            raise PublishError(f"payload {i}: patches is not a list")
+        for j, q in enumerate(patches):
+            bundle = q.get("bundle") if isinstance(q, dict) else None
+            if not isinstance(bundle, dict) or not isinstance(bundle.get("url"), str):
+                raise PublishError(f"payload {i} patch {j} has no bundle with a url")
+            out.append((bundle, True))
+    return out
+
+
 def r2_assets(m: dict, tag: str) -> list[dict]:
     """The assets a manifest names on updates.aethersdr.com for `tag`."""
-    out = []
-    for p in m.get("payloads") or []:
-        for a in [p["full"], *(q["bundle"] for q in p.get("patches", []))]:
-            if a["url"].startswith(R2_BASE + tag + "/"):
-                out.append(a)
-    return out
+    return [a for a, _ in payload_assets(m) if a["url"].startswith(R2_BASE + tag + "/")]
 
 
 def is_complete(store, tag: str, latest_tag: str, public_key: Path) -> bool:
@@ -299,6 +345,8 @@ def validate_manifest(manifest: bytes, tag: str, name: str = LEGACY_MANIFEST) ->
         m = json.loads(manifest)
     except ValueError:
         raise PublishError(f"{name} is not JSON") from None
+    if not isinstance(m, dict):
+        raise PublishError(f"{name} is not a JSON object")
     if m.get("schema") != SCHEMA:
         raise PublishError(f"schema {m.get('schema')!r}, expected {SCHEMA}")
     if m.get("tag") != tag:
@@ -309,14 +357,18 @@ def validate_manifest(manifest: bytes, tag: str, name: str = LEGACY_MANIFEST) ->
     if not payloads:
         raise PublishError("no payloads")
     bases = (DOWNLOAD_BASE,) if name == LEGACY_MANIFEST else (DOWNLOAD_BASE, R2_BASE)
-    for p in payloads:
-        for a in [p["full"], *(q["bundle"] for q in p.get("patches", []))]:
-            if not any(one_file_under(a["url"], b, tag) for b in bases):
-                raise PublishError(f"{a['url']} is not a {tag} download {name} may name")
-            # The file a payload names is the one its URL serves: the upload
-            # reads <dir>/<asset> and writes it at the URL's key.
-            if "asset" in a and urllib.parse.unquote(urllib.parse.urlsplit(a["url"]).path).rsplit("/", 1)[-1] != a["asset"]:
-                raise PublishError(f"{a['url']} does not serve {a['asset']!r}")
+    for a, _ in payload_assets(m):
+        # No percent-escapes at all: the builder never writes one, and
+        # without them the raw prefix tests in r2_assets and payload_base
+        # see the same URL the decoded test here does.
+        if "%" in a["url"]:
+            raise PublishError(f"{a['url']} is percent-encoded; payload URLs never are")
+        if not any(one_file_under(a["url"], b, tag) for b in bases):
+            raise PublishError(f"{a['url']} is not a {tag} download {name} may name")
+        # The file a payload names is the one its URL serves: the upload
+        # reads <dir>/<asset> and writes it at the URL's key.
+        if "asset" in a and urllib.parse.unquote(urllib.parse.urlsplit(a["url"]).path).rsplit("/", 1)[-1] != a["asset"]:
+            raise PublishError(f"{a['url']} does not serve {a['asset']!r}")
 
 
 def validate_pair(legacy: bytes, v2: bytes, tag: str) -> None:
@@ -333,7 +385,7 @@ def validate_pair(legacy: bytes, v2: bytes, tag: str) -> None:
 
 def payload_base(m: dict) -> str:
     """Where a manifest's patch bundles are: "github", "r2", or "none"."""
-    urls = [q["bundle"]["url"] for p in m.get("payloads") or [] for q in p.get("patches", [])]
+    urls = [a["url"] for a, patch in payload_assets(m) if patch]
     if not urls:
         return "none"
     if all(u.startswith(R2_BASE) for u in urls):
@@ -402,8 +454,10 @@ def publish(store, tag: str, latest_tag: str, pairs: dict[str, tuple[bytes, byte
         return written
     # Re-read immediately before the write: promote only over an older (or
     # this same, being repaired) release, never over a newer one. Either
-    # latest/ manifest naming a newer release blocks both, so the two never
-    # name different releases because of this run.
+    # latest/ manifest naming a newer release blocks both. The two are still
+    # separate writes: a failure after the first leaves latest/ naming two
+    # releases until a later run's `check` reads the release as incomplete
+    # and promotes both again.
     for name in MANIFESTS:
         current = served(store, "latest", public_key, name)
         if current is not None and version_key(current[1].get("tag", "v0.0.0")) > version_key(tag):

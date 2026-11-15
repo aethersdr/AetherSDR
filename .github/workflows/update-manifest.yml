@@ -316,9 +316,10 @@ jobs:
       # is uploaded: a wrong or rotated secret fails here, loudly, instead of
       # publishing a manifest no client can verify.
       # The key signs only schema-1 manifests for THIS tag, with a key_id,
-      # whose every URL is one of this release's downloads (GitHub only, and
-      # no patches, in manifest.json); checked before the key is written to
-      # disk.
+      # whose every URL is one of this release's downloads. manifest.json
+      # names GitHub only: identical to manifest-v2.json while the patch
+      # bundles are on the release page, full downloads only once they are on
+      # updates.aethersdr.com. Checked before the key is written to disk.
       - name: Sign and verify the manifests
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
