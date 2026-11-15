@@ -313,6 +313,10 @@ def validate_manifest(manifest: bytes, tag: str, name: str = LEGACY_MANIFEST) ->
         for a in [p["full"], *(q["bundle"] for q in p.get("patches", []))]:
             if not any(one_file_under(a["url"], b, tag) for b in bases):
                 raise PublishError(f"{a['url']} is not a {tag} download {name} may name")
+            # The file a payload names is the one its URL serves: the upload
+            # reads <dir>/<asset> and writes it at the URL's key.
+            if "asset" in a and urllib.parse.unquote(urllib.parse.urlsplit(a["url"]).path).rsplit("/", 1)[-1] != a["asset"]:
+                raise PublishError(f"{a['url']} does not serve {a['asset']!r}")
 
 
 def validate_pair(legacy: bytes, v2: bytes, tag: str) -> None:
@@ -360,6 +364,14 @@ def upload_payloads(store, tag: str, m: dict, payload_dir: Path | None) -> list[
             raise PublishError(f"{a['asset']}: named on updates.aethersdr.com but not in --dir")
         if file_digest(src) != (a["sha256"], a["size"]):
             raise PublishError(f"{a['asset']}: does not match the manifest")
+        # Payloads are served immutable for a year, so one is never rewritten
+        # with other bytes: a repair run reuses what is stored, or stops.
+        stored = store.digest(key)
+        if stored == (a["sha256"], a["size"]):
+            keys.append(key)
+            continue
+        if stored is not None:
+            raise PublishError(f"{key}: already published with other bytes; an immutable payload is never rewritten")
         store.put_file(key, src, "application/x-tar", PAYLOAD_CACHE)
         if store.digest(key) != (a["sha256"], a["size"]):
             raise PublishError(f"{key}: does not read back as the file just uploaded")

@@ -409,6 +409,29 @@ class TwoManifests(Base):
             pub.publish(self.store, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=d)
         self.assertFalse([k for k in self.store.objects if "manifest" in k])
 
+    def test_a_repair_never_rewrites_a_published_payload(self) -> None:
+        pairs = self.signed("v26.10.4", bundle_base=self.R2)
+        key = "releases/v26.10.4/AetherSDR-x.update.tar"
+        self.store.objects[key] = self.BUNDLE           # an earlier run's upload, same bytes
+        puts = []
+        real_put_file = self.store.put_file
+        self.store.put_file = lambda *a, **k: (puts.append(a[0]), real_put_file(*a, **k))
+        pub.publish(self.store, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=self.payload_dir())
+        self.assertNotIn(key, puts, "identical bytes are reused, not uploaded again")
+        self.assertTrue(pub.is_complete(self.store, "v26.10.4", "v26.10.4", self.pub))
+        other = FakeStore()
+        other.objects[key] = b"a different build of the same bundle"
+        with self.assertRaises(pub.PublishError):
+            pub.publish(other, "v26.10.4", "v26.10.4", pairs, self.pub, payload_dir=self.payload_dir())
+        self.assertEqual(other.objects[key], b"a different build of the same bundle")
+        self.assertFalse([k for k in other.objects if "manifest" in k])
+
+    def test_a_payload_must_be_served_under_its_own_name(self) -> None:
+        m = self.body("v26.10.4", bundle_base=self.R2)
+        m["payloads"][0]["patches"][0]["bundle"]["asset"] = "../../elsewhere.tar"
+        with self.assertRaises(pub.PublishError):
+            pub.validate_manifest(json.dumps(m).encode(), "v26.10.4", V2)
+
     def test_github_bundles_are_not_uploaded(self) -> None:
         pub.publish(self.store, "v26.10.4", "v26.10.4", self.signed("v26.10.4"), self.pub)
         self.assertFalse([k for k in self.store.objects if k.endswith(".update.tar")])
