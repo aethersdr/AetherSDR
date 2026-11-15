@@ -2177,7 +2177,8 @@ QStringList AppletPanel::defaultButtonOrder() const
     // labels (WAVE→"WAV", PHNE→"PHN", TXDSP→"VUDU"). TUN/AMP/AG are omitted:
     // updateHardwareAvailability() adds them when the hardware appears, and the
     // user's Hidden choice is respected after that.
-    QStringList out = {"VU", "PWR", "RX", "BAND", "TX", "P/CW"};
+    // BAND sits right after the visible five: first in the drawer (RFC #5234).
+    QStringList out = {"VU", "PWR", "RX", "TX", "P/CW", "BAND"};
     const QStringList rest = {
         "LCK", "PHNE", "EQ", "WAVE", "TXDSP",
         "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "SS", "MQTT"

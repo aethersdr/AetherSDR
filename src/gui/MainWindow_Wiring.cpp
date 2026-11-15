@@ -7975,6 +7975,9 @@ void MainWindow::wireMeters()
     });
 
     if (m_appletPanel && m_appletPanel->bandApplet()) {
+        // Same band-plan lookup as the overlay's Band panel, so the two
+        // highlights agree under every regional plan.
+        m_appletPanel->bandApplet()->setBandPlanManager(m_bandPlanMgr);
         connect(m_appletPanel->bandApplet(), &BandApplet::bandSelected,
                 this, [this](const QString& bandName, double freqMhz, const QString& mode,
                              const QString& stackKeyHint) {

@@ -1,13 +1,15 @@
 #include "BandApplet.h"
 
+#include "ActivePlanBand.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "core/ThemeManager.h"
 #include "models/BandDefs.h"
-#include "models/BandSettings.h"
 #include "models/SliceModel.h"
 
 #include <QGridLayout>
 #include <QPushButton>
+
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -15,7 +17,7 @@ namespace {
 
 struct BandGridEntry {
     const char* label;
-    const char* bandName;  // key for BandSettings (e.g. "20m")
+    const char* bandName;  // band-stack key (e.g. "20m")
     double      freqMhz;
     const char* mode;
 };
@@ -102,6 +104,22 @@ void BandApplet::setSlice(SliceModel* slice)
     updateActiveBand();
 }
 
+void BandApplet::setBandPlanManager(BandPlanManager* manager)
+{
+    if (m_bandPlanManager == manager) {
+        return;
+    }
+    if (m_bandPlanManager) {
+        disconnect(m_bandPlanManager, nullptr, this, nullptr);
+    }
+    m_bandPlanManager = manager;
+    if (m_bandPlanManager) {
+        connect(m_bandPlanManager, &BandPlanManager::planChanged,
+                this, &BandApplet::updateActiveBand);
+    }
+    updateActiveBand();
+}
+
 void BandApplet::setRadioCapabilities(ModelCapabilities caps)
 {
     m_radioCapabilities = caps;
@@ -124,8 +142,16 @@ void BandApplet::setDeclaredBands(const QStringList& bands,
 
 void BandApplet::setTuningRange(double minMhz, double maxMhz)
 {
+    if (qFuzzyCompare(m_tuningMinMhz, minMhz) && qFuzzyCompare(m_tuningMaxMhz, maxMhz))
+        return;
     m_tuningMinMhz = minMhz;
     m_tuningMaxMhz = maxMhz;
+    if (!m_declaredBands.isEmpty()) {
+        // Utility rows are presence-gated by this range in the declared
+        // branch, so it needs a full rebuild, as the overlay does.
+        rebuildGrid();
+        return;
+    }
     applyTuningRange();
 }
 
@@ -151,6 +177,8 @@ void BandApplet::rebuildGrid()
         btn->setCheckable(true);
         btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         btn->setFixedHeight(20);
+        btn->setAccessibleName(isXvtrSetup ? tr("Transverter setup")
+                                           : tr("%1 band").arg(bandName));
 
         BandBtnInfo info;
         info.btn = btn;
@@ -260,23 +288,22 @@ void BandApplet::rebuildGrid()
 
 void BandApplet::applyTuningRange()
 {
-    if (m_tuningMaxMhz <= m_tuningMinMhz) {
-        for (const auto& info : m_buttons) {
-            if (info.btn) {
-                info.btn->setEnabled(true);
-            }
-        }
-        return;
-    }
-
+    // "Not reported" is max <= min: everything stays enabled (the Flex
+    // behavior). The tooltip text matches the overlay's Band panel.
+    const bool constrained = m_tuningMaxMhz > m_tuningMinMhz;
     for (const auto& info : m_buttons) {
         if (!info.btn) continue;
-        if (info.isXvtrSetup) {
-            info.btn->setEnabled(true);
-            continue;
-        }
-        const bool inRange = (info.freqMhz >= m_tuningMinMhz && info.freqMhz <= m_tuningMaxMhz);
-        info.btn->setEnabled(inRange);
+        const bool reachable = !constrained || info.isXvtrSetup
+            || (info.freqMhz >= m_tuningMinMhz && info.freqMhz <= m_tuningMaxMhz);
+        const QString reason = reachable
+            ? QString()
+            : tr("Outside this radio's tuning range (%1–%2 MHz)")
+                  .arg(m_tuningMinMhz, 0, 'f', 3)
+                  .arg(m_tuningMaxMhz, 0, 'f', 3);
+        info.btn->setEnabled(reachable);
+        // A tooltip alone is not announced (docs/a11y.md).
+        info.btn->setToolTip(reason);
+        info.btn->setAccessibleDescription(reason);
     }
 }
 
@@ -293,7 +320,7 @@ void BandApplet::updateActiveBand()
     }
 
     const double freq = m_slice->frequency();
-    QString activeBand = BandSettings::bandForFrequency(freq);
+    QString activeBand = activePlanBandForFrequency(m_bandPlanManager, freq);
 
     // Declared band ranges from the connected backend/gateway.
     for (const auto& range : m_declaredBandRanges) {

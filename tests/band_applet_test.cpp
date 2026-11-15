@@ -1,5 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "gui/BandApplet.h"
+#include "models/BandPlanManager.h"
 #include "models/SliceModel.h"
 #include "models/ModelCapabilities.h"
 
@@ -44,6 +45,20 @@ QPushButton* findButton(const BandApplet& applet, const QString& text)
 void settleRebuild()
 {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+BandPlanManager::Segment segment(double lowMhz, double highMhz)
+{
+    BandPlanManager::Segment seg;
+    seg.lowMhz = lowMhz;
+    seg.highMhz = highMhz;
+    return seg;
+}
+
+// A US-style plan: 40 m runs to 7.300 MHz, 20 m to 14.350 MHz.
+QVector<BandPlanManager::Segment> usStylePlan()
+{
+    return {segment(7.000, 7.300), segment(14.000, 14.350)};
 }
 
 void testDefaultButtons()
@@ -99,7 +114,10 @@ void testActiveBandHighlighting()
 {
     BandApplet applet;
     SliceModel slice(0);
+    BandPlanManager plan;
+    plan.setSegmentsForTest(usStylePlan());
 
+    applet.setBandPlanManager(&plan);
     applet.setSlice(&slice);
 
     // Set frequency to 20m (14.074 MHz)
@@ -122,6 +140,62 @@ void testActiveBandHighlighting()
     // Disconnect slice
     applet.setSlice(nullptr);
     report("all buttons inactive when slice is null", btnGen && !btnGen->isChecked());
+}
+
+// The highlight follows the active band plan, exactly as the overlay's Band
+// panel does: a frequency outside every segment of the plan is GEN, even when
+// it sits inside the band's broad grouping window (#5234 review nit 1).
+void testHighlightFollowsBandPlan()
+{
+    BandApplet applet;
+    SliceModel slice(0);
+    BandPlanManager plan;
+    plan.setSegmentsForTest(usStylePlan());
+    applet.setBandPlanManager(&plan);
+    applet.setSlice(&slice);
+
+    auto* btn40 = findButton(applet, "40");
+    auto* btnGen = findButton(applet, "GEN");
+
+    slice.setFrequency(7.250);
+    report("40 lit at 7.250 MHz under a US-style plan", btn40 && btn40->isChecked());
+
+    // Region 1 style: 40 m ends at 7.200 MHz. planChanged re-runs the
+    // highlight without the slice moving.
+    plan.setSegmentsForTest({segment(7.000, 7.200), segment(14.000, 14.350)});
+    emit plan.planChanged();
+    report("GEN lit at 7.250 MHz once the plan ends 40 m at 7.200",
+           btnGen && btnGen->isChecked());
+    report("40 not lit at 7.250 MHz outside the plan", btn40 && !btn40->isChecked());
+
+    slice.setFrequency(7.100);
+    report("40 lit at 7.100 MHz inside the plan", btn40 && btn40->isChecked());
+
+    // No plan at all reads as GEN, as the overlay's lookup does.
+    applet.setBandPlanManager(nullptr);
+    report("GEN lit with no band plan", btnGen && btnGen->isChecked());
+}
+
+// Every grid button carries a screen-reader name (docs/a11y.md, #5234 review
+// nit 3).
+void testAccessibleNames()
+{
+    BandApplet applet;
+    auto* btn20 = findButton(applet, "20");
+    auto* btnGen = findButton(applet, "GEN");
+    auto* btnXvtr = findButton(applet, "XVTR");
+    report("20 button is named \"20m band\"",
+           btn20 && btn20->accessibleName() == QStringLiteral("20m band"),
+           btn20 ? btn20->accessibleName() : QString());
+    report("GEN button is named \"GEN band\"",
+           btnGen && btnGen->accessibleName() == QStringLiteral("GEN band"));
+    report("XVTR entry is named \"Transverter setup\"",
+           btnXvtr && btnXvtr->accessibleName() == QStringLiteral("Transverter setup"));
+
+    bool allNamed = true;
+    for (auto* btn : applet.findChildren<QPushButton*>())
+        allNamed = allNamed && !btn->accessibleName().isEmpty();
+    report("every band button has an accessible name", allNamed);
 }
 
 void testRadioCapabilitiesAndXvtr()
@@ -169,6 +243,22 @@ void testTuningRange()
     report("20m button enabled within tuning range", btn20 && btn20->isEnabled());
     report("6m button disabled outside tuning range", btn6 && !btn6->isEnabled());
     report("XVTR setup button remains enabled", btnXvtr && btnXvtr->isEnabled());
+
+    // Disabled buttons say why, in the overlay's words (#5234 review nit 2).
+    const QString expectedTip =
+        QStringLiteral("Outside this radio's tuning range (1.800–30.000 MHz)");
+    report("out-of-range button explains itself",
+           btn6 && btn6->toolTip() == expectedTip,
+           btn6 ? btn6->toolTip() : QString());
+    report("out-of-range reason reaches screen readers",
+           btn6 && btn6->accessibleDescription() == expectedTip);
+    report("in-range button has no tooltip", btn20 && btn20->toolTip().isEmpty());
+
+    // Clearing the range re-enables everything and drops the explanation.
+    applet.setTuningRange(0.0, 0.0);
+    report("6m re-enabled once no range is reported", btn6 && btn6->isEnabled());
+    report("6m tooltip cleared once no range is reported",
+           btn6 && btn6->toolTip().isEmpty());
 }
 
 void testDeclaredBands()
@@ -219,6 +309,20 @@ void testDeclaredBands()
            findButton(ranged, "WWV") != nullptr);
     report("declared utility outside tuning range dropped",
            findButton(ranged, "2200") == nullptr);
+
+    // MainWindow pushes the declared set first and the range after it, so a
+    // range arriving later must rebuild the presence-gated utility rows.
+    BandApplet late;
+    late.setDeclaredBands({"20m", "2m"}, ranges);
+    settleRebuild();
+    report("declared utility shown before any range is reported",
+           findButton(late, "2200") != nullptr);
+    late.setTuningRange(1.8, 148.0);
+    settleRebuild();
+    report("declared utility dropped by a range reported afterwards",
+           findButton(late, "2200") == nullptr);
+    report("declared utility in range kept after a late range",
+           findButton(late, "WWV") != nullptr);
 }
 
 void testXvtrHighlightPrecedence()
@@ -252,11 +356,14 @@ void testXvtrHighlightPrecedence()
 
 int main(int argc, char* argv[])
 {
+    TestSettingsProfile profile(QStringLiteral("band_applet_test"));
     QApplication app(argc, argv);
 
     testDefaultButtons();
     testBandSelectionSignals();
     testActiveBandHighlighting();
+    testHighlightFollowsBandPlan();
+    testAccessibleNames();
     testRadioCapabilitiesAndXvtr();
     testTuningRange();
     testDeclaredBands();

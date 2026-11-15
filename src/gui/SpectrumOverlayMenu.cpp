@@ -1,6 +1,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "FrontEndOverloadIndicator.h"
 #include "core/TxKeyingMarker.h"
+#include "ActivePlanBand.h"
 #include "AntennaChoiceGate.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
@@ -356,52 +357,6 @@ static constexpr BandGridEntry BAND_GRID[] = {
     {"4",    "4m",   70.200,  "USB"},   // 16 — FLEX-6500 (Region 1) + FLEX-6700
     {"2",    "2m",  144.200,  "USB"},   // 17 — FLEX-6700
 };
-
-// Broad, non-regulatory grouping windows map a frequency that is already
-// proven to lie inside the active BandPlanManager to the matching menu key.
-// Actual membership and gaps come only from the active regional plan.
-struct BandPlanLookup {
-    const char* bandName;
-    double searchLowMhz;
-    double searchHighMhz;
-};
-
-static constexpr BandPlanLookup kBandPlanLookup[] = {
-    {"2200m", 0.1, 0.2}, {"630m", 0.4, 0.5},
-    {"160m", 1.7, 2.1}, {"80m", 3.4, 4.1}, {"60m", 5.2, 5.5},
-    {"40m", 6.9, 7.4}, {"30m", 10.0, 10.2}, {"20m", 13.9, 14.5},
-    {"17m", 18.0, 18.3}, {"15m", 20.9, 21.6}, {"12m", 24.8, 25.1},
-    {"10m", 27.9, 30.0}, {"6m", 49.0, 54.5}, {"4m", 69.0, 71.0},
-    {"2m", 143.0, 149.0}, {"1.25m", 221.0, 226.0},
-    {"440", 419.0, 451.0}, {"33cm", 901.0, 929.0},
-    {"23cm", 1239.0, 1301.0},
-};
-
-static QString activePlanBandForFrequency(const BandPlanManager* manager,
-                                          double freqMhz)
-{
-    if (!manager) {
-        return QStringLiteral("GEN");
-    }
-
-    bool inActivePlan = false;
-    for (const BandPlanManager::Segment& segment : manager->segments()) {
-        if (freqMhz >= segment.lowMhz && freqMhz <= segment.highMhz) {
-            inActivePlan = true;
-            break;
-        }
-    }
-    if (!inActivePlan) {
-        return QStringLiteral("GEN");
-    }
-
-    for (const BandPlanLookup& lookup : kBandPlanLookup) {
-        if (freqMhz >= lookup.searchLowMhz && freqMhz <= lookup.searchHighMhz) {
-            return QString::fromLatin1(lookup.bandName);
-        }
-    }
-    return QStringLiteral("GEN");
-}
 
 // Indices into BAND_GRID for the built-in transverter bands.  Used by
 // the conditional VHF row in setXvtrBands().

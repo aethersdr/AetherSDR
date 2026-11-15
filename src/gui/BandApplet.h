@@ -13,12 +13,14 @@ class QPushButton;
 
 namespace AetherSDR {
 
+class BandPlanManager;
 class SliceModel;
 
 // BandApplet — right-side sidebar applet for quick band switching.
 // Mirrors the band selection functionality of SpectrumOverlayMenu's Band popup,
 // including HF, VHF/UHF capability bands, custom XVTR bands, and utility bands.
-// Highlights the active band button matching the current slice's RX frequency.
+// Highlights the active band button matching the current slice's RX frequency,
+// under the active band plan, with the overlay's lookup (ActivePlanBand.h).
 class BandApplet : public QWidget {
     Q_OBJECT
 
@@ -32,6 +34,7 @@ public:
     explicit BandApplet(QWidget* parent = nullptr);
 
     void setSlice(SliceModel* slice);
+    void setBandPlanManager(BandPlanManager* manager);
     void setRadioCapabilities(ModelCapabilities caps);
     void setXvtrBands(const QVector<XvtrBand>& bands);
     void setDeclaredBands(const QStringList& bands,
@@ -59,6 +62,7 @@ private:
 
     QGridLayout*          m_grid{nullptr};
     QPointer<SliceModel>  m_slice;
+    QPointer<BandPlanManager> m_bandPlanManager;
     ModelCapabilities     m_radioCapabilities;
     QVector<XvtrBand>     m_xvtrBands;
     QStringList           m_declaredBands;
