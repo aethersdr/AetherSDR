@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T07:57:33.548265+00:00",
+  "updated_utc": "2026-11-15T08:04:50.381727+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -16,15 +16,15 @@
   ],
   "current_changes": {
     "description": "Public-record carrier image and two-role RAM credential broker/receiver. Each fixed role fetches once; no request secret is placed in the image. No new radio deployment.",
-    "builds": "ARM64 acceptor and delivery entries and native host fixtures built.",
-    "evidence": "ram-carrier-development under evidence_root; prior ram-request-development evidence remains preserved.",
+    "builds": "Full signed ARM64 and ARMv7 shim/DSP/helper candidates built. Native release and worker verifiers accept both candidates and refuse wrong keys. Actual compiled ARM64 carrier image assembled twice identically; layer inspection finds no request secret.",
+    "evidence": "ram-carrier-development/image-validation.json and ram-installed-candidate-development/validation.json under evidence_root; earlier component-test evidence remains preserved.",
     "tests": "Saved logs show the full shim race suite passing (14.156 s), eleven installer test methods passing, two native credential methods passing with C ASan/UBSan and Go race detection, fifteen upload regression tests passing, and three image-layout tests passing.",
     "unfinished": [
       "Full root/container process graph and tmpfs behavior on the radio",
-      "Actual compiled-binary public-record image assembly and license bundle verification",
       "Initial-install trust and ordinary desktop integration",
       "Integration into a signed release, live upgrade and automatic outer cleanup",
-      "Remaining cross-platform, hardware qualification and release gates"
+      "Remaining cross-platform, hardware qualification and release gates",
+      "Desktop reconnect must verify durable committed state after the shim upgrade stops its owned request process; transport disconnect is indeterminate."
     ]
   },
   "remaining": [
@@ -42,5 +42,6 @@
     "RF only within explicitly authorized bounded bench limits",
     "No new live tests during this checkpoint"
   ],
-  "production_ready": false
+  "production_ready": false,
+  "next_action": "Revalidate installed generation, prepare a bounded receive-only bench bootstrap upgrade to the new shim, then qualify the RAM request/public carrier process graph and committed-state detection. No new candidate has been deployed."
 }

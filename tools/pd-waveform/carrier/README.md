@@ -8,18 +8,26 @@ a supported FLEX-6000 installer. No radio command or RF interface is exposed.
 
 The native waveform launch tests found that the radio retains its uploaded ZIP
 as mode 0644 and extracts its private configuration under a different UID. That
-credential-bearing native package must not ship. This carrier's private image
-has only been loaded through the bench path; its request secret must likewise
-stay out of public radio upload artifacts. A RAM-only authenticated request
-configuration path remains required before normal operator installation.
+credential-bearing native package must not ship. The old private carrier image
+was loaded only through the bench path and is not suitable for public upload.
 
-The private, per-request OCI image contains four static executables, a 120-byte
-`PDXFER01` configuration and licenses. There is no shell. `image.py` assembles
-the image deterministically for identical inputs; the configuration's fresh
-secret deliberately changes the resulting image for a new request. The caller
-must authenticate the distributed code and obtain approval of the exact plan
-before producing that configuration. Image construction itself grants no consent.
-Store this image and its configuration privately and remove them after use.
+The current per-request OCI image contains four static executables, a 120-byte
+`PDPUB001` public receipt/key commitment and licenses. There is no shell or
+private request configuration in the image. `image.py` assembles identical
+inputs deterministically and rejects private `PDXFER01` records. The caller
+must authenticate the distributed code and obtain approval of the exact plan;
+image construction itself grants no consent.
+
+The installed shim keeps the private request in unlinked tmpfs. The acceptor
+and installer child each fetch it once using their fixed role and the matching
+public record. The native receiver authenticates the shim UID, verifies the
+read-only unlinked tmpfs descriptor, receipt and commitment, then makes its own
+root-owned RAM copy. The broker closes after both roles fetch or the job ends.
+Local integration tests exercise both role orders, replay, mismatched records
+and malformed descriptors. The actual root/container graph, writable tmpfs
+availability and normal radio upload lifecycle remain to be qualified. This
+upgrade path depends on an already-installed shim; first-install trust remains
+unresolved. See [`request/README.md`](../request/README.md) for the wire contract.
 
 The entrypoint `/pd/accept` retires all effective, permitted, inheritable and
 bounding capabilities and enables NoNewPrivs before accepting a request. It
