@@ -318,6 +318,38 @@ int main()
                 && gatewareMinorFromVersionText(gatewareVersionText(*parsed)) == parsed->gatewareMinor;
         }
         check(roundTrips, "every minor 0..255 round-trips through the version text");
+        // The support tier's inputs (#7311): the major and a stable board id,
+        // neither of which is the display label.
+        check(gatewareMajorFromVersionText("74.3") == std::optional<std::uint8_t>(74),
+              "\"74.3\" -> major 74");
+        check(gatewareMajorFromVersionText("74") == std::optional<std::uint8_t>(74),
+              "\"74\" -> major 74");
+        check(gatewareMajorFromVersionText("75.52") == std::optional<std::uint8_t>(75),
+              "\"75.52\" -> major 75");
+        check(!gatewareMajorFromVersionText(""), "empty version -> no major");
+        check(!gatewareMajorFromVersionText("256.3"), "major above 255 rejected");
+        check(!gatewareMajorFromVersionText("74x"), "non-digit major rejected");
+        check(!gatewareMajorFromVersionText("74.5x"), "malformed minor rejects the major too");
+        check(!gatewareMajorFromVersionText("4.2.20.41343"), "a Flex version is not a major");
+        bool majorsRoundTrip = true;
+        for (int v = 0; v <= 0xFF; ++v) {
+            reply[0x09] = static_cast<std::uint8_t>(v);
+            const auto parsed = parseDiscoveryReply(reply);
+            majorsRoundTrip = majorsRoundTrip
+                && gatewareMajorFromVersionText(gatewareVersionText(*parsed))
+                       == std::optional<std::uint8_t>(parsed->gatewareVersion);
+        }
+        reply[0x09] = 74;
+        check(majorsRoundTrip, "every major 0..255 round-trips through the version text");
+        check(std::string(boardIdFor(GatewareBoard::Unknown)) == "hl2",
+              "a board that does not name itself is \"hl2\"");
+        check(std::string(boardIdFor(GatewareBoard::SquareSdr2)) == "square-sdr-2",
+              "SQUARE SDR 2 is \"square-sdr-2\"");
+        check(std::string(boardIdFor(GatewareBoard::Square3)) == "square-3",
+              "SQUARE 3 is \"square-3\"");
+        check(std::string(boardIdFor(boardForGatewareMinor(3))) == "hl2"
+                  && std::string(boardIdFor(boardForGatewareMinor(std::nullopt))) == "hl2",
+              "stock minor 3 and no minor both map to \"hl2\"");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }

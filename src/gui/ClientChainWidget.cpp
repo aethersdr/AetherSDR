@@ -162,16 +162,21 @@ void ClientChainWidget::setTxActive(bool active)
 
 bool ClientChainWidget::isStageImplemented(AudioEngine::TxChainStage s) const
 {
-    // All six TX DSP stages are now implemented.  The Enh slot hosts
-    // the PUDU exciter (Phase 5) — the enum name is legacy; the
-    // user-facing label is PUDU (see stageLabel above).
-    return s == AudioEngine::TxChainStage::Eq
-        || s == AudioEngine::TxChainStage::Comp
-        || s == AudioEngine::TxChainStage::Gate
-        || s == AudioEngine::TxChainStage::DeEss
-        || s == AudioEngine::TxChainStage::Tube
-        || s == AudioEngine::TxChainStage::Enh
-        || s == AudioEngine::TxChainStage::Reverb;
+    // The Enh slot hosts the PUDU exciter; the enum name is legacy.
+    switch (s) {
+        case AudioEngine::TxChainStage::Eq:
+        case AudioEngine::TxChainStage::Comp:
+        case AudioEngine::TxChainStage::Gate:
+        case AudioEngine::TxChainStage::DeEss:
+        case AudioEngine::TxChainStage::Tube:
+        case AudioEngine::TxChainStage::Enh:
+        case AudioEngine::TxChainStage::Reverb:
+            return true;
+        case AudioEngine::TxChainStage::None:
+            return false;
+    }
+    // No default: a new stage must be listed above, or -Wswitch says so.
+    return false;
 }
 
 bool ClientChainWidget::isStageBypassed(AudioEngine::TxChainStage s) const
@@ -192,9 +197,11 @@ bool ClientChainWidget::isStageBypassed(AudioEngine::TxChainStage s) const
             return !(m_audio->clientPuduTx() && m_audio->clientPuduTx()->isEnabled());
         case AudioEngine::TxChainStage::Reverb:
             return !(m_audio->clientReverbTx() && m_audio->clientReverbTx()->isEnabled());
-        default:
+        case AudioEngine::TxChainStage::None:
             return true;
     }
+    // No default: a new stage must be added above, or -Wswitch says so.
+    return true;
 }
 
 void ClientChainWidget::rebuildLayout()
@@ -623,52 +630,62 @@ void ClientChainWidget::toggleStageBypass(int boxIdx)
     if (!isStageImplemented(stage)) return;
 
     const bool newEnabled = isStageBypassed(stage);   // was off → turn on
+    bool handled = false;
     switch (stage) {
         case AudioEngine::TxChainStage::Eq:
             if (m_audio->clientEqTx()) {
                 m_audio->clientEqTx()->setEnabled(newEnabled);
                 m_audio->saveClientEqSettings();
             }
+            handled = true;
             break;
         case AudioEngine::TxChainStage::Comp:
             if (m_audio->clientCompTx()) {
                 m_audio->clientCompTx()->setEnabled(newEnabled);
                 m_audio->saveClientCompSettings();
             }
+            handled = true;
             break;
         case AudioEngine::TxChainStage::Gate:
             if (m_audio->clientGateTx()) {
                 m_audio->clientGateTx()->setEnabled(newEnabled);
                 m_audio->saveClientGateSettings();
             }
+            handled = true;
             break;
         case AudioEngine::TxChainStage::DeEss:
             if (m_audio->clientDeEssTx()) {
                 m_audio->clientDeEssTx()->setEnabled(newEnabled);
                 m_audio->saveClientDeEssSettings();
             }
+            handled = true;
             break;
         case AudioEngine::TxChainStage::Tube:
             if (m_audio->clientTubeTx()) {
                 m_audio->clientTubeTx()->setEnabled(newEnabled);
                 m_audio->saveClientTubeSettings();
             }
+            handled = true;
             break;
         case AudioEngine::TxChainStage::Enh:
             if (m_audio->clientPuduTx()) {
                 m_audio->clientPuduTx()->setEnabled(newEnabled);
                 m_audio->saveClientPuduSettings();
             }
+            handled = true;
             break;
         case AudioEngine::TxChainStage::Reverb:
             if (m_audio->clientReverbTx()) {
                 m_audio->clientReverbTx()->setEnabled(newEnabled);
                 m_audio->saveClientReverbSettings();
             }
+            handled = true;
             break;
-        default:
-            return;
+        case AudioEngine::TxChainStage::None:
+            break;
     }
+    // An enumerator missing above (-Wswitch ignored) must not emit.
+    if (!handled) return;
     emit stageEnabledChanged(stage, newEnabled);
     update();
 }

@@ -2,6 +2,7 @@
 #include "core/ClientGate.h"
 #include "core/RNNoiseFilter.h"
 #include "core/Resampler.h"
+#include "core/TxChainLayout.h"
 #include "core/TxVoiceProcessor.h"
 
 #include <QByteArray>
@@ -727,6 +728,42 @@ void testChannelStripRunsAt48k()
                != processor.postChannelStripFloat48Stereo());
 }
 
+// A stage past the eighth slot still runs: the order is 16 four-bit slots.
+// Eight Gate slots with no gate processor are pass-through; the tube sits in
+// the ninth, which a one-byte-per-slot order could not hold, and a tenth
+// entry shares its byte so a byte-wide decode cannot find it either.
+void testNinthSlotStageRuns()
+{
+    ClientTube tube;
+    tube.setEnabled(true);
+    tube.setDriveDb(12.0f);
+    tube.setDryWet(1.0f);
+
+    std::vector<TxVoiceProcessor::Stage> order(8, TxVoiceProcessor::Stage::Gate);
+    order.push_back(TxVoiceProcessor::Stage::Tube);
+    // A tenth entry puts the Tube's nibble in the same byte as this Gate's,
+    // so a byte-slot decode reads 0x15 (no stage) and skips the Tube.
+    order.push_back(TxVoiceProcessor::Stage::Gate);
+    uint64_t packed = 0;
+    const bool fits = AetherSDR::TxChainLayout::pack(order, packed);
+
+    TxVoiceProcessor processor;
+    TxVoiceProcessor::Processors processors;
+    processors.tube = &tube;
+    processor.setProcessors(processors);
+    processor.setStageOrder(packed);
+    processor.setMeasurementCaptureEnabled(true);
+    processor.prepare(48000, 1024);
+    QByteArray transportOutput = makeCanonicalTone(480, 48000, 1000.0f);
+    const bool processed = processor.processCapturedInt16(transportOutput);
+
+    report("a ten-slot order packs", fits);
+    report("a stage in the ninth slot changes the post-strip audio",
+           processed
+               && processor.normalizedFloat48Stereo()
+                      != processor.postChannelStripFloat48Stereo());
+}
+
 void testNonFiniteSamplesCannotPoisonEgressSrc()
 {
     std::vector<float> input(480 * 2, 0.1f);
@@ -1189,6 +1226,7 @@ int main()
     testCapturedFloat32EntryAvoidsInputQuantization();
     testCapturedFloat32MatchesInt16ForRepresentableAudio();
     testChannelStripRunsAt48k();
+    testNinthSlotStageRuns();
     testNonFiniteSamplesCannotPoisonEgressSrc();
     testNonFiniteCapturedFloatCannotPoisonIngressSrc();
     testMeasurementCaptureCanBeDisabled();

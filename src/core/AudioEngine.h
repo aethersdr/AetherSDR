@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include "RxChainRunner.h"
+#include "TxChainLayout.h"
 
 #include <QAudioSink>
 #include <QAudioSource>
@@ -509,8 +510,9 @@ public:
     void setTxPostDspMonitor(ClientPuduMonitor* m) noexcept;
 
     // Generalised TX DSP chain — each stage is a separate float processing
-    // block run in order by TxVoiceProcessor at 48 kHz. Numeric values are
-    // persisted in the packed atomic and therefore form a stable contract.
+    // block run in order by TxVoiceProcessor at 48 kHz. The values are shared
+    // with TxVoiceProcessor::Stage and must fit one 4-bit slot of the packed
+    // order (TxChainLayout): 1..15, with None ending the list.
     enum class TxChainStage : uint8_t {
         None   = 0,   // sentinel / end-of-list marker
         Gate   = 1,
@@ -521,7 +523,13 @@ public:
         Enh    = 6,   // PUDU slot
         Reverb = 7,
     };
-    static constexpr int kMaxTxChainStages = 8;  // packs into uint64_t
+    static constexpr int kMaxTxChainStages = TxChainLayout::kSlots;
+
+    // The packed order the audio thread loads each block. Tests only.
+    uint64_t txChainPackedForTest() const noexcept
+    {
+        return m_txChainPacked.load(std::memory_order_acquire);
+    }
 
     // RX chain — same packed-atomic dispatcher pattern as TX, applied
     // to playback audio after the radio's NR has run.  Phase 0 ships
@@ -557,8 +565,9 @@ public:
 
     // Set the ordered list of stages.  UI thread API; commits an
     // atomic snapshot that the audio thread picks up on its next block.
-    // Order may contain any subset of stages; unlisted stages are
-    // bypassed entirely.  Persists via AppSettings.
+    // Repeats are dropped and every canonical stage the order lacks is
+    // appended, as on load, so a stage is bypassed by its processor's
+    // enable flag, never by leaving it out.  Persists what was packed.
     void setTxChainStages(const QVector<TxChainStage>& stages);
     QVector<TxChainStage> txChainStages() const;
 
@@ -1460,11 +1469,10 @@ private:
     // Post-DSP TX monitor — owned by MainWindow; we just hold a
     // pointer the audio thread can load lock-free per block.
     std::atomic<ClientPuduMonitor*> m_txPostDspMonitor{nullptr};
-    // Generalised TX DSP chain — stages packed one-byte-per-slot into
-    // a uint64_t so the audio thread can load the full order in a
-    // single atomic read per block.  TxChainStage::None terminates the
-    // list; unused slots are zero.  Default canonical order:
-    // [Gate, Eq, DeEss, Comp, Tube, Enh, Reverb].
+    // Generalised TX DSP chain, packed by TxChainLayout (4 bits per slot)
+    // so the audio thread loads the full order in a single atomic read per
+    // block. TxChainStage::None terminates the list; unused slots are zero.
+    // Default canonical order: [Gate, Eq, DeEss, Comp, Tube, Enh, Reverb].
     std::atomic<uint64_t> m_txChainPacked{0};
     // Master-bypass snapshot — the stages that were enabled at the
     // moment setTxBypassed(true) was called.  Used solely to restore

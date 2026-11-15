@@ -64,6 +64,8 @@ to check transverter drive with a carrier; set the transverter's **Max Power
    grid, between the HF bands and the utility row.
 3. Click one to tune to it.
 
+The [Band applet](./panadapter-controls.md#band-applet) (button **BAND**) shows the same transverter buttons in the applet panel.
+
 Band stacks are kept per transverter band.
 
 ### Built-in 4 m and 2 m (FLEX-6500 / FLEX-6700)
