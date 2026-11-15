@@ -27,19 +27,23 @@
 //              --tube-drywet 0.4 --tube-output 0
 // Exciter:     --exciter-air 6 --exciter-mix 0.2 --exciter-low-mix 0
 //              --exciter-mode 0|1      0 = Even (Aphex), 1 = Odd (Behringer)
+// CFC:         --cfc-fft 1024 --cfc-precomp 0 --cfc-posteq 0|1 --cfc-postgain 0
+//              --cfc-band<N>-hz / -comp / -eq (N = 1..10) override the
+//              first-enable profile's band N; --cfc-flat 1 zeroes every band
 // Final:       --lim-ceiling -0.5 (Final Output LIM) --lim-lookahead 1.5 (ms)
 //              --trim 0
 //
 // Any flag of a stage turns that stage on in the processed run; the rest keep
 // the stage's own defaults. An unknown flag is an error, so a typo cannot
 // switch a stage on with defaults behind the operator's back. Stage order is the shipped default: Tube, EQ,
-// Compressor, Exciter.
+// CFC, Compressor, Exciter.
 //
 // -DTX_PAPR_HARNESS_NO_HL2 builds it without the HL2 modulator (and so
 // without WDSP or the rest of aethercore): TxVoiceProcessor, the Client*
 // stages, r8brain and RNNoise are all it needs. That is how the Pi-class CPU
 // gate is measured on a board that cannot build the whole tree.
 
+#include "core/ClientCfc.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientFinalLimiter.h"
@@ -246,6 +250,41 @@ const char* const kKnownKeys[] = {
     "exciter-mix",
     "exciter-low-mix",
     "exciter-mode",
+    "cfc-fft",
+    "cfc-precomp",
+    "cfc-posteq",
+    "cfc-postgain",
+    "cfc-flat",
+    "cfc-band1-hz",
+    "cfc-band1-comp",
+    "cfc-band1-eq",
+    "cfc-band2-hz",
+    "cfc-band2-comp",
+    "cfc-band2-eq",
+    "cfc-band3-hz",
+    "cfc-band3-comp",
+    "cfc-band3-eq",
+    "cfc-band4-hz",
+    "cfc-band4-comp",
+    "cfc-band4-eq",
+    "cfc-band5-hz",
+    "cfc-band5-comp",
+    "cfc-band5-eq",
+    "cfc-band6-hz",
+    "cfc-band6-comp",
+    "cfc-band6-eq",
+    "cfc-band7-hz",
+    "cfc-band7-comp",
+    "cfc-band7-eq",
+    "cfc-band8-hz",
+    "cfc-band8-comp",
+    "cfc-band8-eq",
+    "cfc-band9-hz",
+    "cfc-band9-comp",
+    "cfc-band9-eq",
+    "cfc-band10-hz",
+    "cfc-band10-comp",
+    "cfc-band10-eq",
     "lim-ceiling",
     "lim-lookahead",
     "trim",
@@ -273,6 +312,7 @@ struct Settings {
 
 struct Chain {
     ClientEq eq;
+    ClientCfc cfc;
     ClientComp comp;
     ClientTube tube;
     ClientPudu pudu;
@@ -281,6 +321,7 @@ struct Chain {
     void configure(const Settings& s, bool processed)
     {
         eq.setEnabled(false);
+        cfc.setEnabled(false);
         comp.setEnabled(false);
         tube.setEnabled(false);
         pudu.setEnabled(false);
@@ -347,6 +388,34 @@ struct Chain {
             pudu.setPooMix(s.get("exciter-low-mix", 0));
             pudu.setEnabled(true);
         }
+        if (s.any("cfc-")) {
+            cfc.setFftSize(static_cast<int>(s.get("cfc-fft", ClientCfc::kDefaultFftSize)));
+            cfc.setPrecompDb(s.get("cfc-precomp", 0));
+            cfc.setPostEqEnabled(s.get("cfc-posteq", 0) > 0.5);
+            cfc.setPostGainDb(s.get("cfc-postgain", 0));
+            auto bands = ClientCfc::defaultBands();
+            if (s.get("cfc-flat", 0) > 0.5) {
+                for (auto& b : bands) {
+                    b.compDb = 0.0f;
+                    b.eqDb = 0.0f;
+                }
+            }
+            for (int n = 1; n <= ClientCfc::kMaxBands; ++n) {
+                const std::string p = "cfc-band" + std::to_string(n) + "-";
+                if (!s.any(p.c_str())) {
+                    continue;
+                }
+                if (n > static_cast<int>(bands.size())) {
+                    bands.resize(static_cast<std::size_t>(n), {1000.0f, 0.0f, 0.0f});
+                }
+                auto& b = bands[static_cast<std::size_t>(n - 1)];
+                b.hz = s.get((p + "hz").c_str(), b.hz);
+                b.compDb = s.get((p + "comp").c_str(), b.compDb);
+                b.eqDb = s.get((p + "eq").c_str(), b.eqDb);
+            }
+            cfc.setBands(bands);
+            cfc.setEnabled(true);
+        }
         limiter.setEnabled(s.has("lim-ceiling") || s.has("lim-lookahead"));
         limiter.setCeilingDb(s.get("lim-ceiling", ClientFinalLimiter::kDefaultCeilingDb));
         limiter.setLookaheadMs(s.get("lim-lookahead", ClientFinalLimiter::kDefaultLookaheadMs));
@@ -375,10 +444,11 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     processors.comp = &chain->comp;
     processors.tube = &chain->tube;
     processors.pudu = &chain->pudu;
+    processors.cfc = &chain->cfc;
     processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
     using Stage = TxVoiceProcessor::Stage;
-    const std::vector<Stage> stages{Stage::Tube, Stage::Eq, Stage::Comp, Stage::Enh};
+    const std::vector<Stage> stages{Stage::Tube, Stage::Eq, Stage::Cfc, Stage::Comp, Stage::Enh};
     uint64_t order = 0;
     if (!TxChainLayout::pack(stages, order)) {
         std::fprintf(stderr, "the stage order does not fit the packed chain\n");

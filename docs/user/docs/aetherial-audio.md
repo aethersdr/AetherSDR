@@ -392,8 +392,15 @@ a +7 dB post-EQ (Post-EQ itself off).
 a phrase with **REC** and compare against **BYPASS**. If the voice gets gritty,
 lower the 2–3 kHz points before touching anything else.
 
-**Pitfall:** CFC raises quiet sound, so room noise between words rises with it.
-Use the Gate ahead of it, and keep the Compressor after it gentle.
+**Pitfalls:**
+- CFC raises quiet sound, so room noise between words rises with it. Turn on
+  RN2 (on the Tube page), and keep the Compressor after it gentle.
+- CFC's ceiling holds each frequency, not the waveform's peaks: with heavy
+  Pre-comp the output can exceed full scale. Keep the Compressor's
+  **Limiter** or the Final Output **LIM** on after it.
+- CFC evens out your voice's spectrum and density; on its own it adds little
+  average power at the same peak. For that, use the Compressor's **Drive** and
+  **Phase**.
 
 ### Compressor
 
