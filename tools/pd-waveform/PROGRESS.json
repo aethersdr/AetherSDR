@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T11:44:35.098514+00:00",
+  "updated_utc": "2026-11-15T12:08:22.323233+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -367,6 +367,46 @@
       "Shipping authenticated catalogue; initial-install trust and actual6000 provisioning.",
       "Final process-graph exit/crash/cancel/reboot tests.",
       "All original P1-P10 DSP, PR4770, RF repeatability/stock APD, actual6300 hardware qualification and release gates."
+    ]
+  },
+  "desktop_live_installation": {
+    "status": "live_gui_upgrade_verified_runtime_completion_gap_open",
+    "evidence": "live-gui-installation/validation.json under evidence_root",
+    "source_commit": "01418555c039df705c83a80df872e005965187c5",
+    "installed_release": {
+      "sha256": "7af68e75f5a5d270fbef43ffd493de285b9b9ea1359d5733d35d66223f8b993e",
+      "blake2b_256": "380b5265219dc88c7513e709cd94dc845a4b900c54642091eac22341a17d52bd",
+      "publisher_key": "4c8fa54934a6b60fec35d83407c5035fe6abf8468b86206e226dcc895c9409ec",
+      "attempt": "77e78ce1cdd3db9d8a8b6f036e5f69690812a3340434c810310f79e8af5470f6"
+    },
+    "verified": [
+      "Actual desktop Prepare/Approve path committed exact PDUPGR02 successor and removed carrier in105.447s from approval; delivery alone never counted as commit.",
+      "Independent authenticated monitor and host journal match exact approved attempt. Updated boot hash matches signed candidate.",
+      "Primary UID78666, all capabilities0, NoNewPrivs1. Temporary installer units/carrier/images/archive/listener absent. Identity retained.",
+      "Receive-only GUI Start registered idle/unkeyed; GUI Stop removed DSP/IQ children and fixed ARP. Original operator instance remains connected, FDXoff, power0."
+    ],
+    "open_findings": [
+      {
+        "id": "local-stop-completion-observation",
+        "status": "open",
+        "evidence": "session-stopped.json, stop-status-gap.png, host-stopped-state.json",
+        "cause": "queryStatus calls readNativeQuery; once p.done closes the query returns owned AetherPD exited and maps to503. Completion is not exposed despite supervisor cleanup evidence.",
+        "next": "Expose authenticated final session completion from supervisor wait/guardian results, with explicit unconfirmed/error states; test cancellation, crash, stale sessions and UI behavior."
+      },
+      {
+        "id": "local-session-no-new-privileges",
+        "status": "open",
+        "evidence": "host-stopped-state.json",
+        "cause": "Remaining unprivileged service relay and private shim have zero capabilities but NoNewPrivs=0; service_launch/drop_root path omits the optional Linux3.5+ hardening already used by primary_launch.",
+        "next": "Apply supported-kernel no-new-privileges after authority drop, keep explicit Linux2.6 EINVAL fallback and verify real process graph."
+      }
+    ],
+    "remaining": [
+      "Resolve final Stop status and session relay NoNewPrivs findings, then repeat ordinary GUI runtime/failure tests.",
+      "Full final-process-graph crash/cancel/unkey/reboot qualification.",
+      "Initial-install trust, production catalogue and ARMv7/6000 provisioning.",
+      "Natural alignment-slip/cold-start bypass, PR4770 integration, repeated final-candidate RF and stock APD comparison.",
+      "Actual6300 teammate hardware qualification, resource/reproducibility budgets and independent release gates."
     ]
   }
 }
