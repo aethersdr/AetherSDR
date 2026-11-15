@@ -60,6 +60,7 @@ void AetherPDCaptureSource::abandon()
     m_bytes.clear();
     m_chunk = 0;
     m_checkingReady = false;
+    m_waitingForTones = false;
     m_readyCallback = {};
     QPointer<QNetworkReply> reply = m_reply;
     m_reply = nullptr;
@@ -80,6 +81,7 @@ void AetherPDCaptureSource::setSession(const QHostAddress& address, const QStrin
                                       std::function<bool()> current)
 {
     stop();
+    m_measurementSourceId = 0;
     m_address = address;
     m_token = token;
     m_current = std::move(current);
@@ -88,6 +90,13 @@ void AetherPDCaptureSource::setSession(const QHostAddress& address, const QStrin
 void AetherPDCaptureSource::clearSession()
 {
     setSession({}, {}, {});
+}
+
+bool AetherPDCaptureSource::setMeasurementSource(quint64 sourceId)
+{
+    if (QThread::currentThread() != thread() || m_running || !sourceId) { return false; }
+    m_measurementSourceId = sourceId;
+    return true;
 }
 
 bool AetherPDCaptureSource::sessionCurrent() const
@@ -155,7 +164,8 @@ void AetherPDCaptureSource::beginCapture()
     m_chunk = 0;
     m_age.start();
     m_deadline.start(kCaptureTimeoutMs);
-    send(aetherpd::captureBeginRequest());
+    m_waitingForTones = m_measurementSourceId && !m_checkingReady;
+    send(m_waitingForTones ? *aetherpd::request(aetherpd::Operation::Status) : aetherpd::captureBeginRequest());
 }
 
 void AetherPDCaptureSource::send(const aetherpd::Request& descriptor)
@@ -203,10 +213,33 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation)
         || reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {
         fail("IQ capture request failed"); return;
     }
+    if (m_waitingForTones) {
+        const std::optional<aetherpd::Status> observed = aetherpd::parseStatus(body);
+        if (!observed || !observed->available || !observed->registered
+            || !observed->measurement || observed->measurement->sourceId != m_measurementSourceId
+            || (observed->calibrationState != aetherpd::CalibrationState::Running
+                && observed->calibrationState != aetherpd::CalibrationState::Armed)) {
+            fail("Measurement source changed or ended before capture"); return;
+        }
+        if (!observed->measurement->tones) {
+            QTimer::singleShot(20, this, [this, generation] {
+                if (generation == m_generation && m_running && m_gate && m_waitingForTones) {
+                    send(*aetherpd::request(aetherpd::Operation::Status));
+                }
+            });
+            return;
+        }
+        m_waitingForTones = false;
+        send(aetherpd::captureBeginRequest());
+        return;
+    }
     if (!m_manifest) {
         m_manifest = aetherpd::parseCaptureManifest(body);
         if (!m_manifest || m_manifest->keyed != !m_checkingReady || m_manifest->sampleRateHz != m_config.sampleRateHz
-            || std::abs(double(m_manifest->centerHz) - m_config.centerFreqHz) > 0.5) {
+            || std::abs(double(m_manifest->centerHz) - m_config.centerFreqHz) > 0.5
+            || (m_measurementSourceId && (!m_manifest->measurement
+                || m_manifest->measurement->sourceId != m_measurementSourceId
+                || (!m_checkingReady && !m_manifest->measurement->tones)))) {
             fail("IQ capture does not match the expected key state, rate or center"); return;
         }
         m_bytes.reserve(8 * aetherpd::kCaptureSamples);

@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
+#include <QThread>
 #include <QtEndian>
 
 #include <optional>
@@ -348,6 +349,43 @@ int main(int argc, char** argv)
         ok &= check(source->start(config()), "destruction fixture start failed"); source->setGateOpen(true);
         completeCapture(network); QCoreApplication::processEvents();
         ok &= check(!source && frames == 1 && errors == 0 && network.sent.size() == 33, "callback destruction revived source");
+    }
+    for (int fault = 0; fault < 4; ++fault) {
+        Network network;
+        AetherPDCaptureSource source(network); int frames = 0, errors = 0;
+        setup(source, frames, errors);
+        ok &= check(source.setMeasurementSource(31) && source.start(config()), "measurement source binding refused");
+        source.setGateOpen(true);
+        ok &= check(network.sent.back().request.url().path().endsWith("/status"), "capture began before source observation");
+        QJsonObject status{{"available", true}, {"registered", true}, {"keyed", true},
+            {"correction_enabled", true}, {"correcting", false}, {"state", "calibrating"},
+            {"calibration_required", false}, {"calibration_control", true}, {"calibration_state", "running"},
+            {"calibration_samples_left", 90000}, {"input_limited_samples", 0},
+            {"measurement_control", true}, {"source_purpose", "measurement"},
+            {"measurement", QJsonObject{{"source_id", "000000000000001f"}, {"tones", false}}},
+            {"faults", QJsonObject{{"dispatch_deadlines",0},{"send_errors",0},{"rejected_input",0},{"stale_iq",0}}}};
+        network.last->complete(200, encode(status));
+        ok &= check(network.sent.size() == 1 && frames == 0 && errors == 0, "preamble admitted a capture");
+        if (fault == 3) {
+            source.stop();
+            QThread::msleep(25); QCoreApplication::processEvents();
+            ok &= check(network.sent.size() == 1 && frames == 0, "delayed tone poll survived Stop");
+            continue;
+        }
+        QThread::msleep(25); QCoreApplication::processEvents();
+        status["measurement"] = QJsonObject{{"source_id", "000000000000001f"}, {"tones", true}};
+        network.last->complete(200, encode(status));
+        ok &= check(network.sent.back().request.url().path().endsWith("/capture"), "ready source did not start capture");
+        QJsonObject captured = manifest();
+        captured["measurement"] = QJsonObject{{"source_id", fault == 1 ? "0000000000000020" : "000000000000001f"}, {"tones", fault != 2}};
+        network.last->complete(200, encode(captured));
+        if (fault) {
+            ok &= check(errors == 1 && frames == 0, "changed source or mixed tone frame admitted");
+        } else {
+            for (int chunkIndex = 0; chunkIndex < 32; ++chunkIndex) { network.last->complete(200, chunk(chunkIndex)); }
+            ok &= check(frames == 1 && errors == 0, "matching steady-source capture missing");
+        }
+        source.stop();
     }
     return ok ? 0 : 1;
 }

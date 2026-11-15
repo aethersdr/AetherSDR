@@ -50,6 +50,17 @@ void captureProtocol()
     check(captureChunkRequest(*manifest, 31)->path.endsWith(QStringLiteral("/31")), "last chunk request missing");
     check(!captureChunkRequest(*manifest, -1) && !captureChunkRequest(*manifest, 32), "unbounded chunk request");
     const QJsonObject good = QJsonDocument::fromJson(text).object();
+    QJsonObject measured = good;
+    measured["measurement"] = QJsonObject{{"source_id", "000000000000001f"}, {"tones", true}};
+    const std::optional<CaptureManifest> sourced = parseCaptureManifest(encode(measured));
+    check(sourced && sourced->measurement && sourced->measurement->sourceId == 31 && sourced->measurement->tones,
+        "measurement capture provenance lost");
+    for (const QJsonValue& invalid : {QJsonValue(QJsonValue::Null), QJsonValue(QJsonObject{{"source_id", "0000000000000000"}, {"tones", true}}),
+            QJsonValue(QJsonObject{{"source_id", "000000000000001f"}, {"tones", "yes"}})}) {
+        measured["measurement"] = invalid;
+        check(!parseCaptureManifest(encode(measured)), "malformed measurement capture provenance accepted");
+    }
+
     for (const QString& key : good.keys()) {
         QJsonObject bad = good;
         bad.remove(key);
@@ -90,6 +101,7 @@ void captureProtocol()
         check(file.open(QIODevice::ReadOnly), "Go capture manifest missing");
         const std::optional<CaptureManifest> native = parseCaptureManifest(file.readAll());
         check(native.has_value(), "Go capture manifest rejected");
+        check(native->measurement && native->measurement->sourceId == 31 && native->measurement->tones, "native/Go measurement provenance changed");
         for (int index = 0; index < 32; ++index) {
             QFile part(directory + QStringLiteral("/chunk-%1.json").arg(index));
             check(part.open(QIODevice::ReadOnly), "Go capture chunk missing");

@@ -52,7 +52,7 @@ int main(void)
     deadline = s.deadline_ns;
     assert(!command(&s, 'M', 11, 12000, 1).applied && s.deadline_ns == deadline);
     assert(command(&s, 'A', 12, 12000, 1).result == PD_CAL_BUSY);
-    assert(s.purpose == PD_SOURCE_MEASUREMENT && s.deadline_ns == deadline);
+    assert(s.purpose == PD_SOURCE_MEASUREMENT && s.deadline_ns == deadline && s.source_id == 11);
     assert(pd_calibration_begin(&s, 13000));
     assert(s.deadline_ns == INT64_C(8000013000));
     pd_calibration_consume(&s, PD_CAL_SAMPLES);

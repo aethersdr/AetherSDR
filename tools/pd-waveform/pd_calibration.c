@@ -39,6 +39,7 @@ struct pd_calibration_reply pd_calibration_command(struct pd_calibration* s,
     else if (!eligible || now <= 0 || now > INT64_MAX - kArmNs) { reply.result = PD_CAL_BLOCKED; }
     else {
         s->phase = PD_CAL_ARMED; s->samples_left = PD_CAL_SAMPLES;
+        s->source_id = nonce;
         s->purpose = bytes[0] == 'M' ? PD_SOURCE_MEASUREMENT : PD_SOURCE_CALIBRATION;
         s->last_clock_ns = now; s->deadline_ns = now + kArmNs; reply.applied = 1;
     }

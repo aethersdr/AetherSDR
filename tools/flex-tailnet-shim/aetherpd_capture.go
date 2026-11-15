@@ -11,16 +11,18 @@ import (
 )
 
 const (
-	aetherPDCaptureSamples      = 16384
-	aetherPDCaptureChunk        = 1024 // Native datagram samples.
-	aetherPDCaptureHeader       = 72
-	pdCapturePublicChunk        = 512 // Fits the existing 8 KiB private control reply.
-	pdCaptureBegin         byte = 'I'
-	pdCaptureReadFirst     byte = 0x80
-	pdCaptureReadEnd       byte = 0xa0
+	aetherPDCaptureSamples       = 16384
+	aetherPDCaptureChunk         = 1024 // Native datagram samples.
+	aetherPDCaptureHeader        = 72   // Legacy v1; v2 appends the source ID.
+	aetherPDCaptureHeaderV2      = 80
+	pdCapturePublicChunk         = 512 // Fits the existing 8 KiB private control reply.
+	pdCaptureBegin          byte = 'I'
+	pdCaptureReadFirst      byte = 0x80
+	pdCaptureReadEnd        byte = 0xa0
 )
 
 type aetherPDIQCapture struct {
+	Measurement                                             *pdMeasurementSource
 	ID, CenterHz, Generation, FirstReceiveNS, LastReceiveNS uint64
 	Rate, Stream, Flags                                     uint32
 	// Unchanged little-endian float32 I/Q pairs, not calibrated antenna watts.
@@ -28,16 +30,17 @@ type aetherPDIQCapture struct {
 }
 
 type pdCaptureManifest struct {
-	CaptureID      string `json:"capture_id"`
-	Format         string `json:"format"`
-	SampleRate     uint32 `json:"sample_rate_hz"`
-	CenterHz       uint64 `json:"center_hz"`
-	Samples        int    `json:"sample_count"`
-	ChunkSamples   int    `json:"chunk_samples"`
-	Keyed          bool   `json:"keyed"`
-	Correcting     bool   `json:"correcting"`
-	FirstReceiveNS string `json:"first_receive_ns"`
-	LastReceiveNS  string `json:"last_receive_ns"`
+	Measurement    *pdMeasurementSource `json:"measurement,omitempty"`
+	CaptureID      string               `json:"capture_id"`
+	Format         string               `json:"format"`
+	SampleRate     uint32               `json:"sample_rate_hz"`
+	CenterHz       uint64               `json:"center_hz"`
+	Samples        int                  `json:"sample_count"`
+	ChunkSamples   int                  `json:"chunk_samples"`
+	Keyed          bool                 `json:"keyed"`
+	Correcting     bool                 `json:"correcting"`
+	FirstReceiveNS string               `json:"first_receive_ns"`
+	LastReceiveNS  string               `json:"last_receive_ns"`
 }
 
 type pdCaptureChunk struct {
@@ -118,7 +121,7 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 	s.frame = frame
 	s.expires = time.Now().Add(10 * time.Second)
 	return pdCaptureJSON(200, pdCaptureManifest{
-		CaptureID: s.id, Format: "f32le-iq-v1", SampleRate: frame.Rate, CenterHz: frame.CenterHz,
+		Measurement: frame.Measurement, CaptureID: s.id, Format: "f32le-iq-v1", SampleRate: frame.Rate, CenterHz: frame.CenterHz,
 		Samples: aetherPDCaptureSamples, ChunkSamples: pdCapturePublicChunk,
 		Keyed: frame.Flags&1 != 0, Correcting: frame.Flags&2 != 0,
 		FirstReceiveNS: strconv.FormatUint(frame.FirstReceiveNS, 10), LastReceiveNS: strconv.FormatUint(frame.LastReceiveNS, 10),

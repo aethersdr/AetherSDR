@@ -177,6 +177,23 @@ std::optional<CalibrationState> calibrationState(const QJsonValue& value)
     return std::nullopt;
 }
 
+std::optional<MeasurementSource> measurementSource(const QJsonValue& value)
+{
+    if (!value.isObject()) { return std::nullopt; }
+    const QJsonObject o = value.toObject();
+    if (o.size() != 2 || !o.value(QStringLiteral("source_id")).isString()) { return std::nullopt; }
+    const QString id = o.value(QStringLiteral("source_id")).toString();
+    if (id.size() != 16) { return std::nullopt; }
+    for (const QChar c : id) {
+        if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return std::nullopt; }
+    }
+    bool valid = false;
+    MeasurementSource result;
+    result.sourceId = id.toULongLong(&valid, 16);
+    if (!valid || !boolean(o, "tones", result.tones) || (result.tones && !result.sourceId)) { return std::nullopt; }
+    return result;
+}
+
 bool consistent(const Status& s)
 {
     const bool armed = s.calibrationState == CalibrationState::Armed;
@@ -193,6 +210,9 @@ bool consistent(const Status& s)
                          || s.calibrationRequired || s.state == State::BlockedByRadioApd)) {
         return false;
     }
+    if (s.measurement && s.measurement->sourceId
+        && (!s.measurementControl || s.sourcePurpose != SourcePurpose::Measurement)) { return false; }
+    if (s.measurement && s.measurement->tones && (!s.keyed || !running)) { return false; }
     if (s.measurementControl && !s.calibrationControl) { return false; }
     if (s.sourcePurpose == SourcePurpose::Measurement && !s.measurementControl) { return false; }
     if (s.calibrationRequired && !s.faults.any()) { return false; }
@@ -266,7 +286,7 @@ std::optional<Status> parseStatus(const QByteArray& json)
         QStringLiteral("keyed"), QStringLiteral("correction_enabled"), QStringLiteral("correcting"),
         QStringLiteral("calibration_required"), QStringLiteral("calibration_control"),
         QStringLiteral("calibration_state"), QStringLiteral("calibration_samples_left"),
-        QStringLiteral("measurement_control"), QStringLiteral("source_purpose"),
+        QStringLiteral("measurement_control"), QStringLiteral("source_purpose"), QStringLiteral("measurement"),
         QStringLiteral("input_limited_samples"), QStringLiteral("faults")};
     for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
         if (!known.contains(it.key())) { return std::nullopt; }
@@ -303,6 +323,10 @@ std::optional<Status> parseStatus(const QByteArray& json)
         if (purpose.toString() == QLatin1String("measurement")) { s.sourcePurpose = SourcePurpose::Measurement; }
         else if (purpose.toString() != QLatin1String("calibration")) { return std::nullopt; }
     } else if (s.measurementControl) { return std::nullopt; }
+    if (o.contains(QStringLiteral("measurement"))) {
+        s.measurement = measurementSource(o.value(QStringLiteral("measurement")));
+        if (!s.measurement) { return std::nullopt; }
+    }
     return consistent(s) ? std::optional<Status>(s) : std::nullopt;
 }
 
@@ -353,7 +377,7 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
 {
     if (json.size() > 2048) { return std::nullopt; }
     const std::optional<QJsonObject> parsed = object(json);
-    if (!parsed || parsed->size() != 10) { return std::nullopt; }
+    if (!parsed || parsed->size() != (parsed->contains(QStringLiteral("measurement")) ? 11 : 10)) { return std::nullopt; }
     const QJsonObject& o = *parsed;
     CaptureManifest m;
     m.captureId = o.value(QStringLiteral("capture_id")).toString();
@@ -367,6 +391,10 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
         || !timestamp(o, "first_receive_ns", m.firstReceiveNs) || !timestamp(o, "last_receive_ns", m.lastReceiveNs)
         || m.lastReceiveNs < m.firstReceiveNs || m.lastReceiveNs - m.firstReceiveNs > 1'000'000'000) {
         return std::nullopt;
+    }
+    if (o.contains(QStringLiteral("measurement"))) {
+        m.measurement = measurementSource(o.value(QStringLiteral("measurement")));
+        if (!m.measurement || (m.measurement->tones && !m.keyed)) { return std::nullopt; }
     }
     m.sampleRateHz = quint32(rate);
     return m;

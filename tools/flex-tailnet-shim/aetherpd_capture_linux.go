@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -24,27 +25,40 @@ func (p *aetherPDProcess) captureAlive() bool {
 
 func parseAetherPDCapture(data []byte, id uint64, offset uint32) (aetherPDIQCapture, uint32, error) {
 	bad := errors.New("invalid private IQ snapshot")
-	if len(data) < aetherPDCaptureHeader || string(data[:8]) != "PDIQ0001" ||
+	header := aetherPDCaptureHeader
+	if len(data) >= 8 && string(data[:8]) == "PDIQ0002" {
+		header = aetherPDCaptureHeaderV2
+	}
+	if len(data) < header || (string(data[:8]) != "PDIQ0001" && string(data[:8]) != "PDIQ0002") ||
 		id == 0 || binary.BigEndian.Uint64(data[8:16]) != id ||
 		binary.BigEndian.Uint32(data[20:24]) != offset || offset >= aetherPDCaptureSamples || offset%aetherPDCaptureChunk != 0 {
 		return aetherPDIQCapture{}, 0, bad
 	}
 	state := binary.BigEndian.Uint32(data[16:20])
 	count := binary.BigEndian.Uint32(data[24:28])
-	if state < 1 || state > 5 || (state != 2 && (count != 0 || len(data) != aetherPDCaptureHeader)) {
+	if state < 1 || state > 5 || (state != 2 && (count != 0 || len(data) != header)) {
 		return aetherPDIQCapture{}, 0, bad
 	}
 	if state != 2 {
 		return aetherPDIQCapture{}, state, nil
 	}
-	if count != aetherPDCaptureChunk || len(data) != aetherPDCaptureHeader+8*aetherPDCaptureChunk {
+	if count != aetherPDCaptureChunk || len(data) != header+8*aetherPDCaptureChunk {
 		return aetherPDIQCapture{}, 0, bad
 	}
 	c := aetherPDIQCapture{
 		ID: id, Rate: binary.BigEndian.Uint32(data[28:32]), CenterHz: binary.BigEndian.Uint64(data[32:40]),
 		Generation: binary.BigEndian.Uint64(data[40:48]), FirstReceiveNS: binary.BigEndian.Uint64(data[48:56]),
 		LastReceiveNS: binary.BigEndian.Uint64(data[56:64]), Stream: binary.BigEndian.Uint32(data[64:68]),
-		Flags: binary.BigEndian.Uint32(data[68:72]), IQ: data[aetherPDCaptureHeader:],
+		Flags: binary.BigEndian.Uint32(data[68:72]), IQ: data[header:],
+	}
+	if header == aetherPDCaptureHeaderV2 {
+		sourceID := binary.BigEndian.Uint64(data[72:80])
+		tones := c.Flags&4 != 0
+		if c.Flags > 7 || (tones && (sourceID == 0 || c.Flags&1 == 0)) {
+			return aetherPDIQCapture{}, 0, bad
+		}
+		c.Measurement = &pdMeasurementSource{SourceID: fmt.Sprintf("%016x", sourceID), Tones: tones}
+		c.Flags &= 3
 	}
 	if (c.Rate != 24000 && c.Rate != 48000 && c.Rate != 96000 && c.Rate != 192000) ||
 		c.CenterHz == 0 || c.CenterHz > 1000000000 || c.Generation == 0 || c.Stream == 0 ||
@@ -95,8 +109,8 @@ func (p *aetherPDProcess) readNativeCapture(ctx context.Context) (aetherPDIQCapt
 			if offset == 0 {
 				result = chunk
 				result.IQ = make([]byte, 0, 8*aetherPDCaptureSamples)
-				metadata = append([]byte(nil), data[28:aetherPDCaptureHeader]...)
-			} else if !bytes.Equal(metadata, data[28:aetherPDCaptureHeader]) {
+				metadata = append([]byte(nil), data[28:len(data)-8*aetherPDCaptureChunk]...)
+			} else if !bytes.Equal(metadata, data[28:len(data)-8*aetherPDCaptureChunk]) {
 				return aetherPDIQCapture{}, errors.New("IQ snapshot metadata changed")
 			}
 			result.IQ = append(result.IQ, chunk.IQ...)

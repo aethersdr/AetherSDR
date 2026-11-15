@@ -42,7 +42,8 @@ func TestPrivateAetherPDCaptureNativePublicFixture(t *testing.T) {
 	if waitErr != nil || response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &manifest) != nil {
 		t.Fatal(waitErr, response.Code, response.Body.String())
 	}
-	if manifest.SampleRate != 192000 || manifest.CenterHz != 7150000 || !manifest.Keyed || !manifest.Correcting {
+	if manifest.SampleRate != 192000 || manifest.CenterHz != 7150000 || !manifest.Keyed || !manifest.Correcting ||
+		manifest.Measurement == nil || manifest.Measurement.SourceID != "000000000000001f" || !manifest.Measurement.Tones {
 		t.Fatal("native metadata changed")
 	}
 	directory := os.Getenv("AETHER_PD_CAPTURE_FIXTURE_DIR")
@@ -260,5 +261,32 @@ func TestPrivateAetherPDCaptureCancellation(t *testing.T) {
 	c, err := p.readNativeCapture(ctx)
 	if err == nil || len(c.IQ) != 0 {
 		t.Fatal("cancelled snapshot returned", err)
+	}
+}
+
+func TestPDMeasurementCaptureV2(t *testing.T) {
+	legacy := captureReply(9, 0, 2)
+	v2 := append(append(append([]byte{}, legacy[:72]...), make([]byte, 8)...), legacy[72:]...)
+	copy(v2, "PDIQ0002")
+	binary.BigEndian.PutUint32(v2[68:], 7)
+	binary.BigEndian.PutUint64(v2[72:], 31)
+	parsed, state, err := parseAetherPDCapture(v2, 9, 0)
+	if err != nil || state != 2 || parsed.Measurement == nil || parsed.Measurement.SourceID != "000000000000001f" || !parsed.Measurement.Tones || parsed.Flags != 3 {
+		t.Fatal(parsed, state, err)
+	}
+	for _, flags := range []uint32{4, 6, 8} {
+		bad := append([]byte{}, v2...)
+		binary.BigEndian.PutUint32(bad[68:], flags)
+		if _, _, err := parseAetherPDCapture(bad, 9, 0); err == nil {
+			t.Fatal("invalid v2 source flags accepted", flags)
+		}
+	}
+	binary.BigEndian.PutUint64(v2[72:], 0)
+	if _, _, err := parseAetherPDCapture(v2, 9, 0); err == nil {
+		t.Fatal("anonymous tone source accepted")
+	}
+	old, _, err := parseAetherPDCapture(legacy, 9, 0)
+	if err != nil || old.Measurement != nil {
+		t.Fatal("legacy capture gained source provenance")
 	}
 }

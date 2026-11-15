@@ -3,12 +3,14 @@
 #include <stdint.h>
 
 enum { PD_CAPTURE_SAMPLES = 16384, PD_CAPTURE_CHUNK = 1024,
-       PD_CAPTURE_HEADER = 72, PD_CAPTURE_REPLY = PD_CAPTURE_HEADER + 8 * PD_CAPTURE_CHUNK };
+       PD_CAPTURE_HEADER = 80, PD_CAPTURE_REPLY = PD_CAPTURE_HEADER + 8 * PD_CAPTURE_CHUNK };
 enum pd_capture_state { PD_CAPTURE_EMPTY, PD_CAPTURE_PENDING, PD_CAPTURE_READY,
                         PD_CAPTURE_INVALID, PD_CAPTURE_EXPIRED, PD_CAPTURE_UNAVAILABLE };
 struct pd_capture_meta {
     uint64_t generation, center_hz;
     uint32_t stream, rate, keyed, correcting;
+    uint64_t measurement_id;
+    uint32_t measurement_tones;
 };
 /* Owned exclusively by the DSP event loop. Samples are unchanged little-endian
  * complex float32 DAX IQ, before the correction feedback decimator/EQ. */

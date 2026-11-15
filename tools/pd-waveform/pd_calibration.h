@@ -14,7 +14,7 @@ struct pd_calibration {
     enum pd_source_purpose purpose;
     int samples_left;
     int64_t deadline_ns, last_clock_ns;
-    uint64_t nonce;
+    uint64_t nonce, source_id;
     unsigned char opcode, result;
 };
 struct pd_calibration_reply { enum pd_calibration_result result; int applied; };

@@ -32,7 +32,13 @@ struct Faults {
     bool any() const;
 };
 
+struct MeasurementSource {
+    quint64 sourceId{0};
+    bool tones{false};
+};
+
 struct Status {
+    std::optional<MeasurementSource> measurement;
     bool available{false};
     State state{State::Unavailable};
     bool registered{false};
@@ -58,6 +64,7 @@ struct Request {
 inline constexpr int kCaptureSamples = 16384;
 inline constexpr int kCaptureChunkSamples = 512;
 struct CaptureManifest {
+    std::optional<MeasurementSource> measurement;
     QString captureId;
     quint32 sampleRateHz{0};
     quint64 centerHz{0};

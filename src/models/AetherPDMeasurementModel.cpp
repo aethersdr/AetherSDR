@@ -12,6 +12,7 @@
 #include <QNetworkAccessManager>
 #include <QThread>
 #include <cmath>
+#include <algorithm>
 #include <utility>
 
 namespace AetherSDR {
@@ -38,6 +39,11 @@ void AetherPDMeasurementModel::initialize(QNetworkAccessManager* network)
             [] { return TxCoordinator::monotonicMs(); },
             [this] { return current(); },
             [this](std::int64_t now) { return m_telemetry.read(now); }});
+    // Includes 4 s of source alignment noise and the independent helper's
+    // 4.5 s startup/cleanup reserves. The RF helper expires after at most 9.5 s.
+    txlin::SafetyLimits limits;
+    limits.maxTransmitMs = 14000;
+    m_controller->setSafetyLimits(limits, true);
     m_controller->setCallbacks([this] { publish(); }, [this](const txlin::LinearityRunResult& measured) {
         m_result = Result{measured, m_config, m_request, m_serial, m_mode, m_antenna,
                           m_powerSetting, QDateTime::currentDateTimeUtc()};
@@ -72,7 +78,14 @@ AetherPDMeasurementModel::~AetherPDMeasurementModel()
 
 bool AetherPDMeasurementModel::current() const
 {
-    return !m_shuttingDown && QThread::currentThread() == thread() && m_radio && m_slice
+    if (m_shuttingDown || QThread::currentThread() != thread() || !m_radio) { return false; }
+    const std::optional<aetherpd::Status> source = m_radio->aetherPDModel().status();
+    return source && source->measurement && m_measurementSourceId
+        && source->measurement->sourceId == m_measurementSourceId
+        && source->sourcePurpose == aetherpd::SourcePurpose::Measurement
+        && (source->calibrationState == aetherpd::CalibrationState::Armed
+            || source->calibrationState == aetherpd::CalibrationState::Running)
+        && !m_shuttingDown && QThread::currentThread() == thread() && m_radio && m_slice
         && (!m_injectedNetwork || m_network) && m_current && m_current()
         && m_radio->controlSessionCurrent(m_session) && !m_radio->fullDuplexEnabled()
         && m_radio->txSlice() == m_slice && m_slice->isTxSlice() && m_slice->frequency() == m_frequencyMHz
@@ -87,6 +100,16 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
     if (m_shuttingDown || QThread::currentThread() != thread() || !m_radio || !dummyLoadConfirmed || state() != State::Idle
         || !m_radio->controlSessionCurrent(session) || m_radio->fullDuplexEnabled()
         || (m_injectedNetwork && (!m_network || m_network->thread() != thread()))) { return false; }
+    const std::optional<aetherpd::Status> source = m_radio->aetherPDModel().status();
+    if (!source || !source->measurementControl || !source->measurement || !source->measurement->sourceId
+        || source->sourcePurpose != aetherpd::SourcePurpose::Measurement || source->keyed
+        || source->calibrationState != aetherpd::CalibrationState::Armed
+        || config.capture.sampleRateHz != 48000
+        || std::abs(request.tone1Hz - (config.capture.centerFreqHz + 710)) > 0.5
+        || std::abs(request.tone2Hz - (config.capture.centerFreqHz + 1900)) > 0.5
+        || !std::any_of(request.allocations.begin(), request.allocations.end(), [&](const txlin::AllocationRange& band) {
+            return band.lowHz <= config.capture.centerFreqHz - 4500 && band.highHz >= config.capture.centerFreqHz + 7500;
+        })) { return false; }
     SliceModel* slice = m_radio->txSlice();
     if (!slice || !slice->isTxSlice() || !std::isfinite(slice->frequency())
         || !std::isfinite(config.capture.centerFreqHz) || !std::isfinite(config.maxForwardWatts)
@@ -97,7 +120,7 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
         return false;
     }
     const std::function<bool()> bound = m_radio->bindAetherPDCapture(session, *m_capture);
-    if (!bound) { return false; }
+    if (!bound || !m_capture->setMeasurementSource(source->measurement->sourceId)) { return false; }
     const quint64 generation = ++m_generation;
     for (const QMetaObject::Connection& connection : m_stationConnections) { disconnect(connection); }
     m_stationConnections = {
@@ -107,6 +130,7 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
         connect(slice, &QObject::destroyed, this, &AetherPDMeasurementModel::poll)};
     m_session = session;
     m_current = bound;
+    m_measurementSourceId = source->measurement->sourceId;
     m_slice = slice;
     m_frequencyMHz = slice->frequency();
     m_mode = slice->mode();

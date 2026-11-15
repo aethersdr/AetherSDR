@@ -21,20 +21,21 @@ var aetherPDReads = make(chan struct{}, 1)
 // client identifiers and packet metadata stay local to the waveform.
 // This report never authorizes capture provisioning or transmitter control.
 type aetherPDStatus struct {
-	InputLimitedSamples    uint64         `json:"input_limited_samples"`
-	MeasurementControl     bool           `json:"measurement_control,omitempty"`
-	SourcePurpose          string         `json:"source_purpose,omitempty"`
-	CalibrationControl     bool           `json:"calibration_control"`
-	CalibrationState       string         `json:"calibration_state,omitempty"`
-	CalibrationSamplesLeft uint32         `json:"calibration_samples_left,omitempty"`
-	Available              bool           `json:"available"`
-	State                  string         `json:"state"`
-	Registered             bool           `json:"registered"`
-	Keyed                  bool           `json:"keyed"`
-	CorrectionEnabled      bool           `json:"correction_enabled"`
-	Correcting             bool           `json:"correcting"`
-	CalibrationRequired    bool           `json:"calibration_required"`
-	Faults                 aetherPDFaults `json:"faults"`
+	Measurement            *pdMeasurementSource `json:"measurement,omitempty"`
+	InputLimitedSamples    uint64               `json:"input_limited_samples"`
+	MeasurementControl     bool                 `json:"measurement_control,omitempty"`
+	SourcePurpose          string               `json:"source_purpose,omitempty"`
+	CalibrationControl     bool                 `json:"calibration_control"`
+	CalibrationState       string               `json:"calibration_state,omitempty"`
+	CalibrationSamplesLeft uint32               `json:"calibration_samples_left,omitempty"`
+	Available              bool                 `json:"available"`
+	State                  string               `json:"state"`
+	Registered             bool                 `json:"registered"`
+	Keyed                  bool                 `json:"keyed"`
+	CorrectionEnabled      bool                 `json:"correction_enabled"`
+	Correcting             bool                 `json:"correcting"`
+	CalibrationRequired    bool                 `json:"calibration_required"`
+	Faults                 aetherPDFaults       `json:"faults"`
 }
 
 type aetherPDFaults struct {
@@ -148,6 +149,19 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 		}
 	} else if _, present := fields["source_purpose"]; present {
 		return result, errors.New("partial measurement status")
+	}
+	if raw, present := fields["measurement"]; present {
+		result.Measurement, err = parsePDMeasurementSource(raw)
+		if err != nil {
+			return result, err
+		}
+		active := result.Measurement.SourceID != "0000000000000000"
+		if active && (!result.MeasurementControl || result.SourcePurpose != "measurement") {
+			return result, errors.New("measurement identity without capability")
+		}
+		if result.Measurement.Tones && (!result.Keyed || result.CalibrationState != "running") {
+			return result, errors.New("measurement tones outside running source")
+		}
 	}
 	if _, present := fields["limited_samples"]; present {
 		if err = read("limited_samples", &result.InputLimitedSamples); err != nil {

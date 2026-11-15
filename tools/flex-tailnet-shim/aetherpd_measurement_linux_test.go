@@ -161,3 +161,14 @@ func TestPDMeasurementSessionVersionFence(t *testing.T) {
 		t.Fatal("unsupported measurement reached session", calls)
 	}
 }
+
+func TestPDMeasurementSourceJSON(t *testing.T) {
+	for _, body := range []string{`null`, `{}`, `{"source_id":"0000000000000001","tones":null}`, `{"source_id":"0000000000000000","tones":true}`, `{"source_id":"0000000000000001","tones":true,"tones":false}`, `{"source_id":"0000000000000001","tones":false,"extra":0}`, `{"source_id":"000000000000000F","tones":false}`} {
+		if _, err := parsePDMeasurementSource([]byte(body)); err == nil {
+			t.Fatal("invalid source metadata accepted", body)
+		}
+	}
+	if got, err := parsePDMeasurementSource([]byte(`{"source_id":"000000000000001f","tones":true}`)); err != nil || got.SourceID != "000000000000001f" || !got.Tones {
+		t.Fatal(got, err)
+	}
+}

@@ -17,7 +17,7 @@ int main(void)
 {
     if (pd_status_open("3")!=3) { return 1; }
     struct pd_capture capture={0};
-    struct pd_capture_meta meta={7,7150000,0x40000001,192000,1,1};
+    struct pd_capture_meta meta={7,7150000,0x40000001,192000,1,1,31,1};
     for (unsigned requests=0;requests<64;++requests) {
         struct pollfd fd={.fd=3,.events=POLLIN};
         if (poll(&fd,1,2000)!=1) { return 2; }

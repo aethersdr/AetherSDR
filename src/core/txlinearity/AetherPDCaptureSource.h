@@ -25,6 +25,7 @@ public:
 
     void setSession(const QHostAddress& address, const QString& token, std::function<bool()> current);
     void clearSession();
+    bool setMeasurementSource(quint64 sourceId);
     bool start(const CaptureConfig& config) override;
     void stop() override;
     bool checkReceiveReady(ReadyCallback ready) override;
@@ -62,5 +63,7 @@ private:
     bool m_running{false};
     bool m_gate{false};
     bool m_checkingReady{false};
+    bool m_waitingForTones{false};
+    quint64 m_measurementSourceId{0};
 };
 } // namespace AetherSDR::txlin

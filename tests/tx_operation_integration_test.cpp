@@ -920,17 +920,25 @@ void aetherPDMeasurementWorkflow()
     using State = AetherPDMeasurementModel::State;
     QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
     check(fixture.open(QIODevice::ReadOnly), "measurement has public status fixture");
-    const QByteArray idle = fixture.readAll();
+    QJsonObject sourceStatus = QJsonDocument::fromJson(fixture.readAll()).object();
+    sourceStatus["measurement_control"] = true;
+    sourceStatus["source_purpose"] = "measurement";
+    sourceStatus["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}};
+    sourceStatus["calibration_state"] = "armed";
+    sourceStatus["calibration_samples_left"] = 192000;
+    sourceStatus["state"] = "measurement_armed";
+    const QByteArray idle = QJsonDocument(sourceStatus).toJson();
     const QString captureId = QStringLiteral("0123456789abcdef0123456789abcdef");
     const auto encode = [](const QJsonObject& object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); };
     const auto manifest = [&](bool keyed) {
-        return encode({{"capture_id", captureId}, {"format", "f32le-iq-v1"}, {"sample_rate_hz", 192000},
+        return encode({{"capture_id", captureId}, {"format", "f32le-iq-v1"}, {"sample_rate_hz", 48000},
             {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
             {"keyed", keyed}, {"correcting", keyed}, {"first_receive_ns", "1000000000"},
-            {"last_receive_ns", "1085000000"}});
+            {"last_receive_ns", "1341000000"},
+            {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", keyed}}}});
     };
-    const std::vector<std::complex<double>> tones = txlin_test::twoTone(16384, 192000, 750, 1875, .2);
-    const std::vector<std::complex<double>> products = txlin_test::twoTone(16384, 192000, -375, 3000, .002);
+    const std::vector<std::complex<double>> tones = txlin_test::twoTone(16384, 48000, 710, 1900, .2);
+    const std::vector<std::complex<double>> products = txlin_test::twoTone(16384, 48000, -480, 3090, .002);
     const auto chunk = [&](int index) {
         QByteArray raw(4096, '\0');
         for (int i = 0; i < 512; ++i) {
@@ -940,7 +948,7 @@ void aetherPDMeasurementWorkflow()
         }
         return encode({{"capture_id", captureId}, {"offset", index * 512}, {"iq_f32le", QString::fromLatin1(raw.toBase64())}});
     };
-    for (int scenario = 0; scenario < 7; ++scenario) {
+    for (int scenario = 0; scenario < 9; ++scenario) {
         RadioConnection connection;
         AetherPDTest::Network controlNetwork, measurementNetwork;
         Fixture f;
@@ -968,15 +976,27 @@ void aetherPDMeasurementWorkflow()
         const RadioControlSession session = f.radio.controlSession();
         txlin::LinearityRunConfig config;
         config.capture.centerFreqHz = 7150000;
+        config.capture.sampleRateHz = 48000;
         config.capture.settleMsAfterKey = 0;
         config.targetAverages = 1;
         config.maxForwardWatts = 10;
         config.expectedCorrection = true;
         txlin::RunRequest request;
-        request.tone1Hz = 7150750; request.tone2Hz = 7151875;
+        request.tone1Hz = 7150710; request.tone2Hz = 7151900;
         request.allocations = {{7000000, 7300000}};
         check(!model->prepare(session, config, request, false) && measurementNetwork.sent.empty(),
               "measurement requires explicit dummy-load confirmation before capture");
+        if (scenario == 0) {
+            QJsonObject noSource = sourceStatus; noSource.remove("measurement");
+            f.radio.aetherPDModel().refresh(); controlNetwork.last->complete(200, encode(noSource));
+            check(!model->prepare(session, config, request, true) && measurementNetwork.sent.empty(),
+                "source capability without observed arm identity cannot prepare");
+            f.radio.aetherPDModel().refresh(); controlNetwork.last->complete(200, idle);
+            txlin::RunRequest wrongTones = request; wrongTones.tone1Hz += 100;
+            check(!model->prepare(session, config, wrongTones, true), "unmatched generated tones refused");
+            txlin::RunRequest narrow = request; narrow.allocations = {{7147000, 7156000}};
+            check(!model->prepare(session, config, narrow, true), "allocation must cover alignment noise as well as tone products");
+        }
         check(model->prepare(session, config, request, true), "measurement preparation accepted");
         check(model->state() == State::CheckingReceive && !f.commands.contains("mox:on"),
               "measurement preparation is receive-only");
@@ -989,6 +1009,15 @@ void aetherPDMeasurementWorkflow()
                   && !f.commands.contains("mox:on") && !model->result(),
               "complete receive capture grants readiness without keying or publishing a result");
         check(!model->stop({}) && model->state() == State::Ready, "foreign session cannot cancel preparation");
+        if (scenario == 7 || scenario == 8) {
+            QJsonObject changed = sourceStatus;
+            if (scenario == 7) { changed["measurement"] = QJsonObject{{"source_id", "0000000000000002"}, {"tones", false}}; }
+            else { changed["calibration_state"] = "canceled"; changed["calibration_samples_left"] = 0; changed["state"] = "idle"; }
+            f.radio.aetherPDModel().refresh(); controlNetwork.last->complete(200, encode(changed));
+            check(model->state() == State::Idle && !model->start(session) && !f.commands.contains("mox:on"),
+                "replacement or cancellation of source retires key admission");
+            continue;
+        }
         if (scenario == 6) {
             f.radio.transmitModel().setRfPower(5);
             TxOperationIntegrationTestAccess::transmitDelta(f.radio, power);
@@ -1036,6 +1065,12 @@ void aetherPDMeasurementWorkflow()
                 meters.updateValueByName("TX", "FWDPWR", 11.f);
                 model->poll();
             } else {
+                QJsonObject running = sourceStatus;
+                running["keyed"] = true;
+                running["state"] = "calibrating";
+                running["calibration_state"] = "running";
+                running["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", true}};
+                measurementNetwork.last->complete(200, encode(running));
                 measurementNetwork.last->complete(200, manifest(true));
                 for (int i = 0; i < 32; ++i) { measurementNetwork.last->complete(200, chunk(i)); }
             }

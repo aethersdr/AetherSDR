@@ -67,6 +67,7 @@ private:
     QPointer<SliceModel> m_slice;
     std::vector<QMetaObject::Connection> m_stationConnections;
     quint64 m_generation{0};
+    quint64 m_measurementSourceId{0};
     double m_frequencyMHz{0};
     QString m_mode;
     QString m_antenna;
