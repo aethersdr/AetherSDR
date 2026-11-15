@@ -204,11 +204,25 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
   drain-side and enqueue-side bounds.
 - Trimming occurs on both drain and producer paths. `drainRxAudio()` trims
   normal, legacy KiwiSDR, and external Kiwi receive queues, plus RADE speech
-  separately. `processRxAudioData()` trims the NR2 packet queue or the raw
-  main/Kiwi buffer, depending on the path. `queueLegacyKiwiAudioData()` and
+  separately. For the main RX source, `trimMainRxBuffers()` advances overflow
+  input through the existing NR, client strip and output resamplers before
+  dropping oldest speaker-ready output. Byte input uses blocks of at most
+  20 ms, and only the oldest excess plus a 10 ms tail for the quiet-point
+  cut and fade is processed; input held for a presentation delay stays
+  queued. Received samples are never spliced
+  out ahead of those stateful processors. `processRxAudioData()` uses the same
+  combined raw/output bound on enqueue. Legacy and external Kiwi paths retain
+  their independent queue limits. `queueLegacyKiwiAudioData()` and
   `queueKiwiAudioData()` also enforce producer-side limits, and
   `setReceivePresentationDelays()` trims queued audio when delays decrease.
   Producer-side caps also bound backlog when the speaker drain is stopped.
+  Main-source trimming runs synchronously on the engine thread under the DSP
+  mutex. Lowering a presentation delay can process the entire held backlog;
+  20 ms bounds each input block, not the total time spent processing it.
+  Presentation feeds, ASR, Receive Sync, scopes and level/EQ taps observe the
+  processed excess before the speaker-output cut, including audio the speaker
+  will not play. The quiet-point search can retain up to 6 ms less than the
+  requested queue cap.
 - The speaker drain timer runs every 10 ms, writes only full float32 samples, and
   respects `QAudioSink::bytesFree()`.
 - If decoded RADE speech is pending, the speaker timer mixes `m_radeRxBuffer`
