@@ -107,6 +107,10 @@ static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Enh)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Enh));
 static_assert(static_cast<uint8_t>(AudioEngine::TxChainStage::Reverb)
               == static_cast<uint8_t>(TxVoiceProcessor::Stage::Reverb));
+static_assert(static_cast<unsigned>(AudioEngine::TxChainStage::Reverb)
+              <= TxChainLayout::kMaxStageValue,
+              "every TX chain stage value must fit one packed slot");
+static_assert(AudioEngine::kMaxTxChainStages == TxVoiceProcessor::kMaxStages);
 
 static QString wisdomDir();
 static void logNr2WisdomSummary(const QString& context);
@@ -6297,29 +6301,24 @@ void AudioEngine::applyClientPuduRxFloat32(QByteArray& float32)
 
 namespace {
 
-// Pack a stage list into the uint64_t atomic format used by the audio
-// thread.  Unused slots are TxChainStage::None (0).
+// A list that does not fit is a programming error: it asserts in debug and
+// warns in release, and the audio thread gets the stages that did fit.
 uint64_t packChain(const QVector<AudioEngine::TxChainStage>& stages)
 {
-    uint64_t v = 0;
-    const int n = std::min(static_cast<int>(stages.size()),
-                           AudioEngine::kMaxTxChainStages);
-    for (int i = 0; i < n; ++i) {
-        v |= static_cast<uint64_t>(static_cast<uint8_t>(stages[i])) << (i * 8);
+    uint64_t packed = 0;
+    const bool fits = TxChainLayout::pack(stages, packed);
+    if (!fits) {
+        qCWarning(lcAudio) << "AudioEngine: TX chain of" << stages.size()
+                           << "stages does not fit" << AudioEngine::kMaxTxChainStages
+                           << "packed slots; stages were dropped";
     }
-    return v;
+    Q_ASSERT_X(fits, "packChain", "TX chain does not fit the packed order");
+    return packed;
 }
 
 QVector<AudioEngine::TxChainStage> unpackChain(uint64_t v)
 {
-    QVector<AudioEngine::TxChainStage> out;
-    out.reserve(AudioEngine::kMaxTxChainStages);
-    for (int i = 0; i < AudioEngine::kMaxTxChainStages; ++i) {
-        const auto s = static_cast<AudioEngine::TxChainStage>((v >> (i * 8)) & 0xFF);
-        if (s == AudioEngine::TxChainStage::None) break;
-        out.append(s);
-    }
-    return out;
+    return TxChainLayout::unpack<QVector<AudioEngine::TxChainStage>>(v);
 }
 
 // Map persisted stage names (human-readable in the XML settings) to
@@ -6443,9 +6442,12 @@ QVector<AudioEngine::RxChainStage> defaultRxChain()
 
 void AudioEngine::setTxChainStages(const QVector<TxChainStage>& stages)
 {
-    m_txChainPacked.store(packChain(stages), std::memory_order_release);
+    // Persist what was packed, so the settings file and the audio thread
+    // can never disagree about the order.
+    const uint64_t packed = packChain(stages);
+    m_txChainPacked.store(packed, std::memory_order_release);
     QStringList names;
-    for (auto s : stages) {
+    for (auto s : unpackChain(packed)) {
         const QString n = stageName(s);
         if (!n.isEmpty()) names.append(n);
     }
@@ -6944,13 +6946,9 @@ void AudioEngine::loadClientCompSettings()
     }
     if (stages.isEmpty()) stages = defaultChain();
 
-    // Append any canonical stages that are missing from the loaded
-    // list — guarantees all 6 processor boxes are always visible in
-    // the chain widget so users can reorder them ahead of time and
-    // future phases slot in automatically without a second migration.
-    for (auto canon : defaultChain()) {
-        if (!stages.contains(canon)) stages.append(canon);
-    }
+    // Every canonical stage is always present, so a stage added by an
+    // upgrade appears in the chain widget without a second migration.
+    stages = TxChainLayout::withMissingAppended(stages, defaultChain());
 
     m_txChainPacked.store(packChain(stages), std::memory_order_release);
 }

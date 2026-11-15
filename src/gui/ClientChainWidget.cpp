@@ -192,9 +192,11 @@ bool ClientChainWidget::isStageBypassed(AudioEngine::TxChainStage s) const
             return !(m_audio->clientPuduTx() && m_audio->clientPuduTx()->isEnabled());
         case AudioEngine::TxChainStage::Reverb:
             return !(m_audio->clientReverbTx() && m_audio->clientReverbTx()->isEnabled());
-        default:
+        case AudioEngine::TxChainStage::None:
             return true;
     }
+    // No default: a new stage must be added above, or -Wswitch says so.
+    return true;
 }
 
 void ClientChainWidget::rebuildLayout()
@@ -666,7 +668,7 @@ void ClientChainWidget::toggleStageBypass(int boxIdx)
                 m_audio->saveClientReverbSettings();
             }
             break;
-        default:
+        case AudioEngine::TxChainStage::None:
             return;
     }
     emit stageEnabledChanged(stage, newEnabled);

@@ -84,8 +84,10 @@ AetherialAudioStrip::Stage fromChainStage(AudioEngine::TxChainStage s)
         case AudioEngine::TxChainStage::Tube:   return AetherialAudioStrip::Tube;
         case AudioEngine::TxChainStage::Enh:    return AetherialAudioStrip::Enh;
         case AudioEngine::TxChainStage::Reverb: return AetherialAudioStrip::Reverb;
-        default:                                return AetherialAudioStrip::StageCount;
+        case AudioEngine::TxChainStage::None:   return AetherialAudioStrip::StageCount;
     }
+    // No default: a new stage must be mapped above, or -Wswitch says so.
+    return AetherialAudioStrip::StageCount;
 }
 
 } // namespace

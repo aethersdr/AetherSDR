@@ -472,8 +472,7 @@ void TxVoiceProcessor::processChannelStrip(QByteArray& float48Stereo) noexcept
     const int frames = float48Stereo.size()
         / (kChannels * static_cast<int>(sizeof(float)));
     for (int index = 0; index < kMaxStages; ++index) {
-        const Stage stage = static_cast<Stage>(
-            (m_packedStages >> (index * 8)) & 0xFF);
+        const Stage stage = TxChainLayout::slot<Stage>(m_packedStages, index);
         switch (stage) {
             case Stage::None:
                 return;
@@ -558,8 +557,7 @@ int TxVoiceProcessor::latencyFrames() const noexcept
         ? 480
         : 0;
     for (int index = 0; index < kMaxStages; ++index) {
-        const Stage stage = static_cast<Stage>(
-            (m_packedStages >> (index * 8)) & 0xFF);
+        const Stage stage = TxChainLayout::slot<Stage>(m_packedStages, index);
         if (stage == Stage::None) {
             break;
         }

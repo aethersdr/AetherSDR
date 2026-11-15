@@ -3814,6 +3814,14 @@ target_include_directories(tx_mic_channel_normalizer_test PRIVATE
 target_link_libraries(tx_mic_channel_normalizer_test PRIVATE Qt6::Core)
 add_test(NAME tx_mic_channel_normalizer_test COMMAND tx_mic_channel_normalizer_test)
 
+# The packed TX chain order: 16 four-bit slots round-trip, an order that does
+# not fit is reported instead of truncated, and the load-time migration keeps
+# the saved order and appends stages an upgrade adds (RFC #4836 precursor).
+add_executable(tx_chain_layout_test tests/tx_chain_layout_test.cpp)
+target_include_directories(tx_chain_layout_test PRIVATE src)
+target_link_libraries(tx_chain_layout_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_chain_layout_test COMMAND tx_chain_layout_test)
+
 add_executable(tx_voice_processor_test
     tests/tx_voice_processor_test.cpp
 )
