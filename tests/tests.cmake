@@ -3858,7 +3858,7 @@ add_test(NAME ssb_envelope_meter_test COMMAND ssb_envelope_meter_test)
 # prints the SSB envelope figures of the 24 kHz transport output. No radio, no
 # sockets, no keying. Never part of the default build or the CTest graph.
 add_executable(tx_papr_harness EXCLUDE_FROM_ALL tools/tx_papr_harness.cpp)
-target_include_directories(tx_papr_harness PRIVATE src)
+target_include_directories(tx_papr_harness PRIVATE src tests)
 target_link_libraries(tx_papr_harness PRIVATE aethercore Qt6::Core)
 
 add_executable(tx_voice_processor_test

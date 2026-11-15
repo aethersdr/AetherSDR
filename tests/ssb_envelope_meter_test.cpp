@@ -17,6 +17,7 @@ using AetherSDR::SsbEnvelopeReport;
 using AetherSDR::SsbFilterPhase;
 using AetherSDR::SsbPassband;
 using AetherSDR::designSsbFilter;
+using AetherSDR::measureIqEnvelope;
 using AetherSDR::measureSsbEnvelope;
 
 namespace {
@@ -198,6 +199,20 @@ int main()
                std::fabs(shared.activePaprDb - base.activePaprDb) < 0.05
                    && own.activePaprDb > shared.activePaprDb + 2.0,
                fmt("shared %.2f dB, own gate %.2f dB", shared.activePaprDb, own.activePaprDb));
+    }
+
+    // IQ a modulator already produced: the envelope is |iq| directly.
+    {
+        std::vector<std::complex<float>> iq(static_cast<std::size_t>(kRate));
+        for (std::size_t n = 0; n < iq.size(); ++n) {
+            const double t = static_cast<double>(n) / kRate;
+            iq[n] = std::complex<float>(std::polar(0.25, 2.0 * kPi * 700.0 * t)
+                                        + std::polar(0.25, 2.0 * kPi * 1900.0 * t));
+        }
+        const auto r = measureIqEnvelope(iq.data(), iq.size(), kRate);
+        report("IQ two tone: peak-to-average ratio is 3.01 dB",
+               std::fabs(r.paprDb - 3.0103) < 0.01 && std::fabs(r.envelopePeak - 0.5) < 0.001,
+               fmt("%.4f dB, peak %.4f", r.paprDb, r.envelopePeak));
     }
 
     // Too short to fill the filter: nothing is analysed, nothing is invented.

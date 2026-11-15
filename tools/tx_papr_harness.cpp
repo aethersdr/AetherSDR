@@ -1,42 +1,70 @@
 // Offline SSB peak-to-average harness (RFC #4836, Stage 0).
 //
-// Runs a local recording through the real TX voice processor twice -- every
-// stage off, then with the dynamics settings given on the command line --
-// and measures the 24 kHz transport output the radio would receive with the
-// SSB envelope meter. Nothing is keyed and no radio is opened.
+// Runs transmit audio through the real TX voice processor twice -- every
+// stage off, then with the settings given on the command line -- and measures
+// the 24 kHz transport output the radio would receive: through a modeled radio
+// sideband filter (linear and minimum phase), and with --hl2 1 through the
+// real Hermes-Lite 2 modulator, whose IQ envelope is measured directly.
+// Nothing is keyed and no radio or socket is opened.
 //
-//   tx_papr_harness voice-48k.wav [--low 300] [--high 2700]
-//       [--comp-threshold -20] [--comp-ratio 4] [--comp-attack 20]
-//       [--comp-release 150] [--comp-knee 6] [--comp-makeup 5]
-//       [--comp-drive 0] [--comp-phase 0] [--comp-ceiling -1]
-//       [--lim-ceiling -1] [--trim 0] [--gain 0] [--eq-hpf 200]
+//   tx_papr_harness <voice-48k.wav | synthetic> [--key value ...]
 //
-// --comp-* turns the Compressor stage on, --comp-ceiling its own limiter,
-// --lim-ceiling the Final Output LIM, --eq-hpf a 24 dB/oct EQ high-pass ahead
-// of the compressor (processed run only). --gain is applied to the recording
-// before both runs, to place a quiet recording at a realistic mic level.
-// The input must be 48 kHz PCM16 or float32 WAV, mono or stereo (left used),
-// or the word `synthetic` for a deterministic 12 s voiced-speech stand-in
-// (jittered glottal pulses through three formant resonators, with pauses), so
-// a run is reproducible without a recording.
+// Input: 48 kHz PCM16 or float32 WAV, mono or stereo (left used), or the word
+// `synthetic` for a deterministic 12 s voiced-speech stand-in (jittered
+// glottal pulses through three formant resonators, with pauses), so a run is
+// reproducible without a recording.
+//
+// General:     --low 300 --high 2700   radio passband (Hz)
+//              --gain 0                dB applied to the input before both runs
+//              --hl2 0|1               also measure through the HL2 modulator
+//              --hl2-alc 0|1           HL2 ALC in that measurement (default 0)
+// Gate:        --gate-threshold -40 --gate-ratio 2.5 --gate-release 80
+//              --gate-hold 20 --gate-floor -15 --gate-return 3 --gate-mode 0|1
+// EQ:          --eq-hpf 80             one 24 dB/oct high-pass band
+// De-esser:    --deess-freq 5000 --deess-q 2 --deess-threshold -25 --deess-amount -6
+// Compressor:  --comp-threshold -20 --comp-ratio 4 --comp-attack 20
+//              --comp-release 150 --comp-knee 6 --comp-makeup 5
+//              --comp-drive 0 --comp-phase 0 --comp-ceiling -1 (its limiter)
+// Tube:        --tube-drive 6 --tube-model 0|1|2 --tube-tone 0 --tube-bias 0
+//              --tube-drywet 0.4 --tube-output 0
+// Exciter:     --exciter-air 6 --exciter-mix 0.2 --exciter-low-mix 0
+//              --exciter-mode 0|1
+// Final:       --lim-ceiling -1 (Final Output LIM) --trim 0
+//
+// Any flag of a stage turns that stage on in the processed run; the rest keep
+// the stage's own defaults. Stage order is the shipped default: Gate, EQ,
+// De-esser, Compressor, Tube, Exciter.
 
 #include "core/ClientComp.h"
+#include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
 #include "core/ClientFinalLimiter.h"
+#include "core/ClientGate.h"
+#include "core/ClientPudu.h"
+#include "core/ClientTube.h"
 #include "core/TxVoiceProcessor.h"
+#include "core/backends/TxAudioSource.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/dsp/SsbEnvelopeMeter.h"
+#include "TxTestAuthority.h"
 
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QFile>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace AetherSDR;
@@ -150,68 +178,139 @@ std::vector<float> synthesizeVoice(double seconds)
 struct Settings {
     std::map<std::string, double> values;
     bool has(const char* key) const { return values.count(key) != 0; }
-    double get(const char* key, double fallback) const
+    bool any(const char* prefix) const
+    {
+        const std::size_t n = std::strlen(prefix);
+        for (const auto& [key, value] : values)
+            if (key.compare(0, n, prefix) == 0) return true;
+        return false;
+    }
+    float get(const char* key, double fallback) const
     {
         const auto it = values.find(key);
-        return it == values.end() ? fallback : it->second;
+        return static_cast<float>(it == values.end() ? fallback : it->second);
     }
 };
 
-struct Run {
-    std::vector<float> transport;  // left channel at 24 kHz, before int16
-    int latencyFrames48{0};
-    double postChainPeak{0.0};     // 48 kHz, after the chain, before Final Output
-    double postLimiterPeakDb{-200.0};  // 48 kHz, after Final Output
-    std::size_t int16Clips{0};     // transport samples at or over full scale
-};
-
-Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
-{
+struct Chain {
+    ClientGate gate;
     ClientEq eq;
+    ClientDeEss deEss;
     ClientComp comp;
+    ClientTube tube;
+    ClientPudu pudu;
     ClientFinalLimiter limiter;
-    eq.setEnabled(false);
-    comp.setEnabled(false);
-    limiter.setEnabled(false);
-    limiter.setDcBlockEnabled(false);
-    if (processed) {
-        const bool compOn = s.has("comp-threshold") || s.has("comp-ratio") || s.has("comp-makeup")
-            || s.has("comp-drive") || s.has("comp-phase") || s.has("comp-ceiling")
-            || s.has("comp-attack") || s.has("comp-release") || s.has("comp-knee");
-        comp.setEnabled(compOn);
-        comp.setThresholdDb(static_cast<float>(s.get("comp-threshold", -20.0)));
-        comp.setRatio(static_cast<float>(s.get("comp-ratio", 4.0)));
-        comp.setAttackMs(static_cast<float>(s.get("comp-attack", 20.0)));
-        comp.setReleaseMs(static_cast<float>(s.get("comp-release", 150.0)));
-        comp.setKneeDb(static_cast<float>(s.get("comp-knee", 6.0)));
-        comp.setMakeupDb(static_cast<float>(s.get("comp-makeup", 0.0)));
-        comp.setDriveDb(static_cast<float>(s.get("comp-drive", 0.0)));
-        comp.setPhaseRotatorStages(static_cast<int>(s.get("comp-phase", 0.0)));
-        comp.setLimiterEnabled(s.has("comp-ceiling"));
-        comp.setLimiterCeilingDb(static_cast<float>(s.get("comp-ceiling", -1.0)));
+
+    void configure(const Settings& s, bool processed)
+    {
+        gate.setEnabled(false);
+        eq.setEnabled(false);
+        deEss.setEnabled(false);
+        comp.setEnabled(false);
+        tube.setEnabled(false);
+        pudu.setEnabled(false);
+        limiter.setEnabled(false);
+        limiter.setDcBlockEnabled(false);
+        if (!processed) return;
+
+        if (s.any("gate-")) {
+            // Mode first: switching it snaps ratio and floor.
+            gate.setMode(s.get("gate-mode", 0) > 0.5 ? ClientGate::Mode::Gate
+                                                     : ClientGate::Mode::Expander);
+            gate.setThresholdDb(s.get("gate-threshold", -40));
+            gate.setRatio(s.get("gate-ratio", 2.5));
+            gate.setReleaseMs(s.get("gate-release", 80));
+            gate.setHoldMs(s.get("gate-hold", 20));
+            gate.setFloorDb(s.get("gate-floor", -15));
+            gate.setReturnDb(s.get("gate-return", 3));
+            gate.setEnabled(true);
+        }
         if (s.has("eq-hpf")) {
             ClientEq::BandParams hpf;
             hpf.type = ClientEq::FilterType::HighPass;
-            hpf.freqHz = static_cast<float>(s.get("eq-hpf", 200.0));
+            hpf.freqHz = s.get("eq-hpf", 80);
             hpf.slopeDbPerOct = 24;
             eq.setBand(0, hpf);
             eq.setActiveBandCount(1);
             eq.setEnabled(true);
         }
+        if (s.any("deess-")) {
+            deEss.setFrequencyHz(s.get("deess-freq", 5000));
+            deEss.setQ(s.get("deess-q", 2));
+            deEss.setThresholdDb(s.get("deess-threshold", -25));
+            deEss.setAmountDb(s.get("deess-amount", -6));
+            deEss.setEnabled(true);
+        }
+        if (s.any("comp-")) {
+            comp.setThresholdDb(s.get("comp-threshold", -20));
+            comp.setRatio(s.get("comp-ratio", 4));
+            comp.setAttackMs(s.get("comp-attack", 20));
+            comp.setReleaseMs(s.get("comp-release", 150));
+            comp.setKneeDb(s.get("comp-knee", 6));
+            comp.setMakeupDb(s.get("comp-makeup", 0));
+            comp.setDriveDb(s.get("comp-drive", 0));
+            comp.setPhaseRotatorStages(static_cast<int>(s.get("comp-phase", 0)));
+            comp.setLimiterEnabled(s.has("comp-ceiling"));
+            comp.setLimiterCeilingDb(s.get("comp-ceiling", -1));
+            comp.setEnabled(true);
+        }
+        if (s.any("tube-")) {
+            const int model = static_cast<int>(s.get("tube-model", 0));
+            tube.setModel(model == 2 ? ClientTube::Model::C
+                          : model == 1 ? ClientTube::Model::B : ClientTube::Model::A);
+            tube.setDriveDb(s.get("tube-drive", 6));
+            tube.setTone(s.get("tube-tone", 0));
+            tube.setBiasAmount(s.get("tube-bias", 0));
+            tube.setDryWet(s.get("tube-drywet", 0.4));
+            tube.setOutputGainDb(s.get("tube-output", 0));
+            tube.setEnabled(true);
+        }
+        if (s.any("exciter-")) {
+            pudu.setMode(s.get("exciter-mode", 0) > 0.5 ? ClientPudu::Mode::Behringer
+                                                        : ClientPudu::Mode::Aphex);
+            pudu.setDooHarmonicsDb(s.get("exciter-air", 6));
+            pudu.setDooMix(s.get("exciter-mix", 0.2));
+            pudu.setPooMix(s.get("exciter-low-mix", 0));
+            pudu.setEnabled(true);
+        }
         limiter.setEnabled(s.has("lim-ceiling"));
-        limiter.setCeilingDb(static_cast<float>(s.get("lim-ceiling", -1.0)));
-        limiter.setOutputTrimDb(static_cast<float>(s.get("trim", 0.0)));
+        limiter.setCeilingDb(s.get("lim-ceiling", -1));
+        limiter.setOutputTrimDb(s.get("trim", 0));
     }
+};
+
+struct Run {
+    std::vector<float> transport;      // left channel at 24 kHz, before int16
+    int latencyFrames48{0};
+    double postChainPeak{0.0};         // 48 kHz, after the chain, before Final Output
+    double postLimiterPeakDb{-200.0};  // 48 kHz, after Final Output
+    std::size_t int16Clips{0};         // transport samples at or over full scale
+    double meanBlockUs{0.0};           // processFloat48 per 10 ms block
+    double maxBlockUs{0.0};
+};
+
+Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
+{
+    auto chain = std::make_unique<Chain>();
+    chain->configure(s, processed);
 
     TxVoiceProcessor processor;
     TxVoiceProcessor::Processors processors;
-    processors.eq = &eq;
-    processors.comp = &comp;
-    processors.finalLimiter = &limiter;
+    processors.gate = &chain->gate;
+    processors.eq = &chain->eq;
+    processors.deEss = &chain->deEss;
+    processors.comp = &chain->comp;
+    processors.tube = &chain->tube;
+    processors.pudu = &chain->pudu;
+    processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
-    // EQ in slot 0, Compressor in slot 1: the shipped default order.
-    processor.setStageOrder(static_cast<uint64_t>(TxVoiceProcessor::Stage::Eq)
-                            | static_cast<uint64_t>(TxVoiceProcessor::Stage::Comp) << 8);
+    using Stage = TxVoiceProcessor::Stage;
+    uint64_t order = 0;
+    int slot = 0;
+    for (Stage st : {Stage::Gate, Stage::Eq, Stage::DeEss, Stage::Comp, Stage::Tube, Stage::Enh})
+        order |= static_cast<uint64_t>(st) << (8 * slot++);
+    processor.setStageOrder(order);
+
     constexpr int kBlock = 480;  // 10 ms at 48 kHz
     Run run;
     if (!processor.prepare(TxVoiceProcessor::kDspRate, kBlock)) return run;
@@ -220,17 +319,26 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
 
     std::vector<float> stereo(kBlock * 2);
     QByteArray transport;
+    double totalUs = 0.0;
+    std::size_t blocks = 0;
     for (std::size_t at = 0; at + kBlock <= input.size(); at += kBlock) {
-        for (int i = 0; i < kBlock; ++i) {
+        for (int i = 0; i < kBlock; ++i)
             stereo[i * 2] = stereo[i * 2 + 1] = input[at + static_cast<std::size_t>(i)];
-        }
-        if (!processor.processFloat48(stereo.data(), kBlock, transport)) continue;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = processor.processFloat48(stereo.data(), kBlock, transport);
+        const double us = std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - t0).count();
+        totalUs += us;
+        run.maxBlockUs = std::max(run.maxBlockUs, us);
+        ++blocks;
+        if (!ok) continue;
+
         const QByteArray& strip = processor.postChannelStripFloat48Stereo();
-        const auto* chain = reinterpret_cast<const float*>(strip.constData());
+        const auto* post = reinterpret_cast<const float*>(strip.constData());
         for (qsizetype i = 0; i < strip.size() / static_cast<qsizetype>(sizeof(float)); ++i)
-            run.postChainPeak = std::max(run.postChainPeak, static_cast<double>(std::fabs(chain[i])));
+            run.postChainPeak = std::max(run.postChainPeak, static_cast<double>(std::fabs(post[i])));
         run.postLimiterPeakDb = std::max(run.postLimiterPeakDb,
-                                         static_cast<double>(limiter.outputPeakDb()));
+                                         static_cast<double>(chain->limiter.outputPeakDb()));
         const QByteArray& floats = processor.transportFloat32Stereo();
         const auto* samples = reinterpret_cast<const float*>(floats.constData());
         const int frames = static_cast<int>(floats.size() / (2 * sizeof(float)));
@@ -240,17 +348,100 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
             run.transport.push_back(v);
         }
     }
+    run.meanBlockUs = blocks ? totalUs / static_cast<double>(blocks) : 0.0;
     return run;
 }
 
+// The transport audio through the real HL2 modulator, as Hl2Backend hands it
+// over: int16 at 24 kHz, as mono float. The modulator is paced in real time
+// (its channel is non-blocking; feeding it faster starves it), so this takes
+// as long as the audio lasts. Returns IQ at 48 kHz with the channel's 48.7 ms
+// priming (mute ramp and fill) dropped.
+std::vector<std::complex<float>> runHl2(const std::vector<float>& transport,
+                                        const Settings& s,
+                                        unsigned long long* faults)
+{
+    hl2::Hl2TxDsp tx;
+    TxTestAuthority authority;
+    hl2::Hl2TxDsp::Config cfg;
+    cfg.filterLowHz = std::fabs(s.get("low", 300));
+    cfg.filterHighHz = std::fabs(s.get("high", 2700));
+    cfg.alcEnabled = s.get("hl2-alc", 0) > 0.5;
+    std::string error;
+    if (!tx.configure(cfg, &error)) {
+        std::fprintf(stderr, "HL2 modulator: %s\n", error.c_str());
+        return {};
+    }
+    tx.setMicGain(1.0);
+
+    std::vector<std::complex<float>> iq;
+    QObject::connect(&tx, &hl2::Hl2TxDsp::iqReady, &tx,
+                     [&](const std::vector<std::complex<float>>& block) {
+        iq.insert(iq.end(), block.begin(), block.end());
+    });
+    constexpr std::size_t kChunk = 240;  // 10 ms at 24 kHz
+    for (std::size_t at = 0; at < transport.size(); at += kChunk) {
+        const std::size_t n = std::min(kChunk, transport.size() - at);
+        std::vector<float> chunk(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const float v = std::clamp(transport[at + i], -1.0f, 32767.0f / 32768.0f);
+            chunk[i] = std::round(v * 32768.0f) / 32768.0f;  // the int16 hop
+        }
+        tx.processAudioBlock(chunk, TxAudioSource::Microphone, authority.context);
+        std::this_thread::sleep_for(std::chrono::duration<double>(
+            static_cast<double>(n) / cfg.inputSampleRateHz));
+    }
+    *faults = tx.modulatorFaultBlocks();
+    constexpr std::size_t kPriming = 2336;
+    if (iq.size() <= kPriming) return {};
+    return {iq.begin() + static_cast<std::ptrdiff_t>(kPriming), iq.end()};
+}
+
 double dbfs(double linear) { return 20.0 * std::log10(std::max(linear, 1e-9)); }
+
+void printRow(const char* label, const SsbEnvelopeReport& r, bool iq)
+{
+    if (iq) {
+        std::printf("%-26s %8s %8.2f %8.2f %8.2f %8.2f %8s %8s\n", label, "-",
+                    dbfs(r.envelopePeak), dbfs(r.activeEnvelopeRms), r.activePaprDb,
+                    r.activeP999PaprDb, "-", "-");
+    } else {
+        std::printf("%-26s %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.1f\n", label,
+                    dbfs(r.audioPeak), dbfs(r.envelopePeak), dbfs(r.activeEnvelopeRms),
+                    r.activePaprDb, r.activeP999PaprDb, r.envelopeOverAudioPeakDb,
+                    r.outOfBandDbc);
+    }
+}
+
+void printGain(const SsbEnvelopeReport& base, const SsbEnvelopeReport& proc, bool iq)
+{
+    std::printf("%-26s talk-power gain %+.2f dB active, %+.2f dB p99.9, %+.2f dB whole signal",
+                "", base.activePaprDb - proc.activePaprDb,
+                base.activeP999PaprDb - proc.activeP999PaprDb, base.paprDb - proc.paprDb);
+    // OOB as a change: the raw figure mostly measures what the recording
+    // already carries outside the passband (a voice's fundamental sits under
+    // 300 Hz), not what the processing added.
+    if (!iq) std::printf("; OOB change %+.1f dB", proc.outOfBandDbc - base.outOfBandDbc);
+    std::printf("\n\n");
+}
+
+std::vector<std::uint8_t> shifted(const std::vector<std::uint8_t>& mask, long blocks)
+{
+    std::vector<std::uint8_t> out(mask.size(), 0);
+    for (std::size_t b = 0; b < mask.size(); ++b) {
+        const long to = static_cast<long>(b) + blocks;
+        if (to >= 0 && to < static_cast<long>(out.size())) out[static_cast<std::size_t>(to)] = mask[b];
+    }
+    return out;
+}
 
 }  // namespace
 
 int main(int argc, char** argv)
 {
+    QCoreApplication app(argc, argv);
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s input-48k.wav [--key value ...]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <input-48k.wav | synthetic> [--key value ...]\n", argv[0]);
         return 2;
     }
     Settings settings;
@@ -270,10 +461,10 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "%s: %s\n", argv[1], error.c_str());
         return 2;
     }
-    const double gain = std::pow(10.0, settings.get("gain", 0.0) / 20.0);
+    const double gain = std::pow(10.0, settings.get("gain", 0) / 20.0);
     for (auto& v : input) v = static_cast<float>(v * gain);
 
-    const SsbPassband band{settings.get("low", 300.0), settings.get("high", 2700.0)};
+    const SsbPassband band{settings.get("low", 300), settings.get("high", 2700)};
     const Run baseline = runChain(input, settings, false);
     const Run processed = runChain(input, settings, true);
     if (baseline.transport.empty() || processed.transport.empty()) {
@@ -292,54 +483,54 @@ int main(int argc, char** argv)
                     "transport %6.2f dBFS, int16 clips %zu\n",
                     r == &baseline ? "baseline" : "processed", dbfs(r->postChainPeak),
                     r->postLimiterPeakDb, dbfs(transportPeak), r->int16Clips);
+        std::printf("%-9s CPU: %.1f us mean, %.1f us worst per 10 ms block (%.2f%% / %.2f%% of real time)\n",
+                    "", r->meanBlockUs, r->maxBlockUs, r->meanBlockUs / 100.0, r->maxBlockUs / 100.0);
     }
-    std::printf("\n");
-    std::printf("%-22s %8s %8s %8s %8s %8s %8s %8s\n", "run / radio filter", "audio", "env pk",
+    std::printf("\n%-26s %8s %8s %8s %8s %8s %8s %8s\n", "run / radio", "audio", "env pk",
                 "act rms", "PAPR", "p99.9", "env/aud", "OOB");
-    std::printf("%-22s %8s %8s %8s %8s %8s %8s %8s\n", "", "dBFS", "dBFS", "dBFS", "dB", "dB",
+    std::printf("%-26s %8s %8s %8s %8s %8s %8s %8s\n", "", "dBFS", "dBFS", "dBFS", "dB", "dB",
                 "dB", "dBc");
 
+    // Both runs are scored over the bypassed run's active blocks, shifted by
+    // any latency the processing adds (20 ms blocks).
+    const long shiftBlocks = std::lround(
+        (processed.latencyFrames48 - baseline.latencyFrames48) / 48.0 / 20.0);
     for (const auto phase : {SsbFilterPhase::Linear, SsbFilterPhase::Minimum}) {
-        const char* phaseName = phase == SsbFilterPhase::Linear ? "linear" : "minimum";
-        SsbEnvelopeReport reports[2];
-        const Run* runs[2] = {&baseline, &processed};
-        const char* names[2] = {"baseline", "processed"};
-        // Both runs are scored over the bypassed run's active blocks, shifted
-        // by any latency the processing adds (20 ms blocks at 24 kHz).
-        std::vector<std::uint8_t> baseMask, shiftedMask;
-        const long shiftBlocks = std::lround(
-            (processed.latencyFrames48 - baseline.latencyFrames48) / 2.0 / 480.0);
-        for (int r = 0; r < 2; ++r) {
-            if (r == 1) {
-                shiftedMask.assign(baseMask.size(), 0);
-                for (std::size_t b = 0; b < baseMask.size(); ++b) {
-                    const long to = static_cast<long>(b) + shiftBlocks;
-                    if (to >= 0 && to < static_cast<long>(shiftedMask.size()))
-                        shiftedMask[static_cast<std::size_t>(to)] = baseMask[b];
-                }
-            }
-            reports[r] = measureSsbEnvelope(runs[r]->transport.data(), runs[r]->transport.size(),
-                                            24000.0, band, phase, 1023,
-                                            r == 0 ? nullptr : &shiftedMask,
-                                            r == 0 ? &baseMask : nullptr);
-            const auto& rep = reports[r];
-            const std::string label = std::string(names[r]) + " / " + phaseName;
-            std::printf("%-22s %8.2f %8.2f %8.2f %8.2f %8.2f %8.2f %8.1f\n", label.c_str(),
-                        dbfs(rep.audioPeak), dbfs(rep.envelopePeak), dbfs(rep.activeEnvelopeRms),
-                        rep.activePaprDb, rep.activeP999PaprDb, rep.envelopeOverAudioPeakDb,
-                        rep.outOfBandDbc);
+        const char* name = phase == SsbFilterPhase::Linear ? "linear filter" : "minimum-phase filter";
+        std::vector<std::uint8_t> mask;
+        const auto base = measureSsbEnvelope(baseline.transport.data(), baseline.transport.size(),
+                                             24000.0, band, phase, 1023, nullptr, &mask);
+        const auto maskShifted = shifted(mask, shiftBlocks);
+        const auto proc = measureSsbEnvelope(processed.transport.data(), processed.transport.size(),
+                                             24000.0, band, phase, 1023, &maskShifted);
+        printRow((std::string("baseline / ") + name).c_str(), base, false);
+        printRow((std::string("processed / ") + name).c_str(), proc, false);
+        printGain(base, proc, false);
+    }
+
+    if (settings.get("hl2", 0) > 0.5) {
+        unsigned long long baseFaults = 0, procFaults = 0;
+        std::printf("HL2 modulator (real time, %.0f s per run, ALC %s)...\n",
+                    static_cast<double>(baseline.transport.size()) / 24000.0,
+                    settings.get("hl2-alc", 0) > 0.5 ? "on" : "off");
+        std::fflush(stdout);
+        const auto baseIq = runHl2(baseline.transport, settings, &baseFaults);
+        const auto procIq = runHl2(processed.transport, settings, &procFaults);
+        if (baseIq.empty() || procIq.empty()) {
+            std::fprintf(stderr, "the HL2 modulator produced no IQ\n");
+            return 1;
         }
-        // Talk-power gain: how much more average power the processed audio
-        // carries at the same envelope peak (PEP).
-        // OOB is reported as a change: the raw figure mostly measures what the
-        // recording already carries below and above the passband (a voice's
-        // fundamental sits under 300 Hz), not what the processing added.
-        std::printf("%-22s talk-power gain %+.2f dB active, %+.2f dB p99.9, %+.2f dB whole signal;"
-                    " OOB change %+.1f dB\n\n",
-                    "", reports[0].activePaprDb - reports[1].activePaprDb,
-                    reports[0].activeP999PaprDb - reports[1].activeP999PaprDb,
-                    reports[0].paprDb - reports[1].paprDb,
-                    reports[1].outOfBandDbc - reports[0].outOfBandDbc);
+        std::vector<std::uint8_t> mask;
+        const auto base = measureIqEnvelope(baseIq.data(), baseIq.size(), 48000.0, nullptr, &mask);
+        const auto maskShifted = shifted(mask, shiftBlocks);
+        const auto proc = measureIqEnvelope(procIq.data(), procIq.size(), 48000.0, &maskShifted);
+        printRow("baseline / HL2 modulator", base, true);
+        printRow("processed / HL2 modulator", proc, true);
+        printGain(base, proc, true);
+        if (baseFaults || procFaults) {
+            std::printf("WARNING: modulator fault blocks %llu / %llu (starved or late); "
+                        "rerun on an idle machine\n", baseFaults, procFaults);
+        }
     }
     return 0;
 }

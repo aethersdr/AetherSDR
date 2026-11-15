@@ -76,6 +76,62 @@ double toDb(double ratio)
     return 20.0 * std::log10(std::max(ratio, 1e-12));
 }
 
+// Envelope statistics shared by the audio and IQ entry points.
+void summarizeEnvelope(const std::vector<double>& envelope,
+                       double sampleRate,
+                       const std::vector<std::uint8_t>* activeBlocksIn,
+                       std::vector<std::uint8_t>* activeBlocksOut,
+                       SsbEnvelopeReport& report)
+{
+    const std::size_t count = envelope.size();
+    report.samplesAnalysed = count;
+    double energy = 0.0;
+    for (double e : envelope) {
+        report.envelopePeak = std::max(report.envelopePeak, e);
+        energy += e * e;
+    }
+    report.envelopeRms = std::sqrt(energy / static_cast<double>(count));
+
+    std::vector<double> sorted(envelope);
+    const std::size_t rank = static_cast<std::size_t>(0.999 * static_cast<double>(count - 1));
+    std::nth_element(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(rank), sorted.end());
+    report.envelopeP999 = sorted[rank];
+
+    // Speech has pauses, and a whole-signal RMS would score silence as
+    // "low average power". Active blocks are the 20 ms blocks within 30 dB of
+    // the loudest one.
+    const std::size_t block = std::max<std::size_t>(1, static_cast<std::size_t>(0.020 * sampleRate));
+    std::vector<double> blockEnergy;
+    for (std::size_t start = 0; start + block <= count; start += block) {
+        double e = 0.0;
+        for (std::size_t i = start; i < start + block; ++i) e += envelope[i] * envelope[i];
+        blockEnergy.push_back(e);
+    }
+    if (blockEnergy.empty()) blockEnergy.push_back(energy);
+    const double loudest = *std::max_element(blockEnergy.begin(), blockEnergy.end());
+    const double floor = loudest * 1e-3;  // -30 dB
+    double activeEnergy = 0.0;
+    std::size_t activeBlocks = 0;
+    std::vector<std::uint8_t> mask(blockEnergy.size(), 0);
+    for (std::size_t b = 0; b < blockEnergy.size(); ++b) {
+        const bool active = activeBlocksIn
+            ? b < activeBlocksIn->size() && (*activeBlocksIn)[b] != 0
+            : blockEnergy[b] >= floor;
+        if (!active) continue;
+        mask[b] = 1;
+        activeEnergy += blockEnergy[b];
+        ++activeBlocks;
+    }
+    if (activeBlocksOut) *activeBlocksOut = std::move(mask);
+    const std::size_t activeSamples = activeBlocks * std::min(block, count);
+    report.activeEnvelopeRms = activeSamples
+        ? std::sqrt(activeEnergy / static_cast<double>(activeSamples)) : report.envelopeRms;
+
+    report.paprDb = toDb(report.envelopePeak / std::max(report.envelopeRms, 1e-12));
+    report.activePaprDb = toDb(report.envelopePeak / std::max(report.activeEnvelopeRms, 1e-12));
+    report.activeP999PaprDb = toDb(report.envelopeP999 / std::max(report.activeEnvelopeRms, 1e-12));
+}
+
 }  // namespace
 
 std::vector<Complex> designSsbFilter(double sampleRate,
@@ -161,58 +217,27 @@ SsbEnvelopeReport measureSsbEnvelope(const float* audio,
         outOfBandEnergy += residual * residual;
     }
 
-    report.samplesAnalysed = count;
     for (std::size_t i = length - 1; i < frames; ++i)
         report.audioPeak = std::max(report.audioPeak, static_cast<double>(std::fabs(audio[i])));
 
-    double energy = 0.0;
-    for (double e : envelope) {
-        report.envelopePeak = std::max(report.envelopePeak, e);
-        energy += e * e;
-    }
-    report.envelopeRms = std::sqrt(energy / static_cast<double>(count));
-
-    std::vector<double> sorted(envelope);
-    const std::size_t rank = static_cast<std::size_t>(0.999 * static_cast<double>(count - 1));
-    std::nth_element(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(rank), sorted.end());
-    report.envelopeP999 = sorted[rank];
-
-    // Speech has pauses, and a whole-signal RMS would score silence as
-    // "low average power". Active blocks are the 20 ms blocks within 30 dB of
-    // the loudest one.
-    const std::size_t block = std::max<std::size_t>(1, static_cast<std::size_t>(0.020 * sampleRate));
-    std::vector<double> blockEnergy;
-    for (std::size_t start = 0; start + block <= count; start += block) {
-        double e = 0.0;
-        for (std::size_t i = start; i < start + block; ++i) e += envelope[i] * envelope[i];
-        blockEnergy.push_back(e);
-    }
-    if (blockEnergy.empty()) blockEnergy.push_back(energy);
-    const double loudest = *std::max_element(blockEnergy.begin(), blockEnergy.end());
-    const double floor = loudest * 1e-3;  // -30 dB
-    double activeEnergy = 0.0;
-    std::size_t activeBlocks = 0;
-    std::vector<std::uint8_t> mask(blockEnergy.size(), 0);
-    for (std::size_t b = 0; b < blockEnergy.size(); ++b) {
-        const bool active = activeBlocksIn
-            ? b < activeBlocksIn->size() && (*activeBlocksIn)[b] != 0
-            : blockEnergy[b] >= floor;
-        if (!active) continue;
-        mask[b] = 1;
-        activeEnergy += blockEnergy[b];
-        ++activeBlocks;
-    }
-    if (activeBlocksOut) *activeBlocksOut = std::move(mask);
-    const std::size_t activeSamples = activeBlocks * std::min(block, count);
-    report.activeEnvelopeRms = activeSamples
-        ? std::sqrt(activeEnergy / static_cast<double>(activeSamples)) : report.envelopeRms;
-
-    report.paprDb = toDb(report.envelopePeak / std::max(report.envelopeRms, 1e-12));
-    report.activePaprDb = toDb(report.envelopePeak / std::max(report.activeEnvelopeRms, 1e-12));
-    report.activeP999PaprDb = toDb(report.envelopeP999 / std::max(report.activeEnvelopeRms, 1e-12));
+    summarizeEnvelope(envelope, sampleRate, activeBlocksIn, activeBlocksOut, report);
     report.envelopeOverAudioPeakDb = toDb(report.envelopePeak / std::max(report.audioPeak, 1e-12));
     report.outOfBandDbc = 10.0 * std::log10(std::max(outOfBandEnergy, 1e-30)
                                             / std::max(inBandEnergy, 1e-30));
+    return report;
+}
+
+SsbEnvelopeReport measureIqEnvelope(const std::complex<float>* iq,
+                                    std::size_t count,
+                                    double sampleRate,
+                                    const std::vector<std::uint8_t>* activeBlocksIn,
+                                    std::vector<std::uint8_t>* activeBlocksOut)
+{
+    SsbEnvelopeReport report;
+    if (!iq || count == 0 || sampleRate <= 0.0) return report;
+    std::vector<double> envelope(count);
+    for (std::size_t i = 0; i < count; ++i) envelope[i] = std::abs(std::complex<double>(iq[i]));
+    summarizeEnvelope(envelope, sampleRate, activeBlocksIn, activeBlocksOut, report);
     return report;
 }
 

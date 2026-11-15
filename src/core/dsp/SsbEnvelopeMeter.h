@@ -61,6 +61,15 @@ SsbEnvelopeReport measureSsbEnvelope(const float* audio,
                                      const std::vector<std::uint8_t>* activeBlocksIn = nullptr,
                                      std::vector<std::uint8_t>* activeBlocksOut = nullptr);
 
+// The same envelope figures for IQ a modulator has already produced (the HL2
+// modulator's output, for one): the envelope is |iq|, no filter is modeled,
+// and audioPeak, envelopeOverAudioPeakDb and outOfBandDbc stay 0.
+SsbEnvelopeReport measureIqEnvelope(const std::complex<float>* iq,
+                                    std::size_t count,
+                                    double sampleRate,
+                                    const std::vector<std::uint8_t>* activeBlocksIn = nullptr,
+                                    std::vector<std::uint8_t>* activeBlocksOut = nullptr);
+
 // The active-speech mask is one byte per 20 ms block of analysed output.
 // `activeBlocksOut` receives the mask a measurement chose; `activeBlocksIn`
 // scores the active RMS over a mask chosen elsewhere. Comparing a processed
