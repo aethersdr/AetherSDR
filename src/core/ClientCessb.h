@@ -56,8 +56,10 @@ public:
     void setOutputDb(float db) noexcept;        // -12..0, the envelope ceiling
     float outputDb() const noexcept;
 
-    // Owner thread. Clamped to 100..3950 Hz and at least 500 Hz wide. Once
-    // prepared, builds the new block here and the audio thread crossfades to it.
+    // GUI thread; safe beside prepare() on the engine thread, since every
+    // block hand-off is an atomic exchange. Clamped to 100..3950 Hz and at
+    // least 500 Hz wide. Once prepared, builds the new block here and the
+    // audio thread crossfades to it.
     void setPassband(float lowHz, float highHz);
     // The passband for a radio TX filter: its edges pulled in by the margin.
     void followRadioFilter(int radioLowHz, int radioHighHz);
@@ -88,7 +90,9 @@ private:
     void runBlock() noexcept;
     void clearFifo() noexcept;
 
-    double m_sampleRate{0.0};
+    // Read by setPassband() on the GUI thread while prepare() may be writing
+    // it on the audio engine's thread.
+    std::atomic<double> m_sampleRate{0.0};
     std::atomic<bool> m_enabled{false};
     std::atomic<float> m_clipDb{kDefaultClipDb};
     std::atomic<bool> m_overshoot{true};

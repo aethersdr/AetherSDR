@@ -183,6 +183,35 @@ void testEnvelopeBound()
         }
     }
 
+    // The range limits, and the passband the 8600's 50..4000 Hz SSB filter
+    // gives (100..3950). Against a radio filter only 50 Hz wider the last
+    // bandpass leaves a little overshoot, so the bound there is 0.75 dB.
+    struct Limit {
+        float clip;
+        float ceiling;
+        double radioLow;
+        double radioHigh;
+        double tolerance;
+    };
+    for (const Limit& l : {Limit{20.0f, -1.0f, 100.0, 2900.0, 0.5},
+                           Limit{6.0f, 0.0f, 100.0, 2900.0, 0.5},
+                           Limit{6.0f, -12.0f, 100.0, 2900.0, 0.5},
+                           Limit{6.0f, -1.0f, 50.0, 4000.0, 0.75},
+                           Limit{20.0f, -1.0f, 50.0, 4000.0, 0.75}}) {
+        auto s = makeStage(l.clip, true, l.ceiling);
+        s->followRadioFilter(static_cast<int>(l.radioLow), static_cast<int>(l.radioHigh));
+        auto audio = voice(2.0, 0.9);
+        run(*s, audio);
+        const auto r = AetherSDR::measureSsbEnvelope(audio.data() + skip, audio.size() - skip,
+                                                     kRate, {l.radioLow, l.radioHigh},
+                                                     AetherSDR::SsbFilterPhase::Linear);
+        const double env = db(r.envelopePeak);
+        char name[120];
+        std::snprintf(name, sizeof name, "clip %.0f, ceiling %.0f, radio %.0f..%.0f: within %.2f dB",
+                      l.clip, l.ceiling, l.radioLow, l.radioHigh, l.tolerance);
+        report(name, env <= l.ceiling + l.tolerance, fmt("%.2f dBFS vs %.2f", env, l.ceiling));
+    }
+
     auto on = makeStage(12.0f, true, -1.0f);
     auto off = makeStage(12.0f, false, -1.0f);
     auto a = voice(2.0, 0.9);

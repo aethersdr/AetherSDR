@@ -542,7 +542,7 @@ which you will notice on quick overs.
 WDSP's SSB speech processor: a bandpass, an envelope clipper, a second
 bandpass, CESSB (controlled-envelope SSB) overshoot control and a last
 bandpass. It holds the envelope of the SSB signal your radio builds from this
-audio under a ceiling. That is not the same as limiting the audio's sample
+audio at a ceiling, to within about half a dB. That is not the same as limiting the audio's sample
 peaks: band-limited audio can have an envelope several dB above its highest
 sample, which is why a limiter alone cannot cap the peak RF power. With the
 envelope held, you can run more average power at the same peak. Peak control
@@ -555,19 +555,21 @@ The page traces the envelope peak over the last five seconds against the
 |---|---|---|
 | **Clip** | 0 to 20 dB | How hard the envelope is driven into the clipper. More clip, more average power and more distortion. Default 6 dB |
 | **CESSB** | On / off | Removes the overshoot the bandpass after the clipper puts back. Without it the envelope runs about 1 dB over the ceiling at 12 dB of clip. Default on |
-| **Ceiling** | −12 to 0 dBFS | The largest envelope it lets through. Default −1 dBFS |
+| **Ceiling** | −12 to 0 dBFS | The envelope level it holds to. Default −1 dBFS |
 
 **Passband.** The stage's bandpass follows your radio's TX filter, 50 Hz inside
 each edge, so the radio's filter does not reshape the envelope after it. The
 readout under the knobs shows the passband in force. Changing the TX filter
-while you talk is seamless.
+while you talk is seamless. The passband stops at 3950 Hz and is never
+narrower than 500 Hz, so with a wider (ESSB) TX filter, or one narrower than
+600 Hz, it no longer matches the radio's.
 
 **Delay.** Peak control adds about 33 ms.
 
 **Example: SSB contest or DX punch.** Clip 6 dB, CESSB on, Ceiling −1 dBFS. On
-a FLEX-8600 at 25 W into a dummy load, with the Contest profile ahead of it,
-this lowered the peak-to-average ratio from about 6.4 dB to about 3 dB and
-raised average power by about 3 dB at the same peak.
+a FLEX-8600 at 25 W into a dummy load, with the Contest profile ahead of it
+and a 150–2850 Hz passband, this lowered the peak-to-average ratio from about
+6.4 dB to about 3 dB and raised average power by about 3 dB at the same peak.
 
 **Pitfalls:**
 - Clip is distortion by design. Beyond about 10 dB, voices get rough. Record
@@ -575,6 +577,8 @@ raised average power by about 3 dB at the same peak.
 - Set the radio's drive so the envelope peaks reach full power, not beyond.
   Peak control bounds the envelope it sends; the radio's own ALC still sees
   anything you add after it.
+- Final Output comes after the ceiling. **Trim** above 0 dB raises the
+  envelope past it, and the **LIM** ceiling, if set lower, cuts into it.
 
 ### Final Output (AetherTX)
 
