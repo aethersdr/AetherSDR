@@ -211,7 +211,9 @@ type AnnouncePeer struct {
 // already hears the radio; a second announcement naming the tailnet would
 // only make its radio list flip between the two addresses.
 // A device whose discovery helper is connected gets the announcement from
-// the helper, whatever the device choice says.
+// the helper, and only when the setting includes the device: the helper
+// passes the same checks as a device sent a copy (#6984, condition 1). A
+// helper at the station would rebroadcast onto the radio's own LAN.
 func selectTargets(peers []tailPeer, mode string, only []string, station []netip.Prefix, helpers map[netip.Addr]bool) ([]netip.Addr, []AnnouncePeer) {
 	sort.Slice(peers, func(i, j int) bool {
 		if peers[i].Name != peers[j].Name {
@@ -230,16 +232,18 @@ func selectTargets(peers []tailPeer, mode string, only []string, station []netip
 		switch {
 		case mode == announceOff:
 			r.Skipped = "off"
-		case p.IP.IsValid() && helpers[p.IP]:
-			r.Announced, r.Via = true, "helper"
 		case mode == announceOnly && !chosen[p.ID]:
 			r.Skipped = "not chosen"
+		case p.Direct.IsValid() && inAny(station, p.Direct):
+			r.Skipped = "at the station"
+		case p.IP.IsValid() && helpers[p.IP]:
+			// Ahead of "offline": a connected helper shows the device is up
+			// though the last device list may not say so yet.
+			r.Announced, r.Via = true, "helper"
 		case !p.Online:
 			r.Skipped = "offline"
 		case !p.IP.IsValid():
 			r.Skipped = "no IPv4"
-		case p.Direct.IsValid() && inAny(station, p.Direct):
-			r.Skipped = "at the station"
 		case len(targets) >= maxAnnounceTargets:
 			r.Skipped = "over the limit"
 		default:
@@ -290,6 +294,9 @@ type Announcer struct {
 	// generation, so a selection made under the old one is discarded.
 	peers []tailPeer
 	gen   uint64
+	// The tailnet addresses whose helpers the setting includes; a helper
+	// from any other is refused, or closed when the setting changes.
+	helperTo map[netip.Addr]bool
 	// Connected discovery helpers, and the last announcement forwarded
 	// (rewritten), for a helper that connects.
 	helpers  map[*helperConn]bool
@@ -308,9 +315,24 @@ type HelperRefusal struct {
 
 // helperConn is one connected discovery helper.
 type helperConn struct {
-	addr netip.Addr
-	conn net.Conn
-	ch   chan []byte // announcements to write; full means it is behind
+	addr    netip.Addr
+	conn    net.Conn
+	ch      chan []byte // announcements to write; full means it is behind
+	closing bool        // closed because the setting left its device out
+}
+
+// helperRefusal says why a helper is refused, from its device's reason in
+// the status.
+func helperRefusal(skipped string) string {
+	switch skipped {
+	case "off":
+		return "the radio's announcement is off"
+	case "not chosen":
+		return "this device isn't ticked under Only the devices ticked below"
+	case "at the station":
+		return "this device is at the station, where it hears the radio's own broadcast"
+	}
+	return "this device isn't sent the announcement (" + skipped + ")"
 }
 
 // announceLink is what forwarding needs from a running tailnet node.
@@ -476,7 +498,9 @@ func (a *Announcer) forward(b []byte) {
 	if send {
 		a.sentAt, a.lastOut, a.lastOutT = now, out, now
 		for h := range a.helpers {
-			helpers = append(helpers, h)
+			if a.helperTo[h.addr] {
+				helpers = append(helpers, h)
+			}
 		}
 	}
 	targets := a.targets
@@ -522,7 +546,7 @@ func (a *Announcer) Attach(self netip.Addr, send func([]byte, netip.AddrPort) er
 	if a.link != nil {
 		a.link.cancel()
 	}
-	a.link, a.targets, a.report, a.selectedFor, a.peers = link, nil, nil, netip.Addr{}, nil
+	a.link, a.targets, a.report, a.selectedFor, a.peers, a.helperTo = link, nil, nil, netip.Addr{}, nil, nil
 	a.mu.Unlock()
 	go a.keepSelecting(ctx, link)
 }
@@ -532,7 +556,7 @@ func (a *Announcer) Detach() error {
 	if a.link != nil {
 		a.link.cancel()
 	}
-	a.link, a.targets, a.report, a.peers = nil, nil, nil, nil
+	a.link, a.targets, a.report, a.peers, a.helperTo = nil, nil, nil, nil, nil
 	for h := range a.helpers {
 		h.conn.Close()
 	}
@@ -570,7 +594,21 @@ func (a *Announcer) serveHelper(c net.Conn, authorize func(net.Addr) (string, bo
 	}
 	h := &helperConn{addr: ap.Addr().Unmap(), conn: c, ch: make(chan []byte, 2)}
 	a.mu.Lock()
-	if a.link == nil {
+	link := a.link
+	a.mu.Unlock()
+	if link == nil {
+		a.refuseHelper(c, who, "the shim's tailnet node is stopping")
+		return
+	}
+	// Refused before it is sent anything, the last announcement included,
+	// when the setting leaves its device out. A setting changed after
+	// this check closes it at the next selection, which registering runs.
+	if reason := a.helperVerdict(link, h.addr); reason != "" {
+		a.refuseHelper(c, who, reason)
+		return
+	}
+	a.mu.Lock()
+	if a.link != link {
 		a.mu.Unlock()
 		a.refuseHelper(c, who, "the shim's tailnet node is stopping")
 		return
@@ -725,7 +763,62 @@ func (a *Announcer) apply(link *announceLink, gen uint64, peers []tailPeer, mode
 		return targets, false
 	}
 	a.targets, a.report, a.selectedFor = targets, report, radioIP
+	ipByID := map[string]netip.Addr{}
+	for _, p := range peers {
+		ipByID[p.ID] = p.IP
+	}
+	a.helperTo = map[netip.Addr]bool{}
+	skipped := map[netip.Addr]string{}
+	for _, r := range report {
+		if r.Via == "helper" {
+			a.helperTo[ipByID[r.ID]] = true
+		} else {
+			skipped[ipByID[r.ID]] = r.Skipped
+		}
+	}
+	// A connected helper the setting now leaves out is closed; it
+	// reconnects and is told why.
+	for h := range a.helpers {
+		if !a.helperTo[h.addr] && !h.closing {
+			h.closing = true
+			reason, listed := skipped[h.addr]
+			if !listed {
+				reason = "not in the tailnet's device list"
+			}
+			log.Printf("announce: closing the discovery helper from %s: %s", h.addr, helperRefusal(reason))
+			h.conn.Close()
+		}
+	}
 	return targets, true
+}
+
+// helperVerdict says why a helper from addr can't be served under the
+// current setting, or "" when its device is included.
+func (a *Announcer) helperVerdict(link *announceLink, addr netip.Addr) string {
+	a.mu.Lock()
+	listed := a.peers != nil
+	var p tailPeer
+	found := false
+	for _, q := range a.peers {
+		if q.IP == addr {
+			p, found = q, true
+			break
+		}
+	}
+	radioIP := a.radioIP
+	a.mu.Unlock()
+	if !listed {
+		return "the shim hasn't listed the tailnet's devices yet"
+	}
+	if !found {
+		return "its device isn't in the tailnet's device list"
+	}
+	mode, only := link.mode()
+	_, report := selectTargets([]tailPeer{p}, mode, only, a.stationNets(radioIP), map[netip.Addr]bool{addr: true})
+	if report[0].Announced {
+		return ""
+	}
+	return helperRefusal(report[0].Skipped)
 }
 
 func (a *Announcer) keepSelecting(ctx context.Context, link *announceLink) {

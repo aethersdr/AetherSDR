@@ -173,22 +173,36 @@ func TestSelectTargets(t *testing.T) {
 	}
 }
 
-// A device with a discovery helper is served by the helper, even when the
-// device choice leaves it out, and is not also sent a copy; "off" stops it.
+// A device with a discovery helper is served by the helper and is not also
+// sent a copy, but only when the setting includes the device: a helper
+// that isn't ticked, is at the station, or runs under "off" is left out
+// (#6984, condition 1).
 func TestSelectTargetsHelper(t *testing.T) {
-	peers := []tailPeer{
+	station := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")}
+	away := []tailPeer{
 		{ID: "nWin", Name: "winpc", Online: true, IP: netip.MustParseAddr("100.64.0.7")},
 		{ID: "nMac", Name: "mac", Online: true, IP: netip.MustParseAddr("100.64.0.8")},
 	}
+	atStation := []tailPeer{
+		{ID: "nWin", Name: "winpc", Online: true, IP: netip.MustParseAddr("100.64.0.7"),
+			Direct: netip.MustParseAddr("192.168.0.60")},
+		away[1],
+	}
 	helpers := map[netip.Addr]bool{netip.MustParseAddr("100.64.0.7"): true}
 	for _, tc := range []struct {
-		mode, wantTargets, wantWin string
+		name                 string
+		peers                []tailPeer
+		mode                 string
+		only                 []string
+		wantTargets, wantWin string
 	}{
-		{announceAll, "[100.64.0.8]", "true/helper/"},
-		{announceOnly, "[]", "true/helper/"},
-		{announceOff, "[]", "false//off"},
+		{"all", away, announceAll, nil, "[100.64.0.8]", "true/helper/"},
+		{"only, ticked", away, announceOnly, []string{"nWin"}, "[]", "true/helper/"},
+		{"only, not ticked", away, announceOnly, []string{"nMac"}, "[100.64.0.8]", "false//not chosen"},
+		{"off", away, announceOff, nil, "[]", "false//off"},
+		{"at the station", atStation, announceAll, nil, "[100.64.0.8]", "false//at the station"},
 	} {
-		targets, report := selectTargets(peers, tc.mode, nil, nil, helpers)
+		targets, report := selectTargets(append([]tailPeer(nil), tc.peers...), tc.mode, tc.only, station, helpers)
 		var win AnnouncePeer
 		for _, r := range report {
 			if r.ID == "nWin" {
@@ -196,10 +210,10 @@ func TestSelectTargetsHelper(t *testing.T) {
 			}
 		}
 		if got := fmt.Sprint(targets); got != tc.wantTargets {
-			t.Errorf("%s: targets %s, want %s", tc.mode, got, tc.wantTargets)
+			t.Errorf("%s: targets %s, want %s", tc.name, got, tc.wantTargets)
 		}
 		if got := fmt.Sprintf("%v/%s/%s", win.Announced, win.Via, win.Skipped); got != tc.wantWin {
-			t.Errorf("%s: helper device %s, want %s", tc.mode, got, tc.wantWin)
+			t.Errorf("%s: helper device %s, want %s", tc.name, got, tc.wantWin)
 		}
 	}
 }
@@ -408,9 +422,12 @@ func TestAnnouncerHelperHello(t *testing.T) {
 	defer ln.Close()
 	a := &Announcer{}
 	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
-		func(context.Context) ([]tailPeer, error) { return nil, nil },
+		func(context.Context) ([]tailPeer, error) {
+			return []tailPeer{{ID: "nWin", Name: "winpc", Online: true, IP: netip.MustParseAddr("127.0.0.1")}}, nil
+		},
 		func() (string, []string) { return announceAll, nil })
 	defer a.Detach()
+	waitFor(t, "the device list", func() bool { return len(a.Status().Devices) == 1 })
 	a.mu.Lock()
 	a.lastOut, a.lastOutT = vitaAnnouncement(announcePayload, false), time.Now().Add(time.Hour)
 	a.mu.Unlock()
@@ -779,5 +796,98 @@ func TestSelectionUnderTheOldSettingIsDiscarded(t *testing.T) {
 	}
 	if got, want := deviceStates(a), "nA:false/off nB:false/off"; got != want {
 		t.Errorf("status %q after a pass under the old setting, want %q", got, want)
+	}
+}
+
+// TestHelperMustPassTheDeviceChecks: a helper whose device the setting
+// leaves out (off, not ticked, at the station) is refused with the reason
+// and sent nothing, not even the waiting announcement; one the setting
+// includes is served; and a served helper is closed when the setting
+// changes to leave it out (#6984, condition 1).
+func TestHelperMustPassTheDeviceChecks(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	setting := &settingForTest{mode: announceOff}
+	var direct atomic.Value
+	direct.Store(netip.Addr{})
+	a := &Announcer{Interfaces: func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")} }}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(context.Context) ([]tailPeer, error) {
+			return []tailPeer{{ID: "nWin", Name: "winpc", Online: true,
+				IP: netip.MustParseAddr("127.0.0.1"), Direct: direct.Load().(netip.Addr)}}, nil
+		}, setting.get)
+	defer a.Detach()
+	a.mu.Lock()
+	a.radioIP = netip.MustParseAddr("192.168.0.20")
+	a.lastOut, a.lastOutT = vitaAnnouncement(announcePayload, false), time.Now().Add(time.Hour)
+	a.mu.Unlock()
+	go a.ServeHelpers(ln, func(net.Addr) (string, bool) { return "winpc", true })
+	waitFor(t, "the device list", func() bool { return deviceStates(a) == "nWin:false/off" })
+
+	dial := func() net.Conn {
+		c, err := net.Dial("tcp4", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write([]byte("AETHER-DISCOVERY 1\n"))
+		return c
+	}
+	refused := func(why string) {
+		t.Helper()
+		c := dial()
+		defer c.Close()
+		if got, want := readAnswer(t, c), "AETHER-DISCOVERY 1 REFUSED "+why; got != want {
+			t.Errorf("answer %q, want %q", got, want)
+		}
+		c.SetReadDeadline(time.Now().Add(time.Second))
+		if n, err := c.Read(make([]byte, 64)); err != io.EOF {
+			t.Errorf("refused (%s), but read %d bytes, %v; want closed with nothing sent", why, n, err)
+		}
+	}
+
+	refused("the radio's announcement is off")
+
+	setting.set(announceOnly, "nOther")
+	a.Refresh()
+	refused("this device isn't ticked under Only the devices ticked below")
+
+	setting.set(announceAll)
+	direct.Store(netip.MustParseAddr("192.168.0.60"))
+	a.Refresh()
+	waitFor(t, "the station PC", func() bool { return deviceStates(a) == "nWin:false/at the station" })
+	refused("this device is at the station, where it hears the radio's own broadcast")
+
+	direct.Store(netip.Addr{})
+	a.Refresh()
+	waitFor(t, "the PC away", func() bool { return deviceStates(a) == "nWin:true/" })
+	c := dial()
+	defer c.Close()
+	if got := readAnswer(t, c); got != "AETHER-DISCOVERY 1 OK" {
+		t.Fatalf("away and included: answer %q, want OK", got)
+	}
+	if _, err := readFrame(c, time.Second); err != nil {
+		t.Fatalf("served, but no announcement: %v", err)
+	}
+	if got := deviceStates(a); got != "nWin:true/" {
+		t.Errorf("served helper: status %q", got)
+	}
+	a.mu.Lock()
+	via := ""
+	for _, r := range a.report {
+		via = r.Via
+	}
+	a.mu.Unlock()
+	if via != "helper" {
+		t.Errorf("served helper: via %q, want helper", via)
+	}
+
+	setting.set(announceOff)
+	a.Refresh()
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.Copy(io.Discard, c); err != nil {
+		t.Errorf("after Off, the helper wasn't closed: %v", err)
 	}
 }
