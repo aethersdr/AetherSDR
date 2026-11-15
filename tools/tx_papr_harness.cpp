@@ -27,7 +27,8 @@
 //              --tube-drywet 0.4 --tube-output 0
 // Exciter:     --exciter-air 6 --exciter-mix 0.2 --exciter-low-mix 0
 //              --exciter-mode 0|1      0 = Even (Aphex), 1 = Odd (Behringer)
-// Final:       --lim-ceiling -1 (Final Output LIM) --trim 0
+// Final:       --lim-ceiling -0.5 (Final Output LIM) --lim-lookahead 1.5 (ms)
+//              --trim 0
 //
 // Any flag of a stage turns that stage on in the processed run; the rest keep
 // the stage's own defaults. An unknown flag is an error, so a typo cannot
@@ -246,6 +247,7 @@ const char* const kKnownKeys[] = {
     "exciter-low-mix",
     "exciter-mode",
     "lim-ceiling",
+    "lim-lookahead",
     "trim",
 };
 
@@ -345,8 +347,9 @@ struct Chain {
             pudu.setPooMix(s.get("exciter-low-mix", 0));
             pudu.setEnabled(true);
         }
-        limiter.setEnabled(s.has("lim-ceiling"));
-        limiter.setCeilingDb(s.get("lim-ceiling", -1));
+        limiter.setEnabled(s.has("lim-ceiling") || s.has("lim-lookahead"));
+        limiter.setCeilingDb(s.get("lim-ceiling", ClientFinalLimiter::kDefaultCeilingDb));
+        limiter.setLookaheadMs(s.get("lim-lookahead", ClientFinalLimiter::kDefaultLookaheadMs));
         limiter.setOutputTrimDb(s.get("trim", 0));
     }
 };
