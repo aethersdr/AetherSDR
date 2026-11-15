@@ -1150,6 +1150,7 @@ set(CORE_SOURCES
     src/core/AetherPDClient.cpp
     src/core/AetherPDInstallationMonitor.cpp
     src/core/AetherPDInstallRequestClient.cpp
+    src/core/AetherPDInstallUpload.cpp
     src/models/AetherPDModel.cpp
     src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
     src/core/TailnetShimTokenStore.cpp

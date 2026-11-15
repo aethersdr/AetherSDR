@@ -4934,6 +4934,22 @@ target_link_libraries(aetherpd_client_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME aetherpd_client_test COMMAND aetherpd_client_test)
 set_tests_properties(aetherpd_client_test PROPERTIES TIMEOUT 10)
 
+# Authenticated upload: injected byte channel and clock; no sockets.
+add_executable(aetherpd_install_upload_test
+    tests/aetherpd_install_upload_test.cpp
+    src/core/AetherPDInstallUpload.cpp
+    src/core/AetherPDInstallRequestClient.cpp
+    src/core/AetherPDProtocol.cpp)
+target_include_directories(aetherpd_install_upload_test PRIVATE src tests)
+target_compile_definitions(aetherpd_install_upload_test PRIVATE
+    AETHERPD_UPLOAD_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/upload.json")
+target_link_libraries(aetherpd_install_upload_test PRIVATE Qt6::Core Qt6::Network aether_monocypher)
+if(WIN32)
+    target_link_libraries(aetherpd_install_upload_test PRIVATE ws2_32)
+endif()
+add_test(NAME aetherpd_install_upload_test COMMAND aetherpd_install_upload_test)
+set_tests_properties(aetherpd_install_upload_test PROPERTIES TIMEOUT 10)
+
 # Installer request lifecycle: injected HTTP and clock, no sockets.
 add_executable(aetherpd_install_request_client_test
     tests/aetherpd_install_request_client_test.cpp

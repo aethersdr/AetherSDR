@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T09:32:54.891084+00:00",
+  "updated_utc": "2026-11-15T09:42:31.555207+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -48,7 +48,7 @@
     "No new live tests during this checkpoint"
   ],
   "production_ready": false,
-  "next_action": "Implement desktop-native authenticated input upload and connect request client, public carrier upload and exact-plan monitor in the operator coordinator. Initial trust/6000 provisioning and the complete P1-P10 plan remain open.",
+  "next_action": "Connect desktop request client, authenticated upload, per-request public carrier assembly/upload/removal and exact-plan monitor in the operator coordinator. Preserve complete P1-P10 plan and initial-install/6000 blockers.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -199,6 +199,23 @@
       "Caller remains responsible for artifact authentication, exact-plan consent and original-session/credential lifetime.",
       "No new installation/upgrade, RF or host process inventory in the request/cancel check.",
       "Initial trust, FLEX-6000 privilege adapter/hardware and all remaining full production requirements remain open."
+    ]
+  },
+  "desktop_install_upload": {
+    "status": "component_validated_not_coordinator",
+    "evidence": "install-upload-development/validation.json under evidence_root",
+    "checks": [
+      "5 registered project tests passed",
+      "Address/undefined/leak sanitizer upload tests passed",
+      "MAC-comparison mutation detected",
+      "Qt TCP -> native receiver passed for fixed vectors and 18,452,908 bytes of actual public candidate inputs; hashes and descriptor counts matched"
+    ],
+    "remaining": [
+      "Linux desktop socket to native receiver, not an installed-radio or operator-workflow proof.",
+      "Stage-two refusal supplied by local adapter; no installation was attempted.",
+      "Windows/macOS half-close and socket behavior unqualified.",
+      "Coordinator still must authenticate artifacts, obtain consent, assemble/upload/remove the public carrier and match installed commit.",
+      "First-install trust, 6000 privilege adapter, actual 6300 and all other P1-P10 requirements remain."
     ]
   }
 }
