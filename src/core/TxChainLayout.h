@@ -60,6 +60,20 @@ template <typename Container>
     return out;
 }
 
+// The first occurrence of each stage, in order. A hand-edited settings file or
+// an imported preset can repeat a name; a repeat must not reach pack().
+template <typename Container>
+[[nodiscard]] Container withoutDuplicates(const Container& stages)
+{
+    Container out;
+    for (const auto& stage : stages) {
+        if (std::find(out.begin(), out.end(), stage) == out.end()) {
+            out.push_back(stage);
+        }
+    }
+    return out;
+}
+
 // The stored order first, then every canonical stage it lacks, in canonical
 // order: an upgrade that adds a stage shows it without reordering the rest.
 template <typename Container>

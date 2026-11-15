@@ -109,6 +109,24 @@ void testUpgradeFromSevenStageList()
            std::to_string(live.size()) + " live");
 }
 
+void testDuplicatesAreDropped()
+{
+    const std::vector<FutureStage> repeated{FutureStage::S3, FutureStage::S1, FutureStage::S3,
+                                            FutureStage::S2, FutureStage::S1};
+    report("repeats are dropped, first occurrence kept",
+           Layout::withoutDuplicates(repeated)
+               == std::vector<FutureStage>{FutureStage::S3, FutureStage::S1, FutureStage::S2});
+
+    // Forty entries of three types: too long to pack as stored, three after.
+    std::vector<FutureStage> forty;
+    for (int i = 0; i < 40; ++i) {
+        forty.push_back(static_cast<FutureStage>(1 + i % 3));
+    }
+    uint64_t packed = 0;
+    report("a long repeated list packs once its repeats are dropped",
+           !Layout::pack(forty, packed) && Layout::pack(Layout::withoutDuplicates(forty), packed));
+}
+
 void testFreshInstall()
 {
     const auto canonicalTen = futureRange(1, 10);
@@ -150,6 +168,7 @@ int main()
     testRoundTripAllSlots();
     testOverflowIsReported();
     testUpgradeFromSevenStageList();
+    testDuplicatesAreDropped();
     testFreshInstall();
     testTodaysStages();
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");

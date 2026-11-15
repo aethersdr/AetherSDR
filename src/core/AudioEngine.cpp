@@ -6444,7 +6444,7 @@ void AudioEngine::setTxChainStages(const QVector<TxChainStage>& stages)
 {
     // Persist what was packed, so the settings file and the audio thread
     // can never disagree about the order.
-    const uint64_t packed = packChain(stages);
+    const uint64_t packed = packChain(TxChainLayout::withoutDuplicates(stages));
     m_txChainPacked.store(packed, std::memory_order_release);
     QStringList names;
     for (auto s : unpackChain(packed)) {
@@ -6948,7 +6948,8 @@ void AudioEngine::loadClientCompSettings()
 
     // Every canonical stage is always present, so a stage added by an
     // upgrade appears in the chain widget without a second migration.
-    stages = TxChainLayout::withMissingAppended(stages, defaultChain());
+    stages = TxChainLayout::withMissingAppended(
+        TxChainLayout::withoutDuplicates(stages), defaultChain());
 
     m_txChainPacked.store(packChain(stages), std::memory_order_release);
 }
