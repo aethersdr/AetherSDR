@@ -102,9 +102,10 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 - After you unkey, receive stays muted through the transmit/receive turnaround, so you don't hear the PA's own carrier.
 - **S-meter** reads WDSP's average level. It holds steady across key-down and unkey.
 - **AM and SAM** audio is DC-blocked and clean.
+- **FM** audio passes through WDSP's FM limiter, so it stays below full scale, open-squelch noise included. A 1 kHz tone at the full 5 kHz deviation plays at 0.43 of full scale.
 - **CW:** the passband is centered on the signal marker (a real BFO at your CW pitch).
 
-> **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up.
+> **Upgrading from an older version:** receive audio is about 12 dB quieter at every AF gain setting: on the speaker, the radio's own codec, TCI and the decoders. If you turned a slice's AF gain down (to about 25) to stop strong stations distorting, you can turn it back up. FM plays about 8 dB quieter again (a full-deviation 1 kHz tone, 1.08 → 0.43 of full scale); raise the slice's AF gain or your listening level if it is too quiet.
 
 ### Receive filters
 
@@ -153,7 +154,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
 - **Transmit timing:** at the start of an over, voice and data audio wait until one block (about 11 ms) plus about 43 ms of IQ is queued. That margin absorbs up to about 43 ms of accumulated delivery lateness; larger delays can still cause gaps. USB and LSB use a minimum-phase transmit filter; data modes keep linear phase. CW and TUNE bypass the queue hold.
-- **TX filter-loss notice:** when transmitting from receiver A, AetherSDR can warn if the transmit audio is strongly attenuated through the modulator. The check uses a 40 dB threshold, so a narrow passband can still reduce audio without triggering a notice. It does not detect this loss in FM or while transmitting from another receiver.
+- **TX filter-loss notice:** when transmitting from receiver A, AetherSDR can warn if the transmit audio is strongly attenuated through the modulator. The check uses a 40 dB threshold, so a narrow passband can still reduce audio without triggering a notice. It does not detect this loss in FM or AM, or while transmitting from another receiver.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
@@ -166,6 +167,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through short pauses in speech; when the carrier drops to a lower level and stays there, it also holds for a moment before following. This applies to overs AetherSDR keys (MOX, PTT from a client, tune); an over keyed on the radio's own PTT input still shows the latest pair. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
+- **DSB carrier:** DSB suppresses the carrier. On one HL2 into a dummy load, on a build of main from 2026-10-31 (`adc4e4a9f`), the remaining carrier measured 47 dB below the sidebands.
+- **FM deviation** is set to 5 kHz, and no control changes it. Pre-emphasis raises the deviation with audio frequency and the ALC limits the input, so a steady tone stays under 5 kHz: a full-scale 1 kHz tone deviates about 1.4 kHz, and a 2 kHz tone at −6 dBFS about 1.7 kHz. Audio above the TX high cut is filtered out. Speech deviation has not been measured.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
 - **TX output, ANT or RF1:** the slice's TX antenna button chooses where transmit leaves the board. **ANT**, the default, uses the onboard PA. **RF1** is the low-power output with the PA off. The choice is remembered per radio and comes back on the next connect; RF1's drive starts at 0 % each time. The choice cannot change while the radio transmits.
@@ -192,6 +195,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - DAX, SmartLink or Multi-Flex.
 - The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex.
 - FM repeater duplex and CTCSS encode.
+- PureSignal.
 - Line out and headphone controls: the **Line Out:** and **Headphone:** rows under **Settings → Radio Setup... → Audio → Radio Audio Outputs** are dimmed. A codec board's speaker level is under **HL2 Hardware**.
 - Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied."
 - Controls the HL2 cannot honor are dimmed with their reason, or refuse with a notice.
@@ -206,6 +210,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - A CW key on the HL2's own key jack gives no sidetone in AetherSDR: the radio makes the CW itself, the receiver is muted while it does, and the client sidetone follows only AetherSDR's own keyer ([#5909](https://github.com/aethersdr/AetherSDR/issues/5909)).
 - Paddle CW timing can vary with load: each dit and dah edge from AetherSDR's keyer waits in the app's main event queue before it reaches the radio, so a busy computer can stretch or shorten elements ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
 - One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
+- One user reports that a transmission keyed over TCI on v26.11.2 drops out every few seconds. It is not reproduced: in 31 TCI overs into a dummy load on another HL2, on v26.11.2 and on main of 2026-11-12 (`50ed5fff2`), transmit and audio held for the whole over ([#7188](https://github.com/aethersdr/AetherSDR/issues/7188)).
 
 ### What has not been tested
 
