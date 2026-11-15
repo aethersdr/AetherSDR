@@ -252,6 +252,12 @@ public:
     {
         m_txTimerSnapshotHandler = std::move(handler);
     }
+    // Serial PTT/CW port state provider (the `serial` model, #6972): the
+    // observed open state and the last open failure. Supplied by MainWindow.
+    void setSerialSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_serialSnapshotHandler = std::move(handler);
+    }
     // Unified-title-bar state provider (the `titlebar` model): bar height,
     // brand, radio tabs, audio cluster, and which window-chrome variant is in
     // use. Supplied by MainWindow, read off the TitleBar on the GUI thread.
@@ -790,6 +796,7 @@ private:
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;
+    std::function<QJsonObject()> m_serialSnapshotHandler;
     std::function<QJsonObject()> m_titleBarSnapshotHandler;
     std::function<bool(const QString&, const QString&, QString*, DeferredUiAction*)>
         m_titleBarActionHandler;

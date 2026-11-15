@@ -3532,6 +3532,8 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this]() { return automationKiwiSdrSnapshot(); });
     m_automation->setTxTimerSnapshotHandler(
         [this]() { return automationTxTimerSnapshot(); });
+    m_automation->setSerialSnapshotHandler(
+        [this]() { return automationSerialSnapshot(); });
     m_automation->setTitleBarSnapshotHandler(
         [this]() { return automationTitleBarSnapshot(); });
     m_automation->setTitleBarActionHandler(

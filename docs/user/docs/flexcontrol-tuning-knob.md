@@ -116,10 +116,11 @@ The knob is not plugged in, or your user cannot open the serial port.
 1. Check that it is plugged in: on Linux, `ls /dev/ttyUSB*` should show a device and `lsusb | grep 2192` should list the FlexControl.
 2. On Linux your user must be in the serial-port group:
    ```bash
-   sudo usermod -aG uucp $USER     # Arch
-   sudo usermod -aG dialout $USER  # Debian/Ubuntu
+   sudo usermod -aG uucp "$USER"     # Arch
+   sudo usermod -aG dialout "$USER"  # Debian/Ubuntu/Fedora
+   sudo adduser "$USER" dialout      # Debian/Ubuntu alternative
    ```
-   Log out and back in for the change to take effect.
+   Log out of your desktop session and log back in for the change to take effect, then relaunch AetherSDR. `ls -l /dev/ttyUSB0` shows which group owns the device. See [Serial PTT/CW port won't open](./linux.md#serial-pttcw-port-wont-open).
 3. Click **Detect** in **Settings → Radio Setup... → Serial & Controllers**.
 
 ### The knob stopped after a USB glitch
