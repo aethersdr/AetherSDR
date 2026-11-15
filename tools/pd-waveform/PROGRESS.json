@@ -853,5 +853,36 @@
       "Diagnose intermittent GUI source-arm admission; initial failed attempt retained.",
       "All existing P1-P10 production exit criteria remain."
     ]
+  },
+  "capture_batch_installed_rf": {
+    "production_ready": false,
+    "desktop_commit": "768e74877845add2f9b79ce0105cf7b1c361b563",
+    "radio_source_commit": "79b07006ef9e3d47aa3336077f1a88e4e68b8b5a",
+    "evidence": "capture-batch-live/measurement-08-events.json, measurement-08-audit.json and receive-completion-live/profile/logs/aethersdr-20261115-082432.log under evidence_root",
+    "nominal_watts": 5,
+    "frequency_mhz": 7.15,
+    "FDX": false,
+    "one_positive_GUI_key": true,
+    "outcome": "Capture deadline at 5909 ms while waiting for native measurement tones; no keyed snapshot or chunks requested, no IMD result.",
+    "native_evidence": {
+      "loop_delay_samples": 1564.97,
+      "loop_delay_ms": 65.21,
+      "linear_path_residual_db": -29.1,
+      "key_seconds_at_last_fit_status": 4.006,
+      "aligned": true,
+      "fits": 0,
+      "source_end": "shim_session_ended",
+      "generated_samples": 143744,
+      "iq_stale": 0,
+      "iq_invalid": 0,
+      "dispatch_deadlines": 0
+    },
+    "cleanup": "Radio observed unkeyed with zero reported TX power. Independent host audit found no session workers, fixed ARP or private controls; only capability-free UID78666 primary remained. Audit removed its temporary resources.",
+    "remaining": [
+      "Native tone-readiness gate did not qualify within capture budget; exact failed predicate not yet established.",
+      "GUI remains Releasing despite independently confirmed worker retirement and radio unkey; do not classify GUI completion as successful.",
+      "Full-loop alignment delay is not FPGA-to-process packet latency.",
+      "All original production exit criteria remain."
+    ]
   }
 }
