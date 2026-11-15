@@ -193,6 +193,10 @@ void testRttyRangeMatchesRadio()
 {
     // MEASURED (#7093, FLEX-8400 firmware 4.3.16.42034): `slice set` keeps a
     // Mark of 0-4000 Hz and a Shift of 0-2000 Hz and refuses one step past each.
+    // `memory set` accepted a Mark of 0, 15, 25, 75 and 4000 and a Shift of 2000,
+    // and refused a Shift of 2005 (#7264); no memory Mark above 4000 was sent.
+    // The edges pinned here (4001, 2001) are the app's ruled range (#7093,
+    // MemoryFields::kRtty*), not radio readings.
     struct Tones { int mark; int shift; };
     const auto roundTrip = [](const Tones& tones) {
         MemoryCsvRecord record;
@@ -217,6 +221,24 @@ void testRttyRangeMatchesRadio()
         const MemoryCsvParseResult r = roundTrip(tones);
         expect(!r.ok() && r.records.isEmpty(),
                "RTTY mark outside 0-4000 Hz or shift outside 0-2000 Hz is refused");
+    }
+
+    // Import skips the out-of-range row and keeps the rest of the file.
+    MemoryCsvRecord good;
+    good.memory.name = "GOOD";
+    good.memory.freq = 14.085;
+    good.memory.mode = "RTTY";
+    good.memory.rttyMark = 2125;
+    good.memory.rttyShift = 170;
+    MemoryCsvRecord bad = good;
+    bad.memory.name = "BAD";
+    bad.memory.rttyShift = 2001;
+    const MemoryCsvParseResult mixed =
+        MemoryCsvCompat::parse(MemoryCsvCompat::serialize({good, bad}));
+    expect(mixed.errors.size() == 1, "one out-of-range RTTY row yields one error");
+    if (expect(mixed.records.size() == 1, "the in-range row of a mixed file is imported")) {
+        expect(mixed.records.first().memory.name == "GOOD",
+               "the imported row is the in-range one");
     }
 }
 
