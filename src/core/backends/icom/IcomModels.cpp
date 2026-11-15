@@ -199,6 +199,35 @@ constexpr std::array<std::string_view, 10> kIc705Modes{
     "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "WFM", "DIGU", "DIGL"};
 constexpr std::array<std::string_view, 1> kIc705ReceiveOnlyModes{"WFM"};
 
+// The IC-9700's 0x06 modes in neutral names, from its OWN guide's mode table:
+// LSB 00, USB 01, AM 02, CW 03, RTTY 04, FM 05, CW-R 07, RTTY-R 08, DV 17,
+// DD 22. This is NOT the IC-705 list and must not be made one:
+//
+//   NO WFM. The IC-705 has 76-108 MHz broadcast FM; the IC-9700 starts at
+//           144 MHz and its table has no 0x06 entry at all. Publishing WFM
+//           here would offer a mode the radio answers NG to -- the exact
+//           "combo reverts on the confirmation read" failure #5040 fixed.
+//   NO DV.  D-STAR is a waveform, not a demodulator setting, and
+//           modeToNeutral(Dv) returns "" by design. A published name that
+//           comes home empty makes the combo jump, so DV stays out until
+//           there is a neutral vocabulary for it.
+//   NO DD.  Guide-footnoted to 1200 MHz outside satellite mode, and 0x22 is
+//           not in CivMode at all. A mode this list cannot even encode has
+//           no business being offered.
+//   NO RTTY/RTTY-R. modeToNeutral maps them onto DIGL/DIGU, so the radio
+//           reports a different name than was sent -- same combo jump. The
+//           data modes below already carry the sideband and passband that
+//           actually drive a decoder.
+//
+// What is left is every mode that round-trips under its own name. DFM/DIGU/
+// DIGL are the DATA-flag forms of FM/USB/LSB, as on the IC-705.
+constexpr std::array<std::string_view, 9> kIc9700Modes{
+    "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "DIGU", "DIGL"};
+// Every published IC-9700 mode can transmit: 2 m, 70 cm and 23 cm are all
+// amateur allocations end to end, so unlike the IC-705 there is no
+// broadcast-only mode to withhold. Left empty deliberately, not unset.
+constexpr std::array<std::string_view, 0> kIc9700ReceiveOnlyModes{};
+
 // The three supported bring-up targets share the complete documented repeater
 // vocabulary. Their presentation can still differ (Basic versus Extended), but
 // no profile is permitted to pretend these registers are IC-9700-only: both
@@ -661,6 +690,8 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // IC-9700 CI-V Reference Guide 2019, printed p. 8.
         .networkConfiguration = NetworkConfigurationProfile{139, 140, 141, 144},
         .preampLabels = kIc9700PreampLabels,
+        .modes = kIc9700Modes,
+        .receiveOnlyModes = kIc9700ReceiveOnlyModes,
     };
     // MK2 S-meter squelch measured against steady carriers on the estimated
     // pan axis (#6180): -195.1 + 0.584 * raw, with raw = ceil(2.55 * level).
