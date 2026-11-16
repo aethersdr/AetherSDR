@@ -159,8 +159,12 @@ Radios that expose these controls keep their normal behavior.
 
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
+**Speed** sets CW keying speed in WPM: move the slider, or type a value and
+press **Enter** or leave the value field to apply it. The field follows the
+radio's supported range.
 **Pitch** sits directly below **Speed**: use its slider or enter a frequency
 in Hz in the value field. Pitch follows the radio's supported range and step.
+Status refreshes preserve an unfinished speed or pitch entry.
 **Breakin**, **Iambic**, and **Hold Delay** share a separate row.
 **Hold Delay** re-sends your break-in delay after CW speed changes made here;
 it does not cover speed changes made at the radio or by another client.
@@ -266,10 +270,10 @@ The audio controls stay in place as the timer appears and fades. In minimal mode
 
 ## Using AetherTX (Aetherial Audio)
 
-The client-side transmit voice chain — gate with RN2, EQ, split-band
-de-esser, compressor with Drive/Phase, tube, AetherVoice exciter, reverb and
-the final output stage with brickwall limiter, DC block, test tone and
-Quindar tones — lives in the **AetherTX** window, **Tools → AetherTX...**
+The client-side transmit voice chain — RN2 microphone denoising, Tube, EQ,
+Compressor with Drive/Phase, AetherVoice Exciter, Reverb, and Final Output —
+lives in the **AetherTX** window, **Tools → AetherTX...** Final Output includes
+the brickwall limiter, DC block, test tone, and Quindar tones.
 AetherTX needs a computer microphone (Mic source **PC**).
 
 See [Aetherial Audio](./aetherial-audio.md) for the stage reference and profiles.
