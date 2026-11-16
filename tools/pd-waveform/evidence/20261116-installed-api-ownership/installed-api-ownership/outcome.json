@@ -1,0 +1,392 @@
+{
+  "passed": true,
+  "RF_commands": [],
+  "credential_mutations": [],
+  "start_actions": 1,
+  "radio_before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": null,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "identity": {
+    "gui_client_id": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+    "gui_handle": 950861432,
+    "iq_channel": 4,
+    "feedback_pan": 1073741824
+  },
+  "before": {
+    "available": true,
+    "calibration_control": true,
+    "calibration_required": false,
+    "calibration_state": "idle",
+    "correcting": false,
+    "correction_control": true,
+    "correction_enabled": true,
+    "diagnostics": {
+      "alignment": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "source_end": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "version": 1
+    },
+    "faults": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 950861432,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "input_limited_samples": 0,
+    "keyed": false,
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "measurement_capture_batch_version": 1,
+    "measurement_control": true,
+    "measurement_tone_capture_version": 3,
+    "measurement_tone_config": {
+      "center_hz": 1305,
+      "max_spacing_hz": 10000,
+      "min_spacing_hz": 200,
+      "source_id": "0000000000000000",
+      "spacing_hz": 1190
+    },
+    "measurement_tone_control": true,
+    "registered": true,
+    "source_purpose": "calibration",
+    "state": "idle"
+  },
+  "capture_before": {
+    "capture_id": "03a6f45b0d8d1f30fff6c6301b962c04",
+    "center_hz": 7150000,
+    "chunk_samples": 512,
+    "correcting": false,
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 950861432,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "first_receive_ns": "1014839302276",
+    "format": "f32le-iq-v1",
+    "keyed": false,
+    "last_receive_ns": "1015179261544",
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "sample_count": 16384,
+    "sample_rate_hz": 48000,
+    "source": {
+      "generation": "6",
+      "kind": "local_dax_iq",
+      "stream_id": 536870912
+    }
+  },
+  "auth_rejections": [
+    {
+      "method": "GET",
+      "path": "/v1/aetherpd/status",
+      "authorization_kind": "missing",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v2/aetherpd/start",
+      "authorization_kind": "missing",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/aetherpd/stop",
+      "authorization_kind": "missing",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/aetherpd/installation",
+      "authorization_kind": "missing",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v3/aetherpd/capture",
+      "authorization_kind": "missing",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/aetherpd/status",
+      "authorization_kind": "invalid",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v2/aetherpd/start",
+      "authorization_kind": "invalid",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/aetherpd/stop",
+      "authorization_kind": "invalid",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/aetherpd/installation",
+      "authorization_kind": "invalid",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v3/aetherpd/capture",
+      "authorization_kind": "invalid",
+      "http_status": 401,
+      "body": {
+        "error": "admin token required"
+      }
+    }
+  ],
+  "duplicate_start": {
+    "body": {
+      "error": "AetherPD session already owned or starting"
+    },
+    "http_status": 409
+  },
+  "concurrent_duplicate_starts": [
+    {
+      "body": {
+        "error": "AetherPD session already owned or starting"
+      },
+      "http_status": 409
+    },
+    {
+      "body": {
+        "error": "AetherPD session already owned or starting"
+      },
+      "http_status": 409
+    }
+  ],
+  "unknown_executable_field": {
+    "body": {
+      "error": "invalid fixed object fields"
+    },
+    "http_status": 400
+  },
+  "after_rejections": {
+    "available": true,
+    "calibration_control": true,
+    "calibration_required": false,
+    "calibration_state": "idle",
+    "correcting": false,
+    "correction_control": true,
+    "correction_enabled": true,
+    "diagnostics": {
+      "alignment": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "source_end": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "version": 1
+    },
+    "faults": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 950861432,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "input_limited_samples": 0,
+    "keyed": false,
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "measurement_capture_batch_version": 1,
+    "measurement_control": true,
+    "measurement_tone_capture_version": 3,
+    "measurement_tone_config": {
+      "center_hz": 1305,
+      "max_spacing_hz": 10000,
+      "min_spacing_hz": 200,
+      "source_id": "0000000000000000",
+      "spacing_hz": 1190
+    },
+    "measurement_tone_control": true,
+    "registered": true,
+    "source_purpose": "calibration",
+    "state": "idle"
+  },
+  "capture_after": {
+    "capture_id": "ad982966ffe9b0a8f4cbba44c7f8d092",
+    "center_hz": 7150000,
+    "chunk_samples": 512,
+    "correcting": false,
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 950861432,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "first_receive_ns": "1015414284075",
+    "format": "f32le-iq-v1",
+    "keyed": false,
+    "last_receive_ns": "1015755274705",
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "sample_count": 16384,
+    "sample_rate_hz": 48000,
+    "source": {
+      "generation": "6",
+      "kind": "local_dax_iq",
+      "stream_id": 536870912
+    }
+  },
+  "stop_before_foreign": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  },
+  "foreign_gui_start": {
+    "body": {
+      "state": "start_unavailable"
+    },
+    "http_status": 503
+  },
+  "after_foreign": {
+    "body": {
+      "available": false,
+      "state": "unavailable"
+    },
+    "http_status": 503
+  },
+  "radio_after": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.953125,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  }
+}

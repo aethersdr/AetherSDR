@@ -559,6 +559,18 @@ from idle expiry. Connected desktop handling of the restoration window remains
 to be qualified. Neither receive-only test proves RF unkey behavior or actual
 FLEX6000 supervision. Session start and expiry never initiate transmission.
 
+The installed ARM64 receive-only API qualification also rejects missing or
+invalid credentials, duplicate starts against an occupied session, an extra
+executable field and a nonexistent GUI identity. Disconnecting only the owned
+unkey guardian's non-GUI API client retired the original nine DSP/IQ/resource
+workers within 417 ms; the desktop remained connected. Public status retained
+`cleanup_unconfirmed`. An explicit ordinary Start then delivered a complete
+local DAX IQ frame with FDX disabled, followed by verified Stop cleanup.
+See [`INSTALLED-API-OWNERSHIP-QUALIFICATION.json`](../INSTALLED-API-OWNERSHIP-QUALIFICATION.json)
+for exact artifacts and ownership checks. This does not qualify successful
+credential revocation, two real competing GUIs, other API roles or keyed RF
+failure behavior.
+
 ## Feedback pan binding
 
 The installed constructor's IQ owner subscribes to pan status without changing

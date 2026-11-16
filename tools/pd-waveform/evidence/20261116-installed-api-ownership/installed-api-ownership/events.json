@@ -1,0 +1,1178 @@
+[
+  {
+    "event": "bridge",
+    "monotonic_ns": 66536091863221,
+    "request": {
+      "cmd": "whoami"
+    },
+    "response": {
+      "agentName": "Codex AetherPD",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-cleanup-retirement",
+      "ok": true,
+      "pid": 2177039,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-cleanup-retirement",
+      "station": "Codex AetherPD",
+      "txAllowed": true,
+      "version": "26.11.2"
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66536103282038,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "response": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66536108449276,
+    "request": {
+      "cmd": "get",
+      "model": "pans"
+    },
+    "response": {
+      "ok": true,
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.2,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x38acfe78",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 0,
+          "minDbm": -180,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66536114476481,
+    "request": {
+      "cmd": "get",
+      "model": "slices"
+    },
+    "response": {
+      "ok": true,
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": true,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": true,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": true,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ]
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66536139888212,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66536146114008,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdIqSelection",
+      "action": "setCurrentIndex",
+      "value": 1
+    },
+    "response": {
+      "action": "setCurrentIndex",
+      "class": "QComboBox",
+      "newValue": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+      "ok": true,
+      "target": "pdIqSelection"
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66536153182443,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdStart",
+      "action": "click"
+    },
+    "response": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdStart"
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66536172928994,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66536696437324,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66537219974750,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66537743306057,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66538274487763,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 950861432,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66538300568655,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 950861432,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66538678004608,
+    "path": "aetherpd/capture",
+    "response": {
+      "body": {
+        "capture_id": "03a6f45b0d8d1f30fff6c6301b962c04",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 950861432,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "1014839302276",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "1015179261544",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538683735793,
+    "method": "GET",
+    "path": "/v1/aetherpd/status",
+    "authorization_kind": "missing",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538687531997,
+    "method": "POST",
+    "path": "/v2/aetherpd/start",
+    "authorization_kind": "missing",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538691802225,
+    "method": "POST",
+    "path": "/v1/aetherpd/stop",
+    "authorization_kind": "missing",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538696094048,
+    "method": "GET",
+    "path": "/v1/aetherpd/installation",
+    "authorization_kind": "missing",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538699835173,
+    "method": "POST",
+    "path": "/v3/aetherpd/capture",
+    "authorization_kind": "missing",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66538723414887,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 950861432,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66538726596837,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "response": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.96875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538730801950,
+    "method": "GET",
+    "path": "/v1/aetherpd/status",
+    "authorization_kind": "invalid",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538734960452,
+    "method": "POST",
+    "path": "/v2/aetherpd/start",
+    "authorization_kind": "invalid",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538739406089,
+    "method": "POST",
+    "path": "/v1/aetherpd/stop",
+    "authorization_kind": "invalid",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538744137567,
+    "method": "GET",
+    "path": "/v1/aetherpd/installation",
+    "authorization_kind": "invalid",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "unauthorized_boundary",
+    "monotonic_ns": 66538749096880,
+    "method": "POST",
+    "path": "/v3/aetherpd/capture",
+    "authorization_kind": "invalid",
+    "http_status": 401,
+    "body": {
+      "error": "admin token required"
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66538775594133,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 950861432,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66538781549700,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "response": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.96875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "authenticated_boundary",
+    "monotonic_ns": 66538802760314,
+    "action": "duplicate",
+    "response": {
+      "body": {
+        "error": "AetherPD session already owned or starting"
+      },
+      "http_status": 409
+    }
+  },
+  {
+    "event": "authenticated_boundary",
+    "monotonic_ns": 66538826419639,
+    "action": "duplicate",
+    "response": {
+      "body": {
+        "error": "AetherPD session already owned or starting"
+      },
+      "http_status": 409
+    }
+  },
+  {
+    "event": "authenticated_boundary",
+    "monotonic_ns": 66538831967428,
+    "action": "duplicate",
+    "response": {
+      "body": {
+        "error": "AetherPD session already owned or starting"
+      },
+      "http_status": 409
+    }
+  },
+  {
+    "event": "authenticated_boundary",
+    "monotonic_ns": 66538853420377,
+    "action": "malformed",
+    "response": {
+      "body": {
+        "error": "invalid fixed object fields"
+      },
+      "http_status": 400
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66538876193734,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 950861432,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66539258182565,
+    "path": "aetherpd/capture",
+    "response": {
+      "body": {
+        "capture_id": "ad982966ffe9b0a8f4cbba44c7f8d092",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 950861432,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "1015414284075",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "1015755274705",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66539259659685,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "response": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.96875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66539267575261,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdStop",
+      "action": "click"
+    },
+    "response": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdStop"
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66539293948137,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66539568466382,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66539846140676,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66540120289681,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66540393333420,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "authenticated_boundary",
+    "monotonic_ns": 66540478666858,
+    "action": "foreign",
+    "response": {
+      "body": {
+        "state": "start_unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66540498780713,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66540769425471,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66541044524126,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "authenticated_read",
+    "monotonic_ns": 66541316947013,
+    "path": "aetherpd/status",
+    "response": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 66541575419504,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "response": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.953125,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  }
+]

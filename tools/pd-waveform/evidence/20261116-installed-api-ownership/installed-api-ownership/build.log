@@ -1,0 +1,9 @@
+/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-api-ownership/vault-ownership.cpp: In function ‘int main(int, char**)’:
+/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-api-ownership/vault-ownership.cpp:20:24: warning: ignoring return value of ‘bool QFile::open(FILE*, QIODeviceBase::OpenMode, QFileDevice::FileHandleFlags)’, declared with attribute ‘nodiscard’ [-Wunused-result]
+   20 |  QFile input;input.open(stdin,QIODevice::ReadOnly);const QByteArray data=input.read(513);
+      |              ~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/QFile:1,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-api-ownership/vault-ownership.cpp:3:
+/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/qfile.h:273:32: note: declared here
+  273 |     QFILE_MAYBE_NODISCARD bool open(FILE *f, OpenMode ioFlags, FileHandleFlags handleFlags=DontCloseHandle);
+      |                                ^~~~
