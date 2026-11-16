@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-iq-distribution/desktop-check.py", line 15, in <module>
+    try:first_install_package.verify_uploads(native,carrier,(prepared/'other-plan').read_bytes())
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/request/first_install_package.py", line 71, in verify_uploads
+    if content('plan') != plan:
+       ~~~~~~~^^^^^^^^
+  File "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/request/first_install_package.py", line 70, in <lambda>
+    content = lambda leaf: archive.read(name + '/' + leaf)
+                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/zipfile/__init__.py", line 1715, in read
+    with self.open(name, "r", pwd) as fp:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/zipfile/__init__.py", line 1752, in open
+    zinfo = self.getinfo(name)
+  File "/usr/lib/python3.14/zipfile/__init__.py", line 1680, in getinfo
+    raise KeyError(
+        'There is no item named %r in the archive' % name)
+KeyError: "There is no item named 'AetherPDFirst6d6d6d6d6d6d6d6d/plan' in the archive"

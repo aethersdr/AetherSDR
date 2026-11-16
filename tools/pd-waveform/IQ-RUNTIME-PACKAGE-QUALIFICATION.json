@@ -1,0 +1,143 @@
+{
+  "updated_utc": "2026-11-16T15:43:50.601993+00:00",
+  "source_commit": "88280414febdaa69c42f4a7190a38b3f94b90238",
+  "status": "runtime_and_complete_ARM64_first_install_distribution_reproduced_and_desktop_prepared_offline",
+  "installed": false,
+  "production_ready": false,
+  "runtime_packages": {
+    "armv7": {
+      "release_bytes": 9355617,
+      "release_sha256": "9c4ef696e7bfe34e8a6ab9177a0a160ae45d0d34832ac9c3e6f55a11b8422e04",
+      "expanded_bytes": 22700574,
+      "two_path_reproduction": true,
+      "artifact": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/runtime-iq-binding/short/armv7/candidate.release"
+    },
+    "arm64": {
+      "release_bytes": 9029441,
+      "release_sha256": "4205a145909e15140ca84256371aada852865e59a1b4574abd5df67635be366b",
+      "expanded_bytes": 22441954,
+      "two_path_reproduction": true,
+      "artifact": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/runtime-iq-binding/short/arm64/candidate.release"
+    }
+  },
+  "first_install": {
+    "architecture": "arm64",
+    "package_directory": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-iq-distribution/short/package",
+    "selection": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-iq-distribution/short/selection.json",
+    "eight_files_reproduced": true,
+    "release_sha256": "d93ca98fdd17739bcc6e453a4f57afeded3c83c62882da68969a98533bc7de14",
+    "release_blake2b_256": "5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20",
+    "publisher_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558",
+    "worker_bytes": 249672,
+    "native_release_and_worker_verified": true,
+    "desktop_preparation": {
+      "carrier_bytes": 2726597,
+      "carrier_sha256": "14cca6fa62cb196e5eea3b80ceeeaa2224d542b7e4ce6d2d9c12d224330488a2",
+      "different_attempt_changes_both_uploads": true,
+      "loaded_with_compiled_pins": true,
+      "native_bytes": 9110522,
+      "native_sha256": "21beb72b55eac3f10e12a0a8bba8f5a74563b33af51da0ffe6f6a1f7ebcb9803",
+      "plan_sha256": "16ca330a4db00bbf58be1fb88d9cf7eb6c7c6504b4b75d21815e1477ad6a3284",
+      "prepare_repeat_identical": true,
+      "synthetic_identity": true,
+      "uploaded": false
+    },
+    "python_desktop_interop": {
+      "actual_desktop_archives_verified_by_python": true,
+      "mixed_attempt_rejected": true,
+      "names": [
+        "AetherPDFirst6e6e6e6e6e6e6e6e",
+        "aetherpd-first-6e6e6e6e6e6e6e6e"
+      ],
+      "native_sha256": "21beb72b55eac3f10e12a0a8bba8f5a74563b33af51da0ffe6f6a1f7ebcb9803",
+      "carrier_sha256": "14cca6fa62cb196e5eea3b80ceeeaa2224d542b7e4ce6d2d9c12d224330488a2",
+      "uploaded": false
+    }
+  },
+  "storage": {
+    "boundary_checks": 32,
+    "worst_armv7_upgrade_peak_bytes": 39481344,
+    "headroom_against_41_decimal_MB": 1518656,
+    "actual_6300_measurement": false,
+    "first_install_6300_adapter_overhead_qualified": false
+  },
+  "verifier_fix": {
+    "cause": "Python verifier required Python producer history even for the legitimate desktop carrier; actual layer and compressed layer match.",
+    "scope": "Accept two fixed producer labels; preserve full byte comparison, digest chain, permission and attempt checks.",
+    "regression_tests_passed": 6,
+    "carrier_tests_passed": 4,
+    "negative_evidence": "first/desktop-check.log retains original real-archive rejection; first/desktop-interop.log retains unsuccessful compression hypothesis; first/desktop-interop-final.log shows positive verification followed by expected mixed-attempt KeyError not caught by initial harness. Compression changes were discarded.",
+    "passed_evidence": "first/desktop-interop-passed.log"
+  },
+  "radio_return": {
+    "ports_open": [
+      4992,
+      48992,
+      22222
+    ],
+    "observed_boot_id": "2ddebe30-984b-4540-9b5f-4501c709fc1a",
+    "prior_boot_id": "85910aea-b999-472f-b6f2-a139d845c5f8",
+    "same_installation_identity": true,
+    "installation_committed": true,
+    "engine_status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    },
+    "read_only": true,
+    "limit": "Does not establish recovery duration or cause of earlier outage; new runtime has not been installed."
+  },
+  "limitations": [
+    "Same host and pinned toolchains; no independent-host reproduction.",
+    "Runtime and first-install distributions deliberately have different temporary development keys. The first-install package is internally consistent; neither authorizes changing an installed trust anchor.",
+    "First-install distribution reuses the exact verified runtime executable bytes from both build paths, and rebuilds trust-key-dependent boot and delivery executables.",
+    "Native runtime binaries and desktop archives are source88280414. This checkpoint additionally fixes only the offline Python verifier and adds evidence.",
+    "Synthetic first-install preparation contains no usable operator credential and was not uploaded.",
+    "Disk budget is synthetic upgrade admission; full persistent extra upload exceeds modeled6300 budget.",
+    "Actual6300 provisioning adapter and hardware qualification remain open.",
+    "Exact candidate fresh installation, reboot, receive IQ, fault/unkey/recovery, repeatedRF, stockAPD, platformCI and independent release gates remain open."
+  ],
+  "evidence_directory": "evidence/20261116-iq-runtime-package",
+  "evidence_sha256": {
+    "runtime/audit-report.json": "6d4081fbcae96e34568dac39083283760241f66117b54a87e4dccaa63fd6af1c",
+    "runtime/audit.log": "9e71a0a11e81b962240bbeb9812c0dbc2c4a5dd6079e8759ed39a34c6f7b653a",
+    "runtime/audit.py": "167270fca8ca58550bc370f7f7353bb15342f6aa61f8f903c39a942a91be1a9b",
+    "runtime/budget-command.json": "e4dcf57181810b1f23ecdbc77b7d64b5866d9a9efcc1cf19aea06189af084742",
+    "runtime/budget-report.json": "c745bb583415c683bc0471f8656a7d932569003455d65fa1a117cff3291a4d42",
+    "runtime/budget_probe.c": "f5d72290ab6e38954c8208eec6990e9d26a75a89bf7ac79f7888c8cd1d04e042",
+    "runtime/build-budget.py": "d64c3ce136a7e958cc24008104b0fe6d65832c66cc6faddb9a56a19667c02d06",
+    "runtime/measure-budget.py": "166938961fb6672b5364d64d78de4c6725869c0379fef5b8bbe3fec99bc5f6cc",
+    "runtime/radio-returned.json": "8f8777956866da8c268d3a4c726b411136367a87e120bacfb5d2762eadea8574",
+    "runtime/report.json": "115fde93c92d00acbcdb8a2588d6d5bd69d9375fd9331627beed15133446ce97",
+    "runtime/returned-shim-status.json": "26a630075cb05523bc9359592af6b294c9869285c191ba1632d1aa8c93bb797f",
+    "runtime/run.log": "f7ae640d40e4abbe2a0c910ad28c4adaffe0d6e83fbf99d527f41a4ed054ae7a",
+    "runtime/run.py": "1c70f0e3672700d458aa5775cf2eb9856f3325c261eb6bfbee62d8acc999b15d",
+    "runtime/second-distinct-long-source-path-arm64.log": "e19cc846dd8006f11fcc7581548038710cfd6697002e106edbb2290cd8858d83",
+    "runtime/second-distinct-long-source-path-armv7.log": "db49f57dd4eec9e91b6cb0ce4e3700a8d905661f056d009173a3d8f9bfb1e65e",
+    "runtime/short-arm64.log": "9d5424c02c2a02746d637995a4d7bd07af663f42cdf90daa9fe33a73de4a39e7",
+    "runtime/short-armv7.log": "28e33a960a0205815ece5ee76d8cd680cf42c42cf21933f3ad1def6d75a9adce",
+    "runtime/source-sha256.json": "60bdd2884821a3fd9f27c9778ed8980ef590a191eab60bb9379d2918d49fbcad",
+    "first/build.log": "56a0f841aab80a2d7617364c93e3580a16d5cba816f900f5d2577927946ba913",
+    "first/build.py": "ca9d1474d20e9d3bcbfd11a46ef8fca4aaa4e07b6af394b51631452de4b27c06",
+    "first/carrier-tests.log": "1b63894e10663edd2dfa46ca069f5d21b3a010469c8032819caed7115185a8e7",
+    "first/desktop-build-command.json": "19dfd045e60a01964052af03ad44e8545a0506052377fac2e9aed6c19ed99739",
+    "first/desktop-check.log": "85c673489288508cbd2761a27d05b4f44458c199c061a5b0be5f95bdab830d93",
+    "first/desktop-check.py": "1d69c65178022e4a643966be4563bd9027088de5fd992a46a9b477c3f9e1fd25",
+    "first/desktop-interop-final.log": "ed353247628d0b7ba15f206bb65f30d8f606547f02b876fab80f7660c47beee7",
+    "first/desktop-interop-passed.log": "dbbe96708acab2a8494e85327276676c809b1f17a157f9bb6d76b295a550df80",
+    "first/desktop-interop.json": "120e9f5fdf5020277b1b71becfeb093f13677e7b7200339fbffbfacfdf8f6be4",
+    "first/desktop-interop.log": "b5465b12e4bf626a96c69de23b1b860cef6be34d5984c69070532610b321752c",
+    "first/desktop-prepare.cpp": "14cd4f234a444ad95236897e859907873b66335afb0f6123aaae8fb9c98f0e6e",
+    "first/first-package-tests.log": "31bb0a6bab42dadf717e8fc3a0949e3172c8797d4433e0d6c76297643a1c9ff2",
+    "first/regression-original.log": "dd4ff395ae8ed14dd6d9c2376a5a061d5a932194893d84757fe84f07a91fda50",
+    "first/report.json": "d86ab648d4a541a1bd259f2025f3dc22af5f30f6e378b59440b27c56d58e9d9a",
+    "first/save-evidence.py": "4734b85b89deff420c359d0ad540ecb536d6ce2e7819430634fba35001d9026c",
+    "first/second-distinct-long-source-path.log": "cbd2c9a1a288481c51c7b1b130d2c32b21b28a1d47ee8f8167f5cec05830e641",
+    "first/short.log": "e4757167a6543e442cdc03a53deed0e35796f6a692b13cbe2124ec6df6767a36",
+    "first/prepared/report.json": "248c48b87264db873743cbc75a7a8b62608c51e43043034de78d1c5bb05e17c6",
+    "first/short/selection.json": "92e2240f1b0241919d981aca9911c1f3c7fa141e6f13657c183686c7dc2b36ea",
+    "first/short/manifest.json": "9c5767a09194409fe92542f1925ee453417cd4f5064ed60a0999cf4b5e3e63fc"
+  }
+}

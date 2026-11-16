@@ -1,0 +1,12 @@
+{
+    "carrier_bytes": 2726597,
+    "carrier_sha256": "14cca6fa62cb196e5eea3b80ceeeaa2224d542b7e4ce6d2d9c12d224330488a2",
+    "different_attempt_changes_both_uploads": true,
+    "loaded_with_compiled_pins": true,
+    "native_bytes": 9110522,
+    "native_sha256": "21beb72b55eac3f10e12a0a8bba8f5a74563b33af51da0ffe6f6a1f7ebcb9803",
+    "plan_sha256": "16ca330a4db00bbf58be1fb88d9cf7eb6c7c6504b4b75d21815e1477ad6a3284",
+    "prepare_repeat_identical": true,
+    "synthetic_identity": true,
+    "uploaded": false
+}

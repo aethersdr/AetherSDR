@@ -91,6 +91,11 @@ def verify_uploads(native, carrier, plan):
         index = read_json('index.json')
         digest = index['manifests'][0]['digest']
         manifest = read_json('blobs/sha256/' + digest.removeprefix('sha256:'))
+        config = read_json('blobs/sha256/' + manifest['config']['digest'].removeprefix('sha256:'))
+        history = config.get('history')
+        if not isinstance(history, list) or len(history) != 1 or not isinstance(history[0], dict):
+            raise ValueError('invalid carrier producer history')
+        producer = history[0].get('created_by')
         layer = manifest['layers'][0]
         member = outer.getmember('blobs/sha256/' + layer['digest'].removeprefix('sha256:'))
         if not member.isfile() or member.size > 8*1024*1024:
@@ -109,7 +114,7 @@ def verify_uploads(native, carrier, plan):
     spec = importlib.util.spec_from_file_location('first_carrier_image', Path(__file__).resolve().parents[1]/'carrier/image.py')
     image = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(image)
-    canonical, info = image.build(executables, public, licenses)
+    canonical, info = image.build(executables, public, licenses, producer=producer)
     if canonical != carrier:
         raise ValueError('noncanonical first-install carrier')
     return name, info['name']

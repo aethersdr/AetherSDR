@@ -15,7 +15,9 @@ helpers = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helpers)
 
 
-def build(executables, configuration, licenses):
+def build(executables, configuration, licenses, *, producer='tools/pd-waveform/carrier/image.py'):
+    if producer not in ('tools/pd-waveform/carrier/image.py', 'AetherSDR AetherPDCarrierImage'):
+        raise ValueError('unknown carrier producer')
     if set(executables) != {'accept', 'carrier', 'send', 'deliver'}:
         raise ValueError('fixed carrier executable set required')
     if (len(configuration) != 120 or not any(configuration[88:]) or configuration[8:16] != b'PDDELIV1'
@@ -41,7 +43,7 @@ def build(executables, configuration, licenses):
                               'com.flexradio.waveform.name': waveform_name,
                               'com.flexradio.waveform.version': '0.1.0'}},
         'rootfs': {'type': 'layers', 'diff_ids': [helpers.sha(layer_tar)]},
-        'history': [{'created_by': 'tools/pd-waveform/carrier/image.py'}],
+        'history': [{'created_by': producer}],
     }
     encode = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
     config_bytes = encode(config)

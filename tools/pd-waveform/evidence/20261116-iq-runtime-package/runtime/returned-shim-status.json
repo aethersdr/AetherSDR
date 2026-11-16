@@ -1,0 +1,71 @@
+{
+  "utc": "2026-11-16T15:35:32.778629+00:00",
+  "read_only": true,
+  "queries": {
+    "status": {
+      "exit": 0,
+      "response": {
+        "body": {
+          "advertised_routes": [],
+          "allow": [],
+          "approved_routes": [],
+          "claimable": false,
+          "discovered_devices": [],
+          "dns_name": "",
+          "exposed_ports": [
+            {
+              "expires_in_s": 392,
+              "listening": false,
+              "name": "AetherGPS",
+              "port": 2947,
+              "target": "192.168.50.100"
+            }
+          ],
+          "hostname": "flx8600",
+          "installation_id": "421daf94e1ebbd8502975ad35e9b47022548bff1883a17506db0eb32be5dc78c",
+          "key_expiry": "",
+          "last_error": "",
+          "provisioned": true,
+          "recent_commands": [],
+          "routes": [],
+          "session_detail": [],
+          "sessions": 0,
+          "share_discovered": false,
+          "state": "local",
+          "tailnet_ip": "",
+          "version": "0.5.2"
+        },
+        "http_status": 200
+      },
+      "stderr": ""
+    },
+    "aetherpd/installation": {
+      "exit": 0,
+      "response": {
+        "body": {
+          "firmware": "4.3.16.42034",
+          "installation_committed": true,
+          "profile": 1,
+          "selected_release_blake2b_256": "f4223fd0a58c1fbfa7d05ab6c0c9cf5d8803ee4135bc6f79dee9b81a36d5b059",
+          "selected_release_key": "0d914971ea1535558fb0ad9e00ffb45847fb2d957d219c88070b72af566f9b5d",
+          "serial": "2125-1213-8600-8895",
+          "state": "committed",
+          "upgrade_plan_blake2b_256": "c1346b1bc5279292483d0be04cb38ee572a64ce66896194a58a473e72eea1c46"
+        },
+        "http_status": 200
+      },
+      "stderr": ""
+    },
+    "aetherpd/status": {
+      "exit": 1,
+      "response": {
+        "body": {
+          "available": false,
+          "state": "unavailable"
+        },
+        "http_status": 503
+      },
+      "stderr": ""
+    }
+  }
+}

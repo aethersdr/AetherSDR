@@ -1,0 +1,40 @@
+{
+  "version": "0.0.0-iq.88280414f",
+  "firmware": "4.3.16.42034",
+  "profile": 1,
+  "publisher_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558",
+  "files": {
+    "LICENSES": {
+      "size": 215346,
+      "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+    },
+    "candidate.release": {
+      "size": 9029441,
+      "sha256": "d93ca98fdd17739bcc6e453a4f57afeded3c83c62882da68969a98533bc7de14"
+    },
+    "pd-accept": {
+      "size": 29984,
+      "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+    },
+    "pd-carrier": {
+      "size": 6291616,
+      "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+    },
+    "pd-deliver": {
+      "size": 109008,
+      "sha256": "832a19f162489bf23b8f051fa2e54574d8946596eba0787f70986d0ef53b3a04"
+    },
+    "pd-first-request": {
+      "size": 93424,
+      "sha256": "34fa5c83bbfdd9434bbeb3635cee49cc53b5da1746b5194195d65766dfcfefb7"
+    },
+    "pd-send": {
+      "size": 42344,
+      "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+    },
+    "worker.envelope": {
+      "size": 249856,
+      "sha256": "feb1dfa2d001c0c3a8f4e9afb97b979d0217ec1af0401a42c3def1653efed0ed"
+    }
+  }
+}

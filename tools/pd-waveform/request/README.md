@@ -7,6 +7,14 @@ upgrade, saved-attempt recovery and QtKeychain credentials. See
 [FIRST-INSTALL.md](FIRST-INSTALL.md) for exact qualified cases and limits;
 production package selection and FLEX-6000 installation remain incomplete.
 
+The offline `first_install_package.verify_uploads` check recognizes the fixed
+Python and AetherSDR desktop OCI producer labels. It reconstructs and compares
+the complete archives, including the selected producer history, digest chain,
+permissions and public attempt record. Recognition of a builder label grants no
+trust: publisher signatures and executable pins must be checked separately.
+See [the current package qualification](../IQ-RUNTIME-PACKAGE-QUALIFICATION.json)
+for actual runtime and desktop archive evidence and remaining installation gates.
+
 **Rejected private-archive format:** on FLEX-8600 firmware 4.3.16.42034, native
 extraction assigns UID/GID 1001 to these files, while the intended waveform identity is
 UID 78666/GID 20. The private configuration fails both read access and the

@@ -1,0 +1,224 @@
+{
+  "selection": {
+    "version": "0.0.0-iq.88280414f",
+    "firmware": "4.3.16.42034",
+    "profile": 1,
+    "publisher_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558",
+    "files": {
+      "LICENSES": {
+        "size": 215346,
+        "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+      },
+      "candidate.release": {
+        "size": 9029441,
+        "sha256": "d93ca98fdd17739bcc6e453a4f57afeded3c83c62882da68969a98533bc7de14"
+      },
+      "pd-accept": {
+        "size": 29984,
+        "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+      },
+      "pd-carrier": {
+        "size": 6291616,
+        "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+      },
+      "pd-deliver": {
+        "size": 109008,
+        "sha256": "832a19f162489bf23b8f051fa2e54574d8946596eba0787f70986d0ef53b3a04"
+      },
+      "pd-first-request": {
+        "size": 93424,
+        "sha256": "34fa5c83bbfdd9434bbeb3635cee49cc53b5da1746b5194195d65766dfcfefb7"
+      },
+      "pd-send": {
+        "size": 42344,
+        "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+      },
+      "worker.envelope": {
+        "size": 249856,
+        "sha256": "feb1dfa2d001c0c3a8f4e9afb97b979d0217ec1af0401a42c3def1653efed0ed"
+      }
+    }
+  },
+  "release": {
+    "format": "AEPDR005",
+    "paired_boot": true,
+    "managed_startup": true,
+    "origin_recovery": true,
+    "generation_selection": true,
+    "profile": "flex8600",
+    "architecture": "arm64",
+    "firmware": "4.3.16.42034",
+    "source_sha256": "60bdd2884821a3fd9f27c9778ed8980ef590a191eab60bb9379d2918d49fbcad",
+    "bytes": 9029441,
+    "sha256": "d93ca98fdd17739bcc6e453a4f57afeded3c83c62882da68969a98533bc7de14",
+    "blake2b_256": "5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20",
+    "public_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558",
+    "files": [
+      {
+        "name": "pd-boot",
+        "bytes": 189624,
+        "sha256": "f54e76b5a14941f2d175b619c91cb13b0775345d6fd99e571a4c03f8059ecc64",
+        "mode": "0755"
+      },
+      {
+        "name": "pd-update",
+        "bytes": 79512,
+        "sha256": "1a05404c1e2d6ac84660ba2fc51391ba74eb682ab57388626908acf5259fdc77",
+        "mode": "0755"
+      },
+      {
+        "name": "payload.bundle",
+        "bytes": 8721094,
+        "sha256": "670aee2c485280c1a977a7eef5e7a8c841928bef5cdb0896e66960f50f6897e1",
+        "mode": "0644"
+      },
+      {
+        "name": "BOOT-LICENSES.txt",
+        "bytes": 37513,
+        "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+        "mode": "0644"
+      },
+      {
+        "name": "aetherpd-boot.service",
+        "bytes": 245,
+        "sha256": "08f24faab3500778cfbf343cf62d00970789a44f63c5915cddd311fc6283a504",
+        "mode": "0644"
+      },
+      {
+        "name": "aetherpd-start.socket",
+        "bytes": 354,
+        "sha256": "1d77b02319b737ba07d8fd27cca0ae01479bfde05aca1b5a8270ba4d7b981d21",
+        "mode": "0644"
+      },
+      {
+        "name": "aetherpd-start@.service",
+        "bytes": 307,
+        "sha256": "ebd544bc6d39e9f5ca505884ae356385ae504ad0c19a39abc7d4570ac7f7b085",
+        "mode": "0644"
+      },
+      {
+        "name": "aetherpd-shim.service",
+        "bytes": 360,
+        "sha256": "ec48d75a6346751d1440cc166889a75484e3a399935ebdd0877553331355081b",
+        "mode": "0644"
+      }
+    ],
+    "persistent_store": "/var/lib/smartsdr/aetherpd",
+    "runtime": "/run/aetherpd",
+    "fixed_units": [
+      "aetherpd-boot.service",
+      "aetherpd-start.socket",
+      "aetherpd-start@.service",
+      "aetherpd-shim.service"
+    ],
+    "privileged_actions": [
+      "verify approved release digest and trusted signature",
+      "stage fixed authenticated files in private RAM",
+      "retire the owned runtime before updating",
+      "publish protected payload and boot files",
+      "install fixed boot and local socket units",
+      "start the ordinary-user primary shim after retiring any recognized predecessor"
+    ],
+    "temporary_components": [
+      "pd-update",
+      "installer/bootstrap staging and authority"
+    ],
+    "rf_actions": [],
+    "automatic_calibration": false,
+    "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+  },
+  "payload": {
+    "format": "AEPDB001",
+    "arch": 64,
+    "files": [
+      {
+        "name": "flex-tailnet-shim",
+        "bytes": 21495968,
+        "gzip_bytes": 8260378,
+        "sha256": "e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690"
+      },
+      {
+        "name": "aether-pd",
+        "bytes": 279144,
+        "gzip_bytes": 159741,
+        "sha256": "0d5e25818628286a07c510b0c7627fa06f07ff207f8c5bb795cde1c3a95a948c"
+      },
+      {
+        "name": "pd-primary-launch",
+        "bytes": 74520,
+        "gzip_bytes": 41714,
+        "sha256": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc"
+      },
+      {
+        "name": "pd-start-session",
+        "bytes": 57712,
+        "gzip_bytes": 32426,
+        "sha256": "7772765fd596722dc342f2579c83f3a3186614979c9defbc141223f7ae18c525"
+      },
+      {
+        "name": "pd-radio-launch",
+        "bytes": 105080,
+        "gzip_bytes": 56990,
+        "sha256": "4ca6468b3eb9f023937170fdd0bac1c4c38bf017d29e8f3310b94010596cc1d5"
+      },
+      {
+        "name": "pd-fixed-arp",
+        "bytes": 52424,
+        "gzip_bytes": 29609,
+        "sha256": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49"
+      },
+      {
+        "name": "pd-iq-source",
+        "bytes": 54256,
+        "gzip_bytes": 30888,
+        "sha256": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0"
+      },
+      {
+        "name": "pd-capture-bootstrap",
+        "bytes": 61264,
+        "gzip_bytes": 34870,
+        "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+      },
+      {
+        "name": "pd-unkey-guard",
+        "bytes": 41600,
+        "gzip_bytes": 24266,
+        "sha256": "9e16848c15ef86b4bcbe6a1eabf3229fbd368fd32bcd3f406211ff3d954642fd"
+      },
+      {
+        "name": "pd-lease-guard",
+        "bytes": 43608,
+        "gzip_bytes": 25530,
+        "sha256": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+      },
+      {
+        "name": "LICENSES",
+        "bytes": 176378,
+        "gzip_bytes": 23778,
+        "sha256": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+      }
+    ],
+    "source_sha256": "60bdd2884821a3fd9f27c9778ed8980ef590a191eab60bb9379d2918d49fbcad",
+    "expanded_bytes": 22441954,
+    "bytes": 8721094,
+    "sha256": "670aee2c485280c1a977a7eef5e7a8c841928bef5cdb0896e66960f50f6897e1",
+    "blake2b_256": "2c5f309d24439d27f02cd4acbc76894727e301b4b8ece2194fd3d966c97ffff2",
+    "public_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558"
+  },
+  "reused_payload_hashes": {
+    "flex-tailnet-shim": "e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690",
+    "aether-pd": "0d5e25818628286a07c510b0c7627fa06f07ff207f8c5bb795cde1c3a95a948c",
+    "pd-primary-launch": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+    "pd-start-session": "7772765fd596722dc342f2579c83f3a3186614979c9defbc141223f7ae18c525",
+    "pd-radio-launch": "4ca6468b3eb9f023937170fdd0bac1c4c38bf017d29e8f3310b94010596cc1d5",
+    "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+    "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+    "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+    "pd-unkey-guard": "9e16848c15ef86b4bcbe6a1eabf3229fbd368fd32bcd3f406211ff3d954642fd",
+    "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+    "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+  },
+  "worker_bytes": 249672,
+  "native_release_verified": true,
+  "native_worker_verified": true
+}

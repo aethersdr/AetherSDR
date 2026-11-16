@@ -1,0 +1,7 @@
+Actual first-install package authenticated and prepared by desktop code; no upload.
+Traceback (most recent call last):
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-iq-distribution/desktop-check.py", line 12, in <module>
+    names=first_install_package.verify_uploads(native,carrier,plan)
+  File "/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/request/first_install_package.py", line 114, in verify_uploads
+    raise ValueError('noncanonical first-install carrier')
+ValueError: noncanonical first-install carrier

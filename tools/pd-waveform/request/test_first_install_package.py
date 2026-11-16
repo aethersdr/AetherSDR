@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Refuse first-install uploads whose archives differ from operator consent."""
 import hashlib
+import gzip
 import importlib.util
+import io
+import json
 from pathlib import Path
 import struct
 import sys
+import tarfile
 import unittest
 import first_install_package as package
 
@@ -59,6 +63,39 @@ class FirstPackageTest(unittest.TestCase):
         _, _, _, other = self.artifacts(bytes(changed))
         with self.assertRaises(ValueError):
             package.verify_uploads(native, other, self.plan)
+
+    def test_desktop_producer_accepted(self):
+        name, native, public = package.build(self.binary, self.worker, self.plan, self.release, b'fixture')
+        carrier, info = image.build({n:self.binary for n in ['accept','carrier','send','deliver']},
+                                    public, b'fixture', producer='AetherSDR AetherPDCarrierImage')
+        self.assertEqual(package.verify_uploads(native, carrier, self.plan), (name, info['name']))
+
+    def test_unknown_producer_refused(self):
+        _, _, public = package.build(self.binary, self.worker, self.plan, self.release, b'fixture')
+        for producer in [None, 'unrecognized', '', ['AetherSDR AetherPDCarrierImage']]:
+            with self.subTest(producer=producer):
+                with self.assertRaises(ValueError):
+                    image.build({n:self.binary for n in ['accept','carrier','send','deliver']},
+                                public, b'fixture', producer=producer)
+
+    def test_outer_metadata_changes_refused(self):
+        _, _, native, carrier = self.artifacts(self.plan)
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(carrier))) as archive:
+            entries = [(m.name, archive.extractfile(m).read() if m.isfile() else None, m.mode)
+                       for m in archive.getmembers()]
+        def changed_index(rows):
+            result = []
+            for name, data, mode in rows:
+                if name == 'index.json':
+                    value = json.loads(data)
+                    value['manifests'][0]['platform']['architecture'] = 'arm'
+                    data = json.dumps(value).encode()
+                result.append((name, data, mode))
+            return result
+        for rows in [changed_index(entries), entries + [('extra', b'not allowed', 0o644)],
+                     [(n, d, 0o777 if n == 'index.json' else m) for n, d, m in entries]]:
+            with self.assertRaises(ValueError):
+                package.verify_uploads(native, image.helpers.gz(image.helpers.tar_bytes(rows)), self.plan)
 
 
 if __name__ == '__main__':

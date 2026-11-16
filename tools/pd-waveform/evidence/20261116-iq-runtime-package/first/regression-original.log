@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import sys,pathlib; sys.path.insert(0,sys.argv[1]); import first_install_package as p; d=pathlib.Path(sys.argv[2]); p.verify_uploads((d/'native.ssdr_waveform').read_bytes(),(d/'carrier.tar.gz').read_bytes(),(d/'plan').read_bytes())
+                                                                                                                        ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/runtime-iq-binding/short/source/tools/pd-waveform/request/first_install_package.py", line 114, in verify_uploads
+    raise ValueError('noncanonical first-install carrier')
+ValueError: noncanonical first-install carrier

@@ -1,0 +1,11 @@
+test_archive_with_different_token_identity_refused (__main__.FirstPackageTest.test_archive_with_different_token_identity_refused) ... ok
+test_carrier_for_different_plan_refused (__main__.FirstPackageTest.test_carrier_for_different_plan_refused) ... ok
+test_desktop_producer_accepted (__main__.FirstPackageTest.test_desktop_producer_accepted) ... ok
+test_exact_archives_match_approved_plan (__main__.FirstPackageTest.test_exact_archives_match_approved_plan) ... ok
+test_outer_metadata_changes_refused (__main__.FirstPackageTest.test_outer_metadata_changes_refused) ... ok
+test_unknown_producer_refused (__main__.FirstPackageTest.test_unknown_producer_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.018s
+
+OK

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T15:24:37.197069+00:00",
+  "updated_utc": "2026-11-16T15:43:50.601993+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Rebuild complete authenticated ARMv7/ARM64 runtime packages including tone, pan-binding, IQ-selection and capture-provenance changes; verify reproducibility, desktop compatibility and 6300 disk/inode budgets. Resume installation/reboot/IQ and remaining production gates when radio access returns.",
+  "next_action": "Checkpoint package evidence, compile desktop with the new first-install pins, establish receive-only preflight and recoverable clean fixture, then qualify independent first install without predecessor, reboot and selectedIQ. Preserve older installed identity until clean-fixture rollback is secured.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Selected IQ startup and immutable snapshot/export binding are component-qualified end to end offline. Complete package integration and exact-candidate live qualification remain; radio access still unavailable.",
+  "current_focus": "Complete88280414runtime and ARM64 first-install packages reproduced; actual desktop upload archives verified. Radio reachable after a new boot with same committed installation identity. Exact-candidate live installation/reboot/IQ qualification next.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2896,9 +2896,9 @@
   },
   "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
   "current_delivery_status": {
-    "runtime_source": "5eb8f87a462897d6608d99527e8239c67990d45a",
-    "desktop_source": "e53f0b93de3aec49defc917d0eb1c7ba79a47222",
-    "runtime_report": "CAPTURE-GUARDIAN-RUNTIME-QUALIFICATION.json",
+    "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+    "desktop_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+    "runtime_report": "IQ-RUNTIME-PACKAGE-QUALIFICATION.json",
     "desktop_reports": [
       "CAPTURE-DESKTOP-QUALIFICATION.json",
       "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
@@ -2906,22 +2906,22 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "e0563d1e285d36bba21da3f791364dd27642e26a",
-    "installed_state": "No successful readiness or new boot identity observed after the authorized reboot; latest runtime and desktop changes are not live-qualified.",
+    "installed_state": "Radio reachable again with new bootID; olde0563d1e committed identity and selected generation preserved. Engine unavailable/stopped. Latest88280414candidate not installed.",
     "latest_read_only_network_probe": {
-      "utc": "2026-11-16T15:20:35.878049+00:00",
-      "address": "192.168.50.100",
-      "radio_mutations": false,
-      "tcp_ports": {
-        "4992": "[Errno 113] No route to host",
-        "48992": "[Errno 113] No route to host",
-        "22222": "[Errno 113] No route to host"
-      }
+      "utc": "2026-11-16T15:35:05.230864+00:00",
+      "host": "192.168.50.100",
+      "ports": {
+        "4992": "open",
+        "48992": "open",
+        "22222": "open"
+      },
+      "read_only": true
     },
     "historical_failure_audit": "HISTORICAL-STARTUP-AUDIT.json",
     "pending_gates": [
       "Installed-service reboot recovery and exact-candidate first-install/update/rollback",
       "Historical cold-start cancellation and natural alignment failure reproduction/attribution",
-      "Remaining PR4770 channel/pan ownership and operator controls",
+      "PR4770 selectedIQ/pan ownership and operator controls implemented offline; final candidate live workflow qualification remains",
       "Final process-graph faults and actual RF release timing",
       "Repeated exact-candidate 5/10 W tone/speech and matched stock APD comparison",
       "Actual FLEX-6300 teammate qualification",
@@ -2929,7 +2929,6 @@
     ],
     "lp100a": "Deferred by operator",
     "production_ready": false,
-    "unpackaged_native_change": "TONE-NATIVE-QUALIFICATION.json; public integration and complete runtime package rebuild remain",
     "tone_shim": {
       "report": "TONE-SHIM-QUALIFICATION.json",
       "status": "native_and_shim_component_qualified_not_installed",
@@ -2964,7 +2963,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "runtime_source/desktop_source identify earlier packaged checkpoints. Later tone, pan-binding, IQ-selection and capture-binding reports identify component-qualified changes; no updated complete runtime package is qualified.",
+    "source_provenance_note": "Latest runtime and completeARM64 first-install packages are source88280414. Older component reports retain historical scope; installed runtime remains e0563d1e. Offline verifier fix is later than candidate source.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3014,6 +3013,12 @@
       "report": "CAPTURE-BINDING-QUALIFICATION.json",
       "status": "immutable_capture_binding_qualified_offline",
       "installed": false
+    },
+    "package_qualification": {
+      "report": "IQ-RUNTIME-PACKAGE-QUALIFICATION.json",
+      "installed": false,
+      "first_install_arm64_complete": true,
+      "first_install_armv7_complete": false
     }
   },
   "power_control": {
