@@ -1,0 +1,78 @@
+{
+  "passed": false,
+  "rf_commands": [],
+  "start_requested": false,
+  "before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 24.09375,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "pans_before": [
+    {
+      "antennas": [
+        "ANT1",
+        "ANT2",
+        "RX_A",
+        "RX_B",
+        "XVTA",
+        "XVTB"
+      ],
+      "average": 50,
+      "averageIsRequest": false,
+      "bandwidthMhz": 0.2,
+      "centerKnown": true,
+      "centerMhz": 7.15,
+      "clientHandle": "0x19ae2f7",
+      "fps": 25,
+      "fpsIsRequest": false,
+      "maxDbm": 0,
+      "minDbm": -180,
+      "ownedByUs": true,
+      "panId": "0x40000000",
+      "radioReportedAverage": 50,
+      "radioReportedFps": 25,
+      "rfGain": 0,
+      "rxAntenna": "RX_A",
+      "transmitInhibitReason": "",
+      "transmitInhibited": false,
+      "waterfallLineDuration": 80,
+      "weightedAverage": false,
+      "weightedAverageKnown": true,
+      "wide": false,
+      "wnb": false,
+      "wnbLevel": 90
+    }
+  ],
+  "error": "AssertionError: "
+}

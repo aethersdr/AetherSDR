@@ -1,0 +1,407 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T18:58:18.513294+00:00",
+  "production_ready": false,
+  "runtime_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
+  "desktop_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
+  "status": "One valid 5W OFF/ON pair, failed first cold capture retained, and one ordinary reboot followed by local IQ passed",
+  "radio": {
+    "model": "FLEX-8600",
+    "firmware": "4.3.16.42034",
+    "frequency_mhz": 7.15,
+    "nominal_watts": 5,
+    "configured_max_watts": 10,
+    "FDX": false,
+    "feedback": "RX_A",
+    "transmit_antenna": "ANT1",
+    "preamp_db": 0,
+    "transport": "local_dax_iq",
+    "channel": 4
+  },
+  "bounds": {
+    "source_seconds": 8,
+    "independent_unkey_seconds": 9,
+    "desktop_authorization_seconds": 10,
+    "measured_abort_watts": 10,
+    "minimum_cooldown_seconds": 31,
+    "positive_key_actions": 3,
+    "automatic_retries": false
+  },
+  "cases": {
+    "off-01": {
+      "valid_measurement": false,
+      "GUI_outcome": "Measurement source changed or ended before capture",
+      "intent_to_observed_idle_s": 9.491,
+      "first_observed_tones_after_intent_s": 6.905,
+      "native_status_polls": 25,
+      "faults_at_end": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "diagnostics_at_end": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=source_samples_complete mono_ns=6300848595493 source=0000000000000002 phase=completed keyed=1 tx_on=1 samples_left=0 generated=191999 iq_frames=14476 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=222034 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=1 idle=0 gui=60d47b49 slice=0 correction=0 native_apd=0 iq_valid_ns=6300844303306",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "input_limited_samples": 0,
+      "sampled_radio_peak_w": 3.3544740676879883,
+      "released": true
+    },
+    "off-02": {
+      "valid_measurement": true,
+      "GUI_outcome": "Idle. Arm the source, then prepare.",
+      "intent_to_observed_idle_s": 8.615,
+      "first_observed_tones_after_intent_s": 5.154,
+      "native_status_polls": 22,
+      "faults_at_end": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "diagnostics_at_end": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 2,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=6400948779305 source=0000000000000004 phase=running keyed=1 tx_on=1 samples_left=8320 generated=183680 iq_frames=41777 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=571644 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=60d47b49 slice=0 correction=0 native_apd=0 iq_valid_ns=6400948320920",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "input_limited_samples": 0,
+      "sampled_radio_peak_w": 3.3270914554595947,
+      "released": true
+    },
+    "on-02": {
+      "valid_measurement": true,
+      "GUI_outcome": "Idle. Arm the source, then prepare.",
+      "intent_to_observed_idle_s": 7.781,
+      "first_observed_tones_after_intent_s": 6.131,
+      "native_status_polls": 52,
+      "faults_at_end": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "diagnostics_at_end": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 3,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=6450488922248 source=0000000000000007 phase=running keyed=1 tx_on=1 samples_left=11520 generated=180480 iq_frames=55288 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=248220 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=60d47b49 slice=0 correction=1 native_apd=0 iq_valid_ns=6450488331808",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "input_limited_samples": 0,
+      "sampled_radio_peak_w": 3.3578596115112305,
+      "released": true
+    }
+  },
+  "comparison": {
+    "cases": {
+      "off-02": {
+        "analysis": {
+          "valid": true,
+          "clipping_known": false,
+          "absolute_power_calibrated": false,
+          "frames": 4,
+          "sample_rate_hz": 48000,
+          "fft_size": 16384,
+          "window": "blackman-harris-7",
+          "tones_hz": [
+            709.974167069105,
+            1899.97071519098
+          ],
+          "tone_imbalance_db": 0.244915960971511,
+          "fundamental_pep_db_raw_iq": 91.458104041708,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -28.0506991322781,
+              "dbc_fundamental_pep": -34.0704360090162,
+              "noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -27.5216439019405,
+              "dbc_fundamental_pep": -33.5413807786787,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -41.5878407011329,
+              "dbc_fundamental_pep": -47.6075775778711,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -41.8679552197033,
+              "dbc_fundamental_pep": -47.8876920964414,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -53.0706875298968,
+              "dbc_fundamental_pep": -59.090424406635,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -53.2466648761095,
+              "dbc_fundamental_pep": -59.2664017528476,
+              "noise_limited": false
+            }
+          ]
+        },
+        "independent": {
+          "max_difference_db": 6.394884621840902e-14,
+          "iq_sha256": "734585543f4fb12072a59f15c9f071af1cc535676a55bcef3d1800eee7e8a0e6"
+        },
+        "gui_max_difference_db": 4.618527782440651e-14
+      },
+      "on-02": {
+        "analysis": {
+          "valid": true,
+          "clipping_known": false,
+          "absolute_power_calibrated": false,
+          "frames": 4,
+          "sample_rate_hz": 48000,
+          "fft_size": 16384,
+          "window": "blackman-harris-7",
+          "tones_hz": [
+            709.974139826427,
+            1899.97067007524
+          ],
+          "tone_imbalance_db": 0.246080277704479,
+          "fundamental_pep_db_raw_iq": 91.7776484588236,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -44.4933498648103,
+              "dbc_fundamental_pep": -50.5130785183144,
+              "noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -54.5900375837144,
+              "dbc_fundamental_pep": -60.6097662372185,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -56.5014216125148,
+              "dbc_fundamental_pep": -62.5211502660188,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -63.5099817989026,
+              "dbc_fundamental_pep": -69.5297104524067,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -76.0512627261735,
+              "dbc_fundamental_pep": -82.0709913796776,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -63.9082390469348,
+              "dbc_fundamental_pep": -69.9279677004388,
+              "noise_limited": false
+            }
+          ]
+        },
+        "independent": {
+          "max_difference_db": 4.973799150320701e-14,
+          "iq_sha256": "6fd361785344732b43d7964ead4f1f388ea55f9be808836e9a5eb8620889c95c"
+        },
+        "gui_max_difference_db": 4.973799150320701e-14
+      }
+    },
+    "power_match_db": 0.3195444171156083,
+    "improvement_db": [
+      {
+        "order": 3,
+        "upper": false,
+        "db": 16.442650732532197
+      },
+      {
+        "order": 3,
+        "upper": true,
+        "db": 27.068393681773898
+      },
+      {
+        "order": 5,
+        "upper": false,
+        "db": 14.9135809113819
+      },
+      {
+        "order": 5,
+        "upper": true,
+        "db": 21.642026579199303
+      },
+      {
+        "order": 7,
+        "upper": false,
+        "db": 22.980575196276703
+      },
+      {
+        "order": 7,
+        "upper": true,
+        "db": 10.661574170825304
+      }
+    ]
+  },
+  "reboot": {
+    "commands": 1,
+    "ready_seconds": 67.43,
+    "boot_id_before": "25906499-8a2f-48aa-8b97-94eb6624db32",
+    "boot_id_after": "680e84fa-12a0-4b96-be16-c514426e7ff6",
+    "same_installed_release": true,
+    "identity_preserved": true,
+    "receive_iq_bytes": 131072,
+    "receive_iq_sha256": "bc112c579920a0ec54d1f0f292ebf86e0e8d85078c98fa987c6a46c762f763aa",
+    "receive_iq_rms_raw": 33.2134432496843,
+    "session_stopped": true
+  },
+  "cleanup": {
+    "pre_and_post_reboot_audits_passed": true,
+    "temporary_audit_components_removed": true,
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "arp_empty": true,
+    "accept_local": "0",
+    "remaining_processes": [
+      {
+        "pid": 1309,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "4542c96d1d7c92e1c0c6939d446432461b0702a6ad6fe511a8c5d0501288b2fa"
+      },
+      {
+        "pid": 1323,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "5cfb04a15c2ca9436b5ce802231ebcd6588435dd6e9f1b47476fea5d245af11e"
+      },
+      {
+        "pid": 1324,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "4542c96d1d7c92e1c0c6939d446432461b0702a6ad6fe511a8c5d0501288b2fa"
+      }
+    ]
+  },
+  "findings": [
+    "The first capture failed after normal native source_samples_complete; retained diagnostics show no alignment reset, stale IQ, rejected TX input, send error or dispatch deadline fault. It is not the historical unexplained cancellation.",
+    "First observed ready tones arrived 6.905s after GUI intent in off-01 versus5.154s in off-02. These are host polling observations, not exact RF or native alignment timestamps. Delayed acquisition/readiness and capture latency need separation; timing correlation is not root-cause proof.",
+    "Successful captures retain interlock_ineligible at orderly GUI release. This reason alone is not evidence of a startup fault; source ID, event time and current state must be considered."
+  ],
+  "limitations": [
+    "Three finite bench transmissions, not sustained speech or broad repeatability; first attempt failed.",
+    "The first post-reboot receive probe stopped before starting because the old dialog was invalidated. Closing/reopening the panel established the new radio session; this was not a runtime startup failure.",
+    "No new10W or stockAPD test on fa8; previous candidate results retain original attribution.",
+    "No calibrated absolute power or ADC headroom. LP100A deferred.",
+    "One ordinary reboot, not physical power loss or interrupted upgrade/rollback.",
+    "Cold-start cancellation and natural128sample slip remain unresolved; diagnostics show no alignment reset in these captures.",
+    "No actual6300, final process fault matrix, cross-platform or release qualification."
+  ],
+  "evidence_directory": "evidence/20261116-diagnostics-rf-reboot",
+  "evidence_sha256": {
+    "diagnostics-reboot-idle-job.py": "bf0aaab4bad7b2da57fc45fa1f6780e119b7b1d74e788970c393197699502e2c",
+    "diagnostics-reboot-idle-result.json": "613e51604a50a34d106b62fea66a6d4dc00fc2df67e3bec3fbd1d62cf49fea71",
+    "diagnostics-rf-idle-job.py": "bf0aaab4bad7b2da57fc45fa1f6780e119b7b1d74e788970c393197699502e2c",
+    "diagnostics-rf-idle-result.json": "cdc2bc1ed738a1c450ea489d7a6bfdde0635ab6b3fb000ffd8fe17277501127a",
+    "reboot/instance.json": "0d45ca344bee8621b0d97acfbc6108d2078db88e9483163d6e0cc9918b6d2929",
+    "reboot/panel-reopen.json": "4f966c1fe79a741e04ae3232738fde09a6b7ff8cedaf62c2567cd13142732aae",
+    "reboot/reboot-check.json": "8f053915ebd69d372ff473a7a83f3ddc3d347d864018df7130504fb0e713b007",
+    "reboot/reboot-check.py": "78cc1ff5dbb50aa671c7981cdf2d35276c17f43a33f8f0bd38b853c6254f2807",
+    "reboot/reboot-intent.json": "439a2a24f8149b4e14d605812a1dbfadf00064aff768077b8e328d83f47cd781",
+    "reboot/receive-check-before-panel-reopen.json": "c76a5f38fc75551af377c9a24a2736b1081b212f25283d9b9b2c170e4d359557",
+    "reboot/receive-iq-check.json": "0642aa7ead5e35d4cd115dadb92b545161af7f7d8b30207ca327c1a41d7c798a",
+    "reboot/receive-iq-check.py": "295135f0ead0b4ad9b3f5d39b1b65ad7400e9681d4d0bb39e3c190c83ce7eda8",
+    "reboot/receive-iq.f32le": "bc112c579920a0ec54d1f0f292ebf86e0e8d85078c98fa987c6a46c762f763aa",
+    "rf/5w/export.py": "0ec905a804ae27487f5cffea891b7750407459cf261dbfc2c2b7ca8d009b8d67",
+    "rf/5w/instance.json": "0d45ca344bee8621b0d97acfbc6108d2078db88e9483163d6e0cc9918b6d2929",
+    "rf/5w/measure.py": "bc4f9d9174789dbca9d17cf3b526e0525dfea0c952d00949fd8139de51581207",
+    "rf/5w/off-01-events.json": "206dae841231f18a1258dbd34686622bd0174cf5fc7365aa4c7482b9c621f763",
+    "rf/5w/off-02-events.json": "dec567c3af9f3ed5e95781f9662e7353a21701c5caf8270be61cca2a9a07111d",
+    "rf/5w/off-02.f32le": "734585543f4fb12072a59f15c9f071af1cc535676a55bcef3d1800eee7e8a0e6",
+    "rf/5w/off-02.json": "a34447aa5ca5b7ba1e5ee0cc95e5b37daf7a25f4344fbfd1c6534b27471226ec",
+    "rf/5w/on-02-events.json": "71e3bdaffed22a1a6790f6b860d940ff22cbee89fb347de04cb509e6907b6f66",
+    "rf/5w/on-02.f32le": "6fd361785344732b43d7964ead4f1f388ea55f9be808836e9a5eb8620889c95c",
+    "rf/5w/on-02.json": "13ebae6827a10d9c297aae95398291df912dade19561cc74d79e46db9718933f",
+    "rf/analyze.py": "98dcc5e2dc92bd458c1c04b1589e7810d609c9b1358aca418ba90d025b510670",
+    "rf/capture-timing.log": "db1fdf942c984b5f2d5993163f60e1413a3643b8bc8699956f16bf3b805a24e4",
+    "rf/cases.json": "3ca427c77a69471e226230bcad7b4491927541e686f0cb85aba9f5e6df7c44b1",
+    "rf/comparison.json": "f110c7e37f426ee88aadf2f4de9d8909d57b9ff8364cda86a8b61a1a832dbfd4",
+    "rf/configure-5-off.json": "dc1e2a8554e36ab043d4a938817ace7638018b901ed3ae7268da4c8dfebf1452",
+    "rf/configure-5-on.json": "d4a242a6a9bbe5d648e2af5fe5394baeb15033ecb3ec77237e3be8b2d1174037",
+    "rf/configure.py": "fb2169b1baf7bd826ac65f53a36de4ad0467e6a6b11cfe9ac7c6797fa42cee94",
+    "rf/instance.json": "0d45ca344bee8621b0d97acfbc6108d2078db88e9483163d6e0cc9918b6d2929",
+    "rf/observer-config.json": "984579d35041578b870ca3df85b251e3f68bfe9538147bba7e8d8c03acd9ce59",
+    "rf/preflight-iq.f32le": "949d1df83d720bc62915f767795be62d4ef114e2857ea9d9eac7491435fc320d",
+    "rf/preflight.json": "1a1369eb923531411f3643030a1bbd6a6418117f4f7364231196163c57308a0b",
+    "rf/preflight.py": "01e297cc8fb9ec689edb7ae6c8a6873ea89dd9cac0e6f51d8db29896a21a4edb",
+    "rf/prepare.py": "cf23bccc8eb4068feae7bc1bd580d76df3621a34aed832d1f11ae19e00000915",
+    "rf/prepared.json": "ccaa0d673adf1055976fff5b1a4824ca53270115088d5fd8ed3ffab43e8c890b",
+    "rf/save-evidence.py": "3d7df5cd42e1222a05a8f71cc61fd822579cbf002ffc45573e5536aa5d474120",
+    "rf/stopped.json": "dfbe449aa614769531b0b135df2cfefe2d865df52083a3e145380e6826953c75"
+  }
+}

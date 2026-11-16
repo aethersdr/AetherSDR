@@ -1,0 +1,89 @@
+{
+  "off-01": {
+    "valid_measurement": false,
+    "GUI_outcome": "Measurement source changed or ended before capture",
+    "intent_to_observed_idle_s": 9.491,
+    "first_observed_tones_after_intent_s": 6.905,
+    "native_status_polls": 25,
+    "faults_at_end": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "diagnostics_at_end": {
+      "alignment": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "source_end": {
+        "count": 1,
+        "text": "bounded source ended: reason=source_samples_complete mono_ns=6300848595493 source=0000000000000002 phase=completed keyed=1 tx_on=1 samples_left=0 generated=191999 iq_frames=14476 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=222034 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=1 idle=0 gui=60d47b49 slice=0 correction=0 native_apd=0 iq_valid_ns=6300844303306",
+        "truncated": false
+      },
+      "version": 1
+    },
+    "input_limited_samples": 0,
+    "sampled_radio_peak_w": 3.3544740676879883,
+    "released": true
+  },
+  "off-02": {
+    "valid_measurement": true,
+    "GUI_outcome": "Idle. Arm the source, then prepare.",
+    "intent_to_observed_idle_s": 8.615,
+    "first_observed_tones_after_intent_s": 5.154,
+    "native_status_polls": 22,
+    "faults_at_end": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "diagnostics_at_end": {
+      "alignment": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "source_end": {
+        "count": 2,
+        "text": "bounded source ended: reason=interlock_ineligible mono_ns=6400948779305 source=0000000000000004 phase=running keyed=1 tx_on=1 samples_left=8320 generated=183680 iq_frames=41777 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=571644 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=60d47b49 slice=0 correction=0 native_apd=0 iq_valid_ns=6400948320920",
+        "truncated": false
+      },
+      "version": 1
+    },
+    "input_limited_samples": 0,
+    "sampled_radio_peak_w": 3.3270914554595947,
+    "released": true
+  },
+  "on-02": {
+    "valid_measurement": true,
+    "GUI_outcome": "Idle. Arm the source, then prepare.",
+    "intent_to_observed_idle_s": 7.781,
+    "first_observed_tones_after_intent_s": 6.131,
+    "native_status_polls": 52,
+    "faults_at_end": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "diagnostics_at_end": {
+      "alignment": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "source_end": {
+        "count": 3,
+        "text": "bounded source ended: reason=interlock_ineligible mono_ns=6450488922248 source=0000000000000007 phase=running keyed=1 tx_on=1 samples_left=11520 generated=180480 iq_frames=55288 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=248220 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=60d47b49 slice=0 correction=1 native_apd=0 iq_valid_ns=6450488331808",
+        "truncated": false
+      },
+      "version": 1
+    },
+    "input_limited_samples": 0,
+    "sampled_radio_peak_w": 3.3578596115112305,
+    "released": true
+  }
+}

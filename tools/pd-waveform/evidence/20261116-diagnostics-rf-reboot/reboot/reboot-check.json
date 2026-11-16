@@ -1,0 +1,154 @@
+{
+  "passed": true,
+  "rf_commands": [],
+  "reboot_commands_sent": 1,
+  "radio_before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 24.171875,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "before": {
+    "firmware": "4.3.16.42034",
+    "installation_committed": true,
+    "profile": 1,
+    "selected_release_blake2b_256": "d4cb44485dade35a82e1d4c4ef6845ae3cce28dfe2d4ffefbc9c8497c9bb47ef",
+    "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+    "serial": "2125-1213-8600-8895",
+    "state": "committed",
+    "upgrade_plan_blake2b_256": "37ec1393426595fcfd4af1af976c2c0076fc941abec1b7fcc69ee88d92ef2124"
+  },
+  "identity_before": {
+    "advertised_routes": [],
+    "allow": [],
+    "approved_routes": [],
+    "claimable": false,
+    "discovered_devices": [],
+    "dns_name": "",
+    "exposed_ports": [
+      {
+        "expires_in_s": 584,
+        "listening": false,
+        "name": "AetherGPS",
+        "port": 2947,
+        "target": "192.168.50.100"
+      }
+    ],
+    "hostname": "flx8600",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "key_expiry": "",
+    "last_error": "",
+    "provisioned": true,
+    "recent_commands": [],
+    "routes": [],
+    "session_detail": [],
+    "sessions": 0,
+    "share_discovered": false,
+    "state": "local",
+    "tailnet_ip": "",
+    "version": "0.5.2"
+  },
+  "boot_id_before": "25906499-8a2f-48aa-8b97-94eb6624db32",
+  "both_down_s": 11.707,
+  "after": {
+    "firmware": "4.3.16.42034",
+    "installation_committed": true,
+    "profile": 1,
+    "selected_release_blake2b_256": "d4cb44485dade35a82e1d4c4ef6845ae3cce28dfe2d4ffefbc9c8497c9bb47ef",
+    "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+    "serial": "2125-1213-8600-8895",
+    "state": "committed",
+    "upgrade_plan_blake2b_256": "37ec1393426595fcfd4af1af976c2c0076fc941abec1b7fcc69ee88d92ef2124"
+  },
+  "ready_s": 67.43,
+  "identity_after": {
+    "advertised_routes": [],
+    "allow": [],
+    "approved_routes": [],
+    "claimable": false,
+    "discovered_devices": [],
+    "dns_name": "",
+    "exposed_ports": [],
+    "hostname": "flx8600",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "key_expiry": "",
+    "last_error": "",
+    "provisioned": true,
+    "recent_commands": [],
+    "routes": [],
+    "session_detail": [],
+    "sessions": 0,
+    "share_discovered": false,
+    "state": "local",
+    "tailnet_ip": "",
+    "version": "0.5.2"
+  },
+  "boot_id_after": "680e84fa-12a0-4b96-be16-c514426e7ff6",
+  "radio_after": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 24.09375,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "elapsed_s": 67.632
+}

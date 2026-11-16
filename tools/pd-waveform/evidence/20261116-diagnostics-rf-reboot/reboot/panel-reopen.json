@@ -1,0 +1,42 @@
+[
+  {
+    "request": {
+      "cmd": "close",
+      "target": "AetherPDMeasurementDialog"
+    },
+    "response": {
+      "class": "AetherPDMeasurementDialog",
+      "deferred": true,
+      "ok": true,
+      "target": "AetherPDMeasurementDialog",
+      "title": "AetherPD linearity measurement"
+    }
+  },
+  {
+    "request": {
+      "cmd": "close",
+      "target": "AetherPDDialog"
+    },
+    "response": {
+      "class": "AetherPDDialog",
+      "deferred": true,
+      "ok": true,
+      "target": "AetherPDDialog",
+      "title": "AetherPD"
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "openAetherPD",
+      "action": "click"
+    },
+    "response": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "openAetherPD"
+    }
+  }
+]

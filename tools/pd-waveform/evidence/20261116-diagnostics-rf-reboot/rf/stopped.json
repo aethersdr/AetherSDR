@@ -1,0 +1,154 @@
+{
+  "radio_before": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "status_before_stop": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "canceled",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "diagnostics": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 3,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=6450488922248 source=0000000000000007 phase=running keyed=1 tx_on=1 samples_left=11520 generated=180480 iq_frames=55288 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=248220 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=60d47b49 slice=0 correction=1 native_apd=0 iq_valid_ns=6450488331808",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 1624537929,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000007",
+        "tones": false
+      },
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000007",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "measurement",
+      "state": "idle"
+    },
+    "http_status": 200
+  },
+  "stop": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdStop"
+  },
+  "status": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  },
+  "radio_after": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  }
+}
