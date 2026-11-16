@@ -619,7 +619,14 @@ ADC headroom or calibrated output power.
    A delayed startup reply cannot make the helper ready. Transmit authorization
    expires within the selected timeout, never more than ten seconds from
    **Transmit measurement**, and the helper schedules cleanup earlier. Expiry requests stop and
-   ends capture; the panel waits for confirmed release. Process scheduling or
+   ends capture; the panel waits for confirmed release. If the independent helper
+   finishes unkeying while the desktop is stalled, the desktop can confirm that
+   release after it resumes, provided the complete original release sequence,
+   its own stop acknowledgment and fresh idle readback are all available.
+   The interrupted measurement is not restarted; another transmission requires
+   **Arm measurement source**, a new receive check and **Transmit measurement**.
+   Missing release evidence keeps the measurement in recovery.
+   Process scheduling or
    radio/API delays can postpone actual RF release, so a ten-second physical
    RF-off guarantee remains unqualified. Routine status
    polling keeps **Prepare receive check** available while the last status is

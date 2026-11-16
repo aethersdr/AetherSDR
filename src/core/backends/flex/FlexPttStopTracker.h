@@ -20,7 +20,9 @@ public:
     enum class Phase {
         Disconnected, AwaitIdle, Idle, AwaitKeyWrite, AwaitKeyReply,
         AwaitPttRequested, AwaitTransmitting, Transmitting, AwaitStopWrite,
-        AwaitStopReply, AwaitUnkey, AwaitReady, AwaitOwnerClear, Confirmed, Failed
+        AwaitStopReply, AwaitUnkey, AwaitReady, AwaitOwnerClear,
+        AwaitExternalReady, AwaitExternalOwnerClear, ExternalReleased,
+        AwaitRecoveryStopWrite, AwaitRecoveryStopReply, AwaitRecoveryIdle, Confirmed, Failed
     };
     enum class Failure {
         None, InvalidInput, Ordering, Timeout, Write, Reply, State,

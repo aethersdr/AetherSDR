@@ -154,13 +154,20 @@ bool FlexPttStopTracker::requestStop(const TxCoordinator::Operation& operation,
         fail(Failure::Identity);
         return false;
     }
-    if (m_stop.valid() || m_phase < Phase::AwaitKeyReply || m_phase > Phase::Transmitting) {
+    const bool recovering = m_phase == Phase::ExternalReleased;
+    if (m_stop.valid() || (!recovering
+        && (m_phase < Phase::AwaitKeyReply || m_phase > Phase::Transmitting))) {
         fail(Failure::State);
         return false;
     }
     m_stop = request;
     m_stopSequence = stopSequence;
-    m_deadlineMs = nowMs + kTransitionTimeoutMs;
+    if (recovering) {
+        // The first external-unkey observation owns the entire recovery budget.
+        m_phase = Phase::AwaitRecoveryStopWrite;
+    } else {
+        m_deadlineMs = nowMs + kTransitionTimeoutMs;
+    }
     if (m_phase == Phase::Transmitting) {
         m_phase = Phase::AwaitStopWrite;
     }
@@ -184,6 +191,8 @@ void FlexPttStopTracker::commandWritten(Stamp stamp, quint32 sequence, bool keyi
         m_stopWritten = true;
         if (m_phase == Phase::AwaitStopWrite) {
             m_phase = Phase::AwaitStopReply;
+        } else if (m_phase == Phase::AwaitRecoveryStopWrite) {
+            m_phase = Phase::AwaitRecoveryStopReply;
         }
     } else {
         fail(Failure::UnsupportedActivity);
@@ -213,6 +222,8 @@ void FlexPttStopTracker::response(QStringView body)
         m_stopReplied = true;
         if (m_phase == Phase::AwaitStopReply) {
             m_phase = Phase::AwaitUnkey;
+        } else if (m_phase == Phase::AwaitRecoveryStopReply) {
+            m_phase = Phase::AwaitRecoveryIdle;
         }
     } else {
         fail(Failure::Ordering);
@@ -323,6 +334,25 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
     } else if (m_phase == Phase::Transmitting && state == u"TRANSMITTING"
                && source == u"SW" && handle == m_clientHandle) {
         // Repeated current state is not a new keying operation.
+    } else if (m_phase == Phase::Transmitting && !m_stop.valid()
+               && state == u"UNKEY_REQUESTED" && source.isEmpty() && handle == m_clientHandle) {
+        // A radio-side cutoff can complete while the desktop is stalled. Keep
+        // its full transition, but require our subsequent stop ACK and a new
+        // idle observation before certifying this original operation.
+        m_phase = Phase::AwaitExternalReady;
+        m_deadlineMs = m_lastMs + kTransitionTimeoutMs;
+    } else if (m_phase == Phase::AwaitExternalReady && state == u"READY"
+               && source.isEmpty() && handle == m_clientHandle) {
+        m_phase = Phase::AwaitExternalOwnerClear;
+    } else if (m_phase == Phase::AwaitExternalOwnerClear && idle) {
+        m_phase = Phase::ExternalReleased;
+    } else if ((m_phase == Phase::ExternalReleased
+                || m_phase == Phase::AwaitRecoveryStopWrite
+                || m_phase == Phase::AwaitRecoveryStopReply) && idle) {
+        // Idle before our stop acknowledgment cannot finish recovery.
+    } else if (m_phase == Phase::AwaitRecoveryIdle && idle
+               && m_stop.matchesOperation(m_operation)) {
+        m_phase = Phase::Confirmed;
     } else if (m_phase == Phase::AwaitUnkey && state == u"UNKEY_REQUESTED"
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitReady;

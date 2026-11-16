@@ -171,6 +171,111 @@ void helperSubscriptionsDuringRelease()
           "helper idle never replaces missing owner-clear or extends the deadline");
 }
 
+void independentReleaseBeforeDesktopStop()
+{
+    Harness h;
+    h.key(); h.keyReadback();
+    h.now += 12000; // All desktop threads resume after the bounded native cutoff.
+    h.feed(kUnkey); h.feed(kReadyOwned); h.feed(kIdle);
+    check(!h.evidence.valid(h.now) && !h.wire.ready(),
+          "independent release alone cannot certify handoff or admit another key");
+    h.cancel(); h.stopWire();
+    check(h.commands == QStringList{"xmit 1", "xmit 0"},
+          "recovery sends only the original operation's authorized stop");
+    h.feed(u"R102|0|");
+    check(!h.evidence.valid(h.now), "stop acknowledgment still needs fresh complete idle");
+    h.now += 237;
+    h.feed(kIdle);
+    check(h.evidence.valid(h.now) && h.evidence.request.sameRequest(h.stop),
+          "captured stall sequence plus acknowledged stop and fresh idle certifies original operation");
+    check(h.coordinator.confirmStopped(h.evidence.request),
+          "original entered-writer barrier accepts independently released operation");
+    h.wire.poll(++h.now);
+    check(h.wire.ready() && h.operation.hasConfirmedStop()
+          && h.commands == QStringList{"xmit 1", "xmit 0"},
+          "recovery retires old operation without automatic keying");
+}
+
+void independentReleaseRefusals()
+{
+    const QList<QStringView> transition{kUnkey, kReadyOwned, kIdle};
+    for (int omitted = 0; omitted < 3; ++omitted) {
+        Harness h;
+        h.key(); h.keyReadback();
+        for (int i = 0; i < 3; ++i) {
+            if (i != omitted) { h.feed(transition[i]); }
+        }
+        h.cancel(); h.stopWire(); h.feed(u"R102|0|"); h.feed(kIdle);
+        check(!h.evidence.valid(h.now) && h.coordinator.recovering(),
+              "fresh stop ACK and idle cannot fill in a missing original release transition");
+    }
+    for (QStringView reply : {u"R999|0|", u"R102|1|", u"R102|garbage|"}) {
+        Harness h;
+        h.key(); h.keyReadback(); h.feed(kUnkey); h.feed(kReadyOwned); h.feed(kIdle);
+        h.cancel(); h.stopWire(); h.feed(reply); h.feed(kIdle);
+        check(!h.evidence.valid(h.now) && h.coordinator.recovering(),
+              "missing, failed or malformed recovery acknowledgment cannot release operation");
+    }
+    Harness earlyIdle;
+    earlyIdle.key(); earlyIdle.keyReadback();
+    earlyIdle.feed(kUnkey); earlyIdle.feed(kReadyOwned); earlyIdle.feed(kIdle);
+    earlyIdle.cancel(); earlyIdle.stopWire(); earlyIdle.feed(kIdle); earlyIdle.feed(u"R102|0|");
+    check(!earlyIdle.evidence.valid(earlyIdle.now), "pre-ACK idle never counts as fresh recovery evidence");
+    earlyIdle.feed(u"S87654321|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1");
+    check(!earlyIdle.evidence.valid(earlyIdle.now), "helper-triggered idle cannot finish recovery");
+    earlyIdle.feed(kIdle);
+    check(earlyIdle.evidence.valid(earlyIdle.now), "later original-connection idle completes qualified recovery");
+
+    for (int stage = 0; stage < 6; ++stage) {
+        Harness h;
+        h.key(); h.keyReadback(); h.feed(kUnkey);
+        if (stage >= 1) { h.feed(kReadyOwned); }
+        if (stage >= 2) { h.feed(kIdle); }
+        if (stage >= 3) { h.cancel(); }
+        if (stage >= 4) { h.stopWire(); }
+        if (stage >= 5) { h.feed(u"R102|0|"); }
+        h.feed(kTransmitting);
+        if (stage < 3) { h.cancel(); }
+        if (stage < 4) { h.stopWire(); }
+        if (stage < 5) { h.feed(u"R102|0|"); }
+        h.feed(kIdle);
+        check(!h.evidence.valid(h.now) && h.coordinator.recovering(),
+              "another TX interval at any recovery stage cannot reuse the old release");
+    }
+    for (QStringView contradiction : {
+             u"S0|interlock state=READY",
+             u"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=0",
+             u"S0|interlock tx_client_handle=0x87654321 state=TRANSMITTING reason= source=SW tx_allowed=1",
+             u"S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=MIC tx_allowed=1"}) {
+        Harness h;
+        h.key(); h.keyReadback(); h.feed(kUnkey); h.feed(kReadyOwned); h.feed(kIdle);
+        h.cancel(); h.stopWire(); h.feed(u"R102|0|"); h.feed(contradiction); h.feed(kIdle);
+        check(!h.evidence.valid(h.now), "partial, inhibited, foreign or hardware TX invalidates recovery");
+    }
+    Harness partial;
+    partial.key(); partial.keyReadback(); partial.feed(kUnkey); partial.feed(kReadyOwned); partial.feed(kIdle);
+    partial.cancel(); partial.fullWrite = false; partial.stopWire(); partial.feed(u"R102|0|"); partial.feed(kIdle);
+    check(!partial.evidence.valid(partial.now), "partial recovery stop write cannot produce a certificate");
+
+    Harness deadline;
+    deadline.key(); deadline.keyReadback(); deadline.feed(kUnkey);
+    deadline.now += 4000;
+    deadline.feed(kReadyOwned); deadline.feed(kIdle); deadline.cancel(); deadline.stopWire();
+    deadline.feed(u"R102|0|");
+    deadline.now += 1000;
+    deadline.feed(kIdle);
+    check(!deadline.evidence.valid(deadline.now), "recovery request and ACK do not renew first-unkey deadline");
+
+    Harness disconnected;
+    disconnected.key(); disconnected.keyReadback();
+    disconnected.feed(kUnkey); disconnected.feed(kReadyOwned); disconnected.feed(kIdle);
+    disconnected.cancel(); disconnected.stopWire(); disconnected.feed(u"R102|0|"); disconnected.feed(kIdle);
+    const TxStopEvidence proof = disconnected.evidence;
+    check(proof.valid(disconnected.now), "recovery produces a revocable certificate");
+    disconnected.wire.disconnect();
+    check(!proof.valid(disconnected.now), "disconnect revokes an unconsumed recovery certificate");
+}
+
 void partialAndStale()
 {
     Harness partial;
@@ -210,6 +315,8 @@ int main(int argc, char** argv)
     noDispatch();
     rapidReleaseAndHandoff();
     helperSubscriptionsDuringRelease();
+    independentReleaseBeforeDesktopStop();
+    independentReleaseRefusals();
     partialAndStale();
     return failures ? 1 : 0;
 }

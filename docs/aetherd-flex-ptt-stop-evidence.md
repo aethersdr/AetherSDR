@@ -157,6 +157,40 @@ Even a candidate result cannot cross the coordinator's entered-writer barrier.
 Tests retain it while a writer exits and then acknowledge that exact token. No
 request refused as busy/recovering is automatically retried.
 
+## Recovery after an independent radio-side cutoff
+
+A complete software-PTT release can precede the desktop's stop request when
+an independent helper unkeys during a desktop stall. The captured FLEX-8600
+4.3.16 trace is retained in
+[`DESKTOP-STALL-QUALIFICATION.json`](../tools/pd-waveform/DESKTOP-STALL-QUALIFICATION.json).
+The original key write, matching success reply, owned PTT_REQUESTED and owned
+TRANSMITTING must already have qualified the original operation. Recovery then
+requires all of the following, in this connection's transport order:
+
+1. Complete UNKEY_REQUESTED with the original GUI owner and empty source.
+2. Complete READY retaining that owner, then complete unowned READY.
+3. The original coordinator operation is fenced and its exact stop request is
+   bound to a new full `xmit 0` write on the original connection.
+4. The matching successful stop reply, then another complete unowned READY.
+
+The early release sequence alone cannot admit another operation or produce a
+certificate. Neither can the stop reply, nor an idle sample received before it.
+A helper-triggered idle snapshot cannot substitute for step 4. The five-second
+recovery budget starts at the first UNKEY_REQUESTED observation and no later
+request, acknowledgment or idle sample renews it. Contradictory input, a new TX
+interval, missing transitions, ownership changes, partial writes, malformed
+replies and disconnect still invalidate the attempt. Unconsumed evidence keeps
+the same revocation and coordinator entered-writer barriers as ordinary release.
+This path sends no new positive key command and does not rearm a source.
+
+This is a bounded extension for the captured complete-release-before-stop
+ordering, not a general recovery from failed evidence. A stop request arriving
+before the independent release sequence is complete is not qualified by this
+path. The ordinary acknowledged-stop sequence remains unchanged. Firmware
+without the final fresh idle observation remains in recovery. Protocol ordering
+and the complete original lifecycle are the basis for this implementation
+inference; an ambient READY alone is never enough.
+
 ## Production composition and qualification
 
 `RadioConnection` constructs the wire session on its existing worker thread.
