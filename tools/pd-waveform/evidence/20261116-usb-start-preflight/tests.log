@@ -1,0 +1,37 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 503: aetherpd_dialog_test
+1/2 Test #503: aetherpd_dialog_test .............***Failed    0.14 sec
+AppSettings: created new settings store with defaults
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+FAIL: choosing feedback sends no command
+FAIL: unsupported baseline must refuse Start before HTTP or IQ setup
+FAIL: unsupported baseline must refuse Start before HTTP or IQ setup
+FAIL: unsupported baseline must refuse Start before HTTP or IQ setup
+FAIL: USB readback enables explicit Start without starting a session
+FAIL: Start is explicit and pending startup remains stoppable
+FAIL: Stop interrupts startup through the production model
+FAIL: supervisor completion visible without live DSP counters or calibration
+This plugin does not support raise()
+aether.waveform.measurement: TX linearity safety abort {"forward_watts":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null},"limits":{"max_forward_watts":10,"max_pa_temp_c":75,"max_swr":2,"max_transmit_ms":10000,"min_supply_volts":11,"telemetry_max_age_ms":2000,"vitals_max_age_ms":3000},"now_ms":59681964,"pa_temp_c":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null},"phase":"pre_key","reason":"Radio telemetry stopped updating","supply_volts":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null},"swr":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null}}
+FAIL: successor has explicitly selected owned feedback before lifetime test
+FAIL: request handler survives synchronous panel deletion
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+FAIL: AetherPD explicit controls and credential/window lifetime
+
+    Start 881: tx_operation_integration_test
+2/2 Test #881: tx_operation_integration_test ....   Passed   10.00 sec
+
+50% tests passed, 1 tests failed out of 2
+
+Total Test time (real) =  10.16 sec
+
+The following tests FAILED:
+	503 - aetherpd_dialog_test (Failed)
+Errors while running CTest

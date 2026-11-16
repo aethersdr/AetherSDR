@@ -828,8 +828,10 @@ session. A separate unprivileged receive guardian keeps the modeled receive
 snapshot in memory so it can restore settings after the shim process exits.
 It verifies the original receiver and radio state before writing, and cannot
 recreate a missing slice or start a transmission. The snapshot does not survive
-a reboot. Managed startup currently supports USB only and rejects other modes
-before launching the DSP.
+a reboot. Before **Start AetherPD**, select USB on the active receiver and wait
+for the radio's readback. Start is dimmed with that reason in other modes;
+changing to USB does not start the service. Managed startup currently supports
+USB only and also checks the receive baseline before launching the DSP.
 
 The development calibration interface can arm a bounded source for the next
 AetherSDR software PTT after PD mode and RF settings are selected on the

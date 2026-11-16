@@ -1,0 +1,49 @@
+{
+  "updated_utc": "2026-11-16T21:35:00.170354+00:00",
+  "status": "USB_active_receiver_start_guard_component_qualified_live_pending",
+  "production_ready": false,
+  "runtime_changed": false,
+  "RF_transmissions": 0,
+  "behavior": [
+    "Start requires exactly one active owned receiver with USB mode and USB radio readback.",
+    "UI remains visible and dimmed with an actionable reason; engine refuses direct unsupported requests before HTTP.",
+    "Mode and active-receiver observations refresh Start availability; switching to USB does not start anything."
+  ],
+  "verification": {
+    "desktop_build": true,
+    "dialog_test": true,
+    "transmit_operation_integration_test": true,
+    "docs_build": true,
+    "engine_boundary_strict": true,
+    "capability_freeze": true,
+    "command_plane_strict": true,
+    "manifest_generated": true
+  },
+  "negative_evidence": "Initial dialog fixture omitted active-receiver readback. The guard rejected it; fixture now supplies that observation explicitly. The failing test log is retained.",
+  "touchpoint_change": "AetherPDDialog explicitly includes SliceModel to watch existing neutral mode/active/readback signals; no vendor include or new backend command. Generated manifest count increases by one.",
+  "source_sha256": {
+    "docs/architecture/aetherd-touchpoints.md": "b3491a7ff8bd3da1e245e4fc5fe0b1e422a553be2372bb42ae198112993ef000",
+    "docs/user/docs/tailscale-remote-access.md": "83f3c8c9037b78827c858b91bb7a9b55a8dcbfce2f199a1ee66cdc8afae1b769",
+    "src/gui/AetherPDDialog.cpp": "1a3bb59c2e7dcc4addb8408e0b767d8ed24f091fccc899078db0b4e40867dfe4",
+    "src/gui/AetherPDDialog.h": "d3cf173de9dba3ea9086f78c8b3b15041d4dfaa7eba5aac275e3f03ac5a8d5ad",
+    "src/models/RadioModel.h": "06353b62c09aeab62f9b4c3ac8917cbb21e2a40ded8702d1c48cd169201052be",
+    "src/models/RadioModel_AetherPD.cpp": "d2ee2039a3af4618a0e43338369ee2a7bf4939b58553cc56e1f6886906d35b24",
+    "tests/aetherpd_dialog_test.cpp": "5d1a102429b3cb190909144a841d9badf1829f31424a60eca347b06d73c7be7b"
+  },
+  "remaining": [
+    "Live no-RF Start-control proof and ordinary receive IQ session.",
+    "Final candidate failure/restart/reboot/update/rollback, sustained signal checks, stock APD comparison, actual6300 and release gates."
+  ],
+  "evidence_sha256": {
+    "build.log": "3343af025914912e42acaab6649e827092e13125a695fa3207d1fa39163c8016",
+    "final-build.log": "e9ce4f8e632e2ebca36121dcc120f7662d48ee94638e57ff7e6bbda9c7378534",
+    "tests.log": "f9a0e35304827e751036ef7e9c4f02cf3c1244dda401f382a21ee2654460ba18",
+    "final-tests.log": "d6a775c06ada25c89713207af1d37a795906989c8da8a942c15132aba08a1d01",
+    "active-receiver-test.log": "0d74e1110db8867dfab271581f4c53d003623606a14c3a0c5d1ccd8f7e7902b9",
+    "engine-boundary.log": "69eb2004112263193fe9dc81451539051d0eb8d86f325515fd7b00d29dc58ddf",
+    "capability.log": "c32f2ec83320720ea25f1198c9b12eea8043b6f3daed9e796c69153e8438afa7",
+    "command-plane.log": "732775d31517ce48196fa99fbf6a406b33e5336b38f7f1784b8f060376962635",
+    "manifest-final.log": "426e75c148cad9b18ffca12c006f1e96dc7818c5c32945f1c165dac6fbf47c48",
+    "docs-build.log": "393de4ee7a90e6da372c61c362c0b5322c94c08da584b68da7440aa110f0acd3"
+  }
+}

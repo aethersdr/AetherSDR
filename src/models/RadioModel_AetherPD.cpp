@@ -1,6 +1,7 @@
 #include "RadioModel.h"
 #include "AetherPDMeasurementModel.h"
 #include "AetherPDInstallationModel.h"
+#include "SliceModel.h"
 
 #include <QPointer>
 #include <QThread>
@@ -48,6 +49,27 @@ bool RadioModel::attachAetherPD(const RadioControlSession& session, const QStrin
     return owner && m_aetherPDModel->active();
 }
 
+QString RadioModel::aetherPDStartUnavailableReason(const RadioControlSession& session) const
+{
+    if (QThread::currentThread() != thread() || !controlSessionCurrent(session)
+        || !sessionTransportCurrent() || !m_sessionCommands.current()) {
+        return tr("A current radio session is required before starting AetherPD.");
+    }
+    const SliceModel* receiver = nullptr;
+    for (const SliceModel* candidate : m_slices) {
+        if (candidate && candidate->isActive() && sliceOwnedByUs(candidate->sliceId())) {
+            if (receiver) { return tr("Select one active receiver before starting AetherPD."); }
+            receiver = candidate;
+        }
+    }
+    if (!receiver) { return tr("Select an active receiver owned by this connection before starting AetherPD."); }
+    if (receiver->mode() != QStringLiteral("USB")
+        || receiver->receiveObservation().mode != QStringLiteral("USB")) {
+        return tr("Select USB on the active receiver and wait for radio readback before starting AetherPD.");
+    }
+    return {};
+}
+
 bool RadioModel::requestAetherPD(const RadioControlSession& session, aetherpd::Operation operation,
                                  std::optional<quint32> toneSpacingHz, std::optional<aetherpd::IQSelection> selection)
 {
@@ -63,6 +85,9 @@ bool RadioModel::requestAetherPD(const RadioControlSession& session, aetherpd::O
                 && pan->ownerHandle() && pan->daxiqChannel() == int(selection->channel)) { matched = true; break; }
         }
         if (!matched) { return false; }
+    }
+    if (operation == aetherpd::Operation::Start && !aetherPDStartUnavailableReason(session).isEmpty()) {
+        return false;
     }
     return m_aetherPDModel->request(operation, toneSpacingHz, selection);
 }

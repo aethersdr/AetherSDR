@@ -1,0 +1,11 @@
+[0/2] Re-checking globbed directories...
+[1/16] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/16] Capturing build identity (git describe)
+[3/12] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/12] Completed 'vulkan-shaders-gen'
+[5/12] Automatic MOC and UIC for target aetherpd_dialog_test
+[6/11] Automatic MOC and UIC for target AetherSDR
+[7/9] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/tests/aetherpd_dialog_test.cpp.o
+[8/9] Linking CXX executable aetherpd_dialog_test

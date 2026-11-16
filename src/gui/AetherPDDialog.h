@@ -32,6 +32,7 @@ private:
     void refresh();
     void render();
     void watchPan(PanadapterModel* pan);
+    void watchSlice(SliceModel* slice);
     void renderIqChoices();
     std::optional<aetherpd::IQSelection> iqSelection() const;
     void renderInstallation();

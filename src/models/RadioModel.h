@@ -171,6 +171,7 @@ public:
     AetherPDInstallationModel& aetherPDInstallationModel();
     const AetherPDModel& aetherPDModel() const { return *m_aetherPDModel; }
     bool attachAetherPD(const RadioControlSession& session, const QString& adminToken);
+    QString aetherPDStartUnavailableReason(const RadioControlSession& session) const;
     std::function<bool()> bindAetherPDCapture(const RadioControlSession& session,
                                             txlin::AetherPDCaptureSource& source);
     std::function<bool()> bindAetherPDTest(const RadioControlSession& session,

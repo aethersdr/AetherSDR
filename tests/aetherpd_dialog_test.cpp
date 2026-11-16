@@ -196,7 +196,7 @@ int main(int argc, char** argv)
     Access::install(radio, network);
     check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "injected receive slice created");
     SliceDelta station;
-    station.txSlice = true; station.mode = QStringLiteral("USB");
+    station.txSlice = true; station.active = true; station.mode = QStringLiteral("USB");
     station.frequency = 7.15; station.txAntenna = QStringLiteral("ANT1");
     radio.slice(0)->applyChanges(station);
     TransmitDelta power; power.rfPower = 5;
@@ -236,8 +236,35 @@ int main(int argc, char** argv)
         "foreign and unassigned pans are excluded; no automatic selection");
     const size_t beforeChoice = network.sent.size();
     iqChoice->setCurrentIndex(1);
+    if (!button(*dialog, "pdStart")->isEnabled()) {
+        std::fprintf(stderr, "Start unavailable: %s\n", qPrintable(radio.aetherPDStartUnavailableReason(radio.controlSession())));
+    }
     ok &= check(button(*dialog, "pdStart")->isEnabled() && !button(*dialog, "pdArm")->isEnabled()
         && network.sent.size() == beforeChoice, "choosing feedback sends no command");
+    SliceDelta inactive; inactive.active = false;
+    radio.slice(0)->applyChanges(inactive);
+    ok &= check(!button(*dialog, "pdStart")->isEnabled()
+        && button(*dialog, "pdStart")->toolTip().contains("active receiver")
+        && !radio.requestAetherPD(radio.controlSession(), Operation::Start, std::nullopt, IQSelection{1, 0x40000001})
+        && network.sent.size() == beforeChoice, "missing active receiver must refuse Start before HTTP");
+    SliceDelta activeReceiver; activeReceiver.active = true;
+    radio.slice(0)->applyChanges(activeReceiver);
+    for (const QString& unsupported : {QStringLiteral("DIGU"), QStringLiteral("LSB"), QStringLiteral("PD")}) {
+        SliceDelta changed; changed.mode = unsupported;
+        radio.slice(0)->applyChanges(changed);
+        ok &= check(!button(*dialog, "pdStart")->isEnabled()
+            && button(*dialog, "pdStart")->toolTip().contains("Select USB")
+            && !radio.requestAetherPD(radio.controlSession(), Operation::Start, std::nullopt, IQSelection{1, 0x40000001})
+            && network.sent.size() == beforeChoice, "unsupported baseline must refuse Start before HTTP or IQ setup");
+    }
+    radio.slice(0)->setMode(QStringLiteral("USB"));
+    ok &= check(!button(*dialog, "pdStart")->isEnabled()
+        && !radio.requestAetherPD(radio.controlSession(), Operation::Start, std::nullopt, IQSelection{1, 0x40000001})
+        && network.sent.size() == beforeChoice, "USB request alone must not replace radio mode readback");
+    SliceDelta usb; usb.mode = QStringLiteral("USB");
+    radio.slice(0)->applyChanges(usb);
+    ok &= check(button(*dialog, "pdStart")->isEnabled() && network.sent.size() == beforeChoice,
+        "USB readback enables explicit Start without starting a session");
     int iqResets = 0;
     const auto resetConnection = QObject::connect(iqChoice->model(), &QAbstractItemModel::modelReset,
         iqChoice, [&iqResets] { ++iqResets; });

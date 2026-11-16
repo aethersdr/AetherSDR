@@ -3,6 +3,7 @@
 
 #include "CanonIndicators.h"
 #include "models/AetherPDInstallationModel.h"
+#include "models/SliceModel.h"
 #include "core/TailnetShimTokenStore.h"
 
 #include <QAccessible>
@@ -264,6 +265,9 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     connect(m_restore, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::RestoreReceive); });
     if (radio) {
         for (PanadapterModel* pan : radio->panadapters()) { watchPan(pan); }
+        for (SliceModel* slice : radio->slices()) { watchSlice(slice); }
+        connect(radio, &RadioModel::sliceAdded, this, &AetherPDDialog::watchSlice);
+        connect(radio, &RadioModel::sliceRemoved, this, &AetherPDDialog::render);
         connect(radio, &RadioModel::panadapterAdded, this, &AetherPDDialog::watchPan);
         connect(radio, &RadioModel::panadapterRemoved, this, &AetherPDDialog::render);
         connect(&radio->aetherPDModel(), &AetherPDModel::changed, this, &AetherPDDialog::render);
@@ -287,6 +291,14 @@ void AetherPDDialog::watchPan(PanadapterModel* pan)
     connect(pan, &PanadapterModel::geometryObservationChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
     connect(pan, &PanadapterModel::infoChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
     render();
+}
+
+void AetherPDDialog::watchSlice(SliceModel* slice)
+{
+    if (!slice) { return; }
+    connect(slice, &SliceModel::modeChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
+    connect(slice, &SliceModel::receiveObservationChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
+    connect(slice, &SliceModel::activeChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
 }
 
 std::optional<aetherpd::IQSelection> AetherPDDialog::iqSelection() const
@@ -392,7 +404,9 @@ void AetherPDDialog::request(aetherpd::Operation operation)
         return;
     }
     if (!admitted) {
-        m_notice = tr("Request not admitted. Wait for current status and check the connection.");
+        const QString reason = operation == aetherpd::Operation::Start && m_radio
+            ? m_radio->aetherPDStartUnavailableReason(m_session) : QString{};
+        m_notice = reason.isEmpty() ? tr("Request not admitted. Wait for current status and check the connection.") : reason;
     }
     render();
 }
@@ -457,8 +471,11 @@ void AetherPDDialog::render()
     }
     setText(m_iqObserved, binding);
     if (!alive) { return; }
-    enable(m_start, iqSelection().has_value() && active && !installing && (!pending || pending == Operation::Status) && (!status || !status->available),
+    const QString startReason = m_radio ? m_radio->aetherPDStartUnavailableReason(m_session)
+        : tr("A current radio session is required before starting AetherPD.");
+    enable(m_start, startReason.isEmpty() && iqSelection().has_value() && active && !installing && (!pending || pending == Operation::Status) && (!status || !status->available),
         installing ? tr("Wait for the service update to finish before starting AetherPD.")
+            : !startReason.isEmpty() && (!status || !status->available) ? startReason
             : tr("Select an owned pan with IQ Ch 1–4 assigned, authenticate this radio session, and stop any running AetherPD session before starting."));
     if (!alive) { return; }
     const bool arm = status && status->available && status->registered && !status->keyed
