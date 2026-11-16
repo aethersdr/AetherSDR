@@ -2736,7 +2736,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     // While FFT frames are presenting, the next one redraws the labels; a
     // render of their own is another whole-window composite (#6883).
     connect(w, &VfoWidget::smartMtrLabelsChanged, this, [this]() {
-        markOverlayDirty("smartMtr", !deferPresentToFft());
+        invalidateSmartMtrLabels();
     });
     m_vfoWidgets[sliceId] = w;
     w->show();
@@ -2786,7 +2786,7 @@ void SpectrumWidget::adoptVfoWidget(int sliceId, VfoWidget* widget)
     widget->setProperty("sliceId", sliceId);
     installVfoCursorEventFilter(widget);
     connect(widget, &VfoWidget::smartMtrLabelsChanged, this,
-            [this]() { markOverlayDirty("smartMtr", !deferPresentToFft()); });
+            [this]() { invalidateSmartMtrLabels(); });
     m_vfoWidgets[sliceId] = widget;
     widget->show();
     widget->raise();
@@ -14671,8 +14671,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         }
 
         // panstats: time the bg + static QPainter repaints as one rebuild.
-        const bool rebuildStaticOverlay = m_overlayStaticDirty && !resizePreview;
-        const bool panStatsOvRebuild = rebuildStaticOverlay;
+        bool rebuildStaticOverlay = m_overlayStaticDirty && !resizePreview;
+        bool panStatsOvRebuild = rebuildStaticOverlay;
         QElapsedTimer panStatsOvTimer;
         if (panStatsOvRebuild)
             panStatsOvTimer.start();
@@ -14737,6 +14737,25 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         // their rectangles must use the same frame's VFO geometry.
         // Live-flag selection stays outside this render callback.
         repositionVfoFlags(specRect);
+
+        const QRect labelCoverageLogical = smartMtrLabelsCoverageRect();
+        const QRect labelCoveragePx = QRectF(
+            labelCoverageLogical.x() * dpr,
+            labelCoverageLogical.y() * dpr,
+            labelCoverageLogical.width() * dpr,
+            labelCoverageLogical.height() * dpr)
+            .toAlignedRect().intersected(m_overlayStatic.rect());
+        // Empty-to-live and moved flags change the restore band's geometry.
+        // The saved pre-label strip is no longer valid in that case.
+        if (!resizePreview && !m_frequencyPreviewActive
+            && labelCoveragePx != m_smartMtrLabelStripPx) {
+            m_overlayStaticDirty = true;
+            if (!rebuildStaticOverlay) {
+                rebuildStaticOverlay = true;
+                panStatsOvRebuild = true;
+                panStatsOvTimer.start();
+            }
+        }
 
         // Background-image layer — kept separate from the static overlay so
         // it can render BELOW the FFT trace (parity with software paint).
@@ -14808,7 +14827,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, freqScaleH()));
-            drawSmartMtrValueLabels(p);
 
             // The auto-SQL floor and squelch line are anchored to the 2D
             // dynamic-range y-axis, which doesn't map onto the 3D surface — only
@@ -14975,6 +14993,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
             drawTimeScale(p, wfRect);
 
+            // Keep the static image without labels as the restore source.
+            // Repaint labels last so that partial refreshes match full frames.
+            p.end();
+            m_smartMtrLabelStripPx = labelCoveragePx;
+            m_smartMtrLabelBaseStrip = labelCoveragePx.isEmpty()
+                ? QImage{} : m_overlayStatic.copy(labelCoveragePx);
+            if (!labelCoveragePx.isEmpty()) {
+                QPainter labelsPainter(&m_overlayStatic);
+                drawSmartMtrValueLabels(labelsPainter);
+            }
+            m_smartMtrLabelsDirty = false;
             m_overlayStaticDirty = false;
             m_overlayNeedsUpload = true;
             m_overlayFrequencyNeedsUpload = true;
@@ -14985,6 +15014,39 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_panStats.overlayRebuilds++;
             m_panStats.overlayRebuildUs +=
                 static_cast<quint64>(panStatsOvTimer.nsecsElapsed() / 1000);
+        }
+
+        if (m_smartMtrLabelsDirty && !rebuildStaticOverlay
+            && !resizePreview && !m_overlayNeedsUpload
+            && !m_smartMtrLabelStripPx.isEmpty()
+            && m_smartMtrLabelBaseStrip.size() == m_smartMtrLabelStripPx.size()) {
+            // QImage::copy yields a tightly packed strip. Restore it byte for
+            // byte so the old glyph and antialiasing pixels cannot accumulate.
+            const int bytesPerLine = m_smartMtrLabelStripPx.width() * 4;
+            for (int row = 0; row < m_smartMtrLabelStripPx.height(); ++row) {
+                std::memcpy(
+                    m_overlayStatic.scanLine(row + m_smartMtrLabelStripPx.top())
+                        + m_smartMtrLabelStripPx.left() * 4,
+                    m_smartMtrLabelBaseStrip.constScanLine(row),
+                    static_cast<size_t>(bytesPerLine));
+            }
+            {
+                QPainter labelsPainter(&m_overlayStatic);
+                drawSmartMtrValueLabels(labelsPainter);
+            }
+            const QImage changedPixels =
+                m_overlayStatic.copy(m_smartMtrLabelStripPx);
+            QRhiTextureSubresourceUploadDescription labelsDesc(changedPixels);
+            labelsDesc.setDestinationTopLeft(m_smartMtrLabelStripPx.topLeft());
+            batch->uploadTexture(
+                m_ovGpuTex, QRhiTextureUploadEntry(0, 0, labelsDesc));
+            m_panStats.overlayUploadBytes +=
+                static_cast<quint64>(changedPixels.sizeInBytes());
+            if (perfEnabled) {
+                PerfTelemetry::instance().recordGpuUpload(
+                    PerfTelemetry::GpuUploadKind::Overlay);
+            }
+            m_smartMtrLabelsDirty = false;
         }
 
         // Upload overlay texture only when content changed
@@ -17563,6 +17625,37 @@ void SpectrumWidget::showSpotClusterPopup(const SpotCluster& cluster, const QPoi
     menu->popup(globalPos);
     // QMenu self-deletes on close with WA_DeleteOnClose
     menu->setAttribute(Qt::WA_DeleteOnClose);
+}
+
+QRect SpectrumWidget::smartMtrLabelsCoverageRect() const
+{
+    QRect coverage;
+    for (VfoWidget* flag : m_vfoWidgets) {
+        if (flag)
+            coverage |= flag->smartMtrLabelsCoverageRect();
+    }
+    return coverage.intersected(rect());
+}
+
+void SpectrumWidget::invalidateSmartMtrLabels()
+{
+#ifdef AETHER_GPU_SPECTRUM
+    // The preview shader samples an immutable drag-start frame; its commit
+    // already rebuilds the complete overlay.
+    if (m_frequencyPreviewActive && m_ovPreviewPipeline
+        && m_ovPreviewSrb && m_ovPreviewUbo) {
+        if (!deferPresentToFft())
+            update();
+        return;
+    }
+    m_smartMtrLabelsDirty = true;
+    if (!m_overlayStaticDirty)
+        m_panStats.noteDirty("smartMtr");
+    if (!deferPresentToFft())
+        update();
+#else
+    markOverlayDirty("smartMtr", !deferPresentToFft());
+#endif
 }
 
 void SpectrumWidget::drawSmartMtrValueLabels(QPainter& p)

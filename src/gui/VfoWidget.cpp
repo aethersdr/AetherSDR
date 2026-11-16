@@ -4668,6 +4668,27 @@ void VfoWidget::onSmartMtrRepainted()
     emit smartMtrLabelsChanged();
 }
 
+QRect VfoWidget::smartMtrLabelsCoverageRect() const
+{
+    if (!m_smartMtrWidget || !m_smartMtr || m_collapsed
+        || m_smartMtrWidget->size().isEmpty() || !parentWidget()
+        || m_smartMtrWidget->extremeLabels().isEmpty()) {
+        return {};
+    }
+    using namespace SmartMtrUnits;
+    const auto g = SmartMtrGeometry::fit(m_smartMtrWidget->rect());
+    QFont labelFont = font();
+    labelFont.setPixelSize(qMax(8, qRound(g.len(kLabelHeightNormal))));
+    labelFont.setWeight(QFont::Light);
+    const qreal lineH = QFontMetricsF(labelFont).height();
+    // Marker movement affects the entire width; only these two text rows
+    // need to be repainted. Include the antialiased text/line halo.
+    const int top = qFloor(y() + height() + 2.0 - 3.0);
+    const int bottom = qCeil(y() + height() + 2.0 + 2.0 * lineH + 3.0);
+    return QRect(0, top, parentWidget()->width(), bottom - top)
+        .intersected(parentWidget()->rect());
+}
+
 void VfoWidget::drawSmartMtrLabels(QPainter& p) const
 {
     using namespace SmartMtrUnits;

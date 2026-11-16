@@ -9,6 +9,9 @@
 
 #include <QApplication>
 #include <QSignalSpy>
+#include <QPainter>
+#include <QFontMetricsF>
+#include <cstring>
 #include <QtTest>
 
 using namespace AetherSDR;
@@ -171,6 +174,89 @@ private slots:
         vfo.paints = 0;
         QTest::qWait(200);
         QCOMPARE(vfo.paints, 0);
+    }
+
+    void smartMtrStripUploadMatchesFullFrame_data()
+    {
+        QTest::addColumn<qreal>("dpr");
+        QTest::newRow("logical") << qreal(1.0);
+        QTest::newRow("fractional-125") << qreal(1.25);
+        QTest::newRow("fractional-150") << qreal(1.5);
+    }
+
+    void smartMtrStripUploadMatchesFullFrame()
+    {
+        QFETCH(qreal, dpr);
+        MeterViewController::instance().setShowValues(
+            DisplaySettings::MeterValues::Signal);
+        QWidget spectrum;
+        spectrum.resize(1900, 1154);
+        VfoWidget flag(&spectrum);
+        flag.move(210, 65);
+        spectrum.show();
+        flag.show();
+        SmartMtrWidget* meter = flag.findChild<SmartMtrWidget*>();
+        QVERIFY(meter);
+        flag.setRelativeSignalLevel(-75);
+        QTest::qWait(80);
+        meter->grab();
+        QVERIFY(!meter->extremeLabels().isEmpty());
+
+        const QRect logicalCoverage = flag.smartMtrLabelsCoverageRect();
+        QVERIFY2(!logicalCoverage.isEmpty(), "live labels require a redraw band");
+        const QSize framebuffer(
+            qCeil(spectrum.width() * dpr),
+            qCeil(spectrum.height() * dpr));
+        QImage background(framebuffer, QImage::Format_RGBA8888_Premultiplied);
+        background.setDevicePixelRatio(dpr);
+        background.fill(QColor(20, 33, 46));
+        {
+            QPainter p(&background);
+            p.setPen(QPen(QColor(60, 180, 210), 1));
+            for (int x = 0; x < spectrum.width(); x += 29)
+                p.drawLine(x, 0, x, spectrum.height());
+            p.fillRect(0, 100, spectrum.width(), 17, QColor(12, 19, 30));
+        }
+
+        const QRect strip = QRectF(
+            logicalCoverage.x() * dpr, logicalCoverage.y() * dpr,
+            logicalCoverage.width() * dpr, logicalCoverage.height() * dpr)
+            .toAlignedRect().intersected(background.rect());
+        QVERIFY(!strip.isEmpty());
+        QVERIFY(strip.height() < framebuffer.height() / 4);
+        const QImage savedBackgroundStrip = background.copy(strip);
+
+        const auto withLabels = [&](const QImage& base) {
+            QImage image = base.copy();
+            QPainter p(&image);
+            flag.drawSmartMtrLabels(p);
+            return image;
+        };
+        const QImage first = withLabels(background);
+
+        // Moving values must replace old glyphs, not blend over them.
+        flag.setRelativeSignalLevel(-15);
+        QTest::qWait(80);
+        meter->grab();
+        QCOMPARE(flag.smartMtrLabelsCoverageRect(), logicalCoverage);
+        const QImage expected = withLabels(background);
+        QVERIFY2(first != expected, "value change must move/redraw labels");
+        QImage partial = first.copy();
+        for (int y = 0; y < strip.height(); ++y) {
+            std::memcpy(partial.scanLine(strip.top() + y) + strip.left() * 4,
+                        savedBackgroundStrip.constScanLine(y),
+                        static_cast<size_t>(strip.width() * 4));
+        }
+        partial = withLabels(partial);
+        QCOMPARE(partial, expected);
+
+        // Clearing values may shrink the coverage to empty. A full rebuild
+        // must then exactly erase the old text, including at fractional DPR.
+        flag.setRelativeSignalLevel(std::nullopt);
+        meter->grab();
+        QVERIFY(meter->extremeLabels().isEmpty());
+        QVERIFY(flag.smartMtrLabelsCoverageRect().isEmpty());
+        QCOMPARE(withLabels(background), background);
     }
 
     void subpixelStandardMeterChangesDoNotRepaintTheCard()
