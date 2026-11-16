@@ -573,14 +573,26 @@ bool MainWindow::isSameDiversityReceivePair(const SliceModel* slice,
         return false;
     }
 
+    // A diversity parent and its child share one panadapter. With two
+    // diversity pairs on two pans (two SCUs, each pair on its own pan), the
+    // parent of one pair and the child of the other also satisfy the
+    // parent/child role test, so the role test alone couples the pans:
+    // tuning one slice drags the other pair along (#4891). Only treat a
+    // parent/child match as a pair when both slices are on the same pan.
+    // If either pan id is not known yet, keep the previous role-only answer.
+    const bool slicePanKnown = !slice->panId().isEmpty();
+    const bool otherPanKnown = !other->panId().isEmpty();
+    const bool samePan = slicePanKnown && otherPanKnown
+        && slice->panId() == other->panId();
+
     const bool parentChildPair =
         (slice->isDiversityParent() && other->isDiversityChild())
         || (slice->isDiversityChild() && other->isDiversityParent());
     if (parentChildPair) {
-        return true;
+        return samePan || !slicePanKnown || !otherPanKnown;
     }
 
-    return !slice->panId().isEmpty() && slice->panId() == other->panId();
+    return samePan;
 }
 
 // ─── Shortcut guard (file-scope for use as std::function<bool()>) ───────────
