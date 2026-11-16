@@ -251,9 +251,11 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
         || frame.sampleRateHz != m_config.capture.sampleRateHz
         || !std::isfinite(frame.centerFreqHz) || std::abs(frame.centerFreqHz - m_config.capture.centerFreqHz) > 0.5
         || frame.sourceCaptureId.empty() || frame.sourceCaptureId.size() > 128 || frame.timestampNs == 0
+        || (frame.sourceStream && (!frame.sourceStream->streamId || !frame.sourceStream->generation))
         || (m_config.expectedCorrection && frame.correctionActive != m_config.expectedCorrection)
         || (!m_frames.empty() && (frame.timestampNs <= m_frames.back().timestampNs
-            || frame.correctionActive != m_frames.front().correctionActive))
+            || frame.correctionActive != m_frames.front().correctionActive
+            || frame.sourceStream != m_frames.front().sourceStream))
         || std::any_of(m_frames.begin(), m_frames.end(), [&](const CaptureFrame& old) { return old.sourceCaptureId == frame.sourceCaptureId; })
         || std::any_of(frame.feedback.begin(), frame.feedback.end(), [](const std::complex<float>& value) {
             return !std::isfinite(value.real()) || !std::isfinite(value.imag());
@@ -266,6 +268,7 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
     stored.centerFreqHz = frame.centerFreqHz;
     stored.timestampNs = frame.timestampNs;
     stored.sourceCaptureId = frame.sourceCaptureId;
+    stored.sourceStream = frame.sourceStream;
     stored.correctionActive = frame.correctionActive;
     stored.clipped = frame.clipped;
     stored.clippingKnown = frame.clippingKnown;
@@ -340,7 +343,7 @@ void TxLinearityController::complete()
             if (!analyzer.accumulate(frame.feedback)) { result.error = "Spectrum analysis rejected capture"; break; }
             clipped |= frame.clipped;
             clippingKnown &= frame.clippingKnown;
-            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs, std::move(frame.feedback)});
+            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs, std::move(frame.feedback), frame.sourceStream});
         }
         if (result.error.empty()) {
             result.correctionActive = m_frames.front().correctionActive;

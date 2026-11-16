@@ -1,0 +1,16 @@
+[0/2] Re-checking globbed directories...
+[1/16] Capturing build identity (git describe)
+[2/14] Automatic MOC and UIC for target aetherpd_capture_source_test
+[3/13] Automatic MOC and UIC for target tx_linearity_controller_test
+[4/12] Automatic MOC and UIC for target aetherpd_dialog_test
+[5/11] Building CXX object CMakeFiles/tx_linearity_controller_test.dir/tests/tx_linearity_controller_test.cpp.o
+[6/11] Linking CXX executable tx_linearity_controller_test
+[7/11] Building CXX object CMakeFiles/aetherpd_capture_source_test.dir/tests/aetherpd_capture_source_test.cpp.o
+[8/11] Linking CXX executable aetherpd_capture_source_test
+[9/11] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/tests/aetherpd_dialog_test.cpp.o
+[10/11] Linking CXX executable aetherpd_dialog_test
+[0/2] Re-checking globbed directories...
+[1/8] Capturing build identity (git describe)
+[2/6] Automatic MOC and UIC for target aetherpd_dialog_test
+[3/5] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/tests/aetherpd_dialog_test.cpp.o
+[4/5] Linking CXX executable aetherpd_dialog_test

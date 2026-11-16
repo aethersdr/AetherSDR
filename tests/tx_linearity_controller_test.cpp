@@ -163,6 +163,29 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     previousHandler = qInstallMessageHandler(captureDiagnostic);
+    for (const int variant : {0, 1, 2, 3, 4, 5, 6}) {
+        Fixture f; f.start();
+        CaptureFrame first = frame(1), second = frame(2);
+        if (variant != 5) {
+            first.sourceStream = second.sourceStream = CaptureStreamIdentity{1073741825, 7};
+        }
+        if (variant == 1) { second.sourceStream->streamId += 1; }
+        if (variant == 2) { second.sourceStream->generation += 1; }
+        if (variant == 3) { second.sourceStream.reset(); }
+        if (variant == 4) { second.sourceStream->generation = 0; }
+        if (variant == 6) { first.sourceStream.reset(); }
+        f.send(first); f.send(second);
+        check(f.lease->releases == 1 && f.finished == 0, "identity check bypassed release confirmation");
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        if (variant == 0 || variant == 5) {
+            check(f.result && f.result->measurement && f.result->captures.size() == 2
+                && f.result->captures.front().sourceStream == first.sourceStream,
+                "completed measurement lost source identity or legacy uncertainty");
+        } else {
+            check(f.result && !f.result->error.empty() && !f.result->measurement,
+                "mixed or invalid acquisition identity survived averaging");
+        }
+    }
     {
         Fixture f; f.start();
         abortEvidence.clear(); evidenceAfterRelease = true;

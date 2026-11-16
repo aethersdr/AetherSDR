@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Offline analyzer choices and measurement-retirement runtime packages qualified. Radio still unavailable after single reboot; hardware first-install/reboot/RF gates remain open. Resolve analyzer deadline contract and remaining P1-P10 requirements.",
+  "current_focus": "Desktop sampled DAX IQ identity integration qualified offline. Radio still unavailable after one reboot. Next: refresh exact runtime package qualification and resolve analyzer deadline contract; live first-install/reboot/RF and full P1-P10 gates remain open.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2873,7 +2873,8 @@
   },
   "capture_source_identity": {
     "report": "CAPTURE-SOURCE-IDENTITY-QUALIFICATION.json",
-    "status": "versioned capture identity producer and desktop parser component-qualified; workflow integration incomplete",
-    "installed": false
+    "status": "Producer/parser and desktop capture/controller/UI/exports component-qualified; not installed",
+    "installed": false,
+    "desktop_report": "CAPTURE-DESKTOP-QUALIFICATION.json"
   }
 }

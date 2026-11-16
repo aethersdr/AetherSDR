@@ -85,6 +85,7 @@ void AetherPDCaptureSource::abandon()
 void AetherPDCaptureSource::stop()
 {
     m_running = m_gate = false;
+    m_verifiedReceiveSource.reset();
     abandon();
 }
 
@@ -93,6 +94,7 @@ void AetherPDCaptureSource::setSession(const QHostAddress& address, const QStrin
 {
     stop();
     m_measurementSourceId = 0;
+    m_legacyCapture = m_sourceIdentitySupported = false;
     m_address = address;
     m_token = token;
     m_current = std::move(current);
@@ -114,6 +116,12 @@ bool AetherPDCaptureSource::sessionCurrent() const
 {
     return m_network && m_network->thread() == thread() && m_current && m_current()
         && aetherpd::lanAddress(m_address) && aetherpd::validAdminToken(m_token);
+}
+
+std::optional<aetherpd::CaptureSourceIdentity> AetherPDCaptureSource::receiveSourceIdentity() const
+{
+    return QThread::currentThread() == thread() && m_running && sessionCurrent()
+        ? m_verifiedReceiveSource : std::nullopt;
 }
 
 bool AetherPDCaptureSource::start(const CaptureConfig& config)
@@ -177,7 +185,7 @@ void AetherPDCaptureSource::beginCapture()
     m_waitingForTones = m_measurementSourceId && !m_checkingReady;
     m_captureBudgetMs = m_waitingForTones ? kMeasurementCaptureTimeoutMs : kCaptureTimeoutMs;
     m_deadline.start(m_captureBudgetMs);
-    send(m_waitingForTones ? *aetherpd::request(aetherpd::Operation::Status) : aetherpd::captureBeginRequest());
+    send(m_waitingForTones ? *aetherpd::request(aetherpd::Operation::Status) : aetherpd::captureBeginRequest(!m_legacyCapture));
 }
 
 void AetherPDCaptureSource::send(const aetherpd::Request& descriptor, int chunk)
@@ -241,6 +249,16 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     if (!sessionCurrent()) { fail("IQ capture session is no longer current"); return; }
     if (!m_age.isValid() || m_age.elapsed() >= m_captureBudgetMs) { captureTimeout(); return; }
     const QByteArray body = reply->read(kMaxReplyBytes + 1);
+    const int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (body.size() <= kMaxReplyBytes && !m_manifest && !m_waitingForTones
+        && !m_legacyCapture && !m_sourceIdentitySupported && chunk < 0
+        && reply->url().path() == QStringLiteral("/v2/aetherpd/capture") && (code == 404 || code == 501)) {
+        // Only explicit version absence permits legacy capture, within the
+        // original deadline. A previously observed identity cannot disappear.
+        m_legacyCapture = true;
+        send(aetherpd::captureBeginRequest());
+        return;
+    }
     if (body.size() > kMaxReplyBytes || reply->error() != QNetworkReply::NoError
         || reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {
         fail("IQ capture request failed"); return;
@@ -262,18 +280,22 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
             return;
         }
         m_waitingForTones = false;
-        send(aetherpd::captureBeginRequest());
+        send(aetherpd::captureBeginRequest(!m_legacyCapture));
         return;
     }
     if (!m_manifest) {
         m_manifest = aetherpd::parseCaptureManifest(body);
         if (!m_manifest || m_manifest->keyed != !m_checkingReady || m_manifest->sampleRateHz != m_config.sampleRateHz
+            || m_manifest->source.has_value() == m_legacyCapture
+            || (m_verifiedReceiveSource && (!m_manifest->source
+                || m_verifiedReceiveSource->streamId != m_manifest->source->streamId))
             || std::abs(double(m_manifest->centerHz) - m_config.centerFreqHz) > 0.5
             || (m_measurementSourceId && (!m_manifest->measurement
                 || m_manifest->measurement->sourceId != m_measurementSourceId
                 || (!m_checkingReady && !m_manifest->measurement->tones)))) {
-            fail("IQ capture does not match the expected key state, rate or center"); return;
+            fail("IQ capture does not match the expected key state, rate, center or source"); return;
         }
+        m_sourceIdentitySupported = m_manifest->source.has_value();
         m_bytes.resize(8 * aetherpd::kCaptureSamples);
         // Queue one fixed snapshot, allowing the network worker to make progress
         // without a GUI event-loop round trip between every 512-sample chunk.
@@ -295,6 +317,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
         fail("IQ capture was incomplete"); return;
     }
     if (m_checkingReady) {
+        m_verifiedReceiveSource = m_manifest->source;
         const ReadyCallback callback = std::move(m_readyCallback);
         abandon();
         callback();
@@ -305,6 +328,9 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     frame.centerFreqHz = double(m_manifest->centerHz);
     frame.timestampNs = m_manifest->firstReceiveNs;
     frame.sourceCaptureId = m_manifest->captureId.toStdString();
+    if (m_manifest->source) {
+        frame.sourceStream = CaptureStreamIdentity{m_manifest->source->streamId, m_manifest->source->generation};
+    }
     frame.correctionActive = m_manifest->correcting;
     frame.clippingKnown = false;
     frame.feedback.reserve(aetherpd::kCaptureSamples);

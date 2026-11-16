@@ -1,0 +1,21 @@
+{
+  "utc": "2026-11-16T11:52:17.633266+00:00",
+  "host": "192.168.50.100",
+  "checks": [
+    {
+      "port": 4992,
+      "reachable": false,
+      "error": "timed out"
+    },
+    {
+      "port": 48992,
+      "reachable": false,
+      "error": "timed out"
+    },
+    {
+      "port": 22222,
+      "reachable": false,
+      "error": "timed out"
+    }
+  ]
+}

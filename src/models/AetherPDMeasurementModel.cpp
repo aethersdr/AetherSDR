@@ -230,6 +230,14 @@ QByteArray AetherPDMeasurementModel::exportResultCsv() const
     return m_result ? m_result->toCsv() : QByteArray{};
 }
 
+QString AetherPDMeasurementModel::Result::sourceSummary() const
+{
+    if (measurement.captures.empty() || !measurement.captures.front().sourceStream) {
+        return tr("DAX IQ stream identity not reported");
+    }
+    return tr("DAX IQ stream 0x%1").arg(measurement.captures.front().sourceStream->streamId, 8, 16, QLatin1Char('0'));
+}
+
 QByteArray AetherPDMeasurementModel::Result::toCsv() const
 {
     QByteArray output("Measurement,Value,Unit,Reference,Status\r\n");
@@ -257,7 +265,7 @@ QByteArray AetherPDMeasurementModel::Result::toCsv() const
     row(QStringLiteral("Radio serial"), text(serial));
     row(QStringLiteral("Completed UTC"), completedAtUtc.toString(Qt::ISODateWithMs));
     row(QStringLiteral("Source"), QStringLiteral("local-dax-iq"));
-    row(QStringLiteral("Source ID"), QStringLiteral("%1").arg(sourceId, 16, 16, QLatin1Char('0')));
+    row(QStringLiteral("Measurement source ID"), QStringLiteral("%1").arg(sourceId, 16, 16, QLatin1Char('0')));
     row(QStringLiteral("Mode"), text(mode));
     row(QStringLiteral("Transmit antenna"), text(transmitAntenna));
     row(QStringLiteral("Center frequency"), number(config.capture.centerFreqHz), QStringLiteral("Hz"));
@@ -269,6 +277,16 @@ QByteArray AetherPDMeasurementModel::Result::toCsv() const
         ? (*measurement.correctionActive ? QStringLiteral("yes") : QStringLiteral("no")) : QString{}, {}, {},
         measurement.correctionActive ? QStringLiteral("known") : QStringLiteral("unknown"));
     row(QStringLiteral("Absolute power and ADC headroom"), {}, {}, {}, QStringLiteral("uncalibrated"));
+    for (const txlin::LinearityCaptureStamp& stamp : measurement.captures) {
+        const QString id = text(QString::fromStdString(stamp.id));
+        row(QStringLiteral("Capture ID"), id);
+        row(QStringLiteral("Capture IQ stream ID"), stamp.sourceStream
+            ? QStringLiteral("0x%1").arg(stamp.sourceStream->streamId, 8, 16, QLatin1Char('0')) : QString{},
+            {}, id, stamp.sourceStream ? QStringLiteral("reported") : QStringLiteral("unknown"));
+        row(QStringLiteral("Capture IQ generation"), stamp.sourceStream
+            ? QString::number(stamp.sourceStream->generation) : QString{},
+            {}, id, stamp.sourceStream ? QStringLiteral("reported") : QStringLiteral("unknown"));
+    }
     if (!measurement.error.empty()) {
         row(QStringLiteral("Run error"), text(QString::fromStdString(measurement.error)), {}, {}, QStringLiteral("invalid"));
     }
@@ -335,6 +353,9 @@ QByteArray AetherPDMeasurementModel::exportResult() const
         }
         captures.append(QJsonObject{{"id", QString::fromStdString(stamp.id)},
             {"timestamp_ns", QString::number(stamp.timestampNs)},
+            {"source_stream", stamp.sourceStream ? QJsonValue(QJsonObject{
+                {"kind", "local_dax_iq"}, {"stream_id", qint64(stamp.sourceStream->streamId)},
+                {"generation", QString::number(stamp.sourceStream->generation)}}) : QJsonValue()},
             {"sample_count", qint64(stamp.feedback.size())},
             {"iq_f32le", QString::fromLatin1(raw.toBase64())},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(raw, QCryptographicHash::Sha256).toHex())}});
@@ -390,10 +411,13 @@ QByteArray AetherPDMeasurementModel::exportResult() const
 QString AetherPDMeasurementModel::preparationSummary() const
 {
     if (state() == State::Idle) { return {}; }
-    return tr("%1 MHz · %2 · %3 · nominal setting %4 W · abort limit %5 W\n%6 · %7 averages · through IMD%8")
+    const std::optional<aetherpd::CaptureSourceIdentity> source = m_capture ? m_capture->receiveSourceIdentity() : std::nullopt;
+    const QString identity = source ? tr("DAX IQ stream 0x%1").arg(source->streamId, 8, 16, QLatin1Char('0'))
+        : state() == State::CheckingReceive ? tr("Checking DAX IQ stream identity") : tr("DAX IQ stream identity not reported");
+    return tr("%1 MHz · %2 · %3 · nominal setting %4 W · abort limit %5 W\n%6 · %7 averages · through IMD%8\n%9")
         .arg(m_config.capture.centerFreqHz / 1e6, 0, 'f', 6).arg(m_mode).arg(m_antenna)
         .arg(m_powerSetting).arg(m_config.maxForwardWatts, 0, 'f', 1)
-        .arg(QString::fromStdString(txlin::windowKindLabel(m_config.window))).arg(m_config.targetAverages).arg(m_config.imd.maxOrder);
+        .arg(QString::fromStdString(txlin::windowKindLabel(m_config.window))).arg(m_config.targetAverages).arg(m_config.imd.maxOrder).arg(identity);
 }
 
 QString AetherPDMeasurementModel::resultSummary() const
@@ -403,6 +427,7 @@ QString AetherPDMeasurementModel::resultSummary() const
     QString text = tr("%1 MHz · %2 · nominal setting %3 W · %4\n")
         .arg(r.config.capture.centerFreqHz / 1e6, 0, 'f', 6).arg(r.transmitAntenna).arg(r.powerSetting)
         .arg(r.measurement.correctionActive ? (*r.measurement.correctionActive ? tr("corrected") : tr("uncorrected")) : tr("correction unknown"));
+    text += r.sourceSummary() + QLatin1Char('\n');
     if (!r.measurement.error.empty()) { text += QString::fromStdString(r.measurement.error) + QLatin1Char('\n'); }
     if (r.measurement.measurement) {
         const txlin::LinearityResult& m = *r.measurement.measurement;

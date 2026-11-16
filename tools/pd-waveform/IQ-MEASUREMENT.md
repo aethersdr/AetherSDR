@@ -109,9 +109,17 @@ The primary returns 501 for an older private session without sending the new
 opcode; the old session remains available for v1 capture. New primary/private
 session binaries ship in one atomic release. An older primary cannot attach
 to a v6 private process. No new native DSP command, socket, privilege or
-radio mutation is introduced. The desktop protocol parser understands the
-optional source identity; the capture adapter and operator display still need
-to adopt the v2 request and retain its provenance.
+radio mutation is introduced. The desktop requests v2 first. Only an initial
+404 or 501 permits one v1 retry within the original capture deadline. Once v2
+is observed on that session, a later response cannot downgrade it. Legacy
+captures remain usable with stream identity explicitly unknown.
+
+Receive preparation retains the verified stream ID. Keyed captures must match
+that stream; generation may change across RX to TX. Every frame within one
+averaged measurement must agree on stream ID and generation, including whether
+identity is known. Results retain each capture's identity in JSON and CSV;
+the result summary and PNG description identify the reported stream. Neither
+channel number nor panadapter ownership is inferred from a stream ID.
 
 `GET /v1/aetherpd/capture/{capture_id}/{chunk}` accepts a canonical lowercase
 32-character hex ID and chunk index 0–31. Each JSON response contains the

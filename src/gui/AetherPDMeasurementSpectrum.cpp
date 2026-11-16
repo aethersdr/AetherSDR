@@ -91,6 +91,7 @@ void AetherPDMeasurementSpectrum::setResult(const AetherPDMeasurementModel::Resu
                 .arg(result->config.capture.centerFreqHz / 1e6, 0, 'f', 6).arg(result->powerSetting)
                 .arg(result->measurement.correctionActive ? (*result->measurement.correctionActive ? tr("on") : tr("off")) : tr("unknown"))
                 .arg(result->completedAtUtc.toUTC().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+            m_caption += QStringLiteral(" · ") + result->sourceSummary();
             summary = m_caption + tr(". Uncalibrated raw IQ level; ADC headroom unknown. Tone spacing %1 Hz. Noise floor %2 dB raw IQ per bin. ")
                 .arg(value.toneSpacingHz, 0, 'f', 1).arg(value.noiseFloorDb, 0, 'f', 1);
             for (const txlin::ImdProduct& product : value.products) {

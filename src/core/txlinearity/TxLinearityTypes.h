@@ -68,6 +68,12 @@ struct CaptureConfig {
     int settleMsBeforeUnkey = 50;
 };
 
+struct CaptureStreamIdentity {
+    std::uint32_t streamId = 0;
+    std::uint64_t generation = 0;
+    bool operator==(const CaptureStreamIdentity&) const = default;
+};
+
 // One contiguous capture frame handed from the source to the analyzer.
 //
 // `reference` is engaged only when the capture source supplies an ideal TX
@@ -91,6 +97,8 @@ struct CaptureFrame {
     bool clippingKnown = true;
     std::string sourceCaptureId;
     std::optional<bool> correctionActive;
+    // Optional, scoped to the original capture process; never inferred from settings.
+    std::optional<CaptureStreamIdentity> sourceStream;
 };
 
 // ── Measurement results ─────────────────────────────────────────────────────

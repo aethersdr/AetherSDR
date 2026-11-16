@@ -36,6 +36,7 @@ public:
     std::string describe() const override { return "On-radio AetherPD raw DAX IQ"; }
     void setFrameCallback(FrameCallback callback) override;
     void setErrorCallback(ErrorCallback callback) override;
+    std::optional<aetherpd::CaptureSourceIdentity> receiveSourceIdentity() const;
 
 private:
     void initialize();
@@ -62,6 +63,7 @@ private:
     ErrorCallback m_errorCallback;
     ReadyCallback m_readyCallback;
     std::optional<aetherpd::CaptureManifest> m_manifest;
+    std::optional<aetherpd::CaptureSourceIdentity> m_verifiedReceiveSource;
     QByteArray m_bytes;
     quint64 m_generation{0};
     int m_chunk{0};
@@ -70,6 +72,8 @@ private:
     bool m_gate{false};
     bool m_checkingReady{false};
     bool m_waitingForTones{false};
+    bool m_legacyCapture{false};
+    bool m_sourceIdentitySupported{false};
     quint64 m_measurementSourceId{0};
 };
 } // namespace AetherSDR::txlin

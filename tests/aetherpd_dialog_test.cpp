@@ -15,6 +15,7 @@
 #include <QAccessible>
 #include <QImage>
 #include <limits>
+#include <cstdint>
 #include "models/SliceModel.h"
 #include "core/TxKeyingMarker.h"
 
@@ -62,6 +63,14 @@ int main(int argc, char** argv)
         value.acprLow = txlin::BandPower{-6000, -4000, -70, -60, -66.0206, {}};
         value.acprHigh = txlin::BandPower{4000, 6000, -70, -60, -66.0206, {}};
         capture.measurement.measurement = value;
+        capture.measurement.captures.push_back({"fixture", 1, {}, {}});
+        if (!check(capture.sourceSummary().contains("identity not reported")
+            && capture.toCsv().contains("\"Capture IQ stream ID\",\"\",\"\",\"fixture\",\"unknown\""),
+            "legacy export must preserve missing source identity")) { return 1; }
+        capture.measurement.captures.front().sourceStream = txlin::CaptureStreamIdentity{
+            1073741825, std::numeric_limits<std::uint64_t>::max()};
+        if (!check(capture.toCsv().contains("18446744073709551615"),
+            "CSV must preserve the full unsigned generation")) { return 1; }
         spectrum.setResult(&capture);
         QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(&spectrum);
         const QImage image = QImage::fromData(spectrum.exportPng(), "PNG");
@@ -69,6 +78,7 @@ int main(int argc, char** argv)
             && image.text(QStringLiteral("Description")).contains("-40.0 dBc per tone")
             && image.text(QStringLiteral("Description")).contains("noise limited")
             && image.text(QStringLiteral("Description")).contains("5 W setting")
+            && image.text(QStringLiteral("Description")).contains("DAX IQ stream 0x40000001")
             && !image.text(QStringLiteral("Description")).contains("dBFS")
             && accessible && accessible->role() == QAccessible::Graphic
             && accessible->text(QAccessible::Value).contains("ADC headroom unknown"),
@@ -363,7 +373,7 @@ int main(int argc, char** argv)
     if (!captureNetwork.last) { return 1; }
     const QString id = QStringLiteral("0123456789abcdef0123456789abcdef");
     const auto encode = [](const QJsonObject& o) { return QJsonDocument(o).toJson(QJsonDocument::Compact); };
-    captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"},
+    captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"}, {"source", QJsonObject{{"kind", "local_dax_iq"}, {"stream_id", 1073741825}, {"generation", "7"}}},
         {"sample_rate_hz", 48000}, {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
         {"keyed", false}, {"correcting", false}, {"first_receive_ns", "1000000000"}, {"last_receive_ns", "1341000000"},
         {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));
@@ -377,7 +387,7 @@ int main(int argc, char** argv)
     const QString readyText = measurement->findChild<QLabel*>(QStringLiteral("pdMeasureState"))->text();
     ok &= check(readyText.contains("7.150000 MHz") && readyText.contains("ANT1")
         && readyText.contains("nominal setting 5 W") && readyText.contains("abort limit 10.0 W")
-        && readyText.contains("Hann") && readyText.contains("2 averages") && readyText.contains("IMD5"),
+        && readyText.contains("DAX IQ stream 0x40000001") && readyText.contains("Hann") && readyText.contains("2 averages") && readyText.contains("IMD5"),
         "ready display identifies the original station and separates drive from abort limit");
     const auto bridge = std::make_shared<TxController>(&radio);
     TxKeyingAction::Prepared queued = prepareTxKeyingAction(mb("pdMeasureTransmit"), bridge, "click", {});
@@ -400,7 +410,7 @@ int main(int argc, char** argv)
     mb("pdMeasurePrepare")->click();
     ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::CheckingReceive,
         "a new preparation can follow canceled readiness");
-    captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"},
+    captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"}, {"source", QJsonObject{{"kind", "local_dax_iq"}, {"stream_id", 1073741825}, {"generation", "7"}}},
         {"sample_rate_hz", 48000}, {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
         {"keyed", false}, {"correcting", false}, {"first_receive_ns", "2000000000"}, {"last_receive_ns", "2341000000"},
         {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));

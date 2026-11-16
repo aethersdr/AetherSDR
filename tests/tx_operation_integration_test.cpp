@@ -935,7 +935,7 @@ void aetherPDMeasurementWorkflow()
     const QString captureId = QStringLiteral("0123456789abcdef0123456789abcdef");
     const auto encode = [](const QJsonObject& object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); };
     const auto manifest = [&](bool keyed) {
-        return encode({{"capture_id", captureId}, {"format", "f32le-iq-v1"}, {"sample_rate_hz", 48000},
+        return encode({{"capture_id", captureId}, {"format", "f32le-iq-v1"}, {"source", QJsonObject{{"kind", "local_dax_iq"}, {"stream_id", 1073741825}, {"generation", "7"}}}, {"sample_rate_hz", 48000},
             {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
             {"keyed", keyed}, {"correcting", keyed}, {"first_receive_ns", "1000000000"},
             {"last_receive_ns", "1341000000"},
@@ -1121,6 +1121,11 @@ void aetherPDMeasurementWorkflow()
                 && exported.value("captures").toArray().size() == 1,
                 "export preserves source, station, spectra and unknown calibration after release");
             const QJsonObject capture = exported.value("captures").toArray().first().toObject();
+            const QJsonObject identity = capture.value("source_stream").toObject();
+            check(identity.value("stream_id").toInteger() == 1073741825
+                && identity.value("generation").toString() == QStringLiteral("7")
+                && model->resultSummary().contains("DAX IQ stream 0x40000001"),
+                "completed result and JSON retain actual IQ stream identity");
             const QByteArray raw = QByteArray::fromBase64(capture.value("iq_f32le").toString().toLatin1());
             QByteArray original;
             for (int i = 0; i < 32; ++i) {
@@ -1156,6 +1161,7 @@ void aetherPDMeasurementWorkflow()
             check(csv.startsWith("Measurement,Value,Unit,Reference,Status\r\n")
                 && csv.contains("\"Nominal power setting\",\"5\",\"W\",\"radio setting; not measured output\"")
                 && csv.contains("\"Capture clipped\",\"\",\"\",\"\",\"unknown\"")
+                && csv.contains("\"Capture IQ stream ID\",\"0x40000001\"")
                 && csv.contains("\"sampled envelope PEP\"") && !csv.contains("dBFS"),
                 "CSV export preserves explicit references, nominal power and unknown clipping");
             bool csvImdFound = false;

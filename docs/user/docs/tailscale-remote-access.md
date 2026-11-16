@@ -565,6 +565,10 @@ ADC headroom or calibrated output power.
    reserves time for snapshot retrieval within the bounded source window.
    Window choice changes leakage and resolution, so no window guarantees a
    particular measurable IMD depth.
+   A completed receive check shows the sampled DAX IQ stream ID when the shim
+   reports it. Older shims show **DAX IQ stream identity not reported**. The ID
+   does not identify a DAX channel number or antenna. The measurement rejects
+   a changed stream, or a changed acquisition generation between averaged frames.
    Capture waits for the guarded tone interval and collects the selected frames. A cold
    correction fit can use most of the source window; capture waits within that
    eight-second window and reports a failure if enough qualified frames do not
@@ -590,7 +594,9 @@ ADC headroom or calibrated output power.
    **Export result…** offers JSON, CSV and (for a valid spectrum) PNG. JSON contains the station settings, source and capture
    identities, timestamps, correction state, spectrum, noise limitations and
    reference conventions. Each completed capture includes its original IQ
-   samples and a SHA-256 checksum for offline analysis. Exporting collects no
+   samples and a SHA-256 checksum for offline analysis. JSON and CSV also retain
+   each capture's reported IQ stream ID and acquisition generation; unavailable
+   identities remain explicitly unknown. Exporting collects no
    new samples and never transmits. IMD is labeled both per tone and relative to
    fundamental-derived PEP; the separately measured sample-peak reference is
    retained in the export. Raw IQ levels are not calibrated dBFS or watts.

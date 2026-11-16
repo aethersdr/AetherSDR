@@ -39,7 +39,7 @@ QByteArray encode(const QJsonObject& object)
 }
 QJsonObject manifest()
 {
-    return {{"capture_id", kId}, {"format", "f32le-iq-v1"}, {"sample_rate_hz", 192000},
+    return {{"capture_id", kId}, {"format", "f32le-iq-v1"}, {"source", QJsonObject{{"kind", "local_dax_iq"}, {"stream_id", 1073741825}, {"generation", "7"}}}, {"sample_rate_hz", 192000},
         {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
         {"keyed", true}, {"correcting", true}, {"first_receive_ns", "1000000000"},
         {"last_receive_ns", "1085000000"}};
@@ -101,6 +101,65 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     bool ok = true;
+    for (const int status : {404, 501, 401, 503, 200}) {
+        Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0, ready = 0;
+        setup(source, frames, errors);
+        ok &= check(source.start(config()) && source.checkReceiveReady([&] { ++ready; }), "version fixture failed");
+        const QList<QTimer*> timers = source.findChildren<QTimer*>(QString(), Qt::FindDirectChildrenOnly);
+        QThread::msleep(15);
+        network.last->complete(status, "{}");
+        if (status == 404 || status == 501) {
+            ok &= check(network.sent.size() == 2
+                && network.last->url().path() == QStringLiteral("/v1/aetherpd/capture")
+                && timers.size() == 1 && timers[0]->remainingTime() < 5990,
+                "explicit version absence must fall back once without resetting deadline");
+            QJsonObject legacy = receiveManifest(); legacy.remove(QStringLiteral("source"));
+            network.last->complete(200, encode(legacy));
+            for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
+            ok &= check(ready == 1 && errors == 0 && !source.receiveSourceIdentity(),
+                "legacy readiness must not invent identity");
+        } else {
+            ok &= check(network.sent.size() == 1 && errors == 1 && ready == 0,
+                "authentication, server or malformed success must not downgrade");
+        }
+    }
+    for (const int fault : {0, 1, 2}) {
+        Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0;
+        setup(source, frames, errors);
+        ok &= check(source.start(config()), "fallback refusal fixture failed"); source.setGateOpen(true);
+        if (fault == 0) { network.last->complete(404, QByteArray(8193, 'x')); }
+        if (fault == 1) { network.last->complete(0, {}, QNetworkReply::TimeoutError); }
+        if (fault == 2) {
+            QJsonObject missing = manifest(); missing.remove(QStringLiteral("source"));
+            network.last->complete(200, encode(missing));
+        }
+        ok &= check(network.sent.size() == 1 && frames == 0 && errors == 1,
+            "oversized, timed out or incomplete v2 response must not downgrade");
+    }
+    for (const int fault : {0, 1, 2, 3, 4}) {
+        Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0, ready = 0;
+        setup(source, frames, errors);
+        ok &= check(source.start(config()) && source.checkReceiveReady([&] { ++ready; }), "identity fixture failed");
+        network.last->complete(200, encode(receiveManifest()));
+        for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
+        ok &= check(ready == 1 && source.receiveSourceIdentity().has_value(), "verified source not exposed");
+        source.setGateOpen(true);
+        QJsonObject keyed = manifest();
+        QJsonObject identity = keyed.value("source").toObject();
+        if (fault == 0) { identity["generation"] = "8"; keyed["source"] = identity; }
+        if (fault == 1) { identity["stream_id"] = 1073741826; keyed["source"] = identity; }
+        if (fault == 2) { keyed.remove(QStringLiteral("source")); }
+        network.last->complete(fault >= 3 ? (fault == 3 ? 404 : 501) : 200, encode(keyed));
+        if (fault == 0) {
+            for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
+            ok &= check(frames == 1 && errors == 0, "normal RX to TX generation change rejected");
+        } else {
+            ok &= check(frames == 0 && errors == 1 && network.sent.size() == 34,
+                "changed stream, missing identity or negotiated downgrade accepted");
+        }
+        source.stop();
+        ok &= check(!source.receiveSourceIdentity(), "stopped capture retained live identity");
+    }
     {
         using namespace AetherSDR::txlin;
         Network network;
@@ -167,7 +226,8 @@ int main(int argc, char** argv)
         ok &= check(ready == 1 && frames == 0 && errors == 0 && network.sent.size() == 33,
                     "readiness published a frame, repeated or did not complete");
         for (const Network::Sent& sent : network.sent) {
-            ok &= check(sent.body.isEmpty() && sent.request.url().path().startsWith(QStringLiteral("/v1/aetherpd/capture")),
+            ok &= check(sent.body.isEmpty() && (sent.request.url().path() == QStringLiteral("/v2/aetherpd/capture")
+                || sent.request.url().path().startsWith(QStringLiteral("/v1/aetherpd/capture/"))),
                         "receive readiness issued a control request");
         }
         source.setGateOpen(true);
@@ -261,13 +321,14 @@ int main(int argc, char** argv)
         ok &= check(source.start(config()) && network.sent.empty(), "start issued a request before gate opened");
         source.setGateOpen(true);
         ok &= check(network.sent.size() == 1 && network.sent[0].method == QNetworkAccessManager::PostOperation
-                    && network.sent[0].request.url().path() == QStringLiteral("/v1/aetherpd/capture"), "wrong begin request");
+                    && network.sent[0].request.url().path() == QStringLiteral("/v2/aetherpd/capture"), "wrong begin request");
         completeCapture(network);
         ok &= check(frames == 1 && errors == 0 && captured && captured->feedback.size() == 16384, "complete frame not delivered");
         ok &= check(captured && !captured->reference && !captured->clippingKnown
                     && captured->sourceCaptureId == kId.toStdString() && captured->correctionActive == true
                     && captured->timestampNs == 1000000000 && captured->sampleRateHz == 192000
-                    && captured->centerFreqHz == 7150000, "capture provenance lost");
+                    && captured->centerFreqHz == 7150000
+                    && captured->sourceStream == AetherSDR::txlin::CaptureStreamIdentity{1073741825, 7}, "capture provenance lost");
         if (captured) {
             for (const std::complex<float>& sample : captured->feedback) {
                 ok &= check(sample == std::complex<float>(0.5f, -0.25f), "raw IQ altered");

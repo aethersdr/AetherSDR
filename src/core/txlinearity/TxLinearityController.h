@@ -46,6 +46,7 @@ struct LinearityCaptureStamp {
     std::uint64_t timestampNs = 0;
     // Original bounded feedback, retained only after confirmed TX release.
     std::vector<std::complex<float>> feedback;
+    std::optional<CaptureStreamIdentity> sourceStream;
 };
 
 struct LinearityRunResult {

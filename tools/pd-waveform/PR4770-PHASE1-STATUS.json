@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T11:44:08.942659+00:00",
+  "updated_utc": "2026-11-16T11:56:38.549047+00:00",
   "original_pr_head": "2b723cde563ec264999cdfaafe6af8f5707b61e4",
   "current_base": "23ccdf7fb504e0019759dab249132dfc5b223bd7",
   "phase1_complete": false,
@@ -45,10 +45,11 @@
     },
     {
       "feature": "DAX channel and feedback pan selection",
-      "status": "Versioned capture API and desktop parser now retain the sampled stream/generation; adapter/UI integration and actual channel/pan binding remain incomplete",
-      "remaining": "Integrate v2 capture provenance in adapter/results/UI; do not infer channel/pan identifiers from stream ID. Selectable alternatives still need ownership/capability contract.",
+      "status": "Versioned sampled stream/generation retained through desktop adapter, controller, display and exports; component-qualified only",
+      "remaining": "Actual channel/pan binding and selectable alternatives still need ownership/capability contract. Do not infer them from a stream ID. Connected final-candidate qualification remains open.",
       "evidence": [
-        "CAPTURE-SOURCE-IDENTITY-QUALIFICATION.json"
+        "CAPTURE-SOURCE-IDENTITY-QUALIFICATION.json",
+        "CAPTURE-DESKTOP-QUALIFICATION.json"
       ]
     },
     {
@@ -85,7 +86,7 @@
     "Resolve analyzer deadline semantics and causal socket-free regression before exposing timeout adjustment",
     "Complete connected final-desktop/RF and platform qualification after radio returns"
   ],
-  "radio_state": "2026-11-16T11:15:47Z API4992/shim48992/SSH22222 timed out. No new reboot or RF commands.",
+  "radio_state": "2026-11-16T11:52:17Z API4992/shim48992/SSH22222 timed out. No new reboot or RF commands.",
   "measurement_retirement_fix": "MEASUREMENT-RETIREMENT-QUALIFICATION.json: prevents microphone fall-through and late prepared-packet output after source expiry; component-qualified, not installed. Does not prove physical RF-off or close10second unkey contract.",
   "guardian_deadline_evidence": "GUARDIAN-DEADLINE-QUALIFICATION.json: rejects overdue startup readiness; injected cleanup delay demonstrates11400/13000ms unkey request, not physical RF release. Best-effort validated unkey retained."
 }

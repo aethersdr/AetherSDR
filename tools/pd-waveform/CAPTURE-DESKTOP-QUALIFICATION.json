@@ -1,0 +1,40 @@
+{
+  "updated_utc": "2026-11-16T11:56:38.549047+00:00",
+  "base_commit": "8afbba58931a4427fa2e3694f5f53627059a8b0c",
+  "status": "Desktop v2 capture, provenance display and exports component-qualified; not installed or live-qualified",
+  "installed": false,
+  "production_ready": false,
+  "radio_used": false,
+  "implemented": [
+    "Prefer v2 capture; only initial HTTP404/501 permits legacy retry without extending capture deadline. Negotiated v2 cannot downgrade.",
+    "Retain completed receive stream identity and require keyed captures to use that stream. Normal receive-to-transmit generation change remains allowed.",
+    "Reject averaging across different stream IDs, acquisition generations or known/unknown identity.",
+    "Preserve source identity in capture stamps, JSON and CSV; identify sampled stream in preparation/result text and PNG description.",
+    "Legacy source identity remains explicitly unknown; channel number, panadapter and antenna are not inferred."
+  ],
+  "validation": {
+    "adapter_and_controller": "2/2 passed, 6.49 s",
+    "composed_model_tx_integration": "1/1 passed, 10.05 s; injected transport only, no RF",
+    "docs": "Docusaurus build passed",
+    "static": "Registration and generated-reference checks passed; log-rule checker passed 767 checks with 12 pre-existing unrelated moved line-number notes.",
+    "desktop": "Full AetherSDR build passed; existing unrelated SFINAE/unused-function warnings retained in log.",
+    "final_capture_controller_dialog": "3/3 passed, 6.63 s; verifies full uint64 CSV generation, unknown legacy identity, PNG description, stream changes, and rejected downgrade/oversize/timeout.",
+    "preview": "680x700 offscreen receive-ready preview inspected; stream identity visible and controls fit."
+  },
+  "remaining": [
+    "Refresh reproducible ARMv7/ARM64 release packages; recent native guardian and Go metadata changes are not in the installed radio candidate.",
+    "Radio API/shim/SSH still time out at 2026-11-16T11:52:17Z after prior reboot; live install/reboot/RF validation remains unavailable.",
+    "Ten-second RF release contract, sustained correction defects, final stock APD comparison, actual6300 validation and full P1-P10 release gates remain open."
+  ],
+  "evidence_directory": "evidence/20261116-capture-desktop",
+  "evidence_sha256": {
+    "core-tests.log": "fa8650f446f04c33dc323c238af9f07e853d530f020a80b0ff53918a2bdc0063",
+    "desktop-build.log": "c70d1e5921bebcf6619585cbf648f6dd5091d2b5e1737dce70085a98d804adc6",
+    "desktop-source-preview.png": "3dd8f51a5543df4ef71165770cfbd3df9ad76021f2a1c8f79cc547fde82b3be3",
+    "docs-build.log": "cf8d6c77d28710b026536d285c25d38421f3c0aa61c4bd38ffab2433579d7bcd",
+    "final-tests.log": "487daeb438c717f90cd79844ff33225b9d843d06c0301d5b4b48681b383c88d0",
+    "integration-tests.log": "32d73cbb5f4fc3a384172842eb1a9fe6a0e79a3cc00a77296fdef72d1f9e3d48",
+    "radio-reachability.json": "e10a995d4e84bc201aeb130f259327151ad3b6bf2fcdbd628bd2474bd489072f",
+    "test-build.log": "1c977d751d0b1dfd8cafcb849d269cca9a60ffe41532c037800bbf1af48eaf81"
+  }
+}

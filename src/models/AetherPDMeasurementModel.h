@@ -39,6 +39,7 @@ public:
         QDateTime completedAtUtc;
         quint64 sourceId{0};
         QByteArray toCsv() const;
+        QString sourceSummary() const;
     };
     explicit AetherPDMeasurementModel(RadioModel& radio);
     AetherPDMeasurementModel(RadioModel& radio, QNetworkAccessManager& network);
