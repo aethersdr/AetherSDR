@@ -1,0 +1,99 @@
+{
+  "updated_utc": "2026-11-16T12:01:25.825941+00:00",
+  "source_commit": "5eb8f87a462897d6608d99527e8239c67990d45a",
+  "previous_source_commit": "fdef108dcd60b807edc6b9739654939787b0b113",
+  "status": "Complete runtime releases reproduced from two paths; authenticated upgrade capacity boundaries passed",
+  "installed": false,
+  "production_ready": false,
+  "radio_used": false,
+  "architectures": {
+    "armv7": {
+      "release_bytes": 9335607,
+      "expanded_bytes": 22690730,
+      "changed_payload_files": [
+        {
+          "name": "flex-tailnet-shim",
+          "byte_delta": 0,
+          "sha256": "07a81947dfaaf894c9b1a19452ea1d42c80780160c0bd75e9aecf18730e1610d"
+        },
+        {
+          "name": "pd-unkey-guard",
+          "byte_delta": 912,
+          "sha256": "0e50d33198d0194ce99d7a2ded98922e58361d9964a41a6a20da2287597be6cc"
+        }
+      ],
+      "identical_release": true,
+      "identical_manifest": true,
+      "release_sha256": "8a516ff0e97f8f3fafb1698589f6b586000793c6995bdb1647cd63c0221d5401",
+      "native_release_verified": true,
+      "artifact": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/runtime-capture-guardian/short/armv7/candidate.release"
+    },
+    "arm64": {
+      "release_bytes": 9009195,
+      "expanded_bytes": 22300794,
+      "changed_payload_files": [
+        {
+          "name": "flex-tailnet-shim",
+          "byte_delta": 0,
+          "sha256": "acfaa05c0fac8bef1a62914a64c077ee3af3aed0a037347f34a71b05f6c87890"
+        },
+        {
+          "name": "pd-unkey-guard",
+          "byte_delta": 632,
+          "sha256": "9e16848c15ef86b4bcbe6a1eabf3229fbd368fd32bcd3f406211ff3d954642fd"
+        }
+      ],
+      "identical_release": true,
+      "identical_manifest": true,
+      "release_sha256": "2f564105afc1eb1e52c166dd6cfeb926526489020ca75c81f2b3b8fa8e996667",
+      "native_release_verified": true,
+      "artifact": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/runtime-capture-guardian/short/arm64/candidate.release"
+    }
+  },
+  "storage": {
+    "boundary_checks": 32,
+    "scope": "8 architecture/block/filesystem combinations; exact bytes and inodes accepted, one short refused, actual prior/new signed package inventories",
+    "worst_armv7_peak_bytes": 39424000,
+    "headroom_against_41_decimal_MB": 1576000
+  },
+  "included_changes": [
+    "Measurement retirement silence fix from prior runtime remains byte-identical.",
+    "Guardian now rejects overdue startup readiness while retaining best-effort ownership-validated unkey after delay.",
+    "Go private v6/public capture v2 source metadata; legacy public capture unchanged. Primary/private processes ship together."
+  ],
+  "component_evidence": [
+    "MEASUREMENT-RETIREMENT-QUALIFICATION.json",
+    "GUARDIAN-DEADLINE-QUALIFICATION.json",
+    "CAPTURE-SOURCE-IDENTITY-QUALIFICATION.json",
+    "CAPTURE-DESKTOP-QUALIFICATION.json"
+  ],
+  "limits": [
+    "Same host and pinned toolchains; not independent-host reproduction.",
+    "Development signing seed remained in memory/pipes; packages are not installed and do not authorize a deployed trust-key rotation.",
+    "Synthetic capacity with explicit state/metadata allowances. No fresh FLEX-6300 filesystem or first-install transient adapter measurement.",
+    "A full additional persistent upload still exceeds the modeled budget.",
+    "Exact installed candidate startup/reboot/RF, full failure matrix, actual6300 and P1-P10 release gates remain open.",
+    "Ten-second physical RF-release contract remains unresolved."
+  ],
+  "radio_discovery": "No target-serial UDP4992 broadcast during an eight-second passive listen at 2026-11-16T12:00:06Z. This does not establish power state or exclude network isolation.",
+  "evidence_directory": "evidence/20261116-runtime-capture-guardian",
+  "evidence_sha256": {
+    "budget-build.log": "02db3e662f2ff56ea5f9d868679fce74da88cb767311b97c632c29176e52a586",
+    "budget-command.json": "5eb29f9063d006e1b33ebb42045f65fea672e1d4845d598f0e790f297aeb7a87",
+    "budget-report.json": "0bdb041686bfd889814d42d2767db3cd0dde75da1e61f3b53349298553582a62",
+    "budget-run.log": "aa5541ed21b25cf8ee41292e9f38a45da1b9319a369c5e2f694e11380f723548",
+    "budget_probe.c": "f5d72290ab6e38954c8208eec6990e9d26a75a89bf7ac79f7888c8cd1d04e042",
+    "build-budget.py": "d64c3ce136a7e958cc24008104b0fe6d65832c66cc6faddb9a56a19667c02d06",
+    "measure-budget.py": "24033d44d93eab404252c6ed39d9ba218885aabe25fa4899b78324518f17fac6",
+    "payload-comparison.json": "dd47458c32188506016f07b252988122253370533f9d11f6b62807fcfbef8b40",
+    "radio-discovery.json": "6e008215be23a1c5a41af4b9b8f1f21be4e7a4bf65cd2730078a3e624113635e",
+    "report.json": "237431842d0f15041fe4d64791b2025a9a90b7784296b16879b2b22ceafaa8f1",
+    "run.log": "f7ae640d40e4abbe2a0c910ad28c4adaffe0d6e83fbf99d527f41a4ed054ae7a",
+    "run.py": "1c70f0e3672700d458aa5775cf2eb9856f3325c261eb6bfbee62d8acc999b15d",
+    "second-distinct-long-source-path-arm64.log": "3171f2106c1487140473ef28a49b2f8c18b4c099de27d8ee4bd5e3c2a15baca5",
+    "second-distinct-long-source-path-armv7.log": "ed1d600906929f4a5ea20f38dd24d1f107800d81938d4f0612e4bd7e901008f9",
+    "short-arm64.log": "24fdc42d37cf69dbc6426267260ffbbf7526cec6dcc45085b857a21095ae54f2",
+    "short-armv7.log": "ecd6b6a7c6760ee8634ac30e06aa8954cde37003a5b595aba818f02d4d23ca64",
+    "source-sha256.json": "7af8b69509499cd02ffc34bdf85b84dce2d05810a1fe37243b6dc4d59405f64e"
+  }
+}

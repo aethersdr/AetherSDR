@@ -22,7 +22,7 @@
     "preview": "680x700 offscreen receive-ready preview inspected; stream identity visible and controls fit."
   },
   "remaining": [
-    "Refresh reproducible ARMv7/ARM64 release packages; recent native guardian and Go metadata changes are not in the installed radio candidate.",
+    "Install and qualify the exact packaged runtime and desktop after radio returns; signing/test packages do not authorize deployed trust-key rotation.",
     "Radio API/shim/SSH still time out at 2026-11-16T11:52:17Z after prior reboot; live install/reboot/RF validation remains unavailable.",
     "Ten-second RF release contract, sustained correction defects, final stock APD comparison, actual6300 validation and full P1-P10 release gates remain open."
   ],
@@ -36,5 +36,6 @@
     "integration-tests.log": "32d73cbb5f4fc3a384172842eb1a9fe6a0e79a3cc00a77296fdef72d1f9e3d48",
     "radio-reachability.json": "e10a995d4e84bc201aeb130f259327151ad3b6bf2fcdbd628bd2474bd489072f",
     "test-build.log": "1c977d751d0b1dfd8cafcb849d269cca9a60ffe41532c037800bbf1af48eaf81"
-  }
+  },
+  "runtime_followup": "CAPTURE-GUARDIAN-RUNTIME-QUALIFICATION.json: current runtime source packaged reproducibly for both architectures and upgrade capacity boundaries passed; not installed."
 }

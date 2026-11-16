@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Desktop sampled DAX IQ identity integration qualified offline. Radio still unavailable after one reboot. Next: refresh exact runtime package qualification and resolve analyzer deadline contract; live first-install/reboot/RF and full P1-P10 gates remain open.",
+  "current_focus": "Current guardian/capture runtime packages reproduce byte-for-byte and pass modeled upgrade capacity boundaries. Radio API/shim/SSH unavailable; passive discovery found no target broadcast. Resolve analyzer deadline semantics and remaining offline production gates; live first-install/reboot/RF and actual6300 qualification remain open.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2876,5 +2876,11 @@
     "status": "Producer/parser and desktop capture/controller/UI/exports component-qualified; not installed",
     "installed": false,
     "desktop_report": "CAPTURE-DESKTOP-QUALIFICATION.json"
+  },
+  "capture_guardian_runtime": {
+    "report": "CAPTURE-GUARDIAN-RUNTIME-QUALIFICATION.json",
+    "source_commit": "5eb8f87a462897d6608d99527e8239c67990d45a",
+    "status": "Two-path ARMv7/ARM64 complete releases and 32 upgrade capacity boundaries passed; not installed",
+    "installed": false
   }
 }

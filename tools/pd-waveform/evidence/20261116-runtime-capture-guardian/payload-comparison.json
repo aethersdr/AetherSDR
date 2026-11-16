@@ -1,0 +1,34 @@
+{
+  "armv7": {
+    "release_bytes": 9335607,
+    "expanded_bytes": 22690730,
+    "changed_payload_files": [
+      {
+        "name": "flex-tailnet-shim",
+        "byte_delta": 0,
+        "sha256": "07a81947dfaaf894c9b1a19452ea1d42c80780160c0bd75e9aecf18730e1610d"
+      },
+      {
+        "name": "pd-unkey-guard",
+        "byte_delta": 912,
+        "sha256": "0e50d33198d0194ce99d7a2ded98922e58361d9964a41a6a20da2287597be6cc"
+      }
+    ]
+  },
+  "arm64": {
+    "release_bytes": 9009195,
+    "expanded_bytes": 22300794,
+    "changed_payload_files": [
+      {
+        "name": "flex-tailnet-shim",
+        "byte_delta": 0,
+        "sha256": "acfaa05c0fac8bef1a62914a64c077ee3af3aed0a037347f34a71b05f6c87890"
+      },
+      {
+        "name": "pd-unkey-guard",
+        "byte_delta": 632,
+        "sha256": "9e16848c15ef86b4bcbe6a1eabf3229fbd368fd32bcd3f406211ff3d954642fd"
+      }
+    ]
+  }
+}
