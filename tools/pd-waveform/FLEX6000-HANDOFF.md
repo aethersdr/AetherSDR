@@ -20,10 +20,20 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The current measured package is about 9 MB. Budget installed compressed
-payloads, staging, an old rollback copy, filesystem allocation and a small
-identity/configuration reserve before uploading. The reported 6300 has
-41 MB free in `/user`; other 6000 models may have much smaller partitions.
+The independently rebuilt ARMv7 runtime release is 9,331,383 bytes; its
+expanded executables/licenses occupy 22,688,874 bytes in RAM. Both ARMv7 and
+ARM64 runtime releases reproduced byte for byte with pinned compilers on the
+same host. This does not qualify the first-install adapter or radio operation.
+See [runtime package qualification](./RUNTIME-PACKAGE-QUALIFICATION.md).
+
+The calculated ARMv7 successor-upgrade budget is up to 39,411,712 bytes,
+including the existing compacted installation, stated state/metadata allowances,
+transient files and the native 8 MiB reserve. Against a conservative decimal
+interpretation of the reported 41 MB free, only 1,588,288 bytes remain.
+One extra full release archive does not fit. The final 6000 adapter must account
+for firmware-retained upload/extraction copies as well as signed input staging;
+that adapter and first-install high-water measurement remain unqualified.
+Other 6000 models may have much smaller partitions.
 Keep expanded executables, logs, packet captures and caches in RAM. Persistent
 identity and atomic update/rollback still need a qualified installer.
 

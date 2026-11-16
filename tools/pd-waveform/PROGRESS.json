@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T08:12:07.223350+00:00",
+  "updated_utc": "2026-11-16T08:25:32.186292+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Continue remaining transaction interruption and production package gates using current qualified retry identity. Stopped-carrier cancellation regression is fixed; image-only cleanup and 6000 adapter/hardware remain distinct limitations.",
+  "next_action": "Continue final installed-session DSP/alignment and failure qualification on 8600. Preserve current qualified retry identity. Runtime binaries reproduce on both architectures; 6000 first-install adapter, firmware-retained upload budget and actual hardware qualification remain open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2392,5 +2392,25 @@
       "tests/aetherpd_installation_coordinator_test.cpp": "d78cb5d3d9cd82ebd734d6e23af37331f0c3a35f1e1490b4cdc314a88ad8d817",
       "docs/user/docs/tailscale-remote-access.md": "048b4eb715249306569ccd7bb5a2ecf5fe776e4814fca3a3ae096495a04608cb"
     }
+  },
+  "runtime_rebuild_and_disk_budget": {
+    "source_commit": "6e37edc4da4732258351a7220ef0f2d13f45eeb7",
+    "evidence": "RUNTIME-PACKAGE-QUALIFICATION.json",
+    "status": "offline_runtime_rebuild_and_upgrade_budget_qualified_with_limits",
+    "reproduced_architectures": [
+      "armv7",
+      "arm64"
+    ],
+    "armv7_release_bytes": 9331383,
+    "arm64_release_bytes": 9005703,
+    "armv7_successor_peak_budget_bytes_4k_same_volume": 39411712,
+    "remaining_from_reported_41_decimal_MB": 1588288,
+    "native_admission_boundary_checks": 32,
+    "production_ready": false,
+    "remaining": [
+      "6000 first-install adapter and retained upload storage budget",
+      "Actual 6300 kernel, disk/CPU and RF qualification",
+      "Final product signing/toolchain/release gates"
+    ]
   }
 }
