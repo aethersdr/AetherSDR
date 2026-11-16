@@ -548,6 +548,29 @@ int main(int argc, char** argv)
         // replace the stale stored pan rectangles, not merely rearrange the
         // hidden legacy splitter. It changes only active-main live pans:
         // applets and extra surfaces remain the operator arranged them.
+        // Reflow the same first two pans with the legacy panel preference on:
+        // canvas applets already have independent positions, so no strip is
+        // reserved for the invisible panel on either side (#7381).
+        const QString initialPan0 = ctl.panItemIdFor(QStringLiteral("0x40000000"));
+        const QString initialPan1 = ctl.panItemIdFor(QStringLiteral("0x40000002"));
+        canvas.setItemRect(initialPan0, NormRect{0.0, 0.0, 1.0, 1.0});
+        canvas.setItemRect(initialPan1, NormRect{0.0, 0.0, 1.0, 1.0});
+        ctl.commitPlacement();
+        AppSettings::instance().setValue(QStringLiteral("AppletPanelVisible"),
+                                         QStringLiteral("True"));
+        AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
+                                         QStringLiteral("True"));
+        AppSettings::instance().setValue(QStringLiteral("Applet_RX"),
+                                         QStringLiteral("True"));
+        AppSettings::instance().save();
+        report("two canvas pans fill width despite the hidden left panel",
+               ctl.applyPanLayout(QStringLiteral("2v"))
+                   && nearly(canvas.itemRect(initialPan0).x, 0.0)
+                   && nearly(canvas.itemRect(initialPan0).w, 1.0)
+                   && nearly(canvas.itemRect(initialPan0).h, 0.5)
+                   && nearly(canvas.itemRect(initialPan1).x, 0.0)
+                   && nearly(canvas.itemRect(initialPan1).w, 1.0)
+                   && nearly(canvas.itemRect(initialPan1).y, 0.5));
         auto* panD2 = new QWidget(&panOwner);
         auto* panE2 = new QWidget(&panOwner);
         pans.insert(QStringLiteral("0x40000010"), panD2);
@@ -578,7 +601,7 @@ int main(int argc, char** argv)
         AppSettings::instance().save();
         report("canvas pan layout accepts canonical 4v",
                ctl.applyPanLayout(QStringLiteral("4v")));
-        const double classicPanWidth = 1.0 - AetherSDR::kClassicAppletColumnWidth;
+        const double classicPanWidth = 1.0;
         report("4v replaces stale pan rectangles with canonical cells",
                nearly(canvas.itemRect(pan0).x, 0.0)
                    && nearly(canvas.itemRect(pan0).y, 0.0)
@@ -587,6 +610,18 @@ int main(int argc, char** argv)
                    && nearly(canvas.itemRect(pan1).y, 0.25)
                    && nearly(canvas.itemRect(pan2).y, 0.50)
                    && nearly(canvas.itemRect(pan3).y, 0.75));
+        // The classic applet panel is hidden while canvas mode is active.
+        // Saved docking preferences must not shrink or shift canvas pans.
+        AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
+                                         QStringLiteral("True"));
+        AppSettings::instance().save();
+        report("left-docked applet preference cannot leave a canvas gap",
+               ctl.applyPanLayout(QStringLiteral("4v"))
+                   && nearly(canvas.itemRect(pan0).x, 0.0)
+                   && nearly(canvas.itemRect(pan0).w, 1.0));
+        AppSettings::instance().setValue(QStringLiteral("AppletPanelDockedLeft"),
+                                         QStringLiteral("False"));
+        AppSettings::instance().save();
         report("canvas pan layout preserves applet and extra surface",
                canvas.itemRect(QStringLiteral("applet:RX")) == appletBefore
                    && !preservedSurface.isEmpty()

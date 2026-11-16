@@ -44,6 +44,8 @@ In edit posture:
 
 Positions are stored as fractions of the canvas, so a layout made on a 3840 × 1600 screen comes back in proportion on 1920 × 1080.
 
+When you choose **Tools → Add Panadapter...**, the selected pan layout rearranges the main-canvas pans across the full canvas width. Applets keep their own canvas positions; the applet-panel docking preference is used only in Classic mode, so it cannot leave an empty strip beside the pans.
+
 ### Named workspaces
 
 **View → Workspace Canvas → Workspaces ▸** lists your workspaces with a check mark on the active one. Switching restores both which applets are open and where everything sits.
