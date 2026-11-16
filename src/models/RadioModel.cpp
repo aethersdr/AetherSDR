@@ -8685,6 +8685,13 @@ void RadioModel::onDisconnected()
     m_backendObservedTransmit = false;
     m_radioTransmitting = false;
     emit radioTransmittingChanged(false);
+    // Transmitter ownership belonged to the session that ended. Left stale, a
+    // multiFLEX disconnect while another station held TX would keep
+    // txOwnedByUs() false into the next session, and only the Flex interlock
+    // ever rewrites it: an HL2 or demo session would never send TCI
+    // tx_sensors. A Flex reconnect re-reads the owner from the next interlock.
+    m_txClientHandle = 0;
+    m_txOwnedByUs = true;
     if (m_profileDatabaseImporting) {
         m_profileDatabaseImporting = false;
         emit profileDatabaseImportingChanged(false);

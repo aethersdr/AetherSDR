@@ -8059,6 +8059,14 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_trxmap_test COMMAND tci_trxmap_test)
 
+    # Socket-free: the tx_sensors gate (TciServer::txSensorsKeyed) against the
+    # real RadioModel, and the TX ownership reset on disconnect. No TciServer
+    # is started; no listener, client or radio.
+    add_executable(tci_tx_sensors_gate_test tests/tci_tx_sensors_gate_test.cpp)
+    target_include_directories(tci_tx_sensors_gate_test PRIVATE src tests)
+    target_link_libraries(tci_tx_sensors_gate_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_tx_sensors_gate_test COMMAND tci_tx_sensors_gate_test)
+
     add_executable(tci_automation_test tests/tci_automation_test.cpp)
     target_include_directories(tci_automation_test PRIVATE src tests)
     target_link_libraries(tci_automation_test PRIVATE
