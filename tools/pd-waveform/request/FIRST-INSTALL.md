@@ -551,10 +551,41 @@ native uninstall, but desktop cleanup timed out as unconfirmed. The retry itself
 completed with cleanup confirmed. The wire evidence is retained; the earlier
 carrier-image inventory was not captured, so absence from the waveform list must
 not be promoted to proof that the image was gone. This cancellation case remains
-a separate cleanup reconciliation gate.
+a separate cleanup reconciliation result, addressed by the regression below.
 
 These results qualify one process-crash point and one completed-install reboot,
 not physical power loss, every transaction boundary, other firmware or the 6000.
+
+## Disappeared-carrier cleanup regression
+
+The fixed desktop requests removal once for a carrier it previously observed,
+even if firmware reports that carrier removed before cancellation. It requires
+an accepted removal reply and current absence before confirming public cleanup.
+A carrier that was never observed remains unconfirmed; cleanup does not recreate
+or re-upload it. Rejected and missing replies cannot become success.
+
+A separate inert fixture on FLEX-8600 4.3.16.42034 demonstrated why both steps are
+needed: a stopped container produced a `removed` waveform status while its exited
+container and image remained. The ordinary `waveform remove_container` request
+then removed both. The installed shim retained its PID and identity throughout.
+This does not change the earlier image-only negative result: a list omission
+alone is still not an independent container/image audit.
+
+`DISAPPEARED-CARRIER-CLEANUP-QUALIFICATION.json` records the desktop regression
+and repeated live failed-install test. The new injected-transport regression fails
+against the prior implementation because no removal request is sent. A separate
+mutation that bypasses the acknowledgment gate also fails. The three installation
+suites and full desktop build pass.
+
+During the repeated live ACTIVATING crash, the original identity survived local
+rollback. Firmware removed the carrier from its list before cancellation. The
+fixed desktop confirmed cancellation cleanup in 0.356 seconds. Independent host
+inspection then found no matching carrier container or image, native installer
+files (including firmware's shortened basename), installation capsule, temporary
+worker units or runtime processes. A subsequent explicit saved-attempt retry
+committed the same plan and preserved the identity. Independent keychain
+authentication and a final host audit confirmed the working unprivileged primary
+and removal of installer resources. No RF was transmitted.
 
 ## Remaining gates
 

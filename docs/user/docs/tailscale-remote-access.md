@@ -666,6 +666,10 @@ FLEX-6000 installation still require qualification.
 
 A confirmed update and confirmed cleanup are separate results. If cleanup is
 unconfirmed, the window says so even when the radio confirmed the new payload.
+Cleanup still requests removal of an installer that appeared and then disappeared
+from the waveform list: a stopped installer can leave files on the radio. The
+window waits for the removal acknowledgment and the installer's absence; a rejected
+or missing acknowledgment leaves cleanup unconfirmed.
 A connection change requires reopening the window; an old window cannot approve
 a plan for the replacement connection. Fixed boot/session helpers remain installed
 for reboot and local IQ setup; temporary delivery and upgrade workers are retired.

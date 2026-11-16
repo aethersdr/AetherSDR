@@ -257,6 +257,9 @@ private slots:
         QCOMPARE(f.transfers.last(), "waveform uninstall " + prepared->nativeName());
         { const auto reply = f.transferReplies.last(); reply(0, {}); }
         f.carrier(false);
+        QVERIFY(done.isEmpty());
+        { const auto reply = f.transferReplies[f.transfers.indexOf("waveform remove_container " + prepared->carrierName())]; reply(0, {}); }
+        f.coordinator.poll();
         QCOMPARE(done.size(), 1); QCOMPARE(done.first()[0].value<Coordinator::Outcome>(), Coordinator::Outcome::Committed);
         QVERIFY(done.first()[1].toBool()); QVERIFY(!f.reserved());
         for (const auto& sent : f.network.sent) { QCOMPARE(sent.method, QNetworkAccessManager::GetOperation); }
@@ -275,6 +278,39 @@ private slots:
         QCOMPARE(done.size(), 1); QCOMPARE(done.first()[0].value<Coordinator::Outcome>(), Coordinator::Outcome::Canceled);
         QCOMPARE(f.archive.starts, 0); QVERIFY(f.network.sent.empty()); QVERIFY(!f.channel.connected);
         QVERIFY(prepared->used());
+    }
+
+    void freshCancelRemovesPreviouslyObservedCarrierAfterItDisappears()
+    {
+        for (const bool accepted : {false, true}) {
+            Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+            QSignalSpy done(&f.coordinator, &Coordinator::finished);
+            QVERIFY(f.coordinator.begin(*prepared, f.model.controlSession(), QString(64, u'a')));
+            { const auto reply = f.transferReplies.last(); reply(0, {}); }
+            { const auto reply = f.transferReplies.last(); reply(0, "42607"); }
+            f.archive.complete(); f.clock = 3000; f.coordinator.poll();
+            f.archive.complete(); f.carrier(true); f.carrier(false);
+            QCOMPARE(f.coordinator.state(), Coordinator::State::WaitingForCommit);
+            f.coordinator.cancel(); f.coordinator.poll();
+            const QString remove = "waveform remove_container " + prepared->carrierName();
+            const int removeIndex = f.transfers.indexOf(remove);
+            QVERIFY(removeIndex >= 0);
+            const int nativeIndex = f.transfers.indexOf("waveform uninstall " + prepared->nativeName());
+            QVERIFY(nativeIndex >= 0);
+            { const auto reply = f.transferReplies[nativeIndex]; reply(0, {}); }
+            f.coordinator.poll(); QVERIFY(done.isEmpty());
+            { const auto reply = f.transferReplies[removeIndex]; reply(accepted ? 0 : 1, {}); }
+            f.coordinator.poll();
+            if (!accepted) {
+                QVERIFY(done.isEmpty());
+                f.clock = 63000; f.coordinator.poll();
+            }
+            QCOMPARE(done.size(), 1);
+            QCOMPARE(done.first()[0].value<Coordinator::Outcome>(), Coordinator::Outcome::Canceled);
+            QCOMPARE(done.first()[1].toBool(), accepted);
+            QCOMPARE(f.transfers.count(remove), 1);
+            QCOMPARE(f.archive.starts, 1); QCOMPARE(f.archive.nativeStarts, 1);
+        }
     }
 
     void freshDestructorKeepsUploadSettleWindow()
@@ -390,6 +426,9 @@ private slots:
             job->poll(); QCOMPARE(attempts.size(), 1);
             { const auto reply = f.transferReplies.last(); reply(0, {}); }
             f.model.handleLineForTest("S0|waveform container name=" + model.carrierName() + " removed"); job->poll();
+            QCOMPARE(model.state(), AetherPDInstallationModel::State::Running);
+            { const auto reply = f.transferReplies[f.transfers.indexOf("waveform remove_container " + model.carrierName())]; reply(0, {}); }
+            job->poll();
             QCOMPARE(model.state(), AetherPDInstallationModel::State::PromotingCredential);
             QCOMPARE(attempts.size(), 2); QVERIFY(attempts.last().isEmpty()); QCOMPARE(tokens.first(), tokens.last());
             model.cancel(); QCOMPARE(model.state(), AetherPDInstallationModel::State::PromotingCredential);
@@ -745,6 +784,9 @@ private slots:
         // A restarted shim no longer has the retired receiver request.
         auto* request = f.pending('/' + f.coordinator.requestId()); QVERIFY(request);
         request->complete(404, "{}"); f.coordinator.poll();
+        QVERIFY(done.isEmpty());
+        { const auto reply = f.transferReplies[f.transfers.indexOf("waveform remove_container " + package->carrierName())]; reply(0, {}); }
+        f.coordinator.poll();
         QCOMPARE(done.size(), 1);
         QCOMPARE(done.first()[0].value<Coordinator::Outcome>(), Coordinator::Outcome::Committed);
         QVERIFY(done.first()[1].toBool());

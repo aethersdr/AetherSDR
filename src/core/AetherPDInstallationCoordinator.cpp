@@ -331,7 +331,9 @@ void AetherPDInstallationCoordinator::poll()
         if (m_requestStarted && !m_receiverRetired && !m_request->busy() && !m_stopSent) {
             m_stopSent = m_request->requestStop();
         }
-        if ((m_cleanupOnly || (m_carrierSeen && present)) && !m_removeSent) {
+        // FLEX-8600 4.3.16 can report a stopped carrier removed while retaining
+        // its container and image. Request removal even after that observation.
+        if ((m_cleanupOnly || m_carrierSeen) && !m_removeSent) {
             m_removeSent = true;
             const QPointer<AetherPDInstallationCoordinator> alive(this);
             m_model->requestWaveform({WaveformAction::RemoveContainer, carrierName()}, this,
@@ -342,8 +344,8 @@ void AetherPDInstallationCoordinator::poll()
                 });
             if (!alive || m_state == State::Finished) { return; }
         }
-        const bool absent = m_cleanupOnly ? m_cleanupRemoveAccepted && !present
-            : !m_carrierStarted || (m_carrierSeen && m_removeSent && !present);
+        const bool absent = !m_carrierStarted
+            || ((m_cleanupOnly || m_carrierSeen) && m_cleanupRemoveAccepted && !present);
         if (m_nativeStarted && !m_nativeRemoveSent) {
             m_nativeRemoveSent = true;
             const QPointer<AetherPDInstallationCoordinator> alive(this);

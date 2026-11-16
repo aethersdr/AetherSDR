@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T07:59:11.649880+00:00",
+  "updated_utc": "2026-11-16T08:12:07.223350+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Resolve the observed failed-install cancellation cleanup reconciliation case, then continue bounded transaction-interruption and remaining production gates; preserve current retried identity and prior backups.",
+  "next_action": "Continue remaining transaction interruption and production package gates using current qualified retry identity. Stopped-carrier cancellation regression is fixed; image-only cleanup and 6000 adapter/hardware remain distinct limitations.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2149,6 +2149,248 @@
       "post-reboot-inventory-job.py": "a440b026a73b004fbd185c589abf10f7bfd4c1bf8077d4af92c45dd4b24706f5",
       "post-reboot-inventory.json": "2154a62b2a2833fde1c7cda0e76ff707c69225338ba4bdf55e89432aae0a6fe7",
       "docs-build.log": "6a1145372126ca249362ca7585682e498b5686e11362c35b1f701ce623c5b682"
+    }
+  },
+  "disappeared_carrier_cleanup": {
+    "updated_utc": "2026-11-16T08:12:07.223350+00:00",
+    "status": "disappeared_stopped_carrier_cleanup_fixed_and_live_8600_qualified",
+    "production_ready": false,
+    "source_base": "d6b42f21458de0146ffc5689655ef6dc546c8ce2",
+    "firmware": "4.3.16.42034",
+    "native_package_unchanged": "0.0.0-retry.d60df159f",
+    "evidence": [
+      "disappeared-carrier-cleanup",
+      "first-install-failed-retry-cleanup-live"
+    ],
+    "cause": "Cleanup required current carrier presence before sending removal. Firmware can publish removed for an exited container while retaining both the container and image.",
+    "change": [
+      "Send exactly one removal request for the already-observed carrier even after it disappears.",
+      "Require accepted removal reply plus current absence before public cleanup confirmation.",
+      "Keep unseen-carrier, rejected/missing reply and replacement-session refusals; never recreate or upload during cleanup."
+    ],
+    "inert_firmware_probe": {
+      "rf_commands": [],
+      "fixture": {
+        "name": "aetherpd-retire-probe-20261114",
+        "image": "79c036d100439a4dd2fc13c02225b3215b5c2be1b37f77923bf88aea80ec0872",
+        "archive_sha256": "4d172231747fb5ce17cc26d42cff138eb1636770766d093f3a430b1e5ea6f050",
+        "binary_sha256": "207f5f97a86fe7574c52f062d1ab9c13d89baf3cb57de4d1a73d575d03da9bc3"
+      },
+      "original_modified": false,
+      "api": [
+        {
+          "command": "info",
+          "code": 0,
+          "body": "redacted identity check"
+        },
+        {
+          "command": "sub waveform all",
+          "code": 0,
+          "body": ""
+        },
+        {
+          "command": "waveform recreate aetherpd-retire-probe-20261114",
+          "code": 0,
+          "body": "Recreated waveform aetherpd-retire-probe-20261114"
+        },
+        {
+          "command": "sub waveform all",
+          "code": 0,
+          "body": ""
+        },
+        {
+          "command": "waveform remove_container aetherpd-retire-probe-20261114",
+          "code": 0,
+          "body": "Waveform removal started: aetherpd-retire-probe-20261114"
+        }
+      ],
+      "stages": [
+        {
+          "phase": "firmware_recreated",
+          "id": "2c6909b2b21e4957d690235e9a8d4b617b73a10c8d120f5e9fb70e90cd9d63bd",
+          "pid": 1577,
+          "unprivileged": true,
+          "restart": {
+            "Name": "always",
+            "MaximumRetryCount": 0
+          }
+        }
+      ],
+      "primary_pid_before": 913,
+      "stopped_container_retained": true,
+      "stopped_image_retained": true,
+      "events_before_remove": [
+        "S0|waveform container name=aetherpd-retire-probe-20261114 version=0.0.20261114",
+        "S0|waveform container name=aetherpd-retire-probe-20261114 version=0.0.20261114 removed"
+      ],
+      "before_remove_container_state": "exited",
+      "image_retained_after_api_removal": false,
+      "container_absent_after_api_removal": true,
+      "events": [
+        "S0|waveform container name=aetherpd-retire-probe-20261114 version=0.0.20261114",
+        "S0|waveform container name=aetherpd-retire-probe-20261114 version=0.0.20261114 removed"
+      ],
+      "passed": true,
+      "primary_same_pid": true,
+      "identity_unchanged": true,
+      "fixture_container_removed": true,
+      "fixture_image_removed": true
+    },
+    "live_cancel": {
+      "cleanup_s": 0.356,
+      "carrier_absent_before_cancel": true,
+      "independent_inventory": {
+        "rf_commands": [],
+        "processes": [],
+        "identity_sha256": "dac9c7673f8bf67b9d544471fa25410d19c1df0b016916d888fd7bcf2410c07d",
+        "temporary_paths": {
+          "/var/lib/smartsdr/aetherpd-installation": false,
+          "/run/aetherpd-install": false,
+          "/run/aetherpd-delivery": false,
+          "/etc/systemd/system/aetherpd-install.service": false,
+          "/etc/systemd/system/aetherpd-recover.service": false
+        },
+        "private_sockets": [],
+        "containers": [
+          "nereus-net-probe",
+          "AetherGPS",
+          "nereus-inprocess-job-72832413d0"
+        ],
+        "arp": [],
+        "accept_local": "0",
+        "legacy_container_absent": true,
+        "cached_first_artifacts": [],
+        "boot_id": "a1bf06e0-259a-4bae-991c-8d860884ec0a",
+        "all_runtime_unprivileged": true,
+        "matching_images": [],
+        "passed": true
+      }
+    },
+    "saved_retry": {
+      "exact_original_plan": "b8b7afbd8b0f100bccf6590f9bd09cd01b0675aef94a32483d7163b6293ab563",
+      "identity_preserved": true,
+      "separate_keychain_authentication": true,
+      "complete": true,
+      "final_audit": {
+        "rf_commands": [],
+        "processes": [
+          {
+            "pid": 4523,
+            "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+            "uid": "78666\t78666\t78666\t78666",
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000000000",
+              "CapEff": "0000000000000000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "1",
+            "sha256": "a949d292ada235f2cf9392e5c92c0162c05c24578901171c2885258e576b68f7",
+            "role": "primary",
+            "ppid": 1,
+            "state": "S (sleeping)",
+            "rss_kb": "18716 kB"
+          }
+        ],
+        "identity_sha256": "dac9c7673f8bf67b9d544471fa25410d19c1df0b016916d888fd7bcf2410c07d",
+        "temporary_paths": {
+          "/var/lib/smartsdr/aetherpd-installation": false,
+          "/run/aetherpd-install": false,
+          "/run/aetherpd-delivery": false,
+          "/etc/systemd/system/aetherpd-install.service": false,
+          "/etc/systemd/system/aetherpd-recover.service": false
+        },
+        "private_sockets": [],
+        "containers": [
+          "nereus-net-probe",
+          "AetherGPS",
+          "nereus-inprocess-job-afef052dae"
+        ],
+        "arp": [],
+        "accept_local": "0",
+        "legacy_container_absent": true,
+        "cached_first_artifacts": [],
+        "boot_id": "a1bf06e0-259a-4bae-991c-8d860884ec0a",
+        "all_runtime_unprivileged": true,
+        "failed_record_retained": true,
+        "retry_grant_consumed": true,
+        "matching_images": [],
+        "passed": true
+      }
+    },
+    "checks": {
+      "full_desktop_build": true,
+      "registered_installation_suites": 3,
+      "new_regression_failed_before_fix": true,
+      "ack_guard_mutation_detected": true,
+      "docs_build": true,
+      "strict_test_registration": true
+    },
+    "rf_commands": [],
+    "reboot_this_test": false,
+    "reboot_scope": "Unchanged native package passed software reboot and FDX-off IQ in DESKTOP-FIRST-INSTALL-FAILED-RETRY-QUALIFICATION.json; this desktop-only cleanup change did not repeat that test.",
+    "diagnostics_bridge_for_installation_delivery_or_authorization": false,
+    "prior_installation_preserved": "/var/lib/smartsdr/aetherpd-cleanup-backup-retry-qualified",
+    "current_identity_sha256": "dac9c7673f8bf67b9d544471fa25410d19c1df0b016916d888fd7bcf2410c07d",
+    "current_installation_id": "421daf94e1ebbd8502975ad35e9b47022548bff1883a17506db0eb32be5dc78c",
+    "current_attempt_journal": "first-install-failed-retry-cleanup-live/private-profile",
+    "negative_evidence": [
+      "First test fixture omitted native upload replies and failed before reaching the intended boundary; corrected fixture independently failed at the missing removal request. Both logs retained.",
+      "Existing positive fixtures needed explicit carrier-removal acknowledgments after the gate was strengthened.",
+      "Live retry observer treated disabled Cancel as terminal and stopped during credential promotion. Read-only reobservation of the same attempt and actual keychain authentication confirmed success without replay. A corrected observer is saved separately."
+    ],
+    "limitations": [
+      "Public cleanup result covers accepted API removal and current waveform absence; actual files/images require the independent host audit used here.",
+      "The earlier image-only fixture failure is not resolved or qualified by this stopped-container test."
+    ],
+    "remaining": [
+      "Other interrupted installation boundaries, physical power-loss qualification and image-only retirement limitations.",
+      "Authenticated shipping catalogue, Windows/macOS credential and transfer qualification.",
+      "Actual FLEX-6000 installation adapter and Linux 2.6/Cortex-A8 hardware qualification.",
+      "Remaining DSP alignment/cold-start, final-process faults, PR4770 keyed measurement, repeated RF/stock APD and release gates."
+    ],
+    "development_files": {
+      "stopped-carrier-job.py": "ab450b72d4f8832840a22d78b7a09c7058b9843ad72add6069ebd6eef4347ff4",
+      "stopped-carrier.json": "7bf04534ca2ca8e89d5627770f341b702579127ea85e6fb159360409a530efa6",
+      "fixture.json": "0d172e107c53a1b3dde09b47c9a2b7e50c9630ef31742e9197c62b94a91da436",
+      "regression-before.log": "38283cb103ece22306cbe31c01437581a759d43f65661f589a8dad6c24bc3475",
+      "regression-before-valid-fixture.log": "ee5325361c76182d96954a5c1a70a5bac0f094882ca747de317adb64dcf0bfd0",
+      "tests-first.log": "eb7225a64a4c9890407dba22e8e368ba163d340ba8c6574d8325460ef0ad2d75",
+      "tests-final.log": "8b324d1b90fe270b75e4606fa593534151f21b18f7e7525ead498382a521d5d0",
+      "mutation-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mutation-test.log": "00758bd6f9fa55140d6eb1577939a057ce77676be39ca14cbd87e8a974649500",
+      "desktop-build.log": "38265cc71a6beaec2202310275677daef90923c34fcac40db7aa8ecee9c7a8d0",
+      "docs-build.log": "ddfc1814e28b2d95c723d0e07335e013a76929015676e3dcc29376e2edf8c388",
+      "test-registration.log": "159cae34bc871940fca10b3979690db7a3d285db3d4cff2eaca5f580b4e5cbb5"
+    },
+    "live_files": {
+      "profile-fixture.json": "373a6e9ff4eb38c1fa94e0b8d3d520230a41bac22ce79d10e78b714e44ca43b1",
+      "clean-fixture-job.py": "71da865fd39f5a1333c34e1993790ff6b4847d6d8e39abefa8aab531c06a507c",
+      "clean-fixture.json": "c7e3a3465514868a76f3f61a6411b4d455f175196ef9308f1d6cdada0b897827",
+      "fault-watch-job.py": "59b5b010cda2aa9ffeb9fe643db16a4c6209fa4f95bfe3064b1916e0f0fa6341",
+      "fault-watch.json": "8e1b61486c6c62bafeddb7f651e8fcd8551651d8cd74fb4203b6206c64cb72bf",
+      "approve-and-observe.py": "2a23622891f72554caea1bfcb220dd51ca5a7dec585e86d00bcd6a8aacc44061",
+      "approve-and-observe.json": "7b4ad95bce62b4cf4ea055b6c1621e95c897a0e5271414de79218a43553dc4f6",
+      "run-approved-fault.py": "2a1aed7ab5c0763e89289208481c44be2a9b83fdfb6eb30de7b6134bb47cb9f4",
+      "bind-plan.py": "ed62f78de7c492d54b6c588d1635039598d6f7112b29638f0ed09c4e337fc53b",
+      "plan-bindings.json": "26442dfdb5aeb0d055f0202e9cb16c85d436cb3fd9d78bf762618fdc666ce5be",
+      "cancel-check.py": "a0388678f9a3bd9dc0ce3012317603f8e601b10b1fae7dcefbb523bd547644ea",
+      "cancel-check.json": "ea13f15bdea661fe67c512d1ea893b0255a6938374c14b48bd575de648bb7471",
+      "canceled-inventory-job.py": "ba47ad0b549caff2edc531fcee0884c092c9c9f9ca52fcc3d0511878c06c5538",
+      "canceled-inventory.json": "65b90f3682edc74769c7f4805744eb2d14985fbb1031b82408cbb01808d3b152",
+      "resume-saved.py": "cfe7c68d552aaf9de11cdbf0d7bc4f634d0ddf1bb4c86c8dd29ba7e7c419650a",
+      "resume-saved.json": "8bbbdf1fd890894de0a3c5f54695870ad7c0b84e00d38cc982cdce13030e1a7d",
+      "resume-saved-observer-fixed.py": "269c212d8bcce115c969fc5c40c59435053aa798c43b7696758664ccf9ca27e9",
+      "retry-completed-observation.json": "5457035b5ddc52623f1b49de28566cb3e611530b1f2b4b2f88e18079dfe43316",
+      "installation-authenticated.json": "a46de5b5bcefccd5790d80a0627640360335b0b67b36f6170bece2f9e8522982",
+      "resume-audit-job.py": "2cab7f6d136881189fe2625f54afa7405f832690cf9c1dfa4c7da348903c7566",
+      "resume-audit.json": "87ef8e78b4938a0595831a3c4b0e8d2f82b9f8ada1f442a7e63bc90430ef0f04"
+    },
+    "source_files": {
+      "src/core/AetherPDInstallationCoordinator.cpp": "13ce1e34c5496bb4751eaf26182bd49e91f350a02eda982c4b1a6e984e573dc3",
+      "tests/aetherpd_installation_coordinator_test.cpp": "d78cb5d3d9cd82ebd734d6e23af37331f0c3a35f1e1490b4cdc314a88ad8d817",
+      "docs/user/docs/tailscale-remote-access.md": "048b4eb715249306569ccd7bb5a2ecf5fe776e4814fca3a3ae096495a04608cb"
     }
   }
 }
