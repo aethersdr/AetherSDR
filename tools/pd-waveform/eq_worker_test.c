@@ -41,6 +41,16 @@ int main(void)
     count=pd_eq_apply(direct,tx+512,rx+512,256,a,b);
     assert(pd_eq_apply(imported,tx+512,rx+512,256,c,d)==count);
     assert(!memcmp(a,c,(size_t)count*2*sizeof(double)));
+    assert(pd_acquire_submit(worker,7,tx,tx,N));
+    struct pd_acquire_result timing;int timing_rc;
+    while(!(timing_rc=pd_acquire_take(worker,7,&timing))){tick();}
+    assert(timing_rc==1 && timing.generation==7 && fabs(timing.delay)<0.1);
+    assert(timing.submitted_ns>0 && timing.started_ns>=timing.submitted_ns
+           && timing.completed_ns>=timing.started_ns);
+    assert(pd_acquire_submit(worker,8,tx,tx,N));
+    while(!(timing_rc=pd_acquire_take(worker,9,&timing))){tick();}
+    assert(timing_rc==2 && timing.generation==0 && timing.submitted_ns==0
+           && timing.started_ns==0 && timing.completed_ns==0);
     memset(tx,0,2*N*sizeof(double));memset(rx,0,2*N*sizeof(double));
     assert(pd_acquire_submit_eq(worker,4,tx,rx,N));assert(take(worker,4,imported)==3);
     assert(pd_acquire_submit_eq(worker,5,tx,rx,N));

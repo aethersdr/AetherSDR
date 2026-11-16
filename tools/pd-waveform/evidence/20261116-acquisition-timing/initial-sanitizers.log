@@ -1,0 +1,50 @@
+In file included from /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/dispatch_deadline_test.c:37:
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_acquire.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+pd_dispatch_deadline_test failed: 0 phase=idle keyed=0 tx_on=1 samples_left=0 generated=256 iq_frames=1 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1046 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000000 slice=1 correction=1 native_apd=0 iq_valid_ns=50811486680982
+1794855851.102 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794855851.102 PD selected on slice 1
+1794855851.102 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794855851.104 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794855851.104 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794855851.122 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794855851.122 PD selected on slice 1
+1794855851.122 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794855851.124 bounded source ended: reason=pd_mode_released mono_ns=50811527750053 source=0000000000000000 phase=idle keyed=0 tx_on=1 samples_left=0 generated=256 iq_frames=1 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1183 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000000 slice=1 correction=1 native_apd=0 iq_valid_ns=50811525758721
+1794855851.124 PD released by slice 1
+1794855851.128 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794855851.128 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794855851.128 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794855851.128 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794855851.129 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794855851.129 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794855851.129 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+==112==LeakSanitizer has encountered a fatal error.
+==112==HINT: For debugging, try setting environment variable LSAN_OPTIONS=verbosity=1:log_threads=1
+==112==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)
+

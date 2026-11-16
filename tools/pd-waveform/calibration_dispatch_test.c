@@ -244,8 +244,50 @@ static void check_feedback_binding(unsigned channel)
     unsetenv("AETHER_PD_DAXIQ");
     unsetenv("AETHER_PD_FEEDBACK_PAN");unsetenv("AETHER_PD_GUI_HANDLE");
 }
+static void check_acquisition_evidence(void)
+{
+    unsetenv("AETHER_PD_TEST_TONES");unsetenv("AETHER_PD_TEST_SECONDS");
+    setenv("AETHER_PD_FEEDBACK","local",1);
+    setenv("AETHER_PD_MAX_DELAY_MS","25",1);
+    wf_t w;assert(wf_init(&w));w.api=-1;
+    w.acquisition_generation=17;w.calibration.source_id=0x1234;
+    w.key_started_ns=pd_iq_monotonic_ns();w.settle_left=0;
+    uint32_t seed=13;
+    int64_t deadline=pd_iq_monotonic_ns()+10000000000LL;
+    while (!w.aligned) {
+        for (unsigned i=0;i<BLOCK;++i) {
+            seed=seed*1664525u+1013904223u;
+            double value=(seed>>8)/16777216.0-0.5;
+            fifo_push(&w.ref,value,0);fifo_push(&w.fbk,value,0);
+        }
+        calibrate(&w);
+        assert(pd_iq_monotonic_ns()<deadline);
+        if (w.acquisition_pending) {
+            struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+        }
+    }
+    assert(w.alignment_event.count==1 && !w.alignment_event.truncated);
+    assert(strstr(w.alignment_event.text,"alignment evidence: reason=acquisition source=0000000000001234 generation=17"));
+    assert(strstr(w.alignment_event.text,"submitted_ns=") && strstr(w.alignment_event.text,"consumed_ns="));
+    char json[8192];int size=status_json(&w,json,sizeof(json));
+    assert(size>0 && (size_t)size<sizeof(json) && strstr(json,w.alignment_event.text));
+    printf("ACQUISITION_FIXTURE %s",json);
+    // Failed estimates are also evidence; they must not be hidden by the
+    // reset-event guard that requires an already aligned reference.
+    struct pd_acquire_result rejected={.generation=18,.delay=-1,.envelope_correlation=0.2};
+    w.aligned=0;log_alignment_acquisition(&w,&rejected);
+    assert(w.alignment_event.count==2 && strstr(w.alignment_event.text,"delay=-1.000"));
+    w.alignment_event.count=UINT32_MAX;
+    log_alignment_acquisition(&w,&rejected);assert(w.alignment_event.count==UINT32_MAX);
+    pd_acquire_destroy(w.acquire);pd_core_destroy(w.core);
+    pd_align_destroy(w.align);pd_eq_destroy(w.eq);pd_eq_destroy(w.trusted_eq);
+    free(w.ref.buf);free(w.fbk.buf);free(w.acq_tx);free(w.acq_rx);
+    unsetenv("AETHER_PD_MAX_DELAY_MS");
+}
+
 int main(void)
 {
+    check_acquisition_evidence();
     for(unsigned channel=1;channel<=4;++channel){check_feedback_binding(channel);}
     check_source('A');check_source('M');check_source('Q');
     for (int ending=0;ending<3;++ending) {

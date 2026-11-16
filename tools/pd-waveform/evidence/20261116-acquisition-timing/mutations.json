@@ -1,0 +1,6 @@
+{
+  "acquisition": {
+    "exit": -6,
+    "assertion": "acquisition-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/acquisition-timing/acquisition-test.c:269: check_acquisition_evidence: Assertion `w.alignment_event.count==1 && !w.alignment_event.truncated' failed."
+  }
+}

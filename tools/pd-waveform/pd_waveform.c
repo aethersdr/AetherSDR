@@ -622,6 +622,26 @@ static void log_alignment_evidence(wf_t* w, const struct alignment_evidence* evi
     }
 }
 
+static void log_alignment_acquisition(wf_t* w, const struct pd_acquire_result* result)
+{
+    struct alignment_evidence evidence = { { 0 }, 0 };
+    // All clocks are radio CLOCK_MONOTONIC. Consumed time also includes the
+    // packet thread's delay in taking a completed job, separately from work.
+    int size=snprintf(evidence.line,sizeof(evidence.line),
+        "alignment evidence: reason=acquisition source=%016llx generation=%llu key_ns=%lld "
+        "submitted_ns=%lld started_ns=%lld completed_ns=%lld consumed_ns=%lld "
+        "delay=%.3f envelope=%.6f phase=%.6f offset_hz=%.6f "
+        "noise_left=%d samples_left=%d tone_sent_ns=%lld guard_ns=%lld",
+        (unsigned long long)w->calibration.source_id,(unsigned long long)result->generation,
+        (long long)w->key_started_ns,(long long)result->submitted_ns,
+        (long long)result->started_ns,(long long)result->completed_ns,
+        (long long)pd_iq_monotonic_ns(),result->delay,result->envelope_correlation,
+        result->phase_correlation,result->offset_hz,w->test_noise_left,w->test_left,
+        (long long)w->measurement_tone_sent_ns,(long long)w->measurement_guard_ns);
+    evidence.truncated=size<0 || (size_t)size>=sizeof(evidence.line);
+    log_alignment_evidence(w,&evidence);
+}
+
 static void log_measurement_window(const wf_t* w, const char* event);
 
 static void log_bounded_source_end(wf_t* w, const char* reason)
@@ -1332,6 +1352,7 @@ static void calibrate(wf_t* w)
                 w->eq_energy = 0;
             }
             if (acquired == 1) {
+                log_alignment_acquisition(w, &result);
                 if (result.delay < 0) {
                     w->acq_n = 0;
                     logf_("no delay lock yet (correlation %.2f)", result.envelope_correlation);

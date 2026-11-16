@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T19:05:47.704156+00:00",
+  "production_ready": false,
+  "installed": false,
+  "status": "Acquisition timing component qualified; installed runtime remains fa8dd7aec",
+  "changes": [
+    "Worker results carry monotonic submission, start and completion times; matching-generation results are recorded at consumption.",
+    "Existing bounded alignment diagnostic slot now includes successful and rejected acquisition events; no new slot, thread, endpoint, acceptance rule or RF duration.",
+    "Source, generation, key start, remaining noise/source samples and tone emission guard connect readiness to the acquisition timeline. Counts include acquisitions and resets; only latest event survives."
+  ],
+  "validation": {
+    "registered_native_tests": 3,
+    "sanitizers": {
+      "pd_dispatch_deadline_test": 0,
+      "pd_calibration_dispatch_test": 0
+    },
+    "native_go_qt": [
+      {
+        "case": 0,
+        "diagnostics": {
+          "version": 1,
+          "alignment": {
+            "count": 1,
+            "truncated": false,
+            "text": "alignment evidence: reason=acquisition source=0000000000001234 generation=17 key_ns=50847793542851 submitted_ns=50847793919330 started_ns=50847793924168 completed_ns=50847842026994 consumed_ns=50847842892493 delay=0.000 envelope=1.000000 phase=1.000000 offset_hz=0.000000 noise_left=0 samples_left=0 tone_sent_ns=0 guard_ns=125000000"
+          },
+          "source_end": {
+            "count": 0,
+            "truncated": false,
+            "text": ""
+          }
+        },
+        "native_go_qt": true
+      }
+    ],
+    "mutations": {
+      "acquisition": {
+        "exit": -6,
+        "assertion": "acquisition-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/acquisition-timing/acquisition-test.c:269: check_acquisition_evidence: Assertion `w.alignment_event.count==1 && !w.alignment_event.truncated' failed."
+      }
+    },
+    "cross_builds": {
+      "armv7": {
+        "bytes": 269548,
+        "sha256": "2cf1548fec1fb1638a44d5f9493db7ea4876de9a8c9497978e08c6e1942fd2a6"
+      },
+      "arm64": {
+        "bytes": 280776,
+        "sha256": "e0a2a202f4e2306b2f36e6d9d79f25db1594f705594ca9757217074c5ecbc302"
+      }
+    },
+    "test_registration": "passed"
+  },
+  "cold_start_probe": {
+    "runtime_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
+    "nominal_watts": 5,
+    "FDX": false,
+    "DAX_IQ_channel": 4,
+    "valid_averages": 4,
+    "waiting_for_tones_ms": 5861,
+    "first_frame_complete_ms": 6249,
+    "subsequent_frame_ms": [
+      408,
+      398,
+      391
+    ],
+    "session_stopped": true,
+    "scope": "One successful fresh-session capture with detailed desktop timing; failed prior capture remains in DIAGNOSTICS-RF-REBOOT-QUALIFICATION.json."
+  },
+  "negative_evidence": [
+    "Initial composition rejected the new text prefix under the existing strict diagnostic schema. Producer now uses reason=acquisition under the established prefix; no parser relaxation.",
+    "Initial LeakSanitizer run could not inspect threads under sandbox ptrace; same checks passed outside that sandbox.",
+    "Initial build used the read-only default ccache directory; build passed with the existing workspace cache."
+  ],
+  "limitations": [
+    "Not deployed; no radio acquisition timing observed yet.",
+    "Clock failures report zero; CPU time versus scheduling inside worker execution is not separated.",
+    "Latest record can overwrite earlier resets/acquisitions; poll and retain during startup.",
+    "No root-cause claim for prior cold-start failure or natural128sample slip; no RF duration change.",
+    "Actual6300, final failure matrix, sustained speech, rollback/power interruption and release gates remain."
+  ],
+  "evidence_directory": "evidence/20261116-acquisition-timing",
+  "evidence_sha256": {
+    "ctest.log": "74dc055645a44b42c119bb7b16ef66b0b34715f657eecebff43bbb2305206d40",
+    "build.log": "712367c355b70cf9b952f45d4814fb812485a88e4511165eda4a3341e8740d47",
+    "sanitizers.log": "d1b7af7b1ff4eadddfd7f177a1ed0e71ab8d15f4a4c1ec75fbc167a087b1009e",
+    "native-sanitizers.json": "6b79a179955c29abebc97976fbf9fa6eef0fbd79ef471227fb7f1114f0b17547",
+    "cross-build.py": "82634bdec90e72b536f7eb3e69feff4a40b8bae3fb36a57641fc119bc881254f",
+    "cross-build.log": "83069e65e6e15aea543f59ee7b3beafc3fb2893a9bda59b730fbec14b3aad45e",
+    "cross-builds.json": "1579c7ce4d5d80440ca6cd5679f99046de4bc267c4896afd62661767df6bc626",
+    "compose.py": "546a5eeabda7ec61523b59e7ba76d1e97eb950af5032c310a332919c7e8390f1",
+    "composition.json": "6afd44ad74cab2a60ba5743b3d98f94e8dd2c8aabffb49fe942c19550727e6ac",
+    "composition.log": "7d66f4b9c864caccb84370e6fb398003ddb7297d81fc9bb3ba2def758c53da50",
+    "composition-go-0.log": "8c5ddafebe603a2a7ae753aaf7207b821e50ce8b5e4952d56bdf932135817fac",
+    "composition-qt-0.log": "0b91649e9315f10948c3742b437d39e8d48440399c6fed14900d8e4f812009d5",
+    "native-fixture-0.json": "38d6b9b235e1f7867a5a0e6022ce08730fc748cfc9d9240514dbfd25000aa24a",
+    "public-fixture-0.json": "20f08b72c9413b8521e56c9758b0f6e2a9eee1ca7d35c707700fbbe935297a35",
+    "mutation-check.py": "b77e244031564dec8d220c85ae914d795f1d99fcb6b5a50ca7126519500d62c0",
+    "mutations.json": "f91ba69fb0ae80d76f35ed8b291c739990853b426ea683f0e5e5726f0777335c",
+    "acquisition-mutation.log": "9385ffcfbdf63c333c301ff0be11507fd1b457dc2eec229aa52cac5f0706b25a",
+    "check-native.py": "fdce15b161ceea07484785e7e8851ca0f2ce2858a1e982c70f97e8855eac78d5",
+    "initial-composition.log": "3134c70ce85afa7eddf1c2419af34146c1e8873e406e15bebd6b3889d22757c1",
+    "initial-composition-go-0.log": "831b1667caf62878ee9294b8b87091fa4ba3a6b8e4d6e5a94e03f3d00eebfda1",
+    "initial-sanitizers.log": "2a53c9671b89cdd5f64399be19c566e0dfbd01fe74acf625cb96360b9fc7af75",
+    "pd_calibration_dispatch_test-asan.log": "ddbc41e9c9dccea754042a5c622e6cf98efcde9585585ab7e3c0ddb36d6d5425",
+    "pd_dispatch_deadline_test-asan.log": "17758a935361639376aa7e00a6d7dbbbf7f55a1dd8cd6c24663a60ba116cbf42",
+    "cold-start/prepare.py": "cf23bccc8eb4068feae7bc1bd580d76df3621a34aed832d1f11ae19e00000915",
+    "cold-start/configure.py": "fb2169b1baf7bd826ac65f53a36de4ad0467e6a6b11cfe9ac7c6797fa42cee94",
+    "cold-start/preflight.py": "01e297cc8fb9ec689edb7ae6c8a6873ea89dd9cac0e6f51d8db29896a21a4edb",
+    "cold-start/instance.json": "0d45ca344bee8621b0d97acfbc6108d2078db88e9483163d6e0cc9918b6d2929",
+    "cold-start/prepared.json": "b4948d560f2ad9cb20b1d2341dbcac73eccbc83e30058a11bf812774b02cf963",
+    "cold-start/preflight-iq.f32le": "f307b3df842f67fc31affd4df3503d5ea2aeadceb60ec6a3307690000f396c90",
+    "cold-start/preflight.json": "054464ffbd223cd9dca9ae4a2cbef1cc6eeea7f488653f3d427385805ca01298",
+    "cold-start/observer-config.json": "3ec1cd9f5fa35daa8c7bd53f2309e0c20d385d4ad5d01aa8a0803e6839c940e1",
+    "cold-start/configure-5-off.json": "12909aa4b98b38548e3f7592a9a34fe60863bf327f2ba2d8270868909e6625da",
+    "cold-start/log-offset.json": "c93ba7c71b5e76d4cb7b5ad865352609a94dba3613fb97e844d5d37ffb3053e9",
+    "cold-start/capture-timing.log": "12f81f00b968a36729fc369bcd157608fe027c0444ebd0c5afb7c55f3d3fc53c",
+    "cold-start/stopped.json": "89459b25f2e67fff59eb3a363ef7b0945701bc79746b22c6fc66183e8ed38eaa",
+    "cold-start/5w/measure.py": "bc4f9d9174789dbca9d17cf3b526e0525dfea0c952d00949fd8139de51581207",
+    "cold-start/5w/export.py": "0ec905a804ae27487f5cffea891b7750407459cf261dbfc2c2b7ca8d009b8d67",
+    "cold-start/5w/instance.json": "0d45ca344bee8621b0d97acfbc6108d2078db88e9483163d6e0cc9918b6d2929",
+    "cold-start/5w/off-01-events.json": "b0128b46a89b38552ae37dd33e3279bdef4715682e75079ece5546fff7b1c1b3",
+    "cold-start/5w/off-01.json": "64dd2a645306ffee8300274bd6ccaabedd7282133a2815d362c57335de2a9e54"
+  }
+}

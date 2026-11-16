@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T18:58:18.513294+00:00",
+  "updated_utc": "2026-11-16T19:05:47.704156+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Attribute first-key delayed tone readiness versus capture latency using retained evidence and targeted startup timing; complete cold/warm/speech recovery, exact-build rollback/fault matrix and actual6300 handoff. Do not discard failed off-01.",
+  "next_action": "Package and deploy acquisition timing, then attribute delayed cold-start tone readiness on the radio; preserve failed cold capture and full P1-P10 remaining gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -3225,5 +3225,10 @@
     "first_cold_capture_failed": true,
     "one_ordinary_reboot_passed": true,
     "historical_failures_resolved": false
+  },
+  "acquisition_timing": {
+    "report": "ACQUISITION-TIMING-QUALIFICATION.json",
+    "component_qualified": true,
+    "installed": false
   }
 }

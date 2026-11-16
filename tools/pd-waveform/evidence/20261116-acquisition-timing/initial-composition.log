@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/acquisition-timing/compose.py", line 19, in <module>
+    (out/f'composition-go-{i}.log').write_text(r.stdout+r.stderr);assert r.returncode==0,r.stderr+r.stdout
+                                                                         ^^^^^^^^^^^^^^^
+AssertionError: --- FAIL: TestPDDiagnosticsNativeProjection (0.00s)
+    aetherpd_diagnostics_test.go:97: native record rejected: {Diagnostics:<nil> FeedbackBinding:<nil> MeasurementToneCaptureVersion:3 MeasurementToneControl:false MeasurementToneConfig:0xc000224160 Measurement:0xc000530948 InputLimitedSamples:0 CorrectionControl:false MeasurementControl:false SourcePurpose:calibration CalibrationControl:false CalibrationState:idle CalibrationSamplesLeft:0 Available:false State: Registered:false Keyed:false CorrectionEnabled:true Correcting:false CalibrationRequired:false Faults:{DispatchDeadlines:0 SendErrors:0 RejectedInput:0 StaleIQ:0}} invalid diagnostic record
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.028s
+FAIL
+

@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <time.h>
 
 enum { kIdle, kQueued, kRunning, kReady };
 struct pd_acquire {
@@ -21,8 +22,16 @@ struct pd_acquire {
     pd_eq *equalizer;
     double rate;
     uint64_t generation;
+    int64_t submitted_ns;
     struct pd_acquire_result result;
 };
+
+static int64_t acquisition_clock(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC,&now)) { return 0; }
+    return (int64_t)now.tv_sec*1000000000+now.tv_nsec;
+}
 
 static void *run(void *arg)
 {
@@ -36,7 +45,8 @@ static void *run(void *arg)
         if (rc || atomic_load_explicit(&w->stop,memory_order_acquire)) { break; }
         if (atomic_load_explicit(&w->state,memory_order_acquire)!=kQueued) { continue; }
         atomic_store_explicit(&w->state,kRunning,memory_order_release);
-        struct pd_acquire_result r={.generation=w->generation};
+        struct pd_acquire_result r={.generation=w->generation,
+            .submitted_ns=w->submitted_ns,.started_ns=acquisition_clock()};
         if (w->job_eq) {
             pd_eq_reset(w->equalizer);
             pd_eq_train(w->equalizer,w->tx,w->rx,w->samples);
@@ -47,6 +57,7 @@ static void *run(void *arg)
             r.phase_correlation=pd_align_phase_corr(w->estimator);
             r.offset_hz=pd_align_offset_hz(w->estimator,w->rate);
         }
+        r.completed_ns=acquisition_clock();
         w->result=r;
         atomic_store_explicit(&w->state,kReady,memory_order_release);
     }
@@ -112,6 +123,7 @@ static int submit_job(pd_acquire *w,int eq,uint64_t generation,const double *tx,
     memcpy(w->tx,tx,(size_t)samples*2*sizeof(double));
     memcpy(w->rx,rx,(size_t)samples*2*sizeof(double));
     w->samples=samples;w->generation=generation;w->job_eq=eq;
+    w->submitted_ns=acquisition_clock();
     atomic_store_explicit(&w->state,kQueued,memory_order_release);
     if (sem_post(&w->wake)) {
         atomic_store_explicit(&w->state,kIdle,memory_order_release);return 0;

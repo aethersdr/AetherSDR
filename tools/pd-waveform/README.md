@@ -241,3 +241,10 @@ counters have their own generation/reset lifetimes.
 These records distinguish observed transport failures from a coherence-only
 failure. They do not prove which FPGA behavior caused a delay change, nor
 attribute a historical event whose packet trace was not captured.
+
+Consumed delay estimates also produce `alignment evidence: reason=acquisition` records in the
+same bounded retained diagnostic slot. Source/generation and radio monotonic
+timestamps distinguish collection before submission, worker queueing,
+estimation, and consumption by the packet thread. Rejected estimates remain
+visible. These observations do not change alignment acceptance or RF duration;
+the latest event can overwrite a reset record, and the count covers both kinds.

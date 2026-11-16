@@ -1,0 +1,2 @@
+1794855887.751 loop delay 0.00 samples (0.00 ms), envelope correlation 1.00, phase correlation 1.000
+acquisition-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/acquisition-timing/acquisition-test.c:269: check_acquisition_evidence: Assertion `w.alignment_event.count==1 && !w.alignment_event.truncated' failed.

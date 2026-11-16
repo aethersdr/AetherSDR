@@ -146,7 +146,7 @@ successful fits earlier. `calibration_required=false` alone does not establish
 that a usable correction model exists. A missing, malformed or unresponsive
 native service returns HTTP 503 with `available=false` and `state=unavailable`.
 
-The optional `diagnostics` version-1 object retains the latest alignment-reset
+The optional `diagnostics` version-1 object retains the latest alignment event
 and bounded-source retirement records from the current DSP process. Each has a
 saturating 32-bit `count`, a `truncated` flag and at most 1023 ASCII bytes of
 `text`. It includes event-local monotonic timestamps and continuity counters;
@@ -157,6 +157,15 @@ not correction, keying or recovery authority. No log file or logging pipe is
 created. The shim rejects malformed records rather than forwarding arbitrary
 native fields. Deploy the corresponding desktop parser before this runtime:
 older development desktops reject additional status fields.
+
+Alignment events include both reset snapshots and consumed delay estimates.
+An `alignment evidence: reason=acquisition` record identifies its source and generation, key
+start, submission, worker start/completion and consumption timestamps on the
+radio's monotonic clock. It includes rejected estimates (`delay=-1`); zero
+worker timestamps mean timing was unavailable. The event count is not a reset
+count. Queue time, estimator work and result-consumption delay can be separated
+without comparing the radio clock with desktop polling times. Only the latest
+record is retained, so poll during startup to preserve repeated attempts.
 
 After an owned session ends, its supervisor reports HTTP 200 with exactly
 `available=false` and `state=stopped` only when the DSP and owned cleanup workers

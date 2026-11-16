@@ -4,6 +4,7 @@
 typedef struct pd_acquire pd_acquire;
 struct pd_acquire_result {
     uint64_t generation;
+    int64_t submitted_ns, started_ns, completed_ns;
     double delay, envelope_correlation, phase_correlation, offset_hz;
 };
 
