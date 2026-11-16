@@ -21,7 +21,9 @@ public:
     // Which radio agent's token: the shim's, or the WSPR receiver's
     // (tools/wspr-agent), which issues one the same way on first use. Each
     // has its own keychain entry per radio serial.
-    enum class Entry { TailnetShim, Wspr };
+    // AetherPDFirst uses serial + '/' + exact plan digest as its identifier.
+    // Its hashed, attempt-specific slot never replaces the active radio token.
+    enum class Entry { TailnetShim, Wspr, AetherPDFirst };
 
     // Calls back on context's thread with the stored token, or an empty
     // string when none is stored or the keychain is unavailable.

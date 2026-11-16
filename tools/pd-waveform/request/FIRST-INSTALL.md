@@ -199,8 +199,8 @@ inspection confirms identical carrier payload, modes, execution configuration
 and rootfs digest. C++ builder provenance changes its config/image digest.
 Three component test executables and scoped sanitizer checks pass; the ZIP and
 carrier tests also pass in the full project's registered graph. These prepared
-C++ archives have not been uploaded, and the preparation component is not yet
-connected to the installation coordinator or credential vault.
+C++ archives have not been uploaded. The coordinator and credential model below
+consume this preparation component.
 
 ## Desktop upload coordinator
 
@@ -232,7 +232,38 @@ ordering, cancellation, destruction, deadline and session loss. These are
 injected-transport component proofs. Public cleanup confirmation means the
 removal observations above; it does not prove cached firmware files or private
 host processes were removed. The C++ coordinator still needs a live first-install
-qualification and connection to the new-credential/consent UI.
+qualification through the desktop package-selection workflow.
+
+## Desktop credential model
+
+`AetherPDInstallationModel::prepareFirstPackage` accepts only an independently
+verified first package. It generates a fresh 256-bit token in memory and prepares
+the immutable plan off the UI thread using only its hash. Preview and approval
+remain bound to the original radio session. No credential read, write, upload or
+RF command occurs during preparation.
+
+Exact-plan approval first writes the token to QtKeychain service `AetherSDR`, key
+`aetherpd/first/<SHA256(serial + '/' + planDigest)>/admin_token`. This separate,
+per-attempt slot preserves existing active credentials. A positive persistent
+write completion is required before the coordinator starts; session-only fallback,
+write failure, timeout, cancellation and replacement sessions cannot start it.
+Late callbacks are generation-fenced. The key is also reserved by the settings
+credential policy, so it cannot become an ordinary settings/export value.
+
+After the coordinator observes the exact committed plan, the model writes that
+token to the existing per-radio TailnetShim slot. Failure or timeout here leaves
+the confirmed installation outcome intact and reports a separate credential
+failure. The attempt slot is retained; cancellation and uncertain installation
+outcomes do not delete the only recovery credential. No failed or canceled
+installation promotes a token. The model and dialog expose the saving and
+promotion states and describe first-install authority separately from upgrades.
+
+`first-install-credential-model` records three registered suites, two scoped
+ASan/UBSan/LSan suites, and a mutation that removes the durable-write gate and is
+detected. The tests inject keychain callbacks; they do not establish a working OS
+keychain on every supported desktop. The actual QtKeychain backend, durable
+public attempt journal, restart/recovery UI, package-selection entry point and
+live C++ first installation still require integration and qualification.
 
 ## Remaining gates
 

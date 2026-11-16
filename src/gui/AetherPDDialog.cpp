@@ -418,6 +418,23 @@ void AetherPDDialog::renderInstallation()
             "Temporary carrier: %7\nCarrier archive (SHA-256): %8")
             .arg(preview->serial, preview->firmware, preview->previousDigest, preview->candidateDigest,
                  preview->candidateKey, preview->planDigest, preview->carrierName, preview->archiveSha256);
+        if (preview->firstInstallation) {
+            detail = tr("Radio: %1\nFirmware: %2\n\nFirst installation — changes on approval:\n"
+                "• Save a new radio credential in the system keychain before uploading.\n"
+                "• Temporarily use host-root authority to install the verified AetherPD payload and fixed helpers.\n"
+                "• Create a new local identity; no predecessor credential or Tailnet enrollment is used.\n"
+                "• Install fixed boot and local-session helpers for reboot, local IQ capture and scheduling.\n"
+                "• Run the shim and AetherPD without host-root authority.\n"
+                "• Remove temporary installation components. Fixed boot/session helpers remain installed.\n"
+                "Installation does not transmit or arm calibration.\n\n"
+                "Temporary executables: pd-first-request, pd-accept, pd-carrier, pd-send, pd-deliver, signed installation worker, pd-update.\n"
+                "Permanent helper: pd-boot.\n"
+                "Fixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\n"
+                "New release (BLAKE2b-256): %3\nPublisher key (Ed25519): %4\nAttempt (BLAKE2b-256): %5\n"
+                "Temporary native package: %6\nTemporary carrier: %7\nCarrier archive (SHA-256): %8")
+                .arg(preview->serial, preview->firmware, preview->candidateDigest, preview->candidateKey,
+                     preview->planDigest, preview->nativeName, preview->carrierName, preview->archiveSha256);
+        }
     } else {
         detail = tr("No verified update is prepared. Qualified package selection is not yet available in this development build. "
             "Installing the released Remote Access shim alone does not install AetherPD.");
@@ -437,9 +454,13 @@ void AetherPDDialog::renderInstallation()
         status = m_radio->isRadioTransmitting() ? tr("Review the plan; approval is unavailable while transmitting.")
             : tr("Review the plan, then choose Approve update. Nothing is installed before approval."); break;
     case State::LoadingCredential: status = tr("Loading the saved radio credential…"); break;
+    case State::SavingCredential: status = tr("Saving the new credential in the system keychain before installation…"); break;
+    case State::PromotingCredential: status = tr("Radio confirmed installation; saving its active credential…"); break;
     case State::Running:
         switch (model->phase()) {
         case Phase::Idle: case Phase::Requesting: status = tr("Requesting the temporary installer…"); break;
+        case Phase::UploadingNative: status = tr("Uploading the temporary first-install requester…"); break;
+        case Phase::WaitingForNative: status = tr("Waiting for the native upload to settle…"); break;
         case Phase::UploadingCarrier: status = tr("Uploading the temporary installer…"); break;
         case Phase::WaitingForCarrier: status = tr("Waiting for the radio to publish the installer…"); break;
         case Phase::UploadingInputs: status = tr("Transferring authenticated package files…"); break;
@@ -461,13 +482,17 @@ void AetherPDDialog::renderInstallation()
         if (model->phase() != Phase::Idle) {
             status += model->cleanupConfirmed() ? tr(" Temporary installer cleanup confirmed.") : tr(" Temporary installer cleanup is unconfirmed.");
         }
+        if (model->failure() == Model::Failure::CredentialSaveFailed) {
+            status += tr(" The active credential could not be saved. The attempt credential remains in the keychain; credential recovery is required.");
+        }
         break;
     case State::Unavailable:
         if (!model) { status = tr("Connection ended — reopen AetherPD for the current radio."); break; }
         switch (model->failure()) {
         case Model::Failure::SessionChanged: status = tr("Radio connection changed; prepare a new update for the current connection."); break;
         case Model::Failure::NoCredential: status = tr("No saved Remote Access credential for this radio. Update credentials before preparing another attempt."); break;
-        case Model::Failure::CredentialTimeout: status = tr("Credential lookup timed out; no installation was started."); break;
+        case Model::Failure::CredentialTimeout: status = tr("Credential operation timed out; no installation was started."); break;
+        case Model::Failure::CredentialSaveFailed: status = tr("The new credential could not be saved persistently; no installation was started. Check the system keychain."); break;
         case Model::Failure::DownloadFailed: status = tr("Package download or verification failed; no installation was started."); break;
         case Model::Failure::PackageRejected: status = tr("Package preparation failed; no installation was started."); break;
         default: status = tr("Update could not start. Check the connection, transmit state and upload availability."); break;
@@ -476,7 +501,7 @@ void AetherPDDialog::renderInstallation()
     }
     const bool approve = model && state == State::AwaitingApproval && preview && !m_radio->isRadioTransmitting();
     const bool cancel = model && (state == State::Downloading || state == State::Preparing || state == State::AwaitingApproval
-        || state == State::LoadingCredential || state == State::Running);
+        || state == State::LoadingCredential || state == State::SavingCredential || state == State::Running);
     const QPointer<AetherPDDialog> alive(this);
     enable(m_installPrepare, model && !developmentVersion.isEmpty() && !model->active() && state != State::AwaitingApproval,
         tr("A development package compiled for this radio firmware and no pending update are required."));

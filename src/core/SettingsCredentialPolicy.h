@@ -58,7 +58,8 @@ struct ScopedCredential {
 };
 inline constexpr ScopedCredential kSmartLinkCredential{"smartlink/", "/refresh_token"};
 inline constexpr ScopedCredential kIcomCredential{"icom/", "/password"};
-inline constexpr ScopedCredential kScopedCredentials[] = {kSmartLinkCredential, kIcomCredential};
+inline constexpr ScopedCredential kAetherPDFirstCredential{"aetherpd/first/", "/admin_token"};
+inline constexpr ScopedCredential kScopedCredentials[] = {kSmartLinkCredential, kIcomCredential, kAetherPDFirstCredential};
 
 inline QString scopedCredentialKey(const ScopedCredential& type, const QString& id)
 {

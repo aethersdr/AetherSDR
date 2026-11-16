@@ -39,7 +39,8 @@ struct Fixture {
     RadioModel radio;
     RadioSetupTestBackend* backend{installRadioSetupBackend(radio)};
     AetherPDTest::PackageFixture files;
-    int loads{0};
+    int loads{0}, writes{0};
+    std::function<void(bool)> saved;
     std::function<void(const QString&)> credential;
     QPointer<Coordinator> job;
     std::unique_ptr<AetherPDDialog> dialog;
@@ -54,6 +55,8 @@ struct Fixture {
             [this](RadioModel& model) {
                 auto result = std::make_unique<Coordinator>(model, network, channel, carrier, [] { return qint64(0); });
                 job = result.get(); return result;
+            }, nullptr, AetherPDInstallationModel::DownloadFactory{}, [this](const QString&, const QString&, const QString&, QObject*, auto done) {
+                ++writes; saved = std::move(done);
             });
         RadioSetupControlTestAccess::installationModel(radio, std::move(model));
         open();
@@ -78,6 +81,26 @@ struct Fixture {
 class InstallationDialogTest : public QObject {
     Q_OBJECT
 private slots:
+    void firstInstallationPreviewAndCredentialFailure()
+    {
+        Fixture f; const auto package = f.files.loadFirst(); QVERIFY(package);
+        QVERIFY(f.model().prepareFirstPackage(*package, "fixture-radio", f.radio.controlSession()));
+        QTRY_COMPARE(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QVERIFY(f.preview().contains("First installation"));
+        QVERIFY(f.preview().contains("host-root authority"));
+        QVERIFY(f.preview().contains("Fixed boot/session helpers remain installed"));
+        QVERIFY(!f.preview().contains("retaining its Remote Access identity"));
+        QCOMPARE(f.loads, 0); QCOMPARE(f.writes, 0); QVERIFY(f.network.sent.empty());
+        QTest::mouseClick(f.button("pdInstallApprove"), Qt::LeftButton);
+        QCOMPARE(f.writes, 1); QCOMPARE(f.loads, 0);
+        QVERIFY(f.state().contains("system keychain before installation"));
+        QVERIFY(!f.button("pdInstallApprove")->isEnabled());
+        QVERIFY(f.button("pdInstallCancel")->isEnabled());
+        f.saved(false);
+        QVERIFY(f.state().contains("no installation was started"));
+        QVERIFY(f.network.sent.empty()); QVERIFY(!f.job);
+    }
+
     void prepareButtonDoesNotApprove()
     {
         Fixture f;

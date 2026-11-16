@@ -3,6 +3,8 @@
 #include "AetherPDDevelopmentSelection.h"
 #include "core/AetherPDProtocol.h"
 #include "core/TailnetShimTokenStore.h"
+#include <QCryptographicHash>
+#include <QRandomGenerator>
 #include <QThread>
 #include <QtConcurrent/QtConcurrentRun>
 #include <utility>
@@ -12,9 +14,14 @@ AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, QObject*
     : AetherPDInstallationModel(radio,
         [](const QString& serial, QObject* context, std::function<void(const QString&)> done) {
             TailnetShimTokenStore::load(serial, context, std::move(done));
-        }, [](RadioModel& model) { return std::make_unique<Coordinator>(model); }, parent) {}
-AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent, DownloadFactory downloader)
-    : QObject(parent), m_radio(&radio), m_load(std::move(loader)), m_factory(std::move(factory)),
+        }, [](RadioModel& model) { return std::make_unique<Coordinator>(model); }, parent, {},
+        [](const QString& serial, const QString& attempt, const QString& token, QObject* context, std::function<void(bool)> done) {
+            TailnetShimTokenStore::save(attempt.isEmpty() ? serial : serial + u'/' + attempt, token, context,
+                [done = std::move(done)](bool persisted, const QString&) { done(persisted); },
+                attempt.isEmpty() ? TailnetShimTokenStore::Entry::TailnetShim : TailnetShimTokenStore::Entry::AetherPDFirst);
+        }) {}
+AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent, DownloadFactory downloader, TokenWriter writer)
+    : QObject(parent), m_radio(&radio), m_load(std::move(loader)), m_write(std::move(writer)), m_factory(std::move(factory)),
       m_downloadFactory(downloader ? std::move(downloader) : [] { return std::make_unique<AetherPDPackageDownload>(); })
 {
     m_timeout.setParent(this);
@@ -22,6 +29,8 @@ AetherPDInstallationModel::AetherPDInstallationModel(RadioModel& radio, TokenLoa
     m_timeout.setInterval(10000);
     connect(&m_timeout, &QTimer::timeout, this, [this] {
         if (m_state == State::LoadingCredential) { unavailable(Failure::CredentialTimeout); }
+        else if (m_state == State::SavingCredential) { unavailable(Failure::CredentialTimeout); }
+        else if (m_state == State::PromotingCredential) { promoted(false, m_generation); }
     });
     connect(&radio, &RadioModel::connectionStateChanged, this, &AetherPDInstallationModel::reconcile);
     connect(&radio, &RadioModel::infoChanged, this, &AetherPDInstallationModel::reconcile);
@@ -37,7 +46,8 @@ AetherPDInstallationModel::~AetherPDInstallationModel()
 bool AetherPDInstallationModel::active() const
 {
     return m_state == State::Downloading || m_state == State::Preparing || m_state == State::LoadingCredential
-        || m_state == State::Running || m_state == State::Canceling;
+        || m_state == State::Running || m_state == State::Canceling || m_state == State::SavingCredential
+        || m_state == State::PromotingCredential;
 }
 bool AetherPDInstallationModel::current() const
 {
@@ -51,6 +61,7 @@ bool AetherPDInstallationModel::prepareRelease(const AetherPDRelease& release, c
     retirePreparation();
     if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); }
     m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
+    m_firstToken.clear(); m_publisherKey.clear(); m_nativeName.clear();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
     m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
     const quint64 generation = ++m_generation;
@@ -87,10 +98,32 @@ bool AetherPDInstallationModel::prepareSelectedDevelopment(const RadioControlSes
     retirePreparation();
     if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); }
     m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
+    m_firstToken.clear(); m_publisherKey.clear(); m_nativeName.clear();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
     m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
     const quint64 generation = ++m_generation;
     preparePackage([] { return aetherpd::development::load(); }, generation);
+    return true;
+}
+bool AetherPDInstallationModel::prepareFirstPackage(const AetherPDFirstPackage& package, const QString& hostname,
+                                                   const RadioControlSession& session)
+{
+    if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
+        || !m_radio->controlSessionCurrent(session) || m_radio->serial().isEmpty() || !m_write) { return false; }
+    retirePreparation();
+    if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); }
+    m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
+    m_publisherKey.clear(); m_nativeName.clear();
+    m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
+    m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
+    QByteArray bytes(32, Qt::Uninitialized);
+    for (char& byte : bytes) { byte = static_cast<char>(QRandomGenerator::system()->generate() & 255U); }
+    m_firstToken = QString::fromLatin1(bytes.toHex());
+    const QByteArray tokenHash = QCryptographicHash::hash(m_firstToken.toLatin1(), QCryptographicHash::Sha256);
+    const QString serial = m_serial;
+    prepareSnapshot([package, serial, tokenHash, hostname] {
+        return Coordinator::prepareFirst(package, serial, tokenHash, hostname);
+    }, ++m_generation);
     return true;
 }
 void AetherPDInstallationModel::retirePreparation()
@@ -117,8 +150,15 @@ void AetherPDInstallationModel::downloaded(quint64 generation)
 }
 void AetherPDInstallationModel::preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation)
 {
-    m_state = State::Preparing;
     const QString serial = m_serial;
+    prepareSnapshot([load = std::move(load), serial] {
+        const auto package = load();
+        return package ? Coordinator::prepare(*package, serial) : std::nullopt;
+    }, generation);
+}
+void AetherPDInstallationModel::prepareSnapshot(std::function<std::optional<Coordinator::Prepared>()> prepare, quint64 generation)
+{
+    m_state = State::Preparing;
     auto* watcher = new QFutureWatcher<std::optional<Coordinator::Prepared>>(this);
     m_preparation = watcher;
     connect(watcher, &QFutureWatcher<std::optional<Coordinator::Prepared>>::finished, this, [this, watcher, generation] {
@@ -131,18 +171,19 @@ void AetherPDInstallationModel::preparePackage(std::function<std::optional<Aethe
         if (!offer(*prepared, m_session)) { unavailable(Failure::PackageRejected); }
     });
     // Only value snapshots cross threads; no radio, model or credential access.
-    watcher->setFuture(QtConcurrent::run([load = std::move(load), serial] {
-        const auto package = load();
-        return package ? Coordinator::prepare(*package, serial) : std::nullopt;
-    }));
+    watcher->setFuture(QtConcurrent::run(std::move(prepare)));
     emit changed();
 }
 bool AetherPDInstallationModel::offer(const Coordinator::Prepared& package, const RadioControlSession& session)
 {
     if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
         || !m_radio->controlSessionCurrent(session)) { return false; }
-    const auto plan = aetherpd::parseInstallationPlan(package.approvedPlan());
-    if (!plan || package.used() || !package.approvedPlan().startsWith("PDUPGR02") || plan->serial != m_radio->serial()
+    const bool first = !package.nativeName().isEmpty();
+    const auto plan = first ? aetherpd::parseFirstInstallationPlan(package.approvedPlan(), package.publisherKey())
+                            : aetherpd::parseInstallationPlan(package.approvedPlan());
+    if (first && (m_firstToken.isEmpty() || QCryptographicHash::hash(m_firstToken.toLatin1(), QCryptographicHash::Sha256)
+        != package.approvedPlan().mid(148, 32))) { return false; }
+    if (!plan || package.used() || (!first && !package.approvedPlan().startsWith("PDUPGR02")) || plan->serial != m_radio->serial()
         || plan->firmware != m_radio->version()) { return false; }
     ++m_generation;
     m_timeout.stop();
@@ -150,6 +191,8 @@ bool AetherPDInstallationModel::offer(const Coordinator::Prepared& package, cons
     m_job.reset();
     m_package = package;
     m_plan = package.approvedPlan();
+    m_publisherKey = package.publisherKey(); m_nativeName = package.nativeName();
+    if (!first) { m_firstToken.clear(); }
     m_session = session;
     m_serial = plan->serial; m_firmware = plan->firmware; m_address = m_radio->radioAddress();
     m_carrier = package.carrierName(); m_archiveSha256 = package.carrierSha256();
@@ -160,26 +203,41 @@ bool AetherPDInstallationModel::offer(const Coordinator::Prepared& package, cons
 }
 std::optional<AetherPDInstallationModel::Preview> AetherPDInstallationModel::preview() const
 {
-    const auto plan = aetherpd::parseInstallationPlan(m_plan);
+    const bool first = !m_nativeName.isEmpty();
+    const auto plan = first ? aetherpd::parseFirstInstallationPlan(m_plan, m_publisherKey) : aetherpd::parseInstallationPlan(m_plan);
     if (!plan) { return std::nullopt; }
     return Preview{m_plan, plan->serial, plan->firmware, plan->previousDigest, plan->candidateDigest,
-        plan->candidateKey, plan->planDigest, m_carrier, m_archiveSha256};
+        plan->candidateKey, plan->planDigest, m_carrier, m_archiveSha256, first, m_nativeName};
 }
 bool AetherPDInstallationModel::approve(const QByteArray& displayedPlan)
 {
-    if (QThread::currentThread() != thread() || m_state != State::AwaitingApproval || !m_package || !m_load || !m_factory) { return false; }
+    if (QThread::currentThread() != thread() || m_state != State::AwaitingApproval || !m_package || !m_factory
+        || (m_nativeName.isEmpty() ? !m_load : !m_write)) { return false; }
     if (displayedPlan.isEmpty() || displayedPlan != m_plan) { return false; }
     if (!current()) { unavailable(Failure::SessionChanged); return false; }
     if (m_radio->isRadioTransmitting()) { return false; }
-    m_state = State::LoadingCredential;
+    const bool first = !m_nativeName.isEmpty();
+    const auto shown = preview();
+    if (first && (!shown || m_firstToken.isEmpty())) { return false; }
+    m_state = first ? State::SavingCredential : State::LoadingCredential;
     const quint64 generation = ++m_generation;
     const QPointer<AetherPDInstallationModel> self(this);
     const TokenLoader loader = m_load;
     const QString serial = m_serial;
     m_timeout.start();
     emit changed();
-    if (!self || generation != m_generation || m_state != State::LoadingCredential) { return false; }
+    if (!self || generation != m_generation || (m_state != State::LoadingCredential && m_state != State::SavingCredential)) { return false; }
     if (!current()) { unavailable(Failure::SessionChanged); return false; }
+    if (first) {
+        const TokenWriter writer = m_write;
+        writer(serial, shown->planDigest, m_firstToken, this, [self, generation](bool persisted) {
+            if (!self || generation != self->m_generation || self->m_state != State::SavingCredential) { return; }
+            if (!persisted) { self->unavailable(Failure::CredentialSaveFailed); return; }
+            self->m_state = State::LoadingCredential;
+            self->credential(self->m_firstToken, generation);
+        });
+        return true;
+    }
     loader(serial, this, [self, generation](const QString& token) { if (self) { self->credential(token, generation); } });
     return true;
 }
@@ -187,24 +245,47 @@ void AetherPDInstallationModel::credential(const QString& token, quint64 generat
 {
     if (generation != m_generation || m_state != State::LoadingCredential) { return; }
     if (!current()) { unavailable(Failure::SessionChanged); return; }
+    if (m_radio->isRadioTransmitting()) { unavailable(Failure::StartRefused); return; }
     if (token.isEmpty()) { unavailable(Failure::NoCredential); return; }
     ++m_generation;
     m_timeout.stop();
     m_job = m_factory(*m_radio);
     if (!m_job) { unavailable(Failure::StartRefused); return; }
     connect(m_job.get(), &Coordinator::stateChanged, this, [this] { emit changed(); });
-    connect(m_job.get(), &Coordinator::finished, this, [this](Coordinator::Outcome result, bool cleanup) {
-        m_state = State::Finished;
-        m_outcome = result; m_cleanup = cleanup;
-        m_package.reset();
-        emit changed();
-    });
+    connect(m_job.get(), &Coordinator::finished, this, &AetherPDInstallationModel::completed);
     m_state = State::Running;
     const QPointer<AetherPDInstallationModel> self(this);
     const bool started = m_job->begin(*m_package, m_session, token);
     if (!self) { return; }
     m_package.reset();
     if (!started && m_job->state() == Coordinator::State::Idle) { unavailable(Failure::StartRefused); return; }
+    emit changed();
+}
+void AetherPDInstallationModel::completed(Coordinator::Outcome result, bool cleanup)
+{
+    m_outcome = result; m_cleanup = cleanup; m_package.reset();
+    if (!m_firstToken.isEmpty() && result == Coordinator::Outcome::Committed) {
+        m_state = State::PromotingCredential;
+        const quint64 generation = ++m_generation;
+        const QPointer<AetherPDInstallationModel> self(this);
+        const TokenWriter writer = m_write;
+        const QString serial = m_serial, token = m_firstToken;
+        m_timeout.start();
+        emit changed();
+        if (!self || generation != m_generation || m_state != State::PromotingCredential) { return; }
+        writer(serial, {}, token, this, [self, generation](bool persisted) {
+            if (self) { self->promoted(persisted, generation); }
+        });
+        return;
+    }
+    m_firstToken.clear(); m_state = State::Finished;
+    emit changed();
+}
+void AetherPDInstallationModel::promoted(bool persisted, quint64 generation)
+{
+    if (generation != m_generation || m_state != State::PromotingCredential) { return; }
+    ++m_generation; m_timeout.stop(); m_firstToken.clear(); m_state = State::Finished;
+    if (!persisted) { m_failure = Failure::CredentialSaveFailed; }
     emit changed();
 }
 void AetherPDInstallationModel::unavailable(Failure reason)
@@ -214,13 +295,15 @@ void AetherPDInstallationModel::unavailable(Failure reason)
     m_timeout.stop();
     m_state = State::Unavailable; m_failure = reason;
     m_package.reset();
+    m_firstToken.clear();
     emit changed();
 }
 void AetherPDInstallationModel::cancel()
 {
-    if (m_state == State::Downloading || m_state == State::Preparing || m_state == State::AwaitingApproval || m_state == State::LoadingCredential) {
+    if (m_state == State::Downloading || m_state == State::Preparing || m_state == State::AwaitingApproval || m_state == State::LoadingCredential
+        || m_state == State::SavingCredential) {
         retirePreparation();
-        ++m_generation; m_timeout.stop(); m_package.reset();
+        ++m_generation; m_timeout.stop(); m_package.reset(); m_firstToken.clear();
         m_state = State::Finished; m_outcome = Coordinator::Outcome::Canceled; m_cleanup = true;
         emit changed();
     } else if (m_state == State::Running && m_job) {
@@ -231,7 +314,7 @@ void AetherPDInstallationModel::cancel()
 }
 void AetherPDInstallationModel::reconcile()
 {
-    if (m_state == State::Idle || m_state == State::Finished || m_state == State::Unavailable || current()) { return; }
+    if (m_state == State::Idle || m_state == State::Finished || m_state == State::Unavailable || m_state == State::PromotingCredential || current()) { return; }
     if (m_job && active()) { m_job->poll(); }
     else { unavailable(Failure::SessionChanged); }
 }

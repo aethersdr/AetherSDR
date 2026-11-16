@@ -20,15 +20,19 @@ class AetherPDInstallationModel final : public QObject {
 public:
     using Coordinator = AetherPDInstallationCoordinator;
     using TokenLoader = std::function<void(const QString&, QObject*, std::function<void(const QString&)>)>;
+    // Nonempty attempt digest stores a new credential in a separate vault slot;
+    // empty digest promotes it to the radio's active credential after commit.
+    using TokenWriter = std::function<void(const QString&, const QString&, const QString&, QObject*, std::function<void(bool)>)>;
     using Factory = std::function<std::unique_ptr<Coordinator>(RadioModel&)>;
     using DownloadFactory = std::function<std::unique_ptr<AetherPDPackageDownload>()>;
-    enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable };
+    enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable, SavingCredential, PromotingCredential };
     Q_ENUM(State)
-    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected };
+    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed };
     Q_ENUM(Failure)
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
-    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {});
+    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {});
     bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
+    bool prepareFirstPackage(const AetherPDFirstPackage& package, const QString& hostname, const RadioControlSession& session);
     QString selectedDevelopmentVersion() const;
     bool prepareSelectedDevelopment(const RadioControlSession& session);
     ~AetherPDInstallationModel() override;
@@ -37,6 +41,8 @@ public:
         QByteArray plan;
         QString serial, firmware, previousDigest, candidateDigest, candidateKey, planDigest;
         QString carrierName, archiveSha256;
+        bool firstInstallation{false};
+        QString nativeName;
     };
     std::optional<Preview> preview() const;
     bool approve(const QByteArray& displayedPlan);
@@ -62,13 +68,19 @@ private:
     void retirePreparation();
     void downloaded(quint64 generation);
     void preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation);
+    void prepareSnapshot(std::function<std::optional<Coordinator::Prepared>()> prepare, quint64 generation);
     void credential(const QString& token, quint64 generation);
+    void completed(Coordinator::Outcome result, bool cleanup);
+    void promoted(bool persisted, quint64 generation);
     QPointer<RadioModel> m_radio;
     RadioControlSession m_session{};
     QHostAddress m_address;
     QString m_serial, m_firmware, m_carrier, m_archiveSha256;
-    QByteArray m_plan;
+    QByteArray m_plan, m_publisherKey;
+    QString m_nativeName;
     TokenLoader m_load;
+    TokenWriter m_write;
+    QString m_firstToken;
     Factory m_factory;
     DownloadFactory m_downloadFactory;
     std::unique_ptr<AetherPDPackageDownload> m_download;

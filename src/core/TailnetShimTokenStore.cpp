@@ -1,6 +1,8 @@
 #include "TailnetShimTokenStore.h"
+#include "SettingsCredentialPolicy.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QHash>
 #include <QObject>
@@ -19,6 +21,10 @@ namespace {
 
 QString keyFor(const QString& radioSerial, TailnetShimTokenStore::Entry entry)
 {
+    if (entry == TailnetShimTokenStore::Entry::AetherPDFirst) {
+        return SettingsCredentialPolicy::scopedCredentialKey(SettingsCredentialPolicy::kAetherPDFirstCredential,
+            QString::fromLatin1(QCryptographicHash::hash(radioSerial.toUtf8(), QCryptographicHash::Sha256).toHex()));
+    }
     return (entry == TailnetShimTokenStore::Entry::Wspr ? QStringLiteral("AetherWSPR/AdminToken/")
                                                         : QStringLiteral("TailnetShim/AdminToken/"))
         + radioSerial;
@@ -91,9 +97,9 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
     job->setAutoDelete(true);
     QPointer<QObject> guard(context);
     QObject::connect(job, &QKeychain::Job::finished, job,
-                     [guard, hasContext = context != nullptr, done = std::move(done)](QKeychain::Job* finished) {
+                     [guard, deleting = token.isEmpty(), hasContext = context != nullptr, done = std::move(done)](QKeychain::Job* finished) {
         const bool ok = finished->error() == QKeychain::NoError
-            || finished->error() == QKeychain::EntryNotFound;
+            || (deleting && finished->error() == QKeychain::EntryNotFound);
         if (!ok) {
             qWarning() << "TailnetShimTokenStore: keychain write failed:" << finished->errorString();
         }

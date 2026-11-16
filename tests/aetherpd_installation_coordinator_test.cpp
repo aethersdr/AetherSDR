@@ -9,6 +9,7 @@
 #include "core/AetherPDProtocol.h"
 #include "core/backends/AetherPDCarrierUpload.h"
 #include "models/AetherPDInstallationModel.h"
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -52,20 +53,14 @@ std::optional<Coordinator::Prepared> prepare()
     const auto package = fixture.load();
     return package ? Coordinator::prepare(*package, "fixture-8600") : std::nullopt;
 }
-std::optional<Coordinator::Prepared> prepareFirst()
+std::optional<AetherPDFirstPackage> firstPackage()
 {
     AetherPDTest::PackageFixture fixture;
-    if (!fixture.valid) { return std::nullopt; }
-    AetherPDFirstPackage::Files files;
-    for (std::size_t i = 0; i < files.size(); ++i) { files[i] = fixture.bytes(i); }
-    files[0] = AetherPDTest::PackageFixture::decode(fixture.fixture.value("first_worker"));
-    files[2] = fixture.bytes(3);
-    AetherPDFirstPackage::Trust trust;
-    trust.publisherKey = fixture.trust.candidateKey;
-    for (std::size_t i = 0; i < files.size(); ++i) {
-        trust.files[i] = {files[i].size(), QCryptographicHash::hash(files[i], QCryptographicHash::Sha256)};
-    }
-    const auto package = AetherPDFirstPackage::verify(files, trust);
+    return fixture.loadFirst();
+}
+std::optional<Coordinator::Prepared> prepareFirst()
+{
+    const auto package = firstPackage();
     return package ? Coordinator::prepareFirst(*package, "fixture-8600",
         QCryptographicHash::hash(QByteArray(64, 'a'), QCryptographicHash::Sha256), "fixture-radio") : std::nullopt;
 }
@@ -197,6 +192,95 @@ private slots:
         f.coordinator.poll();
         QCOMPARE(done.size(), 1); QVERIFY(!done.first()[1].toBool()); QCOMPARE(f.transfers, before);
         QVERIFY(f.network.sent.empty()); QCOMPARE(f.archive.starts, 0);
+    }
+
+    void firstCredentialMustPersistBeforeAnyUpload()
+    {
+        Fixture f; const auto package = firstPackage(); QVERIFY(package);
+        int loads = 0;
+        QString savedSerial, savedAttempt, savedToken;
+        std::function<void(bool)> saved;
+        AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; },
+            [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
+            nullptr, {}, [&](const QString& serial, const QString& attempt, const QString& token, QObject*, auto done) {
+                savedSerial = serial; savedAttempt = attempt; savedToken = token; saved = std::move(done);
+            });
+        QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
+        QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        const auto preview = model.preview(); QVERIFY(preview); QVERIFY(preview->firstInstallation);
+        QVERIFY(preview->previousDigest.isEmpty()); QVERIFY(!preview->nativeName.isEmpty());
+        QVERIFY(!saved); QVERIFY(f.transfers.isEmpty()); QCOMPARE(loads, 0);
+        QVERIFY(!model.approve(preview->plan + 'x')); QVERIFY(!saved);
+        QVERIFY(model.approve(preview->plan));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::SavingCredential);
+        QCOMPARE(savedSerial, QStringLiteral("fixture-8600")); QCOMPARE(savedAttempt, preview->planDigest);
+        QCOMPARE(savedToken.size(), 64);
+        QCOMPARE(QCryptographicHash::hash(savedToken.toLatin1(), QCryptographicHash::Sha256), preview->plan.mid(148, 32));
+        QVERIFY(!preview->plan.contains(savedToken.toLatin1())); QVERIFY(f.transfers.isEmpty());
+        saved(false);
+        QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::CredentialSaveFailed);
+        QVERIFY(f.transfers.isEmpty()); QCOMPARE(f.archive.nativeStarts, 0); QCOMPARE(loads, 0);
+        saved(true); QCOMPARE(f.archive.nativeStarts, 0);
+    }
+
+    void firstCredentialLateCompletionCannotStartCanceledOrReplacedSession()
+    {
+        for (int mode = 0; mode < 3; ++mode) {
+            Fixture f; const auto package = firstPackage(); QVERIFY(package);
+            std::function<void(bool)> saved;
+            AetherPDInstallationModel model(f.model, {},
+                [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
+                nullptr, {}, [&](const QString&, const QString&, const QString&, QObject*, auto done) { saved = std::move(done); });
+            QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
+            QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+            QVERIFY(model.approve(model.approvedPlan())); QVERIFY(saved);
+            if (mode == 0) { model.cancel(); }
+            else if (mode == 1) { RadioSetupControlTestAccess::replaceConnectionGeneration(f.model); model.reconcile(); }
+            else { QVERIFY(QMetaObject::invokeMethod(model.findChild<QTimer*>(), "timeout", Qt::DirectConnection)); }
+            saved(true);
+            QCOMPARE(f.archive.nativeStarts, 0); QVERIFY(f.transfers.isEmpty());
+        }
+    }
+
+    void firstCredentialPromotesOnlyAfterExactCommit()
+    {
+        for (bool persisted : {false, true}) {
+            Fixture f; const auto package = firstPackage(); QVERIFY(package);
+            Coordinator* job = nullptr;
+            QStringList attempts;
+            QStringList tokens;
+            std::function<void(bool)> saved;
+            AetherPDInstallationModel model(f.model, {}, [&](RadioModel& radio) {
+                auto coordinator = std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; });
+                job = coordinator.get(); return coordinator;
+            }, nullptr, {}, [&](const QString&, const QString& attempt, const QString& token, QObject*, auto done) {
+                attempts << attempt; tokens << token; saved = std::move(done);
+            });
+            QVERIFY(model.prepareFirstPackage(*package, "fixture-radio", f.model.controlSession()));
+            QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+            const auto preview = model.preview(); QVERIFY(preview);
+            QVERIFY(model.approve(preview->plan));
+            { const auto complete = saved; complete(true); }
+            QCOMPARE(f.archive.nativeStarts, 1); QCOMPARE(attempts.size(), 1); QVERIFY(job);
+            { const auto reply = f.transferReplies.last(); reply(0, {}); }
+            { const auto reply = f.transferReplies.last(); reply(0, "42607"); }
+            f.archive.complete(); f.clock = 3000; job->poll(); f.archive.complete();
+            f.model.handleLineForTest("S0|waveform container name=" + model.carrierName() + " version=1"); job->poll();
+            auto* observation = f.pending("/installation"); QVERIFY(observation);
+            observation->complete(200, QJsonDocument(QJsonObject{{"state", "committed"}, {"installation_committed", true},
+                {"first_install_plan_blake2b_256", preview->planDigest}, {"selected_release_blake2b_256", preview->candidateDigest},
+                {"selected_release_key", preview->candidateKey}, {"profile", 1}, {"firmware", preview->firmware}, {"serial", preview->serial}}).toJson());
+            job->poll(); QCOMPARE(attempts.size(), 1);
+            { const auto reply = f.transferReplies.last(); reply(0, {}); }
+            f.model.handleLineForTest("S0|waveform container name=" + model.carrierName() + " removed"); job->poll();
+            QCOMPARE(model.state(), AetherPDInstallationModel::State::PromotingCredential);
+            QCOMPARE(attempts.size(), 2); QVERIFY(attempts.last().isEmpty()); QCOMPARE(tokens.first(), tokens.last());
+            model.cancel(); QCOMPARE(model.state(), AetherPDInstallationModel::State::PromotingCredential);
+            { const auto complete = saved; complete(persisted); }
+            QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished);
+            QCOMPARE(model.outcome(), Coordinator::Outcome::Committed); QVERIFY(model.cleanupConfirmed());
+            QCOMPARE(model.failure(), persisted ? AetherPDInstallationModel::Failure::None : AetherPDInstallationModel::Failure::CredentialSaveFailed);
+        }
     }
 
     void compiledDevelopmentSelectionRequiresExplicitPreparation()

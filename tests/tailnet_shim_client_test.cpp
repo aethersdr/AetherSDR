@@ -218,6 +218,19 @@ int main(int argc, char** argv)
         QCoreApplication::processEvents();
         QCoreApplication::processEvents();
         ok &= expect(got == QStringLiteral("issued-after"), "a load answers with a token saved after it began");
+        bool persisted = true;
+        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL/attempt-a"), QStringLiteral("new-first-token"), &app,
+            [&persisted](bool value, const QString&) { persisted = value; }, TailnetShimTokenStore::Entry::AetherPDFirst);
+        QString first, active, other;
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL/attempt-a"), &app,
+            [&first](const QString& value) { first = value; }, TailnetShimTokenStore::Entry::AetherPDFirst);
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL/attempt-b"), &app,
+            [&other](const QString& value) { other = value; }, TailnetShimTokenStore::Entry::AetherPDFirst);
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL"), &app,
+            [&active](const QString& value) { active = value; });
+        QCoreApplication::processEvents(); QCoreApplication::processEvents();
+        ok &= expect(!persisted && first == QStringLiteral("new-first-token") && other.isEmpty()
+            && active == QStringLiteral("issued-after"), "first-install attempt is isolated and session-only storage is not durable");
         TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL"), QString());
     }
 

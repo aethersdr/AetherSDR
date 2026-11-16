@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T05:39:52.965814+00:00",
+  "updated_utc": "2026-11-16T05:48:23.955964+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Wire first-install credential creation/storage and exact-plan operator approval into the desktop model and UI; then qualify that C++ path live. Preserve prior evidence and all remaining P1-P10 gates.",
+  "next_action": "Add durable public attempt journal and restart recovery; connect first-package selection to explicit desktop approval. Then qualify the C++ first-install flow live, preserving existing identity backups and all P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1193,5 +1193,44 @@
       "transfers-asan.log": "b97e2aab897e3d9a2f452afc0f31cef448d1e55f9e4215ed0c4ebd17d2861296"
     },
     "evidence": "first-install-upload-lifecycle/validation.json under evidence_root"
+  },
+  "desktop_first_install_credentials": {
+    "status": "credential_and_preview_components_verified_not_live_workflow",
+    "production_ready": false,
+    "registered_suites_passed": 3,
+    "scoped_sanitizers": {
+      "coordinator_cases_passed": 29,
+      "dialog_cases_passed": 8,
+      "scope": "Installation model, token store, tests and dialog instrumented; remainder of engine uninstrumented"
+    },
+    "mutation": {
+      "removed": "durable credential write gate before native upload",
+      "detected": true
+    },
+    "checks": [
+      "Selected targets built",
+      "Accessibility no findings",
+      "QSettings ratchet passed",
+      "Engine boundary zero new blockers",
+      "Touchpoint manifest current",
+      "git diff --check passed"
+    ],
+    "radio_changes": false,
+    "remaining": [
+      "Durable public attempt journal and recovery after desktop exit",
+      "Authenticated first-package selection wired to ordinary UI",
+      "Actual keychain and live C++ installation/reboot/IQ qualification",
+      "6000 hardware and all remaining P1-P10 release/RF gates"
+    ],
+    "logs": {
+      "sanitizer-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mutation-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "engine-boundary.log": "2bfcc53a98fe54218c68911c8d3d32ac95690c6cefe49a6e23412cd160569192",
+      "coordinator-asan.log": "fc470025385e5b1ddbaa270f8bf4ea37f43590b73bf95cb02e4114d2b3a84475",
+      "dialog-asan.log": "82737c330faed3d70c1073b341632f3618c1678cd35c6ae5160c7356a58414f4",
+      "mutation.log": "0dc3f24e264a653c5f8e6646db0b325ae7bd3e879519c81cfed3bdc8c10c6333",
+      "registered-tests.log": "6970553026b17abac5f787953603f2322c6e89e95dc7d46864b2ed45f67b4161"
+    },
+    "evidence": "first-install-credential-model/validation.json under evidence_root"
   }
 }

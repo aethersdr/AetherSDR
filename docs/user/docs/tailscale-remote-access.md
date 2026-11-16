@@ -615,6 +615,16 @@ the current connection.
   and temporary-installer cleanup are reported; recovery after application exit
   is not yet qualified.
 
+Development first-install plans identify themselves as **First installation**
+and list the temporary host-root installation step, new local identity and fixed
+helpers that remain installed. Approval saves the new credential persistently in
+the system keychain before the first upload. If that save fails or times out,
+installation does not start. An existing radio credential is retained until the
+radio confirms the exact new installation. If saving the active credential then
+fails, the window reports that failure separately from the confirmed radio
+installation; the attempt credential remains in the keychain. First-install
+package selection and recovery after application exit are still in development.
+
 A confirmed update and confirmed cleanup are separate results. If cleanup is
 unconfirmed, the window says so even when the radio confirmed the new payload.
 A connection change requires reopening the window; an old window cannot approve

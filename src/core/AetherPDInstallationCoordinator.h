@@ -33,6 +33,7 @@ public:
     public:
         QString carrierName() const { return m_image.containerName; }
         QString nativeName() const { return m_nativeName; }
+        QByteArray publisherKey() const { return m_publisherKey; }
         QString carrierSha256() const { return m_image.archiveSha256; }
         QByteArray approvedPlan() const { return m_inputs[1]; }
         bool used() const { return m_started && m_started->load(); }

@@ -45,6 +45,20 @@ struct PackageFixture {
         if (repin) { trust.files[index] = {bytes.size(), QCryptographicHash::hash(bytes, QCryptographicHash::Sha256)}; }
         return true;
     }
+    std::optional<AetherSDR::AetherPDFirstPackage> loadFirst() const
+    {
+        if (!valid) { return std::nullopt; }
+        AetherSDR::AetherPDFirstPackage::Files files;
+        for (std::size_t i = 0; i < files.size(); ++i) { files[i] = bytes(i); }
+        files[0] = decode(fixture.value("first_worker"));
+        files[2] = bytes(3);
+        AetherSDR::AetherPDFirstPackage::Trust firstTrust;
+        firstTrust.publisherKey = trust.candidateKey;
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            firstTrust.files[i] = {files[i].size(), QCryptographicHash::hash(files[i], QCryptographicHash::Sha256)};
+        }
+        return AetherSDR::AetherPDFirstPackage::verify(files, firstTrust);
+    }
     std::optional<AetherSDR::AetherPDPackage> load() const
     { return valid ? AetherSDR::AetherPDPackage::load(directory.path(), trust) : std::nullopt; }
 };
