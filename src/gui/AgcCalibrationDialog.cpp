@@ -400,6 +400,7 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_floorTimer->start();
 
     updateModeUi();
+    rewireAudioSource();
 }
 
 AgcCalibrationDialog::~AgcCalibrationDialog()
@@ -507,11 +508,36 @@ int AgcCalibrationDialog::liveValue() const
 
 bool AgcCalibrationDialog::isTciMode() const
 {
-    if (!m_tci || !m_slice) {
+    // daxChannel() >= 1 required: host-demodulating backends (HL2, etc.) and
+    // Flex slices with no DAX channel assigned leave m_daxChannel at 0, so the
+    // rxLevel channel-match can never fire. Fall back to PC Audio for them.
+    if (!m_tci || !m_slice || m_slice->daxChannel() < 1) {
         return false;
     }
     const QString& m = m_slice->mode();
     return m == QStringLiteral("DIGU") || m == QStringLiteral("DIGL");
+}
+
+void AgcCalibrationDialog::rewireAudioSource()
+{
+    // Connect (or re-connect) the appropriate audio source. Called whenever the
+    // source might have changed: constructor end, mode change (via updateModeUi),
+    // sweep start, and sweep finish. Keeping audio connected at all times means
+    // the manual slider path always has fresh RMS data, not just during sweeps.
+    disconnect(m_audioConn);
+    m_audioConn = {};
+    if (isTciMode()) {
+        const int daxCh = m_slice->daxChannel(); // >= 1 guaranteed by isTciMode()
+        m_audioConn = connect(m_tci, &TciServer::rxLevel,
+                              &m_engine, [this, daxCh](int ch, float rms) {
+            if (ch == daxCh) {
+                m_engine.onAudioLevel(rms);
+            }
+        });
+    } else if (m_audio) {
+        m_audioConn = connect(m_audio, &AudioEngine::levelChanged,
+                              &m_engine, &AgcTCalibrator::onAudioLevel);
+    }
 }
 
 bool AgcCalibrationDialog::nrSuppressesCalibration() const
@@ -610,6 +636,13 @@ void AgcCalibrationDialog::updateModeUi()
             "AGC: %1 — finding the knee (agc_threshold) just above the noise floor.")
             .arg(m_slice->agcMode().toUpper()));
     }
+
+    // Re-evaluate the audio source when the mode changes while the dialog is
+    // open (e.g. operator switches from DIGU to SSB). Don't rewire mid-sweep;
+    // the sweep already latched its source in onStartStop().
+    if (!m_engine.isRunning()) {
+        rewireAudioSource();
+    }
 }
 
 void AgcCalibrationDialog::refreshFromSlice()
@@ -655,23 +688,11 @@ void AgcCalibrationDialog::onStartStop()
     m_curve->clear();
     m_applyBtn->setEnabled(false);
 
-    // Latch the audio source at sweep start. Source must not change mid-sweep:
-    // DAX (TCI) is pre-AF-gain; PC Audio is post-volume — mixing them splices
-    // two different gain references. Connect only one, and remember it so we can
-    // disconnect on finish/stop.
-    disconnect(m_audioConn);
-    if (isTciMode() && m_tci) {
-        const int daxCh = m_slice ? m_slice->daxChannel() : -1;
-        m_audioConn = connect(m_tci, &TciServer::rxLevel,
-                              &m_engine, [this, daxCh](int ch, float rms) {
-            if (ch == daxCh) {
-                m_engine.onAudioLevel(rms);
-            }
-        });
-    } else if (m_audio) {
-        m_audioConn = connect(m_audio, &AudioEngine::levelChanged,
-                              &m_engine, &AgcTCalibrator::onAudioLevel);
-    }
+    // Latch the audio source for this sweep. rewireAudioSource() chooses TCI or
+    // PC Audio from the current mode; calling it here before startAutoSweep()
+    // ensures the source is fixed for the entire sweep. DAX (TCI) is pre-AF-gain
+    // and PC Audio is post-volume — they must not mix across a single sweep.
+    rewireAudioSource();
 
     m_engine.startAutoSweep();
 }
@@ -728,9 +749,8 @@ void AgcCalibrationDialog::onQuietSpot(bool quiet, float marginDb)
 
 void AgcCalibrationDialog::onFinished(bool applied)
 {
-    // Release the latched audio source connection (set in onStartStop).
-    disconnect(m_audioConn);
-    m_audioConn = {};
+    // Sweep finished — rewire so the manual slider path keeps receiving audio.
+    rewireAudioSource();
 
     m_startStopBtn->setText(QStringLiteral("Auto Sweep"));
     if (applied) {
