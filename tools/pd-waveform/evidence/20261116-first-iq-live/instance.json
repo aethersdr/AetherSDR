@@ -1,0 +1,8 @@
+{
+  "pid": 1192726,
+  "socket": "/tmp/aetherpd-first-iq-desktop",
+  "binary_sha256": "42668418a13a61b26b6e8f26509f77155af836b256ef7fc820614bd03d2720d9",
+  "desktop_source": "fdf0a40861ddbc0a11308303656429fdfcbc9f78",
+  "package_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+  "automation_TX_disabled": true
+}

@@ -1,0 +1,235 @@
+{
+  "updated_utc": "2026-11-16T16:05:55.285163+00:00",
+  "status": "independent_ARM64_first_install_reboot_and_selected_local_DAX_IQ_passed",
+  "production_ready": false,
+  "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+  "desktop_source": "fdf0a40861ddbc0a11308303656429fdfcbc9f78",
+  "radio": {
+    "model": "FLEX-8600",
+    "serial": "2125-1213-8600-8895",
+    "firmware": "4.3.16.42034",
+    "fdx": false,
+    "rf_transmissions": 0
+  },
+  "installation": {
+    "release_sha256": "d93ca98fdd17739bcc6e453a4f57afeded3c83c62882da68969a98533bc7de14",
+    "release_blake2b_256": "5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20",
+    "publisher_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558",
+    "plan_blake2b_256": "9e798ab8179e28d5c9dc3a53f654bdfe1713947bf56a62e02fbb9689d4e98e47",
+    "installation_id": "1e15fc3849a5a4090ecd10ffd487a992f39af43a9d2e2a7568b0a8fc8bb1b80f",
+    "identity_sha256": "7e315aee252647fbbaf713d7633ec4b72fbd9c73406bedc54b107bedc5476931",
+    "old_active_store_and_listener_absent": true,
+    "predecessor_credential_used_for_install": false,
+    "diagnostics_used_for_delivery": false,
+    "diagnostics_used_for_fixture_and_audit": true,
+    "desktop_approval_to_radio_commit_observation_s": 39.214,
+    "timing_limit": "39.214s is first radio-commit observation during credential promotion; final panel and authenticated API confirm promotion/cleanup separately.",
+    "native_package": "AetherPDFirst1e15fc3849a5a409",
+    "carrier": "aetherpd-first-1e15fc3849a5a409",
+    "new_identity_local_only": true,
+    "persistent_backup_of_prior_installation": "/var/lib/smartsdr/aetherpd-first-iq-backup-fdf0a40861ddbc0a",
+    "rollback_exercised": false
+  },
+  "reboot": {
+    "commands_sent": 1,
+    "same_exact_commit_ready_s": 44.172,
+    "boot_id_before": "2ddebe30-984b-4540-9b5f-4501c709fc1a",
+    "boot_id_after": "e7c4dffa-907e-4c8e-b1f8-4c29e310a92e",
+    "same_identity_and_runtime_hashes": true,
+    "startup_without_desktop_start": true,
+    "desktop_reconnected_then_explicitly_started_IQ": true
+  },
+  "iq": [
+    {
+      "phase": "before_reboot",
+      "samples": 16384,
+      "sample_rate_hz": 48000,
+      "center_hz": 7150000,
+      "bytes": 131072,
+      "sha256": "3dde7340b69cac93dd39754af1639667c9bdd4b49ba1b9d02ede5830fdca8ba2",
+      "finite_nonzero_values": 30863,
+      "binding": {
+        "channel": 1,
+        "failed": false,
+        "gui_handle": 1131998352,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "source": {
+        "generation": "6",
+        "kind": "local_dax_iq",
+        "stream_id": 536870912
+      },
+      "final_faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "unkeyed": true,
+      "tones": false
+    },
+    {
+      "phase": "after_reboot",
+      "samples": 16384,
+      "sample_rate_hz": 48000,
+      "center_hz": 7150000,
+      "bytes": 131072,
+      "sha256": "d0cb0be5d5ef5620a3aca6395606c10ed4fbdf579eca118d957e05a96aa5c46c",
+      "finite_nonzero_values": 30929,
+      "binding": {
+        "channel": 1,
+        "failed": false,
+        "gui_handle": 602294182,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "source": {
+        "generation": "6",
+        "kind": "local_dax_iq",
+        "stream_id": 536870912
+      },
+      "final_faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "unkeyed": true,
+      "tones": false
+    }
+  ],
+  "final_cleanup": {
+    "stopped": true,
+    "remaining_control_processes": 3,
+    "all_UID_78666_caps_zero_NNP_1": true,
+    "DSP_and_capture_workers_absent": true,
+    "arp_absent": true,
+    "accept_local": "0",
+    "temporary_installer_paths_absent": true,
+    "temporary_carrier_and_native_cache_absent": true,
+    "diagnostic_audit_job_removed": true,
+    "prior_backup_identity_preserved": true,
+    "desktop_automation_TX_disabled": true,
+    "radio_power_setting_and_maximum_W": 10
+  },
+  "negative_evidence": [
+    {
+      "case": "reused_desktop_profile",
+      "result": "Refused before upload: completed first-install journal had a different earlier development publisher key. Old journal/profile retained; successful run used an isolated fresh profile.",
+      "files": [
+        "install-result.json",
+        "prior-journal-status.json"
+      ]
+    },
+    {
+      "case": "capture_harness_field_names",
+      "result": "First live manifest valid; harness expected private request names instead of public channel/pan fields. Corrected only harness; session stopped.",
+      "files": [
+        "fresh/receive-iq-harness-field-error.json",
+        "fresh/receive-iq-harness-field-error.py"
+      ]
+    },
+    {
+      "case": "capture_harness_chunk_route",
+      "result": "v3 manifest valid; chunk endpoint remains v1. Corrected temporary vault helper to match production protocol routing; session stopped.",
+      "files": [
+        "fresh/receive-iq-harness-route-error.json",
+        "vault-v3-route-error.cpp"
+      ]
+    },
+    {
+      "case": "audit_process_scope",
+      "result": "Audit expected three control processes but counted only two under /run, excluding /var/lib/smartsdr/aetherpd/pd-boot. Initial audit and first inspection failed the same count assertion. Explicit process/journal evidence showed no DSP/IQ workers or ARP; corrected full-path audit passed before and after reboot.",
+      "files": [
+        "idle-audit-result.json",
+        "idle-inspect-result.json",
+        "process-inspect-result.json",
+        "idle-verified-result.json"
+      ]
+    }
+  ],
+  "limits": [
+    "Single latest-candidate fresh installation and one normal software reboot on8600; not repeated cold-power-cut qualification.",
+    "IQ proof is receive-only on channel1. Channels2-4, ownership-change rejection and all new operator controls still need exact-candidate live coverage.",
+    "No new RF correction evidence. Earlier matched5/10W results belong to earlier runtime candidates.",
+    "Natural alignment slip, cold-start cancellation, final failure/unkey matrix, repeated tone/speech and stockAPD comparison remain open.",
+    "Development keys and local package pins only. A completed local journal from another publisher is deliberately refused; this run does not qualify cross-publisher reinstall/recovery.",
+    "Actual6300 native first-install adapter, Linux2.6 hardware qualification and disk footprint remain open.",
+    "Private bench diagnostics used only to create/audit the fixture; original diagnostics SSH container remains a separate bench tool, not part of shipped AetherPD.",
+    "Normal capture shutdown journal reports output_errors1/loss_seen1 as its receiver closes; this is not loss-free streaming qualification.",
+    "User cause of the earlier outage remains unconfirmed. This new timed reboot result does not rewrite the earlier failed observation.",
+    "LP100A integration deferred. Cross-platformCI, independent review and release gates remain open."
+  ],
+  "evidence_directory": "evidence/20261116-first-iq-live",
+  "evidence_sha256": {
+    "clean-fixture-job.py": "1373c6309f87957c55cfe64519ea634924dc6595fbf226515ae851dd8c69785d",
+    "clean-fixture-result.json": "da1515e73c6c9ec7702e4490bf3e8ba3427803a4ad0257fc8cddb55f863c22e2",
+    "clean-fixture.log": "da1515e73c6c9ec7702e4490bf3e8ba3427803a4ad0257fc8cddb55f863c22e2",
+    "committed-audit-job.py": "69a9532d2a7d55c95d8c18a732a427b292a5bb5ac090a291de97acf33f1cfc7a",
+    "committed-audit-result.json": "4775d4ec0058705e0aaaf2010e661374af5891c273fa896d4c71859126ae60e5",
+    "committed-audit.log": "4775d4ec0058705e0aaaf2010e661374af5891c273fa896d4c71859126ae60e5",
+    "connected-state.json": "934f3c3368cf1b550b860d9ca5b1d34cb523b890b03514ee3e8ac2f48d46f194",
+    "desktop-build-commands.json": "3c7a596dee60b45f92f123df672c76734fbe969881906228db5b75c8adc406c0",
+    "desktop-build.log": "032770697db7556c936bec2bd95f9f67ba97df7a2ba9279486b616b6c769743a",
+    "desktop-preflight.json": "6a71e0d3e7bff6a748e538dadbf278cc57b971e57129684a2a54ef491630c0a0",
+    "desktop.log": "0187257212b969eaac2889fe280937a065c0734e3fa72f34c2a34ffca6e409e7",
+    "final-state.json": "3d7dae07998d949f8f1ab30152e9561c8e6a4aa62bf5e39d964d9ec5a0377895",
+    "idle-audit-job.py": "b6231dd8a25c3509baed6dbf1f2cae92ec5e98b06c2b560e88edb1567195c965",
+    "idle-audit-result.json": "be2b49fca4479c7c17b8dbd075f10ef59b9d0e70f5d7a7e2d81af3023bd56662",
+    "idle-audit.log": "bcc8ddc40439df248b8f40d70d6a03c4bbc67f24440ed53b8bb03439b321d630",
+    "idle-inspect-job.py": "8e3c4fb51e72e08e3995cc9e4a6983d740c4d847f6093033d3e0d3008f76267d",
+    "idle-inspect-result.json": "c5d363540692c75d058f64c03df098433392e50dd2831363b17cc57d2a78cefc",
+    "idle-inspect.log": "2384039725a8315810c0b86583e0210a891128f4291f11113b884fd2f4e5eab2",
+    "idle-verified-job.py": "5dbdd138f7ccc963d34ef4754f7cdcf07722e5862915bcd5a3600907e3110c0f",
+    "idle-verified-result.json": "787ff9f3e87f7fe3f5e1f0395f41a0b12575fbbf34dd9bcfe6f7075279354a00",
+    "idle-verified.log": "787ff9f3e87f7fe3f5e1f0395f41a0b12575fbbf34dd9bcfe6f7075279354a00",
+    "install-result.json": "a24d6a0ae9bcfd709d1043519691873bc6239fbd4fd4595dd737e0d8029a04d5",
+    "install.py": "db11f88332aaa8c677458cb9f7cb1bf3ff808b92b4b7dd0a7ad688b80274ae17",
+    "instance.json": "69b296edca1c7d0a7278f548a08eed25331e9e72c0962b8ba322af393e1806e0",
+    "launch.py": "26b76ea138648a7be2127aea1c33178a58bf0f775e5d16352752120dd6c58a8b",
+    "panel-before.json": "3b74a1228f2dcd7f2dd33be33443ee6d99f88ed71aff29d22f05e362d6f04233",
+    "post-reboot-audit-job.py": "5dbdd138f7ccc963d34ef4754f7cdcf07722e5862915bcd5a3600907e3110c0f",
+    "post-reboot-audit-result.json": "c51a7277b14dbf1c2554f2c6121db1d1be86cfd97691a4b55db626ab61caeb9b",
+    "post-reboot-audit.log": "c51a7277b14dbf1c2554f2c6121db1d1be86cfd97691a4b55db626ab61caeb9b",
+    "preflight-job.py": "9c612fe54cd349c8c19fdb5192dc1ed34e1c6ea942756f87d3b96f69a68118fc",
+    "preflight-result.json": "76971aff75862d29da91a0e39d4708eb064b0154b34d217fc6ebeae347a2226e",
+    "preflight.log": "76971aff75862d29da91a0e39d4708eb064b0154b34d217fc6ebeae347a2226e",
+    "prepare.py": "cb81c1225458b2af4eb01d3f2409630761e35f2f59f14bf013f7a6b5d31317a5",
+    "prepared.json": "2f7ba2615b5c2c4291e8622efe8b06733cee8657c0ee914f8f812b1c19424f57",
+    "prior-journal-status.json": "14b95019bba5889f9d6ba43b4477b44ccdcdf79a8071fb518839c8a90856e255",
+    "process-inspect-job.py": "f0d6905f0103108d207d4dac7921eab2236c6e81acd8ca65e33debd5a79af6a6",
+    "process-inspect-result.json": "acb7f0ac6df26fb48e8fd2daa385cb57c590179c2490b4450b4aa0161f99855a",
+    "process-inspect.log": "acb7f0ac6df26fb48e8fd2daa385cb57c590179c2490b4450b4aa0161f99855a",
+    "reboot-check.json": "17425530be8a9de1d1d36fc1286e4735887e77aebb43ad794d36a49ea2af5a59",
+    "reboot-check.py": "5b54bcf93032680263b05d41641091b0b689f1174df442652c35351f71d89cb3",
+    "reboot-intent.json": "b58a4b954c29edc7cf5136e1a5e89a7eb85a555501bf9e6636621724b500b770",
+    "run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "save-evidence.py": "97adc2ef1b77345854a0b3916cac5b74a80e120362be9d0ee21e2a516e5e95f8",
+    "vault-build-command.json": "ddc1c4e77fdeb06fe40c1ee51e969d9a06af31af09aa96a34322179f515bfe2f",
+    "vault-v3-route-error.cpp": "7f38cf857dd0ea17c5dba846b76e90c36fc47154bf6c64e03f888216122c72ba",
+    "vault-v3.cpp": "8441912207402161eb8b023cef5ca9d0acd0953e9573e26c9efa47101dc58ff7",
+    "fresh/connected-state.json": "c432e3f56f832513ed5decc20e8d13f38a15ad2f667cae301fb0ad694c9363a8",
+    "fresh/desktop.log": "27986740337ca7e132002853a039af8b64c96f8c05b3c5967dc2dc9802ecf14c",
+    "fresh/install-result.json": "11c5912572b8b42685aa9ea54cf5608088bb174c7903e3a53018ce8fde6a96ba",
+    "fresh/install.py": "72dc1f42a2136348c93d044c87ab2643ad815b90c0253e84b90b749dcf9ec7e5",
+    "fresh/installed-status.json": "1939bb0ddbfbe50306a4cf966284085511c96f7c8b7bad6ec83a437648658d39",
+    "fresh/instance.json": "39f2d08348ae4ba1fdbc549dd767a36a858acceee45f8c49cf66581410b2464e",
+    "fresh/launch.py": "056256b3f6a08768f951578bfc6d51c64d62c901c7a28f4fffd1741a13acaf43",
+    "fresh/prepare.py": "5cee302778e96b5e0d26507a9b4ba071f10d595723f368ecbbc295f5766b2d3b",
+    "fresh/prepared.json": "79553d65e7b43cdcc47bea6f0af6ea8a92c3df446722ced2dc46da1feb8f0ee5",
+    "fresh/receive-iq-check.json": "e353afb64ff2d71e920136bf9114007bad2e430c3080e518eaf4a0d7fcf8d4b6",
+    "fresh/receive-iq-check.py": "bc4c402fae2c3e29039a676007b16f1f908b6dbfd27d0c93fb740e2aae10de4e",
+    "fresh/receive-iq-harness-field-error.json": "c8a480f52801f22e326054e95a9354049586a20a996940b5ba38675b46170616",
+    "fresh/receive-iq-harness-field-error.py": "0e0a88afcfb1f546b57aabeb15751c5a77ae174cdb9cdf1f92f28da6bbdda2b9",
+    "fresh/receive-iq-harness-route-error.json": "01280e056d15d50f7a404dbb9f7a2a4be488450d0222e1bb66eed5ade67a2797",
+    "fresh/receive-iq.f32le": "3dde7340b69cac93dd39754af1639667c9bdd4b49ba1b9d02ede5830fdca8ba2",
+    "fresh/receive-preflight.json": "78b2d055f3560e9770157dd0affa963f736a766ded550734cd3347013e5baae7",
+    "fresh/post-reboot/receive-iq-check.json": "cebdc5fe07a53b41adb361936c94760734c3ca91c967ab8f9d9b710fec8e11cf",
+    "fresh/post-reboot/receive-iq-check.py": "fe8e4d8762889af251b0d0c7b620172bed9344bbb0d6e6b77103b1331a489cb1",
+    "fresh/post-reboot/receive-iq.f32le": "d0cb0be5d5ef5620a3aca6395606c10ed4fbdf579eca118d957e05a96aa5c46c",
+    "fresh/post-reboot/reconnected.json": "5429953aa510d1b09e940239dc15094f54f7028cd8bcde35507ec6bf73758b54"
+  }
+}

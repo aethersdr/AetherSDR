@@ -1,0 +1,21 @@
+[
+  [
+    "cmake",
+    "-S",
+    "/home/jeremy/AetherSDR/build/aetherpd-source",
+    "-B",
+    "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project",
+    "-DAETHERPD_DEVELOPMENT_SELECTION=",
+    "-DAETHERPD_FIRST_DEVELOPMENT_SELECTION=/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-iq-distribution/short/selection.json"
+  ],
+  [
+    "cmake",
+    "--build",
+    "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project",
+    "--parallel",
+    "6",
+    "--target",
+    "AetherSDR",
+    "aetherpd_package_test"
+  ]
+]

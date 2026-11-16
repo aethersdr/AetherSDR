@@ -1,0 +1,168 @@
+{
+  "connect": {
+    "connect": "local",
+    "deferred": true,
+    "ok": true,
+    "radio": {
+      "address": "192.168.50.100",
+      "callsign": "KK7GWY",
+      "family": "flex",
+      "inUse": false,
+      "model": "FLEX-8600",
+      "multiFlexEnabled": true,
+      "name": "",
+      "nickname": "FLX8600",
+      "port": 4992,
+      "routed": false,
+      "serial": "2125-1213-8600-8895",
+      "status": "Available",
+      "version": "4.3.16.42034"
+    },
+    "requested": true,
+    "selector": "serial",
+    "serial": "2125-1213-8600-8895"
+  },
+  "wait": {
+    "connected": true,
+    "elapsedMs": 0,
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": null,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 0,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 0,
+      "slots": [
+        {
+          "id": 0,
+          "state": "empty"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": null,
+      "version": "4.3.16.42034"
+    }
+  },
+  "radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": null,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 0,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 0,
+      "slots": [
+        {
+          "id": 0,
+          "state": "empty"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": null,
+      "version": "4.3.16.42034"
+    }
+  },
+  "transmit": {
+    "model": "transmit",
+    "ok": true,
+    "transmit": {
+      "accTxDelay": 0,
+      "activeMicProfile": "",
+      "activeProfile": "",
+      "amCarrierLevel": 48,
+      "apdEnabled": false,
+      "atuEnabled": false,
+      "atuMemories": false,
+      "atuStatus": "none",
+      "cwBreakIn": false,
+      "cwDelay": 500,
+      "cwIambic": true,
+      "cwIambicMode": 0,
+      "cwPitch": 600,
+      "cwSidetone": true,
+      "cwSpeed": 20,
+      "cwSwapPaddles": false,
+      "cwlEnabled": false,
+      "dax": false,
+      "dexp": false,
+      "dexpLevel": 0,
+      "maxPowerLevel": 100,
+      "micAcc": false,
+      "micBias": false,
+      "micBoost": false,
+      "micLevel": 50,
+      "micSelection": "MIC",
+      "monGainCw": 50,
+      "monGainSb": 50,
+      "monPanCw": 50,
+      "monitor": false,
+      "mox": false,
+      "rfPower": 100,
+      "showTxInWaterfall": false,
+      "speechProc": false,
+      "speechProcLevel": 0,
+      "speechProcLevelMaximum": 2,
+      "transmitting": false,
+      "tunePower": 10,
+      "tuning": false,
+      "tx1Delay": 0,
+      "tx2Delay": 0,
+      "tx3Delay": 0,
+      "txDelay": 0,
+      "txFilterHigh": 3300,
+      "txFilterLow": 50,
+      "voxDelay": 50,
+      "voxEnable": false,
+      "voxLevel": 50
+    }
+  },
+  "pans": {
+    "ok": true,
+    "pans": []
+  },
+  "slices": {
+    "ok": true,
+    "slices": []
+  }
+}

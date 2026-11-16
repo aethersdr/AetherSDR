@@ -1,0 +1,42 @@
+import hashlib,json,os,pathlib,subprocess
+P=pathlib.Path;store=P('/var/lib/smartsdr/aetherpd');report={'rf_commands':[],'processes':[]}
+plan=(store/'migration-approved').read_bytes();assert hashlib.blake2b(plan,digest_size=32).hexdigest()=='9e798ab8179e28d5c9dc3a53f654bdfe1713947bf56a62e02fbb9689d4e98e47'
+assert (store/'transaction').read_bytes()==b'PDTXN001'+plan+bytes([0,0,0,5])
+cfg=json.loads((store/'state/provision.json').read_text());assert cfg['local_only'] and cfg['installation_id']=='1e15fc3849a5a4090ecd10ffd487a992f39af43a9d2e2a7568b0a8fc8bb1b80f'
+assert not (store/'state/tsnet').exists()
+report['identity_sha256']=hashlib.sha256((store/'state/provision.json').read_bytes()).hexdigest()
+report['temporary_paths']={p:P(p).exists() for p in ['/var/lib/smartsdr/aetherpd-installation','/run/aetherpd-install','/run/aetherpd-delivery','/etc/systemd/system/aetherpd-install.service','/etc/systemd/system/aetherpd-recover.service']}
+assert not any(report['temporary_paths'].values())
+for p in P('/proc').iterdir():
+ if not p.name.isdecimal():continue
+ try:
+  exe=os.readlink(p/'exe')
+  if exe.startswith('/run/aetherpd/') or 'pd-first-request' in exe:
+   status={l.split(':',1)[0]:l.split(':',1)[1].strip() for l in (p/'status').read_text().splitlines() if ':' in l}
+   row={'pid':int(p.name),'exe':exe,'uid':status['Uid'],'caps':{k:status[k] for k in ['CapInh','CapPrm','CapEff','CapBnd','CapAmb']},'nnp':status['NoNewPrivs'],'sha256':hashlib.sha256((p/'exe').read_bytes()).hexdigest()};report['processes'].append(row)
+ except (FileNotFoundError,ProcessLookupError,PermissionError):pass
+assert len(report['processes'])==1
+primary=report['processes'][0];assert primary['exe']=='/run/aetherpd/bin/flex-tailnet-shim' and primary['uid'].split()==['78666']*4 and all(int(x,16)==0 for x in primary['caps'].values()) and primary['nnp']=='1'
+assert primary['sha256']=='e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690'
+report['private_sockets']=[l for l in P('/proc/net/unix').read_text().splitlines() if any(x in l for x in ['aetherpd-config-','aetherpd-bootstrap-','aetherpd-relay-'])];assert not report['private_sockets']
+ns=['/usr/bin/nsenter','--target','1','--cgroup']
+p=subprocess.run(ns+['/usr/bin/podman','ps','-a','--format','{{.Names}}'],capture_output=True,text=True,timeout=10);assert p.returncode==0
+report['containers']=p.stdout.splitlines();assert not any(x.startswith(('aetherpd-first-','aetherpd-install-')) for x in report['containers'])
+report['arp']=[l for l in P('/proc/net/arp').read_text().splitlines()[1:] if l.split()[0]=='172.30.2.1'];assert not report['arp']
+report['accept_local']=P('/proc/sys/net/ipv4/conf/eth0.10/accept_local').read_text().strip();assert report['accept_local']=='0'
+report['legacy_container_absent']='aetherpd-before-first-24cfa90ab5052bf8' not in report['containers'];assert report['legacy_container_absent']
+report['cached_first_artifacts']=[]
+for root in ['/user/waveforms','/var/lib/smartsdr']:
+ for item in P(root).rglob('*1e15fc3849a5a409*'):
+  report['cached_first_artifacts'].append(str(item))
+assert not report['cached_first_artifacts']
+expected={'flex-tailnet-shim': 'e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690', 'aether-pd': '0d5e25818628286a07c510b0c7627fa06f07ff207f8c5bb795cde1c3a95a948c', 'pd-primary-launch': '21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc', 'pd-start-session': '7772765fd596722dc342f2579c83f3a3186614979c9defbc141223f7ae18c525', 'pd-radio-launch': '4ca6468b3eb9f023937170fdd0bac1c4c38bf017d29e8f3310b94010596cc1d5', 'pd-fixed-arp': '2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49', 'pd-iq-source': '37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0', 'pd-capture-bootstrap': 'b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc', 'pd-unkey-guard': '9e16848c15ef86b4bcbe6a1eabf3229fbd368fd32bcd3f406211ff3d954642fd', 'pd-lease-guard': '297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e', 'LICENSES': '3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1'}
+report['runtime_hashes']={n:hashlib.sha256((P('/run/aetherpd/bin')/n).read_bytes()).hexdigest() for n in expected if n!='LICENSES'}
+assert all(report['runtime_hashes'][n]==h for n,h in expected.items() if n!='LICENSES')
+assert not (store/'upgrade-generation').exists()
+report['first_install_without_upgrade_generation']=True
+backup=P('/var/lib/smartsdr/aetherpd-first-iq-backup-fdf0a40861ddbc0a/store/state/provision.json')
+report['prior_backup_identity_sha256']=hashlib.sha256(backup.read_bytes()).hexdigest()
+assert report['prior_backup_identity_sha256']=='dac9c7673f8bf67b9d544471fa25410d19c1df0b016916d888fd7bcf2410c07d'
+report['boot_id']=P('/proc/sys/kernel/random/boot_id').read_text().strip();report['passed']=True
+print(json.dumps(report),flush=True)

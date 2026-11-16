@@ -1,0 +1,17 @@
+{
+  "purpose": "owner-authorized bounded native in-process experiment",
+  "workdir": "/var/tmp/nereus-inprocess-f28fb09714b14afd830327146a14e9a1",
+  "job_container": "07e0a7c265de95df1f8243de3b65f228c06e8d3e483c9f7071d0573c6afccae8",
+  "wait": {
+    "StatusCode": 0,
+    "Error": null
+  },
+  "logs": "{\"rf_commands\": [], \"installation_mutated\": false, \"identity_sha256\": \"dac9c7673f8bf67b9d544471fa25410d19c1df0b016916d888fd7bcf2410c07d\", \"installation_id\": \"421daf94e1ebbd8502975ad35e9b47022548bff1883a17506db0eb32be5dc78c\", \"local_only\": true, \"boot_id\": \"2ddebe30-984b-4540-9b5f-4501c709fc1a\", \"uptime\": \"1171.84 4246.46\", \"generation\": \"c1346b1bc5279292483d0be04cb38ee572a64ce66896194a58a473e72eea1c46\", \"processes\": [{\"pid\": 1295, \"exe\": \"/run/aetherpd/bin/flex-tailnet-shim\", \"uid\": \"78666\\t78666\\t78666\\t78666\", \"nnp\": \"1\", \"caps\": {\"CapInh\": \"0000000000000000\", \"CapPrm\": \"0000000000000000\", \"CapEff\": \"0000000000000000\", \"CapBnd\": \"0000000000000000\", \"CapAmb\": \"0000000000000000\"}, \"sha256\": \"5b6371126432a236f079c794d8c0277673ef2fdfaae7d59e54cea33aea7632e0\"}], \"arp\": [], \"accept_local\": \"0\", \"temporary_paths\": {\"/var/lib/smartsdr/aetherpd-upgrade\": false, \"/var/lib/smartsdr/.aetherpd-upgrade\": false, \"/var/lib/smartsdr/.aetherpd-upgrade-retired\": false, \"/var/lib/smartsdr/.aetherpd-upgrade-staging\": false, \"/var/lib/smartsdr/aetherpd-installation\": false, \"/etc/systemd/system/aetherpd-upgrade.service\": false, \"/etc/systemd/system/aetherpd-upgrade-recover.service\": false, \"/etc/systemd/system/aetherpd-install.service\": false, \"/etc/systemd/system/aetherpd-recover.service\": false}, \"services\": \"Result=success\\nExecMainStartTimestampMonotonic=9339032\\nId=aetherpd-boot.service\\nActiveState=active\\nSubState=exited\\n\\nResult=success\\nExecMainStartTimestampMonotonic=41922355\\nId=aetherpd-shim.service\\nActiveState=active\\nSubState=running\\n\\nResult=success\\nId=aetherpd-start.socket\\nActiveState=active\\nSubState=listening\\n\", \"containers\": \"nereus-net-probe\\nAetherGPS\\nnereus-inprocess-job-82d07276d5\\n\", \"boot_journal\": \"Starting aetherpd-boot.service - AetherPD authenticated RAM payload...\\nFinished aetherpd-boot.service - AetherPD authenticated RAM payload.\\nStarted aetherpd-shim.service - AetherPD ordinary-user control service.\\n2026/11/16 15:26:23 flex-tailnet-shim 0.5.2 starting; state in /var/lib/smartsdr/aetherpd/state\\n2026/11/16 15:27:05 expose: AetherGPS published TCP 2947 (192.168.50.100)\\n\", \"passed\": true}\n",
+  "job_container_deleted": true,
+  "temporary_host_directory_deleted": true,
+  "orchestration": {
+    "receiver_exit": 0,
+    "waveform_upload_exit": 0,
+    "authenticated_native_bridge_delivered": true
+  }
+}

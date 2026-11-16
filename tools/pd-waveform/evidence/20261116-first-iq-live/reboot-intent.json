@@ -1,0 +1,82 @@
+{
+  "passed": false,
+  "rf_commands": [],
+  "reboot_commands_sent": 0,
+  "radio_before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.203125,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "before": {
+    "firmware": "4.3.16.42034",
+    "first_install_plan_blake2b_256": "9e798ab8179e28d5c9dc3a53f654bdfe1713947bf56a62e02fbb9689d4e98e47",
+    "installation_committed": true,
+    "profile": 1,
+    "selected_release_blake2b_256": "5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20",
+    "selected_release_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558",
+    "serial": "2125-1213-8600-8895",
+    "state": "committed"
+  },
+  "identity_before": {
+    "advertised_routes": [],
+    "allow": [],
+    "approved_routes": [],
+    "claimable": false,
+    "discovered_devices": [],
+    "dns_name": "",
+    "exposed_ports": [
+      {
+        "expires_in_s": 410,
+        "listening": false,
+        "name": "AetherGPS",
+        "port": 2947,
+        "target": "192.168.50.100"
+      }
+    ],
+    "hostname": "flx8600",
+    "installation_id": "1e15fc3849a5a4090ecd10ffd487a992f39af43a9d2e2a7568b0a8fc8bb1b80f",
+    "key_expiry": "",
+    "last_error": "",
+    "provisioned": true,
+    "recent_commands": [],
+    "routes": [],
+    "session_detail": [],
+    "sessions": 0,
+    "share_discovered": false,
+    "state": "local",
+    "tailnet_ip": "",
+    "version": "0.5.2"
+  },
+  "boot_id_before": "2ddebe30-984b-4540-9b5f-4501c709fc1a"
+}

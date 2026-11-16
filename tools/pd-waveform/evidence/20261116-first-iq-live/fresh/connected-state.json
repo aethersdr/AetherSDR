@@ -1,0 +1,136 @@
+{
+  "whoami": {
+    "agentName": "Codex AetherPD",
+    "automationIdentity": "aetherpd-shim-integration",
+    "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+    "guiClientIdTransient": true,
+    "label": "",
+    "name": "aetherpd-first-iq-fresh",
+    "ok": true,
+    "pid": 1196088,
+    "readOnly": false,
+    "socket": "/tmp/aetherpd-first-iq-fresh",
+    "station": "Codex AetherPD",
+    "txAllowed": false,
+    "version": "26.11.2"
+  },
+  "connect": {
+    "connect": "local",
+    "deferred": true,
+    "ok": true,
+    "radio": {
+      "address": "192.168.50.100",
+      "callsign": "KK7GWY",
+      "family": "flex",
+      "inUse": false,
+      "model": "FLEX-8600",
+      "multiFlexEnabled": true,
+      "name": "",
+      "nickname": "FLX8600",
+      "port": 4992,
+      "routed": false,
+      "serial": "2125-1213-8600-8895",
+      "status": "Available",
+      "version": "4.3.16.42034"
+    },
+    "requested": true,
+    "selector": "serial",
+    "serial": "2125-1213-8600-8895"
+  },
+  "wait": {
+    "connected": true,
+    "elapsedMs": 0,
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": null,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 0,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 0,
+      "slots": [
+        {
+          "id": 0,
+          "state": "empty"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": null,
+      "version": "4.3.16.42034"
+    }
+  },
+  "radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "waveforms": {
+    "action": "trigger",
+    "class": "QAction",
+    "deferred": true,
+    "ok": true,
+    "target": "Waveforms...",
+    "text": "Waveforms..."
+  },
+  "panel": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "openAetherPD"
+  }
+}

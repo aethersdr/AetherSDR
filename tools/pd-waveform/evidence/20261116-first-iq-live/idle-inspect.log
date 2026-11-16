@@ -1,0 +1,18 @@
+{
+  "purpose": "owner-authorized bounded native in-process experiment",
+  "workdir": "/var/tmp/nereus-inprocess-aa3a2a32af0e4e4abd893e8f5e5f3a4c",
+  "job_container": "6405af64839ddf4ee29871570fc58d063598f277cbee147408e40a95fad0c5a9",
+  "wait": {
+    "StatusCode": 1,
+    "Error": null
+  },
+  "logs": "Traceback (most recent call last):\n  File \"<string>\", line 20, in <module>\nAssertionError\n",
+  "job_container_deleted": true,
+  "temporary_host_directory_deleted": true,
+  "orchestration": {
+    "receiver_exit": 0,
+    "waveform_upload_exit": 0,
+    "authenticated_native_bridge_delivered": true
+  }
+}
+native job failed; inspect saved evidence

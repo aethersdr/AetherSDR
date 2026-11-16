@@ -1,0 +1,192 @@
+{
+  "whoami": {
+    "agentName": "Codex AetherPD",
+    "automationIdentity": "aetherpd-shim-integration",
+    "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+    "guiClientIdTransient": true,
+    "label": "",
+    "name": "aetherpd-first-iq-desktop",
+    "ok": true,
+    "pid": 1192726,
+    "readOnly": false,
+    "socket": "/tmp/aetherpd-first-iq-desktop",
+    "station": "Codex AetherPD",
+    "txAllowed": false,
+    "version": "26.11.2"
+  },
+  "radio_before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": null,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "plan_before": {
+    "pdInstallState": {
+      "value": "Review the plan, then choose Approve first installation. Nothing is installed before approval.",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "First-install development package 0.0.0-iq.88280414f \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nFirst installation \u2014 changes on approval:\n\u2022 Save a new radio credential in the system keychain before uploading.\n\u2022 Temporarily use host-root authority to install the verified AetherPD payload and fixed helpers.\n\u2022 Create a new local identity; no predecessor credential or Tailnet enrollment is used.\n\u2022 Install fixed boot and local-session helpers for reboot, local IQ capture and scheduling.\n\u2022 Run the shim and AetherPD without host-root authority.\n\u2022 Remove temporary installation components. Fixed boot/session helpers remain installed.\nInstallation does not transmit or arm calibration.\n\nTemporary executables: pd-first-request, pd-accept, pd-carrier, pd-send, pd-deliver, signed installation worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nNew release (BLAKE2b-256): 5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20\nPublisher key (Ed25519): 2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558\nAttempt (BLAKE2b-256): 2cc4679fa04b51feb3d06a6e697347af3e660df83b0f87d44fb376d5ed515eef\nTemporary native package: AetherPDFirst2002b94518cbda76\nTemporary carrier: aetherpd-first-2002b94518cbda76\nCarrier archive (SHA-256): 9452ce94ed43540c048d771cc4e915e01e966a68736bac15f0524cbdba23cac6\nNew local identity hostname: flx8600",
+      "enabled": true
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": true
+    },
+    "pdInstallApprove": {
+      "value": "Approve first installation",
+      "enabled": true
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": false
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": false
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false
+    }
+  },
+  "rf_commands": [],
+  "old_store_absent": true,
+  "predecessor_credential_used_for_delivery": false,
+  "diagnostics_used_for_delivery": false,
+  "states": [
+    {
+      "elapsed_s": 0.912,
+      "state": "Saving the new credential in the system keychain before installation\u2026"
+    },
+    {
+      "elapsed_s": 2.277,
+      "state": "The recovery record could not be saved, or an earlier installation is unresolved. No installation was started."
+    }
+  ],
+  "committed": false,
+  "approval": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdInstallApprove"
+  },
+  "latest": {
+    "pdInstallState": {
+      "value": "The recovery record could not be saved, or an earlier installation is unresolved. No installation was started.",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "First-install development package 0.0.0-iq.88280414f \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nFirst installation \u2014 changes on approval:\n\u2022 Save a new radio credential in the system keychain before uploading.\n\u2022 Temporarily use host-root authority to install the verified AetherPD payload and fixed helpers.\n\u2022 Create a new local identity; no predecessor credential or Tailnet enrollment is used.\n\u2022 Install fixed boot and local-session helpers for reboot, local IQ capture and scheduling.\n\u2022 Run the shim and AetherPD without host-root authority.\n\u2022 Remove temporary installation components. Fixed boot/session helpers remain installed.\nInstallation does not transmit or arm calibration.\n\nTemporary executables: pd-first-request, pd-accept, pd-carrier, pd-send, pd-deliver, signed installation worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nNew release (BLAKE2b-256): 5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20\nPublisher key (Ed25519): 2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558\nAttempt (BLAKE2b-256): 2cc4679fa04b51feb3d06a6e697347af3e660df83b0f87d44fb376d5ed515eef\nTemporary native package: AetherPDFirst2002b94518cbda76\nTemporary carrier: aetherpd-first-2002b94518cbda76\nCarrier archive (SHA-256): 9452ce94ed43540c048d771cc4e915e01e966a68736bac15f0524cbdba23cac6\nNew local identity hostname: flx8600",
+      "enabled": true
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": false
+    },
+    "pdInstallApprove": {
+      "value": "Approve first installation",
+      "enabled": false
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": false
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": true
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": false
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false
+    }
+  },
+  "elapsed_s": 2.277,
+  "radio_after": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 22.984375,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  }
+}

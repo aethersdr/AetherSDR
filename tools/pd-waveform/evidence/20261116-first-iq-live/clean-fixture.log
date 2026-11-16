@@ -1,0 +1,17 @@
+{
+  "purpose": "owner-authorized bounded native in-process experiment",
+  "workdir": "/var/tmp/nereus-inprocess-1d5d719beda54bddab347d4a79b95ac0",
+  "job_container": "930bce5aeb3dedbbbab96a7377a6b6259274bb582efd544e7dd88f0135aaec98",
+  "wait": {
+    "StatusCode": 0,
+    "Error": null
+  },
+  "logs": "{\"passed\": true, \"backup\": \"/var/lib/smartsdr/aetherpd-first-iq-backup-fdf0a40861ddbc0a\", \"runtime_backup\": \"/run/aetherpd-first-iq-backup-fdf0a40861ddbc0a\", \"prior_identity_preserved\": true, \"installed_store_absent\": true, \"shim_listener_absent\": true, \"fixed_units_moved\": [\"aetherpd-start.socket\", \"aetherpd-start@.service\", \"aetherpd-boot.service\", \"aetherpd-shim.service\", \"multi-user.target.wants/aetherpd-shim.service\"], \"rf_commands\": []}\n",
+  "job_container_deleted": true,
+  "temporary_host_directory_deleted": true,
+  "orchestration": {
+    "receiver_exit": 0,
+    "waveform_upload_exit": 0,
+    "authenticated_native_bridge_delivered": true
+  }
+}

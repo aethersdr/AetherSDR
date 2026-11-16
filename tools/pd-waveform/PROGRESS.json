@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T15:43:50.601993+00:00",
+  "updated_utc": "2026-11-16T16:05:55.285163+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Checkpoint package evidence, compile desktop with the new first-install pins, establish receive-only preflight and recoverable clean fixture, then qualify independent first install without predecessor, reboot and selectedIQ. Preserve older installed identity until clean-fixture rollback is secured.",
+  "next_action": "Qualify remaining exact-candidate selected-IQ ownership/operator controls and final installed failure/unkey matrix; then diagnose natural alignment/cold-start gaps and repeat matched5/10W RF and stockAPD comparison through the existing desktop bridge. Keep6000adapter/hardware and release gates open; LP100Adeferred.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Complete88280414runtime and ARM64 first-install packages reproduced; actual desktop upload archives verified. Radio reachable after a new boot with same committed installation identity. Exact-candidate live installation/reboot/IQ qualification next.",
+  "current_focus": "Latest88280414runtime independently first-installed through desktop with old trusted shim absent; new identity, timed reboot and selected local DAXIQ ch1/FDXoff passed. Final stopped processes unprivileged and temporary installation/session resources removed.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2897,7 +2897,7 @@
   "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
   "current_delivery_status": {
     "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
-    "desktop_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+    "desktop_source": "fdf0a40861ddbc0a11308303656429fdfcbc9f78",
     "runtime_report": "IQ-RUNTIME-PACKAGE-QUALIFICATION.json",
     "desktop_reports": [
       "CAPTURE-DESKTOP-QUALIFICATION.json",
@@ -2905,21 +2905,17 @@
       "TIMEOUT-CONTROL-QUALIFICATION.json",
       "POWER-CONTROL-QUALIFICATION.json"
     ],
-    "installed_runtime_source": "e0563d1e285d36bba21da3f791364dd27642e26a",
-    "installed_state": "Radio reachable again with new bootID; olde0563d1e committed identity and selected generation preserved. Engine unavailable/stopped. Latest88280414candidate not installed.",
+    "installed_runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+    "installed_state": "Independent first install committed; same new identity/runtime returned automatically44.172s after one reboot. Selected localIQ capture passed before/after withFDXoff. AetherPD stopped; noRF.",
     "latest_read_only_network_probe": {
-      "utc": "2026-11-16T15:35:05.230864+00:00",
-      "host": "192.168.50.100",
-      "ports": {
-        "4992": "open",
-        "48992": "open",
-        "22222": "open"
-      },
-      "read_only": true
+      "utc": "2026-11-16T16:05:55.285163+00:00",
+      "address": "192.168.50.100",
+      "radio_mutations": false,
+      "status": "final authenticated installation/status and connected GUI readback succeeded"
     },
     "historical_failure_audit": "HISTORICAL-STARTUP-AUDIT.json",
     "pending_gates": [
-      "Installed-service reboot recovery and exact-candidate first-install/update/rollback",
+      "Exact-candidate upgrade/rollback, interrupted install and repeated/power-cut reboot qualification; normal fresh install and one reboot now passed on8600",
       "Historical cold-start cancellation and natural alignment failure reproduction/attribution",
       "PR4770 selectedIQ/pan ownership and operator controls implemented offline; final candidate live workflow qualification remains",
       "Final process-graph faults and actual RF release timing",
@@ -2963,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "Latest runtime and completeARM64 first-install packages are source88280414. Older component reports retain historical scope; installed runtime remains e0563d1e. Offline verifier fix is later than candidate source.",
+    "source_provenance_note": "Installed and packaged runtime source88280414; desktopfdf0a408 includes offline verifier fix/evidence. New independent first-install distribution has its own recorded development key. Earlier RF evidence remains tied to older builds.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,9 +3012,16 @@
     },
     "package_qualification": {
       "report": "IQ-RUNTIME-PACKAGE-QUALIFICATION.json",
-      "installed": false,
+      "installed": true,
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
+    },
+    "latest_live_report": "FIRST-IQ-LIVE-QUALIFICATION.json",
+    "first_install_live": {
+      "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
+      "normal_reboot_s": 44.172,
+      "receive_only": true,
+      "actual_6300": false
     }
   },
   "power_control": {

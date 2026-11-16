@@ -6,6 +6,20 @@ Installation used ordinary public waveform uploads, without an installed shim
 credential or diagnostics bridge as its installation transport. This is a bench
 qualification of the development candidate, not production or FLEX-6000 approval.
 
+The latest [selected-IQ qualification](../FIRST-IQ-LIVE-QUALIFICATION.json)
+covers runtime `88280414` through the desktop: an absent active predecessor,
+new local identity, temporary-installer cleanup, one normal reboot with exact
+commit readiness in 44.172 seconds, and complete 16,384-sample local DAX IQ
+captures before and after reboot. FDX remained off and there was no RF.
+The channel/pan identity matched each current GUI session. Final audits found
+only three unprivileged control processes, no DSP/capture workers or local ARP
+entry, and the same runtime hashes and identity after reboot.
+
+That run used a fresh desktop profile. A reused profile correctly refused to
+replace a completed first-install journal signed by an older development key.
+Cross-publisher reinstall/recovery, additional channels, interrupted updates,
+RF behavior and actual FLEX-6000 hardware remain separate qualification gates.
+
 ## Authorization and identity
 
 The operator approves a `PDFST001` plan bound to the radio serial, firmware,
