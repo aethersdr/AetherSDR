@@ -1,0 +1,393 @@
+{
+  "power": 10,
+  "correction": "on",
+  "commands": [
+    {
+      "request": {
+        "cmd": "get",
+        "model": "radio"
+      },
+      "response": {
+        "model": "radio",
+        "ok": true,
+        "radio": {
+          "callsign": "KK7GWY",
+          "connectState": "connected",
+          "connected": true,
+          "fullDuplex": false,
+          "iaruRegion": 2,
+          "maxSlices": 4,
+          "model": "FLEX-8600",
+          "name": "",
+          "nickname": "FLX8600",
+          "paTemp": null,
+          "panCount": 1,
+          "serial": "2125-1213-8600-8895",
+          "sliceCount": 1,
+          "slots": [
+            {
+              "id": 0,
+              "state": "ours"
+            },
+            {
+              "id": 1,
+              "state": "empty"
+            },
+            {
+              "id": 2,
+              "state": "empty"
+            },
+            {
+              "id": 3,
+              "state": "empty"
+            }
+          ],
+          "transmitting": false,
+          "txPower": 0,
+          "version": "4.3.16.42034"
+        }
+      }
+    },
+    {
+      "request": {
+        "cmd": "invoke",
+        "target": "pdMeasureRadioPower",
+        "action": "setValue",
+        "value": 10
+      },
+      "response": {
+        "action": "setValue",
+        "class": "QSpinBox",
+        "newValue": "10",
+        "ok": true,
+        "target": "pdMeasureRadioPower"
+      }
+    },
+    {
+      "request": {
+        "cmd": "get",
+        "model": "transmit"
+      },
+      "response": {
+        "model": "transmit",
+        "ok": true,
+        "transmit": {
+          "accTxDelay": 0,
+          "activeMicProfile": "Default",
+          "activeProfile": "Default",
+          "amCarrierLevel": 34,
+          "apdEnabled": false,
+          "atuEnabled": true,
+          "atuMemories": false,
+          "atuStatus": "manual_bypass",
+          "cwBreakIn": true,
+          "cwDelay": 41,
+          "cwIambic": true,
+          "cwIambicMode": 1,
+          "cwPitch": 600,
+          "cwSidetone": true,
+          "cwSpeed": 30,
+          "cwSwapPaddles": false,
+          "cwlEnabled": false,
+          "dax": false,
+          "dexp": false,
+          "dexpLevel": 50,
+          "maxPowerLevel": 10,
+          "micAcc": false,
+          "micBias": false,
+          "micBoost": false,
+          "micLevel": 0,
+          "micSelection": "PC",
+          "monGainCw": 80,
+          "monGainSb": 10,
+          "monPanCw": 50,
+          "monitor": false,
+          "mox": false,
+          "pttMicOverride": false,
+          "rfPower": 10,
+          "showTxInWaterfall": false,
+          "speechProc": false,
+          "speechProcLevel": 1,
+          "speechProcLevelMaximum": 2,
+          "transmitting": false,
+          "tunePower": 5,
+          "tuning": false,
+          "tx1Delay": 0,
+          "tx2Delay": 0,
+          "tx3Delay": 0,
+          "txDelay": 0,
+          "txFilterHigh": 4000,
+          "txFilterLow": 50,
+          "voxDelay": 5,
+          "voxEnable": false,
+          "voxLevel": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "cmd": "get",
+        "model": "transmit"
+      },
+      "response": {
+        "model": "transmit",
+        "ok": true,
+        "transmit": {
+          "accTxDelay": 0,
+          "activeMicProfile": "Default",
+          "activeProfile": "Default",
+          "amCarrierLevel": 34,
+          "apdEnabled": false,
+          "atuEnabled": true,
+          "atuMemories": false,
+          "atuStatus": "manual_bypass",
+          "cwBreakIn": true,
+          "cwDelay": 41,
+          "cwIambic": true,
+          "cwIambicMode": 1,
+          "cwPitch": 600,
+          "cwSidetone": true,
+          "cwSpeed": 30,
+          "cwSwapPaddles": false,
+          "cwlEnabled": false,
+          "dax": false,
+          "dexp": false,
+          "dexpLevel": 50,
+          "maxPowerLevel": 10,
+          "micAcc": false,
+          "micBias": false,
+          "micBoost": false,
+          "micLevel": 0,
+          "micSelection": "PC",
+          "monGainCw": 80,
+          "monGainSb": 10,
+          "monPanCw": 50,
+          "monitor": false,
+          "mox": false,
+          "pttMicOverride": false,
+          "rfPower": 10,
+          "showTxInWaterfall": false,
+          "speechProc": false,
+          "speechProcLevel": 1,
+          "speechProcLevelMaximum": 2,
+          "transmitting": false,
+          "tunePower": 5,
+          "tuning": false,
+          "tx1Delay": 0,
+          "tx2Delay": 0,
+          "tx3Delay": 0,
+          "txDelay": 0,
+          "txFilterHigh": 4000,
+          "txFilterLow": 50,
+          "voxDelay": 5,
+          "voxEnable": false,
+          "voxLevel": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "cmd": "invoke",
+        "target": "pdEnableCorrection",
+        "action": "click"
+      },
+      "response": {
+        "action": "click",
+        "class": "QPushButton",
+        "deferred": true,
+        "ok": true,
+        "target": "pdEnableCorrection"
+      }
+    },
+    {
+      "request": {
+        "cmd": "get",
+        "model": "transmit"
+      },
+      "response": {
+        "model": "transmit",
+        "ok": true,
+        "transmit": {
+          "accTxDelay": 0,
+          "activeMicProfile": "Default",
+          "activeProfile": "Default",
+          "amCarrierLevel": 34,
+          "apdEnabled": false,
+          "atuEnabled": true,
+          "atuMemories": false,
+          "atuStatus": "manual_bypass",
+          "cwBreakIn": true,
+          "cwDelay": 41,
+          "cwIambic": true,
+          "cwIambicMode": 1,
+          "cwPitch": 600,
+          "cwSidetone": true,
+          "cwSpeed": 30,
+          "cwSwapPaddles": false,
+          "cwlEnabled": false,
+          "dax": false,
+          "dexp": false,
+          "dexpLevel": 50,
+          "maxPowerLevel": 10,
+          "micAcc": false,
+          "micBias": false,
+          "micBoost": false,
+          "micLevel": 0,
+          "micSelection": "PC",
+          "monGainCw": 80,
+          "monGainSb": 10,
+          "monPanCw": 50,
+          "monitor": false,
+          "mox": false,
+          "pttMicOverride": false,
+          "rfPower": 10,
+          "showTxInWaterfall": false,
+          "speechProc": false,
+          "speechProcLevel": 1,
+          "speechProcLevelMaximum": 2,
+          "transmitting": false,
+          "tunePower": 5,
+          "tuning": false,
+          "tx1Delay": 0,
+          "tx2Delay": 0,
+          "tx3Delay": 0,
+          "txDelay": 0,
+          "txFilterHigh": 4000,
+          "txFilterLow": 50,
+          "voxDelay": 5,
+          "voxEnable": false,
+          "voxLevel": 0
+        }
+      }
+    }
+  ],
+  "before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": null,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "status": {
+    "available": true,
+    "calibration_control": true,
+    "calibration_required": false,
+    "calibration_state": "canceled",
+    "correcting": false,
+    "correction_control": true,
+    "correction_enabled": true,
+    "faults": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 2126147620,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "input_limited_samples": 0,
+    "keyed": false,
+    "measurement": {
+      "source_id": "0000000000000008",
+      "tones": false
+    },
+    "measurement_control": true,
+    "measurement_tone_capture_version": 3,
+    "measurement_tone_config": {
+      "center_hz": 1305,
+      "max_spacing_hz": 10000,
+      "min_spacing_hz": 200,
+      "source_id": "0000000000000008",
+      "spacing_hz": 1190
+    },
+    "measurement_tone_control": true,
+    "registered": true,
+    "source_purpose": "measurement",
+    "state": "idle"
+  },
+  "transmit": {
+    "accTxDelay": 0,
+    "activeMicProfile": "Default",
+    "activeProfile": "Default",
+    "amCarrierLevel": 34,
+    "apdEnabled": false,
+    "atuEnabled": true,
+    "atuMemories": false,
+    "atuStatus": "manual_bypass",
+    "cwBreakIn": true,
+    "cwDelay": 41,
+    "cwIambic": true,
+    "cwIambicMode": 1,
+    "cwPitch": 600,
+    "cwSidetone": true,
+    "cwSpeed": 30,
+    "cwSwapPaddles": false,
+    "cwlEnabled": false,
+    "dax": false,
+    "dexp": false,
+    "dexpLevel": 50,
+    "maxPowerLevel": 10,
+    "micAcc": false,
+    "micBias": false,
+    "micBoost": false,
+    "micLevel": 0,
+    "micSelection": "PC",
+    "monGainCw": 80,
+    "monGainSb": 10,
+    "monPanCw": 50,
+    "monitor": false,
+    "mox": false,
+    "pttMicOverride": false,
+    "rfPower": 10,
+    "showTxInWaterfall": false,
+    "speechProc": false,
+    "speechProcLevel": 1,
+    "speechProcLevelMaximum": 2,
+    "transmitting": false,
+    "tunePower": 5,
+    "tuning": false,
+    "tx1Delay": 0,
+    "tx2Delay": 0,
+    "tx3Delay": 0,
+    "txDelay": 0,
+    "txFilterHigh": 4000,
+    "txFilterLow": 50,
+    "voxDelay": 5,
+    "voxEnable": false,
+    "voxLevel": 0
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "utc": "2026-11-16T17:50:43.573096+00:00",
+  "case": "on-01",
+  "outcome": "preflight refused: 31-second cooldown had not elapsed",
+  "radio_commands": [],
+  "RF": false,
+  "event_file_created": false,
+  "cooldown_remaining_now_s": 0
+}

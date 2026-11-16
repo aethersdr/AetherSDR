@@ -1,0 +1,222 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T17:52:52.355018+00:00",
+  "production_ready": false,
+  "status": "One matched finite OFF/ON pair at each nominal setting passed on the exact installed candidate",
+  "runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "desktop_source": "b1256a1657319360279029cabfcbcb647728b86a",
+  "desktop_sha256": "e6813ac61cff90ae55eb7946958fee0613cb50f4e4e32ff744dfcce30ba29128",
+  "radio": "FLEX-8600",
+  "firmware": "4.3.16.42034",
+  "configuration": {
+    "center_mhz": 7.15,
+    "tx_antenna": "ANT1",
+    "feedback": "RX_A",
+    "preamp_db": 0,
+    "FDX": false,
+    "transport": "local_dax_iq",
+    "channel": 4,
+    "configured_max_watts": 10,
+    "source_seconds": 8,
+    "authorization_seconds": 10,
+    "LP100A": "deferred"
+  },
+  "pairs": [
+    {
+      "nominal_watts": 5,
+      "off": {
+        "four_frames_complete": true,
+        "intent_to_observed_receive_seconds": 7.893,
+        "sampled_radio_peak_forward_watts": 3.340181827545166,
+        "faults_at_completion": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "input_limited_samples": 0,
+        "release_confirmed": true
+      },
+      "on": {
+        "four_frames_complete": true,
+        "intent_to_observed_receive_seconds": 7.884,
+        "sampled_radio_peak_forward_watts": 3.338142156600952,
+        "faults_at_completion": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "input_limited_samples": 0,
+        "release_confirmed": true
+      },
+      "imd3_off_dbc_per_tone": [
+        -28.101489770555354,
+        -27.57101585136678
+      ],
+      "imd3_on_dbc_per_tone": [
+        -44.3767708058856,
+        -54.49953630767926
+      ],
+      "imd3_improvement_db": [
+        16.275281035330245,
+        26.928520456312476
+      ],
+      "fundamental_power_difference_db": 0.2923979203414291,
+      "numerical_max_error_db": 3.764617716228713e-06
+    },
+    {
+      "nominal_watts": 10,
+      "off": {
+        "four_frames_complete": true,
+        "intent_to_observed_receive_seconds": 7.871,
+        "sampled_radio_peak_forward_watts": 6.939241409301758,
+        "faults_at_completion": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "input_limited_samples": 0,
+        "release_confirmed": true
+      },
+      "on": {
+        "four_frames_complete": true,
+        "intent_to_observed_receive_seconds": 7.967,
+        "sampled_radio_peak_forward_watts": 6.955605506896973,
+        "faults_at_completion": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "input_limited_samples": 0,
+        "release_confirmed": true
+      },
+      "imd3_off_dbc_per_tone": [
+        -27.541138931166486,
+        -27.00434208724748
+      ],
+      "imd3_on_dbc_per_tone": [
+        -44.363769325856104,
+        -51.35784567295741
+      ],
+      "imd3_improvement_db": [
+        16.822630394689618,
+        24.35350358570993
+      ],
+      "fundamental_power_difference_db": 0.3166814337505883,
+      "numerical_max_error_db": 3.6069397282290083e-06
+    }
+  ],
+  "preflight_refusal": "First 10 W corrected invocation refused before any bridge/radio command because the 31-second cooldown had not elapsed. Preserved separately; explicitly invoked after cooldown. No guard changed.",
+  "receive_recheck": "Expected release and fresh 16384-sample IQ capture verified after operator reported radio back. This alone does not establish a new reboot.",
+  "cleanup": {
+    "radio_idle": true,
+    "session_stopped": true,
+    "ARP_absent": true,
+    "accept_local": "0",
+    "processes": [
+      {
+        "pid": 911,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690"
+      },
+      {
+        "pid": 1963,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "5cfb04a15c2ca9436b5ce802231ebcd6588435dd6e9f1b47476fea5d245af11e"
+      },
+      {
+        "pid": 1964,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690"
+      }
+    ],
+    "runtime_hashes_verified": true,
+    "temporary_audit_removed": true,
+    "processing_settings_restored": false
+  },
+  "limits": [
+    "One finite pair per power setting; not sustained, speech, all-band or actual FLEX-6300 qualification.",
+    "5 W OFF baseline predates the operator radio-back message; fresh receive check verified the same release, GUI binding and configuration before ON. No continuous environmental stability claim.",
+    "Raw-IQ numerical agreement is not an independent RF instrument. Absolute watts and ADC headroom remain uncalibrated.",
+    "Polled radio receive times are not calibrated physical RF cessation times.",
+    "Stock APD comparison on this candidate remains pending. Existing stock comparison belongs to an earlier build and different capture/analysis protocol.",
+    "Historical alignment/cold-start attribution, remaining process faults, exact-candidate interrupted update/rollback and power loss, ARMv7 first-install adapter, actual6300 and independent release gates remain open."
+  ],
+  "evidence_directory": "evidence/20261116-candidate-rf",
+  "evidence_sha256": {
+    "candidate-rf-idle-job.py": "995f34fd0c7d19fae6fc357767d45c6f43bd5d51cd9307ec4f73f0f95739ad26",
+    "candidate-rf-idle-result.json": "1d4f0235e3831bcf4132f6ba28a83826e1b380fe3c71f76cbe43065e3a160199",
+    "captures/10w/comparison.json": "62163684f8b7651ea78f4fa9d6e7174ccce422e8cf735e39c8be1c86f3165dc5",
+    "captures/10w/export.py": "3507f708c008f85b0c67f58ede9cdbfffe452cc655855544f17aef423b7c1dba",
+    "captures/10w/instance.json": "c11d86ddc36f76b6ebf9050ae5609c5106c423b3376b01349f101f9ed9b0852f",
+    "captures/10w/measure.py": "05be7c7ceb6d1aae0d9f0c7b43cfacb0322a08e17902921495da38c5d9939ac3",
+    "captures/10w/off-01-events.json": "a0862a8c0ab8fe9783b7b902a33cde9b74bbeccfa1c2fb4a31da7df30626892b",
+    "captures/10w/off-01.json": "3720a027caa820cb904e5826a7805b684912c5f3ed16059919982dd66b443fdc",
+    "captures/10w/on-01-cooldown-refusal.json": "5109dda0955bd6a47343d427ff7b3c947fd41f7a8dfb230482fa09500f2c2531",
+    "captures/10w/on-01-events.json": "161a7200b9f12c9ad1410045eeeea673e07981e6e0678de7cd637bb2653adafa",
+    "captures/10w/on-01.json": "4d96c580026705fe227f402277c8aa4d942d3d14f8dc03b0d2768404ac0009d0",
+    "captures/5w/comparison.json": "076167733e53b246fbe49efa09cef6cc403a8b2f58726a1580c6ef878c6673fa",
+    "captures/5w/export.py": "3507f708c008f85b0c67f58ede9cdbfffe452cc655855544f17aef423b7c1dba",
+    "captures/5w/instance.json": "c11d86ddc36f76b6ebf9050ae5609c5106c423b3376b01349f101f9ed9b0852f",
+    "captures/5w/measure.py": "1f6b48bd183f0f68841a6343020ecab17e8da54e4acd775c245e50ffb73671ca",
+    "captures/5w/off-01-events.json": "e84fc3e49b1b6878502a85e52ee1a820bae0246bf428cf1b44a69862b596da38",
+    "captures/5w/off-01.json": "bddb9ea187ab3266c811795547d6bc83bd16b88284ed7ae04054c10e0c388713",
+    "captures/5w/on-01-events.json": "d32759fbb056515501974ea395c6b038e4cad290094fbf4af2fe56853ae05acd",
+    "captures/5w/on-01.json": "ab57bebf1754e4adbff54ef2a71a7498c9b42327a5220dc3c7736e3e3d22adb2",
+    "captures/configure-10-off.json": "175b463d5a6b4a27c096b646ec1c3ac43c6e638fb9caa4e27d557e7d83872c4f",
+    "captures/configure-10-on.json": "8d8962cce100f492f8529cb6974950411209f0e411707bc1df377e382a623153",
+    "captures/configure-5-off.json": "c4e205839b7e24e3a15eb9d932d4c7b5c2b456f5f19a856ff1dbbc823b82156c",
+    "captures/configure-5-on.json": "6c126b9f2f467445a9166d9ee09dbe28d613484e22c9fc92a8ce6d97b2fdceab",
+    "captures/configure.py": "daad1c03d9666456ea753a4a3ed02717479ce307810d9108936733eef1b8edd0",
+    "captures/instance.json": "c11d86ddc36f76b6ebf9050ae5609c5106c423b3376b01349f101f9ed9b0852f",
+    "captures/observer-config.json": "16a5923b07f4a2643c079bf0274e033d8417c0b14c137032f488a065ae7bf634",
+    "captures/observer.py": "6ae8b4b04c1591fa07f527c47768304fef88c4212ac9f7c791cb370baab66840",
+    "captures/preflight-iq.f32le": "0d27d44adc00c5cb799256eeec6652ef1e0e38f7f3ae4496c440737568a31c5c",
+    "captures/preflight-observer-ready.json": "e4762db073fd088380871cdffb22174e3af8176c056a55af5739d668ca13f627",
+    "captures/preflight-observer.json": "55d789199c30c7f57d7dfa11b081baf0ec34205aa2017510b964c6acffd36848",
+    "captures/preflight.json": "d6cc4e05472598b4065f431a5b60ad3dc92c271a5859cb84e39d2701896422dc",
+    "captures/preflight.py": "59d42cd4c9205cad27ac66931033648395c555720f6fa16de0558fdc6614217e",
+    "captures/prepare.py": "f754bc190b1101089728627e5267011d6ee2e7698a9b76c87dde7163cadf5573",
+    "captures/prepared.json": "bb027a987a6d22b6d261161cfd709235fc2a25f53151beb2f3b00a0d9378b700",
+    "captures/save-evidence.py": "0088e8671a4a4a10bb3ae63b0c701ba328493ff8c5245f2e9273d9695b3180ab",
+    "captures/stopped.json": "110655b5e1ea5bda36801c0883b49ed56682961686e9eb54dfeea991b1246e25",
+    "receive-check/instance.json": "c11d86ddc36f76b6ebf9050ae5609c5106c423b3376b01349f101f9ed9b0852f",
+    "receive-check/observer-config.json": "16a5923b07f4a2643c079bf0274e033d8417c0b14c137032f488a065ae7bf634",
+    "receive-check/observer.py": "6ae8b4b04c1591fa07f527c47768304fef88c4212ac9f7c791cb370baab66840",
+    "receive-check/preflight-iq.f32le": "2caf883439ec8391e6bfb5f552096bb725ec6b2c1772fc2162026b9cdc1d4cbe",
+    "receive-check/preflight-observer-ready.json": "5c2efbd391fd170a88d9297b2b74c80ca27cfcb9225815215109eaf6328b0022",
+    "receive-check/preflight-observer.json": "8f5d64a085037e6c783599c2b1ce17e001f3149fbe762ec0d93733f31442d20a",
+    "receive-check/preflight.json": "cce169a9335f622b9e244012afcf7a0a803caa5c4acdefcc301c3ce302900111",
+    "receive-check/preflight.py": "59d42cd4c9205cad27ac66931033648395c555720f6fa16de0558fdc6614217e"
+  }
+}

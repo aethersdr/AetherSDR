@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T17:43:00.540430+00:00",
+  "updated_utc": "2026-11-16T17:52:52.355018+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Run exact-candidate matched correction-OFF/ON5W and10W measurements and stockAPD comparison; continue remaining process faults, sustained/speech, authenticated update/rollback and actual6300/release gates.",
+  "next_action": "Prepare matched final-candidate stock APD capture using a separate receive-only measurement path; preserve mutual exclusion with AetherPD correction. Then continue sustained/speech, remaining process faults, historical failure attribution, installation/6300 and independent release gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Desktopb1256a165 fixes radio-side/desktop overlapping unkey: live READY-owned -> desktop stopACK -> owner-clear now certifies original release. Nine stop/reply placement cases and superseding-token refusal tested; native session stopped, cleanup audited.",
+  "current_focus": "Exact installed runtime and desktop passed finite matched 5/10 W OFF/ON measurements using local DAX IQ with FDX disabled. Raw IQ independently recomputed; session stopped and cleanup audited.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2906,7 +2906,7 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "installed_state": "Runtimee8d68ad4b with desktopb1256a165. Complete and overlapping independent-release recovery implemented; latest overlapping case hardware-qualified, native session stopped and cleanup audited.",
+    "installed_state": "Runtime e8d68ad4b with desktop b1256a165; finite matched 5/10 W pairs passed, radio idle and native session stopped, cleanup audited.",
     "latest_read_only_network_probe": {
       "utc": "2026-11-16T17:19:41.305947+00:00",
       "address": "192.168.50.100",
@@ -2959,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "Runtimee8d68ad4b unchanged. Latest desktopb1256a165 extends overlap recovery; prior corrected5W capture belongs to6f6ab298d, prior matched pairs to88280414runtime. Final-candidate matched RF remains pending.",
+    "source_provenance_note": "Latest matched pairs are attributed to runtime e8d68ad4b and desktop b1256a165. Older reports retain their own source attribution; stock APD comparison is not yet repeated on this candidate.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "PARTIAL-RELEASE-QUALIFICATION.json",
+    "latest_live_report": "CANDIDATE-RF-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3107,5 +3107,98 @@
     "source_commit": "b1256a1657319360279029cabfcbcb647728b86a",
     "captured_overlap_live_qualified": true,
     "all_process_faults_qualified": false
+  },
+  "candidate_rf": {
+    "report": "CANDIDATE-RF-QUALIFICATION.json",
+    "pairs": [
+      {
+        "nominal_watts": 5,
+        "off": {
+          "four_frames_complete": true,
+          "intent_to_observed_receive_seconds": 7.893,
+          "sampled_radio_peak_forward_watts": 3.340181827545166,
+          "faults_at_completion": {
+            "dispatch_deadlines": 0,
+            "rejected_input": 0,
+            "send_errors": 0,
+            "stale_iq": 0
+          },
+          "input_limited_samples": 0,
+          "release_confirmed": true
+        },
+        "on": {
+          "four_frames_complete": true,
+          "intent_to_observed_receive_seconds": 7.884,
+          "sampled_radio_peak_forward_watts": 3.338142156600952,
+          "faults_at_completion": {
+            "dispatch_deadlines": 0,
+            "rejected_input": 0,
+            "send_errors": 0,
+            "stale_iq": 0
+          },
+          "input_limited_samples": 0,
+          "release_confirmed": true
+        },
+        "imd3_off_dbc_per_tone": [
+          -28.101489770555354,
+          -27.57101585136678
+        ],
+        "imd3_on_dbc_per_tone": [
+          -44.3767708058856,
+          -54.49953630767926
+        ],
+        "imd3_improvement_db": [
+          16.275281035330245,
+          26.928520456312476
+        ],
+        "fundamental_power_difference_db": 0.2923979203414291,
+        "numerical_max_error_db": 3.764617716228713e-06
+      },
+      {
+        "nominal_watts": 10,
+        "off": {
+          "four_frames_complete": true,
+          "intent_to_observed_receive_seconds": 7.871,
+          "sampled_radio_peak_forward_watts": 6.939241409301758,
+          "faults_at_completion": {
+            "dispatch_deadlines": 0,
+            "rejected_input": 0,
+            "send_errors": 0,
+            "stale_iq": 0
+          },
+          "input_limited_samples": 0,
+          "release_confirmed": true
+        },
+        "on": {
+          "four_frames_complete": true,
+          "intent_to_observed_receive_seconds": 7.967,
+          "sampled_radio_peak_forward_watts": 6.955605506896973,
+          "faults_at_completion": {
+            "dispatch_deadlines": 0,
+            "rejected_input": 0,
+            "send_errors": 0,
+            "stale_iq": 0
+          },
+          "input_limited_samples": 0,
+          "release_confirmed": true
+        },
+        "imd3_off_dbc_per_tone": [
+          -27.541138931166486,
+          -27.00434208724748
+        ],
+        "imd3_on_dbc_per_tone": [
+          -44.363769325856104,
+          -51.35784567295741
+        ],
+        "imd3_improvement_db": [
+          16.822630394689618,
+          24.35350358570993
+        ],
+        "fundamental_power_difference_db": 0.3166814337505883,
+        "numerical_max_error_db": 3.6069397282290083e-06
+      }
+    ],
+    "stock_comparison_complete": false,
+    "production_ready": false
   }
 }
