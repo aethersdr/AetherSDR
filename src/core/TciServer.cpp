@@ -486,6 +486,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             m_createdVfoBSlices.remove(sliceId);
             m_createdVfoBPans.remove(sliceId);
             retireSliceRx(sliceId);
+            if (!m_hostIqSlices.isEmpty()) {
+                reconcileHostIqTaps();
+            }
             const bool removedTxRoute = sliceId == m_routingState.txSliceId();
             m_routingState.removeSlice(sliceId);
             if (removedTxRoute && (m_tciPttRequestedOn || m_tciPttConfirmedOn)) {

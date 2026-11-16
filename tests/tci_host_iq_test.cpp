@@ -2,21 +2,25 @@
 // per-slice tap instead. Socket-free: real RadioModel and TciServer, an
 // injected backend that records the taps and emits sliceIqFrameReady.
 #include "TestSettingsProfile.h"
+#include "FlexSliceStatusTestSupport.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"
 #include "core/TciClient.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include <QCoreApplication>
 #include <QHash>
 #include <QStringList>
+#include <QtEndian>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <numbers>
+#include <thread>
 #include <vector>
 
 namespace AetherSDR {
@@ -91,6 +95,7 @@ class TciHostIqTest {
         HostIqBackend* backend{nullptr};
         QHash<TciClient*, QList<QByteArray>> frames;
         int binaryFrames = 0;  // IQ must take the droppable stream path
+        QList<QByteArray> binaryPackets;
         QHash<TciClient*, QStringList> texts;
         Fixture()
         {
@@ -108,7 +113,11 @@ class TciHostIqTest {
             auto* socket = new TciClient(&server);
             socket->textSink = [this, socket](const QString& t) { texts[socket].append(t); return qint64(t.size()); };
             socket->streamSink = [this, socket](const QByteArray& b) { frames[socket].append(b); return qint64(b.size()); };
-            socket->binarySink = [this](const QByteArray& b) { ++binaryFrames; return qint64(b.size()); };
+            socket->binarySink = [this](const QByteArray& b) {
+                ++binaryFrames;
+                binaryPackets.append(b);
+                return qint64(b.size());
+            };
             TciServer::ClientState state;
             state.socket = socket;
             state.protocol = new TciProtocol(&model, &server.m_routingState, &server.m_trxMap);
@@ -128,6 +137,99 @@ class TciHostIqTest {
         }
     };
 public:
+    static void queuedHostIqDiesAtFamilySwitch()
+    {
+        for (const QString& family : {QStringLiteral("flex"), QStringLiteral("icom"), QStringLiteral("anan")}) {
+            Fixture f;
+            f.backend->add(3);
+            TciClient* client = f.client();
+            f.command(client, QStringLiteral("iq_start:0;"));
+            f.backend->feed(3, 2048, 48000);
+            check(f.frames[client].size() == 1, "host IQ is live before a family switch");
+            std::thread queuedProducer([&] { f.backend->feed(3, 2048, 48000); });
+            queuedProducer.join();
+            check(f.model.rebuildBackendForTest(family), "production switch replaces the host backend");
+            QCoreApplication::sendPostedEvents();
+            check(f.frames[client].size() == 1 && f.binaryFrames == 0,
+                  "queued IQ from the retired host cannot reach the next radio family");
+            check(f.server.m_hostIqSlices.isEmpty() && f.server.m_hostIqRate == 0
+                      && f.server.m_hostIqDecimators.isEmpty(),
+                  "family switch retires host tap, rate and decimator state");
+        }
+    }
+    static void otherFamiliesKeepTheirIqPolicy()
+    {
+        for (const QString& family : {QStringLiteral("icom"), QStringLiteral("anan")}) {
+            Fixture f;
+            check(f.model.rebuildBackendForTest(family), "production backend factory builds the non-DAX family");
+            IRadioBackend* backend = f.model.backend();
+            check(backend && !backend->capabilities().hasDaxStreams,
+                  "Icom and ANAN still have no DAX streams");
+            if (!backend) { continue; }
+            check(!backend->setSliceIqTap(3, true), "Icom and ANAN do not opt into the IQ tap");
+            SliceDelta delta;
+            delta.frequency = 14.074;
+            delta.mode = QStringLiteral("USB");
+            emit backend->sliceChanged(3, delta);
+            TciClient* client = f.client();
+            f.command(client, QStringLiteral("iq_samplerate:96000;iq_start:0;"));
+            check(f.said(client, QStringLiteral("iq_samplerate:96000;")),
+                  "non-DAX rate preference negotiation is preserved");
+            check(f.said(client, QStringLiteral("iq_stop:0;"))
+                      && f.server.m_hostIqSlices.isEmpty()
+                      && f.server.clientStateFor(client)->iqReceivers.isEmpty(),
+                  "Icom and ANAN still refuse IQ with no subscription or tap");
+            check(f.frames[client].isEmpty() && f.binaryFrames == 0,
+                  "unsupported families produce no IQ traffic");
+        }
+
+        Fixture f;
+        check(f.model.rebuildBackendForTest(QStringLiteral("flex")), "production backend factory builds Flex");
+        auto* flex = static_cast<FlexBackend*>(f.model.backend());
+        if (!flex) { return; }
+        flex->setModelProvider([] { return QStringLiteral("FLEX-6400"); });
+        check(flex->capabilities().hasDaxStreams && !flex->setSliceIqTap(3, true),
+              "Flex keeps DAX and does not opt into the host IQ tap");
+        SliceDelta delta;
+        delta.frequency = 14.074;
+        delta.mode = QStringLiteral("USB");
+        delta.panId = QStringLiteral("0x40000000");
+        beginFlexStatusSession(f.model);
+        f.model.handleLineForTest(QStringLiteral(
+            "S0|slice 3 in_use=1 RF_frequency=14.074 mode=USB pan=0x40000000"));
+        check(f.model.slice(3) && f.model.slice(3)->panId() == *delta.panId,
+              "Flex fixture publishes its slice through the production status ingress");
+        TciClient* client = f.client();
+        f.command(client, QStringLiteral("iq_samplerate:96000;"));
+        f.texts[client].clear();
+        f.command(client, QStringLiteral("iq_samplerate:192000;"));
+        check(f.server.m_iqSampleRate == 96000
+                  && f.said(client, QStringLiteral("iq_samplerate:96000;")),
+              "Flex still refuses IQ rates beyond the identified model limit");
+        f.server.clientStateFor(client)->iqReceivers.insert(0);
+        f.server.m_iqPanChannel.insert(*delta.panId, 1);
+        QByteArray payload(16, Qt::Uninitialized);
+        const float input[] = {0.25f, -0.5f, -0.75f, 1.0f};
+        for (int n = 0; n < 4; ++n) {
+            quint32 bits;
+            std::memcpy(&bits, &input[n], sizeof(bits));
+            qToLittleEndian(bits, payload.data() + n * sizeof(bits));
+        }
+        f.server.onIqDataReady(1, payload, 96000);
+        check(f.binaryFrames == 1 && f.frames[client].isEmpty(),
+              "Flex DAX IQ keeps the fatal binary path, never the droppable host path");
+        if (!f.binaryPackets.isEmpty()) {
+            const QByteArray& packet = f.binaryPackets.first();
+            check(word(packet, 1) == 96000 && word(packet, 6) == 0
+                      && sample(packet, 0) == input[0] && sample(packet, 1) == input[1]
+                      && sample(packet, 2) == input[2] && sample(packet, 3) == input[3],
+                  "Flex DAX frame rate and I/Q values are unchanged");
+        }
+        f.server.onSliceIqReady(3, payload, 96000);
+        check(f.binaryFrames == 1 && f.frames[client].isEmpty()
+                  && f.server.m_hostIqSlices.isEmpty(),
+              "an unsolicited host frame cannot enter the Flex IQ path");
+    }
     static void startStreamsStop()
     {
         Fixture f; f.backend->add(3); f.backend->add(17);
@@ -314,8 +416,22 @@ public:
         check(f.said(a, QStringLiteral("iq_stop:0;")) && f.server.m_hostIqSlices.isEmpty(),
               "a backend without IQ refuses with iq_stop");
     }
+    static void sliceCloseReleasesTap()
+    {
+        Fixture f;
+        f.backend->add(3);
+        TciClient* client = f.client();
+        f.command(client, QStringLiteral("iq_start:0;"));
+        check(f.backend->tapped(3), "slice-close: tap initially held");
+        emit f.backend->sliceRemoved(3);
+        check(!f.backend->tapped(3) && f.server.m_hostIqSlices.isEmpty(),
+              "slice-close: removed receiver immediately releases its host IQ tap");
+    }
     static int run()
     {
+        otherFamiliesKeepTheirIqPolicy();
+        queuedHostIqDiesAtFamilySwitch();
+        sliceCloseReleasesTap();
         startStreamsStop(); sharedAndDisconnect(); outageReleasesTaps();
         secondReceiverKeepsFirst(); refusalAnswers();
         decimatesToRequestedRate(); decimatorKeepsTonesAndRejectsAliases();
