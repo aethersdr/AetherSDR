@@ -1,0 +1,129 @@
+{
+  "scope": "Historical evidence extraction only; no RF, replay or current-candidate qualification",
+  "cases": [
+    {
+      "case": "production-pi-lp100a-5w-02",
+      "source_sha256": "7e4534ea410893e8fe01b80c4c236999b1402f0cf9cce1099ce8715e45006ec7",
+      "arm_reply": {
+        "code": 200,
+        "reply": {
+          "state": "calibration_arm_accepted"
+        }
+      },
+      "status_rows": 212,
+      "keyed_rows": 211,
+      "first_keyed_status": {
+        "seconds": 0.0,
+        "keyed": true,
+        "calibration_state": "canceled",
+        "correction_enabled": true,
+        "correcting": false,
+        "calibration_required": false,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "send_errors": 0,
+          "rejected_input": 0,
+          "stale_iq": 0
+        }
+      },
+      "keyed_calibration_states": [
+        "canceled"
+      ],
+      "correcting_rows": 0,
+      "first_correcting_seconds": null,
+      "last_correcting_seconds": null,
+      "public_fault_maxima": {
+        "dispatch_deadlines": 0,
+        "send_errors": 0,
+        "rejected_input": 0,
+        "stale_iq": 0
+      },
+      "native_start_message_captured": false,
+      "native_retirement_record_captured": false,
+      "diagnostic_artifacts": [],
+      "api_tail_rows": 250,
+      "api_tail_interlock_rows": 10,
+      "api_tail_nonready_interlock_rows": 0
+    },
+    {
+      "case": "production-pi-lp100a-5w-03",
+      "source_sha256": "b0d49415b8386d719b276ab8397f1cf2976b7ab970c472009ca4c508ba579cac",
+      "arm_reply": {
+        "code": 200,
+        "reply": {
+          "state": "calibration_arm_accepted"
+        }
+      },
+      "status_rows": 211,
+      "keyed_rows": 210,
+      "first_keyed_status": {
+        "seconds": 0.0,
+        "keyed": true,
+        "calibration_state": "running",
+        "calibration_samples_left": 190720,
+        "correction_enabled": true,
+        "correcting": false,
+        "calibration_required": false,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "send_errors": 0,
+          "rejected_input": 0,
+          "stale_iq": 0
+        }
+      },
+      "keyed_calibration_states": [
+        "completed",
+        "running"
+      ],
+      "correcting_rows": 135,
+      "first_correcting_seconds": 6.064592604001518,
+      "last_correcting_seconds": 16.903406208002707,
+      "public_fault_maxima": {
+        "dispatch_deadlines": 0,
+        "send_errors": 0,
+        "rejected_input": 0,
+        "stale_iq": 0
+      },
+      "native_start_message_captured": true,
+      "native_retirement_record_captured": false,
+      "diagnostic_artifacts": [],
+      "api_tail_rows": 250,
+      "api_tail_interlock_rows": 9,
+      "api_tail_nonready_interlock_rows": 0
+    }
+  ],
+  "conclusion": "The failed source was canceled by the first keyed observation. The saved evidence does not identify the cancellation trigger.",
+  "limits": [
+    "Public zero fault counters do not exclude ownership, interlock, model-change or keying-admission cancellation.",
+    "No native cancellation record or keyed interlock transition survives in these saved artifacts.",
+    "The successful repeat is not a root-cause test or proof of binary equivalence.",
+    "Further attribution requires a newly observed failure with the existing native retirement diagnostics and bounded admission/status history."
+  ],
+  "alignment_evidence_recovered": [
+    {
+      "case": "rf-repeat",
+      "recovered_path": "/home/jeremy/AetherSDR/build/aetherpd-scratch-out/rf-repeat/gui-rf-1-8600.json",
+      "source_sha256": "081df77c6506edc8084c72f231885cb669e5376e7b23681bba0a78ddcf422598",
+      "matches_prior_audit": true,
+      "delay_change_samples": 128.0,
+      "dispatch_trace_available": false
+    },
+    {
+      "case": "rf-pause-20ms",
+      "recovered_path": "/home/jeremy/AetherSDR/build/aetherpd-scratch-out/rf-pause-20ms/gui-rf-1-8600.json",
+      "source_sha256": "3535f5370bb54a3eff50298187dac18bd496e1445d566f12362e08365821e4fc",
+      "matches_prior_audit": true,
+      "delay_change_samples": 128.0,
+      "dispatch_trace_available": true
+    },
+    {
+      "case": "rf-rt-pause-20ms",
+      "recovered_path": "/home/jeremy/AetherSDR/build/aetherpd-scratch-out/rf-rt-pause-20ms/gui-rf-1-8600.json",
+      "source_sha256": "851b1ac3300dc7f5fa2abb9c114fcd96916007e5aee4a4fa85adc1c7488e5cba",
+      "matches_prior_audit": true,
+      "delay_change_samples": -448.0,
+      "dispatch_trace_available": true
+    }
+  ],
+  "alignment_conclusion": "The original natural +128-sample event file survives byte-identically at a new path. It still lacks dispatch tracing; the injected-pause comparison does not identify the natural trigger."
+}

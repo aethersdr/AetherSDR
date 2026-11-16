@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T11:44:08.942659+00:00",
+  "updated_utc": "2026-11-16T12:28:18.625873+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Complete v2 capture adapter/result/export/UI integration and tests; show only captured stream identity, with channel/pan ownership unreported until an authoritative contract exists. Then refresh exact packages and resume full installation/reboot/RF gates when radio returns. Ten-second release contract remains open.",
+  "next_action": "Finish bounded channel/pan and tone/power control contract and implementation. Once radio returns, establish read-only health and boot identity before installation/reboot or RF; qualify the exact candidate with the current authorization deadline and all failure gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Per-radio3..10second timeout control and schema2 persistence/export snapshot component-qualified. Complete remaining P4 source/control scope and offline qualification while live radio/reboot/RF and actual6300 gates remain unavailable.",
+  "current_focus": "Historical cold-start cancellation narrowed to before the first keyed sample; exact trigger unavailable in saved logs. Natural alignment evidence recovered with matching hashes but lacks dispatch trace. Continue P4 source/control contract offline; live tests await radio return.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2893,5 +2893,40 @@
     "report": "TIMEOUT-CONTROL-QUALIFICATION.json",
     "status": "Per-radio shorter timeout control, settings migration and exported provenance component-qualified",
     "installed": false
+  },
+  "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
+  "current_delivery_status": {
+    "runtime_source": "5eb8f87a462897d6608d99527e8239c67990d45a",
+    "desktop_source": "f9458650f82f108b2f34aebcd8baf149de48a448",
+    "runtime_report": "CAPTURE-GUARDIAN-RUNTIME-QUALIFICATION.json",
+    "desktop_reports": [
+      "CAPTURE-DESKTOP-QUALIFICATION.json",
+      "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
+      "TIMEOUT-CONTROL-QUALIFICATION.json"
+    ],
+    "installed_runtime_source": "e0563d1e285d36bba21da3f791364dd27642e26a",
+    "installed_state": "No successful readiness or new boot identity observed after the authorized reboot; latest runtime and desktop changes are not live-qualified.",
+    "latest_read_only_network_probe": {
+      "utc": "2026-11-16T12:26:01Z",
+      "address": "192.168.50.100",
+      "tcp_ports": {
+        "4992": "timed out",
+        "48992": "timed out",
+        "22222": "timed out"
+      },
+      "radio_mutations": false
+    },
+    "historical_failure_audit": "HISTORICAL-STARTUP-AUDIT.json",
+    "pending_gates": [
+      "Installed-service reboot recovery and exact-candidate first-install/update/rollback",
+      "Historical cold-start cancellation and natural alignment failure reproduction/attribution",
+      "Remaining PR4770 channel/pan and tone/power controls",
+      "Final process-graph faults and actual RF release timing",
+      "Repeated exact-candidate 5/10 W tone/speech and matched stock APD comparison",
+      "Actual FLEX-6300 teammate qualification",
+      "Cross-platform CI, documentation/security/licenses, independent review and maintainer release"
+    ],
+    "lp100a": "Deferred by operator",
+    "production_ready": false
   }
 }
