@@ -1,0 +1,8 @@
+#pragma once
+#include "core/AetherPDPackage.h"
+namespace AetherSDR::aetherpd::firstDevelopment {
+inline QString version() { return {}; }
+inline QString firmware() { return {}; }
+inline QByteArray publisherKey() { return {}; }
+inline std::optional<AetherPDFirstPackage> load() { return std::nullopt; }
+}

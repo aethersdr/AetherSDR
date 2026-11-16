@@ -19,9 +19,9 @@ class SelectionTest(unittest.TestCase):
                          candidate_key='11' * 32, previous_key='22' * 32,
                          files={name: dict(size=1, sha256='33' * 32) for name in selection.NAMES})
 
-    def generate(self, item):
+    def generate(self, item, first=False):
         self.path.write_text(json.dumps(item))
-        return selection.generate(self.path)
+        return selection.generate(self.path, first)
 
     def test_embeds_pins_and_encodes_paths_without_reading_package(self):
         header = self.generate(self.item)
@@ -54,6 +54,28 @@ class SelectionTest(unittest.TestCase):
         item = copy.deepcopy(self.item)
         for name in selection.NAMES[3:7]:
             item['files'][name]['size'] = 8 * 1024 * 1024
+        with self.assertRaises(ValueError):
+            self.generate(item)
+
+    def test_first_install_uses_independent_publisher_without_predecessor(self):
+        item = dict(version='0.0.0-first.1', firmware='4.3.16.42034', profile=1,
+                    publisher_key='11' * 32,
+                    files={name: dict(size=1, sha256='33' * 32) for name in selection.FIRST_NAMES})
+        header = self.generate(item, first=True)
+        self.assertIn('namespace AetherSDR::aetherpd::firstDevelopment', header)
+        self.assertIn('AetherPDFirstPackage::load(', header)
+        self.assertIn('inline QByteArray publisherKey()', header)
+        self.assertNotIn('previousKey', header)
+        self.assertEqual(header.count('trust.files['), 8)
+        for extra in ({'previous_key': '22' * 32}, {'publisher_key': '00' * 32}, {'profile': 2}):
+            with self.assertRaises(ValueError):
+                self.generate(item | extra, first=True)
+        oversized = copy.deepcopy(item)
+        oversized['files']['pd-first-request']['size'] = 512 * 1024 + 1
+        with self.assertRaises(ValueError):
+            self.generate(oversized, first=True)
+        with self.assertRaises(ValueError):
+            self.generate(self.item, first=True)
         with self.assertRaises(ValueError):
             self.generate(item)
 

@@ -44,6 +44,10 @@ public:
     bool recovering() const { return m_recovering; }
     QString selectedDevelopmentVersion() const;
     bool prepareSelectedDevelopment(const RadioControlSession& session);
+    QString selectedFirstDevelopmentVersion() const;
+    bool prepareSelectedFirstDevelopment(const RadioControlSession& session);
+    bool savedFirstInstallationAvailable() const;
+    bool recoverSelectedFirstInstallation(const RadioControlSession& session);
     ~AetherPDInstallationModel() override;
     bool offer(const Coordinator::Prepared& package, const RadioControlSession& session);
     struct Preview {
@@ -52,6 +56,7 @@ public:
         QString carrierName, archiveSha256;
         bool firstInstallation{false};
         QString nativeName;
+        QString hostname;
     };
     std::optional<Preview> preview() const;
     bool approve(const QByteArray& displayedPlan);
@@ -78,6 +83,7 @@ private:
     void downloaded(quint64 generation);
     void preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation);
     void prepareSnapshot(std::function<std::optional<Coordinator::Prepared>()> prepare, quint64 generation);
+    bool prepareFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname, const RadioControlSession& session);
     void credential(const QString& token, quint64 generation);
     void completed(Coordinator::Outcome result, bool cleanup);
     void promoted(bool persisted, quint64 generation);

@@ -1,10 +1,12 @@
 #include "AetherPDInstallationModel.h"
 #include "RadioModel.h"
 #include "AetherPDDevelopmentSelection.h"
+#include "AetherPDFirstDevelopmentSelection.h"
 #include "core/AetherPDProtocol.h"
 #include "core/AetherPDTransportPolicy.h"
 #include "core/AetherPDInstallationMonitor.h"
 #include "core/TailnetShimTokenStore.h"
+#include "core/TailnetShimClient.h"
 #include <QCryptographicHash>
 #include <QRandomGenerator>
 #include <QThread>
@@ -130,6 +132,36 @@ bool AetherPDInstallationModel::prepareSelectedDevelopment(const RadioControlSes
 bool AetherPDInstallationModel::prepareFirstPackage(const AetherPDFirstPackage& package, const QString& hostname,
                                                    const RadioControlSession& session)
 {
+    return prepareFirst([package] { return std::optional<AetherPDFirstPackage>(package); }, hostname, session);
+}
+QString AetherPDInstallationModel::selectedFirstDevelopmentVersion() const
+{
+    return m_radio && m_radio->version() == aetherpd::firstDevelopment::firmware()
+        ? aetherpd::firstDevelopment::version() : QString{};
+}
+bool AetherPDInstallationModel::prepareSelectedFirstDevelopment(const RadioControlSession& session)
+{
+    if (selectedFirstDevelopmentVersion().isEmpty()) { return false; }
+    return prepareFirst([] { return aetherpd::firstDevelopment::load(); },
+        tailnetshim::suggestedHostname(m_radio->nickname()), session);
+}
+bool AetherPDInstallationModel::savedFirstInstallationAvailable() const
+{
+    if (!m_radio || selectedFirstDevelopmentVersion().isEmpty() || !m_recovery.read) { return false; }
+    const QByteArray key = aetherpd::firstDevelopment::publisherKey();
+    const auto saved = m_recovery.read(key);
+    if (saved.state != AetherPDInstallationJournal::State::Pending && saved.state != AetherPDInstallationJournal::State::CredentialSaved) { return false; }
+    const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, key);
+    return plan && plan->serial == m_radio->serial() && plan->firmware == m_radio->version();
+}
+bool AetherPDInstallationModel::recoverSelectedFirstInstallation(const RadioControlSession& session)
+{
+    return !selectedFirstDevelopmentVersion().isEmpty()
+        && recoverFirstInstallation(aetherpd::firstDevelopment::publisherKey(), session);
+}
+bool AetherPDInstallationModel::prepareFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname,
+                                           const RadioControlSession& session)
+{
     if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
         || !m_radio->controlSessionCurrent(session) || m_radio->serial().isEmpty() || !m_write || !m_recovery.journal) { return false; }
     retirePreparation();
@@ -143,8 +175,9 @@ bool AetherPDInstallationModel::prepareFirstPackage(const AetherPDFirstPackage& 
     m_firstToken = QString::fromLatin1(bytes.toHex());
     const QByteArray tokenHash = QCryptographicHash::hash(m_firstToken.toLatin1(), QCryptographicHash::Sha256);
     const QString serial = m_serial;
-    prepareSnapshot([package, serial, tokenHash, hostname] {
-        return Coordinator::prepareFirst(package, serial, tokenHash, hostname);
+    prepareSnapshot([load = std::move(load), serial, tokenHash, hostname] {
+        const auto package = load();
+        return package ? Coordinator::prepareFirst(*package, serial, tokenHash, hostname) : std::nullopt;
     }, ++m_generation);
     return true;
 }
@@ -231,7 +264,8 @@ std::optional<AetherPDInstallationModel::Preview> AetherPDInstallationModel::pre
     const auto plan = first ? aetherpd::parseFirstInstallationPlan(m_plan, m_publisherKey) : aetherpd::parseInstallationPlan(m_plan);
     if (!plan) { return std::nullopt; }
     return Preview{m_plan, plan->serial, plan->firmware, plan->previousDigest, plan->candidateDigest,
-        plan->candidateKey, plan->planDigest, m_carrier, m_archiveSha256, first, m_nativeName};
+        plan->candidateKey, plan->planDigest, m_carrier, m_archiveSha256, first, m_nativeName,
+        first ? QString::fromLatin1(m_plan.mid(180, 64).split('\0').first()) : QString{}};
 }
 bool AetherPDInstallationModel::approve(const QByteArray& displayedPlan)
 {

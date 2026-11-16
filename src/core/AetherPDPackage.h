@@ -57,6 +57,7 @@ public:
     static bool validTrust(const Trust& trust);
     static std::optional<AetherPDFirstPackage> verify(const Files& files, const Trust& trust);
     static std::optional<AetherPDFirstPackage> load(const QString& directory, const Trust& trust);
+    QString firmware() const { return m_firmware; }
     // Local preparation only, before exact-plan consent. Call off the UI thread.
     // Secret generation/storage belongs to the caller; only its hash enters ZIP.
     std::optional<Uploads> prepare(const QString& serial, const QByteArray& tokenHash,

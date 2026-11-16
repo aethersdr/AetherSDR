@@ -261,8 +261,9 @@ promotion states and describe first-install authority separately from upgrades.
 `first-install-credential-model` records three registered suites, two scoped
 ASan/UBSan/LSan suites, and a mutation that removes the durable-write gate and is
 detected. The tests inject keychain callbacks; they do not establish a working OS
-keychain on every supported desktop. The actual QtKeychain backend, restart/recovery UI, package-selection entry point
-and live C++ first installation still require integration and qualification.
+keychain on every supported desktop. The Linux QtKeychain backend was checked with an isolated credential written,
+read and deleted by separate processes. Other desktop platforms and the complete
+live C++ first-install workflow still require qualification.
 
 ## Public attempt journal and restart observation
 
@@ -285,8 +286,33 @@ abandons observation without altering the pending journal.
 Exact committed observation permits active-credential promotion. Only a durable
 promotion updates the journal to `credentialSaved`; a failed journal update stays
 unresolved. Recovery cannot attest temporary-component cleanup and reports that
-separately. The UI entry point and authenticated first-package selection remain
-unwired; this is an engine capability, not a complete shipping recovery workflow.
+separately. The development UI uses the pinned selection below. This is not a complete
+shipping recovery qualification.
+
+## Development desktop controls
+
+`AETHERPD_FIRST_DEVELOPMENT_SELECTION` accepts a reviewed build-time JSON file
+with `version`, `firmware`, `profile: 1`, `publisher_key`, and exactly eight `files`
+size/SHA-256 pins. Files reside in its sibling `package` directory. The generator
+compiles those pins and the publisher key into `AetherPDFirstDevelopmentSelection.h`;
+runtime manifests/environment never establish trust. The first-install schema
+rejects predecessor fields and upgrade packages. CMake marks these builds as
+non-shipping. Ordinary builds expose dimmed controls with a stated reason.
+
+**Prepare first installation** verifies and freezes the package off the UI
+thread, generating a token only in RAM. **Approve first installation** approves
+exact displayed bytes, then durably saves the token and journal before upload.
+The preview names the temporary host-root actions, retained fixed helpers, new
+local hostname and authenticated package identifiers. It does not use an old
+shim credential. **Check saved installation** uses the compiled publisher key and
+only the read-only recovery path. A saved attempt disables first-install
+preparation; recovery never becomes an implicit reinstallation.
+
+`first-install-desktop-controls` records default-build disabled-control checks,
+configured-fixture preparation/recovery checks, a rendered panel and an isolated
+real OS-keychain write/read/delete across separate processes. The normal UI and
+model execute these checks with injected transports; live full-application
+qualification is a separate next step.
 
 ## Remaining gates
 

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T06:02:15.195402+00:00",
+  "updated_utc": "2026-11-16T06:22:24.648193+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Connect independently pinned first-package selection and the saved-attempt check to the desktop UI. Qualify real keychain storage/restart, then the full C++ fresh-install path. Preserve identity backups and all P1-P10 gates.",
+  "next_action": "Launch the rebuilt AetherSDR with its automation bridge for live first-install/recovery qualification. Preserve the current fresh identity and retire the legacy always-restarting backup container safely before another reboot. Use the ordinary public install path, then verify reboot and local DAX IQ; all P1-P10 production gates remain.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1276,5 +1276,52 @@
       "mutation.log": "2c5e96781e665950ea4f26f559543c0af328b54c2e84fbb2d41946d113366cbb"
     },
     "evidence": "first-install-recovery/validation.json under evidence_root"
+  },
+  "desktop_first_install_controls": {
+    "status": "desktop_controls_built_component_and_keychain_verified_live_pending",
+    "production_ready": false,
+    "python_selection_cases_passed": 5,
+    "default_registered_suites_passed": 2,
+    "configured_registered_suites_passed": 2,
+    "configured_positive_dialog_cases_passed": 10,
+    "scoped_sanitizers": {
+      "coordinator_cases_passed": 32,
+      "dialog_cases_passed": 10,
+      "scope": "Installation model, token store, test harnesses and dialog instrumented; remainder of engine uninstrumented"
+    },
+    "actual_signed_package_preparation": "passed with explicit configured-selection assertion; no upload",
+    "full_desktop_build": "passed",
+    "rendered_panel_inspected": true,
+    "keychain": {
+      "separate_process_write_read_delete": true,
+      "separate_process_read_after_delete_refused": true,
+      "existing_credentials_changed": false
+    },
+    "radio": "Read-only SSH connection succeeded; no install/reboot/RF commands this turn",
+    "remaining": [
+      "Live normal-application automation qualification",
+      "Fresh desktop install/reboot/IQ and application-exit recovery",
+      "Preserved legacy container restart policy must be resolved before reboot",
+      "Production release catalogue, uncertain pending-attempt resolution and full P1-P10 gates"
+    ],
+    "logs": {
+      "default-build.log": "e881b55af5b2848fac03d916cae7bd46ec6fc1dcf7c88691a8c48cb5ed7bf017",
+      "default-final-build.log": "103ebf098a65eab40aba93573cae48d185f08253b725cd385f5c07cfa8f7da1f",
+      "default-tests.log": "1c481e50bad6ff2bda9d4f2855667daf42734e0b4a7c03701d1e498d965c6c41",
+      "fixture-configure.log": "1420dc51f686851bf0d10c0712ece0a81a5ef431780b7a6ab941260accb3ca35",
+      "fixture-build.log": "ea26e3e2f24ac1c409c2400a91f5ea8739d757377fcf313e3d846e4353d4e301",
+      "fixture-tests.log": "e90d471e35ba16c14c0503d21ef8e431bb1c690addf24c553b58822281802cb3",
+      "fixture-final-build.log": "103ebf098a65eab40aba93573cae48d185f08253b725cd385f5c07cfa8f7da1f",
+      "fixture-positive-tests.log": "66c4b9c0231e2bf60eabe8fa5eb729d158349e25cb71cb29944b815321db696c",
+      "sanitizer-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "engine-boundary.log": "1a2e374487d97908d268e65976f4ec349514eebee857560bf8d2b7e27b48ca41",
+      "keychain-after-delete.log": "8d34b106a9993766d36d7fff015934ce5203df5df3cb935b74e6534cb68a0a80",
+      "coordinator-asan.log": "f26f3cff4b68218541029a69724632c7a0900cd1f848ccb7cf0ddfb5958f614e",
+      "dialog-asan.log": "471ee0a6dd771f21a7ef0d02bc457d75966f02dd8ea8750b6c81b15b86406efb",
+      "actual-configure.log": "07d940b421131a016ed9ecd67160f5b9f34147753c4264d0460fac2adb42d343",
+      "desktop-build.log": "7114e94d80a89f8560f8441e1a1a861ba7a2044e19fd9397883b2c1f0c99f59e",
+      "actual-preparation.log": "2fb09834a039b9aab211dd93af2bbcdfa04e007d43014dfa80f4f0985b63a46b"
+    },
+    "evidence": "first-install-desktop-controls/validation.json under evidence_root"
   }
 }

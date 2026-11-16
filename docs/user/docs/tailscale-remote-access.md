@@ -595,7 +595,7 @@ retry Start, calibration or Stop automatically after a lost reply. The released
 Remote Access package alone does not supply the AetherPD installation required
 by these controls.
 
-The **AetherPD service update** section shows a prepared update's target radio,
+The **AetherPD service installation** section shows a prepared update's target radio,
 firmware, planned changes and authenticated package identifiers. Qualified package
 selection is not yet available. Builds explicitly configured with a development
 package show its version and **not qualified for production**. **Prepare update**
@@ -615,19 +615,28 @@ the current connection.
   and temporary-installer cleanup are reported; recovery after application exit
   is not yet qualified.
 
-Development first-install plans identify themselves as **First installation**
-and list the temporary host-root installation step, new local identity and fixed
-helpers that remain installed. Approval saves the new credential persistently in
-the system keychain before the first upload. If that save fails or times out,
+**Prepare first installation** is a separate development-build action for a
+radio without a managed AetherPD installation. It is dimmed unless the build
+contains a first-install package for the connected firmware, and while a saved
+installation needs checking. Preparation verifies that package and creates a
+plan without writing credentials or uploading. The plan identifies itself as
+**First installation** and lists the temporary host-root installation step, new
+local identity and fixed helpers that remain installed. **Approve first
+installation** saves the new credential persistently in the system keychain
+before the first upload. If that save fails or times out,
 installation does not start. An existing radio credential is retained until the
 radio confirms the exact new installation. If saving the active credential then
 fails, the window reports that failure separately from the confirmed radio
-installation; the attempt credential remains in the keychain. The approved public plan is saved locally before upload, alongside a separate
-keychain entry for the attempt. An unresolved record blocks another first
-installation. Recovery can check that exact plan using read-only radio status and
-restore the active credential only after confirmation. It does not repeat the
-installation or establish that temporary helpers were removed. First-install
-package selection and the recovery entry point are still in development.
+installation; the attempt credential remains in the keychain. The approved
+public plan is saved locally before upload, alongside a separate keychain entry
+for the attempt. An unresolved record blocks another first
+installation. **Check saved installation** checks that exact plan using read-only
+radio status and restores the active credential only after confirmation. The
+control is dimmed unless the build trusts the saved attempt's publisher and the
+record matches the connected radio and firmware. It does not repeat the
+installation or establish that temporary helpers were removed. These controls
+remain experimental; a complete desktop first-install and restart qualification
+is still required.
 
 A confirmed update and confirmed cleanup are separate results. If cleanup is
 unconfirmed, the window says so even when the radio confirmed the new payload.

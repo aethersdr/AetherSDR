@@ -23,3 +23,24 @@ else()
         "${_pd_selection_header}" COPYONLY)
 endif()
 target_include_directories(aethercore PRIVATE "${_pd_selection_dir}")
+
+set(AETHERPD_FIRST_DEVELOPMENT_SELECTION "" CACHE FILEPATH
+    "Reviewed AetherPD first-install development selection JSON (never for shipping builds)")
+set(_pd_first_header "${_pd_selection_dir}/AetherPDFirstDevelopmentSelection.h")
+if(AETHERPD_FIRST_DEVELOPMENT_SELECTION)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    get_filename_component(_pd_first_selection "${AETHERPD_FIRST_DEVELOPMENT_SELECTION}" ABSOLUTE)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_pd_first_selection}" "${CMAKE_SOURCE_DIR}/tools/pd-waveform/development_selection.py")
+    execute_process(COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/tools/pd-waveform/development_selection.py"
+        "${_pd_first_selection}" "${_pd_first_header}" --first
+        RESULT_VARIABLE _pd_first_result)
+    if(NOT _pd_first_result EQUAL 0)
+        message(FATAL_ERROR "Invalid AetherPD first-install development selection")
+    endif()
+    message(WARNING "AetherPD first-install development package enabled: this build must not ship")
+else()
+    configure_file("${CMAKE_SOURCE_DIR}/cmake/AetherPDFirstDevelopmentSelection.h.in"
+        "${_pd_first_header}" COPYONLY)
+endif()
