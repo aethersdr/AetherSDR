@@ -919,6 +919,7 @@ private:
     // connection when either endpoint dies, and the old backend is destroyed before
     // the new one is built, so no duplicates. Guarded anyway - see the body.
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
+    void wirePureSignalApplet(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
     // Display panel → "Clone to all Pans". Copies every Display setting from

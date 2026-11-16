@@ -10091,6 +10091,25 @@ add_executable(hl2_tx_alc_test
 target_include_directories(hl2_tx_alc_test PRIVATE src)
 add_test(NAME hl2_tx_alc_test COMMAND hl2_tx_alc_test)
 
+# PureSignal's control loop, driven tick by tick, and the 0x0a/DDC facts it
+# relies on. Socket-free; also drives a real, unkeyed TXA channel offline.
+add_executable(hl2_puresignal_test
+    tests/hl2_puresignal_test.cpp
+)
+target_include_directories(hl2_puresignal_test PRIVATE src)
+target_link_libraries(hl2_puresignal_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_puresignal_test COMMAND hl2_puresignal_test)
+
+# Private disk profile, child-process restart, injected link edges and applet
+# error presentation. MetisClient is never started: no socket or peer.
+add_executable(hl2_puresignal_state_test tests/hl2_puresignal_state_test.cpp
+    src/gui/PureSignalApplet.cpp src/gui/DragValuePopup.cpp src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp ${THEME_TEST_RESOURCES})
+target_include_directories(hl2_puresignal_state_test PRIVATE src tests)
+target_link_libraries(hl2_puresignal_state_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME hl2_puresignal_state_test COMMAND hl2_puresignal_state_test)
+
+
 add_executable(hl2_dsp_readback_test
     tests/hl2_dsp_readback_test.cpp
 )
@@ -11545,6 +11564,7 @@ set(AETHER_SETTINGS_CONSUMERS
     squelch_level_scale_test
     hl2_pan_create_async_test
     hl2_session_memory_test
+    hl2_puresignal_state_test
     anan_backend_test
     anan_noise_blanker_readback_test
     noise_blanker_kind_model_test

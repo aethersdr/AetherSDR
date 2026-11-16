@@ -41,6 +41,7 @@
 #include "ModeFilterPresets.h"
 #include "DisplaySquelchRouting.h"
 #include "WfmApplet.h"
+#include "PureSignalApplet.h"
 #include "BandApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
@@ -8396,6 +8397,15 @@ void MainWindow::announceAntennaChoiceRefused(bool tx)
                          << "antenna choice refused: this radio publishes no"
                          << "antenna port to choose";
     showUnsupportedControlNotice();
+}
+
+
+void MainWindow::wirePureSignalApplet(IRadioBackend* backend)
+{
+    // The applet binds only to an advertised extension and otherwise unbinds.
+    if (m_appletPanel && m_appletPanel->pureSignalApplet()) {
+        m_appletPanel->pureSignalApplet()->setBackend(backend);
+    }
 }
 
 } // namespace AetherSDR

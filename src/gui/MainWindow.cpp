@@ -7697,6 +7697,8 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
                 m_audio, &AudioEngine::feedPcmFrame);
     }
 
+    wirePureSignalApplet(backend);
+
     // HL2 only: opening its client-side WDSP chains measures FFTW plans, ~20 s
     // without cached wisdom, so the operator needs a visible explanation. The
     // panadapter animation is hidden behind ConnectionPanel (parented
