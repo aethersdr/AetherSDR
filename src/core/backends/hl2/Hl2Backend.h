@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QThread>
 #include <QTimer>
@@ -119,6 +120,7 @@ public:
     // other token is refused; when called, both republish the slice so the
     // button shows ANT. RadioModel refuses a token outside the list before this.
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
+    bool setSliceIqTap(int sliceId, bool on) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -366,9 +368,12 @@ private:
     friend struct Hl2TxRouteTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
-    void onRadioPttChanged(bool keyed);
-    // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes, and only then.
-    void publishTransmitState();
+    // A rising edge is offered to RadioModel as TransmitDelta::radioPtt only when
+    // keyRequest is set; a PTT held since the stream began rides mox alone.
+    void onRadioPttChanged(bool keyed, bool keyRequest = false);
+    // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes. A radio PTT
+    // edge passes radioPtt, which is published with or without a mox change.
+    void publishTransmitState(std::optional<bool> radioPtt = std::nullopt);
     // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
     // held slice peak on either side of kSliceStaleMs without waiting.
     friend struct Hl2AdcAgeTestAccess;
@@ -972,6 +977,9 @@ private:
     // kEp6LinkBudgetFraction / maxReceiversAtRate() (4 RX at 384 kHz is ~89 Mbit/s
     // on 100BASE-T, refused).
     int m_sampleRateHz = 48000;
+    // UI numbers whose IQ a TCI client wants. Kept here, not only on the DSP,
+    // so a chain rebuilt by a rate change or a reopen starts with its tap set.
+    QSet<int> m_iqTapUis;
     // Receivers to run: operator request (Hl2Settings), clamped by discovery byte
     // 0x13 and the link budget. Never hardcoded: skimmer gateware reports 9..12,
     // hl2b5up_main reports 4.

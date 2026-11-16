@@ -393,6 +393,10 @@ public:
     // Non-inline: IRadioBackend is only forward-declared here.
     RadioCapabilities backendCapabilities() const;
 
+    // Start or stop backendSliceIqFrameReady for one slice; false when the
+    // backend has no raw IQ of its own (IRadioBackend::setSliceIqTap).
+    bool setBackendSliceIqTap(int sliceId, bool on);
+
     // The connected backend's health/status registers, for the Radio Health
     // dialog. Empty when no backend is connected or the family reports none —
     // which the dialog renders as "this radio reports no health registers"
@@ -1440,6 +1444,8 @@ signals:
     // Only a backend that demodulates in this process emits it; Flex per-slice
     // audio arrives as DAX channels instead.
     void backendSliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
+    // ONE slice's raw IQ, relayed from IRadioBackend::sliceIqFrameReady.
+    void backendSliceIqFrameReady(int sliceId, const QByteArray& iqFloat32, int sampleRate);
 
     // Normalized demodulated-RX-audio bus: the audio the operator hears (24 kHz
     // stereo), whoever produced it. Exactly one producer is bound, chosen only
@@ -2612,6 +2618,12 @@ private:
     // Last mox a RadioCapabilities::radioPttObservation backend published; ORed
     // into the command-edge fallback. Always false for every other backend.
     bool        m_backendObservedTransmit{false};
+    // The host key followRadioPtt() took for the radio's own PTT, released on the
+    // radio's falling edge. m_radioPttKeyed is false when the host was already
+    // keyed or the key was refused, so that path never releases another's key.
+    TxCoordinator::Producer m_radioPttProducer;
+    TxCoordinator::Request  m_radioPttInput;
+    bool                    m_radioPttKeyed{false};
     bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not tune/ATU/TCI/DAX)
     // TGXL autotune keys over the interlock line, so no PttSource tags it: arm a
     // short window on `tgxl autotune` and latch the cycle as a tune carrier.
@@ -2776,6 +2788,8 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
+    // Key or release the host for a radioPttObservation backend's own PTT edge.
+    void followRadioPtt(bool down);
     // Command-edge fallback for a backend with no radio TX readback. One that
     // declares RadioCapabilities::hasRadioPttReadback (Icom) waits for the
     // decoded backend edge instead.

@@ -5736,6 +5736,23 @@ target_include_directories(wsjtx_dial_tracker_test PRIVATE src)
 target_link_libraries(wsjtx_dial_tracker_test PRIVATE Qt6::Core)
 add_test(NAME wsjtx_dial_tracker_test COMMAND wsjtx_dial_tracker_test)
 
+# SpotHub WSJT-X feed: Rx/Tx frequency overlay (#4526). Header-only and
+# Qt-Core-only, same lane as wsjtx_dial_tracker_test above — pins the dial+
+# offset resolution and the refuse-rather-than-guess fallback when Status's
+# later fields could not be read, AND (RFC #4526 review item 1) the actual
+# QDataStream byte parsing in parseWsjtxStatusBody() — field order/framing
+# for DX Call/Report/Tx Mode/Tx Enabled/Transmitting/Decoding/[Rx DF/Tx DF] —
+# via hand-built buffers using the same wsjtxReadQString/wsjtxReadBool
+# primitives WsjtxClient.cpp itself calls (WsjtxWireHelpers.h). Still does
+# NOT link WsjtxClient.cpp/LogManager/AppSettings — parseWsjtxStatusBody()
+# is exercised directly, header-only, same as the rest of this target.
+add_executable(wsjtx_status_freq_test
+    tests/wsjtx_status_freq_test.cpp
+)
+target_include_directories(wsjtx_status_freq_test PRIVATE src)
+target_link_libraries(wsjtx_status_freq_test PRIVATE Qt6::Core)
+add_test(NAME wsjtx_status_freq_test COMMAND wsjtx_status_freq_test)
+
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp
     src/core/N1MMSpotParser.cpp
@@ -8119,6 +8136,12 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_rx_audio_test COMMAND tci_rx_audio_test)
 
+    add_executable(tci_host_iq_test tests/tci_host_iq_test.cpp)
+    target_include_directories(tci_host_iq_test PRIVATE src tests)
+    target_link_libraries(tci_host_iq_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_host_iq_test COMMAND tci_host_iq_test)
+
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
     target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
@@ -8324,9 +8347,12 @@ target_include_directories(hl2_unkey_hold_test PRIVATE src)
 target_link_libraries(hl2_unkey_hold_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_unkey_hold_test COMMAND hl2_unkey_hold_test)
 
-# #5998: the HL2's own PTT/key input is an observation: transmit state and receive
-# mute, never a key. Socket-free; EP6 status frames are fed to the backend's own
-# MetisClient. One leg waits out the 2 s silence timeout.
+# #5998: the HL2's own PTT/key input mutes receive and shows transmit, and a
+# fresh press after a seen release keys the host through RadioModel's gated
+# producer path. A PTT held at stream start, after silence or a restart, or
+# carried by a rewound or duplicate EP6 packet, keys nothing. Socket-free; EP6
+# status frames and receiver-count restarts use the backend's own MetisClient
+# with injected sinks. Two legs wait out the 2 s silence timeout.
 add_executable(hl2_hardware_ptt_state_test tests/hl2_hardware_ptt_state_test.cpp)
 target_include_directories(hl2_hardware_ptt_state_test PRIVATE src tests)
 target_link_libraries(hl2_hardware_ptt_state_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -11637,6 +11663,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     tci_applet_test
     tci_rx_applet_test
+    tci_host_iq_test
     bandscope_trace_render_test
     decoder_audio_routing_test
     ax25_receive_model_test
