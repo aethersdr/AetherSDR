@@ -1,0 +1,50 @@
+[
+  {
+    "command": [
+      "python3",
+      "tools/check_test_registration.py",
+      "--strict"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "python3",
+      "tools/check_a11y.py",
+      "src/gui/AetherPDDialog.cpp"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "python3",
+      "tools/check_engine_boundary.py",
+      "--strict"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "python3",
+      "tools/check_command_plane.py",
+      "--strict"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "python3",
+      "tools/check_capability_records.py",
+      "--strict"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit": 0
+  }
+]

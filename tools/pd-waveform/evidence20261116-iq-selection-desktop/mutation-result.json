@@ -1,0 +1,7 @@
+{
+  "mutation": "omit requested IQ binding comparison",
+  "exit": 1,
+  "expected_assertion": true,
+  "restored_sha256": "5f1361033a5550e8c917a882a9f88c645b14fa054aca11b5db35d2d77f8bb3e2",
+  "restored_exit": 0
+}

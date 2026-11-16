@@ -502,7 +502,13 @@ In development builds, open **Tools → Waveforms... → AetherPD…** to contro
 prepared installation. The window loads this computer's saved Remote Access
 credential for the connected radio. Opening it reads status only.
 
-- **Start AetherPD** requests a session for the current connection. It does
+- **Feedback DAX IQ** lists pans owned by this connection with **IQ Ch 1**
+  through **IQ Ch 4** assigned. Choose the feedback pan explicitly. Changing this
+  choice sends no radio command and is not saved across connections. If the
+  pan's channel or owner changes, choose it again after correcting the assignment.
+- **Start AetherPD** requests that exact pan/channel for the current connection.
+  The installed service must confirm the same binding. Older services that lack
+  selected startup are refused; the desktop does not retry with channel 1. It does
   not transmit or arm calibration. A start receipt is followed by a status
   read; it is not confirmation that correction is running. Startup checks the
   idle state for your connected GUI and refuses to continue if its identity
@@ -542,8 +548,10 @@ ADC headroom or calibrated output power.
 
 1. Connect the dummy load and attenuated feedback path, select your TX slice,
    frequency and power, and leave FDX off. In the feedback panadapter's **DAX**
-   panel, assign **IQ Ch 1**. Start AetherPD, then select **PD** mode on your TX
-   slice. The installed local-IQ session binds to the stream's reported
+   panel, assign an available channel from **IQ Ch 1** through **IQ Ch 4**.
+   In the AetherPD window, choose that pan under **Feedback DAX IQ**, then click
+   **Start AetherPD**. Wait for **Service reports … binding confirmed** before
+   proceeding, then select **PD** mode on your TX slice. The installed local-IQ session binds to the stream's reported
    feedback panadapter and verifies that this GUI owns it. Removing the pan or
    reassigning its channel or owner ends that binding; stop and start AetherPD
    explicitly after correcting the assignment. Another pan reporting the same

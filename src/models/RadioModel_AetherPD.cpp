@@ -49,13 +49,22 @@ bool RadioModel::attachAetherPD(const RadioControlSession& session, const QStrin
 }
 
 bool RadioModel::requestAetherPD(const RadioControlSession& session, aetherpd::Operation operation,
-                                 std::optional<quint32> toneSpacingHz)
+                                 std::optional<quint32> toneSpacingHz, std::optional<aetherpd::IQSelection> selection)
 {
     if (QThread::currentThread() != thread() || !controlSessionCurrent(session)
         || !sessionTransportCurrent() || !m_sessionCommands.current()) {
         return false;
     }
-    return m_aetherPDModel->request(operation, toneSpacingHz);
+    if (selection) {
+        if (operation != aetherpd::Operation::Start || !selection->valid()) { return false; }
+        bool matched = false;
+        for (const PanadapterModel* pan : m_panadapters) {
+            if (pan && pan->centerKnown() && pan->panStreamId() == selection->pan && pan->ownerHandle() == clientHandle()
+                && pan->ownerHandle() && pan->daxiqChannel() == int(selection->channel)) { matched = true; break; }
+        }
+        if (!matched) { return false; }
+    }
+    return m_aetherPDModel->request(operation, toneSpacingHz, selection);
 }
 
 std::function<bool()> RadioModel::bindAetherPDCapture(const RadioControlSession& session,

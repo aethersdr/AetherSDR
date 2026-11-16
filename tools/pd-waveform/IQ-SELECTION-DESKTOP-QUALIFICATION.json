@@ -1,0 +1,125 @@
+{
+  "updated_utc": "2026-11-16T15:11:19.673604+00:00",
+  "status": "selected_desktop_start_component_qualified",
+  "production_ready": false,
+  "installed": false,
+  "source_base": "25b66d28e03b1ea0f2c19e8ab6b4502886f5ba67",
+  "evidence": "evidence20261116-iq-selection-desktop",
+  "implemented": [
+    "Feedback DAX IQ picker lists only original-GUI owned, center-observed pans with assigned IQ channels 1..4. Selection is explicit, transient and sends no radio command. Channel or owner changes clear the selection; ordinary readback updates preserve it without resetting the dropdown model.",
+    "Start carries the exact channel and pan through RadioModel session/ownership checks and the HTTP client to authenticated POST /v2/aetherpd/start. Unsupported selected start is refused without legacy channel1 fallback.",
+    "Desktop pins requested and subsequently observed binding to the original session. Missing, mismatched or failed binding cannot revive from a late matching reply. Explicit terminal Stop/new Start permits a new binding.",
+    "Observed native binding is displayed separately from the requested selection. No new privilege, RF command, stream assignment, saved radio configuration or automatic rearm."
+  ],
+  "validation": {
+    "full_linux_desktop_build": true,
+    "focused_ctest": [
+      "aetherpd_protocol_test",
+      "aetherpd_client_test",
+      "aetherpd_model_test",
+      "aetherpd_dialog_test"
+    ],
+    "authoritative_build": "restored-build.log",
+    "authoritative_tests": "restored-tests.log",
+    "protocol_asan_ubsan_lsan": true,
+    "mutation": {
+      "mutation": "omit requested IQ binding comparison",
+      "exit": 1,
+      "expected_assertion": true,
+      "restored_sha256": "5f1361033a5550e8c917a882a9f88c645b14fa054aca11b5db35d2d77f8bb3e2",
+      "restored_exit": 0
+    },
+    "docs_build": true,
+    "docs_dependencies": "Reused installed dependencies after verifying identical package-lock.json; temporary node_modules symlink removed. No npm ci was run.",
+    "static_results": [
+      {
+        "command": [
+          "python3",
+          "tools/check_test_registration.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_a11y.py",
+          "src/gui/AetherPDDialog.cpp"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_engine_boundary.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_command_plane.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_capability_records.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit": 0
+      }
+    ],
+    "a11y_findings": 0,
+    "visual_preview": "picker.png, offscreen injected transport, not a live radio screenshot",
+    "preserved_failures": [
+      "desktop-build.log: original picker called private RadioModel::clientHandle; corrected to existing public ourClientHandle.",
+      "final-tests.log: three tests passed; dialog lifetime fixture did not select IQ before Start and still expected v1. Updated to choose current owned pan, assert Start enabled and expect v2; restored-tests.log passes all four.",
+      "mutation-test.log: deliberately omitted requested-binding comparison; expected missing-binding assertion failed, then source restored byte-for-byte."
+    ],
+    "log_normalization": "Copied logs have trailing whitespace stripped for git diff --check; substantive output preserved."
+  },
+  "network_probe": {
+    "utc": "2026-11-16T15:06:31.559177+00:00",
+    "address": "192.168.50.100",
+    "radio_mutations": false,
+    "tcp_ports": {
+      "4992": "[Errno 113] No route to host",
+      "48992": "[Errno 113] No route to host",
+      "22222": "[Errno 113] No route to host"
+    }
+  },
+  "not_yet_complete": [
+    "Immutable native IQ binding in capture snapshot/manifests/neutral frames/JSON CSV PNG exports. Status pinning does not supply sample-time provenance.",
+    "Updated complete authenticated ARMv7/ARM64 packages and compatibility/size qualification.",
+    "Exact-candidate first installation, reboot persistence and local IQ access: radio remains unreachable.",
+    "Final process-graph faults, natural alignment slip/cold-start diagnosis, repeated 5/10W tones and speech, matched stock APD, actual FLEX-6300 hardware and independent release gates."
+  ],
+  "source_sha256": {
+    "src/core/AetherPDClient.cpp": "a9b16bd7c06db983063668fe570e4613b8df00f68012af605a9682e01404894e",
+    "src/core/AetherPDProtocol.cpp": "c97a1ad0d8d0e9de825314e7c55fc0835d2c7b82fd7313def5bf5c8902aec836",
+    "src/core/AetherPDProtocol.h": "cc8232ad049025df4910e39195a730eaa0941d41a6eda95554755429f6e8feba",
+    "src/gui/AetherPDDialog.cpp": "2fef217d7b4abaa98304b06273998e4577367b652cda18b49837419cb475a280",
+    "src/gui/AetherPDDialog.h": "b383c358e60693d8f6763a57ccbcfe5963ae0fe89906f80e40c37ffa930cbe41",
+    "src/models/AetherPDModel.cpp": "5f1361033a5550e8c917a882a9f88c645b14fa054aca11b5db35d2d77f8bb3e2",
+    "src/models/AetherPDModel.h": "600020c85361781185e38be8c8c0eda04b75cdd7068e05a397efdb4444df270f",
+    "src/models/RadioModel.h": "21d36d66cbaa811f6b2f3f64ccfd3c7a8621ca7b691e2e3e879de07152469ea5",
+    "src/models/RadioModel_AetherPD.cpp": "82998057e4c7a472f00768a1af64d026fe71f6361a1f8d95261ae9e851b8da30",
+    "tests/AetherPDTestRadio.h": "a21752162371d8f65a9f6df5d77f09dcf2c6aa4175447b6d604611ea2440b571",
+    "tests/aetherpd_client_test.cpp": "9e48a69cd45bb016830084b7750d1e379b27b6e73c78286f25a961e2a35d3ced",
+    "tests/aetherpd_dialog_test.cpp": "f5ce0121f5f058bec75acb58249f69e7dd70fcb12ce4bf44e885fae0e17adfd9",
+    "tests/aetherpd_model_test.cpp": "8d7534527565462bbb4b0e8b56e18f657a53dad0cab863babec1441d2ce49e26",
+    "tests/aetherpd_protocol_test.cpp": "501a3fd8463a83f9942f55d5c39177b83dcac2125fb545a079810a438c214c2a"
+  }
+}

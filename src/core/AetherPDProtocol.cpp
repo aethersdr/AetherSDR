@@ -306,9 +306,14 @@ std::optional<QByteArray> measurementToneBody(quint32 spacingHz)
     return QJsonDocument(QJsonObject{{QStringLiteral("spacing_hz"), qint64(spacingHz)}}).toJson(QJsonDocument::Compact);
 }
 
+Request selectedStartRequest()
+{
+    return {"POST", QStringLiteral("/v2/aetherpd/start"), 22'000};
+}
+
 std::optional<QByteArray> startBody(const StartIdentity& identity)
 {
-    if (!identity.guiHandle || identity.guiClientId.size() != 36) {
+    if (!identity.guiHandle || identity.guiClientId.size() != 36 || (identity.iq && !identity.iq->valid())) {
         return std::nullopt;
     }
     for (qsizetype i = 0; i < 36; ++i) {
@@ -320,9 +325,13 @@ std::optional<QByteArray> startBody(const StartIdentity& identity)
             return std::nullopt;
         }
     }
-    return QJsonDocument(QJsonObject{
-        {QStringLiteral("gui_client_id"), identity.guiClientId},
-        {QStringLiteral("gui_handle"), static_cast<qint64>(identity.guiHandle)}}).toJson(QJsonDocument::Compact);
+    QJsonObject object{{QStringLiteral("gui_client_id"), identity.guiClientId},
+        {QStringLiteral("gui_handle"), static_cast<qint64>(identity.guiHandle)}};
+    if (identity.iq) {
+        object.insert(QStringLiteral("iq_channel"), qint64(identity.iq->channel));
+        object.insert(QStringLiteral("feedback_pan"), qint64(identity.iq->pan));
+    }
+    return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
 
 std::optional<Status> parseStatus(const QByteArray& json)

@@ -39,6 +39,17 @@ public:
         model.m_lastInfo.address = QHostAddress(QStringLiteral("192.168.50.100"));
         model.m_lastInfo.serial = QStringLiteral("PD-TEST");
     }
+    static PanadapterModel* pan(RadioModel& model, quint32 id, quint32 owner, int channel)
+    {
+        const QString key = QStringLiteral("0x%1").arg(id, 8, 16, QLatin1Char('0'));
+        auto* pan = new PanadapterModel(key, &model);
+        model.m_panadapters.insert(key, pan);
+        pan->setClientHandle(QStringLiteral("0x%1").arg(owner, 8, 16, QLatin1Char('0')));
+        pan->setCenterBandwidth(7.15, .2);
+        pan->applyStateExtension({{QStringLiteral("daxiq_channel"), channel}});
+        emit model.panadapterAdded(pan);
+        return pan;
+    }
     static void retire(RadioModel& model) { model.resetSessionControls(); }
     static void changeGui(RadioModel& model)
     {

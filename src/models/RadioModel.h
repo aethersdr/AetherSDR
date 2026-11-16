@@ -176,7 +176,8 @@ public:
     std::function<bool()> bindAetherPDTest(const RadioControlSession& session,
                                          txlin::AetherPDTestClient& client);
     bool requestAetherPD(const RadioControlSession& session, aetherpd::Operation operation,
-                         std::optional<quint32> toneSpacingHz = std::nullopt);
+                         std::optional<quint32> toneSpacingHz = std::nullopt,
+                         std::optional<aetherpd::IQSelection> selection = std::nullopt);
     bool detachAetherPD(const RadioControlSession& session);
     EqualizerModel&   equalizerModel()   { return m_equalizerModel; }
     TnfModel&         tnfModel()         { return m_tnfModel; }

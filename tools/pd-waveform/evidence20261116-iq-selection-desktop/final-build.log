@@ -1,0 +1,216 @@
+[0/2] Re-checking globbed directories...
+[1/160] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/160] Capturing build identity (git describe)
+[3/160] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/160] Completed 'vulkan-shaders-gen'
+[5/160] Automatic MOC and UIC for target aetherpd_client_test
+[6/160] Automatic MOC and UIC for target aetherpd_model_test
+[7/160] Automatic MOC and UIC for target aethercore
+[8/160] Building CXX object CMakeFiles/aetherpd_client_test.dir/aetherpd_client_test_autogen/mocs_compilation.cpp.o
+[9/160] Building CXX object CMakeFiles/aetherpd_protocol_test.dir/tests/aetherpd_protocol_test.cpp.o
+[10/160] Building CXX object CMakeFiles/aetherpd_protocol_test.dir/src/core/AetherPDProtocol.cpp.o
+[11/160] Building CXX object CMakeFiles/aethercore.dir/src/core/control/ModelTransmitControlTarget.cpp.o
+[12/160] Building CXX object CMakeFiles/aethercore.dir/src/core/backends/ModelRadioConnectionTarget.cpp.o
+[13/160] Building CXX object CMakeFiles/aethercore.dir/src/core/control/RadioResourceAdapter.cpp.o
+[14/160] Building CXX object CMakeFiles/aethercore.dir/src/core/control/ModelSliceFrequencyTarget.cpp.o
+[15/160] Building CXX object CMakeFiles/aethercore.dir/src/core/control/RadioTelemetryAdapter.cpp.o
+[16/160] Building CXX object CMakeFiles/aethercore.dir/src/core/control/ModelReceiveControlTarget.cpp.o
+[17/160] Building CXX object CMakeFiles/aethercore.dir/src/core/SmartCatProtocol.cpp.o
+[18/160] Building CXX object CMakeFiles/aethercore.dir/src/core/RigctlProtocol.cpp.o
+[19/160] Building CXX object CMakeFiles/aethercore.dir/src/core/SmartCatSession.cpp.o
+[20/160] Building CXX object CMakeFiles/aethercore.dir/src/core/OtrspProtocol.cpp.o
+[21/160] Building CXX object CMakeFiles/aethercore.dir/src/core/CatPort.cpp.o
+[22/160] Building CXX object CMakeFiles/aethercore.dir/aethercore_autogen/mocs_compilation.cpp.o
+In file included from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/PRMOGMWJPH/moc_SmartCatSession.cpp:9,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/mocs_compilation.cpp:79:
+/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/PRMOGMWJPH/../../../../../aetherpd-source/src/core/SmartCatSession.h:21:7: warning: defining ‘AetherSDR::SmartCatSession’, which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]
+   21 | class SmartCatSession : public QObject {
+      |       ^~~~~~~~~~~~~~~
+In file included from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/qobject.h:19,
+                 from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/QObject:1,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/PRMOGMWJPH/../../../../../aetherpd-source/src/core/AcomConnection.h:4,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/PRMOGMWJPH/moc_AcomConnection.cpp:9,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/mocs_compilation.cpp:2:
+/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/qmetatype.h:344:64: note: here.  Use ‘-Wsfinae-incomplete=2’ for a diagnostic at that point
+  344 |         static auto check(U *) -> std::integral_constant<bool, sizeof(U) != 0>;
+      |                                                                ^~~~~~~~~
+In file included from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/QVBOH4CPO5/moc_RadioConnection.cpp:9,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/mocs_compilation.cpp:115:
+/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/QVBOH4CPO5/../../../../../aetherpd-source/src/core/backends/flex/RadioConnection.h:31:7: warning: defining ‘AetherSDR::RadioConnection’, which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]
+   31 | class RadioConnection : public QObject {
+      |       ^~~~~~~~~~~~~~~
+/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/qmetatype.h:344:64: note: here.  Use ‘-Wsfinae-incomplete=2’ for a diagnostic at that point
+  344 |         static auto check(U *) -> std::integral_constant<bool, sizeof(U) != 0>;
+      |                                                                ^~~~~~~~~
+In file included from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/M4YTXQ7V2H/../../../../../aetherpd-source/src/models/RadioModel.h:38,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/M4YTXQ7V2H/moc_RadioModel.cpp:9,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/mocs_compilation.cpp:182:
+/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/aethercore_autogen/M4YTXQ7V2H/../../../../../aetherpd-source/src/models/SliceModel.h:22:7: warning: defining ‘AetherSDR::SliceModel’, which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]
+   22 | class SliceModel : public QObject {
+      |       ^~~~~~~~~~
+/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/qmetatype.h:344:64: note: here.  Use ‘-Wsfinae-incomplete=2’ for a diagnostic at that point
+  344 |         static auto check(U *) -> std::integral_constant<bool, sizeof(U) != 0>;
+      |                                                                ^~~~~~~~~
+[23/160] Building CXX object CMakeFiles/aethercore.dir/src/models/DaxReceiveModel.cpp.o
+[24/160] Building CXX object CMakeFiles/aethercore.dir/src/core/TciServer.cpp.o
+[25/160] Building CXX object CMakeFiles/aethercore.dir/src/core/TciProtocol.cpp.o
+[26/160] Building CXX object CMakeFiles/aethercore.dir/src/core/RadioCertification.cpp.o
+[27/160] Building CXX object CMakeFiles/aethercore.dir/src/core/TciTrxMap.cpp.o
+[28/160] Building CXX object CMakeFiles/aethercore.dir/src/models/Kxpa100RadioAssociation.cpp.o
+[29/160] Building CXX object CMakeFiles/aethercore.dir/src/models/Kat500TxController.cpp.o
+[30/160] Building CXX object CMakeFiles/aethercore.dir/src/core/FirmwareUploader.cpp.o
+[31/160] Building CXX object CMakeFiles/aethercore.dir/src/core/txlinearity/AetherPDCaptureSource.cpp.o
+[32/160] Building CXX object CMakeFiles/aethercore.dir/src/core/WaveformInstaller.cpp.o
+[33/160] Building CXX object CMakeFiles/aethercore.dir/src/core/txlinearity/AetherPDTestClient.cpp.o
+[34/160] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDRunLease.cpp.o
+[35/160] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDInstallationModel.cpp.o
+[36/160] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDMeasurementModel.cpp.o
+[37/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDProtocol.cpp.o
+[38/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDClient.cpp.o
+[39/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDInstallationJournal.cpp.o
+[40/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDInstallationMonitor.cpp.o
+[41/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDPackage.cpp.o
+[42/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDInstallUpload.cpp.o
+[43/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDInstallRequestClient.cpp.o
+[44/160] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDModel.cpp.o
+[45/160] Building CXX object CMakeFiles/aethercore.dir/src/core/AetherPDInstallationCoordinator.cpp.o
+[46/160] Building CXX object CMakeFiles/aethercore.dir/src/core/WsprAgentClient.cpp.o
+[47/160] Building CXX object CMakeFiles/aethercore.dir/src/core/DvkWavTransfer.cpp.o
+[48/160] Building CXX object CMakeFiles/aethercore.dir/src/core/VoiceKeyerTxRoute.cpp.o
+[49/160] Building CXX object CMakeFiles/aethercore.dir/src/core/ProfileTransfer.cpp.o
+[50/160] Building CXX object CMakeFiles/aethercore.dir/src/core/SupportBundle.cpp.o
+[51/160] Building CXX object CMakeFiles/aethercore.dir/src/models/DecoderAudioModel.cpp.o
+[52/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_DaxTx.cpp.o
+[53/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_Setup.cpp.o
+[54/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_SessionControls.cpp.o
+[55/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_AetherPD.cpp.o
+[56/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_Administration.cpp.o
+[57/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_Utilities.cpp.o
+[58/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_StoredControls.cpp.o
+[59/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_TransferControls.cpp.o
+[60/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_WaveformEnv.cpp.o
+[61/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel.cpp.o
+/home/jeremy/AetherSDR/build/aetherpd-source/src/models/RadioModel.cpp:253:6: warning: ‘bool AetherSDR::{anonymous}::streamStatusRemoved(const StreamObjectParts&, const QMap<QString, QString>&)’ defined but not used [-Wunused-function]
+  253 | bool streamStatusRemoved(const StreamObjectParts& stream,
+      |      ^~~~~~~~~~~~~~~~~~~
+/home/jeremy/AetherSDR/build/aetherpd-source/src/models/RadioModel.cpp:228:19: warning: ‘AetherSDR::{anonymous}::StreamObjectParts AetherSDR::{anonymous}::parseStreamObject(const QString&, const QString&)’ defined but not used [-Wunused-function]
+  228 | StreamObjectParts parseStreamObject(const QString& object, const QString& prefix)
+      |                   ^~~~~~~~~~~~~~~~~
+[62/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_NtpSources.cpp.o
+[63/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_SliceLifecycle.cpp.o
+[64/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_PanControls.cpp.o
+[65/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_AudioControls.cpp.o
+[66/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioModel_TxCoordinator.cpp.o
+[67/160] Building CXX object CMakeFiles/aethercore.dir/src/models/TxController.cpp.o
+[68/160] Building CXX object CMakeFiles/aethercore.dir/src/models/RadioSession.cpp.o
+[69/160] Building CXX object CMakeFiles/aethercore.dir/src/models/ReceiverSlotCount.cpp.o
+[70/160] Building CXX object CMakeFiles/aetherpd_client_test.dir/src/core/AetherPDProtocol.cpp.o
+[71/160] Building CXX object CMakeFiles/aetherpd_client_test.dir/tests/aetherpd_client_test.cpp.o
+[72/160] Building CXX object CMakeFiles/aetherpd_client_test.dir/src/core/AetherPDClient.cpp.o
+[73/160] Building CXX object CMakeFiles/aethercore.dir/src/models/VoiceKeyerController.cpp.o
+[74/160] Building CXX object CMakeFiles/aetherpd_model_test.dir/aetherpd_model_test_autogen/mocs_compilation.cpp.o
+[75/160] Building CXX object CMakeFiles/aetherpd_model_test.dir/src/models/AetherPDModel.cpp.o
+[76/160] Building CXX object CMakeFiles/aetherpd_model_test.dir/tests/aetherpd_model_test.cpp.o
+[77/160] Building CXX object CMakeFiles/aetherpd_model_test.dir/src/core/AetherPDClient.cpp.o
+[78/160] Building CXX object CMakeFiles/aetherpd_model_test.dir/src/core/AetherPDProtocol.cpp.o
+[79/160] Linking CXX executable aetherpd_protocol_test
+[80/160] Linking CXX executable aetherpd_client_test
+[81/160] Building CXX object CMakeFiles/aetherpd_model_test.dir/src/core/txlinearity/AetherPDTestClient.cpp.o
+[82/160] Linking CXX static library libaethercore.a
+[83/160] Building CXX object CMakeFiles/aetherpd_model_test.dir/src/core/txlinearity/AetherPDCaptureSource.cpp.o
+[84/160] Linking CXX executable aetherpd_model_test
+[85/160] Building CXX object CMakeFiles/aetherdesktop_support.dir/src/core/AutomationServer.cpp.o
+[86/160] Linking CXX static library libaetherdesktop_support.a
+[87/160] Automatic MOC and UIC for target aetherpd_dialog_test
+[88/160] Automatic MOC and UIC for target AetherSDR
+[89/160] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/aetherpd_dialog_test_autogen/mocs_compilation.cpp.o
+[90/160] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDDialog.cpp.o
+[91/160] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/tests/aetherpd_dialog_test.cpp.o
+[92/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/ControlAvailabilityRegistry.cpp.o
+[93/160] Building CXX object CMakeFiles/AetherSDR.dir/src/main.cpp.o
+[94/160] Building CXX object CMakeFiles/AetherSDR.dir/AetherSDR_autogen/mocs_compilation.cpp.o
+In file included from /home/jeremy/AetherSDR/build/aetherpd-source/src/models/RadioModel.h:38,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/AetherSDR_autogen/MXUWEOXILK/../../../../../aetherpd-source/src/gui/AetherPDDialog.h:4,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/AetherSDR_autogen/MXUWEOXILK/moc_AetherPDDialog.cpp:9,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/AetherSDR_autogen/mocs_compilation.cpp:8:
+/home/jeremy/AetherSDR/build/aetherpd-source/src/models/SliceModel.h:22:7: warning: defining ‘AetherSDR::SliceModel’, which previously failed to be complete in a SFINAE context [-Wsfinae-incomplete=]
+   22 | class SliceModel : public QObject {
+      |       ^~~~~~~~~~
+In file included from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/qobject.h:19,
+                 from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtWidgets/qwidget.h:10,
+                 from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtWidgets/qabstractbutton.h:13,
+                 from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtWidgets/qpushbutton.h:9,
+                 from /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtWidgets/QPushButton:1,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/AetherSDR_autogen/MXUWEOXILK/../../../../../aetherpd-source/src/gui/AccessoryPanelWidgets.h:3,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/AetherSDR_autogen/MXUWEOXILK/moc_AccessoryPanelWidgets.cpp:9,
+                 from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/AetherSDR_autogen/mocs_compilation.cpp:2:
+/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/include/QtCore/qmetatype.h:344:64: note: here.  Use ‘-Wsfinae-incomplete=2’ for a diagnostic at that point
+  344 |         static auto check(U *) -> std::integral_constant<bool, sizeof(U) != 0>;
+      |                                                                ^~~~~~~~~
+[95/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindowHelpers.cpp.o
+[96/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Controllers.cpp.o
+[97/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow.cpp.o
+[98/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_DspApplets.cpp.o
+[99/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Menus.cpp.o
+[100/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Shortcuts.cpp.o
+[101/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_DigitalModes.cpp.o
+[102/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Session.cpp.o
+[103/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Spots.cpp.o
+[104/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_AetherClock.cpp.o
+[105/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_SwrSweep.cpp.o
+[106/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Workspace.cpp.o
+[107/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Callsign.cpp.o
+[108/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Nets.cpp.o
+[109/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_ReceiveSync.cpp.o
+[110/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Wiring.cpp.o
+[111/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/PskReporterMapDialog.cpp.o
+[112/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_KiwiSdr.cpp.o
+[113/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/AgcCalibrationDialog.cpp.o
+[114/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/GpsLocationDialog.cpp.o
+[115/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/FirmwareUpdateCard.cpp.o
+[116/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/SpectrumOverlayMenu.cpp.o
+[117/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/VfoWidget.cpp.o
+[118/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/SpectrumWidget.cpp.o
+[119/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/NtpSourcesPage.cpp.o
+[120/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/RtlReceiverSettingsWidget.cpp.o
+[121/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/RadioSetupDialog.cpp.o
+[122/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/RadioSetupDialog_Peripherals.cpp.o
+[123/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/NetworkDiagnosticsDialog.cpp.o
+[124/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MemoryCommands.cpp.o
+[125/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/Ax25HfPacketDecodeDialog.cpp.o
+[126/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/DStarModemPage.cpp.o
+[127/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MemoryBrowsePanel.cpp.o
+[128/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/SpotSettingsDialog.cpp.o
+[129/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/RxPlaybackTransmitter.cpp.o
+[130/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MemoryDialog.cpp.o
+[131/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/WaveformsDialog.cpp.o
+[132/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/AetherPDMeasurementSpectrum.cpp.o
+[133/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/AetherPDDialog.cpp.o
+[134/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/AetherPDMeasurementDialog.cpp.o
+[135/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/TailnetShimDialog.cpp.o
+[136/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/WaveformEnvironmentDialog.cpp.o
+[137/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/WsprConfigureWindow.cpp.o
+[138/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/ProfileSwitcherApplet.cpp.o
+[139/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/DxClusterDialog.cpp.o
+[140/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/BandscopeDialog.cpp.o
+[141/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/ProfileManagerDialog.cpp.o
+[142/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/ProfileImportExportDialog.cpp.o
+[143/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/TxBandDialog.cpp.o
+[144/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/RxApplet.cpp.o
+[145/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/TxApplet.cpp.o
+[146/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/AtuPreTuneDialog.cpp.o
+[147/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/WfmApplet.cpp.o
+[148/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/DaxApplet.cpp.o
+[149/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/TciApplet.cpp.o
+[150/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/DaxIqApplet.cpp.o
+[151/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/SupportDialog.cpp.o
+[152/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/SliceTroubleshootingDialog.cpp.o
+[153/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/RadioHealthDialog.cpp.o
+[154/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MultiFlexDialog.cpp.o
+[155/160] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDMeasurementSpectrum.cpp.o
+[156/160] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/CopyAssistController.cpp.o
+[157/160] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDMeasurementDialog.cpp.o
+[158/160] Linking CXX executable aetherpd_dialog_test
+[159/160] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory

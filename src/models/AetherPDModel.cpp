@@ -70,6 +70,7 @@ void AetherPDModel::resetSession()
     m_token.clear();
     m_address.clear();
     m_identity.reset();
+    m_expectedIq.reset(); m_observedIq.reset(); m_bindingRejected = false;
     m_current = {};
     m_client.cancelPending();
 }
@@ -162,7 +163,8 @@ std::function<bool()> AetherPDModel::measurementFence()
     return current;
 }
 
-bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32> toneSpacingHz)
+bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32> toneSpacingHz,
+                            std::optional<aetherpd::IQSelection> selection)
 {
     using aetherpd::Operation;
     using Failure = AetherPDClient::Failure;
@@ -184,6 +186,10 @@ bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32
             emit operationFailed(operation, Failure::Busy);
             return false;
         }
+    }
+    if (selection && (operation != Operation::Start || !selection->valid())) {
+        emit operationFailed(operation, Failure::InvalidRequest);
+        return false;
     }
     const std::optional<aetherpd::Status> observed = status();
     if (toneSpacingHz && (!observed || !observed->measurementToneControl || !observed->measurementToneConfig)) {
@@ -216,6 +222,12 @@ bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32
         emit operationFailed(operation, Failure::InvalidRequest);
         return false;
     }
+    std::optional<aetherpd::StartIdentity> startIdentity;
+    if (operation == Operation::Start) {
+        startIdentity = m_identity;
+        startIdentity->iq = selection;
+        m_expectedIq = selection; m_observedIq.reset(); m_bindingRejected = false;
+    }
     m_pending = operation;
     m_failure.reset();
     if (operation != Operation::Status) {
@@ -224,7 +236,7 @@ bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32
     }
     const QPointer<AetherPDModel> guard(this);
     const bool submitted = m_client.submit(operation, m_token,
-        operation == Operation::Start ? m_identity : std::nullopt, toneSpacingHz);
+        startIdentity, toneSpacingHz);
     if (guard) {
         emit changed();
     }
@@ -240,9 +252,21 @@ void AetherPDModel::onStatus(const aetherpd::Status& status)
     if (!m_active || m_pending != aetherpd::Operation::Status) {
         return;
     }
-    if (status.feedbackBinding && m_identity && status.feedbackBinding->guiHandle != m_identity->guiHandle) {
-        onFailure(aetherpd::Operation::Status, AetherPDClient::Failure::InvalidReply);
-        return;
+    if (status.available) {
+        const std::optional<aetherpd::IQSelection> observed = status.feedbackBinding
+            ? std::optional<aetherpd::IQSelection>(aetherpd::IQSelection{status.feedbackBinding->channel, status.feedbackBinding->pan}) : std::nullopt;
+        if ((m_expectedIq && observed != m_expectedIq) || (m_observedIq && observed != m_observedIq)
+            || (status.feedbackBinding && m_identity && status.feedbackBinding->guiHandle != m_identity->guiHandle)
+            || (m_bindingRejected && (!status.feedbackBinding || status.feedbackBinding->valid))) {
+            m_bindingRejected = true;
+            onFailure(aetherpd::Operation::Status, AetherPDClient::Failure::InvalidReply);
+            return;
+        }
+        if (observed) { m_observedIq = observed; }
+        if (status.feedbackBinding && status.feedbackBinding->failed) { m_bindingRejected = true; }
+    } else if (status.state == aetherpd::State::Stopped || status.state == aetherpd::State::StoppedReceiveUnconfirmed
+               || status.state == aetherpd::State::CleanupUnconfirmed) {
+        m_expectedIq.reset(); m_observedIq.reset(); m_bindingRejected = false;
     }
     m_pending.reset();
     m_failure.reset();

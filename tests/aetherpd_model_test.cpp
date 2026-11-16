@@ -154,6 +154,37 @@ int main(int argc, char** argv)
         if (!check(!measurement.lastAcknowledgment() && measurement.pendingOperation() == Operation::CancelCalibration,
             "late measurement receipt overrode cancellation")) { return 1; }
     }
+    for (const quint32 channel : {1U, 2U, 3U, 4U}) {
+        Network controls;
+        AetherPDModel owner(controls);
+        const StartIdentity identity{QStringLiteral("0D3EA0E8-B052-4AC6-9D32-D96918634469"), 0x0321b4de};
+        owner.setSession(address, token, [] { return true; }, identity);
+        controls.last->complete(503, "{}");
+        const IQSelection selected{channel, 0x40000001};
+        if (!check(owner.request(Operation::Start, std::nullopt, selected)
+            && controls.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/start"),
+            "model did not submit selected startup")) { return 1; }
+        const QJsonObject request = QJsonDocument::fromJson(controls.sent.back().body).object();
+        if (!check(request.value("gui_handle").toInteger() == identity.guiHandle
+            && request.value("iq_channel").toInteger() == channel && request.value("feedback_pan").toInteger() == selected.pan,
+            "selected startup lost original identity")) { return 1; }
+        controls.last->complete(202, R"({"state":"start_requested"})");
+        controls.last->complete(200, idle);
+        if (!check(!owner.status(), "selected session silently accepted absent binding")) { return 1; }
+        QJsonObject verified = QJsonDocument::fromJson(idle).object();
+        verified["feedback_binding"] = QJsonObject{{"transport", "local_dax_iq"}, {"channel", qint64(channel)},
+            {"pan", qint64(selected.pan)}, {"gui_handle", qint64(identity.guiHandle)}, {"valid", true}, {"failed", false}};
+        owner.refresh(); controls.last->complete(200, QJsonDocument(verified).toJson());
+        if (!check(!owner.status(), "late matching status revived a rejected binding")) { return 1; }
+        if (!check(owner.request(Operation::Stop), "rejected binding prevented explicit Stop")) { return 1; }
+        controls.last->complete(202, R"({"state":"stop_requested"})");
+        controls.last->complete(200, R"({"available":false,"state":"stopped"})");
+        if (!check(owner.request(Operation::Start, std::nullopt, selected), "explicit selected restart refused")) { return 1; }
+        controls.last->complete(202, R"({"state":"start_requested"})");
+        controls.last->complete(200, QJsonDocument(verified).toJson());
+        if (!check(owner.status() && owner.status()->feedbackBinding && owner.status()->feedbackBinding->channel == channel,
+            "matching explicit successor was not observed")) { return 1; }
+    }
     for (int change = 0; change < 5; ++change) {
         Network controls, captures;
         AetherPDModel owner(controls);
@@ -204,6 +235,7 @@ int main(int argc, char** argv)
                 && !owner.request(Operation::EnableCorrection) && controls.sent.size() == before,
                 "invalid IQ binding admitted source or correction")) { return 1; }
         }
+        owner.refresh(); controls.last->complete(200, R"({"available":false,"state":"stopped"})");
         owner.refresh(); controls.last->complete(200, QJsonDocument(supported).toJson());
         AetherSDR::txlin::AetherPDCaptureSource source(captures);
         const std::function<bool()> fence = owner.bindCaptureSource(source);

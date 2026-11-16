@@ -221,8 +221,11 @@ session has a sealed pan. `feedback_binding_pending` and
 `feedback_binding_failed` distinguish readback still pending from a latched
 binding loss. The binding identity cannot change during a session; stop and
 explicitly start again after repairing the pan assignment. Desktop status
-parsing and disabled-control reasons support these fields, while the desktop
-start button still uses channel1 discovery until the selection UI is complete.
+parsing and disabled-control reasons support these fields. The desktop picker
+lists only the original GUI's assigned IQ pans and uses v2 for every operator
+Start. Selecting a pan sends no command; channel/owner changes clear the draft.
+Desktop source/capture preparation pins observed identity and refuses metadata
+downgrade or revival after failure until explicit session retirement/restart.
 
 The ordinary shim connects only to `/run/aetherpd/start.sock`. A protected
 socket-activated `pd-start-session` admits only UID78666/GID20 peers executing

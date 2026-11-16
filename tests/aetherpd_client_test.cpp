@@ -22,6 +22,18 @@ int main(int argc, char** argv)
                    "first-install token preserved exactly")) { return 1; }
     }
     {
+        Network selectedNetwork;
+        AetherPDClient sender(selectedNetwork);
+        sender.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));
+        const StartIdentity identity{QStringLiteral("0D3EA0E8-B052-4AC6-9D32-D96918634469"),
+            0x0321b4de, IQSelection{3, 0x40000001}};
+        ok &= check(sender.submit(Operation::Start, token, identity)
+            && selectedNetwork.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/start")
+            && selectedNetwork.sent.back().body == *startBody(identity), "selected request changed or used legacy endpoint");
+        selectedNetwork.last->complete(404, "{}");
+        ok &= check(selectedNetwork.sent.size() == 1 && !sender.busy(), "unsupported selection retried legacy start");
+    }
+    {
         Network configured;
         AetherPDClient sender(configured);
         sender.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));

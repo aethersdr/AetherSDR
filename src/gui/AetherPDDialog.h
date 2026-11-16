@@ -5,8 +5,10 @@
 
 #include <QPointer>
 #include <functional>
+#include <optional>
 
 class QLabel;
+class QComboBox;
 class QPushButton;
 class QPlainTextEdit;
 class QTimer;
@@ -29,6 +31,9 @@ public slots:
 private:
     void refresh();
     void render();
+    void watchPan(PanadapterModel* pan);
+    void renderIqChoices();
+    std::optional<aetherpd::IQSelection> iqSelection() const;
     void renderInstallation();
     void prepareInstallation();
     void prepareFirstInstallation();
@@ -60,6 +65,8 @@ private:
     QPushButton* m_installApprove{nullptr};
     QPushButton* m_installCancel{nullptr};
     QTimer* m_installRefresh{nullptr};
+    QComboBox* m_iqChoice{nullptr};
+    QLabel* m_iqObserved{nullptr};
     QLabel* m_state{nullptr};
     QLabel* m_detail{nullptr};
     QLabel* m_receipt{nullptr};

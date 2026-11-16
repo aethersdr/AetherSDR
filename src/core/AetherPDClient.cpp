@@ -104,7 +104,9 @@ bool AetherPDClient::submit(aetherpd::Operation operation, const QString& adminT
                             std::optional<quint32> toneSpacingHz)
 {
     const std::optional<aetherpd::Request> descriptor = toneSpacingHz
-        ? std::optional<aetherpd::Request>(aetherpd::measurementToneRequest()) : aetherpd::request(operation);
+        ? std::optional<aetherpd::Request>(aetherpd::measurementToneRequest())
+        : operation == aetherpd::Operation::Start && identity && identity->iq
+            ? std::optional<aetherpd::Request>(aetherpd::selectedStartRequest()) : aetherpd::request(operation);
     const std::optional<QByteArray> body = operation == aetherpd::Operation::Start
         ? (identity ? aetherpd::startBody(*identity) : std::nullopt)
         : (identity ? std::nullopt : toneSpacingHz ? aetherpd::measurementToneBody(*toneSpacingHz)

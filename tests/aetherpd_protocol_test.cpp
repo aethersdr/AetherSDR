@@ -261,6 +261,21 @@ int main(int argc, char** argv)
         "start body must carry exactly the UUID and unsigned numeric handle");
     check(startBody({identity.guiClientId, 0xffffffffU}).has_value(), "uint32 maximum handle lost precision");
     check(!startBody({identity.guiClientId, 0}), "zero handle admitted");
+    for (const quint32 channel : {1U, 2U, 3U, 4U}) {
+        StartIdentity selected = identity; selected.iq = IQSelection{channel, 0xffffffffU};
+        const std::optional<QByteArray> body = startBody(selected);
+        check(body.has_value(), "selected start refused");
+        const QJsonObject fields = QJsonDocument::fromJson(*body).object();
+        check(fields.size() == 4 && fields.value("iq_channel").toInteger() == channel
+            && fields.value("feedback_pan").toInteger() == 0xffffffffU, "selected start changed channel or pan precision");
+    }
+    for (const IQSelection invalid : {IQSelection{0, 1}, IQSelection{5, 1}, IQSelection{1, 0}}) {
+        StartIdentity selected = identity; selected.iq = invalid;
+        check(!startBody(selected), "invalid explicit selection fell back to legacy");
+    }
+    check(selectedStartRequest().path == QStringLiteral("/v2/aetherpd/start")
+        && selectedStartRequest().timeoutMs == 22000, "selected startup version/deadline wrong");
+
     for (const QString& bad : {QString{}, QStringLiteral("owned-gui"),
              QStringLiteral("{0D3EA0E8-B052-4AC6-9D32-D96918634469}"),
              QStringLiteral("0D3EA0E8/B052-4AC6-9D32-D96918634469"),

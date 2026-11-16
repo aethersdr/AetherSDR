@@ -9,6 +9,7 @@
 #include "gui/AetherPDMeasurementExportDialog.h"
 #include <QBuffer>
 #include <QComboBox>
+#include <QAbstractItemModel>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QTest>
@@ -220,12 +221,51 @@ int main(int argc, char** argv)
     loaded(token);
     ok &= check(network.sent.size() == 1, "duplicate credential callback cannot reattach");
     network.last->complete(503, "{}");
-    ok &= check(button(*dialog, "pdStart")->isEnabled()
-        && !button(*dialog, "pdArm")->isEnabled(), "explicit Start available while status is unknown; arm refused");
+    auto* iqChoice = dialog->findChild<QComboBox*>(QStringLiteral("pdIqSelection"));
+    ok &= check(iqChoice && !button(*dialog, "pdStart")->isEnabled() && !iqChoice->isHidden(),
+        "Start needs an explicit owned IQ selection");
+    if (!iqChoice) { return 1; }
+    Access::pan(radio, 0x40000002, 8, 2);
+    Access::pan(radio, 0x40000003, 7, 0);
+    PanadapterModel* feedback = Access::pan(radio, 0x40000001, 7, 1);
+    ok &= check(iqChoice->count() == 2 && iqChoice->currentIndex() == 0,
+        "foreign and unassigned pans are excluded; no automatic selection");
+    const size_t beforeChoice = network.sent.size();
+    iqChoice->setCurrentIndex(1);
+    ok &= check(button(*dialog, "pdStart")->isEnabled() && !button(*dialog, "pdArm")->isEnabled()
+        && network.sent.size() == beforeChoice, "choosing feedback sends no command");
+    int iqResets = 0;
+    const auto resetConnection = QObject::connect(iqChoice->model(), &QAbstractItemModel::modelReset,
+        iqChoice, [&iqResets] { ++iqResets; });
+    feedback->setCenterBandwidth(7.151, 0.2);
+    ok &= check(iqResets == 0 && iqChoice->currentIndex() == 1
+        && iqChoice->currentText().contains(QStringLiteral("7.151000"))
+        && network.sent.size() == beforeChoice, "readback refresh preserves the selected IQ entry without resetting its model");
+    QObject::disconnect(resetConnection);
+    feedback->applyStateExtension({{QStringLiteral("daxiq_channel"), 3}});
+    ok &= check(iqChoice->currentIndex() == 0 && !button(*dialog, "pdStart")->isEnabled(),
+        "channel reassignment silently adopted a new pair");
+    iqChoice->setCurrentIndex(1);
+    feedback->setClientHandle(QStringLiteral("0x00000008"));
+    ok &= check(iqChoice->count() == 1 && !button(*dialog, "pdStart")->isEnabled()
+        && !radio.requestAetherPD(radio.controlSession(), Operation::Start, std::nullopt, IQSelection{3, 0x40000001}),
+        "foreign owner admitted selected Start");
+    feedback->setClientHandle(QStringLiteral("0x00000007"));
+    iqChoice->setCurrentIndex(1);
+    ok &= check(!radio.requestAetherPD(radio.controlSession(), Operation::Start, std::nullopt, IQSelection{2, 0x40000001})
+        && !radio.requestAetherPD({}, Operation::Start, std::nullopt, IQSelection{3, 0x40000001})
+        && network.sent.size() == beforeChoice, "wrong channel or stale session reached startup");
+    const QString iqScreenshot = qEnvironmentVariable("AETHER_PD_IQ_SCREENSHOT");
+    if (!iqScreenshot.isEmpty()) {
+        dialog->show(); dialog->resize(720, dialog->sizeHint().height()); QCoreApplication::processEvents();
+        ok &= check(dialog->grab().save(iqScreenshot), "IQ picker preview saved");
+    }
     button(*dialog, "pdStart")->click();
     Reply* start = network.last;
-    ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/start")
-        && !button(*dialog, "pdStart")->isEnabled() && button(*dialog, "pdStop")->isEnabled(),
+    ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/start")
+        && QJsonDocument::fromJson(network.sent.back().body).object().value("iq_channel").toInt() == 3
+        && QJsonDocument::fromJson(network.sent.back().body).object().value("feedback_pan").toInteger() == 0x40000001
+        && !iqChoice->isEnabled() && !button(*dialog, "pdStart")->isEnabled() && button(*dialog, "pdStop")->isEnabled(),
         "Start is explicit and pending startup remains stoppable");
     button(*dialog, "pdStop")->click();
     ok &= check(start->aborted && network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/stop"),
@@ -435,6 +475,7 @@ int main(int argc, char** argv)
                 && network.sent.size() == before && label("pdState").contains(QStringLiteral("DAX IQ binding")),
                 "pending or failed IQ binding did not disable source with an accessible reason");
         }
+        button(*dialog, "pdRefresh")->click(); network.last->complete(200, R"({"available":false,"state":"stopped"})");
         button(*dialog, "pdRefresh")->click(); network.last->complete(200, QJsonDocument(configurable).toJson());
         ok &= check(toneChoice->isEnabled(), "configured source enables tone selection");
         const size_t beforeEditing = network.sent.size();
@@ -624,11 +665,15 @@ int main(int argc, char** argv)
     dialog = std::make_unique<AetherPDDialog>(&radio, loader);
     QCoreApplication::processEvents();
     network.last->complete(503, "{}");
+    Access::pan(radio, 0x40000004, 8, 1);
+    auto* successorChoice = dialog->findChild<QComboBox*>(QStringLiteral("pdIqSelection"));
+    successorChoice->setCurrentIndex(successorChoice->findData(QVariant::fromValue((quint64(1) << 32) | 0x40000004)));
+    ok &= check(button(*dialog, "pdStart")->isEnabled(), "successor has explicitly selected owned feedback before lifetime test");
     QMetaObject::Connection destroyOnStart = QObject::connect(&radio.aetherPDModel(), &AetherPDModel::changed,
         &app, [&] { dialog.reset(); });
     button(*dialog, "pdStart")->click();
     QObject::disconnect(destroyOnStart);
-    ok &= check(!dialog && network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/start"),
+    ok &= check(!dialog && network.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/start"),
                 "request handler survives synchronous panel deletion");
     Access::retire(radio);
     std::cout << (ok ? "PASS" : "FAIL") << ": AetherPD explicit controls and credential/window lifetime\n";

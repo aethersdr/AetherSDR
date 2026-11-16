@@ -19,9 +19,17 @@ enum class SourcePurpose { Calibration, Measurement };
 enum class CalibrationState { Unavailable, Idle, Completed, Canceled, Expired, Armed, Running };
 enum class Acknowledgment { MeasurementArmAccepted, ArmAccepted, CancelAccepted, StopRequested, ReceiveRestored, StartRequested, CorrectionEnabled, CorrectionBypassed };
 
+struct IQSelection {
+    quint32 channel{0};
+    quint32 pan{0};
+    bool valid() const { return channel >= 1 && channel <= 4 && pan != 0; }
+    bool operator==(const IQSelection&) const = default;
+};
+
 struct StartIdentity {
     QString guiClientId;
     quint32 guiHandle{0};
+    std::optional<IQSelection> iq{};
 };
 
 struct Faults {
@@ -162,11 +170,12 @@ std::optional<QByteArray> installationAttempt(const QByteArray& plan, const QByt
 std::optional<InstallationObservation> parseInstallationObservation(const QByteArray& json);
 InstallationMatch matchInstallation(const InstallationPlan& plan, const InstallationObservation& observed);
 
-// Start carries only the current GUI identity. Configured measurement carries
+// Start carries the current GUI identity and optional exact IQ selection. Configured measurement carries
 // only a bounded spacing; neither request grants transmitter authority.
 // Acknowledgments never establish observed registration or correction state.
 std::optional<Request> request(Operation operation);
 std::optional<QByteArray> startBody(const StartIdentity& identity);
+Request selectedStartRequest();
 std::optional<QByteArray> measurementToneBody(quint32 spacingHz);
 Request measurementToneRequest();
 std::optional<Status> parseStatus(const QByteArray& json);

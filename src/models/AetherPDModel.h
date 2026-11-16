@@ -26,7 +26,8 @@ public:
     void clearSession();
     void reconcileSession();
     bool refresh();
-    bool request(aetherpd::Operation operation, std::optional<quint32> toneSpacingHz = std::nullopt);
+    bool request(aetherpd::Operation operation, std::optional<quint32> toneSpacingHz = std::nullopt,
+                 std::optional<aetherpd::IQSelection> selection = std::nullopt);
     // Bind a capture source and return the SAME original-session fence for the
     // measurement controller. Empty means refused. Credentials stay inside
     // the model/source; this never starts capture or grants transmit authority.
@@ -62,6 +63,9 @@ private:
     QString m_token;
     QHostAddress m_address;
     std::optional<aetherpd::StartIdentity> m_identity;
+    std::optional<aetherpd::IQSelection> m_expectedIq;
+    std::optional<aetherpd::IQSelection> m_observedIq;
+    bool m_bindingRejected{false};
     std::function<bool()> m_current;
     quint64 m_generation{0};
     quint64 m_captureGeneration{0};

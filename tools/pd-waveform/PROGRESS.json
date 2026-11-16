@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T14:51:12.431144+00:00",
+  "updated_utc": "2026-11-16T15:11:19.673604+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Carry explicit channel/pan selection through desktop start controls and original-session request; add immutable binding to native capture snapshots, shim manifests, neutral capture frames and exports. Then complete authenticated packages and remaining live/full-goal gates.",
+  "next_action": "Carry immutable native feedback binding into capture snapshots, strict shim manifests, neutral frames and saved reports. Then rebuild authenticated packages and resume exact-candidate first-install/reboot/IQ and remaining production-plan qualification when radio access returns.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Public selected-start endpoint and native observed-binding status qualified through Go and desktop parsing. Desktop invalidates prepared captures on binding loss/change. Operator selection and snapshot/export provenance are next; radio access remains unresolved.",
+  "current_focus": "Desktop explicit IQ channel/pan Start, session ownership and observed-binding pinning qualified offline. Snapshot/export binding provenance is next. Radio remains unreachable; no new live installation or RF claim.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2908,7 +2908,7 @@
     "installed_runtime_source": "e0563d1e285d36bba21da3f791364dd27642e26a",
     "installed_state": "No successful readiness or new boot identity observed after the authorized reboot; latest runtime and desktop changes are not live-qualified.",
     "latest_read_only_network_probe": {
-      "utc": "2026-11-16T14:29:55.695738+00:00",
+      "utc": "2026-11-16T15:06:31.559177+00:00",
       "address": "192.168.50.100",
       "radio_mutations": false,
       "tcp_ports": {
@@ -2964,7 +2964,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "runtime_source/desktop_source identify earlier packaged checkpoints. Later tone, pan_binding, iq_selection_native and iq_selection_shim reports identify component changes; no updated complete runtime package is qualified.",
+    "source_provenance_note": "runtime_source/desktop_source identify earlier packaged checkpoints. Later tone, pan-binding and IQ selection reports identify component-qualified changes; no updated complete runtime package is qualified.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3003,6 +3003,11 @@
       "public_selected_start": true,
       "desktop_selected_start": false,
       "capture_binding_metadata": false,
+      "installed": false
+    },
+    "iq_selection_desktop": {
+      "report": "IQ-SELECTION-DESKTOP-QUALIFICATION.json",
+      "status": "selected_desktop_start_component_qualified",
       "installed": false
     }
   },

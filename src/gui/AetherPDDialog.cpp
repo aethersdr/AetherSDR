@@ -6,6 +6,12 @@
 #include "core/TailnetShimTokenStore.h"
 
 #include <QAccessible>
+#include <QComboBox>
+#include <QSignalBlocker>
+#include <QStringList>
+#include <QList>
+#include <QVariant>
+#include <algorithm>
 #include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -52,9 +58,9 @@ void setText(QLabel* label, const QString& text)
         QAccessible::updateAccessibility(&event);
     }
 }
-void enable(QPushButton* button, bool allowed, const QString& reason)
+void enable(QWidget* button, bool allowed, const QString& reason)
 {
-    const QPointer<QPushButton> alive(button);
+    const QPointer<QWidget> alive(button);
     button->setEnabled(allowed);
     if (!alive) { return; }
     button->setToolTip(allowed ? QString{} : reason);
@@ -101,6 +107,17 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     m_detail = label("pdDetail");
     m_receipt = label("pdReceipt");
     m_message = label("pdMessage");
+    auto* iqTitle = new QLabel(tr("Feedback DAX IQ"), bodyWidget());
+    m_iqChoice = new QComboBox(bodyWidget());
+    m_iqChoice->setObjectName(QStringLiteral("pdIqSelection"));
+    m_iqChoice->setAccessibleName(tr("Feedback DAX IQ pan and channel"));
+    m_iqChoice->setMinimumContentsLength(28);
+    m_iqChoice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    iqTitle->setBuddy(m_iqChoice);
+    layout->addWidget(iqTitle); layout->addWidget(m_iqChoice);
+    m_iqObserved = label("pdIqObserved");
+    connect(m_iqChoice, &QComboBox::currentIndexChanged, this, &AetherPDDialog::render);
+
     auto* controls = new QWidget(bodyWidget());
     auto* buttons = new QGridLayout(controls);
     buttons->setContentsMargins(0, 0, 0, 0);
@@ -222,7 +239,7 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
             "QLabel { color: {{color.canon.inkSoft}}; background: transparent; }"
             "QLabel#pdState { color: {{color.canon.ink}}; font-weight: bold; font-size: 16px; }"
             "QLabel#pdMessage { color: {{color.accent.warning}}; }"
-            "QPlainTextEdit { color: {{color.canon.inkSoft}}; background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}}; }"
+            "QPlainTextEdit,QComboBox { color: {{color.canon.inkSoft}}; background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}}; }"
             "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}};"
             " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 6px 12px; }"
             "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }"
@@ -246,6 +263,9 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     connect(m_stop, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::Stop); });
     connect(m_restore, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::RestoreReceive); });
     if (radio) {
+        for (PanadapterModel* pan : radio->panadapters()) { watchPan(pan); }
+        connect(radio, &RadioModel::panadapterAdded, this, &AetherPDDialog::watchPan);
+        connect(radio, &RadioModel::panadapterRemoved, this, &AetherPDDialog::render);
         connect(&radio->aetherPDModel(), &AetherPDModel::changed, this, &AetherPDDialog::render);
         connect(radio, &RadioModel::connectionStateChanged, this, &AetherPDDialog::render);
         connect(radio, &QObject::destroyed, this, &AetherPDDialog::render);
@@ -258,6 +278,57 @@ bool AetherPDDialog::current() const
 {
     return !m_closed && m_radio && !m_serial.isEmpty()
         && m_radio->controlSessionCurrent(m_session) && m_radio->serial() == m_serial;
+}
+
+void AetherPDDialog::watchPan(PanadapterModel* pan)
+{
+    if (!pan) { return; }
+    connect(pan, &PanadapterModel::daxiqChannelChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
+    connect(pan, &PanadapterModel::geometryObservationChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
+    connect(pan, &PanadapterModel::infoChanged, this, &AetherPDDialog::render, Qt::UniqueConnection);
+    render();
+}
+
+std::optional<aetherpd::IQSelection> AetherPDDialog::iqSelection() const
+{
+    const quint64 value = m_iqChoice->currentData().toULongLong();
+    const aetherpd::IQSelection selection{quint32(value >> 32), quint32(value)};
+    return selection.valid() ? std::optional<aetherpd::IQSelection>(selection) : std::nullopt;
+}
+
+void AetherPDDialog::renderIqChoices()
+{
+    const quint64 previous = m_iqChoice->currentData().toULongLong();
+    QList<quint64> keys{0};
+    QStringList labels{tr("Select a feedback pan with IQ assigned…")};
+    QList<PanadapterModel*> pans = current() ? m_radio->panadapters() : QList<PanadapterModel*>{};
+    std::sort(pans.begin(), pans.end(), [](const PanadapterModel* left, const PanadapterModel* right) {
+        return left->panStreamId() < right->panStreamId();
+    });
+    for (const PanadapterModel* pan : pans) {
+        if (!pan->centerKnown() || !pan->ownerHandle() || pan->ownerHandle() != m_radio->ourClientHandle()
+            || pan->daxiqChannel() < 1 || pan->daxiqChannel() > 4 || !pan->panStreamId()) { continue; }
+        keys.append((quint64(pan->daxiqChannel()) << 32) | pan->panStreamId());
+        labels.append(tr("IQ Ch %1 — %2 MHz — pan %3").arg(pan->daxiqChannel())
+            .arg(pan->centerMhz(), 0, 'f', 6).arg(pan->panId()));
+    }
+    bool unchanged = m_iqChoice->count() == keys.size();
+    for (int i = 0; unchanged && i < keys.size(); ++i) {
+        unchanged = m_iqChoice->itemData(i).toULongLong() == keys[i];
+    }
+    const QSignalBlocker blocker(m_iqChoice);
+    if (unchanged) {
+        for (int i = 0; i < labels.size(); ++i) {
+            if (m_iqChoice->itemText(i) != labels[i]) { m_iqChoice->setItemText(i, labels[i]); }
+        }
+        return;
+    }
+    m_iqChoice->clear();
+    for (int i = 0; i < keys.size(); ++i) {
+        m_iqChoice->addItem(labels[i], QVariant::fromValue(keys[i]));
+    }
+    const int index = m_iqChoice->findData(QVariant::fromValue(previous));
+    m_iqChoice->setCurrentIndex(index < 0 ? 0 : index);
 }
 
 void AetherPDDialog::refresh()
@@ -314,7 +385,9 @@ void AetherPDDialog::request(aetherpd::Operation operation)
     }
     m_notice.clear();
     const QPointer<AetherPDDialog> self(this);
-    const bool admitted = m_radio->requestAetherPD(m_session, operation);
+    const std::optional<aetherpd::IQSelection> selection = operation == aetherpd::Operation::Start ? iqSelection() : std::nullopt;
+    const bool admitted = (operation != aetherpd::Operation::Start || selection)
+        && m_radio->requestAetherPD(m_session, operation, std::nullopt, selection);
     if (!self) {
         return;
     }
@@ -326,6 +399,7 @@ void AetherPDDialog::request(aetherpd::Operation operation)
 
 void AetherPDDialog::render()
 {
+    renderIqChoices();
     const bool valid = current();
     const AetherPDModel* model = valid ? &m_radio->aetherPDModel() : nullptr;
     const bool active = model && model->active();
@@ -367,9 +441,25 @@ void AetherPDDialog::render()
     if (!alive) { return; }
     enable(m_refresh, valid && !m_loading && !pending, tr("Wait for the pending request, or reopen this window for the current connection."));
     if (!alive) { return; }
-    enable(m_start, active && !installing && (!pending || pending == Operation::Status) && (!status || !status->available),
+    const bool canSelect = active && !installing && (!pending || pending == Operation::Status) && (!status || !status->available);
+    enable(m_iqChoice, canSelect, tr("Stop the running session and finish pending work before choosing feedback. Only this GUI's assigned IQ pans are listed."));
+    if (!alive) { return; }
+    m_iqChoice->setAccessibleDescription(canSelect
+        ? tr("Choose an owned feedback pan. Assign its IQ channel in the pan's DAX panel first. This choice sends no radio commands.")
+        : m_iqChoice->toolTip());
+    if (!alive) { return; }
+    QString binding = tr("No confirmed native IQ binding. Choose a pan, then start AetherPD.");
+    if (status && status->feedbackBinding) {
+        const aetherpd::FeedbackBinding& observed = *status->feedbackBinding;
+        binding = tr("Service reports IQ Ch %1, pan 0x%2: %3.").arg(observed.channel)
+            .arg(observed.pan, 8, 16, QLatin1Char('0'))
+            .arg(observed.failed ? tr("binding failed") : observed.valid ? tr("binding confirmed") : tr("waiting for readback"));
+    }
+    setText(m_iqObserved, binding);
+    if (!alive) { return; }
+    enable(m_start, iqSelection().has_value() && active && !installing && (!pending || pending == Operation::Status) && (!status || !status->available),
         installing ? tr("Wait for the service update to finish before starting AetherPD.")
-            : tr("Authenticate this radio session and stop any running AetherPD session before starting."));
+            : tr("Select an owned pan with IQ Ch 1–4 assigned, authenticate this radio session, and stop any running AetherPD session before starting."));
     if (!alive) { return; }
     const bool arm = status && status->available && status->registered && !status->keyed
         && status->correctionEnabled && status->calibrationControl
