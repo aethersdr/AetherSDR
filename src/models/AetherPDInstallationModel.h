@@ -1,6 +1,7 @@
 #pragma once
 #include "core/AetherPDInstallationCoordinator.h"
 #include "core/AetherPDPackageDownload.h"
+#include "core/AetherPDInstallationJournal.h"
 #include <QFutureWatcher>
 #include <QHostAddress>
 #include <QObject>
@@ -25,14 +26,22 @@ public:
     using TokenWriter = std::function<void(const QString&, const QString&, const QString&, QObject*, std::function<void(bool)>)>;
     using Factory = std::function<std::unique_ptr<Coordinator>(RadioModel&)>;
     using DownloadFactory = std::function<std::unique_ptr<AetherPDPackageDownload>()>;
-    enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable, SavingCredential, PromotingCredential };
+    struct RecoveryServices {
+        std::function<bool(const QByteArray&, const QByteArray&, bool)> journal;
+        std::function<AetherPDInstallationJournal::Read(const QByteArray&)> read;
+        std::function<void(const QString&, const QString&, QObject*, std::function<void(const QString&)>)> load;
+        std::function<std::unique_ptr<AetherPDInstallationMonitor>()> monitor;
+    };
+    enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable, SavingCredential, PromotingCredential, LoadingRecoveryCredential, CheckingInstallation };
     Q_ENUM(State)
-    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed };
+    enum class Failure { None, SessionChanged, NoCredential, CredentialTimeout, StartRefused, DownloadFailed, PackageRejected, CredentialSaveFailed, JournalFailed };
     Q_ENUM(Failure)
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
-    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {});
+    AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {}, RecoveryServices recovery = {});
     bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
     bool prepareFirstPackage(const AetherPDFirstPackage& package, const QString& hostname, const RadioControlSession& session);
+    bool recoverFirstInstallation(const QByteArray& publisherKey, const RadioControlSession& session);
+    bool recovering() const { return m_recovering; }
     QString selectedDevelopmentVersion() const;
     bool prepareSelectedDevelopment(const RadioControlSession& session);
     ~AetherPDInstallationModel() override;
@@ -72,6 +81,7 @@ private:
     void credential(const QString& token, quint64 generation);
     void completed(Coordinator::Outcome result, bool cleanup);
     void promoted(bool persisted, quint64 generation);
+    void recoveryCredential(const QString& token, quint64 generation);
     QPointer<RadioModel> m_radio;
     RadioControlSession m_session{};
     QHostAddress m_address;
@@ -80,6 +90,9 @@ private:
     QString m_nativeName;
     TokenLoader m_load;
     TokenWriter m_write;
+    RecoveryServices m_recovery;
+    std::unique_ptr<AetherPDInstallationMonitor> m_recoveryMonitor;
+    bool m_recovering{false};
     QString m_firstToken;
     Factory m_factory;
     DownloadFactory m_downloadFactory;

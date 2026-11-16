@@ -1251,6 +1251,33 @@ bool AppSettings::setRadioFeature(const QString& family, const QString& radioId,
     return true;
 }
 
+bool AppSettings::compareAndSetRadioFeature(const QString& family, const QString& radioId,
+                                           const QString& feature, int expectedSchema,
+                                           const std::optional<QJsonObject>& expected,
+                                           int schemaVersion, const QJsonObject& doc)
+{
+    if (family.isEmpty() || feature.isEmpty()) { return false; }
+    QMutexLocker ioLocker(&m_saveMutex);
+    {
+        QReadLocker locker(&m_lock);
+        if (m_loadState != LoadState::ReadyToSave) { return false; }
+    }
+    if (!m_db || !m_db->isOpen() || !m_db->begin()) { return false; }
+    int version = 0;
+    QString value;
+    bool failed = false;
+    const bool present = m_db->readRadioFeature(family, radioId, feature, version, value, &failed);
+    const QJsonDocument parsed = QJsonDocument::fromJson(value.toUtf8());
+    const bool matches = !failed && (expected ? present && version == expectedSchema
+        && parsed.isObject() && parsed.object() == *expected : !present);
+    if (!matches || !m_db->upsertRadioFeature(family, radioId, feature, schemaVersion,
+            QString::fromUtf8(QJsonDocument(doc).toJson(QJsonDocument::Compact))) || !m_db->commit()) {
+        m_db->rollback();
+        return false;
+    }
+    return true;
+}
+
 bool AppSettings::removeRadioFeature(const QString& family,
                                      const QString& radioId,
                                      const QString& feature)

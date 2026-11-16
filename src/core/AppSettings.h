@@ -10,6 +10,7 @@
 #include <QStringList>
 #include <QVariant>
 #include <memory>
+#include <optional>
 
 class QLockFile;
 
@@ -70,6 +71,12 @@ public:
     bool setRadioFeature(const QString& family, const QString& radioId,
                          const QString& feature, int schemaVersion,
                          const QJsonObject& doc);
+    // Compare and replace inside one write transaction. nullopt expects a
+    // missing row; an object expects that exact document and schema.
+    bool compareAndSetRadioFeature(const QString& family, const QString& radioId,
+                                  const QString& feature, int expectedSchema,
+                                  const std::optional<QJsonObject>& expected,
+                                  int schemaVersion, const QJsonObject& doc);
     bool removeRadioFeature(const QString& family, const QString& radioId,
                             const QString& feature);
 

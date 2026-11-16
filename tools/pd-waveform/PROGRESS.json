@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T05:48:23.955964+00:00",
+  "updated_utc": "2026-11-16T06:02:15.195402+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Add durable public attempt journal and restart recovery; connect first-package selection to explicit desktop approval. Then qualify the C++ first-install flow live, preserving existing identity backups and all P1-P10 gates.",
+  "next_action": "Connect independently pinned first-package selection and the saved-attempt check to the desktop UI. Qualify real keychain storage/restart, then the full C++ fresh-install path. Preserve identity backups and all P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1232,5 +1232,49 @@
       "registered-tests.log": "6970553026b17abac5f787953603f2322c6e89e95dc7d46864b2ed45f67b4161"
     },
     "evidence": "first-install-credential-model/validation.json under evidence_root"
+  },
+  "desktop_first_install_recovery": {
+    "status": "journal_and_readonly_recovery_components_verified",
+    "production_ready": false,
+    "registered_suites_passed": 3,
+    "scoped_sanitizers": {
+      "coordinator_cases_passed": 32,
+      "journal_cases_passed": 5,
+      "scope": "Installation model, journal, AppSettings and test translation units instrumented; remainder of engine uninstrumented"
+    },
+    "mutation": {
+      "removed": "atomic expected-record comparison",
+      "detected": true
+    },
+    "verified": [
+      "Journal round trip through settings reload",
+      "Pending attempt cannot be replaced",
+      "Wrong publisher key, target, malformed record and future schema refused",
+      "A second database connection invalidates stale expected-record writes",
+      "Journal failure blocks native upload after credential save",
+      "Recovery uses only GET and promotes only exact matching commit",
+      "Cancellation and session loss before and after GET do not upload, clean up or promote",
+      "Recovery never claims temporary-installer cleanup"
+    ],
+    "remaining": [
+      "Connect independently pinned first-package selection and recovery to ordinary UI",
+      "Actual OS keychain and desktop process restart qualification",
+      "Live C++ first installation, reboot and IQ verification",
+      "Explicit resolution for uncertain or never-started pending attempts",
+      "All remaining P1-P10 RF, release and actual 6300 gates"
+    ],
+    "radio_changes": false,
+    "logs": {
+      "build.log": "b482588ea8b908b57cd49b60e00debb347cb1128cdb6f6a31a16038852aa626a",
+      "engine-boundary.log": "1a2e374487d97908d268e65976f4ec349514eebee857560bf8d2b7e27b48ca41",
+      "final-build.log": "f7f6810d9f767d4c8bdbdfdb5af0fbb13f037603cb1f1526c45de899f27463f8",
+      "registered-tests.log": "1599fe3e4c315b641dda678b8e184ad2ec095ca20dd684421958f9bbe1bc4f0a",
+      "sanitizer-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mutation-build.log": "bf097731145ff828774ab320fa3424cb4a9cf170ed261e13a4198d69c07c7e4e",
+      "coordinator-asan.log": "54f67aad0ea3b998ec1377acbba72f4f15fe05323f5621a425875d47d870653e",
+      "journal-asan.log": "6a6928fa3726a23c513da7d6a74b28dcd7624398e0ed828a348e5245e49b7081",
+      "mutation.log": "2c5e96781e665950ea4f26f559543c0af328b54c2e84fbb2d41946d113366cbb"
+    },
+    "evidence": "first-install-recovery/validation.json under evidence_root"
   }
 }

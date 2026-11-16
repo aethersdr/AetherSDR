@@ -57,7 +57,7 @@ struct Fixture {
                 job = result.get(); return result;
             }, nullptr, AetherPDInstallationModel::DownloadFactory{}, [this](const QString&, const QString&, const QString&, QObject*, auto done) {
                 ++writes; saved = std::move(done);
-            });
+            }, AetherPDInstallationModel::RecoveryServices{[](const QByteArray&, const QByteArray&, bool) { return true; }, {}, {}, {}});
         RadioSetupControlTestAccess::installationModel(radio, std::move(model));
         open();
     }

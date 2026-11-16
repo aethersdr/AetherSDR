@@ -444,6 +444,11 @@ void AetherPDDialog::renderInstallation()
         detail = preview ? tr("Development build — not qualified for production.\n") + detail
             : selection + tr("Choose Prepare update to verify the package and review its plan. Preparation does not change the radio.");
     }
+    if (model && model->recovering() && preview) {
+        detail = tr("Checking a saved first installation. This check only reads the radio's status; it does not upload, install or transmit.\n\n"
+            "Radio: %1\nFirmware: %2\nNew release (BLAKE2b-256): %3\nPublisher key (Ed25519): %4\nAttempt (BLAKE2b-256): %5")
+            .arg(preview->serial, preview->firmware, preview->candidateDigest, preview->candidateKey, preview->planDigest);
+    }
     QString status;
     switch (state) {
     case State::Idle: status = tr("No update prepared"); break;
@@ -456,6 +461,8 @@ void AetherPDDialog::renderInstallation()
     case State::LoadingCredential: status = tr("Loading the saved radio credential…"); break;
     case State::SavingCredential: status = tr("Saving the new credential in the system keychain before installation…"); break;
     case State::PromotingCredential: status = tr("Radio confirmed installation; saving its active credential…"); break;
+    case State::LoadingRecoveryCredential: status = tr("Loading the saved installation credential…"); break;
+    case State::CheckingInstallation: status = tr("Checking the radio for the saved installation…"); break;
     case State::Running:
         switch (model->phase()) {
         case Phase::Idle: case Phase::Requesting: status = tr("Requesting the temporary installer…"); break;
@@ -474,16 +481,19 @@ void AetherPDDialog::renderInstallation()
         switch (model->outcome().value_or(Outcome::Unconfirmed)) {
         case Outcome::Committed: status = tr("Radio confirmed the update."); break;
         case Outcome::RolledBack: status = tr("Radio confirmed rollback to the previous payload."); break;
-        case Outcome::Canceled: status = model->phase() == Phase::Idle
+        case Outcome::Canceled: status = model->recovering() ? tr("Installation observation canceled. The check requested no radio changes.") : model->phase() == Phase::Idle
             ? tr("Update canceled before installation started. No radio changes were requested.")
             : tr("Update canceled locally; an already-started update may still finish."); break;
         case Outcome::Unconfirmed: status = tr("Update outcome unconfirmed. Do not assume it succeeded or rolled back."); break;
         }
-        if (model->phase() != Phase::Idle) {
+        if (model->phase() != Phase::Idle || model->recovering()) {
             status += model->cleanupConfirmed() ? tr(" Temporary installer cleanup confirmed.") : tr(" Temporary installer cleanup is unconfirmed.");
         }
         if (model->failure() == Model::Failure::CredentialSaveFailed) {
             status += tr(" The active credential could not be saved. The attempt credential remains in the keychain; credential recovery is required.");
+        }
+        if (model->failure() == Model::Failure::JournalFailed) {
+            status += tr(" The local recovery record could not be updated; it remains unresolved.");
         }
         break;
     case State::Unavailable:
@@ -493,6 +503,7 @@ void AetherPDDialog::renderInstallation()
         case Model::Failure::NoCredential: status = tr("No saved Remote Access credential for this radio. Update credentials before preparing another attempt."); break;
         case Model::Failure::CredentialTimeout: status = tr("Credential operation timed out; no installation was started."); break;
         case Model::Failure::CredentialSaveFailed: status = tr("The new credential could not be saved persistently; no installation was started. Check the system keychain."); break;
+        case Model::Failure::JournalFailed: status = tr("The recovery record could not be saved, or an earlier installation is unresolved. No installation was started."); break;
         case Model::Failure::DownloadFailed: status = tr("Package download or verification failed; no installation was started."); break;
         case Model::Failure::PackageRejected: status = tr("Package preparation failed; no installation was started."); break;
         default: status = tr("Update could not start. Check the connection, transmit state and upload availability."); break;
@@ -501,7 +512,8 @@ void AetherPDDialog::renderInstallation()
     }
     const bool approve = model && state == State::AwaitingApproval && preview && !m_radio->isRadioTransmitting();
     const bool cancel = model && (state == State::Downloading || state == State::Preparing || state == State::AwaitingApproval
-        || state == State::LoadingCredential || state == State::SavingCredential || state == State::Running);
+        || state == State::LoadingCredential || state == State::SavingCredential || state == State::Running
+        || state == State::LoadingRecoveryCredential || state == State::CheckingInstallation);
     const QPointer<AetherPDDialog> alive(this);
     enable(m_installPrepare, model && !developmentVersion.isEmpty() && !model->active() && state != State::AwaitingApproval,
         tr("A development package compiled for this radio firmware and no pending update are required."));

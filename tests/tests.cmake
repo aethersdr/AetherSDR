@@ -4984,6 +4984,15 @@ target_link_libraries(aetherpd_installation_coordinator_test PRIVATE aethercore 
 add_test(NAME aetherpd_installation_coordinator_test COMMAND aetherpd_installation_coordinator_test)
 set_tests_properties(aetherpd_installation_coordinator_test PROPERTIES TIMEOUT 20)
 
+# Local settings journal only; no sockets or credential backend.
+add_executable(aetherpd_installation_journal_test tests/aetherpd_installation_journal_test.cpp)
+target_include_directories(aetherpd_installation_journal_test PRIVATE src tests)
+target_compile_definitions(aetherpd_installation_journal_test PRIVATE
+    AETHERPD_PACKAGE_TESTDATA="${CMAKE_SOURCE_DIR}/tools/pd-waveform/boot/testdata")
+target_link_libraries(aetherpd_installation_journal_test PRIVATE aethercore Qt6::Test)
+add_test(NAME aetherpd_installation_journal_test COMMAND aetherpd_installation_journal_test)
+set_tests_properties(aetherpd_installation_journal_test PROPERTIES TIMEOUT 20)
+
 add_executable(aetherpd_install_upload_test
     tests/aetherpd_install_upload_test.cpp
     src/core/AetherPDInstallUpload.cpp
@@ -11485,6 +11494,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    aetherpd_installation_journal_test
     aetherpd_installation_coordinator_test
     aetherpd_session_test
     aetherpd_dialog_test

@@ -4,6 +4,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -78,6 +79,13 @@ public:
         }
         return AppSettings::instance().removeRadioFeature(m_family, m_radioId,
                                                           name);
+    }
+    bool compareAndSetFeature(const QString& name, int expectedSchema,
+                              const std::optional<QJsonObject>& expected,
+                              int schemaVersion, const QJsonObject& doc) const
+    {
+        return isValid() && AppSettings::instance().compareAndSetRadioFeature(
+            m_family, m_radioId, name, expectedSchema, expected, schemaVersion, doc);
     }
 
 private:

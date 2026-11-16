@@ -622,8 +622,12 @@ the system keychain before the first upload. If that save fails or times out,
 installation does not start. An existing radio credential is retained until the
 radio confirms the exact new installation. If saving the active credential then
 fails, the window reports that failure separately from the confirmed radio
-installation; the attempt credential remains in the keychain. First-install
-package selection and recovery after application exit are still in development.
+installation; the attempt credential remains in the keychain. The approved public plan is saved locally before upload, alongside a separate
+keychain entry for the attempt. An unresolved record blocks another first
+installation. Recovery can check that exact plan using read-only radio status and
+restore the active credential only after confirmation. It does not repeat the
+installation or establish that temporary helpers were removed. First-install
+package selection and the recovery entry point are still in development.
 
 A confirmed update and confirmed cleanup are separate results. If cleanup is
 unconfirmed, the window says so even when the radio confirmed the new payload.

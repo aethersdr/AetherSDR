@@ -261,9 +261,32 @@ promotion states and describe first-install authority separately from upgrades.
 `first-install-credential-model` records three registered suites, two scoped
 ASan/UBSan/LSan suites, and a mutation that removes the durable-write gate and is
 detected. The tests inject keychain callbacks; they do not establish a working OS
-keychain on every supported desktop. The actual QtKeychain backend, durable
-public attempt journal, restart/recovery UI, package-selection entry point and
-live C++ first installation still require integration and qualification.
+keychain on every supported desktop. The actual QtKeychain backend, restart/recovery UI, package-selection entry point
+and live C++ first installation still require integration and qualification.
+
+## Public attempt journal and restart observation
+
+After durable token storage, first-install approval records the exact public plan
+and independently trusted publisher key in the radio-scoped `AetherPDInstallation`
+settings document (schema 1). Failure stops before upload. The document contains
+no bearer credential. Unknown schemas, malformed records and different pending
+attempts are refused. Compare-and-set runs the expected-record check and write
+inside one SQLite `BEGIN IMMEDIATE` transaction, preventing stale writers from
+overwriting another desktop process's record.
+
+`recoverFirstInstallation` requires a fresh current radio session and a publisher
+key supplied by the application's trusted catalogue. It never adopts the stored
+key as its trust source. The exact serial and firmware must match, and the token
+loaded from the attempt's keychain slot must hash to the approved plan. Recovery
+then starts only the existing authenticated GET monitor. There is no installer
+retry, upload, radio cleanup, rollback or RF command. Cancellation or session loss
+abandons observation without altering the pending journal.
+
+Exact committed observation permits active-credential promotion. Only a durable
+promotion updates the journal to `credentialSaved`; a failed journal update stays
+unresolved. Recovery cannot attest temporary-component cleanup and reports that
+separately. The UI entry point and authenticated first-package selection remain
+unwired; this is an engine capability, not a complete shipping recovery workflow.
 
 ## Remaining gates
 
