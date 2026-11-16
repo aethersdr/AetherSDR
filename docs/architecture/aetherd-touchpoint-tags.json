@@ -1703,6 +1703,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/Kpa500IndicatorState.h": {
+  "tag": "peripheral(elecraft)",
+  "note": "Pure KPA500 status-to-indicator mapping (label + ThemeManager token) for the main-window status bar; no radio-family transport. RFC #7092.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/Kpa500Protocol.h": {
   "tag": "peripheral(elecraft)",
   "note": "Frame parser, status snapshot and command builders for the KPA500 '^CMD;' text protocol \u2014 the codec half of core/Kpa500Connection.h. A standalone accessory's own transport with no radio-family awareness, same precedent as core/AcomProtocol.h. Authority: KPA500 Programmer's Reference Rev. A2.",
