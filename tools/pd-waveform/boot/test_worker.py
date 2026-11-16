@@ -126,6 +126,20 @@ class WorkerTest(unittest.TestCase):
   self.assertEqual(config['installation_id'],bytes(range(32)).hex());self.assertTrue(config['local_only'])
   self.assertFalse((self.store/'state/tsnet').exists())
   self.assertFalse(any(x.startswith(('stop:','retire:','restore:','recover:')) for x in self.events()))
+ def test_fresh_terminal_redelivery_only_cleans_without_reinitializing(self):
+  self.fresh();self.invoke('bootstrap');self.invoke();self.clean()
+  identity=(self.store/'state/provision.json').read_bytes();transaction=(self.store/'transaction').read_bytes()
+  before=self.events().count('activate:before');state=self.state()
+  self.invoke('bootstrap');self.clean()
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+  self.assertEqual((self.store/'transaction').read_bytes(),transaction)
+  self.assertEqual(self.events().count('activate:before'),before);self.assertEqual(self.state(),state)
+ def test_fresh_bootstrap_retry_after_early_extraction_preserves_plan(self):
+  self.fresh();self.invoke('bootstrap',fault='kill:stage:extracted',expected=137)
+  self.invoke('bootstrap');self.invoke();self.clean()
+  self.assertEqual((self.store/'migration-approved').read_bytes(),self.plan)
+  self.assertEqual(json.loads((self.store/'state/provision.json').read_text())['installation_id'],self.plan[244:276].hex())
+  self.assertEqual(self.state()['new_running'],1)
  def test_fresh_install_refuses_existing_predecessor(self):
   self.fresh();(self.fixture/'model').write_bytes(struct.pack('=5i',1,1,0,0,0))
   self.invoke('bootstrap',expected=3);self.assertFalse(self.store.exists())

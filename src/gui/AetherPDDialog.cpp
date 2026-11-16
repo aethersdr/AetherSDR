@@ -166,6 +166,11 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     firstControls->addWidget(m_installFirst);
     firstControls->addWidget(m_installCheck);
     layout->addLayout(firstControls);
+    m_installSaved = new QPushButton(tr("Prepare saved attempt"), bodyWidget());
+    m_installSaved->setObjectName(QStringLiteral("pdInstallSaved"));
+    m_installSaved->setAccessibleName(tr("Prepare saved AetherPD installation attempt"));
+    m_installSaved->setAutoDefault(false);
+    layout->addWidget(m_installSaved);
     m_installCleanup = new QPushButton(tr("Remove temporary installer packages"), bodyWidget());
     m_installCleanup->setObjectName(QStringLiteral("pdInstallCleanup"));
     m_installCleanup->setAccessibleName(tr("Remove temporary AetherPD installer packages"));
@@ -187,6 +192,7 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     connect(m_installPrepare, &QPushButton::clicked, this, &AetherPDDialog::prepareInstallation);
     connect(m_installFirst, &QPushButton::clicked, this, &AetherPDDialog::prepareFirstInstallation);
     connect(m_installCheck, &QPushButton::clicked, this, &AetherPDDialog::checkInstallation);
+    connect(m_installSaved, &QPushButton::clicked, this, &AetherPDDialog::prepareSavedInstallation);
     connect(m_installCleanup, &QPushButton::clicked, this, &AetherPDDialog::cleanupInstallation);
     connect(m_installApprove, &QPushButton::clicked, this, &AetherPDDialog::approveInstallation);
     connect(m_installCancel, &QPushButton::clicked, this, &AetherPDDialog::cancelInstallation);
@@ -408,6 +414,10 @@ void AetherPDDialog::checkInstallation()
 {
     if (current()) { m_radio->aetherPDInstallationModel().recoverSelectedFirstInstallation(m_session); }
 }
+void AetherPDDialog::prepareSavedInstallation()
+{
+    if (current()) { m_radio->aetherPDInstallationModel().prepareSelectedSavedFirstInstallation(m_session); }
+}
 void AetherPDDialog::cleanupInstallation()
 {
     if (current()) { m_radio->aetherPDInstallationModel().cleanupRecoveredInstallation(m_displayedPlan); }
@@ -496,6 +506,20 @@ void AetherPDDialog::renderInstallation()
         detail += tr("\n\nRemove temporary installer packages rechecks this exact commit, then removes only %1 and %2. "
             "It preserves the installed service, identity and fixed helpers.").arg(preview->nativeName, preview->carrierName);
     }
+    if (model && model->preparingSavedInstallation() && preview) {
+        detail = tr("Saved attempt — review before approving another delivery of this exact plan. "
+            "The saved keychain credential, identity and package names are reused. "
+            "The previous attempt may already be running; an unconfirmed status is not proof of absence. "
+            "An existing carrier prevents delivery. A failed terminal installation needs separate recovery.\n\n"
+            "On approval: re-upload the verified native requester and carrier for this plan. The signed worker temporarily uses host-root authority "
+            "to complete or reconcile only this matching transaction, then retires. Fixed pd-boot and boot/session service units "
+            "remain for reboot and IQ setup; the shim and AetherPD run without host-root authority. "
+            "No different identity or transmission is requested. A conflicting carrier is not removed to force a retry.\n\n")
+            + tr("Radio: %1\nFirmware: %2\nLocal hostname: %3\nRelease (BLAKE2b-256): %4\nPublisher key (Ed25519): %5\n"
+                 "Attempt (BLAKE2b-256): %6\nTemporary native package: %7\nTemporary carrier: %8\nCarrier archive (SHA-256): %9")
+                .arg(preview->serial, preview->firmware, preview->hostname, preview->candidateDigest,
+                     preview->candidateKey, preview->planDigest, preview->nativeName, preview->carrierName, preview->archiveSha256);
+    }
     QString status;
     switch (state) {
     case State::Idle: status = tr("No update prepared"); break;
@@ -504,6 +528,7 @@ void AetherPDDialog::renderInstallation()
     case State::Preparing: status = tr("Preparing the installation plan…"); break;
     case State::AwaitingApproval:
         status = m_radio->isRadioTransmitting() ? tr("Review the plan; approval is unavailable while transmitting.")
+            : model->preparingSavedInstallation() ? tr("Review the saved plan, then choose Approve saved attempt. No upload starts before approval.")
             : preview && preview->firstInstallation ? tr("Review the plan, then choose Approve first installation. Nothing is installed before approval.")
             : tr("Review the plan, then choose Approve update. Nothing is installed before approval."); break;
     case State::LoadingCredential: status = tr("Loading the saved radio credential…"); break;
@@ -574,13 +599,16 @@ void AetherPDDialog::renderInstallation()
     enable(m_installCheck, model && savedFirst && !model->active() && state != State::AwaitingApproval,
         tr("A saved installation for this radio and a matching trusted publisher are required."));
     if (!alive) { return; }
+    enable(m_installSaved, model && model->savedFirstPreparationAvailable(),
+        tr("A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first."));
+    if (!alive) { return; }
     enable(m_installCleanup, model && model->recoveredCleanupAvailable(),
         tr("Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."));
     if (!alive) { return; }
     enable(m_installApprove, approve, tr("A verified plan for this connection and an idle transmitter are required."));
     if (!alive) { return; }
-    m_installApprove->setText(preview && preview->firstInstallation ? tr("Approve first installation") : tr("Approve update"));
-    m_installApprove->setAccessibleName(preview && preview->firstInstallation ? tr("Approve AetherPD first installation") : tr("Approve AetherPD update"));
+    m_installApprove->setText(model && model->preparingSavedInstallation() ? tr("Approve saved attempt") : preview && preview->firstInstallation ? tr("Approve first installation") : tr("Approve update"));
+    m_installApprove->setAccessibleName(model && model->preparingSavedInstallation() ? tr("Approve saved AetherPD installation attempt") : preview && preview->firstInstallation ? tr("Approve AetherPD first installation") : tr("Approve AetherPD update"));
     enable(m_installCancel, cancel, tr("No pending update can be canceled in this connection."));
     if (!alive) { return; }
     setText(m_installState, status);

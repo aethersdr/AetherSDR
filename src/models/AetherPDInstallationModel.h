@@ -31,6 +31,7 @@ public:
         std::function<AetherPDInstallationJournal::Read(const QByteArray&)> read;
         std::function<void(const QString&, const QString&, QObject*, std::function<void(const QString&)>)> load;
         std::function<std::unique_ptr<AetherPDInstallationMonitor>()> monitor;
+        std::function<bool(const QByteArray&, const QByteArray&)> retainPending;
     };
     enum class State { Idle, Downloading, Preparing, AwaitingApproval, LoadingCredential, Running, Canceling, Finished, Unavailable, SavingCredential, PromotingCredential, LoadingRecoveryCredential, CheckingInstallation };
     Q_ENUM(State)
@@ -48,6 +49,11 @@ public:
     bool prepareSelectedFirstDevelopment(const RadioControlSession& session);
     bool savedFirstInstallationAvailable() const;
     bool recoverSelectedFirstInstallation(const RadioControlSession& session);
+    bool savedFirstPreparationAvailable() const;
+    bool prepareSelectedSavedFirstInstallation(const RadioControlSession& session);
+    bool prepareSavedFirstPackage(const AetherPDFirstPackage& package, const QByteArray& publisherKey,
+                                 const RadioControlSession& session);
+    bool preparingSavedInstallation() const { return m_savedPreparation; }
     bool recoveredCleanupAvailable() const;
     bool cleanupRecoveredInstallation(const QByteArray& displayedPlan);
     bool cleaningRecoveredInstallation() const { return m_recoveryCleanup; }
@@ -87,6 +93,8 @@ private:
     void preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation);
     void prepareSnapshot(std::function<std::optional<Coordinator::Prepared>()> prepare, quint64 generation);
     bool prepareFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname, const RadioControlSession& session);
+    bool prepareSavedFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QByteArray& publisherKey,
+                           const RadioControlSession& session);
     void credential(const QString& token, quint64 generation);
     void completed(Coordinator::Outcome result, bool cleanup);
     void promoted(bool persisted, quint64 generation);
@@ -103,6 +111,8 @@ private:
     std::unique_ptr<AetherPDInstallationMonitor> m_recoveryMonitor;
     bool m_recovering{false};
     bool m_recoveryCleanup{false};
+    bool m_savedPreparation{false};
+    std::function<std::optional<AetherPDFirstPackage>()> m_savedPackageLoader;
     QString m_firstToken;
     Factory m_factory;
     DownloadFactory m_downloadFactory;

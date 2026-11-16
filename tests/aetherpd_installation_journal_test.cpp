@@ -24,7 +24,10 @@ private slots:
         QVERIFY(first); QVERIFY(second);
         const QByteArray key = fixture.trust.candidateKey;
         QCOMPARE(Journal::read(m_scope, key).state, Journal::State::Missing);
+        QVERIFY(!Journal::retainPending(m_scope, first->approvedPlan(), key));
         QVERIFY(Journal::record(m_scope, first->approvedPlan(), key));
+        QVERIFY(Journal::retainPending(m_scope, first->approvedPlan(), key));
+        QVERIFY(!Journal::retainPending(m_scope, second->approvedPlan(), key));
         QVERIFY(Journal::record(m_scope, first->approvedPlan(), key));
         QVERIFY(!Journal::record(m_scope, second->approvedPlan(), key));
         QVERIFY(!Journal::complete(m_scope, second->approvedPlan(), key));
@@ -34,6 +37,7 @@ private slots:
         QVERIFY(Journal::complete(m_scope, first->approvedPlan(), key));
         AppSettings::instance().load();
         QCOMPARE(Journal::read(m_scope, key).state, Journal::State::CredentialSaved);
+        QVERIFY(!Journal::retainPending(m_scope, first->approvedPlan(), key));
         QVERIFY(Journal::record(m_scope, second->approvedPlan(), key));
         QCOMPARE(Journal::read(m_scope, key).state, Journal::State::Pending);
     }

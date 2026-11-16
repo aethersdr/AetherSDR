@@ -71,6 +71,23 @@ std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoo
     prepared.m_image = uploads->carrier;
     return prepared;
 }
+std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoordinator::prepareSavedFirst(
+    const AetherPDFirstPackage& package, const QByteArray& savedPlan, const QByteArray& publisherKey)
+{
+    const auto plan = aetherpd::parseFirstInstallationPlan(savedPlan, publisherKey);
+    if (!plan) { return std::nullopt; }
+    const auto uploads = package.prepare(plan->serial, savedPlan.mid(148, 32),
+        QString::fromLatin1(savedPlan.mid(180, 64).split('\0').first()), savedPlan.mid(244, 32));
+    if (!uploads || uploads->plan != savedPlan || uploads->publisherKey != publisherKey) { return std::nullopt; }
+    Prepared prepared;
+    prepared.m_started = std::make_shared<std::atomic_bool>(false);
+    prepared.m_inputs[1] = uploads->plan;
+    prepared.m_publisherKey = uploads->publisherKey;
+    prepared.m_nativeName = uploads->nativeName;
+    prepared.m_nativeArchive = uploads->nativeArchive;
+    prepared.m_image = uploads->carrier;
+    return prepared;
+}
 AetherPDInstallationCoordinator::AetherPDInstallationCoordinator(RadioModel& model, QObject* parent)
     : QObject(parent), m_model(&model), m_ownedCarrier(makeAetherPDCarrierUpload(model)), m_carrier(m_ownedCarrier.get()),
       m_request(std::make_unique<AetherPDInstallRequestClient>()), m_upload(std::make_unique<AetherPDInstallUpload>()),

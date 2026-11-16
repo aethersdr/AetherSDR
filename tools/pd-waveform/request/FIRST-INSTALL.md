@@ -407,6 +407,72 @@ radio-process interruption at every transaction phase, a canceled pre-delivery
 attempt, or arbitrary repeated installation. The protected old identities remain
 available; the current attempt's journal lives in the isolated test profile.
 
+## Resuming a pending desktop attempt
+
+**Prepare saved attempt** requires a pending journal for the current radio and
+firmware plus independently trusted package pins. It loads the per-attempt
+credential and verifies its hash against the saved plan. The existing hostname,
+installation nonce, release and package names are reconstructed exactly; changed
+release bytes or publisher keys are refused. There is no new random identity.
+Preparation is local and does not upload or rewrite the credential.
+
+**Approve saved attempt** atomically compares the current pending journal before
+starting delivery. A completed or replaced record is rejected. The loaded
+credential was already durably stored, so this path does not rewrite the attempt
+keychain slot. Normal exact-plan commitment, active-credential promotion and
+public cleanup still apply. The shared upload reservation excludes overlapping
+installs, and a present carrier is not removed to force a retry.
+
+An unreachable status endpoint is not evidence of an absent installation. The
+native worker binds re-entry to the existing protected plan, reconciles an
+interrupted transaction and refuses unrelated stores. A terminal committed
+transaction only completes cleanup; it is not reinitialized. A terminal failed
+fresh transaction remains failed and needs a separate explicit recovery path.
+This action does not erase identity or override that failure fence.
+
+## Live interruption before carrier delivery
+
+`first-install-resume-live` records the new desktop resume path against the
+FLEX-8600 on firmware 4.3.16.42034 with development package
+`0.0.0-first.7c87bc223`. The prior qualified install was preserved in a protected
+backup; an isolated desktop profile left the original settings database intact.
+Diagnostics prepared and audited the clean fixture but supplied no installation
+delivery or authorization.
+
+The desktop was killed 0.844 seconds after approval, while the native upload
+was settling and before carrier upload. Its pending journal and attempt
+credential were already durable. The restarted desktop prepared and explicitly
+approved the same plan:
+`dd3aa6204a49dd3b9ed188a8834ca0f454544a5c7125e6a358f5ecbc190e85b0`.
+The reconstructed carrier archive SHA256 matched the pre-crash preview exactly.
+Commitment and public cleanup completed in 41.833 seconds from resume preparation.
+A separate process authenticated the committed plan through the actual keychain.
+
+Host inspection confirmed the expected new local identity, unprivileged primary,
+removed temporary installation authority, no matching cached native files or
+carrier container, no fixed ARP and `accept_local=0`. One reboot changed the kernel
+boot ID; the same identity and exact commitment returned in 44.451 seconds.
+After reopening the panel for the new connection, a receive-only GUI start/stop
+returned 16,384 complex 48 kHz DAX IQ samples with FDX off. All float components
+were finite and 30,940 were nonzero. No RF command was issued.
+
+The three desktop suites passed; scoped ASan/UBSan/LSan checks passed. An isolated
+mutation that bypassed the pending-journal approval check was detected. The 37
+native worker tests include fresh preparation retry after extraction failure and
+terminal redelivery that preserves identity without reactivation. Native service
+adapters in those tests are fixtures; they do not prove power-loss behavior.
+
+The immediate post-IQ desktop-exit audit failed its single-primary assertion
+without recording the failing process list. A later independent inventory found
+only the unprivileged primary, with the same identity, no matching carrier image
+or cached native files, no temporary installation authority, no fixed ARP and no
+private bootstrap sockets. Both reports are retained; this test does not establish
+an exact session-retirement bound.
+
+This is one live native-before-carrier interruption and one completed-install
+reboot. It does not qualify power loss during a transaction, every interrupted
+phase, terminal failed-store recovery, or pending attempts on other platforms.
+
 ## Remaining gates
 
 Authenticated production package distribution, unresolved-attempt recovery,

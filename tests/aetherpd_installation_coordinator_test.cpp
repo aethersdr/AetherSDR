@@ -117,6 +117,67 @@ struct Fixture {
 class CoordinatorTest : public QObject {
     Q_OBJECT
 private slots:
+    void savedPreparationReproducesOnlyThePinnedPlan()
+    {
+        const auto package = firstPackage(); const auto original = prepareFirst(); QVERIFY(package); QVERIFY(original);
+        const auto resumed = Coordinator::prepareSavedFirst(*package, original->approvedPlan(), original->publisherKey()); QVERIFY(resumed);
+        QCOMPARE(resumed->approvedPlan(), original->approvedPlan());
+        QCOMPARE(resumed->carrierSha256(), original->carrierSha256());
+        QCOMPARE(resumed->nativeName(), original->nativeName()); QCOMPARE(resumed->carrierName(), original->carrierName());
+        QVERIFY(!resumed->used());
+        QByteArray changed = original->approvedPlan(); changed[24] ^= 1;
+        QVERIFY(!Coordinator::prepareSavedFirst(*package, changed, original->publisherKey()));
+        QVERIFY(!Coordinator::prepareSavedFirst(*package, original->approvedPlan(), QByteArray(32, 'z')));
+        QVERIFY(!Coordinator::prepareSavedFirst(*package, original->approvedPlan().chopped(1), original->publisherKey()));
+    }
+
+    void savedAttemptRequiresItsCredentialAndExplicitApproval()
+    {
+        using Model = AetherPDInstallationModel; using Journal = AetherPDInstallationJournal;
+        for (int mode = 0; mode < 6; ++mode) {
+            Fixture f; const auto package = firstPackage(); const auto prepared = prepareFirst(); QVERIFY(package); QVERIFY(prepared);
+            const QByteArray plan = prepared->approvedPlan(), key = prepared->publisherKey();
+            Journal::Read saved{Journal::State::Pending, plan};
+            std::function<void(const QString&)> loaded;
+            int writes = 0, oldLoads = 0, retained = 0;
+            auto services = journalServices();
+            services.read = [&](const QByteArray& pin) { return pin == key ? saved : Journal::Read{}; };
+            services.load = [&](const QString& serial, const QString& attempt, QObject*, auto done) {
+                QCOMPARE(serial, QStringLiteral("fixture-8600"));
+                QCOMPARE(attempt, QString::fromLatin1(QCryptographicHash::hash(plan, QCryptographicHash::Blake2b_256).toHex()));
+                loaded = std::move(done);
+            };
+            services.retainPending = [&](const QByteArray& record, const QByteArray& pin) {
+                ++retained; return saved.state == Journal::State::Pending && saved.plan == record && pin == key;
+            };
+            Model model(f.model, [&](const QString&, QObject*, auto) { ++oldLoads; },
+                [&](RadioModel& radio) { return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
+                nullptr, {}, [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, services);
+            QVERIFY(model.prepareSavedFirstPackage(*package, key, f.model.controlSession())); QVERIFY(loaded);
+            QVERIFY(model.preparingSavedInstallation()); QVERIFY(f.transfers.isEmpty()); QCOMPARE(writes, 0);
+            if (mode == 1) { loaded(QString(64, u'b')); QCOMPARE(model.failure(), Model::Failure::NoCredential); }
+            else if (mode == 2) { model.cancel(); loaded(QString(64, u'a')); QCOMPARE(model.outcome(), Coordinator::Outcome::Canceled); }
+            else if (mode == 3) { RadioSetupControlTestAccess::replaceConnectionGeneration(f.model); loaded(QString(64, u'a')); QCOMPARE(model.failure(), Model::Failure::SessionChanged); }
+            else if (mode == 4) { saved.state = Journal::State::CredentialSaved; loaded(QString(64, u'a')); QCOMPARE(model.failure(), Model::Failure::JournalFailed); }
+            else {
+                loaded(QString(64, u'a'));
+                QTRY_COMPARE(model.state(), Model::State::AwaitingApproval);
+                QCOMPARE(model.approvedPlan(), plan); QCOMPARE(model.carrierName(), prepared->carrierName());
+                QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty()); QCOMPARE(writes, 0); QCOMPARE(retained, 0);
+                QVERIFY(!model.approve(plan + 'x'));
+                if (mode == 5) {
+                    saved.state = Journal::State::CredentialSaved;
+                    QVERIFY(!model.approve(plan)); QCOMPARE(model.failure(), Model::Failure::JournalFailed);
+                } else {
+                    QVERIFY(model.approve(plan)); QCOMPARE(f.archive.nativeStarts, 1); QCOMPARE(retained, 1);
+                    QCOMPARE(model.phase(), Coordinator::State::UploadingNative); model.cancel();
+                }
+            }
+            QCOMPARE(writes, 0); QCOMPARE(oldLoads, 0); QVERIFY(!f.channel.connected);
+            if (mode != 0) { QVERIFY(f.transfers.isEmpty()); QCOMPARE(f.archive.nativeStarts, 0); }
+        }
+    }
+
     void recoveredCleanupRechecksCommitAndRemovesOnlyTheAttempt()
     {
         Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);

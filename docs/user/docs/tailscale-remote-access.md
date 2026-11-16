@@ -636,6 +636,16 @@ control is dimmed unless the build trusts the saved attempt's publisher and the
 record matches the connected radio and firmware. It does not repeat the
 installation or establish that temporary helpers were removed.
 
+If an attempt is still pending, **Prepare saved attempt** loads its existing
+keychain credential and rebuilds the exact saved plan from the trusted package.
+It preserves the installation identity and package names. **Approve saved
+attempt** explicitly authorizes another delivery of that plan. Preparation alone
+makes no radio changes, and a completed or changed local record cannot be used
+for this action. An unconfirmed status does not prove that the previous attempt
+stopped; an existing carrier prevents delivery. The radio accepts only the
+matching transaction. A terminal failed transaction requires separate recovery;
+this control does not replace its identity or erase the installed store.
+
 After that check confirms the exact committed installation, **Remove temporary
 installer packages** rechecks the same commit and removes only the two package
 names shown in the plan. It preserves the installed service, identity and fixed
@@ -648,7 +658,9 @@ These controls remain experimental. The development workflow supports a fresh
 local identity, reboot startup and checking a saved installation after restarting
 the Linux desktop. Recovery after desktop termination following delivery, with
 explicit temporary-package cleanup, has been exercised on the FLEX-8600.
-Other interruption points, power loss, other desktop credential stores and
+A pending attempt interrupted between the native and carrier uploads can be
+prepared and approved again; this path has also passed reboot and receive-only
+DAX IQ checks on the FLEX-8600. Other interruption points, power loss, other desktop credential stores and
 FLEX-6000 installation still require qualification.
 
 A confirmed update and confirmed cleanup are separate results. If cleanup is

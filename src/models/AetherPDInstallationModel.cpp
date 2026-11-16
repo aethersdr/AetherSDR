@@ -28,7 +28,10 @@ AetherPDInstallationModel::RecoveryServices recoveryServices(RadioModel& radio)
         [](const QString& serial, const QString& attempt, QObject* context, std::function<void(const QString&)> done) {
             TailnetShimTokenStore::load(serial + u'/' + attempt, context, std::move(done), TailnetShimTokenStore::Entry::AetherPDFirst);
         },
-        [] { return std::make_unique<AetherPDInstallationMonitor>(); }
+        [] { return std::make_unique<AetherPDInstallationMonitor>(); },
+        [guarded](const QByteArray& plan, const QByteArray& key) {
+            return guarded && AetherPDInstallationJournal::retainPending(guarded->settingsScope(), plan, key);
+        }
     };
 }
 } // namespace
@@ -181,10 +184,61 @@ bool AetherPDInstallationModel::prepareFirst(std::function<std::optional<AetherP
     }, ++m_generation);
     return true;
 }
+bool AetherPDInstallationModel::savedFirstPreparationAvailable() const
+{
+    if (!m_radio || active() || m_state == State::AwaitingApproval || m_radio->isRadioTransmitting()
+        || selectedFirstDevelopmentVersion().isEmpty() || !m_recovery.read) { return false; }
+    const QByteArray key = aetherpd::firstDevelopment::publisherKey();
+    const auto saved = m_recovery.read(key);
+    const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, key);
+    return saved.state == AetherPDInstallationJournal::State::Pending && plan
+        && plan->serial == m_radio->serial() && plan->firmware == m_radio->version();
+}
+bool AetherPDInstallationModel::prepareSelectedSavedFirstInstallation(const RadioControlSession& session)
+{
+    return savedFirstPreparationAvailable() && prepareSavedFirst([] { return aetherpd::firstDevelopment::load(); },
+        aetherpd::firstDevelopment::publisherKey(), session);
+}
+bool AetherPDInstallationModel::prepareSavedFirstPackage(const AetherPDFirstPackage& package, const QByteArray& publisherKey,
+                                                        const RadioControlSession& session)
+{
+    return prepareSavedFirst([package] { return std::optional<AetherPDFirstPackage>(package); }, publisherKey, session);
+}
+bool AetherPDInstallationModel::prepareSavedFirst(std::function<std::optional<AetherPDFirstPackage>()> load,
+    const QByteArray& publisherKey, const RadioControlSession& session)
+{
+    if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
+        || m_state == State::AwaitingApproval || !m_radio->controlSessionCurrent(session) || m_radio->isRadioTransmitting()
+        || !load || !m_write || !m_recovery.read || !m_recovery.load || !m_recovery.journal || !m_recovery.retainPending) { return false; }
+    const auto saved = m_recovery.read(publisherKey);
+    const auto plan = aetherpd::parseFirstInstallationPlan(saved.plan, publisherKey);
+    if (saved.state != AetherPDInstallationJournal::State::Pending || !plan
+        || plan->serial != m_radio->serial() || plan->firmware != m_radio->version()) { return false; }
+    retirePreparation();
+    if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); m_job.reset(); }
+    m_package.reset(); m_firstToken.clear(); m_archiveSha256.clear();
+    m_plan = saved.plan; m_publisherKey = publisherKey;
+    const QString suffix = QString::fromLatin1(m_plan.mid(244, 8).toHex());
+    m_nativeName = QStringLiteral("AetherPDFirst") + suffix; m_carrier = QStringLiteral("aetherpd-first-") + suffix;
+    m_session = session; m_serial = plan->serial; m_firmware = plan->firmware; m_address = m_radio->radioAddress();
+    m_outcome.reset(); m_cleanup = false; m_failure = Failure::None;
+    m_savedPreparation = true; m_savedPackageLoader = std::move(load);
+    m_state = State::LoadingRecoveryCredential;
+    const quint64 generation = ++m_generation;
+    const QPointer<AetherPDInstallationModel> self(this);
+    const auto loader = m_recovery.load;
+    const QString serial = m_serial, attempt = plan->planDigest;
+    m_timeout.start(); emit changed();
+    if (!self || generation != m_generation || m_state != State::LoadingRecoveryCredential) { return false; }
+    if (!current()) { unavailable(Failure::SessionChanged); return false; }
+    loader(serial, attempt, this, [self, generation](const QString& token) { if (self) { self->recoveryCredential(token, generation); } });
+    return true;
+}
 void AetherPDInstallationModel::retirePreparation()
 {
     m_recovering = false;
     m_recoveryCleanup = false;
+    m_savedPreparation = false; m_savedPackageLoader = {};
     if (m_recoveryMonitor) { disconnect(m_recoveryMonitor.get(), nullptr, this, nullptr); m_recoveryMonitor.reset(); }
     if (m_download) {
         disconnect(m_download.get(), nullptr, this, nullptr);
@@ -278,6 +332,16 @@ bool AetherPDInstallationModel::approve(const QByteArray& displayedPlan)
     const bool first = !m_nativeName.isEmpty();
     const auto shown = preview();
     if (first && (!shown || m_firstToken.isEmpty())) { return false; }
+    if (m_savedPreparation) {
+        const QPointer<AetherPDInstallationModel> self(this);
+        const bool retained = m_recovery.retainPending(m_plan, m_publisherKey);
+        if (!self) { return false; }
+        if (!retained) { unavailable(Failure::JournalFailed); return false; }
+        m_state = State::LoadingCredential;
+        const QString token = m_firstToken;
+        credential(token, ++m_generation);
+        return true;
+    }
     m_state = first ? State::SavingCredential : State::LoadingCredential;
     const quint64 generation = ++m_generation;
     const QPointer<AetherPDInstallationModel> self(this);
@@ -457,6 +521,19 @@ void AetherPDInstallationModel::recoveryCredential(const QString& token, quint64
         unavailable(Failure::NoCredential); return;
     }
     ++m_generation; m_timeout.stop(); m_firstToken = token;
+    if (m_savedPreparation) {
+        const auto saved = m_recovery.read(m_publisherKey);
+        if (saved.state != AetherPDInstallationJournal::State::Pending || saved.plan != m_plan) {
+            unavailable(Failure::JournalFailed); return;
+        }
+        const auto load = std::move(m_savedPackageLoader);
+        const QByteArray approved = m_plan, key = m_publisherKey;
+        prepareSnapshot([load, approved, key] {
+            const auto package = load ? load() : std::nullopt;
+            return package ? Coordinator::prepareSavedFirst(*package, approved, key) : std::nullopt;
+        }, m_generation);
+        return;
+    }
     if (m_recoveryCleanup) {
         m_job = m_factory(*m_radio);
         if (!m_job || m_job->thread() != thread()) { unavailable(Failure::StartRefused); return; }

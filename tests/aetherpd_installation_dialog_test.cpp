@@ -70,7 +70,8 @@ struct Fixture {
                         : AetherPDInstallationJournal::State::Pending, journalPlan};
                 },
                 [this](const QString&, const QString&, QObject*, auto done) { ++recoveryLoads; recoveryLoaded = std::move(done); },
-                [this] { return std::make_unique<AetherPDInstallationMonitor>(network, [] { return qint64(0); }); }
+                [this] { return std::make_unique<AetherPDInstallationMonitor>(network, [] { return qint64(0); }); },
+                [this](const QByteArray& plan, const QByteArray& key) { return plan == journalPlan && key == files.trust.candidateKey; }
             });
         RadioSetupControlTestAccess::installationModel(radio, std::move(model));
         open();
@@ -95,6 +96,28 @@ struct Fixture {
 class InstallationDialogTest : public QObject {
     Q_OBJECT
 private slots:
+    void savedAttemptReviewPreservesIdentityAndRequiresApproval()
+    {
+        Fixture f; const auto package = f.files.loadFirst(); QVERIFY(package);
+        const auto prepared = Coordinator::prepareFirst(*package, "fixture-8600",
+            QCryptographicHash::hash(QByteArray(64, 'a'), QCryptographicHash::Sha256), "fixture-radio"); QVERIFY(prepared);
+        f.journalPlan = prepared->approvedPlan();
+        QVERIFY(f.model().prepareSavedFirstPackage(*package, f.files.trust.candidateKey, f.radio.controlSession()));
+        QCOMPARE(f.recoveryLoads, 1); QVERIFY(!f.button("pdInstallApprove")->isEnabled());
+        f.recoveryLoaded(QString(64, u'a'));
+        QTRY_COMPARE(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval);
+        QVERIFY(f.preview().contains("Saved attempt")); QVERIFY(f.preview().contains("keychain credential, identity and package names are reused"));
+        QVERIFY(!f.preview().contains("Save a new radio credential")); QVERIFY(!f.preview().contains("Create a new local identity"));
+        QCOMPARE(f.button("pdInstallApprove")->text(), QStringLiteral("Approve saved attempt"));
+        QVERIFY(f.button("pdInstallApprove")->isEnabled()); QVERIFY(!f.button("pdInstallSaved")->isEnabled());
+        QCOMPARE(f.writes, 0); QCOMPARE(f.loads, 0); QVERIFY(!f.job); QVERIFY(f.network.sent.empty());
+        const QString screenshot = QString::fromLocal8Bit(qgetenv("AETHERPD_SAVED_PANEL_SCREENSHOT"));
+        if (!screenshot.isEmpty()) { f.dialog->show(); QCoreApplication::processEvents(); QVERIFY(f.dialog->grab().save(screenshot)); }
+        QTest::mouseClick(f.button("pdInstallApprove"), Qt::LeftButton);
+        QVERIFY(f.job); QCOMPARE(f.writes, 0); QCOMPARE(f.loads, 0);
+        QTest::mouseClick(f.button("pdInstallCancel"), Qt::LeftButton);
+    }
+
     void firstInstallationPreviewAndCredentialFailure()
     {
         Fixture f; const auto package = f.files.loadFirst(); QVERIFY(package);

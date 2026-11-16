@@ -50,6 +50,14 @@ bool AetherPDInstallationJournal::record(const RadioSettingsScope& scope, const 
         : std::optional<QJsonObject>(document(previous.plan, publisherKey, previous.state == State::CredentialSaved));
     return scope.compareAndSetFeature(kFeature, kSchema, expected, kSchema, document(plan, publisherKey, false));
 }
+bool AetherPDInstallationJournal::retainPending(const RadioSettingsScope& scope, const QByteArray& plan, const QByteArray& publisherKey)
+{
+    if (!target(scope, plan, publisherKey)) { return false; }
+    const Read previous = read(scope, publisherKey);
+    if (previous.state != State::Pending || previous.plan != plan) { return false; }
+    const QJsonObject pending = document(plan, publisherKey, false);
+    return scope.compareAndSetFeature(kFeature, kSchema, pending, kSchema, pending);
+}
 bool AetherPDInstallationJournal::complete(const RadioSettingsScope& scope, const QByteArray& plan, const QByteArray& publisherKey)
 {
     const Read previous = read(scope, publisherKey);

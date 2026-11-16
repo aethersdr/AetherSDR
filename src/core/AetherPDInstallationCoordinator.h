@@ -61,6 +61,8 @@ public:
     static std::optional<Prepared> prepare(const AetherPDPackage& package, const QString& serial);
     static std::optional<Prepared> prepareFirst(const AetherPDFirstPackage& package, const QString& serial,
                                                 const QByteArray& newTokenHash, const QString& hostname);
+    static std::optional<Prepared> prepareSavedFirst(const AetherPDFirstPackage& package,
+                                                    const QByteArray& savedPlan, const QByteArray& publisherKey);
     bool begin(const Prepared& approved, const RadioControlSession& expectedSession, const QString& token);
     // Reauthenticate the exact committed first plan before public removal.
     // No archive, installation request or upload can be issued by this mode.
