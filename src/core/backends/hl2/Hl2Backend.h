@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QThread>
 #include <QTimer>
@@ -119,6 +120,7 @@ public:
     // other token is refused; when called, both republish the slice so the
     // button shows ANT. RadioModel refuses a token outside the list before this.
     ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
+    bool setSliceIqTap(int sliceId, bool on) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -975,6 +977,9 @@ private:
     // kEp6LinkBudgetFraction / maxReceiversAtRate() (4 RX at 384 kHz is ~89 Mbit/s
     // on 100BASE-T, refused).
     int m_sampleRateHz = 48000;
+    // UI numbers whose IQ a TCI client wants. Kept here, not only on the DSP,
+    // so a chain rebuilt by a rate change or a reopen starts with its tap set.
+    QSet<int> m_iqTapUis;
     // Receivers to run: operator request (Hl2Settings), clamped by discovery byte
     // 0x13 and the link budget. Never hardcoded: skimmer gateware reports 9..12,
     // hl2b5up_main reports 4.
