@@ -1,0 +1,14 @@
+{
+  "flex_ptt_stop_tracker_test": {
+    "returncode": 0,
+    "ASan": true,
+    "UBSan": true,
+    "LSan": false
+  },
+  "flex_ptt_wire_session_test": {
+    "returncode": 0,
+    "ASan": true,
+    "UBSan": true,
+    "LSan": false
+  }
+}

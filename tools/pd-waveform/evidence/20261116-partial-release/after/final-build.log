@@ -1,0 +1,17 @@
+[0/2] Re-checking globbed directories...
+[1/22] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/22] Capturing build identity (git describe)
+[3/18] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/18] Automatic MOC and UIC for target flex_ptt_stop_tracker_test
+[5/17] Completed 'vulkan-shaders-gen'
+[6/17] Automatic MOC and UIC for target flex_ptt_wire_session_test
+[7/16] Automatic MOC and UIC for target aethercore
+[8/15] Building CXX object CMakeFiles/flex_ptt_stop_tracker_test.dir/src/core/backends/flex/FlexPttStopTracker.cpp.o
+[9/15] Building CXX object CMakeFiles/flex_ptt_wire_session_test.dir/src/core/backends/flex/FlexPttStopTracker.cpp.o
+[10/15] Linking CXX executable flex_ptt_stop_tracker_test
+[11/15] Linking CXX executable flex_ptt_wire_session_test
+[12/15] Building CXX object CMakeFiles/aethercore.dir/src/core/backends/flex/FlexPttStopTracker.cpp.o
+[13/15] Linking CXX static library libaethercore.a
+[14/15] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory

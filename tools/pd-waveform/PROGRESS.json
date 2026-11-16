@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T17:32:01.068300+00:00",
+  "updated_utc": "2026-11-16T17:43:00.540430+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Complete remaining final-process release/fault interleavings, including stop during a partial independent-release sequence; then exact-candidate matched5/10W/speech/stock comparison, update/rollback and6300/release gates.",
+  "next_action": "Run exact-candidate matched correction-OFF/ON5W and10W measurements and stockAPD comparison; continue remaining process faults, sustained/speech, authenticated update/rollback and actual6300/release gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Desktop6f6ab298d resolves captured independently completed release ordering. One5W desktop stall recovered with exact-operation stop proof, then a fresh corrected four-frame measurement passed in the same connection. Runtime remainse8d68ad4b. Native session stopped and cleanup audit passed.",
+  "current_focus": "Desktopb1256a165 fixes radio-side/desktop overlapping unkey: live READY-owned -> desktop stopACK -> owner-clear now certifies original release. Nine stop/reply placement cases and superseding-token refusal tested; native session stopped, cleanup audited.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2897,7 +2897,7 @@
   "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
   "current_delivery_status": {
     "runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "desktop_source": "6f6ab298ddecfa1ab8e3e1b48ce69ad59df23916",
+    "desktop_source": "b1256a1657319360279029cabfcbcb647728b86a",
     "runtime_report": "GUARDIAN-INSTALLED-QUALIFICATION.json",
     "desktop_reports": [
       "CAPTURE-DESKTOP-QUALIFICATION.json",
@@ -2906,7 +2906,7 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "installed_state": "Runtimee8d68ad4b, desktop6f6ab298d. Captured stalled-desktop recovery and fresh corrected5W measurement passed; native session stopped and cleanup audited.",
+    "installed_state": "Runtimee8d68ad4b with desktopb1256a165. Complete and overlapping independent-release recovery implemented; latest overlapping case hardware-qualified, native session stopped and cleanup audited.",
     "latest_read_only_network_probe": {
       "utc": "2026-11-16T17:19:41.305947+00:00",
       "address": "192.168.50.100",
@@ -2959,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "Radio runtime remainse8d68ad4b. Desktop6f6ab298d adds bounded original-operation recovery. Earlier matched pairs retain88280414 runtime provenance; newest corrected capture has no fresh OFF baseline.",
+    "source_provenance_note": "Runtimee8d68ad4b unchanged. Latest desktopb1256a165 extends overlap recovery; prior corrected5W capture belongs to6f6ab298d, prior matched pairs to88280414runtime. Final-candidate matched RF remains pending.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "DESKTOP-RELEASE-RECOVERY-QUALIFICATION.json",
+    "latest_live_report": "PARTIAL-RELEASE-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3101,5 +3101,11 @@
     "source_commit": "6f6ab298ddecfa1ab8e3e1b48ce69ad59df23916",
     "captured_ordering_live_qualified": true,
     "all_failure_interleavings_qualified": false
+  },
+  "partial_release": {
+    "report": "PARTIAL-RELEASE-QUALIFICATION.json",
+    "source_commit": "b1256a1657319360279029cabfcbcb647728b86a",
+    "captured_overlap_live_qualified": true,
+    "all_process_faults_qualified": false
   }
 }

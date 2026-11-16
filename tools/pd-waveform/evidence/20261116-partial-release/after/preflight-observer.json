@@ -1,0 +1,26 @@
+{
+  "mode": "preflight",
+  "pid": 1365774,
+  "start_ticks": 4573498,
+  "gui_handle": 2126147620,
+  "events": [
+    {
+      "elapsed_s": 0.397863,
+      "monotonic_ns": 45768068465743,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=",
+      "desktop_paused": false,
+      "desktop_process_state": "S"
+    },
+    {
+      "elapsed_s": 0.39805,
+      "monotonic_ns": 45768068644607,
+      "event": "observer_ready"
+    }
+  ],
+  "rf_commands": [],
+  "paused": false,
+  "resumed": false,
+  "completed": true,
+  "elapsed_s": 3.011
+}
