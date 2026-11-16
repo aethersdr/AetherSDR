@@ -10,6 +10,14 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 
 *A panadapter on 20 m with its waterfall, the slice A VFO flag and the overlay menu down the left edge.*
 
+The **B** and **S** buttons at the bottom left zoom to the active band or band-plan segment. On a scope-capable Icom, the tuned frequency never changes, and what the buttons do depends on the scope mode:
+
+- **SCROLL-F, or Fixed chosen in AetherSDR:** the scope shows the allocation itself, centered at its exact width, wherever the window was. With the ARRL US plan, **S** on 14.050 MHz shows 14.025–14.070 MHz (45 kHz). Allocations wider than 1 MHz show a 1 MHz window inside them.
+- **Center:** the scope keeps its center and picks the smallest span that covers both allocation edges. With a center of 14.050 MHz, **S** selects 50 kHz for the same segment; at 14.069 MHz it widens to 100 kHz. Allocations wider than the widest span use that span.
+- **Fixed set on the radio (presets 1–3):** the buttons are dimmed, because the radio's preset owns the scope edges.
+
+A second press at the same zoom does nothing; Icom zoom is not a toggle. FlexRadio uses its own band and segment zoom modes. The buttons remain disabled when the connected radio does not declare either control.
+
 ## Using the panadapter
 
 ### Mouse controls
@@ -143,11 +151,22 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 
 *The Mini-Pan applet: a small spectrum view of the slice's passband.*
 
+### Band applet
+
+The **Band** applet (button **BAND**, first in the drawer, off by default) keeps the band buttons of the overlay's **Band** panel open in the applet panel, so you can change band in one click without covering the spectrum.
+
+- The grid holds **160** to **6**, **4** and **2** on radios that have them, your configured transverter bands, then **WWV**, **GEN**, **2200**, **630** and **XVTR**. **XVTR** opens **Settings → Radio Setup... → Transverters**.
+- A click acts on the active slice and changes band exactly as the overlay's **Band** panel does, band stack included.
+- The lit button follows the active slice wherever it is tuned, under the band plan chosen in **View → Band Plan**, exactly as the overlay's **Band** panel does. A frequency outside the plan lights **GEN**.
+- Bands outside the radio's tuning range are disabled; hover over one to see the range.
+- A radio that declares its own band list shows those bands instead, without transverter entries.
+
 ### Multiple and detached panadapters
 
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
 - **Right-click → ↗ Pop out**, or the header's **⬈** button, moves a pan into its own window; **↩ Dock** puts it back.
 - Pan layouts, including floating pans, are restored when you reconnect.
+- On Flex radios, restored display settings come from the radio. The panadapter and its waterfall can return at different times. If another client takes ownership of a display, AetherSDR keeps the existing pane quiet and stops sending it display changes.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 
 Opening a pan waits for the connected backend to publish its actual display.
@@ -164,6 +183,13 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 ### Status bar
 
 The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
+
+Temporary status messages appear as a small text notice just above the bar and
+clear automatically. The station name, controls and telemetry stay visible in
+their usual positions. Messages do not take keyboard focus or block clicks.
+Long messages shorten with an ellipsis to fit between the panadapter controls,
+without covering the zoom buttons or applet panel. Screen readers receive the
+complete message once rapid updates settle.
 
 Click a bookmark in the band-stack panel to recall its saved receive settings
 on the active slice. The recall stays with that slice and its panadapter even
@@ -201,7 +227,9 @@ The dock side is remembered when you restart AetherSDR.
 
 ### The button bar
 
-The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
+The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW; BAND is first in the drawer) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
+
+> **Upgrading from an older version:** your favorites and drawer are kept as you arranged them, and the new **BAND** button is added after your last button. Use **Customize Button Bar** to move it.
 
 <img src="/img/screens/customize-button-bar.png" width="440" alt="Customize Button Bar dialog. A note explains that the top five active buttons fill the row and the rest live in the drawer, while hidden buttons and their applets are disabled. The Active list holds VU, PWR, RX, TX and P/CW, a Favorites divider, then LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, SS, MQTT and CTR2. The Hidden list is empty, with arrow buttons between the lists and OK and Cancel at the bottom." />
 

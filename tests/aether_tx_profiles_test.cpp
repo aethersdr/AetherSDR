@@ -10,7 +10,7 @@
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
 #include "core/SettingsPaths.h"
-#include "core/ClientGate.h"
+#include "core/ClientTube.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -48,6 +48,7 @@ private slots:
     void theStoredCopyCarriesNoNameOfItsOwn();
     void aRefusedWriteKeepsTheLibraryAndReportsFailure();
     void roundTripsTheLiveTransmitChain();
+    void aLegacyGateProfileTurnsRn2On();
     void exportsAndRestoresCompressorDriveAndPhase();
     void legacyCompressorProfilesKeepCurrentDriveAndPhase();
     void importedCompressorValuesAreClamped();
@@ -253,36 +254,77 @@ void AetherTxProfilesTest::roundTripsTheLiveTransmitChain()
     AudioEngine engine;
     AetherTxProfiles lib(&engine, nullptr);
 
-    auto* gate = engine.clientGateTx();
+    auto* tube = engine.clientTubeTx();
     auto* comp = engine.clientCompTx();
-    QVERIFY(gate && comp);
+    QVERIFY(tube && comp);
 
-    gate->setEnabled(true);
-    gate->setThresholdDb(-29.5f);
+    tube->setEnabled(true);
     comp->setEnabled(false);
     comp->setRatio(6.5f);
+    engine.setRn2TxEnabled(true);
     engine.setTxChainStages({ AudioEngine::TxChainStage::Comp,
-                              AudioEngine::TxChainStage::Gate });
+                              AudioEngine::TxChainStage::Tube });
 
     QVERIFY(lib.saveFromCurrent("Round Trip"));
 
-    gate->setEnabled(false);
-    gate->setThresholdDb(-3.0f);
+    tube->setEnabled(false);
     comp->setEnabled(true);
     comp->setRatio(1.25f);
-    engine.setTxChainStages({ AudioEngine::TxChainStage::Gate,
+    engine.setRn2TxEnabled(false);
+    engine.setTxChainStages({ AudioEngine::TxChainStage::Tube,
                               AudioEngine::TxChainStage::Comp });
 
     QVERIFY(lib.loadProfile("Round Trip"));
 
-    QCOMPARE(gate->isEnabled(), true);
-    QVERIFY(qAbs(gate->thresholdDb() - (-29.5f)) < 0.01f);
+    QCOMPARE(tube->isEnabled(), true);
     QCOMPARE(comp->isEnabled(), false);
     QVERIFY(qAbs(comp->ratio() - 6.5f) < 0.01f);
+    QVERIFY(engine.rn2TxEnabled());
     const auto chain = engine.txChainStages();
     QVERIFY(chain.size() >= 2);
     QCOMPARE(chain.at(0), AudioEngine::TxChainStage::Comp);
-    QCOMPARE(chain.at(1), AudioEngine::TxChainStage::Gate);
+    QCOMPARE(chain.at(1), AudioEngine::TxChainStage::Tube);
+    QVERIFY(!chain.contains(AudioEngine::TxChainStage::Gate));
+}
+
+// A profile saved before the TX gate was retired: its "gate" has nowhere to
+// go; if it was on and the profile does not set RN2, RN2 takes its place.
+void AetherTxProfilesTest::aLegacyGateProfileTurnsRn2On()
+{
+    AudioEngine engine;
+    engine.setRn2TxEnabled(false);
+    ChannelStripPresets::applyTxJson(&engine, sampleProfile());
+    QVERIFY(engine.rn2TxEnabled());
+    QVERIFY(!engine.txChainStages().contains(AudioEngine::TxChainStage::Gate));
+
+    // The profile's own RN2 setting wins.
+    engine.setRn2TxEnabled(false);
+    QJsonObject withRn2 = sampleProfile();
+    withRn2["rn2"] = false;
+    ChannelStripPresets::applyTxJson(&engine, withRn2);
+    QVERIFY(!engine.rn2TxEnabled());
+
+    // A gate that was off turns RN2 off, so switching between two old
+    // profiles still reproduces each.
+    engine.setRn2TxEnabled(true);
+    QJsonObject gateOff = sampleProfile();
+    gateOff["gate"] = QJsonObject{ { "enabled", false } };
+    ChannelStripPresets::applyTxJson(&engine, gateOff);
+    QVERIFY(!engine.rn2TxEnabled());
+
+    // Its chain is the old default, so it loads as today's, Tube first.
+    QCOMPARE(engine.txChainStages().first(), AudioEngine::TxChainStage::Tube);
+
+    // And capture writes no "gate", nor "deess" (the de-esser is retired too).
+    const QJsonObject captured = ChannelStripPresets::captureTxJson(&engine);
+    QVERIFY(!captured.contains("gate"));
+    QVERIFY(!captured.contains("deess"));
+
+    // An old profile's de-esser and chain slot are ignored; the rest loads.
+    QJsonObject withDeEss = sampleProfile();
+    withDeEss["deess"] = QJsonObject{ { "enabled", true }, { "amountDb", -12.0 } };
+    ChannelStripPresets::applyTxJson(&engine, withDeEss);
+    QVERIFY(!engine.txChainStages().contains(AudioEngine::TxChainStage::DeEss));
 }
 
 void AetherTxProfilesTest::exportsAndRestoresCompressorDriveAndPhase()

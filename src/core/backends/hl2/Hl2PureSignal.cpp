@@ -245,10 +245,11 @@ void Hl2PureSignal::setEnabled(bool on)
         qCInfo(lcHl2Ps) << "HL2 PureSignal: on";
     } else {
         // Correction off on the way out. calcc only moves inside pscc(), so
-        // the reset needs a block to run on or the correction stays applied.
+        // first block enters LRESET; the second runs it and releases correction.
         if (WdspChannel* ch = channel()) {
             ch->pureSignalControl(true, false, false, false);
             ch->pureSignalMox(false);
+            pumpIdle(ch);
             pumpIdle(ch);
         }
         m_ctl.reset();
@@ -299,8 +300,13 @@ void Hl2PureSignal::setAutoCalibrate(bool on)
     if (m_enabled) {
         if (on)
             m_ctl.selectAuto();
-        else
-            m_ctl.stopAuto(m_lastInfo.correcting);   // keeps the last good correction
+        else {
+            // The last tick can predate a failed Auto calculation.
+            if (WdspChannel* ch = channel()) {
+                ch->pureSignalInfo(&m_lastInfo);
+            }
+            m_ctl.stopAuto(m_lastInfo.correcting);
+        }
     }
     publish();
 }
@@ -343,7 +349,7 @@ void Hl2PureSignal::saveCorrection(const QString& path)
     }
     if (WdspChannel* ch = channel()) {
         ch->pureSignalSave(p.constData());
-        qCInfo(lcHl2Ps) << "HL2 PureSignal: correction saved to" << path;
+        qCInfo(lcHl2Ps) << "HL2 PureSignal: correction save requested for" << path;
     }
 }
 
@@ -449,6 +455,7 @@ void Hl2PureSignal::publish()
     s.keyed = m_keyed;
     if (m_enabled) {
         s.correcting = info.correcting;
+        s.fileError = info.fileError;
         s.feedbackLevel = info.feedbackLevel;
         s.calibrationCount = info.calibrationCount;
         s.engineState = info.state;
@@ -459,6 +466,7 @@ void Hl2PureSignal::publish()
         && s.autoCalibrate == m_last.autoCalibrate && s.autoAttenuate == m_last.autoAttenuate
         && s.calibrating == m_last.calibrating
         && s.singleCalibrating == m_last.singleCalibrating && s.correcting == m_last.correcting
+        && s.fileError == m_last.fileError
         && s.feedbackLevel == m_last.feedbackLevel
         && s.calibrationCount == m_last.calibrationCount && s.engineState == m_last.engineState
         && s.attenuationDb == m_last.attenuationDb && s.keyed == m_last.keyed
@@ -480,6 +488,7 @@ QVariantMap pureSignalStatusFields(const Hl2PureSignalStatus& s)
         {QStringLiteral("calibrating"), s.calibrating},
         {QStringLiteral("singleCalibrating"), s.singleCalibrating},
         {QStringLiteral("correcting"), s.correcting},
+        {QStringLiteral("fileError"), s.fileError},
         {QStringLiteral("feedbackLevel"), s.feedbackLevel},
         {QStringLiteral("calibrationCount"), s.calibrationCount},
         {QStringLiteral("engineState"), s.engineState},

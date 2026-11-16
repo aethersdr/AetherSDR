@@ -4,10 +4,14 @@
 // report with the GetPSInfo values calcc would give.
 
 #include "core/backends/hl2/Hl2PureSignal.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
+#include <QTemporaryFile>
+#include <chrono>
+#include <thread>
 
 #include <cstdio>
 
@@ -24,6 +28,14 @@ using AetherSDR::hl2::MetisClient;
 using AetherSDR::hl2::MetisClientTestAccess;
 namespace hl2 = AetherSDR::hl2;
 using L = AetherSDR::hl2::Hl2PsController;
+
+namespace AetherSDR::hl2 {
+struct Hl2PureSignalTestAccess {
+    static void setCorrecting(Hl2PureSignal& ps, bool on) { ps.m_lastInfo.correcting = on; }
+    static Hl2PsController::Mode mode(const Hl2PureSignal& ps) { return ps.m_ctl.mode(); }
+    static void tick(Hl2PureSignal& ps) { ps.onTick(); }
+};
+}
 
 namespace {
 
@@ -317,6 +329,69 @@ void controllerAutoSwitch()
     check(!autoReported, "Reset reports Auto off");
 }
 
+void autoUntickKeepsCorrection()
+{
+    Hl2PureSignal ps(nullptr);
+    ps.setAvailability(true, {});
+    ps.setEnabled(true);
+    ps.setAutoCalibrate(true);
+    hl2::Hl2PureSignalTestAccess::setCorrecting(ps, true);
+    ps.setAutoCalibrate(false);
+    check(hl2::Hl2PureSignalTestAccess::mode(ps) == Mode::Restoring,
+          "Auto unticked with a correction held: kept, not Off");
+    ps.setAutoCalibrate(true);
+    hl2::Hl2PureSignalTestAccess::setCorrecting(ps, false);
+    ps.setAutoCalibrate(false);
+    check(hl2::Hl2PureSignalTestAccess::mode(ps) == Mode::Off,
+          "Auto unticked without a correction: Off");
+    ps.setEnabled(false);
+}
+
+void correctionOff()
+{
+#if AETHER_HL2_TX_TXA
+    hl2::Hl2TxDsp tx;
+    check(tx.configure(hl2::Hl2TxDsp::Config{}), "offline TXA channel opens");
+    WdspChannel* ch = tx.pureSignalChannel();
+    if (!ch) { return; }
+    Hl2PureSignal ps(&tx);
+    ps.setAvailability(true, {});
+    ps.setEnabled(true);
+    // Enter calcc's held state unkeyed, without a file, RF or TX audio.
+    ch->pureSignalControl(false, false, false, true);
+    double silence[128] = {};
+    for (int i = 0; i < 4; ++i) { ch->pureSignalFeed(64, silence, silence); }
+    WdspChannel::PureSignalInfo info;
+    ch->pureSignalInfo(&info);
+    check(info.correcting && info.state == L::LStayOn, "premise: real calcc holds correction state");
+    ps.setEnabled(false);
+    ch->pureSignalInfo(&info);
+    check(!info.correcting && info.state == L::LReset,
+          "PS off runs LRESET immediately, before any further tick or feedback");
+    QTemporaryFile corrupt;
+    check(corrupt.open(), "temporary correction file opens");
+    corrupt.write("not-a-correction-file\n");
+    corrupt.flush();
+    ps.setEnabled(true);
+    ps.restoreCorrection(corrupt.fileName());
+    for (int i = 0; i < 200; ++i) {
+        hl2::Hl2PureSignalTestAccess::tick(ps);
+        ch->pureSignalInfo(&info);
+        if (info.fileError != 0) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    check((info.fileError & 2) != 0, "real WDSP reports a corrupt correction restore");
+    int reportedError = 0;
+    QObject::connect(&ps, &Hl2PureSignal::statusChanged, &ps,
+                     [&](const hl2::Hl2PureSignalStatus& status) { reportedError = status.fileError; });
+    hl2::Hl2PureSignalTestAccess::tick(ps);
+    ps.setAutoAttenuate(false); // a status change also exposes the latest WDSP report
+    check((reportedError & 2) != 0, "restore failure reaches controller status");
+    ps.setEnabled(false);
+
+#endif
+}
+
 void receiverCountUnderFloor()
 {
     // PureSignal's floor keeps four DDCs on the wire; a receiver change made
@@ -377,6 +452,7 @@ void statusFields()
     s.available = true;
     s.enabled = true;
     s.correcting = true;
+    s.fileError = 2;
     s.feedbackLevel = 150;
     s.calibrationCount = 3;
     s.engineState = Hl2PsController::LStayOn;
@@ -387,6 +463,7 @@ void statusFields()
           && f.value(QStringLiteral("enabled")).toBool()
           && f.value(QStringLiteral("correcting")).toBool()
           && f.value(QStringLiteral("keyed")).toBool(), "flags reach the extension map");
+    check(f.value(QStringLiteral("fileError")).toInt() == 2, "file error reaches extension map");
     check(f.value(QStringLiteral("feedbackLevel")).toInt() == 150
           && f.value(QStringLiteral("calibrationCount")).toInt() == 3
           && f.value(QStringLiteral("engineState")).toInt() == 8
@@ -417,6 +494,8 @@ int main(int argc, char** argv)
     autoAttenuate();
     singleGainMovesBounded();
     controllerAutoSwitch();
+    autoUntickKeepsCorrection();
+    correctionOff();
     receiverCountUnderFloor();
     wire();
     statusFields();

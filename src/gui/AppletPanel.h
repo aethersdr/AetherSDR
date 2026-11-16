@@ -2,6 +2,7 @@
 
 #include "core/AudioEngine.h"
 #include "core/backends/RadioCapabilities.h"
+#include "AppletRailMetrics.h"
 
 #include <QWidget>
 #include <QMap>
@@ -27,6 +28,7 @@ namespace AetherSDR {
 
 class SliceModel;
 class RxApplet;
+class BandApplet;
 class SMeterWidget;
 class CrossNeedleMeterApplet;
 class CrossNeedleMeterWidget;
@@ -55,7 +57,6 @@ class MiniPanApplet;
 class ClientEqApplet;
 class ClientCompApplet;
 class ClientGateApplet;
-class ClientDeEssApplet;
 class ClientTubeApplet;
 class ClientPuduApplet;
 class ClientReverbApplet;
@@ -88,6 +89,10 @@ class AppletPanel : public QWidget {
 public:
     explicit AppletPanel(QWidget* parent = nullptr);
 
+    static constexpr int kRailWidth      = AppletRailMetrics::kRailWidth;
+    static constexpr int kRailScrollBarW = AppletRailMetrics::kRailScrollBarW;
+    static constexpr int kStackedApplet  = AppletRailMetrics::kStackedApplet;
+
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);
     void setMaxSlices(int maxSlices);
@@ -95,6 +100,7 @@ public:
     void updateSliceButtons(const QList<SliceModel*>& slices, int activeSliceId);
 
     RxApplet*     rxApplet()      { return m_rxApplet; }
+    BandApplet*   bandApplet()    { return m_bandApplet; }
     SMeterWidget* sMeterWidget()  { return m_sMeter; }
     CrossNeedleMeterWidget* crossNeedleMeterWidget() const;
     void setMeterTxValues(float forwardWatts, float swr);
@@ -142,12 +148,9 @@ public:
     ClientCompApplet* clientCompApplet()   { return m_clientCompApplet; }
     ClientCompApplet* clientCompTxApplet() { return m_clientCompApplet; }
     ClientCompApplet* clientCompRxApplet() { return m_clientCompRxApplet; }
-    // Phase 7.2: GATE-TX retains the legacy accessor name; GATE-RX is
-    // the new sibling tile bound to AudioEngine::clientGateRx().
-    ClientGateApplet* clientGateApplet()   { return m_clientGateApplet; }
-    ClientGateApplet* clientGateTxApplet() { return m_clientGateApplet; }
+    // AetherRX's gate tile, bound to AudioEngine::clientGateRx(). AetherTX
+    // has no gate tile (RN2 replaces the TX gate).
     ClientGateApplet* clientGateRxApplet() { return m_clientGateRxApplet; }
-    ClientDeEssApplet* clientDeEssApplet() { return m_clientDeEssApplet; }
     // Phase 7.4: TUBE-TX retains the legacy accessor; TUBE-RX is the new
     // sibling tile bound to AudioEngine::clientTubeRx().
     ClientTubeApplet* clientTubeApplet()   { return m_clientTubeApplet; }
@@ -431,6 +434,7 @@ private:
     QString          m_vuPeakDecayRate{QStringLiteral("Medium")};
     QString          m_vuFaceTheme{QStringLiteral("aether-default")};
     RxApplet*    m_rxApplet{nullptr};
+    BandApplet*  m_bandApplet{nullptr};
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};
     DemoApplet*  m_demoApplet{nullptr};
@@ -463,9 +467,7 @@ private:
     ClientEqApplet* m_clientEqRxApplet{nullptr};
     ClientCompApplet* m_clientCompApplet{nullptr};
     ClientCompApplet* m_clientCompRxApplet{nullptr};
-    ClientGateApplet* m_clientGateApplet{nullptr};
     ClientGateApplet* m_clientGateRxApplet{nullptr};
-    ClientDeEssApplet* m_clientDeEssApplet{nullptr};
     ClientTubeApplet* m_clientTubeApplet{nullptr};
     ClientTubeApplet* m_clientTubeRxApplet{nullptr};
     ClientPuduApplet* m_clientPuduApplet{nullptr};

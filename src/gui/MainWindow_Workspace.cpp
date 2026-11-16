@@ -4,6 +4,7 @@
 // WorkspaceController (docs/architecture/mainwindow-decomposition.md).
 
 #include "MainWindow.h"
+#include "StatusBarMessageOverlay.h"
 
 #include "AppletPanel.h"
 #include "BandStackPanel.h"
@@ -49,6 +50,10 @@ void MainWindow::wireWorkspaceCanvas()
     // same-top-level reparent (red-team B1).
     m_workspaceCanvas = new WorkspaceCanvas(this);
     m_workspaceCanvas->hide();   // mounted on demand by toggleWorkspaceCanvas()
+    if (auto* notice = findChild<StatusBarMessageOverlay*>(QStringLiteral("statusBarMessageOverlay"),
+                                                           Qt::FindDirectChildrenOnly)) {
+        notice->setAlternateSurface(m_workspaceCanvas);
+    }
 
     m_workspaceController = new WorkspaceController(
         m_appletPanel->containerManager(), m_workspaceCanvas, this);

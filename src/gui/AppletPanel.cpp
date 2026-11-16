@@ -5,6 +5,7 @@
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "RxApplet.h"
+#include "BandApplet.h"
 #include "SMeterWidget.h"
 #include "CrossNeedleMeterApplet.h"
 #include "CrossNeedleMeterSettings.h"
@@ -33,7 +34,6 @@
 #include "ClientEqApplet.h"
 #include "ClientCompApplet.h"
 #include "ClientGateApplet.h"
-#include "ClientDeEssApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientPuduApplet.h"
 #include "ClientReverbApplet.h"
@@ -169,7 +169,7 @@ constexpr int kStackBottomMargin = 8;
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "WFM", "TUN", "AMP", "TX", "PS", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
+    "PWR", "RX", "WFM", "BAND", "TUN", "AMP", "TX", "PS", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -307,7 +307,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         this,
         QStringLiteral("QWidget#appletPanel { background: {{color.background.app}}; }"));
 
-    setFixedWidth(260);
+    setFixedWidth(kRailWidth);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -466,10 +466,12 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_scrollArea->setWidgetResizable(true);
     // Handle dims to #2a3a4a at rest, brightens to #4a6880 on hover/drag.
     // 500 ms delay before dimming back so quick drags don't flicker.
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scrollArea, "QScrollBar:vertical { background: {{color.background.0}}; width: 12px; }"
-        "QScrollBar::handle:vertical { background: {{color.background.1}}; border-radius: 4px; min-height: 20px; }"
-        "QScrollBar::handle:vertical[active=\"true\"] { background: #4a6880; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scrollArea,
+        QStringLiteral("QScrollBar:vertical { background: {{color.background.0}}; width: %1px; }"
+                       "QScrollBar::handle:vertical { background: {{color.background.1}}; border-radius: 4px; min-height: 20px; }"
+                       "QScrollBar::handle:vertical[active=\"true\"] { background: #4a6880; }"
+                       "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+            .arg(kRailScrollBarW));
 
     if (auto* sb = m_scrollArea->verticalScrollBar()) {
         sb->setProperty("active", false);
@@ -481,13 +483,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     connect(m_scrollDimTimer, &QTimer::timeout, this,
             [this]() { setScrollHandleActive(false); });
 
-    // Override sizeHint/minimumSizeHint so QScrollArea::setWidgetResizable
-    // always sizes this container to the viewport width rather than "sticking"
-    // at the AppletPanel's fixed width (260px).  Without this, the VBox layout's
-    // sizeHint stays at 260px after the initial layout pass, and the 12px
-    // scrollbar track (always visible) pushes the viewport to 248px — but Qt
-    // keeps the container at max(248, sizeHint=260)=260px, silently clipping
-    // the right 12px of every applet header (including the × close button).
+    // sizeHint of 0 width lets QScrollArea::setWidgetResizable size this
+    // container to the viewport. Reporting kRailWidth instead pins it at
+    // max(viewport, 260) and clips each applet header's close button.
+    // Viewport width: kStackedApplet with the scrollbar showing, kRailWidth
+    // without it (the policy is ScrollBarAsNeeded).
     struct FlexContainer : QWidget {
         using QWidget::QWidget;
         QSize sizeHint() const override
@@ -776,6 +776,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     connect(m_wfmApplet, &WfmApplet::availabilityChanged,
             this, &AppletPanel::setWfmAvailable);
 
+    m_bandApplet = new BandApplet;
+    m_appletOrder.append(makeEntry("BAND", "Band", m_bandApplet, false, m_drawer, m_drawerLayout, "BAND"));
+
     // HL2 PureSignal: present only while a Hermes-Lite 2 backend is bound,
     // with the same presentation gate as WFM.
     m_pureSignalApplet = new PureSignalApplet;
@@ -1039,9 +1042,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_clientEqRxApplet  = new ClientEqApplet(ClientEqApplet::Path::Rx);
     m_clientCompApplet   = new ClientCompApplet(ClientCompApplet::Side::Tx);
     m_clientCompRxApplet = new ClientCompApplet(ClientCompApplet::Side::Rx);
-    m_clientGateApplet   = new ClientGateApplet(ClientGateApplet::Side::Tx);
-    m_clientGateRxApplet = new ClientGateApplet(ClientGateApplet::Side::Rx);
-    m_clientDeEssApplet = new ClientDeEssApplet;
+    m_clientGateRxApplet = new ClientGateApplet;
     m_clientTubeApplet   = new ClientTubeApplet(ClientTubeApplet::Side::Tx);
     m_clientTubeRxApplet = new ClientTubeApplet(ClientTubeApplet::Side::Rx);
     m_clientPuduApplet   = new ClientPuduApplet(ClientPuduApplet::Side::Tx);
@@ -1072,11 +1073,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // pop-outable sub-containers since users commonly want them
     // floating while working on the chain.)
     if (txDsp) txDsp->insertChildWidget(-1, m_clientChainApplet);
-    makeChildContainer("gate",    "Aetherial TX Gate",       m_clientGateApplet,   -1);
     makeChildContainer("gate-rx", "Aetherial AGC-G",          m_clientGateRxApplet, -1);
     makeChildContainer("ceq",     "Aetherial TX EQ",          m_clientEqTxApplet,   -1);
     makeChildContainer("ceq-rx",  "Aetherial RX EQ",          m_clientEqRxApplet,   -1);
-    makeChildContainer("dess",    "Aetherial De-Esser",       m_clientDeEssApplet,  -1);
     makeChildContainer("cmp",     "Aetherial Compressor",     m_clientCompApplet,   -1);
     makeChildContainer("cmp-rx",  "Aetherial AGC-C",          m_clientCompRxApplet, -1);
     makeChildContainer("tube",    "Aetherial Mic-PreAmp",     m_clientTubeApplet,   -1);
@@ -1494,6 +1493,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
     static const QMap<QString, QString> kCategory = {
         {QStringLiteral("RX"),    QStringLiteral("Receive")},
         {QStringLiteral("WFM"),   QStringLiteral("Receive")},
+        {QStringLiteral("BAND"),  QStringLiteral("Receive")},
         {QStringLiteral("MPAN"),  QStringLiteral("Receive")},
         {QStringLiteral("KSDR"),  QStringLiteral("Receive")},
         {QStringLiteral("DEMO"),  QStringLiteral("Receive")},
@@ -1648,8 +1648,6 @@ void AppletPanel::setPooDooActiveSide(PooDooSide side)
     // — they hide entirely on RX and reappear on TX.
     static const QStringList kTxOnly{
         QStringLiteral("ceq"),
-        QStringLiteral("dess"),
-        QStringLiteral("gate"),
         QStringLiteral("cmp"),
         QStringLiteral("tube"),
         QStringLiteral("pudu"),
@@ -2038,6 +2036,8 @@ void AppletPanel::setSlice(SliceModel* slice)
     if (m_wfmApplet) {
         m_wfmApplet->setSlice(slice);
     }
+    if (m_bandApplet)
+        m_bandApplet->setSlice(slice);
     if (m_aetherClockApplet)
         m_aetherClockApplet->setSlice(slice);
 
@@ -2110,9 +2110,9 @@ void AppletPanel::setTxDspChainOrder(
     // should have been hidden via stageEnabledChanged anyway).
     auto idFor = [](AudioEngine::TxChainStage s) -> QString {
         switch (s) {
-            case AudioEngine::TxChainStage::Gate:   return "gate";
+            case AudioEngine::TxChainStage::Gate:   return {};  // retired
             case AudioEngine::TxChainStage::Eq:     return "ceq";
-            case AudioEngine::TxChainStage::DeEss:  return "dess";
+            case AudioEngine::TxChainStage::DeEss:  return {};  // retired
             case AudioEngine::TxChainStage::Comp:   return "cmp";
             case AudioEngine::TxChainStage::Tube:   return "tube";
             case AudioEngine::TxChainStage::Enh:    return "pudu";
@@ -2191,7 +2191,8 @@ QStringList AppletPanel::defaultButtonOrder() const
     // labels (WAVE→"WAV", PHNE→"PHN", TXDSP→"VUDU"). TUN/AMP/AG are omitted:
     // updateHardwareAvailability() adds them when the hardware appears, and the
     // user's Hidden choice is respected after that.
-    QStringList out = {"VU", "PWR", "RX", "TX", "P/CW"};
+    // BAND sits right after the visible five: first in the drawer (RFC #5234).
+    QStringList out = {"VU", "PWR", "RX", "TX", "P/CW", "BAND"};
     const QStringList rest = {
         "LCK", "PHNE", "EQ", "WAVE", "TXDSP",
         "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "SS", "MQTT"

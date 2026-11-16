@@ -101,6 +101,12 @@ struct ReceiveDspControl {
     // An entry narrows a declared feature to a subset of the qualified modes.
     // An absent entry uses all modes; an empty entry disables that feature.
     QMap<Feature, QStringList> featureModes;
+    // Headless admission provenance for slice.setAgcThreshold/NoiseBlanker/
+    // NoiseReduction/Rit. Unknown keeps the record GUI-only: aetherd refuses.
+    // Last, so existing positional initializers keep their meaning.
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    // Largest |RIT offset| slice.setRit admits; 0 = RIT is not offered headless.
+    int maximumRitOffsetHz = 0;
     bool supports(Feature feature, const QString& mode) const
     {
         const auto restriction = featureModes.constFind(feature);
@@ -122,10 +128,31 @@ struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
 };
+// radioSession.setRadioSpeaker: the receiver's audio played on the radio's own speaker
+// (a radio with one, fed from this host), dispatched through requestRadioSpeakerAudio()
+// and reported through radioSpeakerAudioReported().
+struct RadioSpeakerControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+};
+// panadapter.setRfGain: setPanRfGain()'s range in dB, reported back through
+// panRfGainChanged. A backend whose stage is an attenuator declares it negated.
+struct ReceivePanRfGainControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    int minimumDb = 0;
+    int maximumDb = 0;
+    int stepDb = 1;
+};
 // Typed pre-monitor sliceAudioFrameReady export; grants no TX, IQ or control verb.
 struct ReceiveAudioExport {
     QVector<int> sampleRatesHz;
     int maximumReceivers = 0;
+};
+
+// Host playback timing for the existing primary PCM queue. This is transport
+// metadata, independent of model names, monitor controls and decoder exports.
+struct ReceiveAudioPlayout {
+    int prefillMs = 0;
+    int bufferCapMs = 0;
 };
 
 // Broadcast FM controls are available only when their typed request is supported.
@@ -375,6 +402,17 @@ struct RadioCapabilities {
     // status bar shows it above the model unless the model string already names it.
     QString manufacturer;
 
+    // The connected board, as the backend derived it below the seam (#7311). The
+    // GUI classifies a radio's support tier on this, never on display text such
+    // as RadioInfo::versionLabel. Absent = the backend declares no board identity;
+    // an optional cannot distinguish that from "never set", so set it explicitly
+    // per ADDING A FIELD.
+    struct BoardIdentity {
+        QString board;                    // stable lowercase id, e.g. "hl2", "square-sdr-2"
+        std::optional<int> gatewareMajor; // firmware/gateware major; nullopt = not reported
+    };
+    std::optional<BoardIdentity> boardIdentity;
+
     // Receive
     // Independent creation on an existing pan through the typed backend route.
     // Separate from maxSlices: a paired receiver/pan topology can support several
@@ -469,9 +507,12 @@ struct RadioCapabilities {
     std::optional<ReceiveCwPitchControl> receiveCwPitchControl;
     std::optional<ReceiveDspControl> receiveDspControl;
     std::optional<ReceiveAudioExport> receiveAudioExport;
+    std::optional<ReceiveAudioPlayout> receiveAudioPlayout;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
+    std::optional<ReceivePanRfGainControl> receivePanRfGainControl;
+    std::optional<RadioSpeakerControl> radioSpeakerControl;
     // Engaged when the radio can deliver a wideband converter view; see the
     // struct above for why absence is the right default and what it means.
     std::optional<WidebandConverterView> widebandConverterView;

@@ -184,8 +184,13 @@ void SmartLinkClient::finishRefreshReply(QNetworkReply* reply, quint64 generatio
         QString desc = err.value("error_description").toString(reply->errorString());
         qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 refresh failed:" << desc;
         // Only an Auth0 answer invalidates the token; a transport failure keeps
-        // it so the next reconnect can retry.
-        if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).isValid()) {
+        // it so the next reconnect can retry. 400/401/403 (invalid_grant and
+        // kin) mean this refresh token is dead, so auto-login must stop offering
+        // it, from memory or keychain; 408/429 and 5xx do not.
+        const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+        if (status.isValid()) {
+            const int code = status.toInt();
+            if (code == 400 || code == 401 || code == 403) { forgetRefreshToken(m_accountId); }
             resetAuthentication();
         }
         emit authFailed(desc);
@@ -285,6 +290,15 @@ void SmartLinkClient::clearCredentials()
 
 void SmartLinkClient::forgetAccount(const QString& id)
 {
+    forgetRefreshToken(id);
+    if (id == QLatin1String("legacy")) {
+        AppSettings::instance().remove("SmartLinkEmail");
+        AppSettings::instance().save();
+    }
+}
+
+void SmartLinkClient::forgetRefreshToken(const QString& id)
+{
     m_sessionCredentials.remove(id);
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
@@ -299,10 +313,6 @@ void SmartLinkClient::forgetAccount(const QString& id)
     });
     job->start();
 #endif
-    if (id == QLatin1String("legacy")) {
-        AppSettings::instance().remove("SmartLinkEmail");
-        AppSettings::instance().save();
-    }
 }
 
 void SmartLinkClient::tryAutoLogin()

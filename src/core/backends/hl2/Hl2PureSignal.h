@@ -69,6 +69,7 @@ struct Hl2PureSignalStatus {
     bool calibrating = false;    // Auto or Single is running
     bool singleCalibrating = false;  // Single is running, retries included
     bool correcting = false;     // info[14]: correction applied to TX
+    int fileError = 0;            // WDSP file-error flags, latched for this channel
     int feedbackLevel = 0;       // info[4]; 128 < fb <= 181 is the target window
     int calibrationCount = 0;    // info[5]: successful calibrations
     int engineState = 0;         // info[15]: calcc's state
@@ -263,6 +264,7 @@ signals:
     void statusChanged(const AetherSDR::hl2::Hl2PureSignalStatus& status);
 
 private:
+    friend struct Hl2PureSignalTestAccess;
     void onTick();
     WdspChannel* channel();
     void seedChannel(WdspChannel* ch);

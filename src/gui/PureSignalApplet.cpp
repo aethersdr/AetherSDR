@@ -114,6 +114,8 @@ void PureSignalFeedbackMeter::setLevel(int level)
     if (level == m_level) { return; }
     m_level = level;
     setAccessibleDescription(level < 0 ? tr("No feedback") : QString::number(level));
+    QAccessibleEvent event(this, QAccessible::DescriptionChanged);
+    QAccessible::updateAccessibility(&event);
     m_smooth.setTarget(level < 0 ? 0.0f
                                  : static_cast<float>(std::min(level, kScaleMax)) / kScaleMax);
     if (level < 0) { m_smooth.snapToTarget(); }   // no data: empty now, not decaying
@@ -402,6 +404,9 @@ PureSignalView PureSignalView::fromFields(const QVariantMap& f, PureSignalView v
         if (it != f.constEnd()) { out = it->toInt(); }
     };
     b("available", v.available);
+    if (f.contains(QStringLiteral("fileError"))) {
+        v.fileError = f.value(QStringLiteral("fileError")).toInt();
+    }
     if (f.contains(QStringLiteral("unavailableReason"))) {
         v.unavailableReason = f.value(QStringLiteral("unavailableReason")).toString();
     }
@@ -560,6 +565,11 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         text = tr("Hermes-Lite 2 only");
     } else if (!m_error.isEmpty()) {
         text = m_error;
+        token = QStringLiteral("color.accent.danger");
+    } else if (s.fileError != 0) {
+        text = (s.fileError & 2) != 0
+            ? tr("WDSP reported a correction-file restore error")
+            : tr("WDSP reported a correction-file save error");
         token = QStringLiteral("color.accent.danger");
     } else if (!s.available && !s.enabled) {
         text = s.unavailableReason.isEmpty() ? tr("Unavailable") : s.unavailableReason;

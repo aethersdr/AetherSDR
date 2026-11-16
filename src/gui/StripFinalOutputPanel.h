@@ -39,6 +39,7 @@ private:
     void applyEnable(bool on);
     void applyCeiling(float db);
     void applyTrim(float db);
+    void applyLookahead(float ms);
     void applyDcBlock(bool on);
     void applyTestToneEnabled(bool on);
     void applyTestToneFreq(float hz);
@@ -55,6 +56,7 @@ private:
     QPushButton*    m_quinBtn{nullptr};   // Quindar tones (#2262)
     bool            m_quinActive{false};  // signal-driven flash state
     ClientCompKnob* m_trim{nullptr};
+    ClientCompKnob* m_lookahead{nullptr};
     QWidget*        m_meter{nullptr};
     QLabel*         m_pkValue{nullptr};
     QLabel*         m_rmsValue{nullptr};

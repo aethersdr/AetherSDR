@@ -36,6 +36,7 @@ struct PureSignalView {
     bool calibrating = false;
     bool singleCalibrating = false;
     bool correcting = false;
+    int fileError = 0;
     int feedbackLevel = 0;
     int calibrationCount = 0;
     int engineState = 0;

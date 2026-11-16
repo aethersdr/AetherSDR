@@ -7,8 +7,11 @@
 // step (cpm.modulate = bandpass(modulate)).
 #pragma once
 
+#include <array>
 #include <complex>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -74,6 +77,8 @@ Detection detect(const Grid& g, std::span<const double> x, double reach_hz = 150
 
 // (n_sym, m) energies of one codeword -> n_sym * bits LLRs, mapping order (the control codeword's).
 std::vector<double> llrs(const Grid& g, const Mat<double>& E);
+// cpm.bit_llrs: tone log-likelihoods metric * scale -> their coded-bit marginals (llrs: E at its metric's scale).
+std::vector<double> bit_llrs(const Grid& g, const Mat<double>& metric, double scale = 1.0);
 // -> n_sym * m symbol log-likelihoods, mapping order, value v's on tone gray(v) (a GF(M) data codeword's).
 std::vector<double> symbol_ll(const Grid& g, const Mat<double>& E);
 
@@ -150,6 +155,14 @@ Measure measure(const Grid& g, const Mat<double>& E, int n_sym);
 
 // cpm.receive: an early lock's burst, whole in x (same sample origin) ->
 // the per-slot soft bits and tone energies data2g.arq.phy reads.
+// A data slot's mask-free decode made while its burst arrived (arq::cpm_pass,
+// phy.cpm_pass): candidates as codes::decode_raw's row, usable, and the
+// decoded codeword's certain posterior (empty: it failed).
+struct Pass {
+    std::vector<std::uint8_t> cands, usable;
+    std::vector<double> post;
+};
+
 struct Received {
     const Spec* spec;
     int n_cw, n_ctl_slots;  // slots, control included; control slots
@@ -158,10 +171,80 @@ struct Received {
     Mat<double> E;
     double cfo;
     std::int64_t preamble_start, header_end;
+    Mat<std::complex<double>> Z;  // (burst rows, m) complex tone bins at the refined start and CFO (coherent DD)
+    std::map<int, Pass> passes;   // data slots' passes a streaming receiver made (arq::CpmStream); ModemRx makes the rest
 };
 // cpm.refine: a lock's start and CFO by the likelihood of the burst's first refine_symbols symbols.
 std::pair<std::int64_t, double> refine(const Grid& g, std::span<const double> x, std::int64_t s0, double cfo,
                                        const Spec& spec, int n_data, bool dup);
+// The control slots' soft bits are coherent (dd_soft of dd_metric with no
+// posteriors) unless coh_ctl() is off.
 Received receive(std::span<const double> x, const Lock& lock);
+// receive with refine's result `at` (start, cfo) already made.
+Received receive_refined(std::span<const double> x, const Lock& lock, std::pair<std::int64_t, double> at);
+
+// --- coherent detection (cpm.py's section of that name) ---
+// h = 1, continuous phase: every symbol starts at the same carrier phase. A
+// channel estimate per row from its neighbours' known or decided tones makes
+// the metric coherent; a poor estimate falls back to the square law.
+inline constexpr int COH_W = 8;      // coh_metric's window for slots (+- rows, the row left out)
+inline constexpr int COH_HDR_W = 4;  // the header's
+// cpm.COH_LOCK: the grid's coherent lock gates (score one copy, both; margin
+// one copy, both), nullopt for an uncalibrated grid or DATA2G_CPM_COH_LOCK != 1 (read once).
+std::optional<std::array<double, 4>> coh_lock(const Grid& g);
+// cpm.COH_PREGATE: the coherent reading runs only where the noncoherent score reaches this (one copy, both).
+inline constexpr double COH_PREGATE[] = {12.0, 10.0};
+// cpm.COH_CTL (DATA2G_CPM_COH_CTL, read once).
+bool coh_ctl();
+
+// (n_sym, m) complex tone bins from `start`, CFO removed (energies before the square).
+Mat<std::complex<double>> bins(const Grid& g, std::span<const double> x, std::int64_t start, int n_sym, double cfo);
+// (n, m) bins of consecutive rows and P (n, m) the tones' probabilities -> (n, m) coherent tone log-likelihoods.
+Mat<double> coh_metric(const Mat<std::complex<double>>& Z, const Mat<double>& P, int W, double n0);
+// cpm._n0: the noise level of energies E (all but each row's strongest, exponential).
+double noise_n0(const Mat<double>& E);
+// cpm._coh_run_llr: per-row tone_llr of known tones t over a run of consecutive rows (coh_metric, n0).
+std::vector<double> coh_run_llr(const Grid& g, const Mat<std::complex<double>>& Z, std::span<const int> t, double n0);
+// read_header on coh_metric (cpm.coh_read_header).
+Header coh_read_header(const Grid& g, std::span<const double> x, std::int64_t s0, double cfo, int copies = 2);
+// Per slot (control first), its rows in the burst.
+std::vector<std::vector<int>> slot_rows(const Grid& g, int n_data, bool dup);
+// cpm.dd_metric: (slot's rows, m) coh_metric over the burst rows from the
+// slot's first less COH_W to its last plus COH_W; `post` {data slot: GF
+// log-probabilities as sent, decode_posterior's}. It reads r.Z on those rows
+// only, so a streaming receiver can run it once they are in.
+using Posts = std::map<int, std::vector<double>>;
+Mat<double> dd_metric(const Received& r, const Posts& post, int slot);
+// cpm.dd_soft: a slot's soft values from its dd_metric (control: bit LLRs, data: symbol log-likelihoods).
+std::vector<double> dd_soft(const Received& r, const Mat<double>& metric, int slot);
+
+// A pending lock's receive, made as its burst arrives: refine once its
+// window is in (refine_symbols, or the whole burst), then each data slot's
+// pass (`pass`, arq::cpm_pass) once the slot and coh_w rows more are in,
+// each on a Received of the audio so far (a slot's rows and its metric's
+// window are complete then, and rows are computed alone, so it is bitwise
+// the pass made on the whole burst). finish(): the burst's Received, with
+// the passes made, as receive(x, lock) gives it.
+// Not thread-safe: feed and finish from one thread at a time, in order.
+using PassFn = std::function<Pass(const Received&, int slot, const Posts& earlier)>;
+class Stream {
+public:
+    // x: the receiver's buffer at the lock (lock in its coordinates); pass: none = refine early only.
+    Stream(std::vector<double> x, const Lock& lock, PassFn pass);
+    void feed(std::span<const double> more);  // the audio after it, in order
+    Received finish();  // once the burst is whole in what was fed
+    int passes_made() const { return static_cast<int>(passes_.size()); }
+
+private:
+    void advance();
+    std::vector<double> x_;
+    Lock lock_;
+    PassFn pass_;
+    std::optional<std::pair<std::int64_t, double>> at_;
+    std::int64_t refine_need_;  // x_ size refine needs
+    std::vector<std::int64_t> slot_need_;  // per data slot (index 0 = first data slot): x_ size its pass needs
+    std::map<int, Pass> passes_;
+    Posts earlier_;
+};
 
 }  // namespace data2g::cpm
