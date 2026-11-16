@@ -17,8 +17,16 @@ entry, and the same runtime hashes and identity after reboot.
 
 That run used a fresh desktop profile. A reused profile correctly refused to
 replace a completed first-install journal signed by an older development key.
-Cross-publisher reinstall/recovery, additional channels, interrupted updates,
-RF behavior and actual FLEX-6000 hardware remain separate qualification gates.
+Cross-publisher reinstall/recovery, interrupted updates, RF behavior and actual
+FLEX-6000 hardware remain separate qualification gates.
+
+The subsequent [channel and ownership qualification](../SELECTED-IQ-LIVE-QUALIFICATION.json)
+captured channels 2–4 on that same installed runtime. Channel reassignment and
+GUI disconnection terminated capture; an explicit new Start recovered with
+the current binding. Host audits found no remaining IQ/DSP workers or temporary
+ARP entry. Fault exits retained `cleanup_unconfirmed`; successful later normal
+stops reported `stopped`. These receive-only observations do not qualify RF
+unkey timing or simultaneous foreign-client conflicts.
 
 ## Authorization and identity
 

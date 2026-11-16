@@ -687,8 +687,9 @@ brief spike is no longer visible on the meters. Missing readings remain marked
 as missing; the record reports the radio's telemetry and does not independently
 verify the load or confirm that transmission has stopped.
 
-If the source request is refused, check **PD** mode, feedback panadapter
-**IQ Ch 1**, fresh DAX IQ and the transmit interlock before trying again.
+If the source request is refused, check **PD** mode, the pan and IQ channel
+selected under **Feedback DAX IQ**, fresh DAX IQ and the transmit interlock
+before trying again.
 The failure notice remains visible across status refreshes. If an arm or
 cancellation is unconfirmed, check the service status; **Cancel source**
 withdraws an arm and **Stop AetherPD** ends the owned source.

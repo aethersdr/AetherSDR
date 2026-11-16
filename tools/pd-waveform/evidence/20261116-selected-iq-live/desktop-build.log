@@ -1,0 +1,17 @@
+[0/2] Re-checking globbed directories...
+[1/17] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/17] Capturing build identity (git describe)
+[3/17] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/17] Completed 'vulkan-shaders-gen'
+[5/17] Building CXX object CMakeFiles/aetherdesktop_support.dir/src/core/AutomationServer.cpp.o
+[6/17] Linking CXX static library libaetherdesktop_support.a
+[7/17] Automatic MOC and UIC for target aetherpd_dialog_test
+[8/16] Automatic MOC and UIC for target AetherSDR
+[9/15] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/src/gui/AetherPDMeasurementDialog.cpp.o
+[10/15] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/AetherPDMeasurementDialog.cpp.o
+[11/15] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/CopyAssistController.cpp.o
+[12/15] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Menus.cpp.o
+[13/15] Linking CXX executable aetherpd_dialog_test
+[14/15] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory

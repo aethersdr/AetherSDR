@@ -43,8 +43,8 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     layout->setContentsMargins(24, 24, 24, 24);
     layout->addWidget(makeCanonHeader(tr("Linearity measurement")));
     auto* hint = new QLabel(tr("Experimental · local DAX IQ · FDX off. Select your frequency, ANT1 dummy load and "
-        "attenuated RXA feedback before arming. Assign IQ Ch 1 to the feedback panadapter in its DAX panel, "
-        "start AetherPD, then select PD mode on your TX slice. The source runs four seconds of alignment noise, then "
+        "attenuated RXA feedback before arming. Assign an available IQ channel (1–4) to the feedback panadapter in its DAX panel, "
+        "select that pan in AetherPD and start it, then select PD mode on your TX slice. The source runs four seconds of alignment noise, then "
         "the selected tones, for at most eight seconds. Prepare checks reception; only Transmit keys RF."), bodyWidget());
     hint->setWordWrap(true);
     layout->addWidget(hint);
@@ -241,7 +241,7 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
                 if (operation == aetherpd::Operation::CancelCalibration) {
                     m_notice = tr("Source cancellation is not confirmed. Check service status; Stop AetherPD ends the owned source.");
                 } else if (failure == AetherPDClient::Failure::Refused || failure == AetherPDClient::Failure::InvalidRequest) {
-                    m_notice = tr("Measurement source request refused. Check PD mode, feedback panadapter IQ Ch 1, fresh DAX IQ and the transmit interlock.");
+                    m_notice = tr("Measurement source request refused. Check PD mode, the selected feedback pan and IQ channel, fresh DAX IQ and the transmit interlock.");
                 } else if (failure == AetherPDClient::Failure::Busy) {
                     m_notice = tr("Measurement source request was not submitted because another request is pending.");
                 } else {

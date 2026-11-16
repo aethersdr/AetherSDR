@@ -1,0 +1,553 @@
+{
+  "passed": true,
+  "rf_commands": [],
+  "cases": [],
+  "before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.484375,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "prior_status": {
+    "body": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "http_status": 200
+  },
+  "before_controls": {
+    "pdState": {
+      "accessibleName": "Session ended \u2014 cleanup unconfirmed",
+      "class": "QLabel",
+      "enabled": true,
+      "geometry": {
+        "h": 20,
+        "w": 470,
+        "x": 25,
+        "y": 115
+      },
+      "objectName": "pdState",
+      "value": "Session ended \u2014 cleanup unconfirmed",
+      "visible": true
+    },
+    "pdDetail": {
+      "accessibleName": "The session supervisor reported an error or cleanup deadline. Shutdown and unkey are not confirmed.",
+      "class": "QLabel",
+      "enabled": true,
+      "geometry": {
+        "h": 32,
+        "w": 470,
+        "x": 25,
+        "y": 149
+      },
+      "objectName": "pdDetail",
+      "value": "The session supervisor reported an error or cleanup deadline. Shutdown and unkey are not confirmed.",
+      "visible": true
+    },
+    "pdReceipt": {
+      "accessibleName": "Stop requested; shutdown and unkey are not yet confirmed here.",
+      "class": "QLabel",
+      "enabled": true,
+      "geometry": {
+        "h": 16,
+        "w": 470,
+        "x": 25,
+        "y": 195
+      },
+      "objectName": "pdReceipt",
+      "value": "Stop requested; shutdown and unkey are not yet confirmed here.",
+      "visible": true
+    },
+    "pdMessage": {
+      "class": "QLabel",
+      "enabled": true,
+      "geometry": {
+        "h": 16,
+        "w": 470,
+        "x": 25,
+        "y": 225
+      },
+      "objectName": "pdMessage",
+      "visible": true
+    },
+    "pdIqSelection": {
+      "accessibleDescription": "Choose an owned feedback pan. Assign its IQ channel in the pan's DAX panel first. This choice sends no radio commands.",
+      "accessibleName": "Feedback DAX IQ pan and channel",
+      "class": "QComboBox",
+      "currentIndex": 0,
+      "enabled": true,
+      "geometry": {
+        "h": 26,
+        "w": 470,
+        "x": 25,
+        "y": 285
+      },
+      "items": [
+        "Select a feedback pan with IQ assigned\u2026",
+        "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000"
+      ],
+      "objectName": "pdIqSelection",
+      "value": "Select a feedback pan with IQ assigned\u2026",
+      "visible": true
+    },
+    "pdIqObserved": {
+      "accessibleName": "No confirmed native IQ binding. Choose a pan, then start AetherPD.",
+      "class": "QLabel",
+      "enabled": true,
+      "geometry": {
+        "h": 16,
+        "w": 470,
+        "x": 25,
+        "y": 325
+      },
+      "objectName": "pdIqObserved",
+      "value": "No confirmed native IQ binding. Choose a pan, then start AetherPD.",
+      "visible": true
+    },
+    "pdStart": {
+      "accessibleDescription": "Select an owned pan with IQ Ch 1\u20134 assigned, authenticate this radio session, and stop any running AetherPD session before starting.",
+      "accessibleName": "Start AetherPD",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 25,
+        "y": 355
+      },
+      "objectName": "pdStart",
+      "toolTip": "Select an owned pan with IQ Ch 1\u20134 assigned, authenticate this radio session, and stop any running AetherPD session before starting.",
+      "value": "Start AetherPD",
+      "visible": true
+    },
+    "pdStop": {
+      "accessibleName": "Stop AetherPD",
+      "class": "QPushButton",
+      "enabled": true,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 263,
+        "y": 355
+      },
+      "objectName": "pdStop",
+      "value": "Stop AetherPD",
+      "visible": true
+    },
+    "pdArm": {
+      "accessibleDescription": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+      "accessibleName": "Arm calibration",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 25,
+        "y": 391
+      },
+      "objectName": "pdArm",
+      "toolTip": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+      "value": "Arm calibration",
+      "visible": true
+    },
+    "pdCancel": {
+      "accessibleName": "Cancel calibration",
+      "class": "QPushButton",
+      "enabled": true,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 263,
+        "y": 391
+      },
+      "objectName": "pdCancel",
+      "value": "Cancel calibration",
+      "visible": true
+    },
+    "pdRestore": {
+      "accessibleName": "Restore receive",
+      "class": "QPushButton",
+      "enabled": true,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 25,
+        "y": 427
+      },
+      "objectName": "pdRestore",
+      "value": "Restore receive",
+      "visible": true
+    },
+    "pdRefresh": {
+      "accessibleName": "Refresh",
+      "class": "QPushButton",
+      "enabled": true,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 263,
+        "y": 427
+      },
+      "objectName": "pdRefresh",
+      "value": "Refresh",
+      "visible": true
+    },
+    "pdMeasurement": {
+      "accessibleName": "Measure linearity\u2026",
+      "class": "QPushButton",
+      "enabled": true,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 25,
+        "y": 463
+      },
+      "objectName": "pdMeasurement",
+      "value": "Measure linearity\u2026",
+      "visible": true
+    },
+    "pdEnableCorrection": {
+      "accessibleDescription": "The installed service does not support correction selection.",
+      "accessibleName": "Enable correction",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 25,
+        "y": 499
+      },
+      "objectName": "pdEnableCorrection",
+      "toolTip": "The installed service does not support correction selection.",
+      "value": "Enable correction",
+      "visible": true
+    },
+    "pdBypassCorrection": {
+      "accessibleDescription": "The installed service does not support correction selection.",
+      "accessibleName": "Bypass correction",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 232,
+        "x": 263,
+        "y": 499
+      },
+      "objectName": "pdBypassCorrection",
+      "toolTip": "The installed service does not support correction selection.",
+      "value": "Bypass correction",
+      "visible": true
+    },
+    "pdInstallState": {
+      "accessibleName": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+      "class": "QLabel",
+      "enabled": true,
+      "geometry": {
+        "h": 16,
+        "w": 470,
+        "x": 25,
+        "y": 651
+      },
+      "objectName": "pdInstallState",
+      "value": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+      "visible": true
+    },
+    "pdInstallPlan": {
+      "accessibleDescription": "Read-only target, changes and authenticated package identifiers to review before approving.",
+      "accessibleName": "AetherPD installation plan",
+      "class": "QPlainTextEdit",
+      "enabled": true,
+      "geometry": {
+        "h": 150,
+        "w": 470,
+        "x": 25,
+        "y": 681
+      },
+      "objectName": "pdInstallPlan",
+      "value": "First-install development package 0.0.0-iq.88280414f \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nFirst installation \u2014 changes on approval:\n\u2022 Save a new radio credential in the system keychain before uploading.\n\u2022 Temporarily use host-root authority to install the verified AetherPD payload and fixed helpers.\n\u2022 Create a new local identity; no predecessor credential or Tailnet enrollment is used.\n\u2022 Install fixed boot and local-session helpers for reboot, local IQ capture and scheduling.\n\u2022 Run the shim and AetherPD without host-root authority.\n\u2022 Remove temporary installation components. Fixed boot/session helpers remain installed.\nInstallation does not transmit or arm calibration.\n\nTemporary executables: pd-first-request, pd-accept, pd-carrier, pd-send, pd-deliver, signed installation worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nNew release (BLAKE2b-256): 5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20\nPublisher key (Ed25519): 2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558\nAttempt (BLAKE2b-256): 9e798ab8179e28d5c9dc3a53f654bdfe1713947bf56a62e02fbb9689d4e98e47\nTemporary native package: AetherPDFirst1e15fc3849a5a409\nTemporary carrier: aetherpd-first-1e15fc3849a5a409\nCarrier archive (SHA-256): 13bcde59b588c1e2fce40833498085ae419b4d8380ee60da4542340767914fa5\nNew local identity hostname: flx8600",
+      "visible": true
+    },
+    "pdInstallCancel": {
+      "accessibleDescription": "No pending update can be canceled in this connection.",
+      "accessibleName": "Cancel AetherPD update",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 115,
+        "x": 25,
+        "y": 1021
+      },
+      "objectName": "pdInstallCancel",
+      "toolTip": "No pending update can be canceled in this connection.",
+      "value": "Cancel update",
+      "visible": true
+    },
+    "pdInstallApprove": {
+      "accessibleDescription": "A verified plan for this connection and an idle transmitter are required.",
+      "accessibleName": "Approve AetherPD first installation",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 175,
+        "x": 146,
+        "y": 1021
+      },
+      "objectName": "pdInstallApprove",
+      "toolTip": "A verified plan for this connection and an idle transmitter are required.",
+      "value": "Approve first installation",
+      "visible": true
+    },
+    "pdDone": {
+      "accessibleName": "Done",
+      "class": "QPushButton",
+      "enabled": true,
+      "geometry": {
+        "h": 30,
+        "w": 59,
+        "x": 436,
+        "y": 1021
+      },
+      "objectName": "pdDone",
+      "value": "Done",
+      "visible": true
+    },
+    "pdInstallPrepare": {
+      "accessibleDescription": "A development package compiled for this radio firmware and no pending update are required.",
+      "accessibleName": "Prepare AetherPD development update",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 470,
+        "x": 25,
+        "y": 845
+      },
+      "objectName": "pdInstallPrepare",
+      "toolTip": "A development package compiled for this radio firmware and no pending update are required.",
+      "value": "Prepare update",
+      "visible": true
+    },
+    "pdInstallFirst": {
+      "accessibleDescription": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first.",
+      "accessibleName": "Prepare AetherPD first installation",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 228,
+        "x": 25,
+        "y": 889
+      },
+      "objectName": "pdInstallFirst",
+      "toolTip": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first.",
+      "value": "Prepare first installation",
+      "visible": true
+    },
+    "pdInstallCheck": {
+      "accessibleName": "Check saved AetherPD installation",
+      "class": "QPushButton",
+      "enabled": true,
+      "geometry": {
+        "h": 30,
+        "w": 228,
+        "x": 267,
+        "y": 889
+      },
+      "objectName": "pdInstallCheck",
+      "value": "Check saved installation",
+      "visible": true
+    },
+    "pdInstallSaved": {
+      "accessibleDescription": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first.",
+      "accessibleName": "Prepare saved AetherPD installation attempt",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 470,
+        "x": 25,
+        "y": 933
+      },
+      "objectName": "pdInstallSaved",
+      "toolTip": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first.",
+      "value": "Prepare saved attempt",
+      "visible": true
+    },
+    "pdInstallCleanup": {
+      "accessibleDescription": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required.",
+      "accessibleName": "Remove temporary AetherPD installer packages",
+      "class": "QPushButton",
+      "enabled": false,
+      "geometry": {
+        "h": 30,
+        "w": 470,
+        "x": 25,
+        "y": 977
+      },
+      "objectName": "pdInstallCleanup",
+      "toolTip": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required.",
+      "value": "Remove temporary installer packages",
+      "visible": true
+    }
+  },
+  "start": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdStart"
+  },
+  "registered": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "idle",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 602294182,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000000",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "calibration",
+      "state": "idle"
+    },
+    "http_status": 200
+  },
+  "ready_s": 1.67,
+  "capture": {
+    "body": {
+      "capture_id": "1fd999c958a1eb7f94e35c04262788c7",
+      "center_hz": 7150000,
+      "chunk_samples": 512,
+      "correcting": false,
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 602294182,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "first_receive_ns": "844885351916",
+      "format": "f32le-iq-v1",
+      "keyed": false,
+      "last_receive_ns": "845226270881",
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "source": {
+        "generation": "6",
+        "kind": "local_dax_iq",
+        "stream_id": 536870912
+      }
+    },
+    "http_status": 200
+  },
+  "stop": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  },
+  "after": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.484375,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  }
+}

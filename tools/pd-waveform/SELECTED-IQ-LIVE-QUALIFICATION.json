@@ -1,0 +1,213 @@
+{
+  "updated_utc": "2026-11-16T16:19:52.268504+00:00",
+  "status": "selected_channels_and_owner_loss_qualified_on_installed_8600_with_limits",
+  "production_ready": false,
+  "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+  "live_desktop_source": "fdf0a40861ddbc0a11308303656429fdfcbc9f78",
+  "radio": {
+    "model": "FLEX-8600",
+    "serial": "2125-1213-8600-8895",
+    "firmware": "4.3.16.42034",
+    "fdx": false,
+    "rf_transmissions": 0
+  },
+  "installation": {
+    "firmware": "4.3.16.42034",
+    "first_install_plan_blake2b_256": "9e798ab8179e28d5c9dc3a53f654bdfe1713947bf56a62e02fbb9689d4e98e47",
+    "installation_committed": true,
+    "profile": 1,
+    "selected_release_blake2b_256": "5097ff71ddda30839f6df85d6b8eceeebc08cfcc19736f40b6eed431ec44cc20",
+    "selected_release_key": "2854210c1cfd9df89e6bb50f362b910ee117a7063165636b7fb5ba2b5eadb558",
+    "serial": "2125-1213-8600-8895",
+    "state": "committed"
+  },
+  "channel_captures": [
+    {
+      "channel": 2,
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "binding": {
+        "channel": 2,
+        "failed": false,
+        "gui_handle": 602294182,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "bytes": 131072,
+      "sha256": "78d16fcca87b07a307eb5df1c6bdf9d7de5e99c4418b27949e475a19cf5de9c8",
+      "finite_nonzero_values": 30912,
+      "running_selection_disabled": true,
+      "running_selection_attempt_refused": true
+    },
+    {
+      "channel": 3,
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "binding": {
+        "channel": 3,
+        "failed": false,
+        "gui_handle": 602294182,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "bytes": 131072,
+      "sha256": "bbde1fb8209845f5faf6235d0ef22c6cd734af1fe438b2b2f2fd7d7d3118590d",
+      "finite_nonzero_values": 30884,
+      "running_selection_disabled": true,
+      "running_selection_attempt_refused": true
+    },
+    {
+      "channel": 4,
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 602294182,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "bytes": 131072,
+      "sha256": "b3063e3474123c438f008c7acbd40be6d9b1fd38b6ff17aa5021fcc885680b39",
+      "finite_nonzero_values": 30944,
+      "running_selection_disabled": true,
+      "running_selection_attempt_refused": true
+    }
+  ],
+  "channel_1_evidence": "FIRST-IQ-LIVE-QUALIFICATION.json",
+  "binding_loss": {
+    "change": "Owned pan IQ channel 4 to 1 during receive-only operation, then back to 4.",
+    "first_unavailable_observation_s": 0.256,
+    "capture_refused_after_loss_and_return": true,
+    "terminal_state": "cleanup_unconfirmed",
+    "host_audit_workers_gone": true,
+    "host_audit_arp_absent": true,
+    "explicit_restart_ready_s": 1.67,
+    "explicit_restart_fresh_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 602294182,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "normal_stop_after_restart": "stopped",
+    "scope": "Finite observed fail-closed teardown; no claim of maximum fault latency or physically measured unkey timing."
+  },
+  "owner_loss": {
+    "action": "Normal disconnect of the owning GUI through the automation bridge; reconnect to the same serial.",
+    "terminal_observation_s": 5.368,
+    "terminal_state": "cleanup_unconfirmed",
+    "retired_window_start_refused": true,
+    "old_gui_handle": 602294182,
+    "new_gui_handle": 1179346153,
+    "capture_unavailable_until_explicit_restart": true,
+    "fresh_window_requires_explicit_selection": true,
+    "fresh_capture_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 1179346153,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "normal_stop_after_restart": "stopped"
+  },
+  "final_state": {
+    "radio_connected": true,
+    "transmitting": false,
+    "fdx": false,
+    "rf_power_setting_w": 10,
+    "configured_maximum_w": 10,
+    "aetherpd_state": "stopped",
+    "selected_iq_channel": 4,
+    "control_processes": 3,
+    "all_remaining_UID_78666_caps_zero_NNP_1": true,
+    "DSP_and_capture_workers_absent": true,
+    "arp_absent": true,
+    "accept_local": "0",
+    "temporary_audit_job_removed": true
+  },
+  "negative_evidence": [
+    {
+      "case": "binding-loss terminal state",
+      "files": [
+        "check.py",
+        "result.json"
+      ],
+      "finding": "Harness incorrectly required clean stopped after intentional IQ source failure. Production retained cleanup_unconfirmed because IQ source exited before setup lifetime closed (wait status 1280); host audit confirms workers and ARP removed. No production status guard relaxed. Separate explicit restart returned fresh IQ and normal stop."
+    },
+    {
+      "case": "reconnect inventory ordering",
+      "files": [
+        "owner-disconnect.py",
+        "owner-disconnect.json",
+        "reconnect-settled.json",
+        "reconnect-recovery.py",
+        "reconnect-recovery.json"
+      ],
+      "finding": "Harness indexed pan inventory immediately after connection became true; inventory was still empty. Existing reconnect later supplied its new owned pan. Separate continuation verified the retired window and fresh explicit selection; the failed initial result is retained."
+    }
+  ],
+  "source_change": {
+    "files": [
+      "src/gui/AetherPDMeasurementDialog.cpp",
+      "docs/user/docs/tailscale-remote-access.md"
+    ],
+    "change": "Measurement setup and refusal guidance now refer to the selected IQ channel and pan rather than fixed IQ channel 1. Runtime behavior unchanged.",
+    "full_linux_desktop_build": true,
+    "existing_dialog_ctest_passed": true,
+    "a11y_findings": 0,
+    "docs_build": {
+      "exit_code": 0,
+      "dependency_source": "/home/jeremy/AetherSDR/docs/user/node_modules",
+      "package_lock_identical": true,
+      "npm_ci_run": false
+    },
+    "live_desktop_relaunched": false,
+    "note": "Hardware evidence uses the already running fdf0a408 desktop. Updated instruction strings were built and checked offline; the on-radio runtime is unchanged."
+  },
+  "limits": [
+    "Receive-only channel and ownership checks, not RF correction qualification or an absolute FPGA-to-process latency measurement.",
+    "One pan and one GUI connection at a time. Simultaneous foreign-client/pan conflicts remain covered by component tests, not this live run.",
+    "Fault terminal summaries deliberately preserve cleanup_unconfirmed after an error. Independent host audits prove removal for these observed cases; they do not make that public status a universal cleanup guarantee.",
+    "Natural alignment slip, historical cold-start cancellation, remaining installed fault/unkey matrix, repeated matched tone/speech and final stock APD comparison remain open.",
+    "Actual FLEX-6300 adapter and hardware qualification, interrupted installation/update/rollback, repeated cold-power loss and production signing/release gates remain open.",
+    "LP-100A integration remains deferred. No new RF transmission was performed."
+  ],
+  "evidence_directory": "evidence/20261116-selected-iq-live",
+  "evidence_sha256": {
+    "binding-loss-audit-job.py": "5dbdd138f7ccc963d34ef4754f7cdcf07722e5862915bcd5a3600907e3110c0f",
+    "binding-loss-audit-result.json": "831daf5dc7e3ab95aa570aa7b2539f92204bbf5050a55fd6c55b22cacaf7cc47",
+    "binding-loss-audit.log": "831daf5dc7e3ab95aa570aa7b2539f92204bbf5050a55fd6c55b22cacaf7cc47",
+    "binding-loss-inspect-job.py": "f0d6905f0103108d207d4dac7921eab2236c6e81acd8ca65e33debd5a79af6a6",
+    "binding-loss-inspect-result.json": "191565289d9f64d00abf63b45a3cd615728fa7f3f6baa82b070e42a28ef1a7d0",
+    "binding-loss-inspect.log": "191565289d9f64d00abf63b45a3cd615728fa7f3f6baa82b070e42a28ef1a7d0",
+    "channel-2.f32le": "78d16fcca87b07a307eb5df1c6bdf9d7de5e99c4418b27949e475a19cf5de9c8",
+    "channel-3.f32le": "bbde1fb8209845f5faf6235d0ef22c6cd734af1fe438b2b2f2fd7d7d3118590d",
+    "channel-4.f32le": "b3063e3474123c438f008c7acbd40be6d9b1fd38b6ff17aa5021fcc885680b39",
+    "check.py": "6d8b25cf4eae868dc32bb0b9de7e70b633f9533952f1e85b89293e7d837a7225",
+    "desktop-build.log": "b439dd1ae8827f5ec24d9a03fd8149eeb89185d1a5ee048d28bdff1a8b3a0b5b",
+    "dialog-tests.log": "2d52ea20ac3ea16a0601b68335b9446ab77188223378c511673cc8509542d822",
+    "docs-build.json": "3d6c0e880ba861854796a6723764184f2052e41f498d4f9462c7daa17a10fd21",
+    "docs-build.log": "31ea039885d6625a4229d84e63d435f0e2c95d2658d38ca16b66d4a3cc0ea23e",
+    "explicit-restart.json": "99c75f1bb96b7485dcc91ef36d8fbc81003ff68a0ada31c2f60d68c469cb179d",
+    "explicit-restart.py": "2c90ed532b1cdd208a5e473b972e13b52adf844e8ef3118c63ec5a3eb25f3533",
+    "final-audit-job.py": "5dbdd138f7ccc963d34ef4754f7cdcf07722e5862915bcd5a3600907e3110c0f",
+    "final-audit-result.json": "e21958f227a27693731aa27a25a51400d3edd9691f061103acd13ab757354f9f",
+    "final-audit.log": "e21958f227a27693731aa27a25a51400d3edd9691f061103acd13ab757354f9f",
+    "final-state.json": "355e85203467e4f851d977ca578d860a2c0644757f736e1abea3a8d435fed78d",
+    "owner-disconnect.json": "68a31e71d6d05b94ecd4a20ca513ea6ed13bc663fc933c3c4edfc6ef6e2323f9",
+    "owner-disconnect.py": "e40adda540612c7b17ba7894bb4971e982686b6f2cfe2bc7b0d19dd21013ae35",
+    "preflight.json": "277334f83f0b62bac74c39331ff01781cf8f5f6243830d7ba717a6b85de28903",
+    "reconnect-recovery.json": "5eb2f7cc33bddc2567627e6e1897da39670adbac62a789a8b1bcc4d53edc7120",
+    "reconnect-recovery.py": "6abaea503984dbcc6b3407ef8701aa6d6a48497ed635f19d64309b610879e216",
+    "reconnect-settled.json": "b765417fa86ac70fc0137849b96f8f84bf4dd5ae911e2e904bfbbff33ef6d8fd",
+    "result.json": "96d79cf27129e06bf1222cb0d0eba1fcfb3156c0402ddb5d6cd388155c39b0ed",
+    "run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "save-evidence.py": "90593c72468f154641e95b5556d8f06b2347a91f281a078cbde1813218c58629"
+  }
+}
