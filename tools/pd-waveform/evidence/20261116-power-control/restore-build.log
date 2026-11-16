@@ -1,0 +1,6 @@
+[0/2] Re-checking globbed directories...
+[1/9] Capturing build identity (git describe)
+[2/7] Automatic MOC and UIC for target aethercore
+[3/6] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDMeasurementModel.cpp.o
+[4/6] Linking CXX static library libaethercore.a
+[5/6] Linking CXX executable aetherpd_dialog_test

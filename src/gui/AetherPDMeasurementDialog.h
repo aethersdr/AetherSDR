@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QDateTime>
 #include <memory>
+#include <optional>
 
 class QCheckBox;
 class QComboBox;
@@ -38,6 +39,10 @@ private:
     bool m_closed{false};
     QString m_notice;
     QCheckBox* m_dummyLoad{nullptr};
+    QSpinBox* m_power{nullptr};
+    QPushButton* m_applyPower{nullptr};
+    QLabel* m_powerStatus{nullptr};
+    std::optional<int> m_powerReadback;
     QDoubleSpinBox* m_limit{nullptr};
     QComboBox* m_window{nullptr};
     QSpinBox* m_averages{nullptr};

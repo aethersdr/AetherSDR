@@ -48,6 +48,13 @@ public:
                  const txlin::RunRequest& request, bool dummyLoadConfirmed);
     bool prepareCurrent(const RadioControlSession& session, double maxForwardWatts, bool dummyLoadConfirmed);
     using AnalysisOptions = AetherPDMeasurementSettings::Values;
+    struct PowerControl {
+        std::optional<int> reported;
+        std::optional<int> maximum;
+        QString unavailableReason;
+    };
+    PowerControl powerControl(const RadioControlSession& session) const;
+    bool requestPower(const RadioControlSession& session, int nominalWatts);
     AetherPDMeasurementSettings::ReadResult analysisOptions() const;
     bool setAnalysisOptions(const RadioControlSession& session, const AnalysisOptions& options);
     QByteArray exportResult() const;

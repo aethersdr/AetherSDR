@@ -4,6 +4,9 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/AetherPDMeasurementModel.h"
+#include <functional>
+#include <memory>
+#include <utility>
 
 namespace AetherSDR {
 class SessionControlTestAccess {
@@ -43,5 +46,15 @@ public:
         emit model.otherClientsChanged(0, {});
     }
     static void changeTransport(RadioModel& model) { ++model.m_connection->m_sessionGeneration; }
+    static void backendCommandSink(RadioModel& model, std::function<void(const QString&)> sink)
+    {
+        const RadioControlSession session = model.controlSession();
+        static_cast<FlexBackend*>(model.m_backend.get())->setCommandSink(
+            [&model, session, sink = std::move(sink)](const QString& command, FlexBackend::CommandReply) {
+                if (!model.controlSessionCurrent(session)) { return false; }
+                sink(command);
+                return true;
+            });
+    }
 };
 }

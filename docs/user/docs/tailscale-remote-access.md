@@ -545,6 +545,13 @@ ADC headroom or calibrated output power.
    panel, assign **IQ Ch 1**. Start AetherPD, then select **PD** mode on your TX
    slice. Confirm **Dummy load connected;
    feedback attenuation checked**.
+   Before arming, you can choose **Radio power setting (W)** and click
+   **Apply power**. This requests the nominal setting without transmitting;
+   wait for **Radio reports … W setting** before continuing. Actual RF output
+   may differ. The control requires radio-confirmed power and maximum-power
+   readback and a fresh AetherPD service status. It locks while a source is
+   armed, a transmission or measurement is active, or installation is pending.
+   The analyzer does not remember or restore this radio setting.
 2. Choose **Measured forward-power abort limit (W)**. This is a measured-power
    cutoff, not a command to change radio drive. The nominal radio power setting
    must be within the limit. The active band plan and license-class filter must

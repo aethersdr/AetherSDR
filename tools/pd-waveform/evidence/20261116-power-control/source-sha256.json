@@ -1,0 +1,10 @@
+{
+  "docs/architecture/aetherd-touchpoints.md": "54fc5ffae9a0cef34b2853450048d5e1234ed29c980f98613be41bc9bbb06cd9",
+  "docs/user/docs/tailscale-remote-access.md": "d7461eb17e87ce03a7e34eeb36ab5bf226dac515abb71e9f226ceee1ce8938b5",
+  "src/gui/AetherPDMeasurementDialog.cpp": "705094dcf9ff7d6b8d8597c642e55863e6c83151a5846c626c360d5a171528d7",
+  "src/gui/AetherPDMeasurementDialog.h": "959f9227a9d228c90fbd5e2abd2cbcc29f92c52ebe75ef0e7834ffdec09bf718",
+  "src/models/AetherPDMeasurementModel.cpp": "9241b75de131508b2630c2467c09fa027ed2c44d283b6a8af1ec2bcfb893d19c",
+  "src/models/AetherPDMeasurementModel.h": "ab5ac21103cff2653667d59eb1d628f3e8c359290e4492d3c5faeb572f3deb7a",
+  "tests/AetherPDTestRadio.h": "6f8de02589208ccd66ee22a4dab7a67f817702475ba047fb75d80d0d52830d21",
+  "tests/aetherpd_dialog_test.cpp": "3b99601d1a9e5664382638d7ea79dc66ec27d448c7c1e702c18b7f7166e7da84"
+}

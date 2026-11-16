@@ -1,0 +1,7 @@
+{
+  "mutation": "Remove reported maximum-power guard",
+  "exit_code": 8,
+  "expected_assertion_failed": true,
+  "restored_source_sha256": "9241b75de131508b2630c2467c09fa027ed2c44d283b6a8af1ec2bcfb893d19c",
+  "restore_build_exit_code": 0
+}

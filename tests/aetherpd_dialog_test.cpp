@@ -17,6 +17,7 @@
 #include <limits>
 #include <cstdint>
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "core/TxKeyingMarker.h"
 
 #include <QApplication>
@@ -346,6 +347,58 @@ int main(int argc, char** argv)
     unarmedStatus["source_purpose"] = QStringLiteral("calibration");
     button(*dialog, "pdRefresh")->click();
     network.last->complete(200, QJsonDocument(unarmedStatus).toJson());
+    {
+        auto* powerChoice = measurement->findChild<QSpinBox*>(QStringLiteral("pdMeasureRadioPower"));
+        QPushButton* applyPower = mb("pdMeasureApplyPower");
+        auto* powerStatus = measurement->findChild<QLabel*>(QStringLiteral("pdMeasurePowerStatus"));
+        AetherPDMeasurementModel& model = radio.aetherPDMeasurementModel();
+        const RadioControlSession session = radio.controlSession();
+        QStringList commands;
+        Access::backendCommandSink(radio, [&](const QString& command) { commands.append(command); });
+        const size_t beforePower = network.sent.size();
+        ok &= check(powerChoice && powerStatus && applyPower && !powerChoice->isEnabled()
+            && !applyPower->isEnabled() && !model.requestPower(session, 8) && commands.empty(),
+            "unknown maximum refuses power change despite the model's compiled default");
+        TransmitDelta limit; limit.maxPowerLevel = 15;
+        radio.applyBackendTransmitDeltaForTest(limit);
+        ok &= check(powerChoice->isEnabled() && powerChoice->value() == 5 && powerChoice->maximum() == 15
+            && powerStatus->text().contains("Radio reports 5 W") && !applyPower->isEnabled(),
+            "reported power and limit enable editing without sending a command");
+        ok &= check(!model.requestPower({}, 8) && !model.requestPower(session, -1)
+            && !model.requestPower(session, 16) && !model.requestPower(session, 5) && commands.empty(),
+            "foreign session, out-of-range and unchanged power requests send nothing");
+        powerChoice->setValue(8);
+        ok &= check(applyPower->isEnabled() && commands.empty(), "editing power alone does not apply or transmit");
+        // Unrelated observed status must not overwrite an operator's draft.
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(unarmedStatus).toJson());
+        ok &= check(powerChoice->value() == 8, "routine status refresh preserves the unsubmitted power edit");
+        applyPower->click();
+        ok &= check(commands == QStringList{QStringLiteral("transmit set rfpower=8")}
+            && !radio.transmitModel().rfPowerIsFromRadio() && !powerChoice->isEnabled()
+            && !applyPower->isEnabled() && powerStatus->text().contains("awaiting readback")
+            && !model.requestPower(session, 9),
+            "explicit apply issues one typed power command, no key, and requires readback before another request");
+        TransmitDelta echoed; echoed.rfPower = 7;
+        radio.applyBackendTransmitDeltaForTest(echoed);
+        ok &= check(powerChoice->isEnabled() && powerChoice->value() == 7
+            && powerStatus->text().contains("Radio reports 7 W") && commands.size() == 1,
+            "radio readback wins even when it differs from requested power; no retry");
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(measurementStatus).toJson());
+        ok &= check(!powerChoice->isEnabled() && !model.requestPower(session, 5) && commands.size() == 1,
+            "armed source blocks power edits in both model and GUI");
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(unarmedStatus).toJson());
+        radio.transmitModel().setTransmitting(true);
+        ok &= check(!model.requestPower(session, 5) && commands.size() == 1, "keyed radio blocks nominal power changes");
+        radio.transmitModel().setTransmitting(false);
+        echoed.rfPower = 5;
+        radio.applyBackendTransmitDeltaForTest(echoed);
+        ok &= check(commands.size() == 1 && network.sent.size() == beforePower + 3
+            && captureNetwork.sent.empty(), "power controls send no shim arm, capture or key requests");
+        Access::backendCommandSink(radio, [](const QString&) {});
+    }
     const auto measurementText = [measurement] {
         return measurement->findChild<QLabel*>(QStringLiteral("pdMeasureState"))->text();
     };

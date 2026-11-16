@@ -1,0 +1,52 @@
+{
+  "updated_utc": "2026-11-16T12:45:24.844200+00:00",
+  "base_commit": "66e237be41eed549a647917780cdc91e85767df2",
+  "status": "Radio-power controls component-qualified; not live-qualified",
+  "installed": false,
+  "radio_used": false,
+  "production_ready": false,
+  "contract": {
+    "controls": [
+      "Radio power setting (W)",
+      "Apply power"
+    ],
+    "path": "AetherPDMeasurementModel -> TransmitModel::setRfPower -> typed TransmitControlRequest -> existing backend encoder",
+    "readback": "Requires radio authority, present confirmed power and present maximum within the existing0..100setting domain. Request demotes provenance; a different subsequent radio value wins without retry.",
+    "admission": "Original session, fresh available/registered PD service, no pending non-status service command; unarmed/unkeyed, measurement idle, no TX ownership/recovery or installation.",
+    "limits": "Negative, above reported maximum and unchanged values refused. GUI edit alone dispatches nothing; Apply is explicit.",
+    "persistence": "No analyzer drive persistence, automatic setting restoration, keying or source rearm.",
+    "privileges": "No native helper, packet filter, ARP, scheduling or bootstrap change."
+  },
+  "validation": {
+    "build": "Full Linux AetherSDR, aetherpd_dialog_test and tx_operation_integration_test built successfully with pinned Qt6.12.",
+    "tests": "Final two focused tests passed in9.93s. GUI test passed10 consecutive runs with corrected synchronous encoded-command recorder.",
+    "mutation": {
+      "mutation": "Remove reported maximum-power guard",
+      "exit_code": 8,
+      "expected_assertion_failed": true,
+      "restored_source_sha256": "9241b75de131508b2630c2467c09fa027ed2c44d283b6a8af1ec2bcfb893d19c",
+      "restore_build_exit_code": 0
+    },
+    "recorder_scope": "Production model dispatch and Flex command encoder, injected at backend command sink; not a socket/firmware delivery test. Earlier terminal-writer recorder was asynchronous and was replaced to avoid a test data race.",
+    "assertions": [
+      "Absent reported maximum refuses despite compiled default",
+      "Foreign-session, negative, above-limit and unchanged requests refused",
+      "Editing alone sends nothing and unrelated refresh preserves draft",
+      "Apply emits one encoded rfpower command and withdraws provenance",
+      "Another request refused before readback",
+      "Radio reporting7after request8 wins without retry",
+      "Armed source and keyed radio refuse change",
+      "No additional shim arm/capture request"
+    ],
+    "preview": "680x700 offscreen preview inspected; controls and footer fit.",
+    "docs": "Docusaurus build, generated reference checks and log-rule checks passed;12pre-existing unrelated source-line citation notes retained.",
+    "static": "Test registration, engine boundary, capability records and command plane passed. Regenerated stale touchpoint manifest and verified current.",
+    "manifest_backfill": "Two previously added spectrum dependencies now counted: ThemeManager in AetherPDMeasurementSpectrum.cpp, measurement model in its header. This power-control change adds no GUI-to-engine include."
+  },
+  "remaining": [
+    "Connected radio-readback and final-desktop automation qualification",
+    "Tone-spacing configuration and channel/pan ownership contract",
+    "Full production plan including reboot recovery, final RF/faults, stock APD, actual6300 and release gates"
+  ],
+  "evidence": "evidence/20261116-power-control"
+}

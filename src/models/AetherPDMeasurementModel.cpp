@@ -1,8 +1,10 @@
 #include "AetherPDMeasurementModel.h"
 #include "AetherPDRunLease.h"
 #include "AetherPDModel.h"
+#include "AetherPDInstallationModel.h"
 #include "BandPlanManager.h"
 #include "core/AppSettings.h"
+#include "core/backends/RadioCapabilities.h"
 #include "MeterModel.h"
 #include "RadioModel.h"
 #include "SliceModel.h"
@@ -66,6 +68,10 @@ void AetherPDMeasurementModel::initialize(QNetworkAccessManager* network)
     connect(m_radio, &RadioModel::infoChanged, this, &AetherPDMeasurementModel::poll);
     connect(&m_radio->transmitModel(), &TransmitModel::rfPowerChanged, this, &AetherPDMeasurementModel::poll);
     connect(&m_radio->transmitModel(), &TransmitModel::powerProvenanceChanged, this, &AetherPDMeasurementModel::poll);
+    connect(&m_radio->transmitModel(), &TransmitModel::stateChanged, this, &AetherPDMeasurementModel::changed);
+    connect(&m_radio->transmitModel(), &TransmitModel::powerProvenanceChanged, this, &AetherPDMeasurementModel::changed);
+    connect(&m_radio->transmitModel(), &TransmitModel::maxPowerLevelChanged, this, &AetherPDMeasurementModel::changed);
+    connect(m_radio, &RadioModel::radioTransmittingChanged, this, &AetherPDMeasurementModel::changed);
     connect(&m_radio->aetherPDModel(), &AetherPDModel::changed, this, &AetherPDMeasurementModel::poll);
     connect(&m_radio->meterModel(), &MeterModel::txMetersChanged, this, &AetherPDMeasurementModel::poll);
     const auto watchTxSlice = [this](SliceModel* slice) {
@@ -111,6 +117,54 @@ bool AetherPDMeasurementModel::current() const
         && m_slice->mode() == m_mode && m_slice->txAntenna() == m_antenna
         && m_radio->transmitModel().haveTransmitStatus() && m_radio->transmitModel().rfPowerIsFromRadio()
         && m_radio->transmitModel().rfPower() == m_powerSetting;
+}
+
+AetherPDMeasurementModel::PowerControl AetherPDMeasurementModel::powerControl(const RadioControlSession& session) const
+{
+    PowerControl control;
+    if (m_shuttingDown || QThread::currentThread() != thread() || !m_radio || !m_radio->controlSessionCurrent(session)) {
+        control.unavailableReason = tr("Original radio session is unavailable.");
+        return control;
+    }
+    const auto& drive = m_radio->backendCapabilities().transmitDriveControl;
+    if (!drive || drive->authority != SliceFrequencyControl::Authority::Radio) {
+        control.unavailableReason = tr("Radio-confirmed power control is unavailable.");
+        return control;
+    }
+    const TransmitModel& tx = m_radio->transmitModel();
+    if (tx.haveTransmitStatus() && tx.rfPowerIsFromRadio() && tx.rfPower() >= 0 && tx.rfPower() <= 100) {
+        control.reported = tx.rfPower();
+    }
+    if (tx.haveMaxPowerLevel() && tx.maxPowerLevel() >= 0 && tx.maxPowerLevel() <= 100) {
+        control.maximum = tx.maxPowerLevel();
+    }
+    if (!control.reported || !control.maximum) {
+        control.unavailableReason = tr("Waiting for radio power and maximum-power readback.");
+        return control;
+    }
+    const std::optional<aetherpd::Status> source = m_radio->aetherPDModel().status();
+    const std::optional<aetherpd::Operation> pending = m_radio->aetherPDModel().pendingOperation();
+    if (!source || !source->available || !source->registered || (pending && *pending != aetherpd::Operation::Status)) {
+        control.unavailableReason = tr("A fresh AetherPD service status with no pending control request is required.");
+    } else if (state() != State::Idle || source->keyed || source->calibrationState == aetherpd::CalibrationState::Armed
+        || source->calibrationState == aetherpd::CalibrationState::Running || tx.isTransmitting() || tx.isTuning()
+        || tx.isMox() || m_radio->isRadioTransmitting() || !m_radio->txOwnedByUs()
+        || m_radio->transmitOwnershipPending() || m_radio->transmitRecovering()
+        || m_radio->aetherPDInstallationModel().active()) {
+        control.unavailableReason = tr("Cancel the source and finish transmission, measurement or installation before changing power.");
+    }
+    return control;
+}
+
+bool AetherPDMeasurementModel::requestPower(const RadioControlSession& session, int nominalWatts)
+{
+    const PowerControl control = powerControl(session);
+    if (!control.unavailableReason.isEmpty() || !control.reported || !control.maximum
+        || nominalWatts < 0 || nominalWatts > *control.maximum || nominalWatts == *control.reported) { return false; }
+    // The existing typed setting path withdraws provenance until radio readback.
+    // This request neither keys RF nor stores a drive value for later restoration.
+    m_radio->transmitModel().setRfPower(nominalWatts);
+    return true;
 }
 
 bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,

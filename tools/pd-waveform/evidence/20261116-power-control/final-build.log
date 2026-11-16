@@ -1,0 +1,9 @@
+[0/2] Re-checking globbed directories...
+[1/12] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/12] Capturing build identity (git describe)
+[3/7] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/7] Completed 'vulkan-shaders-gen'
+[5/7] Linking CXX executable tx_operation_integration_test
+[6/7] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory

@@ -52,6 +52,34 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     m_dummyLoad->setObjectName(QStringLiteral("pdMeasureDummyLoad"));
     m_dummyLoad->setAccessibleName(m_dummyLoad->text());
     layout->addWidget(m_dummyLoad);
+    auto* powerLayout = new QGridLayout;
+    auto* powerLabel = new QLabel(tr("Radio power setting (W):"), bodyWidget());
+    m_power = new QSpinBox(bodyWidget());
+    m_power->setObjectName(QStringLiteral("pdMeasureRadioPower"));
+    m_power->setRange(-1, 0);
+    m_power->setValue(-1);
+    m_power->setSpecialValueText(tr("Unknown"));
+    m_power->setAccessibleName(powerLabel->text());
+    powerLabel->setBuddy(m_power);
+    m_applyPower = new QPushButton(tr("Apply power"), bodyWidget());
+    m_applyPower->setObjectName(QStringLiteral("pdMeasureApplyPower"));
+    m_powerStatus = new QLabel(bodyWidget());
+    m_powerStatus->setObjectName(QStringLiteral("pdMeasurePowerStatus"));
+    m_powerStatus->setWordWrap(true);
+    powerLayout->addWidget(powerLabel, 0, 0);
+    powerLayout->addWidget(m_power, 0, 1);
+    powerLayout->addWidget(m_applyPower, 0, 2);
+    powerLayout->addWidget(m_powerStatus, 1, 0, 1, 3);
+    layout->addLayout(powerLayout);
+    connect(m_power, &QSpinBox::valueChanged, this, &AetherPDMeasurementDialog::render);
+    connect(m_applyPower, &QPushButton::clicked, this, [this] {
+        if (!current()) { return; }
+        const QPointer<AetherPDMeasurementDialog> alive(this);
+        const bool requested = m_radio->aetherPDMeasurementModel().requestPower(m_session, m_power->value());
+        if (!alive) { return; }
+        m_notice = requested ? QString{} : tr("Power request refused. Check radio readback and cancel any armed source first.");
+        render();
+    });
     auto* limitLabel = new QLabel(tr("Measured forward-power abort limit (W):"), bodyWidget());
     m_limit = new QDoubleSpinBox(bodyWidget());
     m_limit->setObjectName(QStringLiteral("pdMeasurePowerLimit"));
@@ -274,6 +302,35 @@ void AetherPDMeasurementDialog::render()
     const bool changingSource = pending && *pending != aetherpd::Operation::Status;
     const bool installed = valid && !m_radio->aetherPDInstallationModel().active();
     const bool idle = state == State::Idle;
+    const AetherPDMeasurementModel::PowerControl power = model ? model->powerControl(m_session)
+        : AetherPDMeasurementModel::PowerControl{{}, {}, tr("Original radio session is unavailable.")};
+    {
+        const QSignalBlocker blocker(m_power);
+        m_power->setMaximum(power.maximum.value_or(power.reported.value_or(0)));
+        if (m_powerReadback != power.reported) {
+            m_powerReadback = power.reported;
+            m_power->setValue(power.reported.value_or(-1));
+        }
+    }
+    const QString powerHelp = tr("Requests the nominal radio setting without transmitting. Wait for radio readback before arming; actual output is measured separately.");
+    availability(m_power, power.unavailableReason.isEmpty(), power.unavailableReason);
+    if (!alive) { return; }
+    const bool powerEdit = power.reported && m_power->value() >= 0 && m_power->value() != *power.reported;
+    availability(m_applyPower, power.unavailableReason.isEmpty() && powerEdit,
+        power.unavailableReason.isEmpty() ? tr("Choose a different radio power setting first.") : power.unavailableReason);
+    if (!alive) { return; }
+    if (power.unavailableReason.isEmpty()) {
+        m_power->setAccessibleDescription(powerHelp);
+        if (!alive) { return; }
+        m_power->setToolTip(powerHelp);
+        if (!alive) { return; }
+        if (powerEdit) { m_applyPower->setAccessibleDescription(powerHelp); }
+        if (!alive) { return; }
+    }
+    m_powerStatus->setText(power.reported
+        ? tr("Radio reports %1 W setting; actual RF output may differ.").arg(*power.reported)
+        : tr("Radio power is unknown or awaiting readback."));
+    if (!alive) { return; }
     const AetherPDMeasurementSettings::ReadResult preferences = model ? model->analysisOptions()
         : AetherPDMeasurementSettings::ReadResult{false, {}, tr("Original radio is unavailable.")};
     if (idle) {

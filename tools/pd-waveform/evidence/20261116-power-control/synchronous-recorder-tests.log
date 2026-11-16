@@ -1,0 +1,25 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 503: aetherpd_dialog_test (run 1/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.11 sec
+    Start 503: aetherpd_dialog_test (run 2/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.12 sec
+    Start 503: aetherpd_dialog_test (run 3/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.12 sec
+    Start 503: aetherpd_dialog_test (run 4/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.13 sec
+    Start 503: aetherpd_dialog_test (run 5/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.13 sec
+    Start 503: aetherpd_dialog_test (run 6/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.12 sec
+    Start 503: aetherpd_dialog_test (run 7/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.12 sec
+    Start 503: aetherpd_dialog_test (run 8/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.12 sec
+    Start 503: aetherpd_dialog_test (run 9/10)
+    Test #503: aetherpd_dialog_test .............   Passed    0.11 sec
+    Start 503: aetherpd_dialog_test (run 10/10)
+1/1 Test #503: aetherpd_dialog_test .............   Passed    0.12 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =   1.22 sec
