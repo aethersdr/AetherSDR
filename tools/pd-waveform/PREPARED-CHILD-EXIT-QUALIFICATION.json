@@ -1,0 +1,592 @@
+{
+  "updated_utc": "2026-11-16T23:43:44.027244+00:00",
+  "status": "component_fix_verified_installed_requalification_pending",
+  "production_ready": false,
+  "installed_fix": false,
+  "baseline": {
+    "native_source": "a87c915908e73588142e1148303d2c3c83d57a45",
+    "release_blake2b_256": "bf6df6a8a9f1d70ca26218e105bb949166b22d3ed911686e72877789ab040dab",
+    "boot_id": "839d29c7-c56e-4c61-a87e-05fdf1c6b6b6",
+    "desktop_PID": 2177039
+  },
+  "installed_capture_startup_failure": {
+    "passed": true,
+    "target": {
+      "pid": 1805,
+      "ppid": 1798,
+      "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+      "uid": "65534\t65534\t65534\t65534",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+      ],
+      "start_ticks": 171318,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "0"
+    },
+    "signals": [
+      {
+        "pid": 1805,
+        "start_ticks": 171318,
+        "signal": "SIGKILL",
+        "monotonic_ns": 1713231865385
+      }
+    ],
+    "never_observed_registered": true,
+    "workers_gone_ms": 10273.111931,
+    "observations": [
+      {
+        "elapsed_ms": 15.992425,
+        "launcher": [
+          {
+            "pid": 1798,
+            "ppid": 1797,
+            "exe": "/run/aetherpd/bin/pd-radio-launch",
+            "uid": "0\t0\t0\t0",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "000001ffffffffff",
+              "CapEff": "000001ffffffffff",
+              "CapBnd": "000001ffffffffff",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          }
+        ],
+        "active_workers": [
+          {
+            "pid": 1800,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/pd-fixed-arp",
+            "uid": "65534\t65534\t65534\t65534",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000001000",
+              "CapEff": "0000000000001000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          },
+          {
+            "pid": 1801,
+            "ppid": 1800,
+            "exe": "/run/aetherpd/bin/pd-fixed-arp",
+            "uid": "65534\t65534\t65534\t65534",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000001000",
+              "CapEff": "0000000000001000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          },
+          {
+            "pid": 1802,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/pd-iq-source",
+            "uid": "78666\t78666\t78666\t78666",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000000000",
+              "CapEff": "0000000000000000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "1"
+          }
+        ]
+      },
+      {
+        "elapsed_ms": 198.159826,
+        "launcher": [
+          {
+            "pid": 1798,
+            "ppid": 1797,
+            "exe": "/run/aetherpd/bin/pd-radio-launch",
+            "uid": "0\t0\t0\t0",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "000001ffffffffff",
+              "CapEff": "000001ffffffffff",
+              "CapBnd": "000001ffffffffff",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          }
+        ],
+        "active_workers": [
+          {
+            "pid": 1800,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/pd-fixed-arp",
+            "uid": "65534\t65534\t65534\t65534",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000001000",
+              "CapEff": "0000000000001000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          },
+          {
+            "pid": 1801,
+            "ppid": 1800,
+            "exe": "/run/aetherpd/bin/pd-fixed-arp",
+            "uid": "65534\t65534\t65534\t65534",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000001000",
+              "CapEff": "0000000000001000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          },
+          {
+            "pid": 1802,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/pd-iq-source",
+            "uid": "78666\t78666\t78666\t78666",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000000000",
+              "CapEff": "0000000000000000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "1"
+          },
+          {
+            "pid": 1809,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/aether-pd",
+            "uid": "78666\t78666\t78666\t78666",
+            "state": "R (running)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171341,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000000000",
+              "CapEff": "0000000000000000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "1"
+          }
+        ]
+      },
+      {
+        "elapsed_ms": 351.647331,
+        "launcher": [
+          {
+            "pid": 1798,
+            "ppid": 1797,
+            "exe": "/run/aetherpd/bin/pd-radio-launch",
+            "uid": "0\t0\t0\t0",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "000001ffffffffff",
+              "CapEff": "000001ffffffffff",
+              "CapBnd": "000001ffffffffff",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          }
+        ],
+        "active_workers": [
+          {
+            "pid": 1800,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/pd-fixed-arp",
+            "uid": "65534\t65534\t65534\t65534",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000001000",
+              "CapEff": "0000000000001000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          },
+          {
+            "pid": 1801,
+            "ppid": 1800,
+            "exe": "/run/aetherpd/bin/pd-fixed-arp",
+            "uid": "65534\t65534\t65534\t65534",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000001000",
+              "CapEff": "0000000000001000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "0"
+          },
+          {
+            "pid": 1802,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/pd-iq-source",
+            "uid": "78666\t78666\t78666\t78666",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000000000",
+              "CapEff": "0000000000000000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "1"
+          }
+        ]
+      },
+      {
+        "elapsed_ms": 10211.698859,
+        "launcher": [
+          {
+            "pid": 1798,
+            "ppid": 1797,
+            "exe": "/run/aetherpd/bin/pd-radio-launch",
+            "uid": "78666\t78666\t78666\t78666",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000000000",
+              "CapEff": "0000000000000000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "1"
+          }
+        ],
+        "active_workers": [
+          {
+            "pid": 1802,
+            "ppid": 1798,
+            "exe": "/run/aetherpd/bin/pd-iq-source",
+            "uid": "78666\t78666\t78666\t78666",
+            "state": "S (sleeping)",
+            "cgroup": [
+              "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+            ],
+            "start_ticks": 171231,
+            "caps": {
+              "CapInh": "0000000000000000",
+              "CapPrm": "0000000000000000",
+              "CapEff": "0000000000000000",
+              "CapBnd": "0000000000000000",
+              "CapAmb": "0000000000000000"
+            },
+            "nnp": "1"
+          }
+        ]
+      },
+      {
+        "elapsed_ms": 10273.091765,
+        "launcher": [],
+        "active_workers": []
+      }
+    ],
+    "all_original_worker_PIDs_checked_including_zombies": [
+      {
+        "pid": 1800,
+        "ppid": 1798,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+        ],
+        "start_ticks": 171231,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1801,
+        "ppid": 1800,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+        ],
+        "start_ticks": 171231,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1802,
+        "ppid": 1798,
+        "exe": "/run/aetherpd/bin/pd-iq-source",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+        ],
+        "start_ticks": 171231,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 1805,
+        "ppid": 1798,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+        ],
+        "start_ticks": 171318,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1807,
+        "ppid": 1805,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+        ],
+        "start_ticks": 171319,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1808,
+        "ppid": 1807,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+        ],
+        "start_ticks": 171319,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 1809,
+        "ppid": 1798,
+        "exe": "/run/aetherpd/bin/aether-pd",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "R (running)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@5-1304-78666.service"
+        ],
+        "start_ticks": 171341,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      }
+    ],
+    "ARP_after": [],
+    "journal_after": {
+      "exists": true,
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "public_status_after": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    },
+    "RF_commands": []
+  },
+  "root_cause": "The inherited readiness socket is a Unix datagram endpoint. DSP exit need not produce a readiness datagram or poll hangup, so prepared_wait_ready could keep its root caller in the10second poll loop after DSP exit.",
+  "change": "Inspect only the forked child with waitid(P_PID, WEXITED|WNOHANG|WNOWAIT) in readiness/profile waits, refusing on exit or ownership error without reaping. Before cleanup signals, waitpid(WNOHANG) confirms a live waitable child; exited/lost children receive no signal.",
+  "source_sha256": {
+    "tools/pd-waveform/session/pd_prepared_launch.c": "cd85e1c1e25fe9f0d7e609e8e59fba7c34b0e52aeda85f7acbe657189900c064",
+    "tools/pd-waveform/session/radio_launch_test.c": "8d75d44c27de7db031e8c8785410147730bda4441aa3fae94620158f438cbe77",
+    "tests/tests.cmake": "ba177e5dac12f722405b93f58dce31ffd870e5afa7a4a60edec1cb26b7727aa4"
+  },
+  "verification": {
+    "installed": false,
+    "builds": {
+      "host": {
+        "bytes": 884168,
+        "sha256": "d593e41c55c15d4477af7f7581eafc6385f3f23681726d43f80f84a4e0c80d8e"
+      },
+      "arm64": {
+        "bytes": 105472,
+        "sha256": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877"
+      },
+      "armv7": {
+        "bytes": 92208,
+        "sha256": "1fde0e18f08593aac4458dd6b8bb817a0b50ad2ce1503c9512fef8b1c109d593"
+      }
+    },
+    "mutations": {
+      "no-exit-observation": {
+        "timeout_s": 4,
+        "expected": "unobserved exited child leaves readiness waiting for its10second deadline"
+      },
+      "reap-during-observation": {
+        "exit": -6,
+        "output": "test-reap-during-observation: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-child-exit/reap-during-observation/radio_launch_test.c:43: inspect_child: Assertion `type==P_PID && child==42 && options==(WEXITED|WNOHANG|WNOWAIT)' failed.\n"
+      },
+      "signal-before-ownership": {
+        "exit": -6,
+        "output": "test-signal-before-ownership: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-child-exit/signal-before-ownership/radio_launch_test.c:77: check_prepared_child_lifetime: Assertion `waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status)' failed.\n"
+      }
+    },
+    "host_policy_passed": true,
+    "ASan_UBSan_LSan_passed": true
+  },
+  "registered_CTest": {
+    "name": "pd_radio_launch_policy_test",
+    "built_modified_source": true,
+    "passed": true,
+    "scope": "Own child processes and inherited Unix datagram gate; no firmware peer, RF or privileges."
+  },
+  "build_receipt_note": "An initial CMake build failed because the default ccache path was read-only; the following old-binary CTest is not counted. Saved ctest-build/run logs prove the subsequent successful modified-source build using the dedicated writable cache.",
+  "kernel_compatibility": {
+    "source": "https://man7.org/linux/man-pages/man2/waitpid.2.html",
+    "documented_waitid_since": "Linux2.6.9",
+    "WNOWAIT": "Leaves the child waitable; no pidfd requirement in shipping code.",
+    "actual_FLEX6300_qualified": false
+  },
+  "limitations": [
+    "The installed baseline startup-failure refusal and cleanup are observed; the new prompt-exit fix has not yet been installed in this component report.",
+    "No RF, keyed failure behavior or actual6300 qualification.",
+    "Three unprivileged control processes may remain after resource retirement; this is not a claim of complete cgroup removal."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/installed-capture-startup/capture-job.py": "f27cce2a0f4b38034a4402e8e5f31849df83c09a18ff616efda6e2b03f28f994",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/installed-capture-startup/capture-result.json": "715d8f606542aaa5914b66e0c605f89ebd337cc7c1090d696b9573c9767b198c",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/installed-capture-startup/events.json": "0e3ec29d21ce46e9305bcb8cb30f0ab4dea52bc07fb21ba2565b46b31e22d9a0",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/installed-capture-startup/fault-template.py": "fb527508428b9ae2be08f4108435f62698511bd7b4805f04741efe9b09995181",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/installed-capture-startup/outcome.json": "4312c26926c14e1a89370d54d44f361fea0c7848293035d91c63bcf482a474cb",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/installed-capture-startup/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/installed-capture-startup/run-once.py": "bac7006c9161d78eb15dea2a9de9f7f1f37cf036876b41e155075965404fe2e0",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/build-arm64.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/build-armv7.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/ctest-build.log": "4ac0696456ab9bcebe3c31311dca917fdd5da57f10af792601c67a84f06d6b26",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/ctest-run.log": "7c2c8ff1cfcdcb41f40154d2e4b0b9a0e17de682c25abba1ef0002d9c3677b3d",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/host-test.log": "13eba37d908d8def0721c8ab6cfbf4f1c67d38a2638f6fa035129e628078ea61",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/mutation-no-exit-observation.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/mutation-reap-during-observation.log": "b2211ec23b27c1eff063f07f45419ccdd73898b8f2db5871c1951b6c75509452",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/mutation-signal-before-ownership.log": "4a7ef124be4748202281ba728682720a9cfb0095522ce525c7d63ff139deaf54",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/sanitizer-run.log": "13eba37d908d8def0721c8ab6cfbf4f1c67d38a2638f6fa035129e628078ea61",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/save.py": "c1c8a4a2794aebc3be76d1af6157bf41d3027821f50f0cb49f6f44ac300c4195",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/verification.json": "e487aecdea3a1745eb612148cb5f61c99ebe2654031bf5140c001d76dbfaf97e",
+    "tools/pd-waveform/evidence/20261116-prepared-child-exit/prepared-child-exit/verify.py": "6df2f1a35c7fcd1fda3e4cfb800426e74875570a10d84d1ae18d5a732f443dbd"
+  }
+}

@@ -468,6 +468,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME pd_iq_stream_policy_test COMMAND pd_iq_stream_policy_test)
     add_executable(pd_shim_launch_policy_test tools/pd-waveform/session/shim_launch_test.c)
     add_test(NAME pd_shim_launch_policy_test COMMAND pd_shim_launch_policy_test)
+    # Own child lifetime and inherited Unix datagram readiness gate; no radio peer.
     add_executable(pd_radio_launch_policy_test tools/pd-waveform/session/radio_launch_test.c)
     add_test(NAME pd_radio_launch_policy_test COMMAND pd_radio_launch_policy_test)
     add_executable(pd_fixed_arp_test

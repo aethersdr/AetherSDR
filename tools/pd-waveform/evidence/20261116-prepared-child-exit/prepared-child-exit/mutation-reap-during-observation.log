@@ -1,0 +1,1 @@
+test-reap-during-observation: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-child-exit/reap-during-observation/radio_launch_test.c:43: inspect_child: Assertion `type==P_PID && child==42 && options==(WEXITED|WNOHANG|WNOWAIT)' failed.

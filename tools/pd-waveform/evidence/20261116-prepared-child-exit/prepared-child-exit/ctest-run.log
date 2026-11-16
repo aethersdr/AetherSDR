@@ -1,0 +1,7 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 59: pd_radio_launch_policy_test
+1/1 Test #59: pd_radio_launch_policy_test ......   Passed    0.03 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =   0.05 sec

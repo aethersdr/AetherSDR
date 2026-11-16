@@ -1,0 +1,1 @@
+PASS: retire privileges before bounded cleanup; promptly reject exited prepared child without reaping, signal only a waitable child; fixed readiness grammar and owned cleanup; no radio or privileges

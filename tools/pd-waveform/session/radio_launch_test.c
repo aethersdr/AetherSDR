@@ -36,6 +36,50 @@ static void check_retirement_order(void)
     assert(!radio_retire(children,0,retire_test_privileges,collect_test_children));
     assert(cleanup_drop_calls==1 && cleanup_reap_calls==1 && !cleanup_privileged);
 }
+static int child_inspection_mode;
+static unsigned child_inspection_calls;
+static int inspect_child(idtype_t type,id_t child,siginfo_t* state,int options)
+{
+    assert(type==P_PID && child==42 && options==(WEXITED|WNOHANG|WNOWAIT));
+    ++child_inspection_calls;
+    if(child_inspection_mode==1){state->si_pid=42;state->si_code=CLD_EXITED;return 0;}
+    if(child_inspection_mode==2){errno=ECHILD;return -1;}
+    if(child_inspection_mode==3 && child_inspection_calls==1){errno=EINTR;return -1;}
+    if(child_inspection_mode==4){errno=EINVAL;return -1;}
+    return 0;
+}
+static void check_prepared_child_lifetime(void)
+{
+    for(child_inspection_mode=0;child_inspection_mode<=4;++child_inspection_mode){
+        child_inspection_calls=0;
+        assert(prepared_child_running(42,inspect_child)==(child_inspection_mode==0 || child_inspection_mode==3));
+        assert(child_inspection_calls==(child_inspection_mode==3?2u:1u));
+    }
+    child_inspection_calls=0;
+    assert(!prepared_child_running(0,inspect_child) && !prepared_child_running(1,inspect_child));
+    assert(!child_inspection_calls);
+    // This is our own inherited readiness gate, not a simulated radio peer.
+    int gate[2];assert(!socketpair(AF_UNIX,SOCK_DGRAM|SOCK_CLOEXEC,0,gate));
+    pid_t child=fork();assert(child>=0);if(!child){_exit(23);}
+    siginfo_t state={0};assert(!waitid(P_PID,(id_t)child,&state,WEXITED|WNOWAIT) && state.si_pid==child);
+    int64_t start=prepared_ms();assert(start>=0 && !prepared_wait_ready(child,gate[0]));
+    assert(prepared_ms()-start<1000);
+    memset(&state,0,sizeof(state));
+    assert(!waitid(P_PID,(id_t)child,&state,WEXITED|WNOHANG|WNOWAIT) && state.si_pid==child);
+    int status;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==23);
+    close(gate[0]);close(gate[1]);
+    child=fork();assert(child>=0);
+    if(!child){
+        int lifetime[2];assert(!pipe(lifetime));
+        prepared_stop_child(getpid(),lifetime[1]);
+        close(lifetime[0]);_exit(0);
+    }
+    assert(waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status));
+    int lifetime[2];assert(!pipe(lifetime));child=fork();assert(child>=0);
+    if(!child){close(lifetime[1]);char byte;(void)read(lifetime[0],&byte,1);_exit(0);}
+    close(lifetime[0]);prepared_stop_child(child,lifetime[1]);
+    assert(waitpid(child,&status,WNOHANG)==-1 && errno==ECHILD);
+}
 int main(void)
 {
     const char arp[]="{\"event\":\"ready\",\"uid\":65534,\"owned\":true,\"success\":true,\"rf_commands\":[]}\n";
@@ -76,6 +120,7 @@ int main(void)
     children[0]=(struct radio_child){.pid=fork(),.log=-1};assert(children[0].pid>=0);if(!children[0].pid){_exit(7);}
     assert(!radio_reap(children));
     check_retirement_order();
-    puts("PASS: retire privileges before bounded cleanup; fixed constructor readiness grammar, bounded complete-line reads and owned-child cleanup exit classification; no radio or privileges");
+    check_prepared_child_lifetime();
+    puts("PASS: retire privileges before bounded cleanup; promptly reject exited prepared child without reaping, signal only a waitable child; fixed readiness grammar and owned cleanup; no radio or privileges");
     return 0;
 }

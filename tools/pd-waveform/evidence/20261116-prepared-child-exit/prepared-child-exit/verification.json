@@ -1,0 +1,33 @@
+{
+  "installed": false,
+  "builds": {
+    "host": {
+      "bytes": 884168,
+      "sha256": "d593e41c55c15d4477af7f7581eafc6385f3f23681726d43f80f84a4e0c80d8e"
+    },
+    "arm64": {
+      "bytes": 105472,
+      "sha256": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877"
+    },
+    "armv7": {
+      "bytes": 92208,
+      "sha256": "1fde0e18f08593aac4458dd6b8bb817a0b50ad2ce1503c9512fef8b1c109d593"
+    }
+  },
+  "mutations": {
+    "no-exit-observation": {
+      "timeout_s": 4,
+      "expected": "unobserved exited child leaves readiness waiting for its10second deadline"
+    },
+    "reap-during-observation": {
+      "exit": -6,
+      "output": "test-reap-during-observation: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-child-exit/reap-during-observation/radio_launch_test.c:43: inspect_child: Assertion `type==P_PID && child==42 && options==(WEXITED|WNOHANG|WNOWAIT)' failed.\n"
+    },
+    "signal-before-ownership": {
+      "exit": -6,
+      "output": "test-signal-before-ownership: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-child-exit/signal-before-ownership/radio_launch_test.c:77: check_prepared_child_lifetime: Assertion `waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status)' failed.\n"
+    }
+  },
+  "host_policy_passed": true,
+  "ASan_UBSan_LSan_passed": true
+}

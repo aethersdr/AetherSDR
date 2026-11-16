@@ -1,0 +1,1 @@
+test-signal-before-ownership: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/prepared-child-exit/signal-before-ownership/radio_launch_test.c:77: check_prepared_child_lifetime: Assertion `waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status)' failed.

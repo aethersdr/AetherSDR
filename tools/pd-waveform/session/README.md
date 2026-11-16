@@ -543,6 +543,14 @@ parent keeps its existing identity. The child-exit result still determines
 whether cleanup is confirmed. This also covers an early prepared-session
 refusal that returns before the usual privilege retirement.
 
+The prepared-DSP readiness wait checks for child exit without reaping it, so a
+failed IQ handshake ends setup promptly instead of retaining setup privileges
+until the readiness deadline. Cleanup confirms the child is still waitable
+before sending a signal; an exited child is reaped and a lost child is left
+alone. The non-reaping observation uses `waitid(P_PID, ..., WNOWAIT)`, available
+since Linux 2.6.9 according to the [Linux wait manual](https://man7.org/linux/man-pages/man2/waitpid.2.html).
+Actual FLEX-6300 qualification remains required.
+
 On the installed ARM64 candidate, loss of the IQ-source process retires DSP,
 capture, ARP and guardians. Its unprivileged private control owner and launcher
 can remain to serve explicit receive restoration. Status requests refresh the

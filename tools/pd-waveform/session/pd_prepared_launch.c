@@ -44,10 +44,19 @@ static int prepared_profile(pid_t child,int policy,int priority)
     }
     closedir(d);return valid && threads>=3;
 }
+static int prepared_child_running(pid_t child,int (*inspect)(idtype_t,id_t,siginfo_t*,int))
+{
+    if(child<=1){return 0;}
+    siginfo_t state={0};int result;
+    // Preserve the unreaped child so cleanup cannot signal a reused PID.
+    do{result=inspect(P_PID,(id_t)child,&state,WEXITED|WNOHANG|WNOWAIT);}while(result<0 && errno==EINTR);
+    return !result && !state.si_pid;
+}
 static int prepared_wait_ready(pid_t child,int gate)
 {
     int64_t start=prepared_ms();if(start<0){return 0;}
     for(;;){
+        if(!prepared_child_running(child,waitid)){return 0;}
         int64_t now=prepared_ms();if(now<start || now-start>=10000){return 0;}
         struct pollfd p={gate,POLLIN,0};int r=poll(&p,1,100);
         if(r<0 && errno==EINTR){continue;}if(r<0 || p.revents&(POLLERR|POLLHUP|POLLNVAL)){return 0;}
@@ -57,6 +66,7 @@ static int prepared_wait_ready(pid_t child,int gate)
     // created threads before promoting only the forked child's main thread.
     start=prepared_ms();if(start<0){return 0;}
     while(!prepared_profile(child,SCHED_OTHER,0)){
+        if(!prepared_child_running(child,waitid)){return 0;}
         int64_t now=prepared_ms();if(now<start || now-start>=1000){return 0;}
         struct timespec t={0,10000000};nanosleep(&t,NULL);
     }
@@ -64,7 +74,10 @@ static int prepared_wait_ready(pid_t child,int gate)
 }
 static void prepared_stop_child(pid_t child,int owner)
 {
-    close(owner);if(child<=0){return;}
+    close(owner);if(child<=1){return;}
+    int status;pid_t observed;
+    do{observed=waitpid(child,&status,WNOHANG);}while(observed<0 && errno==EINTR);
+    if(observed!=0){return;}
     kill(child,SIGTERM);int64_t start=prepared_ms();
     for(;;){
         int status=0;pid_t result=waitpid(child,&status,WNOHANG);
