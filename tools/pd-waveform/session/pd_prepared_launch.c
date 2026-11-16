@@ -12,6 +12,7 @@
 static pid_t prepared_setup_pids[3];
 // Set by the fixed constructor, never taken from a prepared-launch request.
 static int prepared_session_fd=-1;
+static uint32_t prepared_feedback_pan;
 
 static int64_t prepared_ms(void)
 {
@@ -87,7 +88,8 @@ static void prepared_exec_dsp(int program,const int source[7],uint32_t gui)
     if(!prepared_close_except(kept,7,executable) || setrlimit(RLIMIT_RTTIME,&limit) ||
        syscall(SYS_sched_setscheduler,0,SCHED_OTHER,&ordinary) || setpriority(PRIO_PROCESS,0,0) || !drop_root()){_exit(21);}
     char handle[64];snprintf(handle,sizeof(handle),"AETHER_PD_GUI_HANDLE=0x%08x",gui);
-    char* env[]={"PATH=/usr/bin:/bin","AETHER_PD_RADIO=127.0.0.1","AETHER_PD_FEEDBACK=local","AETHER_PD_TRANSPORT_CACHE=1","AETHER_PD_IQ_FD=3","AETHER_PD_API_FD=4","AETHER_PD_OWNER_FD=6","AETHER_PD_STATUS_FD=7","AETHER_PD_CALIBRATION_FD=8","AETHER_PD_START_FD=9","AETHER_PD_TX_DEADLINE_MS=12",handle,NULL};
+    char pan[64];snprintf(pan,sizeof(pan),"AETHER_PD_FEEDBACK_PAN=0x%08x",prepared_feedback_pan);
+    char* env[]={"PATH=/usr/bin:/bin","AETHER_PD_RADIO=127.0.0.1","AETHER_PD_FEEDBACK=local","AETHER_PD_TRANSPORT_CACHE=1","AETHER_PD_IQ_FD=3","AETHER_PD_API_FD=4","AETHER_PD_OWNER_FD=6","AETHER_PD_STATUS_FD=7","AETHER_PD_CALIBRATION_FD=8","AETHER_PD_START_FD=9","AETHER_PD_TX_DEADLINE_MS=12",handle,prepared_feedback_pan?pan:NULL,NULL};
     char* args[]={"aether-pd",NULL};fexecve(executable,args,env);_exit(22);
 }
 #ifndef PD_PREPARED_MAIN

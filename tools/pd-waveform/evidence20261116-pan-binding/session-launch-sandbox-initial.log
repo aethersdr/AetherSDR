@@ -1,0 +1,8 @@
+AetherPD DSP GUI bind failed: client=00000000 gui=22222222 issued=1 replies=0 parser_failed=0
+AetherPD unkey GUI bind failed: client=00000000 gui=22222222 issued=1 replies=0 parser_failed=0
+AetherPD DSP GUI bind failed: client=11111111 gui=22222222 issued=1 replies=0 parser_failed=1
+AetherPD unkey GUI bind failed: client=33333333 gui=22222222 issued=1 replies=0 parser_failed=1
+AetherPD DSP GUI bind failed: client=11111111 gui=22222222 issued=1 replies=0 parser_failed=1
+AetherPD unkey GUI bind failed: client=11111111 gui=22222222 issued=1 replies=1 parser_failed=0
+AetherPD DSP GUI bind failed: client=22222222 gui=22222222 issued=1 replies=1 parser_failed=0
+session-launch-test-host: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/session/session_launch_test.c:80: int main(void): Assertion `send(protocol[0],reply,sizeof(reply)-1,MSG_NOSIGNAL)==sizeof(reply)-1' failed.

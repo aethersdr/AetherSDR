@@ -1,0 +1,11 @@
+{
+  "source_evidence": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/shim-capture-stop-armv7-01.json",
+  "source_sha256": "6cdeee321eba4044728117e4d5af846964ea92fd112d5795b2d719c6b884cf74",
+  "fixture_sha256": "c17cc70a14f4bc1275d3debc36dd56b05bdf06accf213b542ec5b36a10936af4",
+  "replay_exit": 0,
+  "scope": "Previously recorded stream and pan status replay through current parser; not a live radio test",
+  "protocol_references": {
+    "/home/jeremy/AetherSDR/reference/FlexLib/FlexLib/DAXIQStream.cs": "f184d42850aae52c22bce3445ab4e222664c2dc2223c0799a6d3af98fa485dbb",
+    "/home/jeremy/AetherSDR/reference/FlexLib/FlexLib/Panadapter.cs": "eaf0ddbde8816c6a263020b79f6cb29fe869b8080894698a8a9fabff1a1e2fbc"
+  }
+}

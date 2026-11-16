@@ -1,0 +1,228 @@
+{
+  "updated_utc": "2026-11-16T14:17:07.806226+00:00",
+  "status": "fixed_channel_pan_binding_qualified_offline",
+  "production_ready": false,
+  "installed": false,
+  "source_base": "99bf9272278daecf8307c44a8d3112c80715762c",
+  "evidence": "evidence20261116-pan-binding",
+  "implemented": [
+    "The ordinary-user stream owner subscribes to pan status, binds the created stream explicit pan field, and requires matching GUI owner/channel1 before readiness. Bounded eight-pan inventory supports reordered and fragmented status; missing/foreign readback never establishes readiness.",
+    "After readiness, selected-pan removal, owner/channel change, stream pan change or malformed duplicate identity latches failure. Unrelated pans cannot replace the explicit binding. Cleanup preserves the existing rule to close the owned API lease on uncertain identity.",
+    "The constructor accepts only the complete canonical new private ready record and passes its observed pan ID to the DSP. The native installed constructor supplies the value internally; no public command/path/network/scheduling input or new capability is added.",
+    "The DSP ignores other pans, waits for matching owner/channel readback, gates correction and operator source admission on the sealed binding, and cancels both armed and running sources on binding loss. Feedback readiness clears immediately. A restored status cannot revive the failed binding.",
+    "User and constructor documentation describe restart semantics and the requirement to update owner, constructor and DSP together."
+  ],
+  "validation": {
+    "registered_tests_passed": 3,
+    "registered_tests": [
+      "pd_dispatch_deadline_test",
+      "pd_calibration_dispatch_test",
+      "pd_iq_stream_policy_test"
+    ],
+    "ctest_seconds": 1.11,
+    "constructor_tests": {
+      "iq-stream-test": 0,
+      "radio-launch-test": 0,
+      "session-launch-test": 0,
+      "service-launch-test": 0,
+      "start-session-test": 0,
+      "primary-launch-test": 0,
+      "shim-launch-test": 0
+    },
+    "native_address_undefined_leak_sanitizers": {
+      "pd_iq_stream_policy_test": 0,
+      "pd_calibration_dispatch_test": 0,
+      "pd_dispatch_deadline_test": 0
+    },
+    "constructor_address_undefined_leak_sanitizer": {
+      "radio-launch-test": 0
+    },
+    "mutations": [
+      {
+        "mutation": "pan-owner",
+        "exit_code": 8,
+        "expected_assertion_failed": true,
+        "restored_source_sha256": "d1d04b8792a5e9fabf0e75f6cfc86461877cbfef6204595eca625511c62d6180",
+        "restore_build_exit_code": 0
+      },
+      {
+        "mutation": "dsp-binding",
+        "exit_code": 8,
+        "expected_assertion_failed": true,
+        "restored_source_sha256": "1df0adb31baf9d4fad31cf5b36afaf63032f330c25fd623e957744b7e2329e5f",
+        "restore_build_exit_code": 0
+      }
+    ],
+    "recorded_radio_status_replay": {
+      "source_evidence": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/shim-capture-stop-armv7-01.json",
+      "source_sha256": "6cdeee321eba4044728117e4d5af846964ea92fd112d5795b2d719c6b884cf74",
+      "fixture_sha256": "c17cc70a14f4bc1275d3debc36dd56b05bdf06accf213b542ec5b36a10936af4",
+      "replay_exit": 0,
+      "scope": "Previously recorded stream and pan status replay through current parser; not a live radio test",
+      "protocol_references": {
+        "/home/jeremy/AetherSDR/reference/FlexLib/FlexLib/DAXIQStream.cs": "f184d42850aae52c22bce3445ab4e222664c2dc2223c0799a6d3af98fa485dbb",
+        "/home/jeremy/AetherSDR/reference/FlexLib/FlexLib/Panadapter.cs": "eaf0ddbde8816c6a263020b79f6cb29fe869b8080894698a8a9fabff1a1e2fbc"
+      }
+    },
+    "strict_static_cross_builds": {
+      "armv7": {
+        "pd-capture-bootstrap-armv7": {
+          "bytes": 53724,
+          "sha256": "f86fbdcd6848d1df04992aa550379328b34d1e696dfa4124c8638def5e42ea6b"
+        },
+        "pd-fixed-arp-armv7": {
+          "bytes": 42760,
+          "sha256": "41a6b3a7cfa78f8472f546df8372a9459c871ed559d780ec792f7bd4ee0197f5"
+        },
+        "pd-iq-source-armv7": {
+          "bytes": 44616,
+          "sha256": "44f9915bfbaab03300cfa2fedaad6e657d9869886dcea57613bda898fbd52be7"
+        },
+        "pd-iq-stream-armv7": {
+          "bytes": 41604,
+          "sha256": "d9a0e4cfe5f04cb3077c1e6ac1e2d92ed129f271c11048d8d0f076a002d791f0"
+        },
+        "pd-kernel-probe-armv7": {
+          "bytes": 40816,
+          "sha256": "b71fe4a12bf76dcfabd4975d334e11ba09034e41c237f0260a5916de09d23989"
+        },
+        "pd-lease-guard-armv7": {
+          "bytes": 37372,
+          "sha256": "9ad9baac195793530517dab80170bddccb681cbd20e433967f4e84981b0a830c"
+        },
+        "pd-prepared-launch-armv7": {
+          "bytes": 49760,
+          "sha256": "e012b8d536d1eed4d3bfb0f2cf358e33fc2cec7136b8fc25bd000ecc6fea8bdd"
+        },
+        "pd-primary-launch-armv7": {
+          "bytes": 79492,
+          "sha256": "623b9b8d7fa0bfdf14e7819b850c95f8a7aff664ba0c1a2743668b80118fcc87"
+        },
+        "pd-radio-launch-armv7": {
+          "bytes": 90460,
+          "sha256": "5e9bcc9742e5cbe6a9e3959566f52563e95288a40f8bdeee73f45f9c8da16fca"
+        },
+        "pd-service-launch-armv7": {
+          "bytes": 45748,
+          "sha256": "cb4904d54fb8ff188160f439025fcacd120bd583f7c6a0909e2e4ab6646a3ba4"
+        },
+        "pd-session-launch-armv7": {
+          "bytes": 68932,
+          "sha256": "1dbc4d481decab42a6aa05759215b94e45cf00236f88592b368b354096a87d3b"
+        },
+        "pd-shim-launch-armv7": {
+          "bytes": 40668,
+          "sha256": "1a212d676da4097b5f5a13508d3133e66bc724bfc8aa26c2658735a0b799785b"
+        },
+        "pd-start-session-armv7": {
+          "bytes": 46732,
+          "sha256": "51d6b79344cbe2dac2e76f71f7da6025a4ec525887df099f20dfd0792b45c675"
+        },
+        "aether-pd-armv7": {
+          "bytes": 266684,
+          "sha256": "0293f7fff8806d0ef51f32737e21b2701fafbdacbf18f5e0d8f370e7dccd33f1"
+        }
+      },
+      "arm64": {
+        "pd-capture-bootstrap-arm64": {
+          "bytes": 61264,
+          "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+        },
+        "pd-fixed-arp-arm64": {
+          "bytes": 52424,
+          "sha256": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49"
+        },
+        "pd-iq-source-arm64": {
+          "bytes": 53184,
+          "sha256": "e35292f2c794aefd586f60741aebf57c6b20111de9fffd4e7a1d42b9ab05b018"
+        },
+        "pd-iq-stream-arm64": {
+          "bytes": 49192,
+          "sha256": "0d989a8a160f210efe0e8e2c92e31f674c02ea163f070dc733b50401fecd5b8c"
+        },
+        "pd-kernel-probe-arm64": {
+          "bytes": 50672,
+          "sha256": "b7944e696b4be6a885be46be247d2ab3851c4066d940642a1d3254da51ffaa1f"
+        },
+        "pd-lease-guard-arm64": {
+          "bytes": 43608,
+          "sha256": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+        },
+        "pd-prepared-launch-arm64": {
+          "bytes": 58872,
+          "sha256": "2bb31ead4ff995cb19fe4330424201ea0c5b9298c1bc772090c6fb9bf7005c35"
+        },
+        "pd-primary-launch-arm64": {
+          "bytes": 74520,
+          "sha256": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc"
+        },
+        "pd-radio-launch-arm64": {
+          "bytes": 103656,
+          "sha256": "5bbbebba9373717ee63fb12e8788c015508872aef591ebed312f741c87aeb1ec"
+        },
+        "pd-service-launch-arm64": {
+          "bytes": 54912,
+          "sha256": "b3108a3c9755480bfcd740c90d0d354cd2e2b2a4c7457147505b1c1423457ece"
+        },
+        "pd-session-launch-arm64": {
+          "bytes": 79448,
+          "sha256": "e35497e99fe8164ac795228b5093132d731e6086f396b85817e3836c2c76ed06"
+        },
+        "pd-shim-launch-arm64": {
+          "bytes": 49000,
+          "sha256": "1bbc7ecbe06eeed91fd0da01689400652a1a9f0eb1cf1ab1b2f77171a6ff24f7"
+        },
+        "pd-start-session-arm64": {
+          "bytes": 57200,
+          "sha256": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592"
+        },
+        "aether-pd-arm64": {
+          "bytes": 278440,
+          "sha256": "0a6522367f33aec2b3d4f06c5d86534b449c973b19a49195b25ccb026aa10c63"
+        }
+      }
+    },
+    "docs_build_passed": true,
+    "test_registration_passed": true
+  },
+  "negative_evidence": [
+    "The initial sandboxed session-launch test failed on send() to a local Unix socket. Rebuilt final constructor tests passed outside the sandbox; initial result and log are preserved.",
+    "The first sanitizer harness expanded a static archive into direct objects, duplicating pd_local_iq.c intentionally embedded by the dispatch test. The corrected harness builds an instrumented archive and retains original archive extraction semantics. All final sanitizer tests pass."
+  ],
+  "latest_read_only_network_probe": {
+    "utc": "2026-11-16T14:12:08.048541+00:00",
+    "address": "192.168.50.100",
+    "radio_mutations": false,
+    "tcp_ports": {
+      "4992": "[Errno 113] No route to host",
+      "48992": "timed out",
+      "22222": "[Errno 113] No route to host"
+    }
+  },
+  "source_sha256": {
+    "docs/user/docs/tailscale-remote-access.md": "3c0570014a65d02172019b139e53fb38b9f04525885c4cea23cb1d93486e336d",
+    "tools/pd-waveform/calibration_dispatch_test.c": "ede6323cd5dd1eef4d0279d8c447ff99934ab90ca43844137ca90e4e57739913",
+    "tools/pd-waveform/pd_waveform.c": "1df0adb31baf9d4fad31cf5b36afaf63032f330c25fd623e957744b7e2329e5f",
+    "tools/pd-waveform/session/README.md": "3402b111fe6b75ba2f2e40cb1974572d4a469c5070a0596ec12f5beaed38b6a2",
+    "tools/pd-waveform/session/iq_stream_test.c": "e4583d6d136bccc02782217a489877a668647a7925a55a8cca8df314c02b6359",
+    "tools/pd-waveform/session/pd_iq_stream.c": "d1d04b8792a5e9fabf0e75f6cfc86461877cbfef6204595eca625511c62d6180",
+    "tools/pd-waveform/session/pd_prepared_launch.c": "325316c173734f043651bd3fcdb7534fd63672f83e2e8a0dad45b4808472c797",
+    "tools/pd-waveform/session/pd_radio_launch.c": "acf347fecf149ecc5d211d8a33cfe6082c0e065da43e2009ea89864476402699",
+    "tools/pd-waveform/session/radio_launch_test.c": "dbd2e3e9b47b866152db6b12efdbc7caa5f8e572c5a9c5e609a53cec43cabaa5"
+  },
+  "limitations": [
+    "Channel1 remains fixed. This establishes native provenance for the selector; it does not complete PR4770 channel/pan selection.",
+    "No installation, reboot, real RF, hardware fault/unkey timing or actual6300 qualification. Replay is historical receive status, not a live test.",
+    "No complete signed runtime package or new peak-disk measurement; individual static binaries are component build evidence.",
+    "Public shim status, capture metadata, desktop selection and exports do not yet carry the explicit pan/channel binding.",
+    "Development prepared launches without the full constructor retain their previous unsealed mode. Shipping constructor sets the immutable pan; independently selected test launches are not this qualification.",
+    "The changed private ready grammar is intentionally incompatible with old constructor/owner combinations; atomic package qualification remains required."
+  ],
+  "next": [
+    "Add bounded, versioned start selection (DAX IQ channel1..4 plus explicit pan ID) through public shim, private PDSTART request and fixed native constructors; preserve original GUI/session identity and forbid configured-request fallback.",
+    "Pass the same immutable selection to the unprivileged stream owner and DSP; verify real radio readback for the selected pan rather than writing stored state during reconnect.",
+    "Expose observed binding in public status and immutable capture metadata. Require identical binding for preparation and every averaged frame; retain it in JSON/CSV/PNG exports.",
+    "Add operator channel/pan controls through typed original-session model commands with capability reasons, no key-on-edit, no automatic assignment/rearm and no mapping guessed from stream IDs.",
+    "Rebuild authenticated reproducible packages, recover the reachable radio and qualify the exact final installation/reboot/IQ/process graph; finish DSP attribution, repeated5/10W RF, stock APD, actual6300 and independent release gates."
+  ]
+}

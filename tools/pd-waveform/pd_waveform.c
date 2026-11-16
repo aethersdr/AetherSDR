@@ -469,6 +469,8 @@ typedef struct {
     uint32_t tx_in, rx_in;        // stream IDs from waveform create
     uint32_t daxiq_sid;
     uint32_t feedback_pan;
+    uint32_t sealed_feedback_pan, feedback_pan_owner;
+    int feedback_binding_failed;
     char model_fields[13][64];
     int native_apd_enabled, native_apd_active;
     struct pd_tx_guard tx_guard;
@@ -780,6 +782,12 @@ static void fb_slice_remove(wf_t* w)
     w->fb_mhz = 0;
 }
 
+static int feedback_binding_valid(const wf_t* w)
+{
+    return !w->sealed_feedback_pan || (!w->feedback_binding_failed &&
+        w->feedback_pan==w->sealed_feedback_pan && w->feedback_pan_owner==w->calibration_gui && w->calibration_gui);
+}
+
 static void start_feedback(wf_t* w)
 {
     pd_capture_invalidate(&w->capture);
@@ -814,7 +822,7 @@ static void start_feedback(wf_t* w)
     // The correction spans about +-10 kHz around the carrier; that band has
     // to sit inside the DAX IQ stream.
     double room = w->daxiq_rate / 2.0 - 10000;
-    w->feedback_ok = w->daxiq_sid && w->pan_mhz > 0 && fabs(shift) <= room;
+    w->feedback_ok = feedback_binding_valid(w) && w->daxiq_sid && w->pan_mhz > 0 && fabs(shift) <= room;
     if (!w->feedback_ok) {
         logf_("transmit without feedback: put a panadapter on the coupler's input with DAX IQ "
               "channel %d, centred within %.0f Hz of %.6f MHz", w->daxiq_ch, room, w->tx_mhz);
@@ -1089,6 +1097,24 @@ static void api_line(wf_t* w, char* l)
     if (!strncmp(m, "display pan ", 12)) {
         uint32_t id = (uint32_t)strtoul(m + 12, NULL, 0);
         int changed = 0;
+        if (w->sealed_feedback_pan) {
+            const char* end=strchr(m+12,' ');
+            char identity[16];size_t length=end?(size_t)(end-(m+12)):0;uint32_t parsed=0;
+            if(!length || length>=sizeof(identity)){w->feedback_binding_failed=1;w->feedback_ok=0;model_changed(w);return;}
+            memcpy(identity,m+12,length);identity[length]=0;
+            if(!calibration_handle(identity,&parsed) || !parsed){w->feedback_binding_failed=1;w->feedback_ok=0;model_changed(w);return;}
+            if(parsed!=w->sealed_feedback_pan){return;}
+            char owner[32],channel[16],expected[16];uint32_t handle=0;
+            int has_owner=calibration_field(m,"client_handle",owner,sizeof(owner));
+            int has_channel=calibration_field(m,"daxiq_channel",channel,sizeof(channel));
+            snprintf(expected,sizeof(expected),"%d",w->daxiq_ch);
+            if(has_owner<0 || (has_owner && (!calibration_handle(owner,&handle) || handle!=w->calibration_gui)) ||
+               has_channel<0 || (has_channel && strcmp(channel,expected)) || !strcmp(end+1,"removed")) {
+                w->feedback_binding_failed=1;w->feedback_ok=0;w->feedback_pan=0;w->pan_mhz=0;model_changed(w);return;
+            }
+            if(w->feedback_binding_failed){return;}
+            if(has_owner && w->feedback_pan_owner!=handle){w->feedback_pan_owner=handle;changed=1;}
+        }
         if (id && id == w->feedback_pan && strstr(m, " removed")) {
             w->feedback_pan = 0;
             w->pan_mhz = 0;
@@ -1817,6 +1843,8 @@ static int wf_init(wf_t* w)
     w->fb_slice = -1;
     const char* gui=getenv("AETHER_PD_GUI_HANDLE");
     if (gui && *gui && (!calibration_handle(gui,&w->calibration_gui) || !w->calibration_gui)) { return 0; }
+    const char* pan=getenv("AETHER_PD_FEEDBACK_PAN");
+    if(pan && (!calibration_handle(pan,&w->sealed_feedback_pan) || !w->sealed_feedback_pan || !w->calibration_gui)){return 0;}
     const char* fbm = getenv("AETHER_PD_FEEDBACK");
     w->local_iq_mode = fbm && !strcmp(fbm, "local");
     w->local_iq.fd = -1;
@@ -1944,7 +1972,7 @@ static struct pd_calibration_reply operator_calibration_command(wf_t* w,
     int eligible=w->calibration_control && w->calibration_idle && w->calibration_gui && !w->keyed && !w->tx_on && w->api>=0 && w->api_leased && w->tx_in &&
         w->active_slice>=0 && w->active_slice<16 && w->calibration_slice_owner[w->active_slice]==w->calibration_gui &&
         (w->correct || correction_selection || measurement_arm) && !native_apd_blocked(w) && w->local_iq_mode &&
-        w->local_iq.frames>0 && w->daxiq_sid && w->tx_mhz>0 && w->pan_mhz>0 &&
+        feedback_binding_valid(w) && w->local_iq.frames>0 && w->daxiq_sid && w->tx_mhz>0 && w->pan_mhz>0 &&
         w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns && now-w->local_iq.last_valid_ns<=100000000 &&
         !test_source_active(w);
     uint64_t previous_nonce=w->calibration.nonce;

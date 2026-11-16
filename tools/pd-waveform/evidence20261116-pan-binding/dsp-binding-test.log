@@ -1,0 +1,13 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 50: pd_calibration_dispatch_test
+1/1 Test #50: pd_calibration_dispatch_test .....Subprocess aborted***Exception:   0.06 sec
+pd_calibration_dispatch_test: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/calibration_dispatch_test.c:197: check_feedback_binding: Assertion `!feedback_binding_valid(&w)' failed.
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.07 sec
+
+The following tests FAILED:
+	 50 - pd_calibration_dispatch_test (Subprocess aborted)
+Errors while running CTest

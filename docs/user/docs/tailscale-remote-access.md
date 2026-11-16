@@ -543,7 +543,11 @@ ADC headroom or calibrated output power.
 1. Connect the dummy load and attenuated feedback path, select your TX slice,
    frequency and power, and leave FDX off. In the feedback panadapter's **DAX**
    panel, assign **IQ Ch 1**. Start AetherPD, then select **PD** mode on your TX
-   slice. Confirm **Dummy load connected;
+   slice. The installed local-IQ session binds to the stream's reported
+   feedback panadapter and verifies that this GUI owns it. Removing the pan or
+   reassigning its channel or owner ends that binding; stop and start AetherPD
+   explicitly after correcting the assignment. Another pan reporting the same
+   channel cannot take its place. Confirm **Dummy load connected;
    feedback attenuation checked**.
    Before arming, you can choose **Radio power setting (W)** and click
    **Apply power**. This requests the nominal setting without transmitting;

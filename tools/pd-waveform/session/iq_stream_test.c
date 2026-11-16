@@ -5,7 +5,7 @@
 #undef NDEBUG
 #endif
 #include <assert.h>
-static const char kFull[]="S12345678|stream 0x20000001 type=dax_iq daxiq_channel=1 daxiq_rate=48000 client_handle=0x12345678 client_gui_handle=0x11223344 ip=172.30.2.1 active=1\n";
+static const char kFull[]="S12345678|stream 0x20000001 type=dax_iq daxiq_channel=1 pan=0x40000001 daxiq_rate=48000 client_handle=0x12345678 client_gui_handle=0x11223344 ip=172.30.2.1 active=1\n";
 static struct stream_state state(void)
 {
     return (struct stream_state){.client=0x12345678,.gui=0x11223344,.stream=0x20000001,.issued=127};
@@ -34,14 +34,55 @@ int main(void)
     assert(client_id("0D3EA0E8-B052-4AC6-9D32-D96918634469"));
     assert(!client_id("0D3EA0E8-B052-4AC6-9D32-D96918634469\n"));
     assert(!client_id("0D3EA0E8 B052-4AC6-9D32-D96918634469"));
-    struct stream_state s=state();assert(wire(&s,kFull) && s.fields==63);
+    struct stream_state s=state();assert(wire(&s,kFull) && s.fields==127);
     char broadcast[sizeof(kFull)];memcpy(broadcast,kFull,sizeof(kFull));memcpy(broadcast+1,"87654321",8);
-    s=state();assert(wire(&s,broadcast) && s.fields==63);
+    s=state();assert(wire(&s,broadcast) && s.fields==127);
     s=state();assert(wire(&s,"S87654321|radio daxiq_available=14 full_duplex_enabled=0\n") && !s.fields);
+    assert(!stream_binding_valid(&s));
+    const char pan[]="S87654321|display pan 0x40000001 client_handle=0x11223344 daxiq_channel=1 center=7.150000\n";
+    s=state();assert(wire(&s,kFull) && wire(&s,pan) && stream_binding_valid(&s));
+    s=state();assert(wire(&s,pan) && wire(&s,kFull) && stream_binding_valid(&s));
+    s.binding_ready=1;
+    assert(wire(&s,"S0|display pan 0x40000002 client_handle=0x55667788 daxiq_channel=1\n") && stream_binding_valid(&s));
+    assert(wire(&s,"S0|display pan 0x40000001 center=7.151000\n") && stream_binding_valid(&s));
+    const char* rebind[]={
+        "S0|display pan 0x40000001 client_handle=0x55667788\n",
+        "S0|display pan 0x40000001 daxiq_channel=2\n",
+        "S0|display pan 0x40000001 removed\n",
+        "S0|stream 0x20000001 pan=0x40000002\n",
+        "S0|stream 0x20000001 pan=0x00000000\n",
+        "S0|stream 0x20000001 pan=0x40000001 pan=0x40000001\n",
+        "S0|display pan 0x40000001 client_handle=0x11223344 client_handle=0x11223344\n",
+        "S0|display pan 0x40000001 daxiq_channel=1 daxiq_channel=1\n"
+    };
+    for(unsigned i=0;i<sizeof(rebind)/sizeof(rebind[0]);++i){
+        s=state();assert(wire(&s,pan) && wire(&s,kFull) && stream_binding_valid(&s));s.binding_ready=1;
+        assert(!wire(&s,rebind[i]) && s.failed);
+        assert(!wire(&s,pan));
+    }
+    s=state();assert(wire(&s,kFull));
+    assert(wire(&s,"S0|display pan 0x40000002 client_handle=0x00000000 daxiq_channel=0\n"));
+    assert(wire(&s,"S0|display pan 0x40000001 client_handle=0x55667788 daxiq_channel=1\n") && !stream_binding_valid(&s));
+    s=state();assert(wire(&s,kFull));
+    assert(wire(&s,"S0|display pan 0x40000001 client_handle=0x11223344\n") && !stream_binding_valid(&s));
+    assert(wire(&s,"S0|display pan 0x40000001 daxiq_channel=1\n") && stream_binding_valid(&s));
+    s=state();
+    for(unsigned i=0;i<kPanCount;++i){
+        char text[128];snprintf(text,sizeof(text),"S0|display pan 0x%08x client_handle=0x11223344 daxiq_channel=0\n",0x40000001+i);
+        assert(wire(&s,text));
+    }
+    assert(!wire(&s,"S0|display pan 0x40000009 client_handle=0x11223344\n"));
+    s=state();assert(wire(&s,"S0|display pan 0x40000002 client_handle=0x11223344 daxiq_channel=1\n"));
+    assert(wire(&s,"S0|display pan 0x40000002 removed\n") && !stream_find_pan(&s,0x40000002,0));
+    for(size_t split=0;split<=strlen(pan);++split){
+        s=state();struct stream_input input={0};assert(wire(&s,kFull));
+        assert(feed(&s,&input,(const unsigned char*)pan,split));
+        assert(feed(&s,&input,(const unsigned char*)pan+split,strlen(pan)-split) && stream_binding_valid(&s));
+    }
     /* Framing must not depend on recv() boundaries. */
     for(size_t split=0;split<=strlen(kFull);++split){
         s=state();struct stream_input in={0};assert(feed(&s,&in,(const unsigned char*)kFull,split));
-        assert(feed(&s,&in,(const unsigned char*)kFull+split,strlen(kFull)-split) && s.fields==63);
+        assert(feed(&s,&in,(const unsigned char*)kFull+split,strlen(kFull)-split) && s.fields==127);
     }
     const char* bad_status[]={
         "S12345678|stream 0x20000001 type=dax_audio\n",

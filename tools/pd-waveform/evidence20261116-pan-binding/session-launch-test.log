@@ -1,0 +1,10 @@
+PASS: API handoff exact size/count/identity, CLOEXEC, truncated ancillary cleanup and descriptor-role rejection
+AetherPD DSP GUI bind failed: client=00000000 gui=22222222 issued=1 replies=0 parser_failed=0
+AetherPD unkey GUI bind failed: client=00000000 gui=22222222 issued=1 replies=0 parser_failed=0
+AetherPD DSP GUI bind failed: client=11111111 gui=22222222 issued=1 replies=0 parser_failed=1
+AetherPD unkey GUI bind failed: client=33333333 gui=22222222 issued=1 replies=0 parser_failed=1
+AetherPD DSP GUI bind failed: client=11111111 gui=22222222 issued=1 replies=0 parser_failed=1
+AetherPD unkey GUI bind failed: client=11111111 gui=22222222 issued=1 replies=1 parser_failed=0
+AetherPD DSP GUI bind failed: client=22222222 gui=22222222 issued=1 replies=1 parser_failed=0
+AetherPD rejected bind frame hex=523937303130317c307c30783333333333333333
+AetherPD rejected bind frame hex=523931303030307c307c

@@ -19,10 +19,16 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Ordinary-user stream owner. The trusted provider seals the GUI/pan before
- * launch. This component never changes a receiver, network state or RF. */
-enum { kLine=4096,kBind=970101,kSubscribe=970102,kPort=970103,kCreate=970104,kRate=970105,kConfirm=970106,kRemove=970107 };
-struct stream_state { uint32_t client,gui,stream;unsigned issued,replies,fields;int failed,removed; };
+/* Ordinary-user stream owner. Readback binds the created stream to its GUI
+ * and pan. This component never changes a receiver, network state or RF. */
+enum { kLine=4096,kBind=970101,kSubscribe=970102,kPort=970103,kCreate=970104,kRate=970105,kConfirm=970106,kRemove=970107,kPan=970108,kPanCount=8 };
+struct stream_pan { uint32_t id,owner,channel;unsigned fields;int removed; };
+struct stream_state {
+    uint32_t client,gui,stream,pan;
+    unsigned issued,replies,fields;
+    int failed,removed,binding_ready;
+    struct stream_pan pans[kPanCount];
+};
 struct stream_input { char line[kLine+1];size_t used; };
 static volatile sig_atomic_t stream_stop;
 static void stop_stream(int number){(void)number;stream_stop=1;}
@@ -72,6 +78,45 @@ static int attribute(const char* words,const char* key,char* value,size_t capaci
     }
     return found;
 }
+/* Pan identities come from FlexLib Panadapter.client_handle and the stream's
+ * explicit pan field, never from the VITA stream ID or status-prefix handle. */
+static struct stream_pan* stream_find_pan(struct stream_state* s,uint32_t id,int create)
+{
+    struct stream_pan* vacant=NULL;
+    for(unsigned i=0;i<kPanCount;++i){
+        if(s->pans[i].id==id){return &s->pans[i];}
+        if(!s->pans[i].id && !vacant){vacant=&s->pans[i];}
+    }
+    if(create && vacant){vacant->id=id;return vacant;}
+    return NULL;
+}
+static int stream_binding_valid(struct stream_state* s)
+{
+    struct stream_pan* pan=stream_find_pan(s,s->pan,0);
+    return s->pan && pan && pan->fields==3 && !pan->removed && pan->owner==s->gui && pan->channel==1;
+}
+static void stream_parse_pan(struct stream_state* s,char* body)
+{
+    char* words=strchr(body+12,' ');uint32_t id=0;
+    if(!words){s->failed=1;return;}*words++=0;
+    if(!handle(body+12,&id)){s->failed=1;return;}
+    struct stream_pan* pan=stream_find_pan(s,id,1);
+    if(!pan){s->failed=1;return;}
+    if(!strcmp(words,"removed")){
+        if(id==s->pan){pan->removed=1;s->failed=1;}
+        else{memset(pan,0,sizeof(*pan));}
+        return;
+    }
+    const char* keys[]={"client_handle","daxiq_channel"};
+    for(unsigned i=0;i<2;++i){
+        char value[32];uint32_t parsed=0;int found=attribute(words,keys[i],value,sizeof(value));
+        if(found<0){s->failed=1;return;}if(!found){continue;}
+        if(i==0?(!handle(value,&parsed) && strcmp(value,"0x00000000")):(!number(value,10,1,&parsed) || parsed>4)){s->failed=1;return;}
+        if(i==0){pan->owner=parsed;}else{pan->channel=parsed;}
+        pan->fields|=1u<<i;
+    }
+    if(s->binding_ready && !stream_binding_valid(s)){s->failed=1;}
+}
 static void parse_line(struct stream_state* s,char* line)
 {
     if(s->failed){return;}
@@ -82,7 +127,7 @@ static void parse_line(struct stream_state* s,char* line)
         char* bar=strchr(line+1,'|');if(!bar){s->failed=1;return;}*bar=0;uint32_t seq=0;
         if(!number(line+1,10,6,&seq)){s->failed=1;return;}
         char* body=strchr(bar+1,'|');if(!body){s->failed=1;return;}*body++=0;uint32_t code=0;
-        if(!number(bar+1,16,8,&code) || seq<kBind || seq>kRemove || code || !(s->issued&(1u<<(seq-kBind))) || (s->replies&(1u<<(seq-kBind)))){s->failed=1;return;}
+        if(!number(bar+1,16,8,&code) || seq<kBind || seq>kPan || code || !(s->issued&(1u<<(seq-kBind))) || (s->replies&(1u<<(seq-kBind)))){s->failed=1;return;}
         if(seq==kBind){
             uint32_t bound=0;if(!handle(body,&bound) || bound!=s->gui){s->failed=1;return;}
         }else if(seq==kCreate){
@@ -101,21 +146,25 @@ static void parse_line(struct stream_state* s,char* line)
     if(!number(line+1,16,8,&recipient)){s->failed=1;return;}
     /* FlexLib routes by status topic, not the S-prefix handle. Resource
      * ownership is sealed by our create ACK and explicit stream fields. */
+    if(!strncmp(body,"display pan ",12)){stream_parse_pan(s,body);return;}
     if(strncmp(body,"stream ",7)){return;}
     char* words=strchr(body+7,' ');if(!words){s->failed=1;return;}*words++=0;uint32_t id=0;
     if(!handle(body+7,&id)){s->failed=1;return;}
     /* The create ACK seals ownership. A pre-ACK status is not authority. */
     if(id!=s->stream || !s->stream){return;}
     if(!strcmp(words,"removed")){s->removed=1;return;}
-    const char* keys[]={"type","daxiq_channel","daxiq_rate","client_handle","client_gui_handle","ip"};
-    for(unsigned i=0;i<6;++i){
+    const char* keys[]={"type","daxiq_channel","daxiq_rate","client_handle","client_gui_handle","ip","pan"};
+    for(unsigned i=0;i<7;++i){
         char value[64];int found=attribute(words,keys[i],value,sizeof(value));uint32_t h=0;
         if(found<0){s->failed=1;return;}if(!found){continue;}
         if(i==2 && !(s->issued&(1u<<(kRate-kBind)))){continue;}
         int valid=i==0?!strcmp(value,"dax_iq"):i==1?!strcmp(value,"1"):i==2?!strcmp(value,"48000"):
-            i==3?(handle(value,&h) && h==s->client):i==4?(handle(value,&h) && h==s->gui):!strcmp(value,"172.30.2.1");
+            i==3?(handle(value,&h) && h==s->client):i==4?(handle(value,&h) && h==s->gui):
+            i==5?!strcmp(value,"172.30.2.1"):(handle(value,&h) && (!s->pan || s->pan==h));
+        if(i==6 && valid){s->pan=h;}
         if(!valid){s->failed=1;return;}s->fields|=1u<<i;
     }
+    if(s->binding_ready && !stream_binding_valid(s)){s->failed=1;}
 }
 static int feed(struct stream_state* s,struct stream_input* in,const unsigned char* data,size_t count)
 {
@@ -156,7 +205,7 @@ static int observe(int api,int life,struct stream_state* s,struct stream_input* 
     int64_t start=now_ms();size_t total=0;if(start<0){return 0;}
     for(;;){
         if(s->failed || (s->removed && !(mask&(1u<<(kRemove-kBind))))){return 0;}
-        if((s->replies&mask)==mask && (!require_fields || s->fields==63) && s->client){return 1;}
+        if((s->replies&mask)==mask && (!require_fields || (s->fields==127 && stream_binding_valid(s))) && s->client){return 1;}
         if(cancel && stream_stop){return 0;}
         int64_t now=now_ms();if(now<start || now-start>=3000){return 0;}
         struct pollfd p[2]={{api,POLLIN,0},{life,0,0}};int r=poll(p,cancel?2:1,50);
@@ -211,7 +260,7 @@ static int close_others(int api,int udp,int life)
 }
 static int event(const char* name,const struct stream_state* s,int success)
 {
-    char line[256];int n=snprintf(line,sizeof(line),"{\"event\":\"%s\",\"stream\":\"0x%08x\",\"client\":\"0x%08x\",\"uid\":%u,\"success\":%s,\"issued\":%u,\"replies\":%u,\"fields\":%u,\"parser_failed\":%s,\"rf_commands\":[]}\n",name,s->stream,s->client,(unsigned)geteuid(),success?"true":"false",s->issued,s->replies,s->fields,s->failed?"true":"false");
+    char line[320];int n=snprintf(line,sizeof(line),"{\"event\":\"%s\",\"stream\":\"0x%08x\",\"client\":\"0x%08x\",\"pan\":\"0x%08x\",\"uid\":%u,\"success\":%s,\"issued\":%u,\"replies\":%u,\"fields\":%u,\"parser_failed\":%s,\"rf_commands\":[]}\n",name,s->stream,s->client,s->pan,(unsigned)geteuid(),success?"true":"false",s->issued,s->replies,s->fields,s->failed?"true":"false");
     return n>0 && n<(int)sizeof(line) && write(1,line,(size_t)n)==n;
 }
 static int run_stream(int api,int life,unsigned port,const char* gui_id,struct stream_state* s,struct stream_input* in)
@@ -222,10 +271,13 @@ static int run_stream(int api,int life,unsigned port,const char* gui_id,struct s
     if(!issue(api,s,1u,text) || !observe(api,life,s,in,1u,0,1)){return 0;}
     snprintf(text,sizeof(text),"C%d|sub daxiq all\nC%d|client udpport %u\n",kSubscribe,kPort,port);
     if(!issue(api,s,6u,text) || !observe(api,life,s,in,7u,0,1)){return 0;}
+    if(!issue(api,s,128u,"C970108|sub pan all\n") || !observe(api,life,s,in,135u,0,1)){return 0;}
     if(!issue(api,s,8u,"C970104|stream create type=dax_iq daxiq_channel=1\n") || !observe(api,life,s,in,15u,0,1)){return 0;}
     snprintf(text,sizeof(text),"C%d|stream set 0x%08X daxiq_rate=48000\n",kRate,s->stream);
     if(!issue(api,s,16u,text) || !observe(api,life,s,in,31u,0,1)){return 0;}
-    if(!issue(api,s,32u,"C970106|sub daxiq all\n") || !observe(api,life,s,in,63u,1,1) || !event("ready",s,1)){return 0;}
+    if(!issue(api,s,32u,"C970106|sub daxiq all\n") || !observe(api,life,s,in,191u,1,1)){return 0;}
+    s->binding_ready=1;
+    if(!event("ready",s,1)){return 0;}
     int success=1;
     while(!stream_stop){struct pollfd p[2]={{life,0,0},{api,POLLIN,0}};int r=poll(p,2,100);
         if(r<0 && errno==EINTR){continue;}if(r<0){success=0;break;}

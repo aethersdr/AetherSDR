@@ -543,3 +543,34 @@ full-automatic-cleanup assertion remains a failed assertion, not a pass inferred
 from idle expiry. Connected desktop handling of the restoration window remains
 to be qualified. Neither receive-only test proves RF unkey behavior or actual
 FLEX6000 supervision. Session start and expiry never initiate transmission.
+
+## Feedback pan binding
+
+The installed constructor's IQ owner subscribes to pan status without changing
+any receiver. It requires the created stream's explicit `pan` field, plus that
+panadapter's `client_handle` matching the bound GUI and `daxiq_channel=1`.
+Partial readback cannot report ready. Up to eight pan identities are tracked;
+removed unrelated pans free their slot. The `S` prefix is a status recipient,
+not resource ownership. Stream and pan IDs have no numeric relationship.
+
+The private ready record includes the observed pan ID. The constructor passes
+that exact ID to the DSP as `AETHER_PD_FEEDBACK_PAN`; it does not accept a
+caller-selected path, executable or network setting. The DSP waits for its own
+matching owner/channel readback and ignores other pans, including a foreign
+pan advertising channel 1. Removing or reassigning the selected pan invalidates
+this session and cancels an armed measurement. Restoring status does not rearm
+or revive the binding: stop and explicitly start a new session.
+
+The IQ owner, constructor and DSP must be upgraded together. The new private
+ready grammar requires issued/reply mask191 and field mask127, and rejects the
+older record without a pan. This change adds no capabilities or RF commands.
+Development prepared launches without the constructor retain their earlier
+unsealed behavior; they are not equivalent to this installed path.
+
+Channel 1 is still fixed in the constructor. Operator channel/pan selection,
+public observed-binding metadata, capture/export provenance, and live
+qualification of this exact candidate remain required before claiming the full
+PR4770 workflow. The binding is grounded in the published FlexLib
+`DAXIQStream.StatusUpdate` (`pan`, `daxiq_channel`) and
+`Panadapter.StatusUpdate` (`client_handle`, `daxiq_channel`), corroborated by
+saved FLEX-8600 stream/pan status from the local IQ tests.

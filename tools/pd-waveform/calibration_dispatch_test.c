@@ -172,8 +172,59 @@ static void check_configured_spectrum(unsigned spacing,double lower,double upper
     pd_align_destroy(w.align);pd_eq_destroy(w.eq);pd_eq_destroy(w.trusted_eq);
     free(w.ref.buf);free(w.fbk.buf);free(w.acq_tx);free(w.acq_rx);
 }
+static void check_feedback_binding(void)
+{
+    setenv("AETHER_PD_FEEDBACK","local",1);
+    setenv("AETHER_PD_GUI_HANDLE","0x11223344",1);
+    setenv("AETHER_PD_FEEDBACK_PAN","0x40000001",1);
+    unsetenv("AETHER_PD_TEST_TONES");unsetenv("AETHER_PD_TEST_SECONDS");
+    const char* faults[]={
+        "S0|display pan 0x40000001 client_handle=0x55667788",
+        "S0|display pan 0x40000001 daxiq_channel=2",
+        "S0|display pan 0x40000001 removed",
+        "S0|display pan 0x40000001 client_handle=0x11223344 client_handle=0x11223344",
+        "S0|display pan 0x40000001 daxiq_channel=1 daxiq_channel=1",
+        "S0|display pan 0x40000001garbage daxiq_channel=1"
+    };
+    for(unsigned scenario=0;scenario<2*sizeof(faults)/sizeof(faults[0]);++scenario){
+        unsigned f=scenario/2;
+        wf_t w;assert(wf_init(&w));w.api=-1;w.api_leased=1;w.tx_in=0x81000001;w.active_slice=0;
+        w.tx_mhz=7.15;w.daxiq_sid=0x20000000;w.local_iq.frames=1;
+        w.calibration_slice_owner[0]=w.calibration_gui;w.calibration_control=1;
+        char idle[]="S0|interlock state=READY tx_client_handle=0x00000000 source= reason= tx_allowed=1";
+        api_line(&w,idle);
+        char partial[]="S0|display pan 0x40000001 center=7.150000 daxiq_channel=1";
+        api_line(&w,partial);assert(!feedback_binding_valid(&w));
+        char owned[]="S0|display pan 0x40000001 client_handle=0x11223344";
+        api_line(&w,owned);assert(feedback_binding_valid(&w));
+        uint64_t resets=w.correction_resets;
+        char foreign[]="S0|display pan 0x40000002 client_handle=0x55667788 daxiq_channel=1 center=50.000000";
+        api_line(&w,foreign);assert(feedback_binding_valid(&w) && w.feedback_pan==0x40000001 && w.pan_mhz==7.15 && w.correction_resets==resets);
+        w.api=1;w.local_iq.last_valid_ns=pd_iq_monotonic_ns();
+        assert(arm_source(&w,'M',1190).result==PD_CAL_OK && w.calibration.phase==PD_CAL_ARMED);
+        if(scenario%2){
+            char key[]="S0|interlock state=TRANSMITTING tx_client_handle=0x11223344 source=SW reason= tx_allowed=1";
+            api_line(&w,key);assert(w.keyed && w.calibration.phase==PD_CAL_RUNNING);
+        }
+        w.feedback_ok=1;
+        char fault[160];snprintf(fault,sizeof(fault),"%s",faults[f]);api_line(&w,fault);
+        assert(w.feedback_binding_failed && !feedback_binding_valid(&w) && !w.feedback_ok &&
+            w.calibration.phase!=PD_CAL_ARMED && w.calibration.phase!=PD_CAL_RUNNING);
+        api_line(&w,idle);
+        char restored[]="S0|display pan 0x40000001 client_handle=0x11223344 daxiq_channel=1 center=7.150000";
+        api_line(&w,restored);assert(!feedback_binding_valid(&w));
+        unsigned char retry[9]={'M',0,0,0,0,0,0,0,2};
+        w.local_iq.last_valid_ns=pd_iq_monotonic_ns();
+        assert(operator_calibration_command(&w,retry,sizeof(retry),pd_iq_monotonic_ns()).result==PD_CAL_BLOCKED);
+        pd_acquire_destroy(w.acquire);pd_core_destroy(w.core);
+        pd_align_destroy(w.align);pd_eq_destroy(w.eq);pd_eq_destroy(w.trusted_eq);
+        free(w.ref.buf);free(w.fbk.buf);free(w.acq_tx);free(w.acq_rx);
+    }
+    unsetenv("AETHER_PD_FEEDBACK_PAN");unsetenv("AETHER_PD_GUI_HANDLE");
+}
 int main(void)
 {
+    check_feedback_binding();
     check_source('A');check_source('M');check_source('Q');
     for (int ending=0;ending<3;++ending) {
         check_retirement('M',ending,1190);check_retirement('A',ending,1190);

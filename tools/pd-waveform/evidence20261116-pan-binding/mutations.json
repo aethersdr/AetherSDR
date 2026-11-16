@@ -1,0 +1,16 @@
+[
+  {
+    "mutation": "pan-owner",
+    "exit_code": 8,
+    "expected_assertion_failed": true,
+    "restored_source_sha256": "d1d04b8792a5e9fabf0e75f6cfc86461877cbfef6204595eca625511c62d6180",
+    "restore_build_exit_code": 0
+  },
+  {
+    "mutation": "dsp-binding",
+    "exit_code": 8,
+    "expected_assertion_failed": true,
+    "restored_source_sha256": "1df0adb31baf9d4fad31cf5b36afaf63032f330c25fd623e957744b7e2329e5f",
+    "restore_build_exit_code": 0
+  }
+]

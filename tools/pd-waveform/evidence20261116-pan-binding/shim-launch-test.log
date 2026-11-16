@@ -1,0 +1,1 @@
+fixed shim launcher: descriptor/handle grammar, protected paths, NNP kernel inheritance and old-kernel/error policy; socket-free, no root or network mutation

@@ -1,0 +1,13 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 57: pd_iq_stream_policy_test
+1/1 Test #57: pd_iq_stream_policy_test .........Subprocess aborted***Exception:   0.04 sec
+pd_iq_stream_policy_test: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/session/iq_stream_test.c:60: main: Assertion `!wire(&s,rebind[i]) && s.failed' failed.
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.05 sec
+
+The following tests FAILED:
+	 57 - pd_iq_stream_policy_test (Subprocess aborted)
+Errors while running CTest

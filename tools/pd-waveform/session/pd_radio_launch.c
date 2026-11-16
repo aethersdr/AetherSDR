@@ -45,12 +45,15 @@ static int radio_arp_ready(const char* line)
     return !strcmp(line,"{\"event\":\"ready\",\"uid\":65534,\"owned\":true,\"success\":true,\"rf_commands\":[]}\n") ||
         !strcmp(line,"{\"event\":\"ready\",\"uid\":65534,\"owned\":false,\"success\":true,\"rf_commands\":[]}\n");
 }
-static int radio_stream_ready(const char* line,uint32_t* sid)
+static int radio_stream_ready(const char* line,uint32_t* sid,uint32_t* pan)
 {
-    unsigned stream=0,client=0;int used=0;
-    int fields=sscanf(line,"{\"event\":\"ready\",\"stream\":\"0x%8x\",\"client\":\"0x%8x\",\"uid\":78666,\"success\":true,\"issued\":63,\"replies\":63,\"fields\":63,\"parser_failed\":false,\"rf_commands\":[]}\n%n",&stream,&client,&used);
-    if(fields!=2 || !stream || !client || used!=(int)strlen(line)){return 0;}
-    *sid=stream;return 1;
+    unsigned stream=0,client=0,feedback=0;int used=0;
+    int fields=sscanf(line,"{\"event\":\"ready\",\"stream\":\"0x%8x\",\"client\":\"0x%8x\",\"pan\":\"0x%8x\",\"uid\":78666,\"success\":true,\"issued\":191,\"replies\":191,\"fields\":127,\"parser_failed\":false,\"rf_commands\":[]}\n%n",&stream,&client,&feedback,&used);
+    if(fields!=3 || !stream || !client || !feedback || used!=(int)strlen(line)){return 0;}
+    char canonical[320];
+    int length=snprintf(canonical,sizeof(canonical),"{\"event\":\"ready\",\"stream\":\"0x%08x\",\"client\":\"0x%08x\",\"pan\":\"0x%08x\",\"uid\":78666,\"success\":true,\"issued\":191,\"replies\":191,\"fields\":127,\"parser_failed\":false,\"rf_commands\":[]}\n",stream,client,feedback);
+    if(length<=0 || length>=(int)sizeof(canonical) || strcmp(line,canonical)){return 0;}
+    *sid=stream;*pan=feedback;return 1;
 }
 static int radio_udp(int channel,unsigned* port)
 {
@@ -126,14 +129,14 @@ int PD_RADIO_MAIN(int argc,char** argv)
     if(setsockopt(iq[0],SOL_SOCKET,SO_SNDBUF,&bytes,sizeof(bytes)) || setsockopt(iq[1],SOL_SOCKET,SO_RCVBUF,&bytes,sizeof(bytes))){return 5;}
     struct radio_child children[3]={{.pid=-1,.log=-1},{.pid=-1,.log=-1},{.pid=-1,.log=-1}};
     char read_text[16],channel_text[16];snprintf(read_text,sizeof(read_text),"%d",life[0]);snprintf(channel_text,sizeof(channel_text),"%d",handoff[1]);
-    char* arp_args[]={"pd-fixed-arp",read_text,NULL};int arp_fds[]={life[0]};char line[384];int ok=0,udp=-1;unsigned port=0;uint32_t sid=0;
+    char* arp_args[]={"pd-fixed-arp",read_text,NULL};int arp_fds[]={life[0]};char line[384];int ok=0,udp=-1;unsigned port=0;uint32_t sid=0,pan=0;
     children[2]=radio_spawn(programs[0],arp_fds,1,arp_args,0,id,gui,0);
     if(children[2].pid>0 && radio_line(children[2].log,line,sizeof(line),3000) && radio_arp_ready(line)){
         char* source_args[]={"pd-iq-source",channel_text,read_text,NULL};int source_fds[]={handoff[1],life[0]};
         children[0]=radio_spawn(programs[1],source_fds,2,source_args,1,id,gui,0);close(handoff[1]);handoff[1]=-1;
         struct pollfd ready={handoff[0],POLLIN,0};
         if(children[0].pid>0 && poll(&ready,1,4000)>0){udp=radio_udp(handoff[0],&port);}
-        if(udp>=0 && radio_line(children[0].log,line,sizeof(line),6000) && radio_stream_ready(line,&sid)){
+        if(udp>=0 && radio_line(children[0].log,line,sizeof(line),6000) && radio_stream_ready(line,&sid,&pan)){
             uint64_t generation=0;int random=open("/dev/urandom",O_RDONLY|O_CLOEXEC);
             if(random>=0){if(read(random,&generation,sizeof(generation))!=(ssize_t)sizeof(generation)){generation=0;}close(random);}
             if(generation){
@@ -151,6 +154,7 @@ int PD_RADIO_MAIN(int argc,char** argv)
     for(unsigned i=0;i<3;++i){if(children[i].log>=0){close(children[i].log);children[i].log=-1;}}
     close(life[0]);close(handoff[0]);if(handoff[1]>=0){close(handoff[1]);}if(udp>=0){close(udp);}close(iq[0]);
     if(ok){
+        prepared_feedback_pan=pan;
         for(unsigned i=0;i<3;++i){prepared_setup_pids[i]=children[i].pid;}
         char event[320];int length=snprintf(event,sizeof(event),"{\"event\":\"native_resources_prepared\",\"source_pid\":%ld,\"capture_pid\":%ld,\"arp_pid\":%ld,\"stream\":\"0x%08x\",\"port\":%u,\"rf_commands\":[]}\n",(long)children[0].pid,(long)children[1].pid,(long)children[2].pid,sid,port);
         if(length>0 && length<(int)sizeof(event) && write(1,event,(size_t)length)==length){

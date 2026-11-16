@@ -1,0 +1,55 @@
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_acquire.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+In file included from /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/dispatch_deadline_test.c:37:
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_iq_put32':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:11: multiple definition of `pd_iq_put32'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:11: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_iq_put64':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:15: multiple definition of `pd_iq_put64'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:15: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_iq_get32':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:19: multiple definition of `pd_iq_get32'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:19: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_iq_get64':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:23: multiple definition of `pd_iq_get64'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:23: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_iq_monotonic_ns':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:27: multiple definition of `pd_iq_monotonic_ns'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:27: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_local_iq_init':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:34: multiple definition of `pd_local_iq_init'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:34: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_local_iq_receive':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:61: multiple definition of `pd_local_iq_receive'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:61: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_local_iq_discard_startup_io':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:105: multiple definition of `pd_local_iq_discard_startup_io'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:105: first defined here
+/usr/bin/ld: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o: in function `pd_local_iq_discard_startup':
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:121: multiple definition of `pd_local_iq_discard_startup'; /home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o:/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:121: first defined here
+collect2: error: ld returned 1 exit status
+Traceback (most recent call last):
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/check-native.py", line 37, in <module>
+    subprocess.run(link+flags,cwd=project,check=True)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/c++', '-g', '-Wl,--gc-sections', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-mocs_compilation.cpp.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-TestWdspWisdomIsolation.cpp.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-dispatch_deadline_test.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-warm_seed_curve.c.o', '-o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/pd_dispatch_deadline_test-asan', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_core.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_align.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_eq.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_acquire.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_local_iq.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_stream_guard.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_tx_guard.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_udp_rx.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_owner.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_status.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_capture.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_start_gate.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-pd_calibration.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-calcc.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-iqc.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-delay.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-extrapolate.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-nurbs.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-nurbs_fit.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-nurbs_spline.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-fir.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-utilities.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-impulse_cache.c.o', '/home/jeremy/AetherSDR/build/aetherpd-shim-integration/pan-binding/asan-wdsp_port.c.o', '-lm', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-O1']' returned non-zero exit status 1.

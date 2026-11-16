@@ -1,0 +1,10 @@
+{
+  "utc": "2026-11-16T14:12:08.048541+00:00",
+  "address": "192.168.50.100",
+  "radio_mutations": false,
+  "tcp_ports": {
+    "4992": "[Errno 113] No route to host",
+    "48992": "timed out",
+    "22222": "[Errno 113] No route to host"
+  }
+}
