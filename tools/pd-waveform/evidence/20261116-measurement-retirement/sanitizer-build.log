@@ -1,0 +1,22 @@
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_acquire.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+pd_calibration_state_test failed: ==102==LeakSanitizer has encountered a fatal error.
+==102==HINT: For debugging, try setting environment variable LSAN_OPTIONS=verbosity=1:log_threads=1
+==102==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)
+

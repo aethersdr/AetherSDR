@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T10:54:09.878014+00:00",
+  "updated_utc": "2026-11-16T11:05:21.457344+00:00",
   "original_pr_head": "2b723cde563ec264999cdfaafe6af8f5707b61e4",
   "current_base": "23ccdf7fb504e0019759dab249132dfc5b223bd7",
   "phase1_complete": false,
@@ -77,5 +77,6 @@
     "Implement supported analysis controls/settings, keeping fixed source constraints explicit",
     "Complete connected final-desktop/RF and platform qualification after radio returns"
   ],
-  "radio_state": "Latest probe at2026-11-16T10:43:51Z: API4992,shim48992,SSH22222 No route to host. No further reboot or RF commands."
+  "radio_state": "Latest probe at2026-11-16T10:43:51Z: API4992,shim48992,SSH22222 No route to host. No further reboot or RF commands.",
+  "measurement_retirement_fix": "MEASUREMENT-RETIREMENT-QUALIFICATION.json: prevents microphone fall-through and late prepared-packet output after source expiry; component-qualified, not installed. Does not prove physical RF-off or close10second unkey contract."
 }

@@ -568,6 +568,10 @@ ADC headroom or calibrated output power.
    not require reconnecting the desktop. A pending
    release remains visible on reopening. An unused source arm expires after
    30 seconds, or **Cancel source** withdraws it immediately.
+   If a running measurement source ends or is canceled before unkeying completes,
+   its output stays silent until the radio reports READY. It does not hand the
+   still-keyed measurement over to microphone audio. This differs from voice
+   calibration, which deliberately returns to the microphone.
 6. Results appear only after confirmed release of the original transmission.
    Background helper connections do not complete that confirmation; AetherSDR
    waits for the original transmission's stop sequence from the radio.

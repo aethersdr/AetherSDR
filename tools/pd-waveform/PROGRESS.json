@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T10:54:09.878014+00:00",
+  "updated_utc": "2026-11-16T11:05:21.457344+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Resolve analyzer10second deadline contract versus14second operation budget with causal offline tests; then supported analysis controls/settings. Radio reboot/live RF qualification and full P1-P10 remain incomplete.",
+  "next_action": "Reconcile10second transmit limit with independent helper startup/cleanup and native measurement expiry; retain new silence guard as component-qualified only. Complete remaining analyzer controls/settings. Radio reachability, exact reboot, new packaged DSP and full P1-P10 hardware/release gates remain open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2729,5 +2729,116 @@
       }
     ]
   },
-  "pr4770_phase1_audit": "PR4770-PHASE1-STATUS.json"
+  "pr4770_phase1_audit": "PR4770-PHASE1-STATUS.json",
+  "measurement_retirement": {
+    "updated_utc": "2026-11-16T11:05:21.457344+00:00",
+    "base_commit": "61876b384c9bb1936986fe110a069f623d44be8a",
+    "status": "offline_native_fix_qualified_not_installed",
+    "root_cause": [
+      "Measurement and voice calibration shared source retirement: when tones expired, exhausted samples or were canceled, live microphone audio became the TX input while the radio could still be keyed.",
+      "The packet send path had no final measurement-expiry check, allowing already-generated nonzero payload after expiry."
+    ],
+    "fix": [
+      "Latch measurement ownership from PTT/key admission through a complete READY report, including across incomplete status.",
+      "Measurement never blends to microphone; completed/canceled/expired source holds zero output, including correction residuals.",
+      "Recheck measurement wall-clock expiry immediately before each TX datagram; replace retired payload with zeros.",
+      "Voice calibration keeps its intended microphone handoff; a later fresh key after complete READY can carry normal voice."
+    ],
+    "evidence_scope": [
+      "New nonzero-microphone regression failed before fix at output_peak==0.",
+      "Separate prepared-packet dispatch regression failed before final send guard.",
+      "9 focused native capture/calibration/phase/recovery/deadline tests passed in4.19seconds.",
+      "3 native ASan/UBSan/LeakSanitizer tests passed; initial sandbox LeakSanitizer permission failure preserved.",
+      "ARMv7 Cortex-A8 and ARM64 static DSP builds passed.",
+      "User documentation build and diff whitespace check passed."
+    ],
+    "source_sha256": {
+      "tools/pd-waveform/pd_waveform.c": "61787844ee4be982b65d28cecb452cc6763f55a55910d38e675b3a8bf1e42bfb",
+      "tools/pd-waveform/calibration_dispatch_test.c": "3a9daa23ecd8e7e3e522a0cdd911815a4eb9677b3b7c8d31dcd2cb9fb5aca1bb"
+    },
+    "cross_builds": {
+      "armv7": {
+        "sha256": "3a0abe42998408b45aa8c0fdc710c800f619928a1605493e4dc56abf51c38613",
+        "bytes": 264908
+      },
+      "arm64": {
+        "sha256": "ae501195fe90838dca7baaa554666c8d626af67cf7cb6aac0cdf45133e498984",
+        "bytes": 276856
+      }
+    },
+    "limitations": [
+      "Not installed: current radio remains unreachable after prior reboot.",
+      "Zero waveform payload is not proof of physical RF zero or confirmed PTT release on actual firmware.",
+      "No new continuous-duration, final-process crash/RF, corrected-spectrum or actual6300 hardware claim.",
+      "The14second operation budget versus analyzer10second transmit/release contract remains unresolved; this fix does not close it.",
+      "Full signed runtime packages, reproducibility, disk budgets and live regression need refresh for the changed DSP.",
+      "Full P1-P10 production goal remains incomplete."
+    ],
+    "evidence": [
+      {
+        "path": "evidence/20261116-measurement-retirement/measurement-retirement-before.log",
+        "sha256": "7ae2f292efc6a4988cb9863256505208b6e3f3b0ce626073ab76905b3c72348f"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/measurement-retirement-before-build.log",
+        "sha256": "149a07877b04f4f3bfe72d071617076b7768e1d7e77b853d4bee19032f7e166b"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/dispatch-before.log",
+        "sha256": "c078c77e00d1b9f6fd29d4cd2f3a45e97378ffba50da4f25c58b212dabf5ed5e"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/dispatch-before-build.log",
+        "sha256": "92a9fe1d31c678c243d7423034594525de3f84d37e6738674877a0552503758f"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/final-build.log",
+        "sha256": "4bc60616c1c5f528aaab05c5c1e0d9f11384afe13626520dac65876f91a0b7d9"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/final-tests.log",
+        "sha256": "27ba4618e57903ffde243e0f677634635b755aef8beb7575af08a2b88196966f"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/sanitizer-build.log",
+        "sha256": "48088340fba1e3fd017a3ce9ac27e24a14ad6f32e98f5424802cf3c1566ecfaf"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/sandbox-lsan-failure.log",
+        "sha256": "da27c39a89699a4f0a845fbd9160d8c3c3a8f5cfe9d16e76000e91db41a12cae"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/sanitizer-final.log",
+        "sha256": "37627217fc33bdb80f394187664bb9989b108640b10658c1a09f34b74bd01683"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/native-sanitizers.json",
+        "sha256": "e96853c7173cec7a24bf4476ef009778c4ce3b612bc28c5993c3bd795900cd19"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/pd_calibration_dispatch_test-asan.log",
+        "sha256": "ef5fece7b3be73c28a132a8140854e5819c285d933eec5144f8ecfab615d75df"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/pd_calibration_control_test-asan.log",
+        "sha256": "2a5155023c7186fd823bc7e3a4045fca71082bd3d776b40b6da5efbe9dc0b7bb"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/pd_calibration_state_test-asan.log",
+        "sha256": "cf41d6906ab82bb330c3d53077ee9795eba9c3d6e11b4ef68a72691581bf4e55"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/check-native.py",
+        "sha256": "5e407655eff13c69a6f0463f7427f87053ca7dc5fe08a10eaf3390d784aaa903"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/docs-build.log",
+        "sha256": "e1857d51379bef0a50f412b7c1c279d0e5df143d2cc2b2d11a1dfbc55114fe92"
+      },
+      {
+        "path": "evidence/20261116-measurement-retirement/final-cross-builds.json",
+        "sha256": "0a9b4b4e61ec5f50ecf83139187fd1c3a61bab8634f7e9b99d59f322aa20747e"
+      }
+    ]
+  }
 }

@@ -1,0 +1,10 @@
+{
+  "armv7": {
+    "sha256": "3a0abe42998408b45aa8c0fdc710c800f619928a1605493e4dc56abf51c38613",
+    "bytes": 264908
+  },
+  "arm64": {
+    "sha256": "ae501195fe90838dca7baaa554666c8d626af67cf7cb6aac0cdf45133e498984",
+    "bytes": 276856
+  }
+}

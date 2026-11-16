@@ -1,0 +1,13 @@
+1794826990.043 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794826990.043 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794826990.043 bounded source ended: reason=feedback_invalidated source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1
+1794826990.043 TX dispatch deadline missed: 20.002 ms; correction retired
+1794826990.043 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794826990.057 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794826990.057 measurement window: event=feedback_invalidated ready=0 now_ns=21950461011116 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=95872 test_left=191872 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=21950460925228 iq_age_ns=0 deadline_ns=21958460927032 fits=0 solution=0
+1794826990.057 bounded source ended: reason=feedback_invalidated source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1
+1794826990.057 TX dispatch deadline missed: 20.002 ms; correction retired
+1794826990.057 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794826990.071 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794826990.072 bounded source ended: reason=source_deadline source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+pd_calibration_dispatch_test: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/calibration_dispatch_test.c:73: check_retirement: Assertion `output_peak==0 && w.calibration.phase==PD_CAL_EXPIRED && !w.test_f1' failed.

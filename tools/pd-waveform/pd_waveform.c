@@ -479,6 +479,7 @@ typedef struct {
     double tx_mhz;                // that slice's frequency
     double pan_mhz;               // centre of the pan feeding DAX IQ
     int keyed;
+    int measurement_key;
     double mic_peak, prelimit_peak;
     uint64_t limited_samples, generated_samples;
     int tx_on;                    // interlock PTT_REQUESTED or TRANSMITTING: may send
@@ -822,6 +823,9 @@ static void start_feedback(wf_t* w)
 
 static void set_keyed(wf_t* w, int keyed, int clean_unkey)
 {
+    if (keyed && w->calibration.phase==PD_CAL_ARMED && w->calibration.purpose==PD_SOURCE_MEASUREMENT) {
+        w->measurement_key=1;
+    }
     if (!keyed && w->keyed) { disarm_bounded_test(w, "unkey"); }
     if (keyed == w->keyed) {
         return;
@@ -1153,6 +1157,10 @@ static void api_line(wf_t* w, char* l)
         w->calibration_idle=complete && !strcmp(mode,"READY") && !source[0] && !reason[0] && !strcmp(allowed,"1");
         w->calibration_software_owner=complete && w->calibration_gui && handle==w->calibration_gui && !strcmp(source,"SW") && !reason[0] && !strcmp(allowed,"1") &&
             (!strcmp(mode,"TRANSMITTING") || !strcmp(mode,"PTT_REQUESTED"));
+        if (w->calibration.phase==PD_CAL_ARMED && w->calibration.purpose==PD_SOURCE_MEASUREMENT &&
+            (!strcmp(v,"TRANSMITTING") || !strcmp(v,"PTT_REQUESTED"))) {
+            w->measurement_key=1;
+        }
         if (w->calibration.phase==PD_CAL_ARMED || w->calibration.phase==PD_CAL_RUNNING) {
             if (!complete || (!w->calibration_idle && !w->calibration_software_owner)) { disarm_bounded_test(w, "interlock_ineligible"); }
         }
@@ -1166,6 +1174,7 @@ static void api_line(wf_t* w, char* l)
         if (!admitting && w->tx_on) { disarm_bounded_test(w, "tx_admission_ended"); }
         w->tx_on = admitting;
         set_keyed(w, !strcmp(v, "TRANSMITTING"), !strcmp(v, "UNKEY_REQUESTED"));
+        if (w->calibration_idle) { w->measurement_key=0; }
         return;
     }
 }
@@ -1178,6 +1187,12 @@ static void send_pairs(wf_t* w, uint32_t sid, int* count, const float* pairs, in
         int len = vita_build(pkt, sid, CLASS_AUDIO_24K, (*count)++, pairs + 2 * off, m);
         if (w->udp >= 0) {
             int64_t before = sid == w->tx_in ? pd_iq_monotonic_ns() : 0;
+            if (sid==w->tx_in && w->measurement_key) {
+                if (w->calibration.phase==PD_CAL_RUNNING && !pd_calibration_tick(&w->calibration,before)) {
+                    disarm_bounded_test(w,"measurement_dispatch_expired");
+                }
+                if (!w->test_f1) { memset(pkt+28,0,(size_t)len-28); }
+            }
             ssize_t sent = sendto(w->udp, pkt, (size_t)len, 0,
                                   (struct sockaddr*)&w->radio, sizeof w->radio);
             int send_error = sent < 0 ? errno : 0;
@@ -1452,7 +1467,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         for (int k = 0; k < pairs; k++) {
             double i, q, mi = 0, mq = 0;
             int testing = w->test_f1 > 0;
-            if (!testing || w->test_duration_samples) {
+            if (!w->measurement_key && (!testing || w->test_duration_samples)) {
                 double mic = word_float(v.payload + 8 * k);
                 if (fabs(mic) > w->mic_peak) { w->mic_peak = fabs(mic); }
                 cbp_step(&w->mod, w->gain * mic, &mi, &mq);
@@ -1474,8 +1489,8 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
                 q = mq;
             }
             if (testing && w->test_duration_samples) {
-                // Run the mic FIR throughout calibration; blend the sources only
-                // in the last5ms. No keying, automatic re-arm or model reset.
+                // Voice calibration blends back to the microphone. A measurement
+                // blends to silence and holds it until a complete READY status.
                 double weight = w->test_left < RATE/200 ? (double)w->test_left/(RATE/200) : 1;
                 i = weight*i + (1-weight)*mi;
                 q = weight*q + (1-weight)*mq;
@@ -1524,6 +1539,9 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         }
         for (int k = 0; k < pairs; k++) {
             double i = iq[2 * k], q = iq[2 * k + 1], a = hypot(i, q);
+            // Retired measurement authority cannot expose microphone audio or
+            // residual correction output while independent unkey is pending.
+            if (w->measurement_key && !w->test_f1) { i=q=0; a=0; }
             if (a > 1.0) {
                 i /= a;
                 q /= a;
