@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9038,
+          "line": 9098,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9269,
+          "line": 9329,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9321,
+          "line": 9381,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -713,7 +713,7 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 7870,
+          "line": 7930,
           "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
         }
       ]

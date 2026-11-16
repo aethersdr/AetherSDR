@@ -1620,10 +1620,6 @@ signals:
     void radioMessageReceived(const QString& text, MessageSeverity severity);
 
 public:
-    // Send a raw command to the radio. Returns false when the foreign-owner
-    // gate (#3977) or profile-load hold (#4142) drops it, or WAN is down; a
-    // write onto a dead LAN socket still reports dispatched. Callers that
-    // advance local state to match MUST gate on this return.
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).

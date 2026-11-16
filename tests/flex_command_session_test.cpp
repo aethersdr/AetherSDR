@@ -200,7 +200,17 @@ private slots:
         session.begin(11);
         QCOMPARE(canceled, 1);
         int answers = 0;
-        const quint32 sequence = session.submit("replacement", {}, [&](const Session::Reply&) { ++answers; });
+        int receipts = 0;
+        Session::Options replacement;
+        replacement.written = [&](Session::WriteResult result) {
+            QCOMPARE(result, Session::WriteResult::Written);
+            ++receipts;
+        };
+        const quint32 sequence = session.submit("replacement", replacement, [&](const Session::Reply& reply) {
+            QCOMPARE(reply.kind, Session::ReplyKind::RadioReply);
+            QCOMPARE(reply.body, QStringLiteral("current"));
+            ++answers;
+        });
         QCOMPARE(sequence, writes.first().sequence);
         bool oldWritten = false;
         QCOMPARE(writes.first().run([&] { oldWritten = true; return Session::WriteResult::Written; }),
@@ -209,10 +219,12 @@ private slots:
         session.answer(10, sequence, 0, "stale");
         session.writeFinished(10, sequence, Session::WriteResult::Written);
         QCOMPARE(answers, 0);
+        QCOMPARE(receipts, 0);
         session.writeFinished(11, sequence, writes.last().run([] { return Session::WriteResult::Written; }));
         session.answer(11, sequence, 0, "current");
         session.answer(11, sequence, 0, "duplicate");
         QCOMPARE(answers, 1);
+        QCOMPARE(receipts, 1);
     }
 
     void timeoutCancelsQueuedWrite()

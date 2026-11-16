@@ -12,6 +12,7 @@
 #include <QEvent>
 #include <QSignalSpy>
 #include <QtTest>
+#include <atomic>
 
 using namespace AetherSDR;
 
@@ -35,6 +36,24 @@ protected:
 namespace AetherSDR {
 class RadioConnectionSessionTestAccess {
 public:
+    class NoDialSocket final : public QTcpSocket {
+    public:
+        NoDialSocket(QObject* parent, std::atomic<int>& attempts)
+            : QTcpSocket(parent), m_attempts(attempts) {}
+        void connectToHost(const QString&, quint16, OpenMode = ReadWrite,
+                           NetworkLayerProtocol = AnyIPProtocol) override
+        { ++m_attempts; }
+    private:
+        std::atomic<int>& m_attempts;
+    };
+    static void installNoDialSocket(RadioConnection& wire, std::atomic<int>& attempts)
+    {
+        QMetaObject::invokeMethod(&wire, [&wire, &attempts] {
+            wire.m_socket->disconnect(&wire);
+            wire.m_socket->deleteLater();
+            wire.m_socket = new NoDialSocket(&wire, attempts);
+        }, Qt::BlockingQueuedConnection);
+    }
     static void installCleanupSink(RadioConnection& wire, QStringList& commands, QList<quint32>& sequences)
     {
         wire.m_socket->deleteLater(); // unbound wrapper, on its owner thread
@@ -217,7 +236,9 @@ private slots:
 
     void preHandshakeFailureEndsExactlyOnce()
     {
+        std::atomic<int> dialAttempts{0};
         FlexBackend backend;
+        RadioConnectionSessionTestAccess::installNoDialSocket(*backend.connection(), dialAttempts);
         QSignalSpy errors(&backend, &IRadioBackend::connectionError);
         QSignalSpy ended(&backend, &IRadioBackend::disconnected);
         RadioConnectRequest request;
@@ -228,6 +249,7 @@ private slots:
         backend.connectRadio(request); // address-family validation rejects before any bind/dial
         QTRY_COMPARE(ended.size(), 1);
         QCOMPARE(errors.size(), 1);
+        QCOMPARE(dialAttempts.load(), 0);
         QVERIFY(!backend.connectionSession());
         backend.disconnectRadio();
         QCOMPARE(ended.size(), 1);
@@ -307,7 +329,11 @@ private slots:
 
     void errorObserverCanReplaceThePendingAttempt()
     {
+        std::atomic<int> dialAttempts{0};
         RadioModel model;
+        auto* backend = dynamic_cast<FlexBackend*>(model.backend());
+        QVERIFY(backend);
+        RadioConnectionSessionTestAccess::installNoDialSocket(*backend->connection(), dialAttempts);
         bool replaced = false;
         connect(&model, &RadioModel::connectionError, this, [&](const QString&) {
             if (replaced) { return; }
@@ -326,6 +352,7 @@ private slots:
         model.connectToRadio(invalid);
         QTRY_VERIFY_WITH_TIMEOUT(model.backend()->connectionSession().has_value(), 1000);
         QVERIFY(replaced);
+        QCOMPARE(dialAttempts.load(), 0);
         QVERIFY(model.isConnected());
         model.disconnectFromRadio();
     }
