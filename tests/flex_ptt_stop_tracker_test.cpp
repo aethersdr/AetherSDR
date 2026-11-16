@@ -106,6 +106,76 @@ void capturedSequenceAndHandoff()
     check(!h.coordinator.confirmStopped(candidate), "old proof cannot release replacement operation");
 }
 
+void ownedReadyBeforeKeyReply()
+{
+    // FLEX-8600 4.3.16.42034, 2026-11-16 08:27:16: the radio publishes
+    // our owner with READY between writing xmit 1 and its successful reply.
+    Harness h;
+    check(h.tracker.begin(h.operation, 101, h.now), "arm captured owner-reservation sequence");
+    h.written(101, true);
+    h.feed(kReadyOwned);
+    check(h.tracker.phase() == Phase::AwaitKeyReply && h.tracker.failure() == Failure::None,
+          "owned READY before key reply preserves the pending key transition");
+    check(!h.tracker.evidence(h.now).valid(), "owner reservation is never stop evidence");
+    h.feed(u"R101|0|");
+    h.feed(kRequested);
+    h.feed(kTransmitting);
+    check(h.tracker.phase() == Phase::Transmitting, "captured sequence reaches confirmed software TX");
+    h.complete();
+    check(h.coordinator.confirmStopped(h.tracker.evidence(h.now)),
+          "reservation still requires the complete correlated stop sequence");
+}
+
+void ownerReservationBoundaries()
+{
+    for (const QString& status : {
+             QStringLiteral("S0|interlock tx_client_handle=0x87654321 state=READY reason= source= tx_allowed=1"),
+             QStringLiteral("S87654321|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=1"),
+             QStringLiteral("S0|interlock tx_client_handle=0x12345678 state=READY reason= source=SW tx_allowed=1"),
+             QStringLiteral("S0|interlock tx_client_handle=0x12345678 state=READY reason=FAULT source= tx_allowed=1"),
+             QStringLiteral("S0|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=0"),
+             QStringLiteral("S0|interlock tx_client_handle=0x12345678 state=READY reason= source="),
+             QStringLiteral("S0|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=1 state=READY")}) {
+        Harness h;
+        check(h.tracker.begin(h.operation, 101, h.now), "arm reservation refusal case");
+        h.written(101, true);
+        h.feed(status);
+        check(h.tracker.phase() == Phase::Failed && !h.tracker.evidence(h.now).valid(),
+              "foreign, sourced, inhibited, partial or malformed reservation fails closed");
+    }
+    for (int stage = 0; stage < 3; ++stage) {
+        Harness h;
+        check(h.tracker.begin(h.operation, 101, h.now), "arm reservation phase boundary");
+        if (stage > 0) {
+            h.written(101, true);
+            h.feed(u"R101|0|");
+        }
+        if (stage > 1) {
+            h.feed(kRequested);
+        }
+        h.feed(kReadyOwned);
+        check(h.tracker.phase() == Phase::Failed,
+              "reservation exception applies only after key write and before reply");
+    }
+    Harness timeout;
+    const qint64 deadline = timeout.now + FlexPttStopTracker::kTransitionTimeoutMs;
+    check(timeout.tracker.begin(timeout.operation, 101, timeout.now), "arm reservation deadline check");
+    timeout.written(101, true);
+    timeout.now = deadline - 1;
+    timeout.feed(kReadyOwned);
+    timeout.tracker.poll(deadline);
+    check(timeout.tracker.failure() == Failure::Timeout,
+          "late reservation cannot extend the original transition deadline");
+
+    Harness missingAck;
+    check(missingAck.tracker.begin(missingAck.operation, 101, missingAck.now), "arm missing key acknowledgment");
+    missingAck.written(101, true);
+    missingAck.feed(kReadyOwned);
+    missingAck.feed(kRequested);
+    check(missingAck.tracker.phase() == Phase::Failed,
+          "reservation cannot replace the exact successful key acknowledgment");
+}
+
 void enteredWriterBarrier()
 {
     Harness h;
@@ -416,6 +486,8 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     capturedSequenceAndHandoff();
+    ownedReadyBeforeKeyReply();
+    ownerReservationBoundaries();
     enteredWriterBarrier();
     missingAndReorderedTransitions();
     strictFramesAndOwnership();

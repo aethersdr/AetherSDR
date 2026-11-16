@@ -301,6 +301,13 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
         fail(Failure::State);
         return;
     }
+    if (m_phase == Phase::AwaitKeyReply && state == u"READY"
+        && source.isEmpty() && handle == m_clientHandle) {
+        // FLEX-8600 4.3.16 can publish ownership before acknowledging xmit 1.
+        // This snapshot proves neither keying nor release and does not renew
+        // the deadline; the full acknowledged transition sequence is required.
+        return;
+    }
     if (m_phase == Phase::AwaitPttRequested && state == u"PTT_REQUESTED"
         && source == u"SW" && handle == m_clientHandle) {
         m_phase = Phase::AwaitTransmitting;

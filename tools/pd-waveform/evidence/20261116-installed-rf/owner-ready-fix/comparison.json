@@ -1,0 +1,153 @@
+{
+  "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-iq-rf/owner-ready-fix/on-01.json",
+  "sha256": "27fe2670db3fd6f85eb1c4a6e040d0fb38aaabde282f2a7fa5ca383e637c9753",
+  "frames": 4,
+  "samples_per_frame": 16384,
+  "max_spectrum_error_db": 3.5609130009106593e-06,
+  "products": [
+    {
+      "order": 3,
+      "upper": false,
+      "dbc_per_tone": -43.636901764716946,
+      "dbc_fundamental_pep": -49.65663308860979,
+      "dbc_sampled_pep": -49.65877872252043,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "dbc_per_tone": -53.01614038468375,
+      "dbc_fundamental_pep": -59.03587170857659,
+      "dbc_sampled_pep": -59.03801734248724,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "dbc_per_tone": -54.79097913114429,
+      "dbc_fundamental_pep": -60.81071045503713,
+      "dbc_sampled_pep": -60.812856088947775,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "dbc_per_tone": -60.0146444093901,
+      "dbc_fundamental_pep": -66.03437573328294,
+      "dbc_sampled_pep": -66.03652136719359,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "dbc_per_tone": -67.44071668478514,
+      "dbc_fundamental_pep": -73.46044800867799,
+      "dbc_sampled_pep": -73.46259364258862,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "dbc_per_tone": -61.72576700938865,
+      "dbc_fundamental_pep": -67.74549833328149,
+      "dbc_sampled_pep": -67.74764396719213,
+      "exported_noise_limited": false
+    }
+  ],
+  "fundamental_pep_db_raw_iq": 94.86499185403764,
+  "sampled_pep_db_raw_iq": 94.86713748794828,
+  "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument.",
+  "baseline": {
+    "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-iq-rf/owner-ready-fix/off-01.json",
+    "sha256": "451cac3de07b71dbabc1c3e38f8a90eebc0c988e08942805f7e0367ddb8e507b",
+    "frames": 4,
+    "samples_per_frame": 16384,
+    "max_spectrum_error_db": 3.434865647022889e-06,
+    "products": [
+      {
+        "order": 3,
+        "upper": false,
+        "dbc_per_tone": -27.504639530920322,
+        "dbc_fundamental_pep": -33.52438137035572,
+        "dbc_sampled_pep": -33.84061717638276,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 3,
+        "upper": true,
+        "dbc_per_tone": -26.967237373849592,
+        "dbc_fundamental_pep": -32.98697921328499,
+        "dbc_sampled_pep": -33.30321501931203,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": false,
+        "dbc_per_tone": -39.44108968124766,
+        "dbc_fundamental_pep": -45.46083152068306,
+        "dbc_sampled_pep": -45.777067326710096,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": true,
+        "dbc_per_tone": -39.631488102190666,
+        "dbc_fundamental_pep": -45.65122994162606,
+        "dbc_sampled_pep": -45.9674657476531,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": false,
+        "dbc_per_tone": -48.79201294568682,
+        "dbc_fundamental_pep": -54.81175478512222,
+        "dbc_sampled_pep": -55.127990591149256,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": true,
+        "dbc_per_tone": -48.8585477028073,
+        "dbc_fundamental_pep": -54.8782895422427,
+        "dbc_sampled_pep": -55.194525348269735,
+        "exported_noise_limited": false
+      }
+    ],
+    "fundamental_pep_db_raw_iq": 94.55231665959049,
+    "sampled_pep_db_raw_iq": 94.86855246561753,
+    "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument."
+  },
+  "fundamental_power_difference_db": 0.3126751944471522,
+  "improvement_db": [
+    {
+      "order": 3,
+      "upper": false,
+      "per_tone": 16.132262233796624
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "per_tone": 26.04890301083416
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "per_tone": 15.34988944989663
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "per_tone": 20.383156307199435
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "per_tone": 18.648703739098323
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "per_tone": 12.867219306581347
+    }
+  ]
+}

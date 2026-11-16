@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T16:42:59.083176+00:00",
+  "production_ready": false,
+  "radio": "FLEX-8600",
+  "firmware": "4.3.16.42034",
+  "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+  "desktop_base": "31bdddc12499847ee5df792b2964e6133f8b5a73",
+  "desktop_change": "FlexPttStopTracker accepts complete own-owner READY only while awaiting key acknowledgment; no phase/deadline advancement",
+  "desktop_sha256": "69a0789a0e8ec7fc5a527412666a13208b83f512fff5e275876b0c7c8001798a",
+  "configuration": {
+    "center_mhz": 7.15,
+    "tx_antenna": "ANT1",
+    "feedback": "RX_A",
+    "preamp_db": 0,
+    "full_duplex": false,
+    "feedback_transport": "local_dax_iq",
+    "channel": 4,
+    "configured_max_watts": 10,
+    "measurement_source_seconds": 8,
+    "authorization_seconds": 10,
+    "lp100a": "deferred"
+  },
+  "pairs": [
+    {
+      "label": "5 W pair",
+      "off": {
+        "nominal_watts": 5,
+        "sampled_peak_forward_watts": 3.3821749687194824,
+        "intent_to_observed_receive_seconds": 7.988,
+        "completed": true,
+        "last_event": "idle_session_held"
+      },
+      "on": {
+        "nominal_watts": 5,
+        "sampled_peak_forward_watts": 3.345212936401367,
+        "intent_to_observed_receive_seconds": 7.8,
+        "completed": true,
+        "last_event": "idle_session_held"
+      },
+      "imd3_off_dbc_per_tone": [
+        -28.08353715133557,
+        -27.55383369474464
+      ],
+      "imd3_on_dbc_per_tone": [
+        -43.94003972345774,
+        -51.43595298021397
+      ],
+      "imd3_improvement_db": [
+        15.856502572122167,
+        23.88211928546933
+      ],
+      "fundamental_power_difference_db": 0.31379281413859417,
+      "numerical_max_error_db": 3.481903149804566e-06
+    },
+    {
+      "label": "10 W pair 1",
+      "off": {
+        "nominal_watts": 10,
+        "sampled_peak_forward_watts": 6.951441287994385,
+        "intent_to_observed_receive_seconds": 8.146,
+        "completed": true,
+        "last_event": "idle_session_held"
+      },
+      "on": {
+        "nominal_watts": 10,
+        "sampled_peak_forward_watts": 6.957027435302734,
+        "intent_to_observed_receive_seconds": 7.874,
+        "completed": true,
+        "last_event": "idle_session_held"
+      },
+      "imd3_off_dbc_per_tone": [
+        -27.504639530920322,
+        -26.967237373849592
+      ],
+      "imd3_on_dbc_per_tone": [
+        -43.636901764716946,
+        -53.01614038468375
+      ],
+      "imd3_improvement_db": [
+        16.132262233796624,
+        26.04890301083416
+      ],
+      "fundamental_power_difference_db": 0.3126751944471522,
+      "numerical_max_error_db": 3.5609130009106593e-06
+    },
+    {
+      "label": "10 W pair 2",
+      "off": {
+        "nominal_watts": 10,
+        "sampled_peak_forward_watts": 6.962355613708496,
+        "intent_to_observed_receive_seconds": 7.848,
+        "completed": true,
+        "last_event": "idle_session_held"
+      },
+      "on": {
+        "nominal_watts": 10,
+        "sampled_peak_forward_watts": 6.994978427886963,
+        "intent_to_observed_receive_seconds": 8.012,
+        "completed": true,
+        "last_event": "idle_session_held"
+      },
+      "imd3_off_dbc_per_tone": [
+        -27.55685324711336,
+        -27.018478981628363
+      ],
+      "imd3_on_dbc_per_tone": [
+        -43.39030084682378,
+        -53.44493258987681
+      ],
+      "imd3_improvement_db": [
+        15.833447599710418,
+        26.426453608248444
+      ],
+      "fundamental_power_difference_db": 0.313567217041097,
+      "numerical_max_error_db": 3.8138450264568746e-06
+    }
+  ],
+  "failed_10w_attempt": {
+    "events": "10w/on-01-events.json",
+    "result": "No completed capture. Early unkey followed by GUI release-confirmation failure; native and radio unkeyed. Preserved, not counted as a valid pair.",
+    "reproduced_cause": "Observed own-owner READY before the successful key reply failed the tracker; replay fails four assertions before fix.",
+    "earlier_cold_start_cause_proven": false,
+    "preflight_only_refusal": "Second corrected pair first refused before operator_key_intent because correction_enabled remained false. Preserved on-02-preflight-events.json; explicitly enabled and checked before the actual bounded run."
+  },
+  "checks": {
+    "socket_free_tests": "2/2 passed, including malformed/foreign ownership, phase and deadline negatives",
+    "full_linux_desktop_build": "passed",
+    "docs_build": "passed with identical-lock existing dependency tree; npm ci not rerun",
+    "engine_boundary": "passed; tracked warnings only",
+    "command_plane": "passed",
+    "live_pattern_recurrence": "See retained wire traces; successful RF alone does not prove recurrence of the pre-ack READY race."
+  },
+  "limitations": [
+    "Only finite 8-second tone windows; sustained operation and speech qualification remain open.",
+    "Raw IQ and absolute watts are uncalibrated; no independent meter or ADC-headroom qualification.",
+    "Stock APD final-candidate comparison, natural 128-sample slip, final process fault matrix and release gates remain open.",
+    "Actual FLEX-6300 installation adapter and teammate hardware qualification remain open."
+  ],
+  "evidence_directory": "evidence/20261116-installed-rf",
+  "evidence_sha256": {
+    "10w/off-01-events.json": "5bd4fe3d93e101a9fc68ae17b5479c89002701f7cb71218cbc2b21ab86d9b91e",
+    "10w/off-01-recheck.json": "8b0d492ece0e92231eba48beab003c8b7007a6f55ae756fabdcc649695e1a955",
+    "10w/off-01.json": "5639ba26109eb3b5a12d943fd7d6a2684783ed072ff4ac245d480b96a663e8f7",
+    "10w/on-01-events.json": "52a972b126ac6282d2cd6201a1943e4b21da74abf7482caa9f9ee11c91eeb219",
+    "10w/release-failure-state.json": "e9af994285e3c856f8177d7fc647ead0e7caa89627ffb9af6b15b32ae281e5a3",
+    "aethersdr-20261116-082143.log.ptt.txt": "fdbecf1ce8de426a784466050b992956fb21f7a4c1631a649092f68c4a346d59",
+    "aethersdr-20261116-083608.log.ptt.txt": "bc00589835ed0177fe0c47b1305096ce47fe214164890d8093cc77b41cd25b01",
+    "comparison.json": "cbaa7d15a1a02a504f6c1befd7b65b32b552838c7a4b65029c920f2409445b8d",
+    "off-01-events.json": "9722849fc7b7da0035389ed43095227ca2e9a25414c924f22bbad4d526b9dc26",
+    "off-01.json": "c64dfb8bb6fcc7c74f6ca06409aac43bb5e3796c3242d9f547d2061d2f7b071c",
+    "on-01-events.json": "846ba4c63127e25dd8ee3f7ffd1f9919b0157f7dc087d720454433bb6b540764",
+    "on-01.json": "4db06af44b922d428b697f3ab1eab060b4aae4998ed57c582b47f2171d2dc84f",
+    "owner-ready-before-fix.log": "de639a306f83ef1bc97fe4ed953cda15407d36edbeb8fc7eb830740b13796899",
+    "owner-ready-fix/comparison-02.json": "e0f40dbd53f5c0b444379464d5835b726aae53ef13dfb59cbdca20b294bfcfef",
+    "owner-ready-fix/comparison.json": "3afcdd48c00052c464a60388414ab340d1ce8b5f50a6520a9b4d9a68fd360ff1",
+    "owner-ready-fix/ctest.log": "6d3c02aab041a0a82779048adb886b4a7fa1ed24770e9fc0bbfbab71c83c6796",
+    "owner-ready-fix/final-state.json": "e53f3ab1e97f2d5b64c2dae3b4107992aa5707c1d939ba2bf115803ce1e23e72",
+    "owner-ready-fix/instance.json": "23fd73b52b35910698e79df75b195ac529414d1c40d6e1333dc02046a32805d0",
+    "owner-ready-fix/off-01-events.json": "3281901f93ca511bd0fc4214e8d1d39f95f4cca32ac94650f38b099b64d517cd",
+    "owner-ready-fix/off-01.json": "451cac3de07b71dbabc1c3e38f8a90eebc0c988e08942805f7e0367ddb8e507b",
+    "owner-ready-fix/off-02-events.json": "1558004a04a109f8ee02624f339d990119ef26fdc9386475fbc7f29a36e4c14a",
+    "owner-ready-fix/off-02.json": "a9d9fb4d294afbfd5c67916e4c193a81267143b8921feb5ceffe0287dff64811",
+    "owner-ready-fix/on-01-events.json": "3b4c7b9cf0504f149f9ddd9d7c04bcdec0f717ee7285127c16d78c61e3068ee8",
+    "owner-ready-fix/on-01.json": "27fe2670db3fd6f85eb1c4a6e040d0fb38aaabde282f2a7fa5ca383e637c9753",
+    "owner-ready-fix/on-02-events.json": "b374a51eeda9c5b5dcf7ef5ac2f8cbf08ddd1799f21d3c84501a869522d61fc7",
+    "owner-ready-fix/on-02-preflight-events.json": "d621fd87f126e61fa136c3343ac839775282367786fd115319f17bdd06315f9b",
+    "owner-ready-fix/on-02.json": "b886cfc9b5e002000295a7d03fed25f3cb7818adbd3c92347677610ddcd3d76b",
+    "owner-ready-fix/receive-check.json": "e95d9ab5cfb0e4e431242da7eebe5905f32f43bc587ae7e51cad83f99e7c0f2b"
+  }
+}

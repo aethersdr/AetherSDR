@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T16:19:52.268504+00:00",
+  "updated_utc": "2026-11-16T16:42:59.083176+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Complete the remaining installed process-graph fault and unkey checks, then repeat matched 5/10 W correction and stock APD measurements on this runtime. Diagnose historical alignment/cold-start gaps and complete actual 6300 adapter/hardware and release gates; LP-100A remains deferred.",
+  "next_action": "Qualify remaining final-process fault/unkey behavior, sustained correction and stock APD comparison; diagnose historical alignment/cold-start issues and complete actual 6300 adapter/hardware plus release gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Installed 88280414 runtime delivered local DAX IQ on channels 1\u20134 with FDX off. Channel reassignment and GUI disconnect terminated capture; explicit restart established fresh binding, with workers/ARP removed after stop. Receive-only qualification committed separately from earlier RF evidence.",
+  "current_focus": "Installed runtime: matched 5 W pair and two 10 W pairs with DAX IQ channel 4, FDX off. Fixed captured pre-key-ACK owned READY tracker failure; negative evidence retained. Production qualification remains incomplete.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2906,7 +2906,7 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
-    "installed_state": "First installation and reboot passed. Selected local IQ channels 1\u20134, channel-loss teardown and GUI-session retirement/restart observed on the same runtime. Final service stopped, no RF, three unprivileged control processes and no temporary ARP.",
+    "installed_state": "Same independently installed runtime; receive/idle after three matched RF pairs. DAX IQ channel 4, FDX off.",
     "latest_read_only_network_probe": {
       "utc": "2026-11-16T16:05:55.285163+00:00",
       "address": "192.168.50.100",
@@ -2959,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "Installed and packaged runtime source88280414; desktopfdf0a408 includes offline verifier fix/evidence. New independent first-install distribution has its own recorded development key. Earlier RF evidence remains tied to older builds.",
+    "source_provenance_note": "Runtime remains 88280414; desktop base31bdd plus owned-READY tracker fix. Earlier installation/channel reports retain their original build provenance.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "SELECTED-IQ-LIVE-QUALIFICATION.json",
+    "latest_live_report": "INSTALLED-RF-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3073,5 +3073,11 @@
     "mutations_caught": 2,
     "operator_spacing_selector": false,
     "installed": false
+  },
+  "installed_rf_qualification": {
+    "report": "INSTALLED-RF-QUALIFICATION.json",
+    "matched_pairs": 3,
+    "failed_10w_attempt_retained": true,
+    "production_ready": false
   }
 }

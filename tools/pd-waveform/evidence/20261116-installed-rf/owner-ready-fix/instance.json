@@ -1,0 +1,76 @@
+{
+  "old_identity": {
+    "agentName": "Codex AetherPD",
+    "automationIdentity": "aetherpd-shim-integration",
+    "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+    "guiClientIdTransient": true,
+    "label": "",
+    "name": "aetherpd-installed-iq-rf",
+    "ok": true,
+    "pid": 1226511,
+    "readOnly": false,
+    "socket": "/tmp/aetherpd-installed-iq-rf",
+    "station": "Codex AetherPD",
+    "txAllowed": true,
+    "version": "26.11.2"
+  },
+  "old_radio": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.8125,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "old_status": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  },
+  "binary_sha256": "69a0789a0e8ec7fc5a527412666a13208b83f512fff5e275876b0c7c8001798a",
+  "source_commit": "31bdddc12499847ee5df792b2964e6133f8b5a73",
+  "uncommitted_change": "owned READY before key reply tracker fix",
+  "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+  "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-iq-live/fresh/private-profile",
+  "quit": {
+    "action": "trigger",
+    "class": "QAction",
+    "deferred": true,
+    "ok": true,
+    "target": "Quit",
+    "text": "Quit"
+  },
+  "pid": 1239899,
+  "socket": "/tmp/aetherpd-installed-iq-rf",
+  "keying_requires_explicit_bridge_action": true
+}

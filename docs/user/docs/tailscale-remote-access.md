@@ -637,6 +637,9 @@ ADC headroom or calibrated output power.
 6. Results appear only after confirmed release of the original transmission.
    Background helper connections do not complete that confirmation; AetherSDR
    waits for the original transmission's stop sequence from the radio.
+   A radio ownership update while the key command is awaiting acknowledgment
+   does not complete or cancel the measurement; the acknowledged transmit and
+   stop transitions are still required.
    **Export result…** offers JSON, CSV and (for a valid spectrum) PNG. JSON contains the station settings, source and capture
    identities, timestamps, correction state, spectrum, noise limitations and
    reference conventions. Each completed capture includes its original IQ

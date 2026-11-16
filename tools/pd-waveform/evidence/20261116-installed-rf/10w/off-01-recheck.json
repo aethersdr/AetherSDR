@@ -1,0 +1,60 @@
+{
+  "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-iq-rf/10w/off-01.json",
+  "sha256": "5639ba26109eb3b5a12d943fd7d6a2684783ed072ff4ac245d480b96a663e8f7",
+  "frames": 4,
+  "samples_per_frame": 16384,
+  "max_spectrum_error_db": 3.7368828742501137e-06,
+  "products": [
+    {
+      "order": 3,
+      "upper": false,
+      "dbc_per_tone": -27.538666973040883,
+      "dbc_fundamental_pep": -33.55840967262525,
+      "dbc_sampled_pep": -33.86732270572275,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "dbc_per_tone": -27.001028790653393,
+      "dbc_fundamental_pep": -33.02077149023776,
+      "dbc_sampled_pep": -33.32968452333526,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "dbc_per_tone": -39.47702312685411,
+      "dbc_fundamental_pep": -45.49676582643848,
+      "dbc_sampled_pep": -45.80567885953597,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "dbc_per_tone": -39.65738559812149,
+      "dbc_fundamental_pep": -45.67712829770586,
+      "dbc_sampled_pep": -45.98604133080336,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "dbc_per_tone": -48.78965249059107,
+      "dbc_fundamental_pep": -54.80939519017544,
+      "dbc_sampled_pep": -55.11830822327293,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "dbc_per_tone": -48.88406241024894,
+      "dbc_fundamental_pep": -54.90380510983331,
+      "dbc_sampled_pep": -55.212718142930804,
+      "exported_noise_limited": false
+    }
+  ],
+  "fundamental_pep_db_raw_iq": 94.57198387771321,
+  "sampled_pep_db_raw_iq": 94.8808969108107,
+  "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument."
+}

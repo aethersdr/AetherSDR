@@ -1,0 +1,32 @@
+{
+  "body": {
+    "capture_id": "0ebdaeee31f35fcbbd67f8afa0190b99",
+    "center_hz": 7150000,
+    "chunk_samples": 512,
+    "correcting": false,
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 219823833,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "first_receive_ns": "2216563296503",
+    "format": "f32le-iq-v1",
+    "keyed": false,
+    "last_receive_ns": "2216905294026",
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "sample_count": 16384,
+    "sample_rate_hz": 48000,
+    "source": {
+      "generation": "9",
+      "kind": "local_dax_iq",
+      "stream_id": 536870912
+    }
+  },
+  "http_status": 200
+}

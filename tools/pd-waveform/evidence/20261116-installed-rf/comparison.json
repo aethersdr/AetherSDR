@@ -1,0 +1,153 @@
+{
+  "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-iq-rf/on-01.json",
+  "sha256": "4db06af44b922d428b697f3ab1eab060b4aae4998ed57c582b47f2171d2dc84f",
+  "frames": 4,
+  "samples_per_frame": 16384,
+  "max_spectrum_error_db": 3.481903149804566e-06,
+  "products": [
+    {
+      "order": 3,
+      "upper": false,
+      "dbc_per_tone": -43.94003972345774,
+      "dbc_fundamental_pep": -49.959768792078016,
+      "dbc_sampled_pep": -49.95374801849773,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "dbc_per_tone": -51.43595298021397,
+      "dbc_fundamental_pep": -57.45568204883425,
+      "dbc_sampled_pep": -57.44966127525396,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "dbc_per_tone": -56.31553280196421,
+      "dbc_fundamental_pep": -62.33526187058449,
+      "dbc_sampled_pep": -62.3292410970042,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "dbc_per_tone": -63.16050267002308,
+      "dbc_fundamental_pep": -69.18023173864336,
+      "dbc_sampled_pep": -69.17421096506307,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "dbc_per_tone": -70.61920715739339,
+      "dbc_fundamental_pep": -76.63893622601367,
+      "dbc_sampled_pep": -76.63291545243337,
+      "exported_noise_limited": false
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "dbc_per_tone": -63.2545689361647,
+      "dbc_fundamental_pep": -69.27429800478498,
+      "dbc_sampled_pep": -69.26827723120469,
+      "exported_noise_limited": false
+    }
+  ],
+  "fundamental_pep_db_raw_iq": 91.77429978897902,
+  "sampled_pep_db_raw_iq": 91.76827901539873,
+  "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument.",
+  "baseline": {
+    "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/installed-iq-rf/off-01.json",
+    "sha256": "c64dfb8bb6fcc7c74f6ca06409aac43bb5e3796c3242d9f547d2061d2f7b071c",
+    "frames": 4,
+    "samples_per_frame": 16384,
+    "max_spectrum_error_db": 3.697915644806926e-06,
+    "products": [
+      {
+        "order": 3,
+        "upper": false,
+        "dbc_per_tone": -28.08353715133557,
+        "dbc_fundamental_pep": -34.10327354934244,
+        "dbc_sampled_pep": -34.423461034671654,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 3,
+        "upper": true,
+        "dbc_per_tone": -27.55383369474464,
+        "dbc_fundamental_pep": -33.57357009275151,
+        "dbc_sampled_pep": -33.893757578080724,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": false,
+        "dbc_per_tone": -41.6375656887296,
+        "dbc_fundamental_pep": -47.65730208673647,
+        "dbc_sampled_pep": -47.977489572065686,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 5,
+        "upper": true,
+        "dbc_per_tone": -41.88832322236655,
+        "dbc_fundamental_pep": -47.90805962037342,
+        "dbc_sampled_pep": -48.228247105702636,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": false,
+        "dbc_per_tone": -53.03837478884615,
+        "dbc_fundamental_pep": -59.05811118685302,
+        "dbc_sampled_pep": -59.37829867218223,
+        "exported_noise_limited": false
+      },
+      {
+        "order": 7,
+        "upper": true,
+        "dbc_per_tone": -53.123654429131534,
+        "dbc_fundamental_pep": -59.143390827138404,
+        "dbc_sampled_pep": -59.46357831246762,
+        "exported_noise_limited": false
+      }
+    ],
+    "fundamental_pep_db_raw_iq": 91.46050697484043,
+    "sampled_pep_db_raw_iq": 91.78069446016964,
+    "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument."
+  },
+  "fundamental_power_difference_db": 0.31379281413859417,
+  "improvement_db": [
+    {
+      "order": 3,
+      "upper": false,
+      "per_tone": 15.856502572122167
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "per_tone": 23.88211928546933
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "per_tone": 14.677967113234608
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "per_tone": 21.272179447656526
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "per_tone": 17.58083236854724
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "per_tone": 10.130914507033168
+    }
+  ]
+}
