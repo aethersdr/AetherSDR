@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T09:55:40.103905+00:00",
+  "updated_utc": "2026-11-16T10:13:37.600094+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Deploy a signed successor and repeat actual DSP crash to explicit Start, then private-controller, IQ and ARP-owner failure cases.",
+  "next_action": "Resolve radio unreachability and qualify this exact reboot before any RF. Prepare one bounded 5W installed DSP failure during an operator-initiated source with independent unkey; preserve receive-only proof and full P1-P10 plan.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,13 +2502,56 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Signed correction-selection successor installed and rebooted on 8600; matched 5W/10W-setting raw-DAX-IQ OFF/ON evidence retained. Next: repeated/sustained and final-process-failure qualification, unresolved alignment/cold-start investigation; all original P1-P10 delivery gates retained.",
+  "current_focus": "Installed explicit-restart fix passed four receive-only crash cases, direct GUI restart and cleanup. Reboot qualification incomplete; resolve radio reachability before more live work.",
   "latest_installed_failure": {
-    "status": "installed_DSP_death_cleanup_verified_restart_defect_reproduced_component_fix_passed_not_installed",
-    "report": "tools/pd-waveform/INSTALLED-FAILURE-QUALIFICATION.json",
+    "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
+    "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
+    "source_commit": "e0563d1e285d36bba21da3f791364dd27642e26a",
+    "cases": [
+      {
+        "case": "dsp",
+        "workers_gone_ms": 1560.41,
+        "explicit_restart_ready_s": 1.751,
+        "arp_after_fault": [],
+        "arp_journal_bytes_after_fault": 0,
+        "old_worker_pid_check_including_zombies": "not_collected_in_this_case",
+        "no_RF": true
+      },
+      {
+        "case": "session",
+        "workers_gone_ms": 454.45,
+        "explicit_restart_ready_s": 1.758,
+        "arp_after_fault": [],
+        "arp_journal_bytes_after_fault": 0,
+        "old_worker_pid_check_including_zombies": "passed",
+        "no_RF": true
+      },
+      {
+        "case": "arp-pair",
+        "workers_gone_ms": 1855.604,
+        "explicit_restart_ready_s": 1.756,
+        "arp_after_fault": [
+          "172.30.2.1       0x1         0x6         00:1c:2d:05:37:2a     *        eth0.10"
+        ],
+        "arp_journal_bytes_after_fault": 64,
+        "old_worker_pid_check_including_zombies": "passed",
+        "no_RF": true
+      },
+      {
+        "case": "iq",
+        "workers_gone_ms": 1488.311,
+        "explicit_restart_ready_s": 1.775,
+        "arp_after_fault": [],
+        "arp_journal_bytes_after_fault": 0,
+        "old_worker_pid_check_including_zombies": "passed",
+        "no_RF": true
+      }
+    ],
+    "reboot_ready_s": null,
+    "production_ready": false,
     "remaining": [
-      "Deploy a signed successor and repeat actual DSP crash to explicit Start, then private-controller, IQ and ARP-owner failure cases.",
-      "Keyed independent-unkey cases remain pending. All other P1-P10 obligations remain unchanged."
+      "Keyed independent-unkey, API/credential/partial-startup and scheduling-stall qualification.",
+      "All original P1-P10 delivery gates remain open where not separately qualified."
     ]
   }
 }

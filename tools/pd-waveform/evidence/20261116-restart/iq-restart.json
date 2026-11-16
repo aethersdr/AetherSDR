@@ -1,0 +1,175 @@
+{
+  "label": "after-iq",
+  "passed": true,
+  "rf_commands": [],
+  "events": [
+    {
+      "request": {
+        "cmd": "get",
+        "model": "radio"
+      },
+      "result": {
+        "model": "radio",
+        "ok": true,
+        "radio": {
+          "callsign": "KK7GWY",
+          "connectState": "connected",
+          "connected": true,
+          "fullDuplex": false,
+          "iaruRegion": 2,
+          "maxSlices": 4,
+          "model": "FLEX-8600",
+          "name": "",
+          "nickname": "FLX8600",
+          "paTemp": 23.203125,
+          "panCount": 1,
+          "serial": "2125-1213-8600-8895",
+          "sliceCount": 1,
+          "slots": [
+            {
+              "id": 0,
+              "state": "ours"
+            },
+            {
+              "id": 1,
+              "state": "empty"
+            },
+            {
+              "id": 2,
+              "state": "empty"
+            },
+            {
+              "id": 3,
+              "state": "empty"
+            }
+          ],
+          "transmitting": false,
+          "txPower": 0,
+          "version": "4.3.16.42034"
+        }
+      }
+    },
+    {
+      "request": {
+        "cmd": "invoke",
+        "target": "pdStart",
+        "action": "click"
+      },
+      "result": {
+        "action": "click",
+        "class": "QPushButton",
+        "deferred": true,
+        "ok": true,
+        "target": "pdStart"
+      }
+    },
+    {
+      "request": {
+        "cmd": "slice",
+        "action": "mode",
+        "value": "PD",
+        "id": "0"
+      },
+      "result": {
+        "id": 0,
+        "mode": "PD",
+        "ok": true,
+        "requested": true,
+        "slice": "mode",
+        "unchanged": false
+      }
+    },
+    {
+      "request": {
+        "cmd": "invoke",
+        "target": "pdRefresh",
+        "action": "click"
+      },
+      "result": {
+        "action": "click",
+        "class": "QPushButton",
+        "deferred": true,
+        "ok": true,
+        "target": "pdRefresh"
+      }
+    },
+    {
+      "request": {
+        "cmd": "invoke",
+        "target": "pdBypassCorrection",
+        "action": "click"
+      },
+      "result": {
+        "action": "click",
+        "class": "QPushButton",
+        "deferred": true,
+        "ok": true,
+        "target": "pdBypassCorrection"
+      }
+    }
+  ],
+  "before": {
+    "body": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "http_status": 200
+  },
+  "ready_s": 1.775,
+  "after_start": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "idle",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "measurement_control": true,
+      "registered": true,
+      "source_purpose": "calibration",
+      "state": "idle"
+    },
+    "http_status": 200
+  },
+  "fresh_iq_idle_bypass": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "idle",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": false,
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "measurement_control": true,
+      "registered": true,
+      "source_purpose": "calibration",
+      "state": "disabled"
+    },
+    "http_status": 200
+  }
+}

@@ -1,0 +1,216 @@
+{
+  "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
+  "build": {
+    "production_ready": false,
+    "installed": false,
+    "purpose": "Explicit restart after terminal supervisor status; not deployed",
+    "source_commit": "e0563d1e285d36bba21da3f791364dd27642e26a",
+    "source_sha256": "30a5997a910332a898bb7ab64ed7b37768f0e2b4f3919d4e707f3724c7bebedf",
+    "build_script_sha256": "7cd1ca4564f3331e2bf8accff05856576dd5ccf946f92281c40c50c84727a2af",
+    "changed_source_files": [
+      "CMakeLists.txt",
+      "docs/architecture/aetherd-touchpoints.md",
+      "docs/user/docs/tailscale-remote-access.md",
+      "src/core/AetherPDCarrierImage.cpp",
+      "src/core/AetherPDCarrierImage.h",
+      "src/core/AetherPDInstallationCoordinator.cpp",
+      "src/core/AetherPDInstallationCoordinator.h",
+      "src/core/AetherPDInstallationMonitor.cpp",
+      "src/core/AetherPDInstallationMonitor.h",
+      "src/core/AetherPDPackage.cpp",
+      "src/core/AetherPDPackage.h",
+      "src/core/AetherPDProtocol.cpp",
+      "src/core/AetherPDProtocol.h",
+      "src/core/AetherPDTransportPolicy.h",
+      "src/core/txlinearity/TxLinearitySafety.cpp",
+      "src/core/txlinearity/TxLinearitySafety.h",
+      "src/gui/AetherPDDialog.cpp",
+      "src/gui/AetherPDDialog.h",
+      "src/gui/AetherPDMeasurementDialog.cpp",
+      "src/models/AetherPDInstallationModel.cpp",
+      "src/models/AetherPDInstallationModel.h",
+      "src/models/AetherPDMeasurementModel.cpp",
+      "src/models/AetherPDModel.cpp",
+      "src/models/RadioModel.h",
+      "tests/AetherPDPackageFixture.h",
+      "tests/AetherPDTestTransport.h",
+      "tests/aetherpd_capture_source_test.cpp",
+      "tests/aetherpd_carrier_image_test.cpp",
+      "tests/aetherpd_client_test.cpp",
+      "tests/aetherpd_dialog_test.cpp",
+      "tests/aetherpd_installation_coordinator_test.cpp",
+      "tests/aetherpd_installation_dialog_test.cpp",
+      "tests/aetherpd_installation_monitor_test.cpp",
+      "tests/aetherpd_model_test.cpp",
+      "tests/aetherpd_package_test.cpp",
+      "tests/aetherpd_protocol_test.cpp",
+      "tests/tests.cmake",
+      "tests/tx_linearity_safety_test.cpp",
+      "tools/flex-tailnet-shim/aetherpd.go",
+      "tools/flex-tailnet-shim/aetherpd_calibration.go",
+      "tools/flex-tailnet-shim/aetherpd_calibration_intent.go",
+      "tools/flex-tailnet-shim/aetherpd_calibration_linux.go",
+      "tools/flex-tailnet-shim/aetherpd_capture_test.go",
+      "tools/flex-tailnet-shim/aetherpd_installation.go",
+      "tools/flex-tailnet-shim/aetherpd_installation_test.go",
+      "tools/flex-tailnet-shim/aetherpd_session_linux.go",
+      "tools/flex-tailnet-shim/aetherpd_session_server.go",
+      "tools/flex-tailnet-shim/aetherpd_session_wire.go",
+      "tools/flex-tailnet-shim/aetherpd_start.go",
+      "tools/flex-tailnet-shim/aetherpd_test_unkey_api_linux_test.go",
+      "tools/flex-tailnet-shim/api.go",
+      "tools/flex-tailnet-shim/node.go",
+      "tools/flex-tailnet-shim/testdata/aetherpd/installation/README.md",
+      "tools/pd-waveform/FLEX6000-HANDOFF.md",
+      "tools/pd-waveform/IQ-MEASUREMENT.md",
+      "tools/pd-waveform/PROGRESS.json",
+      "tools/pd-waveform/README.md",
+      "tools/pd-waveform/boot/README.md",
+      "tools/pd-waveform/boot/build.py",
+      "tools/pd-waveform/boot/delivery_check.c",
+      "tools/pd-waveform/boot/delivery_consent.py",
+      "tools/pd-waveform/boot/package_fixture.py",
+      "tools/pd-waveform/boot/pd_boot.c",
+      "tools/pd-waveform/boot/pd_install_worker.c",
+      "tools/pd-waveform/boot/pd_installation.c",
+      "tools/pd-waveform/boot/pd_migration.c",
+      "tools/pd-waveform/boot/pd_migration.h",
+      "tools/pd-waveform/boot/pd_predecessor.c",
+      "tools/pd-waveform/boot/pd_predecessor.h",
+      "tools/pd-waveform/boot/pd_readiness.c",
+      "tools/pd-waveform/boot/pd_readiness.h",
+      "tools/pd-waveform/boot/pd_runtime_config.c",
+      "tools/pd-waveform/boot/pd_transaction.c",
+      "tools/pd-waveform/boot/pd_transaction.h",
+      "tools/pd-waveform/boot/test_delivery.py",
+      "tools/pd-waveform/boot/test_installation.py",
+      "tools/pd-waveform/boot/test_readiness.py",
+      "tools/pd-waveform/boot/test_transaction.py",
+      "tools/pd-waveform/boot/test_worker.py",
+      "tools/pd-waveform/boot/testdata/package-64.json",
+      "tools/pd-waveform/boot/transaction_check.c",
+      "tools/pd-waveform/boot/worker_fixture.c",
+      "tools/pd-waveform/calibration_control_test.c",
+      "tools/pd-waveform/carrier/image.py",
+      "tools/pd-waveform/carrier/test_image.py",
+      "tools/pd-waveform/development_selection.py",
+      "tools/pd-waveform/pd_calibration.c",
+      "tools/pd-waveform/pd_calibration.h",
+      "tools/pd-waveform/pd_waveform.c",
+      "tools/pd-waveform/request/README.md",
+      "tools/pd-waveform/request/test_request.py",
+      "tools/pd-waveform/test_development_selection.py"
+    ],
+    "private_signing_seed_persisted": false,
+    "reused_payload_files": [
+      "LICENSES"
+    ],
+    "payload_files": {
+      "flex-tailnet-shim": "5b6371126432a236f079c794d8c0277673ef2fdfaae7d59e54cea33aea7632e0",
+      "aether-pd": "e06154f34cda20899578e35685ad5b414ddee6b402bd3e38e67432fd1bed3df9",
+      "pd-primary-launch": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+      "pd-start-session": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592",
+      "pd-radio-launch": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+    },
+    "native_release_verified": true,
+    "native_previous_release_verified": true,
+    "native_worker_verified": "466768 c83515cf9428e0f3c6591b266a693cc9f0e62ef8c0388212f36b24244e8c2531 8a39d74b14c108416f7785f4655f3d8e33479fdb09eb1a8532bc7a98bfb6a4b5",
+    "assembly_reproducible": true,
+    "binary_rebuild_reproducibility_tested": false,
+    "files": {
+      "LICENSES": {
+        "size": 215346,
+        "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+      },
+      "candidate.release": {
+        "size": 9007485,
+        "sha256": "c388df185085615d5da6c9e7ef54386b180bc79e0b23b367aef5bc27436f987c"
+      },
+      "pd-accept": {
+        "size": 29984,
+        "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+      },
+      "pd-carrier": {
+        "size": 6291616,
+        "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+      },
+      "pd-deliver": {
+        "size": 109008,
+        "sha256": "05212f4b88bf1b047ed5c0369635987aebcbf5d03fc52274782667cb6323dae1"
+      },
+      "pd-send": {
+        "size": 42344,
+        "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+      },
+      "previous.release": {
+        "size": 9006666,
+        "sha256": "176f8c7a9ae68562c280a84b8b1dfc88516b5857811afdf37bac68fb24459b49"
+      },
+      "worker.envelope": {
+        "size": 466952,
+        "sha256": "6e3d8f156a4f4c4b17234126cf7b4aef8a46cbe8c7ea8c2db1e9a8333634bff6"
+      }
+    },
+    "limitations": [
+      "Development trust key; never a shipping catalogue entry.",
+      "This candidate has not been deployed or qualified on a radio.",
+      "Rebuilt DSP and private measurement session require installed qualification; prior RF evidence does not qualify this candidate."
+    ],
+    "previous_release_sha256": "176f8c7a9ae68562c280a84b8b1dfc88516b5857811afdf37bac68fb24459b49",
+    "previous_key": "91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f",
+    "candidate_key": "0d914971ea1535558fb0ad9e00ffb45847fb2d957d219c88070b72af566f9b5d"
+  },
+  "selection": {
+    "files": {
+      "LICENSES": {
+        "size": 215346,
+        "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+      },
+      "candidate.release": {
+        "size": 9007485,
+        "sha256": "c388df185085615d5da6c9e7ef54386b180bc79e0b23b367aef5bc27436f987c"
+      },
+      "pd-accept": {
+        "size": 29984,
+        "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+      },
+      "pd-carrier": {
+        "size": 6291616,
+        "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+      },
+      "pd-deliver": {
+        "size": 109008,
+        "sha256": "05212f4b88bf1b047ed5c0369635987aebcbf5d03fc52274782667cb6323dae1"
+      },
+      "pd-send": {
+        "size": 42344,
+        "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+      },
+      "previous.release": {
+        "size": 9006666,
+        "sha256": "176f8c7a9ae68562c280a84b8b1dfc88516b5857811afdf37bac68fb24459b49"
+      },
+      "worker.envelope": {
+        "size": 466952,
+        "sha256": "6e3d8f156a4f4c4b17234126cf7b4aef8a46cbe8c7ea8c2db1e9a8333634bff6"
+      }
+    },
+    "version": "0.0.0-restart.e0563d1e2",
+    "firmware": "4.3.16.42034",
+    "profile": 1,
+    "candidate_key": "0d914971ea1535558fb0ad9e00ffb45847fb2d957d219c88070b72af566f9b5d",
+    "previous_key": "91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f"
+  },
+  "desktop_pin_build": true,
+  "desktop_dialog_tests_passed": 12,
+  "armv7_shim_sha256": "408da41dd84f9e22a738fd1a82dca78124b1e54913e534f33bcaa7e5e15125ed",
+  "production_ready": false,
+  "build_snapshot_note": "Build fields record the pre-installation build phase; current installed qualification is linked below.",
+  "live_report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json"
+}

@@ -518,7 +518,8 @@ credential for the connected radio. Opening it reads status only.
   session running; use Stop when you want it stopped. **Stopped — session
   cleanup confirmed** appears only after the service confirms the DSP and its
   cleanup workers exited cleanly. **Session ended — cleanup unconfirmed**
-  means cleanup failed or timed out. **Stopped — receive recovery unconfirmed**
+  means the service cannot confirm clean termination, including an abnormal
+  DSP exit or a cleanup failure or timeout. **Stopped — receive recovery unconfirmed**
   means DSP and worker retirement completed, but the receive helper exited
   without confirming restored receive settings. It can refuse recovery to
   protect another slice's DAX assignment; check your receive settings. This

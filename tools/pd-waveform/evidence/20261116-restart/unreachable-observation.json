@@ -1,0 +1,85 @@
+{
+  "discovery": {
+    "count": 2,
+    "ok": true,
+    "radios": [
+      {
+        "address": "192.168.50.99",
+        "callsign": "",
+        "family": "hl2",
+        "inUse": false,
+        "model": "Hermes-Lite 2",
+        "multiFlexEnabled": true,
+        "name": "Hermes-Lite 2",
+        "nickname": "Hermes-Lite 2",
+        "port": 1024,
+        "routed": false,
+        "serial": "00:1C:C0:A2:13:DD",
+        "status": "Available",
+        "version": "74.2"
+      },
+      {
+        "address": "192.168.50.216",
+        "callsign": "",
+        "family": "anan",
+        "inUse": true,
+        "model": "ANAN-G2",
+        "multiFlexEnabled": true,
+        "name": "ANAN-G2",
+        "nickname": "ANAN-G2",
+        "port": 1024,
+        "routed": false,
+        "serial": "98:FE:54:26:EB:0C",
+        "status": "In_Use",
+        "version": "27"
+      }
+    ]
+  },
+  "radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KI4TTZ/P",
+      "connectState": "connecting",
+      "connected": false,
+      "fullDuplex": false,
+      "iaruRegion": null,
+      "maxSlices": 4,
+      "model": "",
+      "name": "",
+      "nickname": "",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": null,
+      "version": "4.3.16.42034"
+    }
+  },
+  "ports": {
+    "4992": "TimeoutError",
+    "48992": "TimeoutError",
+    "22222": "TimeoutError"
+  },
+  "neighbor": "192.168.50.100 dev wlp0s20f3 INCOMPLETE",
+  "utc_unix_s": 1794824085.6406424
+}

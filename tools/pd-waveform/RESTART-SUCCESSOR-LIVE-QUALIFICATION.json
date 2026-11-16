@@ -1,0 +1,109 @@
+{
+  "updated_utc": "2026-11-16T10:13:37.600094+00:00",
+  "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
+  "production_ready": false,
+  "source_commit": "e0563d1e285d36bba21da3f791364dd27642e26a",
+  "release_sha256": "c388df185085615d5da6c9e7ef54386b180bc79e0b23b367aef5bc27436f987c",
+  "upgrade_s": 51.794,
+  "upgrade_used_root_diagnostics": false,
+  "failure_injection_and_audits_used_existing_root_diagnostics": true,
+  "cases": [
+    {
+      "case": "dsp",
+      "workers_gone_ms": 1560.41,
+      "explicit_restart_ready_s": 1.751,
+      "arp_after_fault": [],
+      "arp_journal_bytes_after_fault": 0,
+      "old_worker_pid_check_including_zombies": "not_collected_in_this_case",
+      "no_RF": true
+    },
+    {
+      "case": "session",
+      "workers_gone_ms": 454.45,
+      "explicit_restart_ready_s": 1.758,
+      "arp_after_fault": [],
+      "arp_journal_bytes_after_fault": 0,
+      "old_worker_pid_check_including_zombies": "passed",
+      "no_RF": true
+    },
+    {
+      "case": "arp-pair",
+      "workers_gone_ms": 1855.604,
+      "explicit_restart_ready_s": 1.756,
+      "arp_after_fault": [
+        "172.30.2.1       0x1         0x6         00:1c:2d:05:37:2a     *        eth0.10"
+      ],
+      "arp_journal_bytes_after_fault": 64,
+      "old_worker_pid_check_including_zombies": "passed",
+      "no_RF": true
+    },
+    {
+      "case": "iq",
+      "workers_gone_ms": 1488.311,
+      "explicit_restart_ready_s": 1.775,
+      "arp_after_fault": [],
+      "arp_journal_bytes_after_fault": 0,
+      "old_worker_pid_check_including_zombies": "passed",
+      "no_RF": true
+    }
+  ],
+  "reboot": {
+    "passed": false,
+    "error": "AssertionError: ",
+    "elapsed_s": 191.836,
+    "reboot_commands_sent": 1,
+    "boot_id_before": "85910aea-b999-472f-b6f2-a139d845c5f8"
+  },
+  "identity_preserved": true,
+  "cleanup_evidence_timing": "before_reboot",
+  "final_cleanup": {
+    "ARP_absent": true,
+    "ARP_journal_bytes": 0,
+    "accept_local": "0",
+    "remaining_processes": 3,
+    "all_remaining_UID_78666_caps_zero_NNP_1": true,
+    "temporary_installer_paths_absent": true,
+    "carrier_container_and_image_absent": true
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-restart/dsp-failure.json": "4a0500b8d130981b26650b0ba55afdc4709557545720c016ce99390f389b0bf9",
+    "tools/pd-waveform/evidence/20261116-restart/dsp-restart.json": "87a8264f6c3ba02776b7d73e8fb0aae6fe97adc9f616ea9f3b1c12b4753b55f5",
+    "tools/pd-waveform/evidence/20261116-restart/session-failure.json": "22524d808149d3cd764f02198963e26ea943ea6248a691f3b4172ffd97785148",
+    "tools/pd-waveform/evidence/20261116-restart/session-restart.json": "73d67d957081586418b73cc31b9c8a81872bbcb8400fa4e7864f7c64cf444b50",
+    "tools/pd-waveform/evidence/20261116-restart/arp-pair-failure.json": "199c4020c6140dbf0047112ab5a8319590bf0b279679a5fe574608bb353e5576",
+    "tools/pd-waveform/evidence/20261116-restart/arp-pair-restart.json": "7083b6a6c41f360fdbbf8042375e795a0b3a670d513f15bfa0241ae741821810",
+    "tools/pd-waveform/evidence/20261116-restart/iq-failure.json": "fc328a314c47097899b265948e95bcd52e786b963547cdabbcc262fddedbf376",
+    "tools/pd-waveform/evidence/20261116-restart/iq-restart.json": "7d468ff5e9bc58814b322183b432be70e9557360c283eaa06033760a2e6d05b4",
+    "tools/pd-waveform/evidence/20261116-restart/upgrade.json": "bf3ccc59eb8adb3ba3b0e49072004bbb4c4fe54f289a5cc8a3dd298920942b8f",
+    "tools/pd-waveform/evidence/20261116-restart/final-audit.json": "6db647974ed9c1ee830531d4382c474b6ddd6b697517b583e7b825574f71bdc2",
+    "tools/pd-waveform/evidence/20261116-restart/pre-reboot-stop.json": "a75a870fc8e3c282ec7e5c1ed7fcf4af6aed1749fb9d4f3ab870e24767f158f7",
+    "tools/pd-waveform/evidence/20261116-restart/reboot-check.json": "93ecaaae298d8b9377c83aa3275d42e30d4cec77605d9867986b693c76eb1954",
+    "tools/pd-waveform/evidence/20261116-restart/final-audit-local-validation.json": "ccf67709e9e6192362e3ac76275f28d9348800bc75140061927d25db53f1aadc",
+    "tools/pd-waveform/evidence/20261116-restart/unreachable-observation.json": "0c1f5b9ffe7fa77c498ddd0f4012d73e6f9ab8dd18e89a168f050037e0d5bf1e"
+  },
+  "limitations": [
+    "Single receive-only injection per case; does not establish keyed unkey timing, arbitrary scheduling stalls or sustained RF behavior.",
+    "DSP-case original PID zombie scan was not collected; the other three cases explicitly checked the original worker PID/start-time pairs.",
+    "Dual ARP-owner death deliberately leaves its exact owned entry and 64-byte journal until explicit trusted restart; that restart succeeded, and subsequent cleanup removed the entry and cleared the journal.",
+    "Final audit initially failed local Python syntax validation, before accessing the radio; corrected script passed. Original failed validation log is retained under evidence_root.",
+    "Abnormal worker death retains truthful cleanup-unconfirmed status; explicit restart is allowed, never automatic restart or keying.",
+    "A stopped session retains three unprivileged control processes for status, not a single-process baseline.",
+    "Normal capture shutdown still reports one output error/loss_seen after its downstream receiver closes; retained journal is evidence, not a loss-free claim.",
+    "Reboot result is reported separately; unreachability cannot establish whether boot, firmware, shim or networking failed. No repeated reboot command was sent.",
+    "Development publisher key only; this successor has no new matched RF evidence. Earlier 82cf candidate RF results remain separate.",
+    "All P1-P10 obligations remain: keyed failures, partial startup/API/credential cases, alignment/cold-start diagnosis, sustained RF and stock APD comparison, actual 6300 and independent release gates."
+  ],
+  "local_probe_source_sha256": {
+    "installed-failure-fixed/dsp-job.py": "1e6b7a44bedcd51c68a100cb037a4bb125030bb93eed76b8e77ecbd9560a3f63",
+    "installed-failure-fixed/session-job.py": "ef4ba2e4204363a13f1436b57d87ba1e507d88bc3a828f7ca524e7e572485178",
+    "installed-failure-fixed/arp-pair-job.py": "a1de9cb37e0fe8e5a1cb370c197b055075fc149b06f19130c3ac16ee641e6ece",
+    "installed-failure-fixed/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "installed-failure-fixed/final-audit-job.py": "5334268bed2faa6fdcb2787f0592d1e20950fa92b591b53686845e22d6614611",
+    "installed-failure-fixed/iq-job.py": "70467456a408a2561ab1cae0750db4f90916dab2bdf178d969e5ce23830b647e",
+    "installed-failure-fixed/post-reboot-audit-job.py": "5334268bed2faa6fdcb2787f0592d1e20950fa92b591b53686845e22d6614611",
+    "installed-failure-fixed/start.py": "4399b1c6dd38c66374f5e21040febd459bd1697117896b9ec27aa3d656ab1597",
+    "installed-failure-fixed/stop.py": "dfe1524f2c49f6eb3a82fb18cd6e9f4cbf6825e00678cd99b5790a6ae877ace2",
+    "installed-failure-fixed/reboot-check.py": "f0b07176c1351e092159ebceb1afa00a03c55f02f103de7de977cc710fbb587e"
+  },
+  "identity_preservation_scope": "Upgrade and pre-reboot audit only; post-reboot persistence unqualified."
+}

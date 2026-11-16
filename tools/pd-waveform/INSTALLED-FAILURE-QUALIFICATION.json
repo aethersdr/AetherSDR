@@ -1,6 +1,6 @@
 {
   "updated_utc": "2026-11-16T09:55:40.103905+00:00",
-  "status": "installed_DSP_death_cleanup_verified_restart_defect_reproduced_component_fix_passed_not_installed",
+  "status": "pre_fix_defect_preserved_successor_live_fix_qualified",
   "production_ready": false,
   "tested_installed_source": "82cf771d8eb4b453060f778f325fa482e8dedf5f",
   "live_DSP_failure": {
@@ -957,5 +957,6 @@
     "restart-final-race.log": "dfa4294c0f499f91276720bd8025c4787cfac3f6b25a5156b21c5ebb5a74841e",
     "stale-terminal-mutation.log": "fe37cf44b2fe49e9783d7f20f38211ebae0b1a2d32ff989f79ae846caec51a3b",
     "restart-docs.log": "623851f03a0c9e436b5bb8ed690af11ef03f43009dd6ef1cd1523e98af4511d2"
-  }
+  },
+  "successor_live_report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json"
 }

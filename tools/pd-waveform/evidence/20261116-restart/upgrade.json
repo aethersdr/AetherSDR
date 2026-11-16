@@ -1,0 +1,92 @@
+{
+  "elapsed_s": 51.794,
+  "installation_after": {
+    "body": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "f4223fd0a58c1fbfa7d05ab6c0c9cf5d8803ee4135bc6f79dee9b81a36d5b059",
+      "selected_release_key": "0d914971ea1535558fb0ad9e00ffb45847fb2d957d219c88070b72af566f9b5d",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "c1346b1bc5279292483d0be04cb38ee572a64ce66896194a58a473e72eea1c46"
+    },
+    "http_status": 200
+  },
+  "panel": {
+    "pdInstallState": {
+      "value": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "Development build \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nChanges on approval:\n\u2022 Verify and replace the AetherPD payload and service.\n\u2022 Install fixed boot and local-session helpers for reboot and IQ setup.\n\u2022 Restart the shim while retaining its Remote Access identity.\n\u2022 Retire temporary delivery and upgrade workers. Fixed boot/session helpers remain installed.\nThe update does not transmit or arm calibration.\n\nTemporary executables: pd-accept, pd-carrier, pd-send, pd-deliver, signed upgrade worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nPrevious release (BLAKE2b-256): c2cd49ff7723d4f25c7a18a10060ed555f104e1a5960f6cfc2d74ca9e9896c0e\nNew release (BLAKE2b-256): f4223fd0a58c1fbfa7d05ab6c0c9cf5d8803ee4135bc6f79dee9b81a36d5b059\nPublisher key (Ed25519): 0d914971ea1535558fb0ad9e00ffb45847fb2d957d219c88070b72af566f9b5d\nAttempt (BLAKE2b-256): c1346b1bc5279292483d0be04cb38ee572a64ce66896194a58a473e72eea1c46\nTemporary carrier: aetherpd-carrier-37d0ccc0ddfbb6a8242eb16097cbab0b\nCarrier archive (SHA-256): 43b25968d316b595543c09508b82b0f41b65c1c3fa6d2560669c2fdfe1776c0e",
+      "enabled": true
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": false
+    },
+    "pdInstallApprove": {
+      "value": "Approve update",
+      "enabled": false
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": true
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": true
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false
+    }
+  },
+  "radio": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.203125,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "root_diagnostics_used": false,
+  "rf_commands": []
+}

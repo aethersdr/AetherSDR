@@ -1,0 +1,415 @@
+{
+  "case": "dsp",
+  "passed": true,
+  "signals": [
+    {
+      "pid": 3127,
+      "start_ticks": 152917,
+      "exe": "/run/aetherpd/bin/aether-pd",
+      "signal": "SIGKILL",
+      "elapsed_ms": 0.413
+    }
+  ],
+  "rf_commands": [],
+  "runtime_restart_requested": false,
+  "before": [
+    {
+      "pid": 2767,
+      "ppid": 1,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/aetherpd-shim.service"
+      ],
+      "start_ticks": 149389,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3116,
+      "ppid": 1,
+      "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152819,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3117,
+      "ppid": 3116,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152819,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3118,
+      "ppid": 3117,
+      "exe": "/run/aetherpd/bin/pd-fixed-arp",
+      "uid": "65534\t65534\t65534\t65534",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152820,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000001000",
+        "CapEff": "0000000000001000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "0"
+    },
+    {
+      "pid": 3119,
+      "ppid": 3118,
+      "exe": "/run/aetherpd/bin/pd-fixed-arp",
+      "uid": "65534\t65534\t65534\t65534",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152820,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000001000",
+        "CapEff": "0000000000001000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "0"
+    },
+    {
+      "pid": 3120,
+      "ppid": 3117,
+      "exe": "/run/aetherpd/bin/pd-iq-source",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152820,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3123,
+      "ppid": 3117,
+      "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+      "uid": "65534\t65534\t65534\t65534",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152895,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "0"
+    },
+    {
+      "pid": 3125,
+      "ppid": 3123,
+      "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+      "uid": "65534\t65534\t65534\t65534",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152895,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "0"
+    },
+    {
+      "pid": 3126,
+      "ppid": 3125,
+      "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+      "uid": "65534\t65534\t65534\t65534",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152895,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "0"
+    },
+    {
+      "pid": 3127,
+      "ppid": 3117,
+      "exe": "/run/aetherpd/bin/aether-pd",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152917,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3136,
+      "ppid": 3117,
+      "exe": "/run/aetherpd/bin/pd-unkey-guard",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152938,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3137,
+      "ppid": 3117,
+      "exe": "/run/aetherpd/bin/pd-lease-guard",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152965,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3140,
+      "ppid": 3117,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152965,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    }
+  ],
+  "arp_before": [
+    "172.30.2.1       0x1         0x6         00:1c:2d:05:37:2a     *        eth0.10"
+  ],
+  "journal_before": {
+    "exists": true,
+    "size": 64,
+    "sha256": "f4436594ce9d5a67998fe6079af33207f870a38b2a0433a1868585badf1b0976"
+  },
+  "idle_before": {
+    "tx_client_handle": "0x00000000",
+    "state": "READY",
+    "reason": "",
+    "source": "",
+    "tx_allowed": "1",
+    "amplifier": ""
+  },
+  "workers_gone_ms": 1560.41,
+  "after": [
+    {
+      "pid": 2767,
+      "ppid": 1,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/aetherpd-shim.service"
+      ],
+      "start_ticks": 149389,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3116,
+      "ppid": 1,
+      "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152819,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3117,
+      "ppid": 3116,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152819,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    }
+  ],
+  "arp_after": [],
+  "journal_after": {
+    "exists": true,
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "idle_after": {
+    "tx_client_handle": "0x00000000",
+    "state": "READY",
+    "reason": "",
+    "source": "",
+    "tx_allowed": "1",
+    "amplifier": ""
+  },
+  "no_restart_graph": [
+    {
+      "pid": 2767,
+      "ppid": 1,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/aetherpd-shim.service"
+      ],
+      "start_ticks": 149389,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3116,
+      "ppid": 1,
+      "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152819,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    {
+      "pid": 3117,
+      "ppid": 3116,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@2-2767-78666.service"
+      ],
+      "start_ticks": 152819,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    }
+  ],
+  "accept_local": "0",
+  "total_s": 2.771
+}

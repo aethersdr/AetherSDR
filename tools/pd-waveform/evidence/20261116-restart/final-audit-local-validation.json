@@ -1,0 +1,4 @@
+{
+  "scope": "local syntax rejection before execution",
+  "log": "usage: native-run.py [-h] --host HOST --ssh-key SSH_KEY\n                     --known-hosts KNOWN_HOSTS --token-file TOKEN_FILE\n                     --native-package NATIVE_PACKAGE --state-dir STATE_DIR\n                     [--expected-sha256 EXPECTED_SHA256]\n                     [--native-sender-uid NATIVE_SENDER_UID] [--file FILE]\n                     job output\nnative-run.py: error: invalid syntax (final-audit-job.py, line 31)\n"
+}
