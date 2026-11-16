@@ -48,6 +48,9 @@ public:
     bool prepareSelectedFirstDevelopment(const RadioControlSession& session);
     bool savedFirstInstallationAvailable() const;
     bool recoverSelectedFirstInstallation(const RadioControlSession& session);
+    bool recoveredCleanupAvailable() const;
+    bool cleanupRecoveredInstallation(const QByteArray& displayedPlan);
+    bool cleaningRecoveredInstallation() const { return m_recoveryCleanup; }
     ~AetherPDInstallationModel() override;
     bool offer(const Coordinator::Prepared& package, const RadioControlSession& session);
     struct Preview {
@@ -99,6 +102,7 @@ private:
     RecoveryServices m_recovery;
     std::unique_ptr<AetherPDInstallationMonitor> m_recoveryMonitor;
     bool m_recovering{false};
+    bool m_recoveryCleanup{false};
     QString m_firstToken;
     Factory m_factory;
     DownloadFactory m_downloadFactory;

@@ -166,6 +166,11 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     firstControls->addWidget(m_installFirst);
     firstControls->addWidget(m_installCheck);
     layout->addLayout(firstControls);
+    m_installCleanup = new QPushButton(tr("Remove temporary installer packages"), bodyWidget());
+    m_installCleanup->setObjectName(QStringLiteral("pdInstallCleanup"));
+    m_installCleanup->setAccessibleName(tr("Remove temporary AetherPD installer packages"));
+    m_installCleanup->setAutoDefault(false);
+    layout->addWidget(m_installCleanup);
     m_installApprove = new QPushButton(tr("Approve update"), bodyWidget());
     m_installApprove->setObjectName(QStringLiteral("pdInstallApprove"));
     m_installApprove->setAccessibleName(tr("Approve AetherPD update"));
@@ -182,6 +187,7 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     connect(m_installPrepare, &QPushButton::clicked, this, &AetherPDDialog::prepareInstallation);
     connect(m_installFirst, &QPushButton::clicked, this, &AetherPDDialog::prepareFirstInstallation);
     connect(m_installCheck, &QPushButton::clicked, this, &AetherPDDialog::checkInstallation);
+    connect(m_installCleanup, &QPushButton::clicked, this, &AetherPDDialog::cleanupInstallation);
     connect(m_installApprove, &QPushButton::clicked, this, &AetherPDDialog::approveInstallation);
     connect(m_installCancel, &QPushButton::clicked, this, &AetherPDDialog::cancelInstallation);
     m_installRefresh = new QTimer(this);
@@ -402,6 +408,10 @@ void AetherPDDialog::checkInstallation()
 {
     if (current()) { m_radio->aetherPDInstallationModel().recoverSelectedFirstInstallation(m_session); }
 }
+void AetherPDDialog::cleanupInstallation()
+{
+    if (current()) { m_radio->aetherPDInstallationModel().cleanupRecoveredInstallation(m_displayedPlan); }
+}
 void AetherPDDialog::approveInstallation()
 {
     if (!current()) { return; }
@@ -477,9 +487,14 @@ void AetherPDDialog::renderInstallation()
         }
     }
     if (model && model->recovering() && preview) {
-        detail = tr("Checking a saved first installation. This check only reads the radio's status; it does not upload, install or transmit.\n\n"
+        detail = (model->cleaningRecoveredInstallation()
+            ? tr("Removing this saved attempt's temporary packages after rechecking its exact committed plan. No upload, reinstall or RF.\n\n")
+            : tr("Checking a saved first installation. This check only reads the radio's status; it does not upload, install or transmit.\n\n"))
+            + tr(
             "Radio: %1\nFirmware: %2\nNew release (BLAKE2b-256): %3\nPublisher key (Ed25519): %4\nAttempt (BLAKE2b-256): %5")
             .arg(preview->serial, preview->firmware, preview->candidateDigest, preview->candidateKey, preview->planDigest);
+        detail += tr("\n\nRemove temporary installer packages rechecks this exact commit, then removes only %1 and %2. "
+            "It preserves the installed service, identity and fixed helpers.").arg(preview->nativeName, preview->carrierName);
     }
     QString status;
     switch (state) {
@@ -514,7 +529,7 @@ void AetherPDDialog::renderInstallation()
         switch (model->outcome().value_or(Outcome::Unconfirmed)) {
         case Outcome::Committed: status = tr("Radio confirmed the update."); break;
         case Outcome::RolledBack: status = tr("Radio confirmed rollback to the previous payload."); break;
-        case Outcome::Canceled: status = model->recovering() ? tr("Installation observation canceled. The check requested no radio changes.") : model->phase() == Phase::Idle
+        case Outcome::Canceled: status = model->cleaningRecoveredInstallation() ? tr("Temporary-package cleanup canceled; removal already requested may still finish.") : model->recovering() ? tr("Installation observation canceled. The check requested no radio changes.") : model->phase() == Phase::Idle
             ? tr("Update canceled before installation started. No radio changes were requested.")
             : tr("Update canceled locally; an already-started update may still finish."); break;
         case Outcome::Unconfirmed: status = tr("Update outcome unconfirmed. Do not assume it succeeded or rolled back."); break;
@@ -558,6 +573,9 @@ void AetherPDDialog::renderInstallation()
     if (!alive) { return; }
     enable(m_installCheck, model && savedFirst && !model->active() && state != State::AwaitingApproval,
         tr("A saved installation for this radio and a matching trusted publisher are required."));
+    if (!alive) { return; }
+    enable(m_installCleanup, model && model->recoveredCleanupAvailable(),
+        tr("Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."));
     if (!alive) { return; }
     enable(m_installApprove, approve, tr("A verified plan for this connection and an idle transmitter are required."));
     if (!alive) { return; }

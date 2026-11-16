@@ -634,10 +634,21 @@ installation. **Check saved installation** checks that exact plan using read-onl
 radio status and restores the active credential only after confirmation. The
 control is dimmed unless the build trusts the saved attempt's publisher and the
 record matches the connected radio and firmware. It does not repeat the
-installation or establish that temporary helpers were removed. These controls
-remain experimental. The development workflow supports a fresh local identity,
-reboot startup and checking a saved installation after restarting the Linux
-desktop. Interrupted installations, other desktop credential stores and
+installation or establish that temporary helpers were removed.
+
+After that check confirms the exact committed installation, **Remove temporary
+installer packages** rechecks the same commit and removes only the two package
+names shown in the plan. It preserves the installed service, identity and fixed
+boot/session helpers. It requires an idle transmitter and does not upload,
+reinstall or transmit. Cancellation stops local tracking; a removal already
+requested may still finish. A rejected or unmatched commit cannot authorize
+package removal.
+
+These controls remain experimental. The development workflow supports a fresh
+local identity, reboot startup and checking a saved installation after restarting
+the Linux desktop. Recovery after desktop termination following delivery, with
+explicit temporary-package cleanup, has been exercised on the FLEX-8600.
+Other interruption points, power loss, other desktop credential stores and
 FLEX-6000 installation still require qualification.
 
 A confirmed update and confirmed cleanup are separate results. If cleanup is

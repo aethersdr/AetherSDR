@@ -363,6 +363,50 @@ This is one clean development installation and reboot on one 8600. It does not
 qualify interruption during installation, power loss, Tailscale enrollment,
 Windows/macOS credentials, the shipping catalogue, or FLEX-6000 installation.
 
+## Desktop crash recovery and explicit cleanup
+
+`first-install-crash-live` records a separate fresh installation of the same
+pinned development release. The previously qualified installation and identity
+were preserved. A private desktop profile supplied an empty first-install
+journal; the original profile database was not edited. The public upload and
+new keychain credential used the normal desktop workflow, without the diagnostics
+bridge for installation delivery or authorization.
+
+The owned desktop was killed with SIGKILL after delivery, while waiting for
+commitment, 6.562 seconds after approval. Its pending journal had been durably
+written before the first upload. After relaunch, **Check saved installation**
+observed the exact new committed plan and promoted the attempt credential without
+reuploading. A separate process authenticated that commit through the real OS
+keychain. The primary was unprivileged; temporary installation authority had
+retired, but the public native package and carrier container remained. This
+negative evidence is preserved in `recovered-inventory.json`.
+
+**Remove temporary installer packages** is a separate explicit operation. It
+loads the matching attempt credential, acquires the shared transfer reservation,
+and rechecks the exact committed plan before issuing only the derived native
+uninstall and container removal. A mismatch, authentication failure, cancellation,
+timeout or session change before confirmation cannot initiate removal. Success
+requires both accepted removal replies and container absence. This is public
+cleanup acknowledgement; independent host inspection is still required for
+qualification of cached-file and authority retirement.
+
+The control removed this attempt's packages in 0.428 seconds on the 8600.
+The saved plan remained
+`117da470c7f5e45e04c5a2c1e9a82c0cc396f085854d009331d200ac62a09659`.
+An independent host audit confirmed no matching cached native files, carrier,
+private bootstrap sockets, fixed ARP or temporary installation units;
+`accept_local` remained zero. The same identity and unprivileged primary survived.
+A subsequent GUI receive-only start/stop delivered 16,384 complex local DAX IQ
+samples with FDX off (all finite, 30,919 nonzero float components).
+No reinstall or RF command was issued. The coordinator and dialog suites passed,
+as did scoped ASan/UBSan/LSan checks. A separate mutant with the exact-commit
+guard removed failed the negative regression. The normal source was not mutated.
+
+This qualifies one desktop crash after delivery. It does not qualify power loss,
+radio-process interruption at every transaction phase, a canceled pre-delivery
+attempt, or arbitrary repeated installation. The protected old identities remain
+available; the current attempt's journal lives in the isolated test profile.
+
 ## Remaining gates
 
 Authenticated production package distribution, unresolved-attempt recovery,

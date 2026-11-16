@@ -117,6 +117,7 @@ void AetherPDInstallationCoordinator::initialize()
         [this](AetherPDInstallationMonitor::State state, AetherPDInstallationMonitor::Reason) {
             if (m_state == State::Cleaning || m_state == State::Finished) { return; }
             using S = AetherPDInstallationMonitor::State;
+            if (m_cleanupOnly && state != S::Committed) { m_outcome = Outcome::Unconfirmed; end(false); return; }
             clean(state == S::Committed ? Outcome::Committed : state == S::RolledBack ? Outcome::RolledBack : Outcome::Unconfirmed);
         });
 }
@@ -246,8 +247,39 @@ void AetherPDInstallationCoordinator::startInputs()
         clean(Outcome::Unconfirmed);
     }
 }
+bool AetherPDInstallationCoordinator::beginFirstCleanup(const QByteArray& planBytes, const QByteArray& publisherKey,
+    const RadioControlSession& session, const QString& token)
+{
+    if (QThread::currentThread() != thread() || m_state != State::Idle || !m_model || !m_carrier
+        || m_model->thread() != thread() || m_carrier->thread() != thread() || m_model->isRadioTransmitting()
+        || !m_model->controlSessionCurrent(session) || !aetherpd::validAdminToken(token)
+        || !aetherpd::lanAddress(m_model->radioAddress())) { return false; }
+    const auto plan = aetherpd::parseFirstInstallationPlan(planBytes, publisherKey);
+    if (!plan || plan->profile != 1 || plan->serial != m_model->serial() || plan->firmware != m_model->version()
+        || QCryptographicHash::hash(token.toLatin1(), QCryptographicHash::Sha256) != planBytes.mid(148, 32)) { return false; }
+    const qint64 now = m_now();
+    if (now < 0 || now > std::numeric_limits<qint64>::max() - kLifetimeMs - kCleanupMs) { return false; }
+    m_reservation = m_model->beginFileTransfer(FileTransferPurpose::DockerWaveform, this, session, 600'000);
+    if (!m_reservation) { return false; }
+    m_session = session; m_serial = plan->serial; m_firmware = plan->firmware;
+    const QString suffix = QString::fromLatin1(planBytes.mid(244, 8).toHex());
+    m_prepared.m_inputs[1] = planBytes; m_prepared.m_publisherKey = publisherKey;
+    m_prepared.m_nativeName = QStringLiteral("AetherPDFirst") + suffix;
+    m_prepared.m_image.containerName = QStringLiteral("aetherpd-first-") + suffix;
+    m_cleanupOnly = true; m_nativeStarted = true; m_carrierStarted = true;
+    m_lastNow = now; m_deadline = now + kLifetimeMs; m_token = token;
+    setState(State::WaitingForCommit);
+    m_timer.start();
+    if (!m_monitor->beginFirstInstallation(m_model->radioAddress(), token, planBytes, publisherKey)) {
+        end(false); return false;
+    }
+    return true;
+}
 void AetherPDInstallationCoordinator::cancel()
 {
+    if (m_cleanupOnly && m_state != State::Idle && m_state != State::Finished) {
+        m_outcome = Outcome::Canceled; end(false); return;
+    }
     if (m_state != State::Idle && m_state != State::Finished) { clean(Outcome::Canceled); }
 }
 void AetherPDInstallationCoordinator::clean(Outcome outcome)
@@ -269,7 +301,7 @@ void AetherPDInstallationCoordinator::poll()
     }
     m_lastNow = now;
     if (now >= m_deadline) {
-        if (m_state == State::Cleaning) { end(false); }
+        if (m_state == State::Cleaning || m_cleanupOnly) { end(false); }
         else { clean(Outcome::Unconfirmed); }
         return;
     }
@@ -282,13 +314,19 @@ void AetherPDInstallationCoordinator::poll()
         if (m_requestStarted && !m_receiverRetired && !m_request->busy() && !m_stopSent) {
             m_stopSent = m_request->requestStop();
         }
-        if (m_carrierSeen && present && !m_removeSent) {
+        if ((m_cleanupOnly || (m_carrierSeen && present)) && !m_removeSent) {
             m_removeSent = true;
             const QPointer<AetherPDInstallationCoordinator> alive(this);
-            m_model->requestWaveform({WaveformAction::RemoveContainer, carrierName()}, this, {});
+            m_model->requestWaveform({WaveformAction::RemoveContainer, carrierName()}, this,
+                [alive](const RadioControlReply& reply) {
+                    if (alive && alive->current() && alive->m_state == State::Cleaning) {
+                        alive->m_cleanupRemoveAccepted = reply.kind == RadioControlReply::Kind::Accepted;
+                    }
+                });
             if (!alive || m_state == State::Finished) { return; }
         }
-        const bool absent = !m_carrierStarted || (m_carrierSeen && m_removeSent && !present);
+        const bool absent = m_cleanupOnly ? m_cleanupRemoveAccepted && !present
+            : !m_carrierStarted || (m_carrierSeen && m_removeSent && !present);
         if (m_nativeStarted && !m_nativeRemoveSent) {
             m_nativeRemoveSent = true;
             const QPointer<AetherPDInstallationCoordinator> alive(this);

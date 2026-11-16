@@ -1,0 +1,151 @@
+{
+  "updated_utc": "2026-11-16T07:05:50.762533+00:00",
+  "status": "linux_desktop_crash_after_delivery_recovery_explicit_cleanup_and_receive_iq_qualified_on_8600",
+  "production_ready": false,
+  "source_base": "ed56c8fea",
+  "native_source_commit": "7c87bc223",
+  "firmware": "4.3.16.42034",
+  "evidence": "first-install-crash-live under evidence_root",
+  "plan_blake2b_256": "117da470c7f5e45e04c5a2c1e9a82c0cc396f085854d009331d200ac62a09659",
+  "installation_id": "6cbaaa815615bb443713b5bbf90e2c22fe601ee7894b589615cd3e7a352e1c2f",
+  "identity_sha256": "0b7ea9e85be9e32657f463b6c0a3d2044c4fa11951450886471ea17603f1a46b",
+  "desktop_crash": {
+    "signal": "SIGKILL",
+    "phase": "WaitingForCommit after delivery",
+    "elapsed_s": 6.562,
+    "pending_journal_verified": true,
+    "process_exited": true
+  },
+  "recovery": {
+    "exact_commit_observed": true,
+    "attempt_credential_promoted": true,
+    "separate_process_real_keychain_auth": true,
+    "reupload": false,
+    "original_profile_database_untouched": true,
+    "test_profile_holds_current_attempt_journal": true
+  },
+  "cleanup": {
+    "explicit_desktop_action": true,
+    "elapsed_s": 0.428,
+    "exact_commit_rechecked": true,
+    "host_audit": {
+      "rf_commands": [],
+      "processes": [
+        {
+          "pid": 2462,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "sha256": "a949d292ada235f2cf9392e5c92c0162c05c24578901171c2885258e576b68f7",
+          "role": "primary",
+          "ppid": 1,
+          "state": "S (sleeping)",
+          "rss_kb": "19988 kB"
+        }
+      ],
+      "identity_sha256": "0b7ea9e85be9e32657f463b6c0a3d2044c4fa11951450886471ea17603f1a46b",
+      "temporary_paths": {
+        "/var/lib/smartsdr/aetherpd-installation": false,
+        "/run/aetherpd-install": false,
+        "/run/aetherpd-delivery": false,
+        "/etc/systemd/system/aetherpd-install.service": false,
+        "/etc/systemd/system/aetherpd-recover.service": false
+      },
+      "private_sockets": [],
+      "containers": [
+        "nereus-net-probe",
+        "AetherGPS",
+        "nereus-inprocess-job-78ce75269f"
+      ],
+      "arp": [],
+      "accept_local": "0",
+      "legacy_container_absent": true,
+      "cached_first_artifacts": [],
+      "boot_id": "44da803f-6e58-4916-9b4c-05a3f92c972e",
+      "all_runtime_unprivileged": true,
+      "passed": true
+    },
+    "diagnostics_job_deleted": true,
+    "diagnostics_directory_deleted": true
+  },
+  "iq": {
+    "capture": {
+      "capture_id": "5af3b6dce42e41e68dff1e4576b85574",
+      "center_hz": 7150000,
+      "chunk_samples": 512,
+      "correcting": false,
+      "first_receive_ns": "1658346303686",
+      "format": "f32le-iq-v1",
+      "keyed": false,
+      "last_receive_ns": "1658686296771",
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "sample_count": 16384,
+      "sample_rate_hz": 48000
+    },
+    "iq_bytes": 131072,
+    "iq_sha256": "1718b0718076f1cd3aac8fc4d62ee263f528141d8294c1bf92fc5fd48fe0998e",
+    "rms": 33.16707233839007,
+    "nonzero_values": 30919
+  },
+  "checks": {
+    "registered_ctest_suites_passed": 2,
+    "coordinator_cases_passed": 34,
+    "dialog_cases_passed": 11,
+    "scoped_ASan_UBSan_LSan_passed": true,
+    "sanitizer_scope": "Coordinator, model, token store, test translation units and dialog; rest of engine uninstrumented",
+    "exact_commit_guard_mutation_detected": true,
+    "full_desktop_build_passed": true,
+    "engine_boundary_new_blockers": 0,
+    "accessibility_findings": 0,
+    "docs_build": "passed with preinstalled dependencies whose package-lock SHA256 matched exactly"
+  },
+  "rf_commands": [],
+  "diagnostics_bridge_for_installation_delivery_or_authorization": false,
+  "diagnostics_bridge_for_fixture_and_audits": true,
+  "negative_evidence": [
+    "Crash left the exact public native package and carrier behind after privileged installation authority retired; this motivated explicit recovery cleanup.",
+    "Sanitizer execution under sandbox ptrace could not run leak checks; identical tests passed outside that sandbox."
+  ],
+  "remaining": [
+    "Pending attempts before delivery and radio-process interruption/power-loss qualification",
+    "Authenticated shipping package catalogue and final candidate upgrade gates",
+    "Windows/macOS credentials and transfer qualification",
+    "FLEX-6000 privilege adapter and actual Linux 2.6/Cortex-A8 hardware qualification",
+    "Remaining DSP alignment/cold-start, final-process faults, PR4770 keyed measurement, repeated RF/stock APD and release gates"
+  ],
+  "files": {
+    "crash-after-delivery.py": "37e37bf3fd076edb9bb8f90530c2b68128e7ff7ca5f8c866d9d0728971b8eaac",
+    "crash-after-delivery.json": "26daf599b54b62fe75593f736ed43dc2a8c44c5ef204f818c4f5d7692d7a3d0a",
+    "clean-fixture-job.py": "66e94b86df4ee12c6c795e363e5fb3f95edc7f5c22694945d198492d738b3afe",
+    "clean-fixture.json": "ce523c1ff09bdcbc70d214b37b59e10c914341e193f1f9e67cf13f84a56fb95a",
+    "profile-fixture.json": "5a1cfabcd49820a35ad742ac28a77c0cdc51bb912abd115f776f1b7b415b664f",
+    "pending-public-journal.json": "7409e21d5fea891d16c83f164abf6303a9ba6a3c1cc438e6353ae245ae47c012",
+    "recovered-public-journal.json": "5d319ec54dd287e191d753fd0faefa67fe8e0cfbd782b6d651c7af299cd9b9e6",
+    "recovered-commit.json": "6c96d024a8350c5c19dd5931bfbd09a41f42eb3d41a7903eb442606e9033bc10",
+    "recovered-inventory-job.py": "40fe3a109a183836f2984b63750f91af3750767a4eff4bf8189f556cfb5222d5",
+    "recovered-inventory.json": "46cb0f091f1a6dbc377dafc1093735ddea0ba63bbef15d147f7cf8f3ccae25e2",
+    "drive-cleanup.py": "de66c893e1770174a33799b94e507cdec3ba5ed202a342f4c6efa5c09fd3828f",
+    "desktop-cleanup.json": "e1846d1200c24e3e48ec541a89841ae1179a67169ab0f1c48cc47b0527f40750",
+    "cleanup-audit-job.py": "c717e9358c38c79469ebca9ffa7953f331229eefdf815434ca7e7f60354ebfbb",
+    "cleanup-audit.json": "83fe10a8a5c71e21480b5577091e754fdefc8e82c8bd5001e1ffd326b6786bbc",
+    "cleanup-complete.png": "479793f94877f6b3f27b12dd6035491f9e323012f881559a78b60acf387e1322",
+    "receive-iq-check.py": "7c280e384cc637e551aad1f6e94401131682b62178756438d443a69b539bbe21",
+    "receive-iq-check.json": "493b2aaf9f3211fb777ff00e5e885197229198514ac25f7f68293f7b9b352517",
+    "cleanup-tests.log": "253b3eaafacc9ae26f421d2de8bfa3565461f956cbef0c4bf6834099a28064de",
+    "coordinator-asan-host.log": "cbea46f858ba6f6d25a608fb3ed6e233fea62bd0bc83917ba285e624cc5c940f",
+    "dialog-asan-host.log": "4d6c76af03fb9ce108dee6cba85082f685518a41a94bf9c10e0efb759c39a8bc",
+    "mutation-test.log": "ec897b57d3edd280592095ea70a813cdfe77fe277888ff602be5b2f8ae7bfd0b",
+    "public-waveforms-after-cleanup.json": "0e6b32299e54fd35ee418f0a6acf3ed86aee1e6660040e45697b95a950f84529",
+    "docs-build.log": "80921ad900c74ac6374c427824dcb27a50b3bdde22f6e160923ed18309cbe8b3"
+  }
+}

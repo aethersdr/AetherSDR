@@ -62,6 +62,10 @@ public:
     static std::optional<Prepared> prepareFirst(const AetherPDFirstPackage& package, const QString& serial,
                                                 const QByteArray& newTokenHash, const QString& hostname);
     bool begin(const Prepared& approved, const RadioControlSession& expectedSession, const QString& token);
+    // Reauthenticate the exact committed first plan before public removal.
+    // No archive, installation request or upload can be issued by this mode.
+    bool beginFirstCleanup(const QByteArray& plan, const QByteArray& publisherKey,
+                           const RadioControlSession& expectedSession, const QString& token);
     void cancel();
     void poll();
     State state() const { return m_state; }
@@ -110,5 +114,6 @@ private:
     qint64 m_nativeReadyAt{0};
     bool m_nativeStarted{false}, m_nativeRemoveSent{false}, m_nativeRemoved{false};
     bool m_carrierStarted{false}, m_carrierSeen{false}, m_removeSent{false};
+    bool m_cleanupOnly{false}, m_cleanupRemoveAccepted{false};
 };
 } // namespace AetherSDR

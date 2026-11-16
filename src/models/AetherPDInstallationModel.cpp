@@ -184,6 +184,7 @@ bool AetherPDInstallationModel::prepareFirst(std::function<std::optional<AetherP
 void AetherPDInstallationModel::retirePreparation()
 {
     m_recovering = false;
+    m_recoveryCleanup = false;
     if (m_recoveryMonitor) { disconnect(m_recoveryMonitor.get(), nullptr, this, nullptr); m_recoveryMonitor.reset(); }
     if (m_download) {
         disconnect(m_download.get(), nullptr, this, nullptr);
@@ -396,6 +397,30 @@ void AetherPDInstallationModel::reconcile()
     if (m_job && active()) { m_job->poll(); }
     else { unavailable(Failure::SessionChanged); }
 }
+bool AetherPDInstallationModel::recoveredCleanupAvailable() const
+{
+    return current() && m_recovering && m_state == State::Finished
+        && m_outcome == Coordinator::Outcome::Committed && !m_cleanup && !m_radio->isRadioTransmitting();
+}
+bool AetherPDInstallationModel::cleanupRecoveredInstallation(const QByteArray& displayedPlan)
+{
+    if (QThread::currentThread() != thread() || !recoveredCleanupAvailable() || displayedPlan != m_plan
+        || !m_recovery.load || !m_factory) { return false; }
+    const auto plan = aetherpd::parseFirstInstallationPlan(m_plan, m_publisherKey);
+    if (!plan) { return false; }
+    if (m_recoveryMonitor) { disconnect(m_recoveryMonitor.get(), nullptr, this, nullptr); m_recoveryMonitor.reset(); }
+    if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); m_job.reset(); }
+    m_recoveryCleanup = true; m_failure = Failure::None; m_state = State::LoadingRecoveryCredential;
+    const quint64 generation = ++m_generation;
+    const QPointer<AetherPDInstallationModel> self(this);
+    const auto loader = m_recovery.load;
+    const QString serial = m_serial, attempt = plan->planDigest;
+    m_timeout.start(); emit changed();
+    if (!self || generation != m_generation || m_state != State::LoadingRecoveryCredential) { return false; }
+    if (!current()) { unavailable(Failure::SessionChanged); return false; }
+    loader(serial, attempt, this, [self, generation](const QString& token) { if (self) { self->recoveryCredential(token, generation); } });
+    return true;
+}
 bool AetherPDInstallationModel::recoverFirstInstallation(const QByteArray& publisherKey, const RadioControlSession& session)
 {
     if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active()
@@ -432,6 +457,19 @@ void AetherPDInstallationModel::recoveryCredential(const QString& token, quint64
         unavailable(Failure::NoCredential); return;
     }
     ++m_generation; m_timeout.stop(); m_firstToken = token;
+    if (m_recoveryCleanup) {
+        m_job = m_factory(*m_radio);
+        if (!m_job || m_job->thread() != thread()) { unavailable(Failure::StartRefused); return; }
+        connect(m_job.get(), &Coordinator::stateChanged, this, [this] { emit changed(); });
+        connect(m_job.get(), &Coordinator::finished, this, &AetherPDInstallationModel::completed);
+        m_state = State::Running;
+        const QPointer<AetherPDInstallationModel> self(this);
+        const bool started = m_job->beginFirstCleanup(m_plan, m_publisherKey, m_session, token);
+        if (!self) { return; }
+        if (!started && m_job->state() == Coordinator::State::Idle) { unavailable(Failure::StartRefused); return; }
+        emit changed();
+        return;
+    }
     m_recoveryMonitor = m_recovery.monitor();
     if (!m_recoveryMonitor || m_recoveryMonitor->thread() != thread()) { unavailable(Failure::StartRefused); return; }
     connect(m_recoveryMonitor.get(), &AetherPDInstallationMonitor::finished, this,

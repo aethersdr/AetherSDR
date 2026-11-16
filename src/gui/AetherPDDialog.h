@@ -33,6 +33,7 @@ private:
     void prepareInstallation();
     void prepareFirstInstallation();
     void checkInstallation();
+    void cleanupInstallation();
     void approveInstallation();
     void cancelInstallation();
     void request(aetherpd::Operation operation);
@@ -53,6 +54,7 @@ private:
     QPushButton* m_installPrepare{nullptr};
     QPushButton* m_installFirst{nullptr};
     QPushButton* m_installCheck{nullptr};
+    QPushButton* m_installCleanup{nullptr};
     QPushButton* m_installApprove{nullptr};
     QPushButton* m_installCancel{nullptr};
     QTimer* m_installRefresh{nullptr};

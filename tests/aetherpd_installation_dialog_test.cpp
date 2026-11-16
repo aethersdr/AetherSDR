@@ -6,6 +6,8 @@
 #include "core/backends/AetherPDCarrierUpload.h"
 #include "core/AetherPDInstallationMonitor.h"
 #include <QLabel>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLayout>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -165,6 +167,34 @@ private slots:
         QCOMPARE(f.model().outcome(), Coordinator::Outcome::Canceled); QCOMPARE(f.writes, 0);
         QVERIFY(f.state().contains("observation canceled")); QVERIFY(!f.model().cleanupConfirmed());
         QVERIFY(f.button("pdInstallCheck")->isEnabled());
+    }
+
+    void recoveredCleanupRequiresAnExplicitClickAndFreshCommit()
+    {
+        Fixture f; const auto package = f.files.loadFirst(); QVERIFY(package);
+        const auto prepared = Coordinator::prepareFirst(*package, "fixture-8600",
+            QCryptographicHash::hash(QByteArray(64, 'a'), QCryptographicHash::Sha256), "fixture-radio"); QVERIFY(prepared);
+        f.journalPlan = prepared->approvedPlan();
+        QVERIFY(!f.button("pdInstallCleanup")->isEnabled());
+        QVERIFY(f.model().recoverFirstInstallation(f.files.trust.candidateKey, f.radio.controlSession()));
+        f.recoveryLoaded(QString(64, u'a'));
+        const auto preview = f.model().preview(); QVERIFY(preview);
+        f.network.last->complete(200, QJsonDocument(QJsonObject{{"state", "committed"}, {"installation_committed", true},
+            {"first_install_plan_blake2b_256", preview->planDigest}, {"selected_release_blake2b_256", preview->candidateDigest},
+            {"selected_release_key", preview->candidateKey}, {"profile", 1}, {"firmware", preview->firmware}, {"serial", preview->serial}}).toJson());
+        QVERIFY(f.saved); QVERIFY(!f.button("pdInstallCleanup")->isEnabled()); f.saved(true);
+        QVERIFY(f.button("pdInstallCleanup")->isEnabled()); QVERIFY(!f.job);
+        QCOMPARE(f.network.sent.size(), std::size_t(1));
+        QTest::mouseClick(f.button("pdInstallCleanup"), Qt::LeftButton);
+        QCOMPARE(f.recoveryLoads, 2); QVERIFY(!f.button("pdInstallCleanup")->isEnabled());
+        QVERIFY(f.preview().contains(prepared->nativeName())); QVERIFY(f.preview().contains(prepared->carrierName()));
+        f.recoveryLoaded(QString(64, u'a'));
+        QVERIFY(f.job); QCOMPARE(f.job->state(), Coordinator::State::WaitingForCommit);
+        QCOMPARE(f.network.sent.size(), std::size_t(2));
+        QCOMPARE(f.network.sent.back().method, QNetworkAccessManager::GetOperation);
+        QTest::mouseClick(f.button("pdInstallCancel"), Qt::LeftButton);
+        QCOMPARE(f.model().outcome(), Coordinator::Outcome::Canceled);
+        QVERIFY(f.state().contains("cleanup canceled")); QVERIFY(!f.model().cleanupConfirmed());
     }
 
     void prepareButtonDoesNotApprove()

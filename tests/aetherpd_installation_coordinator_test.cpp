@@ -117,6 +117,56 @@ struct Fixture {
 class CoordinatorTest : public QObject {
     Q_OBJECT
 private slots:
+    void recoveredCleanupRechecksCommitAndRemovesOnlyTheAttempt()
+    {
+        Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+        const QByteArray key = prepared->publisherKey();
+        QSignalSpy done(&f.coordinator, &Coordinator::finished);
+        QVERIFY(!f.coordinator.beginFirstCleanup(prepared->approvedPlan(), key, f.model.controlSession(), QString(64, u'b')));
+        QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+        QVERIFY(f.coordinator.beginFirstCleanup(prepared->approvedPlan(), key, f.model.controlSession(), QString(64, u'a')));
+        f.carrier(true); QVERIFY(f.reserved()); QVERIFY(f.transfers.isEmpty());
+        QCOMPARE(f.archive.starts, 0); QCOMPARE(f.archive.nativeStarts, 0); QVERIFY(!f.channel.connected);
+        const auto plan = aetherpd::parseFirstInstallationPlan(prepared->approvedPlan(), key); QVERIFY(plan);
+        auto* reply = f.pending("/installation"); QVERIFY(reply);
+        reply->complete(200, QJsonDocument(QJsonObject{{"state", "committed"}, {"installation_committed", true},
+            {"first_install_plan_blake2b_256", plan->planDigest}, {"selected_release_blake2b_256", plan->candidateDigest},
+            {"selected_release_key", plan->candidateKey}, {"profile", 1}, {"firmware", plan->firmware}, {"serial", plan->serial}}).toJson());
+        f.coordinator.poll();
+        QCOMPARE(f.transfers, QStringList({"waveform remove_container " + prepared->carrierName(), "waveform uninstall " + prepared->nativeName()}));
+        { const auto accepted = f.transferReplies[1]; accepted(0, {}); }
+        f.carrier(false); QVERIFY(done.isEmpty());
+        { const auto accepted = f.transferReplies[0]; accepted(0, {}); }
+        f.coordinator.poll(); QCOMPARE(done.size(), 1); QVERIFY(done.first()[1].toBool());
+        QCOMPARE(done.first()[0].value<Coordinator::Outcome>(), Coordinator::Outcome::Committed);
+        QVERIFY(!f.reserved());
+        QCOMPARE(f.network.sent.size(), std::size_t(1));
+        QCOMPARE(f.network.sent.front().method, QNetworkAccessManager::GetOperation);
+    }
+
+    void recoveredCleanupNeverRemovesBeforeExactCommit()
+    {
+        for (int mode = 0; mode < 5; ++mode) {
+            Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+            QSignalSpy done(&f.coordinator, &Coordinator::finished);
+            QVERIFY(f.coordinator.beginFirstCleanup(prepared->approvedPlan(), prepared->publisherKey(), f.model.controlSession(), QString(64, u'a')));
+            f.carrier(true);
+            const auto plan = aetherpd::parseFirstInstallationPlan(prepared->approvedPlan(), prepared->publisherKey()); QVERIFY(plan);
+            if (mode == 0) {
+                auto* reply = f.pending("/installation"); QVERIFY(reply);
+                reply->complete(200, QJsonDocument(QJsonObject{{"state", "committed"}, {"installation_committed", true},
+                    {"first_install_plan_blake2b_256", QString(64, u'0')}, {"selected_release_blake2b_256", plan->candidateDigest},
+                    {"selected_release_key", plan->candidateKey}, {"profile", 1}, {"firmware", plan->firmware}, {"serial", plan->serial}}).toJson());
+            } else if (mode == 1) { f.coordinator.cancel(); }
+            else if (mode == 2) { RadioSetupControlTestAccess::replaceConnectionGeneration(f.model); }
+            else if (mode == 3) { auto* reply = f.pending("/installation"); QVERIFY(reply); reply->complete(401, "{}"); }
+            f.coordinator.poll();
+            f.clock = 500'000; f.coordinator.poll();
+            QVERIFY(f.transfers.isEmpty()); QCOMPARE(f.archive.starts, 0); QCOMPARE(f.archive.nativeStarts, 0);
+            QVERIFY(!f.channel.connected); QCOMPARE(done.size(), 1); QVERIFY(!done.first()[1].toBool());
+        }
+    }
+
     void freshInstallUsesPublicUploadsAndNewIdentityOnly()
     {
         Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
@@ -322,7 +372,9 @@ private slots:
             if (complete && plan == prepared->approvedPlan() && pin == key) { ++journalCompletions; return true; }
             return false;
         };
-        AetherPDInstallationModel model(f.model, {}, {}, nullptr, {},
+        AetherPDInstallationModel model(f.model, {}, [&](RadioModel& radio) {
+                return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; });
+            }, nullptr, {},
             [&](const QString&, const QString& attempt, const QString& token, QObject*, auto done) {
                 QVERIFY(attempt.isEmpty()); QCOMPARE(token, QString(64, u'a')); ++writes; done(true);
             }, services);
@@ -341,6 +393,14 @@ private slots:
         QCOMPARE(writes, 1); QCOMPARE(journalCompletions, 1); QVERIFY(f.transfers.isEmpty());
         QCOMPARE(f.archive.nativeStarts, 0); QCOMPARE(f.archive.starts, 0); QVERIFY(!f.channel.connected);
         for (const auto& sent : f.network.sent) { QCOMPARE(sent.method, QNetworkAccessManager::GetOperation); }
+        QVERIFY(model.recoveredCleanupAvailable());
+        QVERIFY(!model.cleanupRecoveredInstallation(QByteArray(308, 'x')));
+        QVERIFY(model.cleanupRecoveredInstallation(prepared->approvedPlan()));
+        QVERIFY(model.cleaningRecoveredInstallation()); QCOMPARE(model.state(), AetherPDInstallationModel::State::Running);
+        QCOMPARE(f.network.sent.size(), std::size_t(2)); QVERIFY(f.transfers.isEmpty());
+        QCOMPARE(f.archive.nativeStarts, 0); QCOMPARE(f.archive.starts, 0);
+        model.cancel(); QCOMPARE(model.outcome(), Coordinator::Outcome::Canceled); QVERIFY(!model.cleanupConfirmed());
+        QVERIFY(f.transfers.isEmpty()); QCOMPARE(writes, 1);
     }
 
     void recoveryCancellationSessionLossAndWrongTokenDoNotAct()
