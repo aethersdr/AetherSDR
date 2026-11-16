@@ -7,6 +7,8 @@
 
 #include <QDateTime>
 #include <QThread>
+#include <memory>
+#include <utility>
 
 namespace AetherSDR {
 namespace {

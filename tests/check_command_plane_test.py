@@ -37,15 +37,19 @@ class CommandPlaneTest(unittest.TestCase):
             emit controlRequested(request, id);
         '''), 0)
 
-    def test_cwx_ordinary_floor_is_preserved(self):
+    def test_cwx_has_no_legacy_allowance(self):
         self.assertEqual(self.count("src/models/CwxModel.cpp", '''
             emit commandReady(cmd);
             emit replyCommandReady(cmd, epoch, size);
-        '''), 1)
+        '''), 2)
 
-    def test_cwx_reply_allowance_cannot_grow(self):
+    def test_every_cwx_reply_emitter_counts(self):
         self.assertEqual(self.count("src/models/CwxModel.cpp",
-            'emit replyCommandReady(cmd, epoch, size);' * 3), 1)
+            'emit replyCommandReady(cmd, epoch, size);' * 3), 3)
+
+    def test_wan_commands_above_seam_count(self):
+        self.assertEqual(self.count("src/models/RadioModel.cpp",
+            'm_wanConn->sendCommand("ping");'), 1)
 
 
 if __name__ == "__main__":

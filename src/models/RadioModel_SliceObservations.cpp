@@ -139,8 +139,6 @@ void RadioModel::applySliceObservation(const SliceObservation& observation, bool
         } else {
             s = new SliceModel(id, this);
             if (values.squelchLevel) { s->setManualSquelchLevel(*values.squelchLevel); }
-            // Forward slice commands to the radio
-
             // Initial lock observation and selection intents, wired at EVERY
             // construction site rather than only the backend-materialising one.
             initializeObservedSlice(s);

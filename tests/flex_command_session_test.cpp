@@ -293,6 +293,21 @@ private slots:
         QVERIFY(!session);
     }
 
+    void retirementCannotResurrectCancelledReplacement()
+    {
+        Session session;
+        session.begin(1);
+        session.setWriter([](const Session::Write&) { return true; });
+        QVERIFY(session.submit("old", {}, [&](const Session::Reply&) {
+            session.begin(3);
+            session.retire("replacement cancelled");
+        }));
+        session.begin(2);
+        QVERIFY(!session.active());
+        QCOMPARE(session.epoch(), quint64(3));
+        QCOMPARE(session.submit("abandoned intent", {}), 0);
+    }
+
     void cleanupRemainsAdmittedAtOrdinaryCapacity()
     {
         Session session;

@@ -54,11 +54,13 @@ FlexLanSession::FlexLanSession(RadioConnection* connection, PanadapterStream* st
 
 FlexLanSession::~FlexLanSession()
 {
+    m_commands.invalidate();
     m_epoch->store(0);
     QObject::disconnect(m_connection, nullptr, this, nullptr);
     QObject::disconnect(m_connection, nullptr, &m_commands, nullptr);
-    // Drain producers before destroying the receiver of their direct capture
-    // callbacks. The backend owns worker shutdown and object destruction.
+    // Cancel ordinary writes before the worker drain. Classified cleanup may
+    // finish while the direct-capture receiver is still alive; the backend
+    // owns worker shutdown and object destruction.
     QMetaObject::invokeMethod(m_connection, [] {}, Qt::BlockingQueuedConnection);
 }
 

@@ -82,9 +82,11 @@ void FlexCommandSession::begin(quint64 epoch)
 {
     Q_ASSERT(QThread::currentThread() == thread());
     const QPointer<FlexCommandSession> alive(this);
+    const quint64 revision = m_revision + 1;
     retire(QStringLiteral("Original command session ended."));
-    // A completion can start a replacement session while the old one drains.
-    if (!alive || m_active || epoch == 0) { return; }
+    // A completion may replace or cancel the session while the old one drains.
+    // Even an inactive replacement supersedes this older begin request.
+    if (!alive || m_revision != revision || epoch == 0) { return; }
     m_epoch = epoch;
     m_session = SessionCommandGuard::create();
     m_cleanupSession = SessionCommandGuard::create();
@@ -104,6 +106,7 @@ FlexCommandSession::Reply FlexCommandSession::abandoned(const Pending& pending, 
 void FlexCommandSession::retire(const QString& reason)
 {
     Q_ASSERT(QThread::currentThread() == thread());
+    ++m_revision;
     m_active = false;
     m_session.retireSession();
     m_cleanupSession.retireSession();

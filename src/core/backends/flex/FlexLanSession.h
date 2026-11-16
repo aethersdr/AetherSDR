@@ -20,6 +20,7 @@ class FlexStatusIngress;
 // (retry, GUI registration, settings) stays with the session's consumer.
 class FlexLanSession final : public QObject {
     Q_OBJECT
+    friend class FlexLanSessionTestAccess;
 public:
     FlexLanSession(RadioConnection* connection, PanadapterStream* stream,
                    FlexStatusIngress* ingress, QObject* parent = nullptr);

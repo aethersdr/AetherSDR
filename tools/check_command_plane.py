@@ -71,7 +71,7 @@ ABOVE_SEAM_DIR_FLOOR = 20
 #     modelGuard     4x sendCommand
 #     this           1x sendCmd
 # Receivers that are OTHER DEVICES, each its own wire:
-#     client / m_dxCluster (DX cluster + RBN telnet), m_wanConn (SmartLink WAN),
+#     client / m_dxCluster (DX cluster + RBN telnet),
 #     m_pgxlConn (PGXL amp), m_directConn (tuner), connection
 # Files whose UNQUALIFIED send* calls route to the Flex plane. Everything else
 # unqualified belongs to the object that defines it — AntennaGeniusModel writes
@@ -86,7 +86,7 @@ PLANE_HELPER_FILES = {
     "src/models/SliceModel.cpp",
 }
 
-RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this")
+RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this", "m_wanConn")
 
 # ACCESSOR-CALL receivers: `radioModel().sendCommand(...)`. Real API on two
 # classes — MainWindow::radioModel() and RadioSession::radioModel() — so any
@@ -101,13 +101,6 @@ RADIO_MODEL_ACCESSORS = ("radioModel", "model", "radio")
 # error rather than a guess — see UNKNOWN_RECEIVER below.
 FOREIGN_RECEIVERS = (
     "client", "m_client", "m_rbnClient", "m_dxCluster",   # DX cluster + RBN telnet
-    # WanConnection speaks the SAME V/H/R/S/M protocol as RadioConnection, over
-    # TLS — it is the Flex plane, not a foreign device. It is listed here anyway
-    # because RadioModel's calls THROUGH it are transport dispatch of a command
-    # some other site already produced; counting them would double-count. Its own
-    # internal sendCommand("ping") is SmartLink keepalive on its own socket.
-    # Right answer, different reason than "foreign" suggests.
-    "m_wanConn",
     "m_pgxlConn", "m_tgxlConn",                           # PGXL / TGXL amp + tuner
     "m_directConn",                                       # tuner direct connection
     "connection",
@@ -139,10 +132,6 @@ WIRE_TEXT_HELPERS = ("sendSet", "sendSetBit", "sendRemove")
 # The plane's own signal. Always a site, wherever it appears above the seam.
 EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+commandReady\s*\(")
 REPLY_EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+replyCommandReady\s*\(")
-# CWX's two existing reply-aware sites belong to the separately claimed #6646
-# conversion. Only those two sites are grandfathered; additional reply sites
-# increase its ordinary frozen count. Every other file has zero allowance.
-REPLY_MIGRATION_PENDING = {"src/models/CwxModel.cpp": 2}
 # A qualified call on one of the RadioModel receivers. sendCmdPublic is included
 # explicitly: it forwards straight to sendCmd(), and an earlier matcher of
 # `\bsendCmd\s*\(` did not match it, hiding ~26 call sites.
@@ -218,7 +207,7 @@ def count_for(path: Path) -> int:
          + len(QUALIFIED_RE.findall(text))
          + len(ACCESSOR_RE.findall(text))
          + len(HELPER_RE.findall(text)))
-    n += max(0, len(REPLY_EMIT_RE.findall(text)) - REPLY_MIGRATION_PENDING.get(rel, 0))
+    n += len(REPLY_EMIT_RE.findall(text))
     if rel in PLANE_HELPER_FILES:
         n += len(UNQUALIFIED_RE.findall(text)) - len(DEF_RE.findall(text))
     return max(n, 0)

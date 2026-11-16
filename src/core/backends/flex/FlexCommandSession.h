@@ -60,7 +60,7 @@ public:
     void setWriter(Writer writer);
     void bindLan(RadioConnection* connection);
     void begin(quint64 epoch);
-    void invalidate() { m_active = false; m_session.retireSession(); }
+    void invalidate() { ++m_revision; m_active = false; m_session.retireSession(); }
     void retire(const QString& reason);
     quint32 submit(const QString& command, const Options& options, Completion completion = {});
     void answer(quint64 epoch, quint32 sequence, int code, const QString& body);
@@ -92,6 +92,7 @@ private:
     SessionCommandGuard m_session;
     SessionCommandGuard m_cleanupSession;
     quint64 m_epoch{0};
+    quint64 m_revision{0};
     std::atomic<quint64> m_sequence{1};
     bool m_active{false};
 };

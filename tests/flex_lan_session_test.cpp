@@ -2,6 +2,7 @@
 // connected or bound, no discovery runs, and no radio/firmware peer is emulated.
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/FlexLanSession.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/WanConnection.h"
 #include "core/backends/sim/SimBackend.h"
@@ -11,8 +12,10 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QSignalSpy>
+#include <QThread>
 #include <QtTest>
 #include <atomic>
+#include <memory>
 
 using namespace AetherSDR;
 
@@ -34,6 +37,11 @@ protected:
 };
 
 namespace AetherSDR {
+class FlexLanSessionTestAccess {
+public:
+    static std::shared_ptr<std::atomic<quint64>> epoch(FlexLanSession& session)
+    { return session.m_epoch; }
+};
 class RadioConnectionSessionTestAccess {
 public:
     class NoDialSocket final : public QTcpSocket {
@@ -108,6 +116,44 @@ RadioInfo demoInfo()
 class FlexLanSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    void destructionCancelsOrdinaryWritesBeforeWorkerDrain()
+    {
+        QThread worker;
+        auto* wire = new RadioConnection;
+        wire->moveToThread(&worker);
+        connect(&worker, &QThread::finished, wire, &QObject::deleteLater);
+        worker.start();
+        FlexStatusIngress ingress;
+        auto session = std::make_unique<FlexLanSession>(wire, nullptr, &ingress);
+        const auto epoch = FlexLanSessionTestAccess::epoch(*session);
+        epoch->store(1);
+        session->commands().begin(1);
+        std::atomic<int> writes{0};
+        std::atomic<bool> sawRetirement{false};
+        session->commands().setWriter([&](const FlexCommandSession::Write& write) {
+            return QMetaObject::invokeMethod(wire, [&, write] {
+                // Release at the production destructor's retirement boundary,
+                // not after a timing-dependent sleep.
+                QDeadlineTimer deadline(1000);
+                while (epoch->load() != 0 && !deadline.hasExpired()) {
+                    QThread::yieldCurrentThread();
+                }
+                sawRetirement.store(epoch->load() == 0);
+                write.run([&] {
+                    ++writes;
+                    return FlexCommandSession::WriteResult::Written;
+                });
+            }, Qt::QueuedConnection);
+        });
+        const quint32 sequence = session->commands().submit(QStringLiteral("queued setting"), {});
+        session.reset();
+        worker.quit();
+        worker.wait();
+        QVERIFY(sequence != 0);
+        QVERIFY(sawRetirement.load());
+        QCOMPARE(writes.load(), 0);
+    }
+
     void handshakeAndIdempotence()
     {
         FlexBackend backend;
