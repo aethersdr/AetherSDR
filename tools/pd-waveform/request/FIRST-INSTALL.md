@@ -126,9 +126,9 @@ persistent evidence root recorded by `../PROGRESS.json`.
   standalone shim container restarted under its original `always` policy after
   reboot. It was stopped again; its identity hash is unchanged. The new runtime
   was verified independently by executable hash, UID, new bearer token and
-  committed plan. The backup container policy remains unchanged, so another
-  reboot can restart it until backup retirement is resolved. This bench-fixture
-  limitation is not a clean absence-of-predecessor proof after reboot.
+  committed plan. That initial test did not prove predecessor absence after reboot. The desktop
+  qualification below subsequently archived and retired this container before
+  its reboot test; both protected prior identities remain recoverable.
 
 The signed release SHA256 is
 `06473495180114154d284c6d920bf8793687ff44ca4d3fcfb684c4d049bb1289`,
@@ -171,8 +171,8 @@ before network access.
 
 The `first-install-desktop-monitor` evidence directory records four registered
 Qt test passes, scoped address/undefined/leak sanitizer checks, and a read-only
-live match against the installed 8600. This component is not yet connected to
-first-install package preparation, operator consent or credential-vault storage.
+live match against the installed 8600. Package preparation, operator consent
+and credential storage are connected and exercised in the desktop qualification below.
 
 ## Desktop package preparation
 
@@ -199,8 +199,8 @@ inspection confirms identical carrier payload, modes, execution configuration
 and rootfs digest. C++ builder provenance changes its config/image digest.
 Three component test executables and scoped sanitizer checks pass; the ZIP and
 carrier tests also pass in the full project's registered graph. These prepared
-C++ archives have not been uploaded. The coordinator and credential model below
-consume this preparation component.
+C++ archives were subsequently uploaded through the desktop workflow below.
+The coordinator and credential model consume this preparation component.
 
 ## Desktop upload coordinator
 
@@ -231,8 +231,8 @@ observation and retains the bounded upload settling window.
 ordering, cancellation, destruction, deadline and session loss. These are
 injected-transport component proofs. Public cleanup confirmation means the
 removal observations above; it does not prove cached firmware files or private
-host processes were removed. The C++ coordinator still needs a live first-install
-qualification through the desktop package-selection workflow.
+host processes were removed. The live desktop qualification below includes a
+separate host audit of those artifacts.
 
 ## Desktop credential model
 
@@ -262,8 +262,8 @@ promotion states and describe first-install authority separately from upgrades.
 ASan/UBSan/LSan suites, and a mutation that removes the durable-write gate and is
 detected. The tests inject keychain callbacks; they do not establish a working OS
 keychain on every supported desktop. The Linux QtKeychain backend was checked with an isolated credential written,
-read and deleted by separate processes. Other desktop platforms and the complete
-live C++ first-install workflow still require qualification.
+read and deleted by separate processes. The Linux live desktop workflow below
+uses its actual durable credential. Other desktop platforms remain unqualified.
 
 ## Public attempt journal and restart observation
 
@@ -311,12 +311,61 @@ preparation; recovery never becomes an implicit reinstallation.
 `first-install-desktop-controls` records default-build disabled-control checks,
 configured-fixture preparation/recovery checks, a rendered panel and an isolated
 real OS-keychain write/read/delete across separate processes. The normal UI and
-model execute these checks with injected transports; live full-application
-qualification is a separate next step.
+model execute these component checks with injected transports. The subsequent
+full-application bench test is recorded below.
+
+## Live desktop first installation and reboot
+
+`first-install-desktop-live` records the normal Linux AetherSDR workflow at
+`6ce26fb8b` against the FLEX-8600 on firmware 4.3.16.42034. The build independently
+pins development package `0.0.0-first.7c87bc223`. No RF commands were issued.
+
+- The old standalone container was snapshotted into a private OCI archive. All
+  blob hashes and referenced layers were verified before non-force removal of
+  the exact stopped container. Its protected identity and image remain available.
+  The previous managed fresh installation was separately preserved before its
+  units, active store and listener were removed for the clean fixture.
+- The GUI prepared and approved plan
+  `de0ae8141c79e84026b1c25a8743388775563eea62e6f5bf71a20e505c463449`.
+  It saved the new attempt credential in QtKeychain and public journal before
+  uploading, then observed commitment and public cleanup in 51.509 seconds.
+  The diagnostics bridge prepared and audited the fixture; it did not deliver
+  or authorize installation. No predecessor credential was used.
+- A separate process authenticated the exact commit using the promoted keychain
+  credential. After a normal desktop exit/relaunch, **Check saved installation**
+  recovered the same plan through GET requests. Its cleanup result remained
+  unconfirmed, as expected for an observer that did not perform cleanup.
+- One radio reboot changed the kernel boot ID. The same new local identity and
+  exact committed plan returned automatically in 45.201 seconds. The archived
+  legacy container did not return.
+- The GUI started and stopped AetherPD after reboot. At 7.150 MHz, RXA, zero RF
+  gain and FDX off, a local 48 kHz DAX IQ snapshot returned 16,384 complex samples
+  (131,072 bytes). All 32,768 components were finite; 30,899 were nonzero. The
+  snapshot was unkeyed and uncorrected; it proves receive delivery, not RF quality.
+- Host inspection verified the new identity, no temporary installation units,
+  private bootstrap sockets or matching cached upload files, removed fixed ARP,
+  and `accept_local=0`. The stopped session controller and log collector remain
+  while status polling continues; both are UID 78666 with every capability set
+  zero and NoNewPrivs. DSP/resource cleanup is distinct from controller retirement. After the desktop
+  exited, a separate audit confirmed both session processes retired and only the
+  unprivileged primary remained.
+
+The raw negative evidence is retained. An archive-size assertion wrongly compared
+compressed bytes with uncompressed size and stopped before container removal;
+content-hash verification completed the retirement. The desktop observation
+script missed the UI's terminal wording and continued polling until the planned
+application exit; authenticated commit and host audit independently establish
+success. The initial post-IQ audit expected only one shim process and rejected
+the retained unprivileged session controller; the inventory records its actual
+process graph instead of treating that assertion as a clean pass.
+
+This is one clean development installation and reboot on one 8600. It does not
+qualify interruption during installation, power loss, Tailscale enrollment,
+Windows/macOS credentials, the shipping catalogue, or FLEX-6000 installation.
 
 ## Remaining gates
 
-Production desktop consent and credential-vault integration, publisher catalogue,
+Authenticated production package distribution, unresolved-attempt recovery,
 installation interruption qualification and the actual FLEX-6000 adapter/hardware
 remain open. A local identity does not prove Tailscale enrollment persistence.
 This receive-only result does not qualify RF correction, sustained performance,

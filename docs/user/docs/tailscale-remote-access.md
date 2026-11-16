@@ -635,8 +635,10 @@ radio status and restores the active credential only after confirmation. The
 control is dimmed unless the build trusts the saved attempt's publisher and the
 record matches the connected radio and firmware. It does not repeat the
 installation or establish that temporary helpers were removed. These controls
-remain experimental; a complete desktop first-install and restart qualification
-is still required.
+remain experimental. The development workflow supports a fresh local identity,
+reboot startup and checking a saved installation after restarting the Linux
+desktop. Interrupted installations, other desktop credential stores and
+FLEX-6000 installation still require qualification.
 
 A confirmed update and confirmed cleanup are separate results. If cleanup is
 unconfirmed, the window says so even when the radio confirmed the new payload.

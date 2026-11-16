@@ -1,0 +1,131 @@
+{
+  "updated_utc": "2026-11-16T06:45:56.791596+00:00",
+  "status": "linux_desktop_fresh_install_restart_reboot_receive_iq_qualified_on_8600",
+  "production_ready": false,
+  "desktop_source_commit": "6ce26fb8bb3f0ca2148202ed84ba6f87421b6c08",
+  "native_source_commit": "7c87bc223",
+  "firmware": "4.3.16.42034",
+  "development_package": "0.0.0-first.7c87bc223",
+  "first_install_plan_blake2b_256": "de0ae8141c79e84026b1c25a8743388775563eea62e6f5bf71a20e505c463449",
+  "selected_release_blake2b_256": "3c2488c24d3f0a46cee525bb5ee1b2007c6fdd51133f1f664dec82f8fd1f8426",
+  "installation_id": "597282ef9cdbaee8a0f433a2bb852f64268fde019ff59e2d736a164bcc90ffbf",
+  "installation_and_public_cleanup_s": 51.509,
+  "new_credential_persisted_before_upload": true,
+  "separate_process_keychain_authentication": true,
+  "desktop_restart_readonly_recovery": true,
+  "diagnostics_bridge_used_for_install_delivery_or_authorization": false,
+  "diagnostics_bridge_used_for_fixture_and_audits": true,
+  "reboot": {
+    "reboot_commands_sent": 1,
+    "ready_s": 45.201,
+    "boot_id_before": "b00831ef-f572-436e-8bd9-7757ba4b5c90",
+    "boot_id_after": "44da803f-6e58-4916-9b4c-05a3f92c972e"
+  },
+  "iq": {
+    "iq_bytes": 131072,
+    "iq_sha256": "8dd0b55445536cd0edae945be7d37a11bd9446a8d60f41ddc73f66b73b8d4907",
+    "rms": 33.603617736785424,
+    "nonzero_values": 30899
+  },
+  "capture": {
+    "capture_id": "be894104a9f04299b18b41626e85f4bc",
+    "center_hz": 7150000,
+    "chunk_samples": 512,
+    "correcting": false,
+    "first_receive_ns": "129666454918",
+    "format": "f32le-iq-v1",
+    "keyed": false,
+    "last_receive_ns": "130007489669",
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "sample_count": 16384,
+    "sample_rate_hz": 48000
+  },
+  "full_duplex": false,
+  "rf_commands": [],
+  "final_runtime": [
+    {
+      "pid": 915,
+      "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+      "uid": "78666\t78666\t78666\t78666",
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1",
+      "sha256": "a949d292ada235f2cf9392e5c92c0162c05c24578901171c2885258e576b68f7",
+      "role": "primary",
+      "ppid": 1,
+      "state": "S (sleeping)",
+      "rss_kb": "21572 kB"
+    }
+  ],
+  "final_cleanup": {
+    "temporary_installer_paths_absent": true,
+    "private_bootstrap_sockets_absent": true,
+    "fixed_arp_absent": true,
+    "accept_local": "0",
+    "cached_first_artifacts_absent": true,
+    "legacy_container_absent": true,
+    "stopped_controller_retired_after_polling_ended": true
+  },
+  "prior_identities_preserved": true,
+  "docs_build": "passed using existing dependencies with byte-identical package lock",
+  "negative_evidence": [
+    "Archive size assertion used uncompressed threshold for compressed OCI; stopped before removal. Hash and layer verification then succeeded.",
+    "Observer missed terminal UI wording and continued until planned app exit; independent authenticated commitment and host audit passed.",
+    "Immediate post-stop audit expected one shim process; unprivileged controller and log collector intentionally retained while polled. After desktop exit all session processes retired."
+  ],
+  "remaining": [
+    "Interrupted first-install/recovery, pending-attempt resolution and power-loss qualification",
+    "Authenticated shipping package catalogue and final candidate installation/upgrade gates",
+    "Windows/macOS credential and transfer qualification",
+    "FLEX-6000 privilege adapter and actual Linux 2.6/Cortex-A8 hardware qualification",
+    "Remaining DSP alignment/cold-start, final-process faults, PR4770 keyed measurement, repeated RF/stock APD and release gates"
+  ],
+  "evidence": "first-install-desktop-live under evidence_root",
+  "files": {
+    "archive-legacy-job.py": "d996f81dc343790e5f9366f415f5a33b034c02c58f88739ee340e51415f0d10e",
+    "archive-legacy.json": "de94598fb13ab83178d6de8ae16bbc2e9ce0b877dffbb3c447121e21481ccaa4",
+    "backup-inventory-job.py": "e35bf142f990b785285b8062a4c70e4c83cf94ca90fb3adade79e6c8b0ee3b85",
+    "backup-inventory.json": "d0390138bebee3e36d2d06b78eb5e37c467f5b57dd658b04218346e1b51ea80e",
+    "clean-fixture-job.py": "4a83d63fde0f63d29b128d30f8a8a155c2f09097538b98843d67cc8d8150b772",
+    "clean-fixture.json": "86951a9b5d6400e9a781f12601b0efe33bf994699446f21ff1b3a19aff0eff99",
+    "committed-audit-job.py": "f67d46f3b213270eba70e4c8e9dc5802df0de46a409c5dd826f6acdd4b68d1c0",
+    "committed-audit.json": "f9be40d469a794ed17a90c0b9d14dad43458b9db2a3471ec44281142f619c1c4",
+    "desktop-install.json": "638a3d4aeb532958e591dd54e0551ddd638348667c8514763dd6565dac0232b0",
+    "drive-install.py": "fb47b94029185a3994b740aebc49ff392f0caeb349c414b0610af2c2c0461344",
+    "final-retirement-audit-job.py": "12efdaedf37c9f3df291bca29a1d5b4b2d35b52421921bb1380c7b487d16b0a2",
+    "final-retirement-audit.json": "ee30c9b2cad978a076fc85203c39e4164874f812e764084731dda2f75ee1d7f6",
+    "finish-archive-legacy-job.py": "f789b37d3b5ecf2744f1ca7c98191adaf9e60640a50f008e01d784ce1bb47d8b",
+    "finish-archive-legacy.json": "05da65a425f3871f0321e18d22dd80caa66c2ce430afeee80e4ee5fdc6212856",
+    "launch-desktop.py": "158752c1274f6fb7e923b23932efdb59c2a27e12d76ae16ad024bb2da8884033",
+    "menus.json": "ead83f1d43bf9c1bf7877e6c2f626b72e07920a6ccff78ceded69b7105975b58",
+    "panel-after-desktop-restart.json": "3ea180436b72e3ae06a7eb91bdeb18a06801b84bd4200ebb057baccb217c8a2c",
+    "panel-after-iq-stop.json": "98438eaac0f4334d106bbab797cae9e05ae4de21e86830203f858ac3c110bcb7",
+    "panel-before.json": "49360e34855e9fc189eb36eebc45487fd8c00670cb909d1df4b27e6bf9f281c2",
+    "panel-committed.png": "2fbe106b7fee5cd6f2d4d9b3b8e466be2eba09649fcfe2cc76338b772a4240c3",
+    "panel-prepared.json": "11dbe37633355bfa821bec99fffdd0f19772e1668a8a71e65da7d75da09d37c3",
+    "panel-recovery-complete.json": "38f89f048209a53261d65fa96633ef8bc47c464e03447c2ab9f489202d53b4eb",
+    "panel-recovery-start.json": "05b9e743879ad0399a85327a6285974c2f7250be3d01fb82a8b8414613f7736f",
+    "post-iq-inventory-job.py": "bc1214bd2a0846bf09cda4ebb197943b851a096d4e7f1914828dfa9cfbf39d9c",
+    "post-iq-inventory.json": "76406bc1f517ae9b161043311a8b8ba8a42d0dcfd2349a6574dc8465d434787d",
+    "post-reboot-iq-audit.json": "1fb019c5d6686132ddd32c6d2c19e3e03f312eaa0b2487eab1a2a47832392a45",
+    "preflight-audit.json": "cfc05533689d8589a0f9d7c692da3495e8fd048251dd41c2613f937d4395185b",
+    "read-panel.py": "157cfb7e1372f3b1da78cac1a38765a1203b43b3d7508a6d79a0e9a049d963a1",
+    "reboot-check.json": "834cd47fbd34f5911dd3b14f7677333a7ee3d9399a06cb26b47ec430944e0575",
+    "reboot-check.py": "4cb00f17a17d6a162d3b27ff909c6e605dc2568dbe82372f373976eccad7183a",
+    "receive-iq-check.json": "894853371dad43c9be7d58cc15dc46584e83291a515d4b26a6d8b7c5d1bc63f1",
+    "receive-iq-check.py": "07cf5235748a8cfc31638a712843e7b052370a3b947f5d3f7631ef49d14f015f",
+    "saved-public-journal.json": "940d3d8c4211d102dcba4eb2f8cf031f7ae9a2dddf9a9589763bbb3d9e8e2d21",
+    "session-inventory-job.py": "c147afc4bf0afad45fbd64edda905ea2b9f0da92a580abada41581c52b98b219",
+    "session-inventory.json": "6d9e2767956e0084b0786c57a6cd5b2c390a4ac24bc4091a44385d3f497b12ee",
+    "vault-commit.json": "ff96fe5615a12a819237dfa4a485549b3aa3d8d1508467b4b9f59cce586be8aa",
+    "vault-status.cpp": "c2edad7bebc1e8a323ef9522f79bbd706eff7564091e7f4ad21de57d763cd45f"
+  }
+}
