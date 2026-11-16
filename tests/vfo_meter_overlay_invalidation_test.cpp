@@ -224,6 +224,9 @@ private slots:
             .toAlignedRect().intersected(background.rect());
         QVERIFY(!strip.isEmpty());
         QVERIFY(strip.height() < framebuffer.height() / 4);
+        const QRectF alignedLogicalClip(
+            strip.x() / dpr, strip.y() / dpr,
+            strip.width() / dpr, strip.height() / dpr);
         const QImage savedBackgroundStrip = background.copy(strip);
 
         const auto withLabels = [&](const QImage& base) {
@@ -270,7 +273,7 @@ private slots:
         }
         {
             QPainter painter(&clippedPartial);
-            painter.setClipRect(logicalCoverage);
+            painter.setClipRect(alignedLogicalClip);
             flag.drawSmartMtrLabels(painter);
         }
         QCOMPARE(clippedPartial, expected);
@@ -286,14 +289,14 @@ private slots:
         QImage missingForeground = partialForeground.copy();
         {
             QPainter painter(&missingForeground);
-            painter.setClipRect(logicalCoverage);
+            painter.setClipRect(alignedLogicalClip);
             flag.drawSmartMtrLabels(painter);
         }
         QVERIFY2(missingForeground != fullForeground,
                  "missing foreground repaint must change the finished pixels");
         {
             QPainter painter(&partialForeground);
-            painter.setClipRect(logicalCoverage);
+            painter.setClipRect(alignedLogicalClip);
             flag.drawSmartMtrLabels(painter);
             painter.fillRect(logicalCoverage, foregroundColor);
         }

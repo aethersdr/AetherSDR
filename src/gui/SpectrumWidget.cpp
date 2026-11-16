@@ -15037,7 +15037,16 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
             {
                 QPainter labelsPainter(&m_overlayStatic);
-                labelsPainter.setClipRect(labelCoverageLogical);
+                // The upload band was rounded outwards to whole device
+                // pixels. Clip to that same band in logical painter units:
+                // clipping to the original logical rect drops a border row
+                // at 1.5x DPR when its top lands halfway through a pixel.
+                const QRectF alignedClip(
+                    m_smartMtrLabelStripPx.x() / dpr,
+                    m_smartMtrLabelStripPx.y() / dpr,
+                    m_smartMtrLabelStripPx.width() / dpr,
+                    m_smartMtrLabelStripPx.height() / dpr);
+                labelsPainter.setClipRect(alignedClip);
                 drawSmartMtrValueLabels(labelsPainter);
                 paintAboveSmartMtrLabels(labelsPainter);
             }
