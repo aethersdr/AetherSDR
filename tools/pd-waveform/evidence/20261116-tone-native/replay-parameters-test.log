@@ -1,0 +1,13 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 51: pd_calibration_state_test
+1/1 Test #51: pd_calibration_state_test ........Subprocess aborted***Exception:   0.05 sec
+pd_calibration_state_test: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/calibration_test.c:31: configured_measurements: Assertion `configured(&s,1,spacings[i]==200?201:200,200,1).result==PD_CAL_REPLAY' failed.
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.06 sec
+
+The following tests FAILED:
+	 51 - pd_calibration_state_test (Subprocess aborted)
+Errors while running CTest

@@ -1,0 +1,23 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 44: pd_recovery_collection_test
+1/9 Test #44: pd_recovery_collection_test ......   Passed    1.59 sec
+    Start 45: pd_capture_test
+2/9 Test #45: pd_capture_test ..................   Passed    0.00 sec
+    Start 46: pd_eq_phase_startup_test
+3/9 Test #46: pd_eq_phase_startup_test .........   Passed    1.35 sec
+    Start 47: pd_warm_core_test
+4/9 Test #47: pd_warm_core_test ................   Passed    0.02 sec
+    Start 48: pd_eq_worker_test
+5/9 Test #48: pd_eq_worker_test ................   Passed    0.34 sec
+    Start 49: pd_dispatch_deadline_test
+6/9 Test #49: pd_dispatch_deadline_test ........   Passed    0.89 sec
+    Start 50: pd_calibration_dispatch_test
+7/9 Test #50: pd_calibration_dispatch_test .....   Passed    0.42 sec
+    Start 51: pd_calibration_state_test
+8/9 Test #51: pd_calibration_state_test ........   Passed    0.00 sec
+    Start 52: pd_calibration_control_test
+9/9 Test #52: pd_calibration_control_test ......   Passed    0.02 sec
+
+100% tests passed out of 9
+
+Total Test time (real) =   4.66 sec

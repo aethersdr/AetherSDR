@@ -120,12 +120,19 @@ int main(void)
     pd_capture_begin(&c,33,&measuring,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
 
     w.calibration.purpose=PD_SOURCE_MEASUREMENT;w.calibration.source_id=31;
+    w.calibration.tone_spacing_hz=PD_TONE_DEFAULT_SPACING_HZ;
     w.calibration.phase=PD_CAL_RUNNING;w.calibration.deadline_ns=kNow+8000000000LL;
     w.keyed=w.aligned=w.feedback_ok=1;w.test_f1=710;w.test_f2=1900;w.test_left=90000;
     w.measurement_tone_sent_ns=kNow;w.measurement_guard_ns=500000000;
     w.local_iq.last_valid_ns=kNow+510000000;w.local_iq.last_age_ns=20000000;
     assert(!measurement_tones_ready(&w,kNow+510000000)); // queued preamble side
     w.local_iq.last_valid_ns=kNow+520000000;
+    assert(measurement_tones_ready(&w,kNow+520000000));
+    w.calibration.tone_spacing_hz=10000;
+    assert(!measurement_tones_ready(&w,kNow+520000000));
+    w.test_f1=-3695;w.test_f2=6305;
+    assert(measurement_tones_ready(&w,kNow+520000000));
+    w.calibration.tone_spacing_hz=2610;w.test_f1=0;w.test_f2=2610;
     assert(measurement_tones_ready(&w,kNow+520000000));
     w.test_noise_left=1;assert(!measurement_tones_ready(&w,kNow+520000000));w.test_noise_left=0;
     w.test_left=RATE/200;assert(!measurement_tones_ready(&w,kNow+520000000));w.test_left=90000;

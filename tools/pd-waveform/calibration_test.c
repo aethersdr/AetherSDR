@@ -12,8 +12,52 @@ static struct pd_calibration_reply command(struct pd_calibration* s, unsigned ch
     for (unsigned i = 0; i < 8; ++i) { bytes[8 - i] = (unsigned char)(n >> (8 * i)); }
     return pd_calibration_command(s, bytes, sizeof(bytes), now, eligible);
 }
+static struct pd_calibration_reply configured(struct pd_calibration* s, unsigned n, unsigned spacing, int64_t now, int eligible)
+{
+    unsigned char bytes[11] = {'Q',0,0,0,0,0,0,0,(unsigned char)n,
+        (unsigned char)(spacing>>8),(unsigned char)spacing};
+    return pd_calibration_command(s,bytes,sizeof(bytes),now,eligible);
+}
+static void configured_measurements(void)
+{
+    const unsigned spacings[]={200,1001,1190,2610,10000};
+    for (unsigned i=0;i<sizeof(spacings)/sizeof(spacings[0]);++i) {
+        struct pd_calibration s={0};
+        assert(configured(&s,1,spacings[i],100,1).applied);
+        assert(s.phase==PD_CAL_ARMED && s.purpose==PD_SOURCE_MEASUREMENT && s.source_id==1);
+        assert(s.tone_spacing_hz==spacings[i] && s.samples_left==192000);
+        const int64_t deadline=s.deadline_ns;
+        assert(!configured(&s,1,spacings[i],200,1).applied && s.deadline_ns==deadline);
+        assert(configured(&s,1,spacings[i]==200?201:200,200,1).result==PD_CAL_REPLAY);
+        assert(s.tone_spacing_hz==spacings[i] && s.source_id==1 && s.deadline_ns==deadline);
+        assert(configured(&s,2,500,200,1).result==PD_CAL_BUSY);
+        assert(configured(&s,2,500,300,1).result==PD_CAL_BUSY && s.tone_spacing_hz==spacings[i]);
+        assert(pd_calibration_begin(&s,1000) && s.deadline_ns==INT64_C(8000001000));
+        assert(configured(&s,3,600,1100,1).result==PD_CAL_BUSY && s.tone_spacing_hz==spacings[i]);
+        pd_calibration_consume(&s,PD_CAL_SAMPLES);assert(s.phase==PD_CAL_COMPLETED);
+        assert(command(&s,'M',4,2000,1).applied && pd_calibration_tone1(&s)==710 && pd_calibration_tone2(&s)==1900);
+        assert(command(&s,'X',5,2001,1).applied);
+        assert(configured(&s,6,spacings[i],2100,0).result==PD_CAL_BLOCKED && s.tone_spacing_hz==1190);
+        assert(configured(&s,6,spacings[i],2200,1).result==PD_CAL_BLOCKED); // Receipt cannot become an arm.
+        assert(configured(&s,7,spacings[i],2300,1).applied);
+        assert(!pd_calibration_tick(&s,s.deadline_ns));
+        assert(!configured(&s,7,spacings[i],2400,1).applied && s.phase==PD_CAL_EXPIRED);
+        assert(command(&s,'A',8,2500,1).applied && s.tone_spacing_hz==1190);
+    }
+    struct pd_calibration s={0};
+    const unsigned invalid[]={0,199,10001,65535};
+    for (unsigned i=0;i<sizeof(invalid)/sizeof(invalid[0]);++i) {
+        assert(configured(&s,1,invalid[i],100,1).result==PD_CAL_INVALID && s.nonce==0);
+    }
+    unsigned char bytes[12]={'Q',0,0,0,0,0,0,0,1,3,232,0};
+    for (size_t size=0;size<=sizeof(bytes);++size) {
+        if (size!=11) { assert(pd_calibration_command(&s,bytes,size,100,1).result==PD_CAL_INVALID && s.nonce==0); }
+    }
+    assert(configured(&s,0,1000,100,1).result==PD_CAL_INVALID);
+}
 int main(void)
 {
+    configured_measurements();
     struct pd_calibration s = {0};
     assert(!pd_calibration_begin(&s, 100));
     assert(command(&s, 'A', 1, 100, 0).result == PD_CAL_BLOCKED);

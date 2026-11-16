@@ -1,0 +1,24 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 50: pd_calibration_dispatch_test
+1/1 Test #50: pd_calibration_dispatch_test .....Subprocess aborted***Exception:   0.10 sec
+1794833849.354 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794833849.354 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794833849.354 bounded source ended: reason=feedback_invalidated source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1
+1794833849.354 TX dispatch deadline missed: 20.002 ms; correction retired
+1794833849.354 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794833849.375 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794833849.375 measurement window: event=feedback_invalidated ready=0 now_ns=28809778706241 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=95872 test_left=191872 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=28809778629167 iq_age_ns=0 deadline_ns=28817778630882 fits=0 solution=0
+1794833849.375 bounded source ended: reason=feedback_invalidated source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1
+1794833849.375 TX dispatch deadline missed: 20.002 ms; correction retired
+1794833849.375 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794833849.396 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+pd_calibration_dispatch_test: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/calibration_dispatch_test.c:122: check_source: Assertion `sends>0 && output_peak>1e-8 && test_source_active(&w)' failed.
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.11 sec
+
+The following tests FAILED:
+	 50 - pd_calibration_dispatch_test (Subprocess aborted)
+Errors while running CTest

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T12:45:24.844200+00:00",
+  "updated_utc": "2026-11-16T13:01:49.774633+00:00",
   "original_pr_head": "2b723cde563ec264999cdfaafe6af8f5707b61e4",
   "current_base": "23ccdf7fb504e0019759dab249132dfc5b223bd7",
   "phase1_complete": false,
@@ -62,8 +62,11 @@
     },
     {
       "feature": "Tone spacing",
-      "status": "Native measurement source remains fixed to710/1900Hz",
-      "remaining": "Implement bounded source capability/configuration with no TUNE bypass, implicit drive change or automatic rearm"
+      "status": "Native configured measurement-tone component qualified; public API and desktop integration incomplete",
+      "remaining": "Complete authenticated configured-arm, immutable capture provenance and desktop controls; refuse incompatible legacy capture assumptions. No TUNE bypass or automatic rearm.",
+      "evidence": [
+        "TONE-NATIVE-QUALIFICATION.json"
+      ]
     },
     {
       "feature": "Transmit timeout",
@@ -101,7 +104,7 @@
     "Complete exact-candidate connected cold capture, RF-release and failure qualification after radio returns; retain physical-deadline limitation.",
     "Finish remaining channel/pan capability and tone controls, actual6300 and production gates."
   ],
-  "radio_state": "2026-11-16T12:40:05Z API4992/shim48992/SSH22222 timed out. No new reboot or RF commands.",
+  "radio_state": "2026-11-16T12:59:57Z API4992/shim48992/SSH22222 returned No route to host. No new reboot or RF commands.",
   "measurement_retirement_fix": "MEASUREMENT-RETIREMENT-QUALIFICATION.json: prevents microphone fall-through and late prepared-packet output after source expiry; component-qualified, not installed. Does not prove physical RF-off or close10second unkey contract.",
   "guardian_deadline_evidence": "GUARDIAN-DEADLINE-QUALIFICATION.json: rejects overdue startup readiness; injected cleanup delay demonstrates11400/13000ms unkey request, not physical RF release. Best-effort validated unkey retained."
 }

@@ -1,0 +1,68 @@
+{
+  "updated_utc": "2026-11-16T13:01:49.774633+00:00",
+  "base_commit": "e53f0b93de3aec49defc917d0eb1c7ba79a47222",
+  "status": "Native configured measurement-tone component qualified; public API and desktop integration incomplete",
+  "installed": false,
+  "radio_used": false,
+  "production_ready": false,
+  "contract": {
+    "private_command": "11-byte Q + BE64 nonzero monotonically increasing nonce + BE16 integer spacing_hz; existing9-byte response echoes nonce and result.",
+    "range_hz": [
+      200,
+      10000
+    ],
+    "step_hz": 1,
+    "center_hz": 1305,
+    "legacy_spacing_hz": 1190,
+    "tones": "1305 minus/plus spacing/2 Hz relative to waveform carrier; odd integer spacing gives half-hertz frequencies. Both lie inside the existing -4500..7500 Hz alignment-noise band and24kHz complex sample Nyquist interval.",
+    "legacy": "A/M continue using710/1900Hz. Q is a measurement arm, including with correction bypassed; it does not key RF or invalidate a matching PA model.",
+    "lifetime": "Existing30s arm expiry,8s/192000sample source,4s/96000sample alignment preamble, per-tone half-peak amplitudes and retirement silence retained.",
+    "identity": "Accepted source ID scopes the immutable spacing. Same nonce with changed spacing is replay refusal; exact repeats retain prior receipt without extending deadline or rearming. Busy/blocked requests cannot change an accepted profile.",
+    "native_status": "New top-level measurement_tone_control and measurement_tone_config{min_spacing_hz,max_spacing_hz,center_hz,spacing_hz,source_id}; existing measurement object remains unchanged.",
+    "activity": "A measurement lower tone may be zero or negative. Source activity, output silence guards, capture readiness and diagnostics use that fact; environment-only legacy positive-tone behavior remains unchanged.",
+    "privileges": "No ARP/capture-filter/scheduling/bootstrap privilege expansion; request remains on inherited private datagram control."
+  },
+  "validation": {
+    "native_tests": "Nine focused tests passed after restoration in4.66s.",
+    "sanitizers": "Four state/control/dispatch/capture tests passed ASan, UBSan and leak detection.",
+    "emitted_iq": "Captured outgoing VITA payloads without sockets; projected48000complex samples per profile at spacings200,1001,1190,2610,10000Hz. Both tone amplitudes0.35, peak0.7; adjacent1Hz projections below1e-6. This proves generated IQ, not RF power or PA correction at these profiles.",
+    "retirement": "Configured negative/DC-lower-tone sources tested for deadline expiry, sample exhaustion, operator cancel, late-dispatch silence and scheduling fault cancellation; legacy voice-calibration handoff retained.",
+    "mutation_checks": [
+      {
+        "mutation": "replay-parameters",
+        "exit_code": 8,
+        "expected_assertion_failed": true,
+        "restored_source_sha256": "f5fefcc0f6bea7d9c0e9173ca59fb090cf88dbee62aef49403a3eafc9188364a",
+        "restore_build_exit_code": 0
+      },
+      {
+        "mutation": "negative-tone-active",
+        "exit_code": 8,
+        "expected_assertion_failed": true,
+        "restored_source_sha256": "ac5acc4486cea81e8f8b824412b17a498ba316b34537f31d1bd8f410f5267340",
+        "restore_build_exit_code": 0
+      }
+    ],
+    "cross_builds": {
+      "armv7": {
+        "bytes": 266060,
+        "sha256": "dd673c6e7bc43df956684eb26872d4a6bbaed85b2021f87729d0f6c0fa65ab67"
+      },
+      "arm64": {
+        "bytes": 278064,
+        "sha256": "711d854163ed919828839876ccf43b0f686f1487b113af8ed0dd1729b6fb1078"
+      }
+    },
+    "cross_build_scope": "Strict static native binaries compile for Cortex-A8 ARMv7 and ARM64. No hardware execution, full runtime packaging or actual6300 qualification claimed.",
+    "static": "git diff --check and strict test-registration check passed."
+  },
+  "integration_remaining": [
+    "Add authenticated bounded configured-arm API and versioned private Go session transport; gate on native capability and preserve stop/cancel precedence.",
+    "Strictly parse and publish immutable tone profile with native source ID; receipt alone must not establish observed configuration.",
+    "Carry confirmed source profile into capture/result/export provenance. Old capture consumers must not silently analyze a nondefault source using710/1900 assumptions; use a versioned capture contract or explicit legacy refusal.",
+    "Add desktop tone-spacing control, per-radio preference and snapshot locking. Use observed frequencies for safety/IMD requests; do not infer actual emitted tones from a UI value.",
+    "Respect selected IMD order and48kHz IQ bandwidth: large spacings can place high-order products outside captured bandwidth and must be refused/unavailable rather than fabricated.",
+    "Refresh complete reproducible runtime packages/disk budgets, then exact-candidate RF/cold/recovery/reboot and actual6300 qualification."
+  ],
+  "evidence": "evidence/20261116-tone-native"
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "mutation": "replay-parameters",
+    "exit_code": 8,
+    "expected_assertion_failed": true,
+    "restored_source_sha256": "f5fefcc0f6bea7d9c0e9173ca59fb090cf88dbee62aef49403a3eafc9188364a",
+    "restore_build_exit_code": 0
+  },
+  {
+    "mutation": "negative-tone-active",
+    "exit_code": 8,
+    "expected_assertion_failed": true,
+    "restored_source_sha256": "ac5acc4486cea81e8f8b824412b17a498ba316b34537f31d1bd8f410f5267340",
+    "restore_build_exit_code": 0
+  }
+]

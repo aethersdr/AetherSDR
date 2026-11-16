@@ -1,0 +1,22 @@
+[0/2] Re-checking globbed directories...
+[1/12] Building C object CMakeFiles/pd_capture_test.dir/tools/pd-waveform/capture_test.c.o
+[2/12] Building C object CMakeFiles/pd_dispatch_deadline_test.dir/tools/pd-waveform/dispatch_deadline_test.c.o
+In file included from /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/dispatch_deadline_test.c:37:
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+[3/12] Building C object CMakeFiles/pd_calibration_control_test.dir/tools/pd-waveform/calibration_control_test.c.o
+[4/12] Building C object CMakeFiles/pd_eq_phase_startup_test.dir/tools/pd-waveform/eq_phase_startup_test.c.o
+[5/12] Linking CXX executable pd_warm_core_test
+[6/12] Linking CXX executable pd_recovery_collection_test
+[7/12] Linking CXX executable pd_eq_phase_startup_test
+[8/12] Linking CXX executable pd_capture_test
+[9/12] Linking CXX executable pd_eq_worker_test
+[10/12] Linking CXX executable pd_dispatch_deadline_test
+[11/12] Linking CXX executable pd_calibration_control_test

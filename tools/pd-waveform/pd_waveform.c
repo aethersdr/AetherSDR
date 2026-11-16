@@ -541,7 +541,7 @@ typedef struct {
     void (*tx_tap)(void* ctx, const float* iq, int n);
     void* tap_ctx;
     double peak, gain;
-    double test_f1, test_f2;      // AETHER_PD_TEST_TONES, Hz; 0 = use the mic
+    double test_f1, test_f2;      // Hz; retirement clears both frequencies
     long long test_n;             // samples of the test two-tone sent so far
     int test_noise_left;          // samples of noise preamble still to send
     int test_duration_samples, test_left, test_started;
@@ -558,6 +558,14 @@ typedef struct {
     FILE* raw;                     // AETHER_PD_RAW: pairs before alignment
     long raw_left;
 } wf_t;
+
+static int test_source_active(const wf_t* w)
+{
+    // A configured measurement can put the lower tone at or below zero Hz.
+    // Its upper tone stays positive; retirement clears both frequencies.
+    return w->test_f1 > 0 || (w->calibration.purpose == PD_SOURCE_MEASUREMENT &&
+        w->calibration.source_id && w->test_f2 > 0);
+}
 
 struct pd_tx_trace_row {
     int64_t arrival_ns, age_ns, handler_start_ns, send_before_ns, send_after_ns, key_started_ns;
@@ -602,7 +610,7 @@ static void log_measurement_window(const wf_t* w, const char* event);
 static void log_bounded_source_end(const wf_t* w, const char* reason)
 {
     if (w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING ||
-        (w->test_f1 > 0 && w->test_duration_samples)) {
+        (test_source_active(w) && w->test_duration_samples)) {
         log_measurement_window(w, reason);
         // One bounded retirement record captures the source and stream state.
         // This does not log packets or change cancellation policy.
@@ -660,7 +668,9 @@ static int measurement_tones_ready(const wf_t* w, int64_t now)
     // Compare against IQ kernel-arrival time, excluding queued preamble data.
     if (!measurement_source_id(w) || w->calibration.phase!=PD_CAL_RUNNING || !w->keyed ||
         !w->local_iq_mode || w->local_iq_fault || !w->aligned || !w->feedback_ok ||
-        w->test_f1!=710 || w->test_f2!=1900 || w->test_noise_left || w->test_left<=RATE/200 ||
+        !pd_measurement_spacing_valid(w->calibration.tone_spacing_hz) ||
+        w->test_f1!=pd_calibration_tone1(&w->calibration) || w->test_f2!=pd_calibration_tone2(&w->calibration) ||
+        w->test_noise_left || w->test_left<=RATE/200 ||
         w->measurement_tone_sent_ns<=0 || w->measurement_guard_ns<100000000 ||
         now>=w->calibration.deadline_ns || now<w->measurement_tone_sent_ns ||
         w->local_iq.last_valid_ns<=0 || now<w->local_iq.last_valid_ns ||
@@ -854,7 +864,8 @@ static void set_keyed(wf_t* w, int keyed, int clean_unkey)
             pd_calibration_cancel(&w->calibration);
         }
         if (pd_calibration_begin(&w->calibration, cal_now)) {
-            w->test_f1 = 710; w->test_f2 = 1900;
+            w->test_f1 = pd_calibration_tone1(&w->calibration);
+            w->test_f2 = pd_calibration_tone2(&w->calibration);
             w->test_duration_samples = w->test_left = PD_CAL_SAMPLES;
             w->test_started = 0; w->test_n = 0; w->measurement_tone_sent_ns = 0;
             cbp_init(&w->noise_bp, TEST_NOISE_LO_HZ, TEST_NOISE_HI_HZ);
@@ -1191,7 +1202,7 @@ static void send_pairs(wf_t* w, uint32_t sid, int* count, const float* pairs, in
                 if (w->calibration.phase==PD_CAL_RUNNING && !pd_calibration_tick(&w->calibration,before)) {
                     disarm_bounded_test(w,"measurement_dispatch_expired");
                 }
-                if (!w->test_f1) { memset(pkt+28,0,(size_t)len-28); }
+                if (!test_source_active(w)) { memset(pkt+28,0,(size_t)len-28); }
             }
             ssize_t sent = sendto(w->udp, pkt, (size_t)len, 0,
                                   (struct sockaddr*)&w->radio, sizeof w->radio);
@@ -1214,7 +1225,7 @@ static void send_pairs(wf_t* w, uint32_t sid, int* count, const float* pairs, in
                     if (late && sent == len) { local_feedback_suspend_transport(w); }
                     else { local_feedback_invalidate(w, 1); }
                     log_alignment_evidence(&evidence);
-                    if (w->test_f1 > 0) { w->test_noise_left = TEST_NOISE_SAMPLES; }
+                    if (test_source_active(w)) { w->test_noise_left = TEST_NOISE_SAMPLES; }
                     logf_("TX output discontinuity: gap %.3f ms, sent %ld/%d; correction retired",
                           gap / 1e6, (long)sent, len);
                 }
@@ -1394,7 +1405,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             struct alignment_evidence evidence = capture_alignment_evidence(w, "tx_dispatch");
             local_feedback_suspend_transport(w);
             log_alignment_evidence(&evidence);
-            if (w->test_f1 > 0) { w->test_noise_left = TEST_NOISE_SAMPLES; }
+            if (test_source_active(w)) { w->test_noise_left = TEST_NOISE_SAMPLES; }
             logf_("TX dispatch deadline missed: %.3f ms; correction retired",
                   (w->tx_handler_start_ns - w->tx_last_send_ns) / 1e6);
         }
@@ -1466,7 +1477,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         double iq[2 * MAX_SAMPLES];
         for (int k = 0; k < pairs; k++) {
             double i, q, mi = 0, mq = 0;
-            int testing = w->test_f1 > 0;
+            int testing = test_source_active(w);
             if (!w->measurement_key && (!testing || w->test_duration_samples)) {
                 double mic = word_float(v.payload + 8 * k);
                 if (fabs(mic) > w->mic_peak) { w->mic_peak = fabs(mic); }
@@ -1541,7 +1552,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             double i = iq[2 * k], q = iq[2 * k + 1], a = hypot(i, q);
             // Retired measurement authority cannot expose microphone audio or
             // residual correction output while independent unkey is pending.
-            if (w->measurement_key && !w->test_f1) { i=q=0; a=0; }
+            if (w->measurement_key && !test_source_active(w)) { i=q=0; a=0; }
             if (a > 1.0) {
                 i /= a;
                 q /= a;
@@ -1800,6 +1811,7 @@ static int local_feedback_probe(wf_t* w, int seconds)
 static int wf_init(wf_t* w)
 {
     memset(w, 0, sizeof *w);
+    w->calibration.tone_spacing_hz = PD_TONE_DEFAULT_SPACING_HZ;
     w->active_slice = -1;
     w->fb_slice = -1;
     const char* gui=getenv("AETHER_PD_GUI_HANDLE");
@@ -1927,20 +1939,21 @@ static struct pd_calibration_reply operator_calibration_command(wf_t* w,
     const unsigned char* request, size_t size, int64_t now)
 {
     int correction_selection=size==9 && request && (request[0]=='0' || request[0]=='1');
+    int measurement_arm=request && ((size==9 && request[0]=='M') || (size==11 && request[0]=='Q'));
     int eligible=w->calibration_control && w->calibration_idle && w->calibration_gui && !w->keyed && !w->tx_on && w->api>=0 && w->api_leased && w->tx_in &&
         w->active_slice>=0 && w->active_slice<16 && w->calibration_slice_owner[w->active_slice]==w->calibration_gui &&
-        (w->correct || correction_selection || (size==9 && request && request[0]=='M')) && !native_apd_blocked(w) && w->local_iq_mode &&
+        (w->correct || correction_selection || measurement_arm) && !native_apd_blocked(w) && w->local_iq_mode &&
         w->local_iq.frames>0 && w->daxiq_sid && w->tx_mhz>0 && w->pan_mhz>0 &&
         w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns && now-w->local_iq.last_valid_ns<=100000000 &&
-        !(w->test_f1>0);
+        !test_source_active(w);
     uint64_t previous_nonce=w->calibration.nonce;
     struct pd_calibration_reply reply=pd_calibration_command(&w->calibration,request,(size_t)size,now,eligible);
-    if (w->calibration.nonce>previous_nonce && reply.result==PD_CAL_BLOCKED && size==9 && request && (request[0]=='A' || request[0]=='M')) {
+    if (w->calibration.nonce>previous_nonce && reply.result==PD_CAL_BLOCKED && request && ((size==9 && request[0]=='A') || measurement_arm)) {
         logf_("source arm refused: purpose=%c control=%d idle=%d gui=%08x keyed=%d tx_on=%d api=%d leased=%d registered=%d slice=%d owner=%08x correction=%d native_apd=%d local_iq=%d frames=%llu stream=%08x tx_mhz=%.6f pan_mhz=%.6f iq_age_ns=%lld test_active=%d",
             request[0],w->calibration_control,w->calibration_idle,w->calibration_gui,w->keyed,w->tx_on,w->api>=0,w->api_leased,w->tx_in!=0,
             w->active_slice,w->active_slice>=0 && w->active_slice<16?w->calibration_slice_owner[w->active_slice]:0,
             w->correct,native_apd_blocked(w),w->local_iq_mode,(unsigned long long)w->local_iq.frames,w->daxiq_sid,w->tx_mhz,w->pan_mhz,
-            (long long)(w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns?now-w->local_iq.last_valid_ns:-1),w->test_f1>0);
+            (long long)(w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns?now-w->local_iq.last_valid_ns:-1),test_source_active(w));
     }
     if (reply.applied && reply.result==PD_CAL_OK) {
         if (request[0]=='A') {
@@ -1995,7 +2008,7 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         "\"correcting\":%s,\"calc_state\":%d,\"tx_pkts\":%ld,\"tx_held\":%ld,\"fb_pkts\":%ld,"
         "\"other_pkts\":%ld,\"other_last\":\"sid 0x%08x cls 0x%04x\",\"ref_fifo\":%d,"
         "\"fb_fifo\":%d,\"acq\":%d,\"eq_ready\":%s,\"eq_residual_db\":%.1f,"
-        "\"feedback\":\"%s\",\"fb_slice\":%d,\"fb_mhz\":%.6f,\"fb_dax_stream\":\"0x%08x\",\"local_iq_fault\":%s,\"local_iq_frames\":%llu,\"local_iq_stale\":%llu,\"tx_rejected\":%llu,\"model_resets\":%llu,\"model_recoveries\":%llu,\"rejected_fits\":%u,\"cached_model\":%s,\"warm_starts\":%llu,\"cached_packets\":%llu,\"tx_sent_datagrams\":%llu,\"tx_send_errors\":%llu,\"tx_max_send_gap_ns\":%lld,\"tx_max_work_ns\":%lld,\"tx_trace_rows\":%u,\"tx_trace_dropped\":%u,\"scheduler_policy\":%d,\"scheduler_priority\":%d,\"tx_deadline_faults\":%llu,\"api_leased\":%s,\"native_apd_blocked\":%s,\"collection_full_bins\":%d,\"collection_bin_counts\":[%s],\"transport_cache_enabled\":%s,\"transport_pending\":%s,\"transport_recoveries\":%llu,\"transport_eq_distance\":%.6f,\"mic_peak\":%.6f,\"prelimit_peak\":%.6f,\"limited_samples\":%llu,\"generated_samples\":%llu,\"quiet_blocks\":%llu,\"reference_power\":%.9f,\"signal_present\":%s,\"test_active\":%s,\"test_remaining_samples\":%d,\"mic_gain\":%.6f,\"base_peak\":%.6f,\"measurement\":{\"source_id\":\"%016llx\",\"tones\":%s},\"measurement_control\":%s,\"correction_control\":%s,\"source_purpose\":\"%s\",\"calibration_control\":%s,\"calibration_state\":\"%s\",\"calibration_samples_left\":%d}\n",
+        "\"feedback\":\"%s\",\"fb_slice\":%d,\"fb_mhz\":%.6f,\"fb_dax_stream\":\"0x%08x\",\"local_iq_fault\":%s,\"local_iq_frames\":%llu,\"local_iq_stale\":%llu,\"tx_rejected\":%llu,\"model_resets\":%llu,\"model_recoveries\":%llu,\"rejected_fits\":%u,\"cached_model\":%s,\"warm_starts\":%llu,\"cached_packets\":%llu,\"tx_sent_datagrams\":%llu,\"tx_send_errors\":%llu,\"tx_max_send_gap_ns\":%lld,\"tx_max_work_ns\":%lld,\"tx_trace_rows\":%u,\"tx_trace_dropped\":%u,\"scheduler_policy\":%d,\"scheduler_priority\":%d,\"tx_deadline_faults\":%llu,\"api_leased\":%s,\"native_apd_blocked\":%s,\"collection_full_bins\":%d,\"collection_bin_counts\":[%s],\"transport_cache_enabled\":%s,\"transport_pending\":%s,\"transport_recoveries\":%llu,\"transport_eq_distance\":%.6f,\"mic_peak\":%.6f,\"prelimit_peak\":%.6f,\"limited_samples\":%llu,\"generated_samples\":%llu,\"quiet_blocks\":%llu,\"reference_power\":%.9f,\"signal_present\":%s,\"test_active\":%s,\"test_remaining_samples\":%d,\"mic_gain\":%.6f,\"base_peak\":%.6f,\"measurement\":{\"source_id\":\"%016llx\",\"tones\":%s},\"measurement_control\":%s,\"correction_control\":%s,\"measurement_tone_control\":%s,\"measurement_tone_config\":{\"min_spacing_hz\":%u,\"max_spacing_hz\":%u,\"center_hz\":%d,\"spacing_hz\":%u,\"source_id\":\"%016llx\"},\"source_purpose\":\"%s\",\"calibration_control\":%s,\"calibration_state\":\"%s\",\"calibration_samples_left\":%d}\n",
         WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
         w->daxiq_sid, w->daxiq_reply, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
@@ -2017,9 +2030,11 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         native_apd_blocked(w) ? "true" : "false", full_bins, counts_json, w->transport_cache_enabled ? "true" : "false", w->transport_pending ? "true" : "false", (unsigned long long)w->transport_recoveries, w->transport_eq_distance, w->mic_peak, w->prelimit_peak,
         (unsigned long long)w->limited_samples, (unsigned long long)w->generated_samples,
         (unsigned long long)w->quiet_blocks, pd_align_reference_power(w->align),
-        pd_align_signal_present(w->align) ? "true" : "false", w->test_f1 > 0 ? "true" : "false",
-        w->test_f1 > 0 && !w->test_duration_samples ? -1 : w->test_left, w->gain, w->peak, (unsigned long long)measurement_source_id(w),
+        pd_align_signal_present(w->align) ? "true" : "false", test_source_active(w) ? "true" : "false",
+        test_source_active(w) && !w->test_duration_samples ? -1 : w->test_left, w->gain, w->peak, (unsigned long long)measurement_source_id(w),
         measurement_tones_ready(w,pd_iq_monotonic_ns()) ? "true" : "false", w->calibration_control ? "true" : "false", w->calibration_control ? "true" : "false",
+        w->calibration_control ? "true" : "false", (unsigned)PD_TONE_MIN_SPACING_HZ, (unsigned)PD_TONE_MAX_SPACING_HZ,
+        PD_TONE_CENTER_HZ, w->calibration.tone_spacing_hz, (unsigned long long)measurement_source_id(w),
         w->calibration.purpose==PD_SOURCE_MEASUREMENT ? "measurement" : "calibration", w->calibration_control ? "true" : "false",
         pd_calibration_name(&w->calibration), w->calibration.samples_left);
 }
@@ -2864,10 +2879,10 @@ int main(int argc, char** argv)
             !pd_calibration_tick(&w.calibration, pd_iq_monotonic_ns())) { disarm_bounded_test(&w, "source_deadline"); }
         if (calibration>=0 && (pf[6].revents&POLLIN)) {
             for (unsigned batch=0;batch<4;++batch) {
-                unsigned char request[10];ssize_t size=recv(calibration,request,sizeof(request),MSG_DONTWAIT);
+                unsigned char request[12];ssize_t size=recv(calibration,request,sizeof(request),MSG_DONTWAIT);
                 if (size<0) { break; }
                 struct pd_calibration_reply reply=operator_calibration_command(&w,request,(size_t)size,pd_iq_monotonic_ns());
-                if (size==9) {
+                if (size==9 || size==11) {
                     unsigned char response[9];memcpy(response,request+1,8);response[8]=(unsigned char)reply.result;
                     (void)send(calibration,response,sizeof(response),MSG_DONTWAIT|MSG_NOSIGNAL);
                 }

@@ -1,0 +1,10 @@
+{
+  "utc": "2026-11-16T12:59:57.353393+00:00",
+  "address": "192.168.50.100",
+  "radio_mutations": false,
+  "tcp_ports": {
+    "4992": "[Errno 113] No route to host",
+    "48992": "[Errno 113] No route to host",
+    "22222": "[Errno 113] No route to host"
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T12:45:24.844200+00:00",
+  "updated_utc": "2026-11-16T13:01:49.774633+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Implement bounded tone-spacing capability/configuration and channel/pan ownership controls without widening privileged helper inputs. Resume exact-candidate live qualification after read-only radio health and new boot identity are established.",
+  "next_action": "Implement configured-arm transport and confirmed tone/capture provenance. Prevent older capture clients from assuming710/1900Hz on a nondefault source. Then add desktop control and finish channel/pan ownership and full live production gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Radio-power control implemented and component-qualified. Continue tone-spacing and channel/pan ownership scope while final installation/reboot and RF gates await radio return.",
+  "current_focus": "Native configured measurement tones200..10000Hz spacing component-qualified. Continue authenticated shim/capture/desktop integration; this feature is not publicly exposed or installed.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2897,7 +2897,7 @@
   "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
   "current_delivery_status": {
     "runtime_source": "5eb8f87a462897d6608d99527e8239c67990d45a",
-    "desktop_source": "POWER-CONTROL-QUALIFICATION.json and evidence/20261116-power-control/source-sha256.json identify the current source, based on66e237be41eed549a647917780cdc91e85767df2.",
+    "desktop_source": "e53f0b93de3aec49defc917d0eb1c7ba79a47222",
     "runtime_report": "CAPTURE-GUARDIAN-RUNTIME-QUALIFICATION.json",
     "desktop_reports": [
       "CAPTURE-DESKTOP-QUALIFICATION.json",
@@ -2908,13 +2908,13 @@
     "installed_runtime_source": "e0563d1e285d36bba21da3f791364dd27642e26a",
     "installed_state": "No successful readiness or new boot identity observed after the authorized reboot; latest runtime and desktop changes are not live-qualified.",
     "latest_read_only_network_probe": {
-      "utc": "2026-11-16T12:40:05.610702+00:00",
+      "utc": "2026-11-16T12:59:57.353393+00:00",
       "address": "192.168.50.100",
       "radio_mutations": false,
       "tcp_ports": {
-        "4992": "timed out",
-        "48992": "timed out",
-        "22222": "timed out"
+        "4992": "[Errno 113] No route to host",
+        "48992": "[Errno 113] No route to host",
+        "22222": "[Errno 113] No route to host"
       }
     },
     "historical_failure_audit": "HISTORICAL-STARTUP-AUDIT.json",
@@ -2928,11 +2928,17 @@
       "Cross-platform CI, documentation/security/licenses, independent review and maintainer release"
     ],
     "lp100a": "Deferred by operator",
-    "production_ready": false
+    "production_ready": false,
+    "unpackaged_native_change": "TONE-NATIVE-QUALIFICATION.json; public integration and complete runtime package rebuild remain"
   },
   "power_control": {
     "report": "POWER-CONTROL-QUALIFICATION.json",
     "status": "Radio-power controls component-qualified; not live-qualified",
+    "installed": false
+  },
+  "tone_native": {
+    "report": "TONE-NATIVE-QUALIFICATION.json",
+    "status": "Native configured measurement-tone component qualified; public API and desktop integration incomplete",
     "installed": false
   }
 }

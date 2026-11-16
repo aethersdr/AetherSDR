@@ -1,0 +1,4 @@
+[0/2] Re-checking globbed directories...
+[1/4] Building C object CMakeFiles/aether_pd_test_core.dir/tools/pd-waveform/pd_calibration.c.o
+[2/4] Linking C static library libaether_pd_test_core.a
+[3/4] Linking CXX executable pd_calibration_state_test
