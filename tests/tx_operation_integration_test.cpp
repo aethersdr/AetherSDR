@@ -1017,6 +1017,11 @@ void aetherPDMeasurementWorkflow()
         check(!model->prepare(session, config, request, false) && measurementNetwork.sent.empty(),
               "measurement requires explicit dummy-load confirmation before capture");
         if (scenario == 0 || scenario == 11) {
+            QJsonObject legacy = sourceStatus; legacy.remove("measurement_capture_batch_version");
+            check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "batch capability refresh accepted");
+            controlNetwork.last->complete(200, encode(legacy));
+            check(!model->prepare(session, config, request, true) && measurementNetwork.sent.empty()
+                && !f.commands.contains("mox:on"), "legacy shim cannot prepare or key a batch measurement");
             QJsonObject noSource = sourceStatus; noSource.remove("measurement");
             check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "original session refresh accepted");
             controlNetwork.last->complete(200, encode(noSource));
@@ -1127,6 +1132,14 @@ void aetherPDMeasurementWorkflow()
                     {"frames", QJsonArray{QJsonDocument::fromJson(manifest(true)).object()}}}));
                 check(proof.valid() && model->state() == State::Releasing && !model->result(),
                     "sealed batch did not request owned unkey before downloads");
+                QJsonObject stopped = sourceStatus;
+                stopped["calibration_state"] = "canceled";
+                stopped["calibration_samples_left"] = 0;
+                stopped["state"] = "idle";
+                check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "post-acquisition source status requested");
+                controlNetwork.last->complete(200, encode(stopped));
+                check(model->state() == State::Releasing && !model->result() && model->exportResult().isEmpty(),
+                    "stopped source must preserve sealed downloads without publishing partial results");
                 for (int i = 0; i < 32; ++i) {
                     QJsonObject data = QJsonDocument::fromJson(chunk(i)).object(); data["frame_index"] = 0;
                     measurementNetwork.captureChunk(i)->complete(200, encode(data));

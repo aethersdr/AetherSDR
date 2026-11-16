@@ -1,0 +1,33 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 482: aetherpd_protocol_test
+1/4 Test #482: aetherpd_protocol_test ...........   Passed    0.05 sec
+    Start 494: aetherpd_capture_source_test
+2/4 Test #494: aetherpd_capture_source_test .....   Passed    6.47 sec
+    Start 495: tx_linearity_controller_test
+3/4 Test #495: tx_linearity_controller_test .....   Passed    0.10 sec
+    Start 503: aetherpd_dialog_test
+4/4 Test #503: aetherpd_dialog_test .............***Failed    0.12 sec
+AppSettings: created new settings store with defaults
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+FAIL: replacement preparation is independently ready
+FAIL: queued authorization for an older preparation cannot start its replacement
+FAIL: transmit refusal exposes the missing telemetry reason and sends no helper request
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+FAIL: AetherPD explicit controls and credential/window lifetime
+
+
+75% tests passed, 1 tests failed out of 4
+
+Total Test time (real) =   6.76 sec
+
+The following tests FAILED:
+	503 - aetherpd_dialog_test (Failed)
+Errors while running CTest

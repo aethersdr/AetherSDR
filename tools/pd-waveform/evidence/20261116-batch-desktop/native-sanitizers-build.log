@@ -1,0 +1,36 @@
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_acquire.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+In file included from /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/dispatch_deadline_test.c:37:
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+pd_capture_test failed: 1794861067.218 measurement window: event=test_cancel ready=0 now_ns=56027621759731 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=90000 tone1=0 tone2=2610 tone_sent_ns=10000000000 guard_ns=500000000 iq_valid_ns=10520000000 iq_age_ns=0 deadline_ns=18000000000 fits=-1 solution=-1
+1794861067.218 bounded source ended: reason=test_cancel mono_ns=56027621791322 source=000000000000001f phase=running keyed=1 tx_on=0 samples_left=0 generated=0 iq_frames=0 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000007 slice=0 correction=0 native_apd=0 iq_valid_ns=10520000000
+1794861067.218 measurement window: event=batch_test_cancel ready=1 now_ns=56027622241791 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=96000 tone1=710 tone2=1900 tone_sent_ns=56027021795968 guard_ns=500000000 iq_valid_ns=56027622237941 iq_age_ns=0 deadline_ns=56035621795968 fits=-1 solution=-1
+1794861067.218 bounded source ended: reason=batch_test_cancel mono_ns=56027622245956 source=000000000000001f phase=running keyed=1 tx_on=0 samples_left=0 generated=0 iq_frames=0 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000007 slice=-1 correction=0 native_apd=0 iq_valid_ns=56027622237941
+==104==LeakSanitizer has encountered a fatal error.
+==104==HINT: For debugging, try setting environment variable LSAN_OPTIONS=verbosity=1:log_threads=1
+==104==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)
+

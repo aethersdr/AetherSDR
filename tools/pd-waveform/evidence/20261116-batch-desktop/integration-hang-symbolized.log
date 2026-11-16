@@ -1,0 +1,116 @@
+[New LWP 1769688 (id 2)]
+[New LWP 1769687 (id 3)]
+[New LWP 1769684 (id 4)]
+[New LWP 1769673 (id 5)]
+[New LWP 1769670 (id 6)]
+[New LWP 1769669 (id 7)]
+[New LWP 1769668 (id 8)]
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.archlinux.org>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+warning: Target and debugger are in different PID namespaces; thread lists and other data are likely unreliable.  Connect to gdbserver inside the container.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+[Switching to thread 1 (Thread 0x7f9d58a99bc0 (LWP 1769474))]
+0x00007f9d596a08f2 in ?? () from /usr/lib/libc.so.6
+
+Thread 8 (Thread 0x7f9d557fe6c0 (LWP 1769668) "PanadapterStrea"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d59711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f9d59505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f9d59505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f9d5b2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f9d5af9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f9d5b0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f9d5b15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f9d59698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f9d59720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 7 (Thread 0x7f9d55fff6c0 (LWP 1769669) "RadioConnection"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d59711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f9d59505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f9d59505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f9d5b2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f9d5af9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f9d5b0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f9d5b15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f9d59698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f9d59720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 6 (Thread 0x7f9d54ffd6c0 (LWP 1769670) "DaxIq"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d59711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f9d59505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f9d59505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f9d5b2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f9d5af9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f9d5b0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f9d5b15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f9d59698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f9d59720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 5 (Thread 0x7f9d47fff6c0 (LWP 1769673) "cuda0000280000b"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d597116f5 in poll () at /usr/lib/libc.so.6
+#2  0x00007f9d31780c17 in ??? () at /usr/lib/libcuda.so.1
+#3  0x00007f9d31850ac4 in ??? () at /usr/lib/libcuda.so.1
+#4  0x00007f9d31768c13 in ??? () at /usr/lib/libcuda.so.1
+#5  0x00007f9d59698042 in ??? () at /usr/lib/libc.so.6
+#6  0x00007f9d59720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 4 (Thread 0x7f9d477fe6c0 (LWP 1769684) "PwEventLoop"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d59720fcb in epoll_wait () at /usr/lib/libc.so.6
+#2  0x00007f9d563a2529 in ??? () at /usr/lib/spa-0.2/support/libspa-support.so
+#3  0x00007f9d5638b8e9 in ??? () at /usr/lib/spa-0.2/support/libspa-support.so
+#4  0x00007f9d5b8b40c1 in ??? () at /usr/lib/libpipewire-0.3.so.0
+#5  0x00007f9d59698042 in ??? () at /usr/lib/libc.so.6
+#6  0x00007f9d59720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 3 (Thread 0x7f9d465ff6c0 (LWP 1769687) "PWDevMon"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d59711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f9d59505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f9d59505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f9d5b2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f9d5af9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f9d5b0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f9d5b15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f9d59698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f9d59720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 2 (Thread 0x7f9d3f5ff6c0 (LWP 1769688) "QPulseAudioEngi"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d597116f5 in poll () at /usr/lib/libc.so.6
+#2  0x00007f9d5a8e7c8a in ??? () at /usr/lib/libpulse.so.0
+#3  0x00007f9d5a8d0edd in pa_mainloop_poll () at /usr/lib/libpulse.so.0
+#4  0x00007f9d5a8db723 in pa_mainloop_iterate () at /usr/lib/libpulse.so.0
+#5  0x00007f9d5a8db7f1 in pa_mainloop_run () at /usr/lib/libpulse.so.0
+#6  0x00007f9d5a8ecf2e in ??? () at /usr/lib/libpulse.so.0
+#7  0x00007f9d58eda60f in ??? () at /usr/lib/pulseaudio/libpulsecommon-17.0.so
+#8  0x00007f9d59698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f9d59720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 1 (Thread 0x7f9d58a99bc0 (LWP 1769474) "tx_operation_in"):
+#0  0x00007f9d596a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f9d59694c79 in ??? () at /usr/lib/libc.so.6
+#2  0x00007f9d59699e8d in ??? () at /usr/lib/libc.so.6
+#3  0x00007f9d5a8ed175 in pa_threaded_mainloop_free () at /usr/lib/libpulse.so.0
+#4  0x00007f9d5c6bd327 in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#5  0x00007f9d5c7ac782 in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#6  0x00007f9d5c706c5f in QPlatformAudioDevices::create() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#7  0x00007f9d5c714560 in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#8  0x00007f9d5969d79c in ??? () at /usr/lib/libc.so.6
+#9  0x00007f9d5969d819 in pthread_once () at /usr/lib/libc.so.6
+#10 0x00007f9d5c7151f8 in QPlatformMediaIntegration::audioDevices() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#11 0x00007f9d5c723b1a in QMediaDevices::audioInputs() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#12 0x000055c31ef86639 in AetherSDR::DeviceDiagnostics::buildAudioStartupSnapshot (audio=0x7ffdbd0d9770, snapshot=...) at /home/jeremy/AetherSDR/build/aetherpd-source/src/core/DeviceDiagnostics.cpp:361
+#13 0x000055c31e8d3422 in AetherSDR::AudioEngine::AudioEngine (this=0x7ffdbd0d9770, parent=0x0) at /home/jeremy/AetherSDR/build/aetherpd-source/src/core/AudioEngine.cpp:2004
+#14 0x000055c31e38d463 in operator() (__closure=0x7ffdbd0deaf0, keyer=true) at /home/jeremy/AetherSDR/build/aetherpd-source/tests/tx_operation_integration_test.cpp:1895
+#15 0x000055c31e38dce5 in (anonymous namespace)::voiceKeyerDisconnectStopsLikeMox () at /home/jeremy/AetherSDR/build/aetherpd-source/tests/tx_operation_integration_test.cpp:1931
+#16 0x000055c31e3ae025 in main (argc=1, argv=0x7ffdbd0def38) at /home/jeremy/AetherSDR/build/aetherpd-source/tests/tx_operation_integration_test.cpp:4234
+[Inferior 1 (process 1769474) detached]

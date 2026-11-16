@@ -1,0 +1,4 @@
+=== RUN   TestPDCaptureBatchNativePublicFixture
+--- PASS: TestPDCaptureBatchNativePublicFixture (0.05s)
+PASS
+ok  	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.052s

@@ -142,6 +142,23 @@ void configuredTones()
     check(parsed && parsed->measurementToneControl && parsed->measurementToneConfig
         && parsed->measurementToneConfig->lowerOffsetHz() == 804.5
         && parsed->measurementToneConfig->upperOffsetHz() == 1805.5, "half-Hz configured tones lost precision");
+    check(parsed && parsed->captureBatchVersion == 0, "legacy status invented batch support");
+    status["measurement_capture_batch_version"] = 1;
+    const std::optional<Status> batch = parseStatus(encode(status));
+    check(batch && batch->captureBatchVersion == 1, "batch capture capability lost");
+    for (const QJsonValue& version : {QJsonValue(0), QJsonValue(2), QJsonValue(1.5),
+             QJsonValue("1"), QJsonValue(true), QJsonValue(QJsonValue::Null)}) {
+        QJsonObject invalid = status; invalid["measurement_capture_batch_version"] = version;
+        rejects(invalid, "invalid batch capability accepted");
+    }
+    QJsonObject disabled = status;
+    disabled["measurement_control"] = false;
+    disabled["measurement_tone_control"] = false;
+    disabled["source_purpose"] = "calibration";
+    disabled["measurement"] = QJsonObject{{"source_id", "0000000000000000"}, {"tones", false}};
+    QJsonObject inactiveProfile = profile; inactiveProfile["source_id"] = "0000000000000000";
+    disabled["measurement_tone_config"] = inactiveProfile;
+    check(parseStatus(encode(disabled)).has_value(), "batch support was confused with source control permission");
     for (const char* missing : {"measurement_tone_config", "measurement_tone_capture_version", "measurement"}) {
         QJsonObject invalid = status; invalid.remove(QLatin1String(missing)); rejects(invalid, "partial tone status accepted");
     }

@@ -624,7 +624,9 @@ int main(int argc, char** argv)
     captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"}, {"source", QJsonObject{{"kind", "local_dax_iq"}, {"stream_id", 1073741825}, {"generation", "7"}}},
         {"sample_rate_hz", 48000}, {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
         {"keyed", false}, {"correcting", false}, {"first_receive_ns", "2000000000"}, {"last_receive_ns", "2341000000"},
-        {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));
+        {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}},
+        {"measurement_tone_config", measurementStatus["measurement_tone_config"]},
+        {"feedback_binding", measurementStatus["feedback_binding"]}}));
     for (int i = 0; i < 32; ++i) {
         captureNetwork.captureChunk(i)->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
             {"iq_f32le", QString::fromLatin1(QByteArray(4096, '\0').toBase64())}}));

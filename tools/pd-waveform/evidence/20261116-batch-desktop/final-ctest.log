@@ -1,0 +1,21 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 482: aetherpd_protocol_test
+1/5 Test #482: aetherpd_protocol_test ...........***Failed    0.00 sec
+batch support was confused with source control permission
+
+    Start 494: aetherpd_capture_source_test
+2/5 Test #494: aetherpd_capture_source_test .....   Passed    6.48 sec
+    Start 495: tx_linearity_controller_test
+3/5 Test #495: tx_linearity_controller_test .....   Passed    0.10 sec
+    Start 503: aetherpd_dialog_test
+4/5 Test #503: aetherpd_dialog_test .............   Passed    0.13 sec
+    Start 881: tx_operation_integration_test
+5/5 Test #881: tx_operation_integration_test ....   Passed    9.79 sec
+
+80% tests passed, 1 tests failed out of 5
+
+Total Test time (real) =  16.53 sec
+
+The following tests FAILED:
+	482 - aetherpd_protocol_test (Failed)
+Errors while running CTest

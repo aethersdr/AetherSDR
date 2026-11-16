@@ -1,0 +1,7 @@
+[0/2] Re-checking globbed directories...
+[1/11] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/11] Capturing build identity (git describe)
+[3/5] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/5] Completed 'vulkan-shaders-gen'

@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T20:34:07.908269+00:00",
+  "status": "desktop_batch_component_qualified_not_installed",
+  "production_ready": false,
+  "installed": false,
+  "RF_transmissions": 0,
+  "base_commit": "1e5e9dfbfc52b9fe04b12eebe179a19337713b0e",
+  "source_sha256": {
+    "docs/user/docs/tailscale-remote-access.md": "2cf2d34d688f4202cbe20e77cf2237526d713392fdc1e1a0fd842f66c37fdaab",
+    "src/core/AetherPDProtocol.cpp": "b17a3dd39e65828c1e43400760f6f6b03d5d3ec686778d247914aed61c6fe7fb",
+    "src/core/AetherPDProtocol.h": "5c386ec0b75d7571cd432ce1d6b62083af45a46f141a31850b32b5d9e2818783",
+    "src/core/txlinearity/AetherPDCaptureSource.cpp": "2d8febb39489ed5c48ca1b210365bc6afe5da8a2a7c639835b42e76d041f4f00",
+    "src/core/txlinearity/AetherPDCaptureSource.h": "415a15becafed7124eb5cf8746e3b1cfefb5f7733e6de0b4e4f6b1056287f125",
+    "src/core/txlinearity/ITxCaptureSource.h": "d809dd6e1328a89c6c09db7277ae81090f2d0c0cc5fd7e5a359c125151d7548d",
+    "src/core/txlinearity/TxLinearityController.cpp": "f63ff3680389f5bb2a097fece91ab1787a4fdf314a328e0a9fb9c0d931917a9f",
+    "src/core/txlinearity/TxLinearityController.h": "bf56682f64bd43612b28ec6cb73d6ca6b19a74ab395e045d05206fd83958fe79",
+    "src/gui/AetherPDMeasurementDialog.cpp": "eee623e2b7a96ee9848557235f7adc2773172d6f064b003799a21febc12b66e9",
+    "src/models/AetherPDMeasurementModel.cpp": "b630010734e9ac5cd26a465369f134b73ce21785dd1b721342a3cdc99a0e421e",
+    "tests/AetherPDTestTransport.h": "5c0a7ea865e8017d665a03dcefe7ee2546fbb20b9302fccb3060e6b8bd4773a0",
+    "tests/aetherpd_capture_source_test.cpp": "9643777955de6db7210d2bdb2dbb84342846065e4014f53244eed487bb20621c",
+    "tests/aetherpd_dialog_test.cpp": "dbd5a2d6dd126f0274f99fa5e3693e5e8f14e8fbf8ca4e728064acdc38ff130b",
+    "tests/aetherpd_protocol_test.cpp": "72a598ee56e657a97a15f6abb8a7696134073aa8c6cf828d3b380ea9f60b241d",
+    "tests/tx_linearity_controller_test.cpp": "e58bdda849e022243db41bbf60e4d619c3e825b54accda4ac73fe80ebb9fa4ae",
+    "tests/tx_operation_integration_test.cpp": "2b939c9ae545f0d13a423b37cd4459a7d09eba6b4c0de12fbdd7ff5fdb6032dc",
+    "tools/flex-tailnet-shim/aetherpd.go": "3abf5935ccb3aa798b73979a7b0aabaa9934cc6473d31885bba8d022f1a80272",
+    "tools/flex-tailnet-shim/aetherpd_capture_batch_linux_test.go": "4354bd4fbb48874a2ffca89ca14bc31b7aac10e9579c748eeaa602411345a74f",
+    "tools/flex-tailnet-shim/aetherpd_tones_linux_test.go": "445a2581134e0d5f9719a4909f432dd5d8ecb0cf46bb1ec615190fc325f2354e",
+    "tools/pd-waveform/dispatch_deadline_test.c": "552c8b1f365a21897f5e6c67ca59b60e95f067dd947bf33d039dce92cc74c7f4",
+    "tools/pd-waveform/pd_waveform.c": "8af5a2af588e759a385fb793ed427997dfcdc16481fcedc0a8a647f3d5266642"
+  },
+  "validation": {
+    "desktop_build": true,
+    "registered_tests_passed": [
+      "aetherpd_protocol_test",
+      "aetherpd_capture_source_test",
+      "tx_linearity_controller_test",
+      "aetherpd_dialog_test",
+      "tx_operation_integration_test"
+    ],
+    "native_to_Go_to_HTTP_to_Qt_samples_checked": 65536,
+    "go_race_top_level_passed": 52,
+    "native_ASan_UBSan_LeakSanitizer": {
+      "pd_capture_test": 0,
+      "pd_dispatch_deadline_test": 0,
+      "pd_calibration_dispatch_test": 0
+    },
+    "desktop_capture_ASan_UBSan_LeakSanitizer": true,
+    "documentation_build": true,
+    "engine_boundary_strict": true,
+    "DSP_cross_builds": {
+      "armv7": {
+        "bytes": 271804,
+        "sha256": "7b3beddb0a0b4be0074494ba62eb771e339e5b0bd5d064a7e66a1a7cae59e5db"
+      },
+      "arm64": {
+        "bytes": 282696,
+        "sha256": "caf9879b3936e2fd5aeb336746771229ab19729d915be5de8a757b64b2dfa07e"
+      }
+    }
+  },
+  "coverage": [
+    "One bounded request acquires selected 1-4 consecutive radio frames; no legacy fallback for batch mode.",
+    "All manifests validated before release request; release precedes chunk requests.",
+    "Normal source cancellation after unkey does not discard already sealed data.",
+    "Complete data still waits for exact original-operation release proof; partial results remain unpublished.",
+    "Stop, revoked session, malformed metadata/chunks and download deadline discard pending data.",
+    "Batch support is validated separately from current source-control permission."
+  ],
+  "negative_evidence": [
+    "Initial rebuilt dialog fixture omitted tone/binding metadata on replacement preparation; fixed fixture, preserved fail log.",
+    "Sandbox integration run blocked in PulseAudio initialization before AetherPD cases; thread stack captured, process terminated, normal-service-access run passed.",
+    "Initial disabled-control protocol fixture retained an active measurement identity; corrected to inactive calibration-purpose status. Protocol rerun passed.",
+    "Initial sandbox native LeakSanitizer could not inspect threads; same tests passed outside sandbox with leak detection enabled."
+  ],
+  "remaining": [
+    "Build reproducible signed ARMv7/ARM64 runtime releases and ordinary upgrade package.",
+    "Install matching desktop/runtime and qualify cold/warm receive/RF without extending source/key deadlines.",
+    "Full P1-P10 qualification remains: alignment/cold-bypass root cause, sustained/repeated RF, final process faults/reboot/update/rollback, stock APD comparison, actual 6300 team qualification and independent release gates."
+  ],
+  "limitations": [
+    "Component evidence only; no new RF or radio install in this turn.",
+    "Installed radio still uses prior sequential single-frame capture runtime.",
+    "Actual 6300 hardware and cross-platform release validation outstanding.",
+    "LP-100A integration deferred; no absolute power/headroom calibration claim."
+  ],
+  "evidence_directory": "tools/pd-waveform/evidence/20261116-batch-desktop",
+  "evidence_sha256": {
+    "checkpoint-build.log": "13a263707417be239794cff6d2d602145fac5d6dbafaf98a22cf8726c0b6bc3d",
+    "checkpoint-final-focused.log": "269962f6b931e96aa15f77a0e2d36540424cdbb217956122278d4220afb2cad4",
+    "checkpoint-ctest.log": "8a8be14690df72281043552f9bc6099452773feebc7826ba61db68f9f61d0d05",
+    "integration-hang-symbolized.log": "4f61953337e00f51d1f425ee73db92c0de5c9c400fece1f66e9f003b6597f834",
+    "integration-service-access.log": "d5da85abe9f3f7b2372d426e86374b34d1fb19ecf8967f3b0ebc8f9335720ba9",
+    "final-ctest.log": "4fbda06db5721a62df3a99d9156313b84cc6a6a4d06da39f08ea89851d16060e",
+    "verified-protocol.log": "2030ad9e54b339d4e177c036a3a7771499c4973585619df82be3f7ecf7124cce",
+    "final-go-race.log": "e8cc4270d35ee60f29326d7f1ee61b973bce5f23aefc3551830c38e6b9a48e1b",
+    "capability-go.log": "3f779425d6bc8c68b1081e816ec76d4f3d6ce7f7ba9ba9311d7b4e3bf71247a8",
+    "native-public.log": "0dd5f45b670f826c04d2251d9029c3308d0e60e043f3faffa74e5f3dc033955d",
+    "native-sanitizers-build.log": "82b9124b3c99c99215473e95ee421979f3a8ccb0f25cf2db29b7a62888ede42a",
+    "native-final-sanitizers.log": "3d04ade52021d67f8481c6a7984ffc2294e6c8349a34e2d64cd6f5379041a75a",
+    "native-sanitizers.json": "ef01fa0427c8f12f29f4b1a96f29d9e72c8ef0df64fee77f106fc1c14953f7dd",
+    "pd_capture_test-asan.log": "5b520b975cc98266ed4ce448021b22889e649a64da409bfd8a9a2452ac8efbd9",
+    "pd_dispatch_deadline_test-asan.log": "fc5ea3bf35b1f67772e0acea6ce19178781d9f548ee443a18fe083914a726a0a",
+    "pd_calibration_dispatch_test-asan.log": "b73f93e945b2ee011f0868348206ed10f22c0242a71520c4810a707651265452",
+    "desktop-sanitizer.log": "c59f023f261f2aa7e6e0b652c4a0a805089d69fcdfa6176de0c6af359aedc5ca",
+    "docs-build.log": "77d47fa6c1ebaae834143bcd900df5719e5099b408319f3cf50391e2a600f498",
+    "engine-boundary.log": "69eb2004112263193fe9dc81451539051d0eb8d86f325515fd7b00d29dc58ddf",
+    "cross-builds.json": "4f61f41b6cdca4e8760f6250373a67e2d5efe4a633b8d86841f099c7f35994b8",
+    "check-native.py": "5ffdb0188868e7aa0b7b8db7f43d5da97c247f7d9c4a771c36790a1d53def23b",
+    "check-desktop.py": "386f2411e01c67b30f30294bbeb3ded651abd2547af7e7b0ef0bb11b093e24bc",
+    "cross-build.py": "82634bdec90e72b536f7eb3e69feff4a40b8bae3fb36a57641fc119bc881254f"
+  }
+}

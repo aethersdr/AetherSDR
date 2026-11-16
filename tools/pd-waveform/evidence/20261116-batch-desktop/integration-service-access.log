@@ -1,0 +1,9 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 503: aetherpd_dialog_test
+1/2 Test #503: aetherpd_dialog_test .............   Passed    0.13 sec
+    Start 881: tx_operation_integration_test
+2/2 Test #881: tx_operation_integration_test ....   Passed    9.78 sec
+
+100% tests passed out of 2
+
+Total Test time (real) =   9.93 sec

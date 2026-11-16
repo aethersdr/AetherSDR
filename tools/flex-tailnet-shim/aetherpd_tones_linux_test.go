@@ -44,6 +44,34 @@ func TestPDToneNativeStatus(t *testing.T) {
 	}
 }
 
+func TestPDCaptureBatchCapabilityStatus(t *testing.T) {
+	legacy, err := parseAetherPDStatus([]byte(toneNativeStatus()))
+	if err != nil || legacy.CaptureBatchVersion != 0 {
+		t.Fatal("legacy status invented batch support", legacy, err)
+	}
+	good := strings.TrimSuffix(toneNativeStatus(), "}") + `,"measurement_capture_batch_version":1}`
+	for _, data := range []string{good,
+		strings.Replace(strings.Replace(good, `"measurement_control":true`, `"measurement_control":false`, 1), `"measurement_tone_control":true`, `"measurement_tone_control":false`, 1)} {
+		status, err := parseAetherPDStatus([]byte(data))
+		if err != nil || status.CaptureBatchVersion != 1 {
+			t.Fatal("batch capability lost or confused with source control permission", status, err)
+		}
+	}
+	for _, version := range []string{"0", "2", "1.5", `"1"`, "true", "null"} {
+		bad := strings.Replace(good, `"measurement_capture_batch_version":1`, `"measurement_capture_batch_version":`+version, 1)
+		if _, err := parseAetherPDStatus([]byte(bad)); err == nil {
+			t.Fatal("invalid batch capability accepted", version)
+		}
+	}
+	var missing map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(good), &missing)
+	delete(missing, "measurement_tone_config")
+	bad, _ := json.Marshal(missing)
+	if _, err := parseAetherPDStatus(bad); err == nil {
+		t.Fatal("batch without tone provenance accepted")
+	}
+}
+
 func TestPDToneHTTPToNative(t *testing.T) {
 	for _, spacing := range []uint32{200, 1001, 1190, 2610, 10000} {
 		n := newTestNode(t, "owner")

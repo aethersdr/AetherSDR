@@ -1,0 +1,6 @@
+=== RUN   TestPDToneNativeStatus
+--- PASS: TestPDToneNativeStatus (0.00s)
+=== RUN   TestPDCaptureBatchCapabilityStatus
+--- PASS: TestPDCaptureBatchCapabilityStatus (0.00s)
+PASS
+ok  	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.008s

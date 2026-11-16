@@ -206,6 +206,7 @@ int main(void)
     init(&f);
     char status[8192];int initial_size=status_json(&f.w,status,sizeof(status));
     assert(initial_size>0 && (size_t)initial_size<sizeof(status));
+    assert(strstr(status,"\"measurement_capture_batch_version\":1"));
     assert(strstr(status,"\"scheduler_policy\":0") && strstr(status,"\"scheduler_priority\":0"));
     f.w.udp=42;sent_bytes=0;
     f.w.tx_deadline_ns=12000000;f.w.tx_last_send_ns=pd_iq_monotonic_ns()-20000000;f.w.tx_deadline_in_packet=0;
