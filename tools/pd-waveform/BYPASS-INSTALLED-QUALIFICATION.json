@@ -1,0 +1,369 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T19:39:12.003570+00:00",
+  "production_ready": false,
+  "runtime_source": "dd33027f5b53430c60fe2a9db4e7a64ee027a458",
+  "desktop_source": "db6cb9e8e10077d462b6cf8d7377a3571e1550c9",
+  "release_blake2b_256": "8e6e13f9ba459205ad56ec4e445e2b718ab61c6a2f7b431c563cab9ac4e66749",
+  "status": "Ordinary update and IQ passed; four-frame baseline passed, corrected measurement failed when its third capture overlapped normal source expiry. Session stopped and cleanup audited.",
+  "installation": {
+    "committed": true,
+    "seconds": 64.214,
+    "diagnostics_used_for_delivery": false,
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5"
+  },
+  "receive_iq": {
+    "bytes": 131072,
+    "sha256": "b4d20219faf815f736b459bd6eca65fa82f3ec402bbee761a5e0eeb75f067707",
+    "FDX": false,
+    "channel": 4
+  },
+  "bounds": {
+    "positive_key_actions": 2,
+    "automatic_retries": 0,
+    "frequency_mhz": 7.15,
+    "nominal_watts": 5,
+    "max_configured_watts": 10,
+    "measured_abort_watts": 10,
+    "source_seconds": 8,
+    "independent_unkey_seconds": 9,
+    "desktop_authorization_seconds": 10,
+    "FDX": false,
+    "tx_antenna": "ANT1",
+    "feedback": "RX_A",
+    "preamp_db": 0
+  },
+  "cases": {
+    "off-01": {
+      "label": "off-01",
+      "events": [
+        {
+          "count": 1,
+          "host_elapsed_s": 7.451,
+          "record": {
+            "count": 1,
+            "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=2305749147229 submitted_ns=2307498757361 started_ns=2307498781138 completed_ns=2307726477616 consumed_ns=2307733451617 delay=1704.970 envelope=0.997358 phase=0.999147 offset_hz=-0.024465 noise_left=48384 samples_left=144384 tone_sent_ns=0 guard_ns=500000000",
+            "truncated": false
+          },
+          "fields": {
+            "reason": "acquisition",
+            "source": "0000000000000002",
+            "generation": "12",
+            "key_ns": "2305749147229",
+            "submitted_ns": "2307498757361",
+            "started_ns": "2307498781138",
+            "completed_ns": "2307726477616",
+            "consumed_ns": "2307733451617",
+            "delay": "1704.970",
+            "envelope": "0.997358",
+            "phase": "0.999147",
+            "offset_hz": "-0.024465",
+            "noise_left": "48384",
+            "samples_left": "144384",
+            "tone_sent_ns": "0",
+            "guard_ns": "500000000"
+          },
+          "observed_before_current_intent": false,
+          "key_to_submission_ms": 1749.610132,
+          "queue_ms": 0.023777,
+          "worker_ms": 227.696478,
+          "consume_ms": 6.974001,
+          "key_to_result_ms": 1984.304388,
+          "accepted": true
+        }
+      ],
+      "missed_record_counts": [],
+      "first_observed_tones_after_intent_s": 5.709,
+      "GUI_outcome": "Idle. Arm the source, then prepare.",
+      "diagnostics_at_end": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=2305749147229 submitted_ns=2307498757361 started_ns=2307498781138 completed_ns=2307726477616 consumed_ns=2307733451617 delay=1704.970 envelope=0.997358 phase=0.999147 offset_hz=-0.024465 noise_left=48384 samples_left=144384 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=2313169836746 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=13824 generated=178176 iq_frames=14289 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=716216 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=5be10c58 slice=0 correction=0 native_apd=0 iq_valid_ns=2313166380607",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "faults_at_end": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "released": true
+    },
+    "on-01": {
+      "label": "on-01",
+      "events": [
+        {
+          "count": 1,
+          "host_elapsed_s": 1.247,
+          "record": {
+            "count": 1,
+            "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=2305749147229 submitted_ns=2307498757361 started_ns=2307498781138 completed_ns=2307726477616 consumed_ns=2307733451617 delay=1704.970 envelope=0.997358 phase=0.999147 offset_hz=-0.024465 noise_left=48384 samples_left=144384 tone_sent_ns=0 guard_ns=500000000",
+            "truncated": false
+          },
+          "fields": {
+            "reason": "acquisition",
+            "source": "0000000000000002",
+            "generation": "12",
+            "key_ns": "2305749147229",
+            "submitted_ns": "2307498757361",
+            "started_ns": "2307498781138",
+            "completed_ns": "2307726477616",
+            "consumed_ns": "2307733451617",
+            "delay": "1704.970",
+            "envelope": "0.997358",
+            "phase": "0.999147",
+            "offset_hz": "-0.024465",
+            "noise_left": "48384",
+            "samples_left": "144384",
+            "tone_sent_ns": "0",
+            "guard_ns": "500000000"
+          },
+          "observed_before_current_intent": true,
+          "key_to_submission_ms": 1749.610132,
+          "queue_ms": 0.023777,
+          "worker_ms": 227.696478,
+          "consume_ms": 6.974001,
+          "key_to_result_ms": 1984.304388,
+          "accepted": true
+        },
+        {
+          "count": 2,
+          "host_elapsed_s": 7.297,
+          "record": {
+            "count": 2,
+            "text": "alignment evidence: reason=acquisition source=0000000000000005 generation=16 key_ns=2364983265054 submitted_ns=2366732774561 started_ns=2366732804209 completed_ns=2366989713833 consumed_ns=2367008746864 delay=1760.970 envelope=0.997371 phase=0.999151 offset_hz=-0.024463 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+            "truncated": false
+          },
+          "fields": {
+            "reason": "acquisition",
+            "source": "0000000000000005",
+            "generation": "16",
+            "key_ns": "2364983265054",
+            "submitted_ns": "2366732774561",
+            "started_ns": "2366732804209",
+            "completed_ns": "2366989713833",
+            "consumed_ns": "2367008746864",
+            "delay": "1760.970",
+            "envelope": "0.997371",
+            "phase": "0.999151",
+            "offset_hz": "-0.024463",
+            "noise_left": "47360",
+            "samples_left": "143360",
+            "tone_sent_ns": "0",
+            "guard_ns": "500000000"
+          },
+          "observed_before_current_intent": false,
+          "key_to_submission_ms": 1749.509507,
+          "queue_ms": 0.029648,
+          "worker_ms": 256.909624,
+          "consume_ms": 19.033031,
+          "key_to_result_ms": 2025.48181,
+          "accepted": true
+        }
+      ],
+      "missed_record_counts": [],
+      "first_observed_tones_after_intent_s": 6.996,
+      "GUI_outcome": "IQ capture request failed",
+      "diagnostics_at_end": {
+        "alignment": {
+          "count": 2,
+          "text": "alignment evidence: reason=acquisition source=0000000000000005 generation=16 key_ns=2364983265054 submitted_ns=2366732774561 started_ns=2366732804209 completed_ns=2366989713833 consumed_ns=2367008746864 delay=1760.970 envelope=0.997371 phase=0.999151 offset_hz=-0.024463 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 2,
+          "text": "bounded source ended: reason=source_samples_complete mono_ns=2372981981230 source=0000000000000005 phase=completed keyed=1 tx_on=1 samples_left=0 generated=191999 iq_frames=30602 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=398164 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=1 idle=0 gui=5be10c58 slice=0 correction=1 native_apd=0 iq_valid_ns=2372980392243",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "faults_at_end": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "released": true
+    }
+  },
+  "baseline": {
+    "averages": 4,
+    "valid": true,
+    "imd3_per_tone_db": [
+      -28.020399521607715,
+      -27.49251971291038
+    ]
+  },
+  "corrected": {
+    "valid": false,
+    "error": "IQ capture request failed",
+    "completed_frames_in_transport_log": 2,
+    "third_capture_http": 503,
+    "partial_raw_iq_retained": false,
+    "comparison_available": false
+  },
+  "cleanup": {
+    "rf_commands": [],
+    "processes": [
+      {
+        "pid": 3755,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "4542c96d1d7c92e1c0c6939d446432461b0702a6ad6fe511a8c5d0501288b2fa"
+      },
+      {
+        "pid": 4117,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "5cfb04a15c2ca9436b5ce802231ebcd6588435dd6e9f1b47476fea5d245af11e"
+      },
+      {
+        "pid": 4118,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "4542c96d1d7c92e1c0c6939d446432461b0702a6ad6fe511a8c5d0501288b2fa"
+      }
+    ],
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    },
+    "private_sockets": [],
+    "containers": [
+      "nereus-net-probe",
+      "AetherGPS",
+      "nereus-inprocess-job-91f08081bd"
+    ],
+    "arp": [],
+    "accept_local": "0",
+    "legacy_container_absent": true,
+    "cached_first_artifacts": [],
+    "runtime_hashes": {
+      "flex-tailnet-shim": "4542c96d1d7c92e1c0c6939d446432461b0702a6ad6fe511a8c5d0501288b2fa",
+      "aether-pd": "c28641355da9dfb2fee2969d8a29b15e8a44362c04abf9aa649890b79c299151",
+      "pd-primary-launch": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+      "pd-start-session": "7772765fd596722dc342f2579c83f3a3186614979c9defbc141223f7ae18c525",
+      "pd-radio-launch": "4ca6468b3eb9f023937170fdd0bac1c4c38bf017d29e8f3310b94010596cc1d5",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "upgrade_generation_present": true,
+    "prior_backup_identity_sha256": "7e315aee252647fbbaf713d7633ec4b72fbd9c73406bedc54b107bedc5476931",
+    "boot_id": "680e84fa-12a0-4b96-be16-c514426e7ff6",
+    "passed": true
+  },
+  "audit_components_removed": true,
+  "findings": [
+    "The uncorrected readiness gate is removed in this exact installed binary. Offline regression proves it no longer requires a model. This first live baseline completed four frames; host-observed ready tones5.709s versus prior6.338s are observations, not an isolated causal timing benchmark.",
+    "Corrected alignment completed2.025s after keying with256.91ms worker time. The host first observed ready tones6.996s after GUI intent. No new alignment reset or transport fault was recorded.",
+    "Corrected desktop capture log: first frame completed at capture_ms6723; second frame took684ms; third begin request returned503 after349ms. Native source ended normally at its8second sample budget. Third snapshot overlapped source completion, so no valid corrected four-average result exists.",
+    "The desktop waits for all chunks before beginning each subsequent frame. On-radio capture sequencing needs to avoid this dependency on desktop/network delay; simply lengthening a capture timeout cannot extend already-ended source samples.",
+    "Invalid export contains an error and no measurement object or partial captures. The first export validator assumed an invalid measurement object and raised KeyError after the file was saved. Validator was corrected; no re-export or RF retry occurred."
+  ],
+  "next_work": [
+    "Design and implement bounded on-radio multi-frame acquisition with immutable source, binding, correction and freshness metadata; preserve TTL, memory bounds and cancellation.",
+    "Retrieve completed snapshots independently of desktop transfer latency while retaining operator-controlled RF deadlines and no automatic rearm.",
+    "Requalify cold/warm four-frame captures and correction after protocol/native/shim/desktop tests."
+  ],
+  "limitations": [
+    "One successful5Wbaseline and one failed corrected run; no new valid OFF/ON comparison.",
+    "No new reboot,10W,stockAPD,speech or sustained-duty qualification.",
+    "Historical128sample slip and unexplained cancellation remain unresolved.",
+    "No actual6300 or independent release qualification; LP100A deferred."
+  ],
+  "evidence_directory": "evidence/20261116-bypass-installed",
+  "evidence_sha256": {
+    "bypass-idle-job.py": "3affe35410cfe37012d9cf85782a6b0f3d055706f8d064652785a731c9a0dd3e",
+    "bypass-idle-result.json": "c12f346ae238a55ba6c7b7f70edd46426134d992c2d2637900aca5d20817e4c6",
+    "bypass-live/desktop.log": "6ce61c57898765241548de1b1e1f5bd9b72ccdb8f1312de36bb8583b7222a604",
+    "bypass-live/install-result.json": "cf1164aaefbc2e54401532428fa5b42a5cf3fd54aebc73da46503dd59b82b4bf",
+    "bypass-live/install.py": "8cab31a0c84ab26de41613ffc1f6a9ef1b45976c7a0713c423bee86066ce16cd",
+    "bypass-live/instance.json": "b7142e1afa55e9373b04b12d17f603136c102b556893787f45014200643439dc",
+    "bypass-live/prepare.py": "fe4e040523800b9911ca1bf27b0b7f5d4871030c2836ab571f914a3e6df4b69d",
+    "bypass-live/prepared.json": "6e9a287b5a20fec4d1deaa3a817f6774e065c5c7ddb17680c496dea902051464",
+    "bypass-live/receive-iq-check.json": "4a2d966731c09419d51acb09a82330a0a875218b3bed982c363973c28b3b027d",
+    "bypass-live/receive-iq-check.py": "c2ac3852a4611d302637d3b94b3d343887faa590fad42a91cb3ed6e8f02df231",
+    "bypass-live/receive-iq.f32le": "b4d20219faf815f736b459bd6eca65fa82f3ec402bbee761a5e0eeb75f067707",
+    "bypass-live/relaunch.py": "511271f5c0d9e4d6fa47e5763c9d654ecc115a08efd3fce8673bc7d09f9b7f4b",
+    "bypass-rf/5w/export-failure.py": "f0683dc6a74b0a95a63c5b9c3780c6057912414d8cf0d0f046c8d7f59046b23b",
+    "bypass-rf/5w/export.py": "f3b0b6cef360f74fc8311ebb846a390f3868a4075cda5845f0b0eabd88ccd06b",
+    "bypass-rf/5w/instance.json": "b7142e1afa55e9373b04b12d17f603136c102b556893787f45014200643439dc",
+    "bypass-rf/5w/measure.py": "ca1c4f00f1bc861452bec26478560973303810c714608421b52d4a22815d8b03",
+    "bypass-rf/5w/off-01-events.json": "ee4f05d0f4c19668730cafbf270d5fae5f90ed63199c62c7441c6bf64a780b2e",
+    "bypass-rf/5w/off-01.json": "8c62373b171bf7599d27e8231ddda3eab8d1fd6ee8dcdb791e2c1adea845f5fe",
+    "bypass-rf/5w/on-01-events.json": "142c5965f779ff43d2c40a9ece561b9ff90b404761b96ee7b43467da96ff286e",
+    "bypass-rf/5w/on-01-failed.json": "46b7ae23d2f6dfaa90cd5cce5225312210c2296ba598e042ddf10f1d0aee44bf",
+    "bypass-rf/analyze-timing.py": "28189a156c6de36a95095b89d738b7d8636eb0905d404ae938f97c84938f44e1",
+    "bypass-rf/analyze.py": "ee535992a87c8703a963cfd381e923cd1a77a2f6e8e4f69c4be18414d66f0a49",
+    "bypass-rf/capture-timing-off.log": "021d92f52d33bee8826aa7ff251f2e7ba78179c9ec24f5528a980892af233220",
+    "bypass-rf/capture-timing.log": "5c808d9d7106ad8f3b650dd1dc6317bc3d92a9d5185c7e5d3637fe235a2fb88c",
+    "bypass-rf/configure-5-off.json": "9877dad8c93981f05ff74364164d15dc25c35ad3db18f276776cc1d79aa13f54",
+    "bypass-rf/configure-5-on.json": "e55b1de5260dcd33ff4dca684ba7df3b41b052093df12c726f02a400aab06e36",
+    "bypass-rf/configure.py": "1b960cd1cefd6ecf5ddc022b3b9fe7a520399e8564fadd3558b31bca47daefbf",
+    "bypass-rf/enable-log.py": "d5f1cb92a6cff4f44f68707fa995063553102e2f5990767f435a83a3bcdad61c",
+    "bypass-rf/failed-export-validation.json": "7eee8a7cb855150f37f4b136ad782e18e8377cbf4ca2eafec997b84706a12187",
+    "bypass-rf/instance.json": "b7142e1afa55e9373b04b12d17f603136c102b556893787f45014200643439dc",
+    "bypass-rf/log-offset.json": "09589974d3aa291248442e87cd80ec66ef6cd06bdadc7e6e69bf1888620ac910",
+    "bypass-rf/observer-config.json": "f4a72e9f3aa16e81c62d13893960ebe16ba400c743576d18f78efd8fd865ba71",
+    "bypass-rf/off-01-timing.json": "4263969de5fbe420ab60b16d1d3374a27bba8eba8e687e7697b139a2a0bd8211",
+    "bypass-rf/off-01-timing.log": "4263969de5fbe420ab60b16d1d3374a27bba8eba8e687e7697b139a2a0bd8211",
+    "bypass-rf/on-01-timing.json": "88c7866042238df8307e138f3978680efa80a0cdc008b110bf6b628f5313f0d4",
+    "bypass-rf/on-01-timing.log": "88c7866042238df8307e138f3978680efa80a0cdc008b110bf6b628f5313f0d4",
+    "bypass-rf/preflight-iq.f32le": "ea03653af137f4611e390655380bf6e882968eb1aea9c30062182a2d4ad10824",
+    "bypass-rf/preflight.json": "d95f4c61b2e2a7980bb36df26f85d395efbf7b1fc3dc5be8ddb87f83edab561a",
+    "bypass-rf/preflight.py": "2b2b9dd1ce40787d9d50a3c139e5f4e3c46de5bc8a1df0a77e24743c4e678b4a",
+    "bypass-rf/prepare.py": "c801c3fbd44c5510cf9846bf8b812efd440cf4acfb9e27c5ad26b5220e53adec",
+    "bypass-rf/prepared.json": "469b07eb81595671825cbb88c2f5d287f2dec107282eb68e709baf9a07afff0f",
+    "bypass-rf/save-evidence.py": "1c3f7a8a1b168d3a5a054f1e571d6706422fed4f04a1838d9ca9a4612559dd46",
+    "bypass-rf/stopped.json": "f6597caf8bc7009c9e34d80e6e4a2b5ea398d9745e8f975006654a4783a78b71",
+    "upgrade-bypass-readiness/build.py": "e09767250855e8d11c65133a2d1c992e63a5e02948334dad86ac1f7ef447118c",
+    "upgrade-bypass-readiness/cmake.log": "31d1b23f88d4232cc171b64ab9a66add45f97a2c7bc1106a6e72f672f5ee06ae",
+    "upgrade-bypass-readiness/desktop-build.log": "291bd0bc76172fc0d9f4a746ebb28c76492ae0a86a8e57a4b3c47aacff66889c",
+    "upgrade-bypass-readiness/desktop-provenance.json": "2be594fb9dbc0552fbda7ecf59939ebb36e4b266e72cd8c8a0fb90560a5f2571",
+    "upgrade-bypass-readiness/report.json": "82724fc556f85e958cb9f5d5227ca4c3dfbd484152cfd3624670265857c2529f",
+    "upgrade-bypass-readiness/second-distinct-long-source-path.log": "170ef258ec1571208c9d8f47abd95c0fa997480e15d1fc1307dea03aa7de565a",
+    "upgrade-bypass-readiness/short.log": "39f9592735ccc095b227694b73a5d40dd93c633f0669c41065321b6c843da547"
+  }
+}

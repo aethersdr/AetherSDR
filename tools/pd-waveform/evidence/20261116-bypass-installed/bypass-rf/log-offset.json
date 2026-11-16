@@ -1,0 +1,10 @@
+{
+  "path": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile/logs/aethersdr-20261116-113120.log",
+  "offset": 441439,
+  "scope": "Both off-01 and on-01; enabled explicitly after desktop restart",
+  "bridge": {
+    "enabled": true,
+    "id": "aether.waveform.capture",
+    "ok": true
+  }
+}

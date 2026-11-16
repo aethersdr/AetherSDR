@@ -1,0 +1,287 @@
+{
+  "passed": true,
+  "rf_commands": [],
+  "start_requested": true,
+  "before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.640625,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "pans_before": [
+    {
+      "antennas": [
+        "ANT1",
+        "ANT2",
+        "RX_A",
+        "RX_B",
+        "XVTA",
+        "XVTB"
+      ],
+      "average": 50,
+      "averageIsRequest": false,
+      "bandwidthMhz": 0.2,
+      "centerKnown": true,
+      "centerMhz": 7.15,
+      "clientHandle": "0x5be10c58",
+      "fps": 25,
+      "fpsIsRequest": false,
+      "maxDbm": 0,
+      "minDbm": -180,
+      "ownedByUs": true,
+      "panId": "0x40000000",
+      "radioReportedAverage": 50,
+      "radioReportedFps": 25,
+      "rfGain": 0,
+      "rxAntenna": "RX_A",
+      "transmitInhibitReason": "",
+      "transmitInhibited": false,
+      "waterfallLineDuration": 80,
+      "weightedAverage": false,
+      "weightedAverageKnown": true,
+      "wide": false,
+      "wnb": false,
+      "wnbLevel": 90
+    }
+  ],
+  "choice": {
+    "action": "setCurrentIndex",
+    "class": "QComboBox",
+    "newValue": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+    "ok": true,
+    "target": "pdIqSelection"
+  },
+  "start": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdStart"
+  },
+  "registered_status": {
+    "available": true,
+    "calibration_control": true,
+    "calibration_required": false,
+    "calibration_state": "idle",
+    "correcting": false,
+    "correction_control": true,
+    "correction_enabled": true,
+    "diagnostics": {
+      "alignment": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "source_end": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "version": 1
+    },
+    "faults": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 1541475416,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "input_limited_samples": 0,
+    "keyed": false,
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "measurement_control": true,
+    "measurement_tone_capture_version": 3,
+    "measurement_tone_config": {
+      "center_hz": 1305,
+      "max_spacing_hz": 10000,
+      "min_spacing_hz": 200,
+      "source_id": "0000000000000000",
+      "spacing_hz": 1190
+    },
+    "measurement_tone_control": true,
+    "registered": true,
+    "source_purpose": "calibration",
+    "state": "idle"
+  },
+  "capture": {
+    "capture_id": "ba73239040de6ce1e9d5ce36a6c82c13",
+    "center_hz": 7150000,
+    "chunk_samples": 512,
+    "correcting": false,
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 1541475416,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "first_receive_ns": "2247087280848",
+    "format": "f32le-iq-v1",
+    "keyed": false,
+    "last_receive_ns": "2247428308767",
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "sample_count": 16384,
+    "sample_rate_hz": 48000,
+    "source": {
+      "generation": "6",
+      "kind": "local_dax_iq",
+      "stream_id": 536870912
+    }
+  },
+  "iq_bytes": 131072,
+  "iq_sha256": "b4d20219faf815f736b459bd6eca65fa82f3ec402bbee761a5e0eeb75f067707",
+  "rms": 33.543931082984294,
+  "nonzero_values": 30920,
+  "final_status": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "idle",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "diagnostics": {
+        "alignment": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 0,
+          "text": "",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 1541475416,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000000",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "calibration",
+      "state": "idle"
+    },
+    "http_status": 200
+  },
+  "after": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.671875,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "stop": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdStop"
+  },
+  "stopped": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "export_saved": true,
+  "error": "IQ capture request failed",
+  "captures": 0,
+  "measurement_absent": true,
+  "initial_validation_error": "Expected invalid measurement object; invalid export correctly omits it. Validator corrected without another export."
+}

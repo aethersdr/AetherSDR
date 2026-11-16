@@ -1,0 +1,25 @@
+[0/2] Re-checking globbed directories...
+[1/23] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/23] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-base_autogen/mocs_compilation.cpp.o
+[3/23] Building C object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[4/23] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
+[5/23] Building C object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o
+[6/23] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.o
+[7/23] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o
+[8/23] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o
+[9/23] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[10/23] Completed 'vulkan-shaders-gen'
+[11/23] Building C object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
+[12/23] Capturing build identity (git describe)
+[13/23] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[14/23] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
+[15/23] Linking CXX static library third_party/whisper.cpp/ggml/src/libggml-base.a
+[16/23] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDInstallationModel.cpp.o
+[17/23] Linking CXX static library libaethercore.a
+[18/23] Building CXX object CMakeFiles/aetherdesktop_support.dir/src/core/AutomationServer.cpp.o
+[19/23] Linking CXX static library libaetherdesktop_support.a
+[20/23] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/CopyAssistController.cpp.o
+[21/23] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Menus.cpp.o
+[22/23] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory

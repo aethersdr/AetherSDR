@@ -1,0 +1,8 @@
+{
+  "source_commit": "db6cb9e8e10077d462b6cf8d7377a3571e1550c9",
+  "sha256": "3f38df6567db1282c0f1d2efdcebcfcb236d2dfca4f658fa42bd7cc4115c78f8",
+  "selection_sha256": "7ccb75e3f30f16624d2c37b62722aa0d92106fae7e4092c545cad2b446475b5d",
+  "runtime_source": "dd33027f5b53430c60fe2a9db4e7a64ee027a458",
+  "release_blake2b_256": "8e6e13f9ba459205ad56ec4e445e2b718ab61c6a2f7b431c563cab9ac4e66749",
+  "build_type": "Debug"
+}

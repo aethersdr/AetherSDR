@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T19:28:29.760311+00:00",
+  "updated_utc": "2026-11-16T19:39:12.003570+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Build complete eight-file upgrade distribution using upgrade-bypass-readiness/build.py. Build/relaunch desktop with that selection, inspect concrete plan, then install through approved ordinary workflow. Receive IQ check and cold5W bypass/corrected RF tests; stop/audit and preserve outcomes.",
+  "next_action": "Implement bounded on-radio multi-frame capture to remove per-frame desktop-transfer delays; preserve RF cutoffs, source identity, cancellation and memory limits. Qualify exact package through native/shim/desktop and cold/warm RF, then continue full P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2906,7 +2906,7 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
-    "installed_state": "ba00 desktop/runtime ordinary upgrade, IQ4/FDXoff and finite5W pair passed; session stopped and cleanup audited. Baseline-readiness fix remains offline only.",
+    "installed_state": "dd33027runtime/db6cb9desktop: ordinary update and IQ passed.5Wbaseline valid; corrected four-frame capture failed at normal source expiry. Stopped and audited.",
     "latest_read_only_network_probe": {
       "utc": "2026-11-16T18:58:18.513294+00:00",
       "address": "192.168.50.100",
@@ -2959,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "Latest installed/RF buildba00. Reboot proof remainsfa8; earlier10W/stock results keep their original attribution.",
+    "source_provenance_note": "Installed baseline fix isdd33027. Last valid OFF/ONpair remainsba00; reboot proof remainsfa8; historical10W/stock comparisons retain their original attribution.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "ACQUISITION-INSTALLED-QUALIFICATION.json",
+    "latest_live_report": "BYPASS-INSTALLED-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3234,7 +3234,7 @@
   "baseline_readiness": {
     "report": "BYPASS-READINESS-QUALIFICATION.json",
     "offline_passed": true,
-    "installed": false
+    "installed": true
   },
   "acquisition_installed": {
     "report": "ACQUISITION-INSTALLED-QUALIFICATION.json",
@@ -3248,5 +3248,11 @@
     "two_path_reproducible": true,
     "installed": false,
     "durable_artifacts": "/home/jeremy/AetherSDR/aetherpd-checkpoints/20261116-bypass-readiness"
+  },
+  "baseline_installed": {
+    "report": "BYPASS-INSTALLED-QUALIFICATION.json",
+    "baseline_passed": true,
+    "corrected_capture_passed": false,
+    "session_stopped_and_audited": true
   }
 }

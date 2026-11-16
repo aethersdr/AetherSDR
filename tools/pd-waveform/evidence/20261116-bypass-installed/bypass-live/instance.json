@@ -1,0 +1,9 @@
+{
+  "pid": 1698641,
+  "socket": "/tmp/aetherpd-bypass",
+  "binary_sha256": "3f38df6567db1282c0f1d2efdcebcfcb236d2dfca4f658fa42bd7cc4115c78f8",
+  "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+  "runtime_source_before_update": "ba00b01c43676ac60d4f05ff1e76fae629a02e2e",
+  "desktop_source": "db6cb9e8e10077d462b6cf8d7377a3571e1550c9",
+  "keying_requires_explicit_bridge_action": true
+}
