@@ -320,9 +320,10 @@ static void testModelTable()
     const IcomModel* ic7610 = modelForId(0x98);
     check(ic7610 && ic7610->scopePoints == 689 && ic7610->scopeMaxAmplitude == 200,
           "the IC-7610 has a DIFFERENT scope geometry");
-    check(ic7610 && !ic7610->verified, "and is honestly marked unverified");
-    check(ic7610 && !profileFor(*ic7610).supports(IcomFeature::VfoMode),
-          "so it does not inherit the IC-705's selected-VFO 26 00 shape");
+    check(ic7610 && ic7610->verified, "its geometry is attested by the IC-7610 guide");
+    check(ic7610 && profileFor(*ic7610).dualReceiver
+              && profileFor(*ic7610).supports(IcomFeature::VfoMode),
+          "its guide explicitly attests absolute MAIN/SUB 26 rr addressing");
 
     // The IC-9700 is the case that shows the two claims are independent. Its
     // scope geometry is still ASSUMED from the IC-705, so `verified` stays
@@ -439,9 +440,12 @@ static void testModelTable()
     // up a command shape nobody checked on that radio. Naming each address here
     // keeps that guard: the flag cannot go true without a deliberate edit to
     // this list, and the comment beside it has to say what the evidence was.
-    static const std::array<std::uint8_t, 3> kAttestedVfoMode{
+    static const std::array<std::uint8_t, 6> kAttestedVfoMode{
         0xA4,  // IC-705     — its own CI-V Reference Guide documents 26 00
         0xB6,  // IC-7300MK2 — likewise, from its own guide
+        0x98,  // IC-7610 — official absolute MAIN/SUB 26 rr
+        0xB2,  // IC-7760 — official absolute MAIN/SUB 26 rr
+        0x8E,  // IC-7851 — official absolute MAIN/SUB 26 rr
         0xA2,  // IC-9700    — measured on a live radio, 2026-08-14: 26 00 read
                //              answered 26 00 05 00 01, the same three-byte
                //              mode/DATA/filter body cmdSetVfoMode writes
@@ -490,8 +494,8 @@ static void testCapabilityProfiles()
           "IC-705, IC-7300MK2 and IC-9700 are the intentional bring-up profiles");
     check(std::ranges::count_if(knownModels(), [](const IcomModel& model) {
               return profileFor(model).supportedBringup;
-          }) == 3,
-          "exactly three known models have supported command profiles");
+          }) == 6,
+          "six intentional profiles include three shared dual-receiver models");
 
     check(p705.setMenu.voxDelayItem == 359 && p705.setMenu.civTransceiveItem == 131,
           "IC-705 owns VOX delay 0359 and CI-V Transceive 0131");
@@ -577,7 +581,7 @@ static void testCapabilityProfiles()
               && controlSupported(model705, p705, *dtcs)
               && !controlSupported(modelMk2, pMk2, *dtcs),
           "DTCS write/read wiring is effective only for documented model profiles");
-    const IcomModel& identityOnly = *modelForId(0x98);
+    const IcomModel& identityOnly = *modelForId(0xAC); // IC-905 remains unprofiled
     const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
     const ControlSpec* frequency = spec("freq");
     const ControlSpec* scopeMode = spec("scope.onoff");

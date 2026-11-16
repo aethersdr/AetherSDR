@@ -294,7 +294,7 @@ Notes:
 
 ```
 rx_sensors_enable:true;    # S-meter updates
-tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting
+tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting or tuning
 hw_sensors_enable:true,500;  # supply voltage, current and temperature
 ```
 
@@ -304,7 +304,9 @@ RX sensors broadcast each receiver's S-meter in dBm:
 rx_channel_sensors:0,0,-97.3;
 ```
 
-TX sensors broadcast during transmit, including ALC.
+TX sensors broadcast during transmit and tune, including ALC. They follow this
+station's own transmission only: on a multiFLEX radio, another station's
+transmission sends none.
 
 Hardware sensors go only to the client that enabled them, as
 `hw_sensors:<volts>,<amps>,<°C>;`, every 30–1000 ms (200 ms when the interval

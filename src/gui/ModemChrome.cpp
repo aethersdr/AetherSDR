@@ -17,7 +17,7 @@ namespace {
 // window's own palette, base tokens and its navy literals, which the docked
 // applets still wear. Canon is the style guide's (RFC #6226) for the windows
 // that moved to it: content on canon raised over the window's ground, fields
-// on control, selection and focus in canon cyan, status keeping its green.
+// on control, selection in nested with ink, cyan focus, status keeping its green.
 struct Palette {
     const char* text; const char* ground; const char* panelTop; const char* panelBottom;
     const char* border; const char* borderSoft; const char* section; const char* textDim;
@@ -25,7 +25,7 @@ struct Palette {
     const char* accent; const char* accentBright; const char* textBright;
     const char* fieldText; const char* field;
     // The sheet's former literals, by role.
-    std::pair<const char*, const char*> literals[24];
+    std::pair<const char*, const char*> literals[25];
 };
 
 const Palette& palette(Look look)
@@ -44,6 +44,7 @@ const Palette& palette(Look look)
          {"@disabledFill@", "#0b1522"}, {"@tabCheckedText@", "#d4deea"},
          {"@tabCheckedFill@", "#0d1c20"}, {"@tabDisabledText@", "#7f8b9e"},
          {"@inputFill@", "#0b1625"}, {"@selection@", "#1b3650"},
+         {"@selectionTextRule@", ""},
          {"@sliderHandleDisabled@", "#2d3a45"}, {"@sliderFillDisabled@", "#22402a"},
          {"@tableText@", "#c2ccdb"}, {"@tableAlt@", "#081220"},
          {"@tableGrid@", "#14202f"}, {"@headerFill@", "#0d1825"},
@@ -64,6 +65,7 @@ const Palette& palette(Look look)
          {"@disabledFill@", "{{color.canon.control}}"}, {"@tabCheckedText@", "{{color.canon.aqua}}"},
          {"@tabCheckedFill@", "{{color.canon.nested}}"}, {"@tabDisabledText@", "{{color.canon.muted}}"},
          {"@inputFill@", "{{color.canon.control}}"}, {"@selection@", "{{color.canon.nested}}"},
+         {"@selectionTextRule@", "selection-color: {{color.canon.ink}};"},
          {"@sliderHandleDisabled@", "{{color.canon.line}}"}, {"@sliderFillDisabled@", "{{color.canon.line}}"},
          {"@tableText@", "{{color.canon.inkSoft}}"}, {"@tableAlt@", "{{color.canon.raised}}"},
          {"@tableGrid@", "{{color.canon.line}}"}, {"@headerFill@", "{{color.canon.raised}}"},
@@ -272,6 +274,7 @@ QLineEdit {
     border-radius: %7px;
     padding: %30px %31px;
     selection-background-color: @selection@;
+    @selectionTextRule@
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: %34px;
 }
@@ -311,6 +314,7 @@ QTableWidget {
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: %34px;
     selection-background-color: @selection@;
+    @selectionTextRule@
 }
 QTableWidget::item {
     padding: 2px 10px;

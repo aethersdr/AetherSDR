@@ -20,6 +20,7 @@
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
+#include "core/backends/hl2/Hl2PureSignal.h"
 #include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
 #include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
 #include "core/backends/hl2/Hl2TelemetrySource.h"   // the shared attribution rule
@@ -41,6 +42,7 @@ namespace AetherSDR::hl2 {
 class MetisClient;
 class Hl2RxDsp;
 class Hl2TxDsp;
+class Hl2PureSignal;
 
 // The IQ rates the HL2's DDC can run, ascending. One list serves as the
 // capability advertisement (sampleRatesHz), the pan zoom limits and the snap set
@@ -293,6 +295,27 @@ public:
         setTelemetryService(dynamic_cast<Hl2TelemetryService*>(src));
     }
 
+    // ---- PureSignal (docs/HERMES.md §11) -----------------------------------
+    // GUI thread. Each forwards to Hl2PureSignal on the I/O thread; the result
+    // comes back as extensionStatus("hl2", "puresignal", fields). Clients above
+    // the radio seam reach these only through invokeExtension("hl2",
+    // "puresignal.*") -- see invokePureSignal(). Enabling claims DDC 2 and 3
+    // (feedback and TX DAC reference), so it needs a 4-receiver board, a span
+    // whose link budget carries four, and at most two receivers open — and
+    // while it is on the receiver ceiling is two.
+    [[nodiscard]] const Hl2PureSignalStatus& pureSignalStatus() const noexcept { return m_psStatus; }
+    // False, with the reason in pureSignalBlocker(), when PureSignal cannot run.
+    bool setPureSignalEnabled(bool on);
+    void setPureSignalAutoCalibrate(bool on);
+    void pureSignalCalibrateOnce();
+    // Single, Reset and Restore end Auto: drops and persists the switch.
+    void clearPureSignalAutoCalibrate();
+    void pureSignalResetCorrection();
+    void setPureSignalAutoAttenuate(bool on);
+    void setPureSignalAttenuationDb(int att);
+    void savePureSignalCorrection(const QString& path);
+    void restorePureSignalCorrection(const QString& path);
+
 signals:
     // Connect-time progress for the client-side WDSP build; not on the seam because
     // WDSP is this family's alone. `stage` is operator-facing text without a counter;
@@ -333,6 +356,7 @@ private:
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
     friend struct Hl2SessionMemoryTestAccess;
+    friend struct Hl2PureSignalBackendTestAccess;
     // Installs MetisClient's start() stand-in and injects the link edge, so a
     // real connectRadio() runs without a socket (hl2_persist_*_test).
     friend struct Hl2PersistTestAccess;
@@ -351,7 +375,8 @@ private:
     // Forces m_connected, publishes a window and fires linkDown, so
     // control_front_end_overload_test follows a reconnect without a socket.
     friend struct Hl2FrontEndOverloadTestAccess;
-    // Runs loadHardwareOptions() without a socket (hl2_hardware_document_test).
+    // Runs loadHardwareOptions() / loadBoardIdentity() without a socket
+    // (hl2_hardware_document_test).
     friend struct Hl2BoardIdentityTestAccess;
     // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
     // take their age from it and read no clock, so the age row and the pairing
@@ -510,6 +535,37 @@ private:
 
     MetisClient* m_metis = nullptr;
     Hl2TxDsp* m_txDsp = nullptr;
+    // I/O thread, like m_txDsp; deleted before it in the destructor.
+    Hl2PureSignal* m_pureSignal = nullptr;
+    bool m_psEnabled = false;            // GUI thread: DDC 2/3 are claimed
+    bool m_psAvailable = false;          // last availability sent to m_pureSignal
+    QString m_psUnavailableReason;
+    int m_psFeedbackRateHz = 0;
+    Hl2PureSignalStatus m_psStatus;
+    // The operator's PureSignal preferences. GUI thread; the backend owns them
+    // and persists them per radio as the "PureSignal" radio_settings document
+    // (one coupler, one feedback attenuation), loaded on every connect.
+    bool m_psAutoCalibrate = true;
+    bool m_psAutoAttenuate = true;
+    int m_psAttenuationDb = Hl2PsGain::kAttMax;
+    // The operator's last PureSignal on/off, as puresignal.enable set it.
+    // Turned back on at link-up when the radio allows it. Not m_psEnabled:
+    // an automatic off (PureSignal became unavailable) does not change it.
+    bool m_psWanted = false;
+    void restorePureSignalEnabled();
+    void loadPureSignalPreferences();
+    void savePureSignalPreferences();
+    // Why PureSignal cannot run right now, or empty when it can.
+    [[nodiscard]] QString pureSignalBlocker() const;
+    // The "hl2" extension's puresignal.* verbs (get, enable, auto, single,
+    // reset, autoatt, att, save, restore). Replies with the status map, or
+    // with extensionError carrying the reason a request was refused.
+    void invokePureSignal(const QString& verb, quint64 requestId, const QVariant& arg);
+    [[nodiscard]] QVariantMap pureSignalFields() const;
+    // Re-derive availability after a connect, rate or receiver change; turns
+    // PureSignal off if the change took away what it needs.
+    void refreshPureSignalAvailability();
+    void applyPureSignalWire(bool on);
     bool m_connected = false;
 
     // Stream-free telemetry: reads the radio over the alternate control port, on its
@@ -570,8 +626,16 @@ private:
     // m_hw.filterBoard are the suggestion for it rather than a stored choice.
     // A suggested field is not persisted until a hw.set names it (#6806).
     hl2::GatewareBoard m_gatewareBoard = hl2::GatewareBoard::Unknown;
+    // The gateware major from the same connect's version text; published with
+    // the board as RadioCapabilities::boardIdentity (#7311). Held in the
+    // record's type; the parser's 8-bit result (the wire width) widens on
+    // assignment in loadBoardIdentity().
+    std::optional<int> m_gatewareMajor;
     bool m_hwCodecSuggested = false;
     bool m_hwFilterBoardSuggested = false;
+    // The connect-time identity from RadioConnectRequest::version: sets
+    // m_gatewareMajor and runs loadHardwareOptions() with the minor.
+    void loadBoardIdentity(const QString& gatewareVersion);
     // Load m_hw for m_radioSerial at connect, applying sessionCodec().
     void loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor);
     // Adopt a new set: persist (or not), push every field that changed to the

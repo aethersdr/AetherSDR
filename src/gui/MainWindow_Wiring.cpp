@@ -41,6 +41,8 @@
 #include "ModeFilterPresets.h"
 #include "DisplaySquelchRouting.h"
 #include "WfmApplet.h"
+#include "PureSignalApplet.h"
+#include "BandApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
@@ -7488,12 +7490,82 @@ void MainWindow::wireMeters()
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
-    // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
+    // ── LP-100A wattmeter — serial, ser2net, or the radio's USB passthrough ─
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
     // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
     // wiring first, the auto-connect trigger LAST. connectSerial() can call
     // onTransportUp() synchronously, so anything wired after the trigger
     // misses the first connected().
+    // Radio mode: the meter on the radio's own USB port. The connection
+    // stays free of radio types; these hooks and the cable model's signals
+    // are its only route to the radio.
+    {
+        const auto snapshotOf = [this](const QString& serial) {
+            AetherSDR::LpMeter::CableSnapshot snap;
+            const auto& cables = m_radioModel.usbCableModel().cables();
+            const auto it = cables.constFind(serial);
+            if (it == cables.constEnd()) { return snap; }
+            snap.known = true;
+            snap.pluggedIn = it->present;
+            snap.type = it->type;
+            snap.speed = it->speed;
+            snap.dataBits = it->dataBits;
+            snap.parity = it->parity;
+            snap.stopBits = it->stopBits;
+            snap.flowControl = it->flowControl;
+            return snap;
+        };
+        LpMeterConnection::RadioCableHooks hooks;
+        hooks.snapshot = snapshotOf;
+        hooks.configure = [this](const QString& serial, const AetherSDR::LpMeter::CableChange& change) {
+            using Setting = AetherSDR::LpMeter::CableChange::Setting;
+            using Field = UsbCableRequest::Field;
+            UsbCableRequest request{serial, -1, Field::Type, change.text};
+            switch (change.setting) {
+                case Setting::Type:        request.field = Field::Type; break;
+                case Setting::Speed:       request.field = Field::SerialSpeed; request.value = change.number; break;
+                case Setting::DataBits:    request.field = Field::DataBits; request.value = change.number; break;
+                case Setting::Parity:      request.field = Field::Parity; break;
+                case Setting::StopBits:    request.field = Field::StopBits; request.value = change.number; break;
+                case Setting::FlowControl: request.field = Field::FlowControl; break;
+            }
+            if (m_radioModel.requestUsbCable(request) != ReceiveDispatch::Dispatched) {
+                return false;
+            }
+            // The radio pushes a status for a type change but not for the serial
+            // settings (measured on a FLEX-8600, 4.3.16), so ask it to resend the
+            // cable status; the connection waits for that, not for R|0|.
+            if (change.setting != Setting::Type) {
+                m_radioModel.requestUsbCableStatus();
+            }
+            return true;
+        };
+        hooks.write = [this](const QString& serial, const QByteArray& bytes) {
+            return m_radioModel.requestUsbCableWrite(serial, bytes) == ReceiveDispatch::Dispatched;
+        };
+        m_lpMeterConn.setRadioCableHooks(std::move(hooks));
+        auto& cables = m_radioModel.usbCableModel();
+        const auto forward = [this, snapshotOf](const QString& serial) {
+            m_lpMeterConn.onRadioCableStatus(serial, snapshotOf(serial));
+        };
+        connect(&cables, &UsbCableModel::cableAdded, this, forward);
+        connect(&cables, &UsbCableModel::cableChanged, this, forward);
+        // A type change re-creates the cable (cableRemoved, then cableAdded in
+        // the same call). Read it a turn later so only a real removal or a
+        // radio disconnect looks like an unplug; a cable another client
+        // re-typed must not look like a replug the connection may configure.
+        connect(&cables, &UsbCableModel::cableRemoved, this, [this, forward](const QString& serial) {
+            QTimer::singleShot(0, this, [forward, serial] { forward(serial); });
+        });
+        connect(&cables, &UsbCableModel::passthroughDataReceived, this,
+                [this](const QString& serial, const QByteArray& bytes) {
+            m_lpMeterConn.onRadioCableData(serial, bytes);
+        });
+        const int pollMs = PeripheralSettings::deviceInt("Lp100a", "PollIntervalMs",
+            static_cast<int>(AetherSDR::LpMeter::PollGate::kSoloPollIntervalMs));
+        m_lpMeterConn.setPollIntervalMs(pollMs);
+        m_appletPanel->lpMeterApplet()->setPollIntervalMs(m_lpMeterConn.pollIntervalMs());
+    }
     connect(&m_lpMeterConn, &LpMeterConnection::connected, this, [this]() {
         auto* lp = m_appletPanel->lpMeterApplet();
         // Derived from the LIVE transport, never the persisted setting — the
@@ -7576,6 +7648,12 @@ void MainWindow::wireMeters()
             const int port = PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000);
             if (!ip.isEmpty())
                 m_lpMeterConn.connectNetwork(ip, static_cast<quint16>(port));
+        } else if (mode == "Radio") {
+            // Waits for the radio to report the cable; no radio is needed yet.
+            const QString cable = PeripheralSettings::deviceString("Lp100a", "RadioCable");
+            if (!cable.isEmpty())
+                m_lpMeterConn.connectRadioCable(
+                    cable, AetherSDR::LpMeterConnection::RadioCableIntent::Saved);
         }
 #ifdef HAVE_SERIALPORT
         else {
@@ -7766,8 +7844,6 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(tunerMaxWatts(radioMaxWatts, selection),
-                                                   selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };
@@ -7959,6 +8035,32 @@ void MainWindow::wireMeters()
             m_radioModel.transmitModel().apdConfigurable());
     });
 
+    if (m_appletPanel && m_appletPanel->bandApplet()) {
+        // Same band-plan lookup as the overlay's Band panel, so the two
+        // highlights agree under every regional plan.
+        m_appletPanel->bandApplet()->setBandPlanManager(m_bandPlanMgr);
+        connect(m_appletPanel->bandApplet(), &BandApplet::bandSelected,
+                this, [this](const QString& bandName, double freqMhz, const QString& mode,
+                             const QString& stackKeyHint) {
+            PanadapterApplet* pan = nullptr;
+            if (SliceModel* s = activeSlice()) {
+                pan = m_panStack ? m_panStack->panadapter(s->panId()) : nullptr;
+            }
+            if (!pan && m_panStack) {
+                pan = m_panStack->activeApplet();
+                if (!pan && !m_panStack->allApplets().isEmpty())
+                    pan = m_panStack->allApplets().first();
+            }
+            if (pan && pan->spectrumWidget() && pan->spectrumWidget()->overlayMenu()) {
+                emit pan->spectrumWidget()->overlayMenu()->bandSelected(
+                    bandName, freqMhz, mode, stackKeyHint);
+            }
+        });
+        connect(m_appletPanel->bandApplet(), &BandApplet::xvtrSetupRequested,
+                this, [this]() {
+            openRadioSetupPage(QStringLiteral("XVTR"));
+        });
+    }
 }
 
 // Adaptive RX filter (RFC #3878): per FFT frame, drive the fit engine for every
@@ -8295,6 +8397,15 @@ void MainWindow::announceAntennaChoiceRefused(bool tx)
                          << "antenna choice refused: this radio publishes no"
                          << "antenna port to choose";
     showUnsupportedControlNotice();
+}
+
+
+void MainWindow::wirePureSignalApplet(IRadioBackend* backend)
+{
+    // The applet binds only to an advertised extension and otherwise unbinds.
+    if (m_appletPanel && m_appletPanel->pureSignalApplet()) {
+        m_appletPanel->pureSignalApplet()->setBackend(backend);
+    }
 }
 
 } // namespace AetherSDR

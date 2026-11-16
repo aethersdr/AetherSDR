@@ -252,6 +252,15 @@ Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept;
 Cc ccRx1Freq(std::uint32_t hz) noexcept;
 // AD9866 LNA gain in dB, clamped to [-12, +48]; C4 = 0x40 | (dB + 12).
 Cc ccRxGain(int db) noexcept;
+// The same 0x0a bank with the PureSignal enable, DATA[22] = C2 bit 6. It is set
+// for the whole PureSignal session and, while keyed, C4 carries the feedback
+// attenuation instead of the receive gain (HL2 fact, consulted from MI0BOT's
+// Thetis fork, networkproto1.c; see THIRD_PARTY_LICENSES):
+// ((31 - att) & 0x3F) | 0x40, att -28..31, which is ccRxGain(19 - att). With
+// the bit set the HL2 gateware streams the TX DAC samples and the ADC on the
+// third and fourth receivers during transmit (DDC3 = reference, DDC2 = feedback).
+inline constexpr std::uint8_t kGainPureSignal = 0x40;   // C2 bit 6 = DATA[22]
+Cc ccGain(int db, bool pureSignal) noexcept;
 // Per-receiver ADC assignment (see kC0AdcAssignOrTxGain). Phase 1 runs one receiver on
 // ADC0, so every field is zero; the bank still has to be SENT for a conforming
 // device to route ADC samples to RX1 at all.
@@ -783,12 +792,30 @@ inline constexpr std::uint8_t kGatewareMinorSquare3 = 53;
     return nullptr;
 }
 
+// A stable, non-display id for the board, published as
+// RadioCapabilities::BoardIdentity::board (#7311). Unknown is a stock HL2 here:
+// board id 6 is the only board that reaches this backend. Never translate or
+// reword these; the support tier compares them.
+[[nodiscard]] constexpr const char* boardIdFor(GatewareBoard board) noexcept
+{
+    switch (board) {
+    case GatewareBoard::SquareSdr2: return "square-sdr-2";
+    case GatewareBoard::Square3:    return "square-3";
+    case GatewareBoard::Unknown:    return "hl2";
+    }
+    return "hl2";
+}
+
 // The word shown before the version: "Gateware", or "SQUARE SDR 2 gateware".
+// Display only: nothing classifies on it (#7311).
 std::string gatewareVersionLabel(const DiscoveryReply& reply);
 
 // The minor version back out of gatewareVersionText()'s "major.minor", as it
 // arrives in RadioConnectRequest::version. nullopt for "74", empty or malformed.
 std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) noexcept;
+// The major version back out of the same text: 74 for "74.3" and for "74".
+// nullopt for empty or malformed text.
+std::optional<std::uint8_t> gatewareMajorFromVersionText(std::string_view text) noexcept;
 
 // Build a 1032-byte EP2 packet carrying two C&C registers (one per frame). The
 // 504-byte payload is zero-filled, which is transmit SILENCE — ep2WriteTxIq()

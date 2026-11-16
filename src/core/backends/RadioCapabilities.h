@@ -148,6 +148,13 @@ struct ReceiveAudioExport {
     int maximumReceivers = 0;
 };
 
+// Host playback timing for the existing primary PCM queue. This is transport
+// metadata, independent of model names, monitor controls and decoder exports.
+struct ReceiveAudioPlayout {
+    int prefillMs = 0;
+    int bufferCapMs = 0;
+};
+
 // Broadcast FM controls are available only when their typed request is supported.
 struct BroadcastFmReceive {
     QVector<int> deemphasisUs;
@@ -395,6 +402,17 @@ struct RadioCapabilities {
     // status bar shows it above the model unless the model string already names it.
     QString manufacturer;
 
+    // The connected board, as the backend derived it below the seam (#7311). The
+    // GUI classifies a radio's support tier on this, never on display text such
+    // as RadioInfo::versionLabel. Absent = the backend declares no board identity;
+    // an optional cannot distinguish that from "never set", so set it explicitly
+    // per ADDING A FIELD.
+    struct BoardIdentity {
+        QString board;                    // stable lowercase id, e.g. "hl2", "square-sdr-2"
+        std::optional<int> gatewareMajor; // firmware/gateware major; nullopt = not reported
+    };
+    std::optional<BoardIdentity> boardIdentity;
+
     // Receive
     // Independent creation on an existing pan through the typed backend route.
     // Separate from maxSlices: a paired receiver/pan topology can support several
@@ -489,6 +507,7 @@ struct RadioCapabilities {
     std::optional<ReceiveCwPitchControl> receiveCwPitchControl;
     std::optional<ReceiveDspControl> receiveDspControl;
     std::optional<ReceiveAudioExport> receiveAudioExport;
+    std::optional<ReceiveAudioPlayout> receiveAudioPlayout;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;

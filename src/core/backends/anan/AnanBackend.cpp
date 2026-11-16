@@ -549,6 +549,8 @@ RadioCapabilities AnanBackend::capabilities() const
     c.radioGraphicEqControl = std::nullopt;
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
+    // Gateware is reported, but no support tier reads an ANAN board identity yet.
+    c.boardIdentity = std::nullopt;
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.
     // No VOX, monitor or speech-processor setters. PROC would be the host
     // ClientComp, but canTransmit is false below, so nothing serves it and the
@@ -669,6 +671,7 @@ RadioCapabilities AnanBackend::capabilities() const
     // ours, the radio echoes nothing back, and there is no register to read.
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt; // center also retunes the slice
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,

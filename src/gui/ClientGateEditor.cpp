@@ -288,36 +288,17 @@ ClientGateEditor::~ClientGateEditor() = default;
 ClientGate* ClientGateEditor::gate() const
 {
     if (!m_audio) return nullptr;
-    return m_side == Side::Rx ? m_audio->clientGateRx()
-                              : m_audio->clientGateTx();
+    return m_audio->clientGateRx();  // AetherTX has no gate (RN2 replaces it)
 }
 
 void ClientGateEditor::saveGateSettings() const
 {
     if (!m_audio) return;
-    if (m_side == Side::Rx) m_audio->saveClientGateRxSettings();
-    else                    m_audio->saveClientGateSettings();
-}
-
-void ClientGateEditor::showForTx()
-{
-    m_side = Side::Tx;
-    if (m_levelView && gate()) m_levelView->setGate(gate());
-    const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 TX");
-    if (m_titleBar)
-        static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
-    setWindowTitle(title);
-    syncControlsFromEngine();
-    restoreGeometryFromSettings();
-    show();
-    raise();
-    activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    m_audio->saveClientGateRxSettings();
 }
 
 void ClientGateEditor::showForRx()
 {
-    m_side = Side::Rx;
     if (m_levelView && gate()) m_levelView->setGate(gate());
     const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 RX");
     if (m_titleBar)

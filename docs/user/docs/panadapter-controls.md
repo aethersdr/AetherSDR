@@ -151,6 +151,16 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 
 *The Mini-Pan applet: a small spectrum view of the slice's passband.*
 
+### Band applet
+
+The **Band** applet (button **BAND**, first in the drawer, off by default) keeps the band buttons of the overlay's **Band** panel open in the applet panel, so you can change band in one click without covering the spectrum.
+
+- The grid holds **160** to **6**, **4** and **2** on radios that have them, your configured transverter bands, then **WWV**, **GEN**, **2200**, **630** and **XVTR**. **XVTR** opens **Settings → Radio Setup... → Transverters**.
+- A click acts on the active slice and changes band exactly as the overlay's **Band** panel does, band stack included.
+- The lit button follows the active slice wherever it is tuned, under the band plan chosen in **View → Band Plan**, exactly as the overlay's **Band** panel does. A frequency outside the plan lights **GEN**.
+- Bands outside the radio's tuning range are disabled; hover over one to see the range.
+- A radio that declares its own band list shows those bands instead, without transverter entries.
+
 ### Multiple and detached panadapters
 
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
@@ -217,7 +227,9 @@ The dock side is remembered when you restart AetherSDR.
 
 ### The button bar
 
-The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
+The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW; BAND is first in the drawer) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
+
+> **Upgrading from an older version:** your favorites and drawer are kept as you arranged them, and the new **BAND** button is added after your last button. Use **Customize Button Bar** to move it.
 
 <img src="/img/screens/customize-button-bar.png" width="440" alt="Customize Button Bar dialog. A note explains that the top five active buttons fill the row and the rest live in the drawer, while hidden buttons and their applets are disabled. The Active list holds VU, PWR, RX, TX and P/CW, a Favorites divider, then LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, SS, MQTT and CTR2. The Hidden list is empty, with arrow buttons between the lists and OK and Cancel at the bottom." />
 

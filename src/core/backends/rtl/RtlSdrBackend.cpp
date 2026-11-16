@@ -265,6 +265,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;
     c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.
+    c.boardIdentity = std::nullopt;     // a USB dongle reports no gateware.
     c.firmwareUpdateSource = std::nullopt;  // no published firmware list is read.
     c.panZoomModes = std::nullopt;      // no command plane, no per-pan zoom flags.
     c.hasAmCarrierLevel = false;
@@ -338,6 +339,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     }
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = ReceiveAudioExport{{24000, 48000}, m_receiverCapacity};
+    c.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     c.dspParameterReset = std::nullopt;
     c.panSpanModel = PanSpanModel{false, false};
     if (m_lastPublished && hasReceivingDcSensitive(*m_lastPublished)) {
