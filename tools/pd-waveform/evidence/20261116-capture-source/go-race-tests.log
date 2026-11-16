@@ -1,0 +1,37 @@
+--- FAIL: TestPrivateAetherPDCaptureNativePublicFixture (0.00s)
+    aetherpd_capture_linux_test.go:18: file file+net status-fixture: getsockopt: operation not permitted
+--- FAIL: TestPrivateAetherPDCaptureNativePublicSourceFixture (0.00s)
+    aetherpd_capture_linux_test.go:22: file file+net status-fixture: getsockopt: operation not permitted
+--- FAIL: TestPrivateAetherPDCaptureNativeFixture (0.00s)
+    aetherpd_capture_linux_test.go:111: file file+net status-fixture: getsockopt: operation not permitted
+--- FAIL: TestPrivateAetherPDCaptureRetrieval (0.00s)
+    --- FAIL: TestPrivateAetherPDCaptureRetrieval/changed_metadata=false (0.00s)
+        aetherpd_capture_linux_test.go:212: file file+net status-fixture: getsockopt: operation not permitted
+    --- FAIL: TestPrivateAetherPDCaptureRetrieval/changed_metadata=true (0.00s)
+        aetherpd_capture_linux_test.go:212: file file+net status-fixture: getsockopt: operation not permitted
+--- FAIL: TestPrivateAetherPDCaptureCancellation (0.00s)
+    aetherpd_capture_linux_test.go:276: file file+net status-fixture: getsockopt: operation not permitted
+--- FAIL: TestPDCorrectionHTTPAdmission (0.00s)
+    --- FAIL: TestPDCorrectionHTTPAdmission/0 (0.00s)
+        aetherpd_correction_linux_test.go:37: file file+net pd-calibration-parent: getsockopt: operation not permitted
+    --- FAIL: TestPDCorrectionHTTPAdmission/1 (0.00s)
+        aetherpd_correction_linux_test.go:37: file file+net pd-calibration-parent: getsockopt: operation not permitted
+--- FAIL: TestPDCorrectionStatusAdmission (0.00s)
+    --- FAIL: TestPDCorrectionStatusAdmission/armed (0.00s)
+        aetherpd_correction_linux_test.go:96: file file+net pd-calibration-parent: getsockopt: operation not permitted
+    --- FAIL: TestPDCorrectionStatusAdmission/running (0.00s)
+        aetherpd_correction_linux_test.go:96: file file+net pd-calibration-parent: getsockopt: operation not permitted
+    --- FAIL: TestPDCorrectionStatusAdmission/unregistered (0.00s)
+        aetherpd_correction_linux_test.go:96: file file+net pd-calibration-parent: getsockopt: operation not permitted
+    --- FAIL: TestPDCorrectionStatusAdmission/legacy (0.00s)
+        aetherpd_correction_linux_test.go:96: file file+net pd-calibration-parent: getsockopt: operation not permitted
+    --- FAIL: TestPDCorrectionStatusAdmission/keyed (0.00s)
+        aetherpd_correction_linux_test.go:96: file file+net pd-calibration-parent: getsockopt: operation not permitted
+--- FAIL: TestPDCorrectionUncertainReplyRetiresOwnedLifetime (0.00s)
+    --- FAIL: TestPDCorrectionUncertainReplyRetiresOwnedLifetime/cancel (0.00s)
+        aetherpd_correction_linux_test.go:120: file file+net pd-calibration-parent: getsockopt: operation not permitted
+    --- FAIL: TestPDCorrectionUncertainReplyRetiresOwnedLifetime/revoke (0.00s)
+        aetherpd_correction_linux_test.go:120: file file+net pd-calibration-parent: getsockopt: operation not permitted
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.163s
+FAIL

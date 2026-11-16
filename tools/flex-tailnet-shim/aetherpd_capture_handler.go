@@ -18,7 +18,8 @@ func pdCaptureIDValid(id string) bool {
 	return err == nil
 }
 
-func aetherPDCaptureHandler(n *Node, begin bool) http.HandlerFunc {
+func aetherPDCaptureHandler(n *Node, mode byte) http.HandlerFunc {
+	begin := mode == pdCaptureBegin || mode == pdCaptureBeginWithSource
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)
 		n.mu.Lock()
@@ -34,7 +35,7 @@ func aetherPDCaptureHandler(n *Node, begin bool) http.HandlerFunc {
 			writeJSON(w, 400, apiError{"capture accepts no query or body"})
 			return
 		}
-		op := pdCaptureBegin
+		op := mode
 		id := r.PathValue("captureID")
 		index := 0
 		if !begin {
@@ -50,6 +51,10 @@ func aetherPDCaptureHandler(n *Node, begin bool) http.HandlerFunc {
 		unavailable := func() { writeJSON(w, 503, map[string]string{"state": "capture_unavailable"}) }
 		if !usable {
 			unavailable()
+			return
+		}
+		if mode == pdCaptureBeginWithSource && channel != nil && !channel.captureSourceSupported {
+			writeJSON(w, http.StatusNotImplemented, apiError{"capture source identity is not supported by this session"})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
@@ -87,7 +92,8 @@ func aetherPDCaptureHandler(n *Node, begin bool) http.HandlerFunc {
 		if begin {
 			var manifest pdCaptureManifest
 			if json.Unmarshal(reply.body, &manifest) != nil || !pdCaptureIDValid(manifest.CaptureID) ||
-				manifest.Format != "f32le-iq-v1" || manifest.Samples != aetherPDCaptureSamples || manifest.ChunkSamples != pdCapturePublicChunk {
+				manifest.Format != "f32le-iq-v1" || manifest.Samples != aetherPDCaptureSamples || manifest.ChunkSamples != pdCapturePublicChunk ||
+				(mode == pdCaptureBeginWithSource && !manifest.Source.valid()) || (mode == pdCaptureBegin && manifest.Source != nil) {
 				unavailable()
 				return
 			}

@@ -64,7 +64,13 @@ struct Request {
 
 inline constexpr int kCaptureSamples = 16384;
 inline constexpr int kCaptureChunkSamples = 512;
+struct CaptureSourceIdentity {
+    quint32 streamId{0};
+    quint64 generation{0};
+    bool operator==(const CaptureSourceIdentity&) const = default;
+};
 struct CaptureManifest {
+    std::optional<CaptureSourceIdentity> source;
     std::optional<MeasurementSource> measurement;
     QString captureId;
     quint32 sampleRateHz{0};
@@ -75,7 +81,7 @@ struct CaptureManifest {
     bool correcting{false};
 };
 
-Request captureBeginRequest();
+Request captureBeginRequest(bool withSourceIdentity = false);
 std::optional<Request> captureChunkRequest(const CaptureManifest& manifest, int chunk);
 std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json);
 // Returns exactly 512 unchanged little-endian float32 complex samples.

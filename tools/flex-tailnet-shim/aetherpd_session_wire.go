@@ -50,17 +50,18 @@ type pdSessionReply struct {
 }
 
 type pdSessionChannel struct {
-	// Immutable after publication: capture v2, bounded tests v3, measurement source v4, correction selection v5.
-	correctionSupported  bool
-	captureSupported     bool
-	measurementSupported bool
-	testSupported        bool
-	conn                 net.Conn
-	writeMu              sync.Mutex
-	mu                   sync.Mutex
-	next                 uint32
-	pending              map[uint32]chan pdSessionReply
-	closed               bool
+	// Immutable after publication: capture v2, tests v3, measurement v4, correction v5, sampled source identity v6.
+	captureSourceSupported bool
+	correctionSupported    bool
+	captureSupported       bool
+	measurementSupported   bool
+	testSupported          bool
+	conn                   net.Conn
+	writeMu                sync.Mutex
+	mu                     sync.Mutex
+	next                   uint32
+	pending                map[uint32]chan pdSessionReply
+	closed                 bool
 }
 
 func newPDSessionChannel(conn net.Conn) *pdSessionChannel {
@@ -108,7 +109,7 @@ func (s *pdSessionChannel) CallTest(ctx context.Context, op byte, id [16]byte, d
 	return s.call(ctx, op, extra[:])
 }
 func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSessionReply {
-	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && (!s.testSupported || !pdTestOpcode(op))) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == 'M' && !s.measurementSupported) || (pdCorrectionOpcode(op) && !s.correctionSupported) {
+	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && (!s.testSupported || !pdTestOpcode(op))) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == pdCaptureBeginWithSource && !s.captureSourceSupported) || (op == 'M' && !s.measurementSupported) || (pdCorrectionOpcode(op) && !s.correctionSupported) {
 		return pdSessionReply{err: errors.New("invalid session operation")}
 	}
 	if err := ctx.Err(); err != nil {

@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <utility>
 
 using namespace AetherSDR::aetherpd;
@@ -50,6 +51,24 @@ void captureProtocol()
     check(captureChunkRequest(*manifest, 31)->path.endsWith(QStringLiteral("/31")), "last chunk request missing");
     check(!captureChunkRequest(*manifest, -1) && !captureChunkRequest(*manifest, 32), "unbounded chunk request");
     const QJsonObject good = QJsonDocument::fromJson(text).object();
+    check(captureBeginRequest(true).path == QStringLiteral("/v2/aetherpd/capture")
+        && captureBeginRequest().path == QStringLiteral("/v1/aetherpd/capture"), "capture versions mixed");
+    QJsonObject identity = good;
+    const QJsonObject validSource{{"kind", "local_dax_iq"}, {"stream_id", 1073741825}, {"generation", "18446744073709551615"}};
+    identity["source"] = validSource;
+    const std::optional<CaptureManifest> identified = parseCaptureManifest(encode(identity));
+    check(identified && identified->source && identified->source->streamId == 0x40000001
+        && identified->source->generation == std::numeric_limits<quint64>::max(), "sampled stream identity lost precision");
+    for (const auto& [key, value] : std::array<std::pair<const char*, QJsonValue>, 8>{{
+        {"kind", "audio"}, {"stream_id", 0}, {"stream_id", 4294967296.0}, {"stream_id", "1"},
+        {"generation", "0"}, {"generation", "01"}, {"generation", 7}, {"generation", "18446744073709551616"}}}) {
+        QJsonObject invalid = validSource;
+        invalid[QLatin1String(key)] = value;
+        identity["source"] = invalid;
+        check(!parseCaptureManifest(encode(identity)), "malformed stream identity accepted");
+    }
+    identity["source"] = QJsonValue::Null;
+    check(!parseCaptureManifest(encode(identity)), "null stream identity accepted");
     QJsonObject measured = good;
     measured["measurement"] = QJsonObject{{"source_id", "000000000000001f"}, {"tones", true}};
     const std::optional<CaptureManifest> sourced = parseCaptureManifest(encode(measured));
@@ -97,6 +116,11 @@ void captureProtocol()
 
     const QString directory = qEnvironmentVariable("AETHER_PD_CAPTURE_FIXTURE_DIR");
     if (!directory.isEmpty()) {
+        QFile sourceFile(directory + QStringLiteral("/source/manifest.json"));
+        check(sourceFile.open(QIODevice::ReadOnly), "Go source-identity capture manifest missing");
+        const std::optional<CaptureManifest> sourceManifest = parseCaptureManifest(sourceFile.readAll());
+        check(sourceManifest && sourceManifest->source && sourceManifest->source->streamId == 0x40000001
+            && sourceManifest->source->generation == 7, "native/Go/desktop stream identity changed");
         QFile file(directory + QStringLiteral("/manifest.json"));
         check(file.open(QIODevice::ReadOnly), "Go capture manifest missing");
         const std::optional<CaptureManifest> native = parseCaptureManifest(file.readAll());

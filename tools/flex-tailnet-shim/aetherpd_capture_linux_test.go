@@ -15,6 +15,15 @@ import (
 )
 
 func TestPrivateAetherPDCaptureNativePublicFixture(t *testing.T) {
+	testPrivateAetherPDCapturePublic(t, false)
+}
+
+func TestPrivateAetherPDCaptureNativePublicSourceFixture(t *testing.T) {
+	testPrivateAetherPDCapturePublic(t, true)
+}
+
+func testPrivateAetherPDCapturePublic(t *testing.T, withSource bool) {
+	t.Helper()
 	path := os.Getenv("AETHER_PD_CAPTURE_FIXTURE")
 	if path == "" {
 		t.Skip("explicit native C fixture not provided")
@@ -35,8 +44,13 @@ func TestPrivateAetherPDCaptureNativePublicFixture(t *testing.T) {
 	peer.Close()
 	n := newTestNode(t, "owner")
 	n.pdSession, _ = pdSessionTestPair(t, pdSessionOperations(&Node{pdProcess: p}))
+	n.pdSession.captureSourceSupported = withSource
 	h := NewAPI(n)
-	response := call(t, h, "POST", "/v1/aetherpd/capture", "192.168.50.20:4000", "owner", "")
+	endpoint := "/v1/aetherpd/capture"
+	if withSource {
+		endpoint = "/v2/aetherpd/capture"
+	}
+	response := call(t, h, "POST", endpoint, "192.168.50.20:4000", "owner", "")
 	waitErr := cmd.Wait()
 	var manifest pdCaptureManifest
 	if waitErr != nil || response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &manifest) != nil {
@@ -47,6 +61,17 @@ func TestPrivateAetherPDCaptureNativePublicFixture(t *testing.T) {
 		t.Fatal("native metadata changed")
 	}
 	directory := os.Getenv("AETHER_PD_CAPTURE_FIXTURE_DIR")
+	if withSource {
+		if !manifest.Source.valid() {
+			t.Fatal("sample source identity missing")
+		}
+		if directory != "" {
+			directory = filepath.Join(directory, "source")
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	if directory != "" {
 		if err := os.WriteFile(filepath.Join(directory, "manifest.json"), response.Body.Bytes(), 0600); err != nil {
 			t.Fatal(err)

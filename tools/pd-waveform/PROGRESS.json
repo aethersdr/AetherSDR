@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T11:31:03.321689+00:00",
+  "updated_utc": "2026-11-16T11:44:08.942659+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Complete remaining analyzer source/timeout contract and final process gates. Startup deadline guard is component-qualified; current10second RF-release contract is explicitly unproven. Radio return, new guardian packaging, exact reboot/RF and actual6300 remain required.",
+  "next_action": "Complete v2 capture adapter/result/export/UI integration and tests; show only captured stream identity, with channel/pan ownership unreported until an authoritative contract exists. Then refresh exact packages and resume full installation/reboot/RF gates when radio returns. Ten-second release contract remains open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2870,5 +2870,10 @@
     "status": "late-startup admission fixed and clock-injected cleanup timing characterized; component-qualified only",
     "installed": false,
     "full_10second_contract_resolved": false
+  },
+  "capture_source_identity": {
+    "report": "CAPTURE-SOURCE-IDENTITY-QUALIFICATION.json",
+    "status": "versioned capture identity producer and desktop parser component-qualified; workflow integration incomplete",
+    "installed": false
   }
 }

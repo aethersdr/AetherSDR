@@ -85,13 +85,33 @@ It collects a new snapshot and returns a manifest containing `capture_id`,
 `format` (`f32le-iq-v1`), `sample_rate_hz`, `center_hz`, `sample_count` (16,384),
 `chunk_samples` (512), `keyed`, `correcting`, and `first_receive_ns` /
 `last_receive_ns`. Nanosecond timestamps are decimal strings to avoid loss of
-integer precision in JSON clients. There are no stream or process identifiers
-in this public metadata. Version-two captures also carry
+integer precision in JSON clients. The v1 endpoint exposes no stream or process
+identifiers. Native `PDIQ0002` captures also carry
 `measurement: {"source_id": "000000000000001f", "tones": true}`. The ID is a
 canonical 16-character lowercase hexadecimal string scoped to the original
 owned DSP; zero means no measurement source. The same optional object appears
 in status. A true tone flag requires a nonzero source and keyed capture.
 Legacy absence remains distinguishable from observed provenance.
+
+`POST /v2/aetherpd/capture` has the same admission, capture size and lifetime,
+and adds `source: {"kind":"local_dax_iq","stream_id":1073741825,"generation":"7"}`.
+These values come from the immutable native capture header. The stream ID is
+a nonzero unsigned 32-bit JSON integer; acquisition generation is a nonzero
+unsigned 64-bit canonical decimal string. They identify the sampled stream,
+not a requested setting. They do not establish a DAX channel, panadapter ID,
+antenna, current ownership after the capture, or a calibrated RF level.
+Generation is scoped to the original DSP lifetime and can change on a normal
+reset; it is not a persistent radio identity. Existing v1 responses remain
+unchanged, and v2 captures use the same v1 chunk retrieval endpoint.
+
+The v2 request maps to fixed private opcode `J`, advertised by `PDTALK06`.
+The primary returns 501 for an older private session without sending the new
+opcode; the old session remains available for v1 capture. New primary/private
+session binaries ship in one atomic release. An older primary cannot attach
+to a v6 private process. No new native DSP command, socket, privilege or
+radio mutation is introduced. The desktop protocol parser understands the
+optional source identity; the capture adapter and operator display still need
+to adopt the v2 request and retain its provenance.
 
 `GET /v1/aetherpd/capture/{capture_id}/{chunk}` accepts a canonical lowercase
 32-character hex ID and chunk index 0–31. Each JSON response contains the

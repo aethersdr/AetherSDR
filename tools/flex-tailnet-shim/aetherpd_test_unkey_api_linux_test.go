@@ -29,12 +29,13 @@ func pdTestChannelPair(t *testing.T, op pdSessionTestOperation, stop func()) *pd
 	}()
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	var ready [8]byte
-	if _, err := io.ReadFull(client, ready[:]); err != nil || string(ready[:]) != "PDTALK05" {
+	if _, err := io.ReadFull(client, ready[:]); err != nil || string(ready[:]) != "PDTALK06" {
 		t.Fatal(err, string(ready[:]))
 	}
 	client.SetReadDeadline(time.Time{})
 	channel := newPDSessionChannel(client)
 	channel.captureSupported = true
+	channel.captureSourceSupported = true
 	channel.testSupported = true
 	channel.measurementSupported = true
 	t.Cleanup(func() {

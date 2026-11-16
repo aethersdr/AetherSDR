@@ -11,14 +11,15 @@ import (
 )
 
 const (
-	aetherPDCaptureSamples       = 16384
-	aetherPDCaptureChunk         = 1024 // Native datagram samples.
-	aetherPDCaptureHeader        = 72   // Legacy v1; v2 appends the source ID.
-	aetherPDCaptureHeaderV2      = 80
-	pdCapturePublicChunk         = 512 // Fits the existing 8 KiB private control reply.
-	pdCaptureBegin          byte = 'I'
-	pdCaptureReadFirst      byte = 0x80
-	pdCaptureReadEnd        byte = 0xa0
+	aetherPDCaptureSamples        = 16384
+	aetherPDCaptureChunk          = 1024 // Native datagram samples.
+	aetherPDCaptureHeader         = 72   // Legacy v1; v2 appends the source ID.
+	aetherPDCaptureHeaderV2       = 80
+	pdCapturePublicChunk          = 512 // Fits the existing 8 KiB private control reply.
+	pdCaptureBegin           byte = 'I'
+	pdCaptureBeginWithSource byte = 'J'
+	pdCaptureReadFirst       byte = 0x80
+	pdCaptureReadEnd         byte = 0xa0
 )
 
 type aetherPDIQCapture struct {
@@ -30,6 +31,7 @@ type aetherPDIQCapture struct {
 }
 
 type pdCaptureManifest struct {
+	Source         *pdCaptureSource     `json:"source,omitempty"`
 	Measurement    *pdMeasurementSource `json:"measurement,omitempty"`
 	CaptureID      string               `json:"capture_id"`
 	Format         string               `json:"format"`
@@ -41,6 +43,21 @@ type pdCaptureManifest struct {
 	Correcting     bool                 `json:"correcting"`
 	FirstReceiveNS string               `json:"first_receive_ns"`
 	LastReceiveNS  string               `json:"last_receive_ns"`
+}
+
+// Identity of the immutable sampled stream, not permission to reconfigure it.
+type pdCaptureSource struct {
+	Kind       string `json:"kind"`
+	StreamID   uint32 `json:"stream_id"`
+	Generation string `json:"generation"`
+}
+
+func (s *pdCaptureSource) valid() bool {
+	if s == nil || s.Kind != "local_dax_iq" || s.StreamID == 0 {
+		return false
+	}
+	generation, err := strconv.ParseUint(s.Generation, 10, 64)
+	return err == nil && generation != 0 && strconv.FormatUint(generation, 10) == s.Generation
 }
 
 type pdCaptureChunk struct {
@@ -60,7 +77,7 @@ type pdCaptureStore struct {
 }
 
 func pdCaptureOpcode(op byte) bool {
-	return op == pdCaptureBegin || (op >= pdCaptureReadFirst && op < pdCaptureReadEnd)
+	return op == pdCaptureBegin || op == pdCaptureBeginWithSource || (op >= pdCaptureReadFirst && op < pdCaptureReadEnd)
 }
 
 func pdCaptureJSON(code int, value any) pdSessionReply {
@@ -87,7 +104,7 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 		s.mu.Unlock()
 		return unavailable()
 	}
-	if op != pdCaptureBegin {
+	if op != pdCaptureBegin && op != pdCaptureBeginWithSource {
 		defer s.mu.Unlock()
 		if s.id == "" || !time.Now().Before(s.expires) {
 			s.id = ""
@@ -117,10 +134,18 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 	if err != nil || ctx.Err() != nil || s.closed || !alive() || len(frame.IQ) != 8*aetherPDCaptureSamples {
 		return unavailable()
 	}
+	var source *pdCaptureSource
+	if op == pdCaptureBeginWithSource {
+		source = &pdCaptureSource{Kind: "local_dax_iq", StreamID: frame.Stream, Generation: strconv.FormatUint(frame.Generation, 10)}
+		if !source.valid() {
+			return unavailable()
+		}
+	}
 	s.id = hex.EncodeToString(token[:])
 	s.frame = frame
 	s.expires = time.Now().Add(10 * time.Second)
 	return pdCaptureJSON(200, pdCaptureManifest{
+		Source:      source,
 		Measurement: frame.Measurement, CaptureID: s.id, Format: "f32le-iq-v1", SampleRate: frame.Rate, CenterHz: frame.CenterHz,
 		Samples: aetherPDCaptureSamples, ChunkSamples: pdCapturePublicChunk,
 		Keyed: frame.Flags&1 != 0, Correcting: frame.Flags&2 != 0,

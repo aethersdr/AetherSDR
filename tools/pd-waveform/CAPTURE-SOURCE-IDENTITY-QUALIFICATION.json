@@ -1,0 +1,65 @@
+{
+  "updated_utc": "2026-11-16T11:44:08.942659+00:00",
+  "base_commit": "de1b26aa479b73c02f0e422a5b8e83536481750b",
+  "status": "versioned capture identity producer and desktop parser component-qualified; workflow integration incomplete",
+  "installed": false,
+  "production_ready": false,
+  "radio_used": false,
+  "contract": {
+    "endpoint": "POST /v2/aetherpd/capture",
+    "private_version": "PDTALK06",
+    "private_opcode": "J",
+    "source_fields": [
+      "kind=local_dax_iq",
+      "nonzero uint32 stream_id",
+      "nonzero uint64 generation as canonical decimal string"
+    ],
+    "authority": "immutable existing native capture header; no stream selection, provisioning or RF command",
+    "compatibility": "v1 status/capture/chunks unchanged; older private sessions return501 before new opcode dispatch; primary/private binaries update atomically",
+    "not_proven_by_identity": [
+      "DAX channel number",
+      "panadapter identifier",
+      "antenna choice",
+      "live ownership after snapshot",
+      "RF calibration"
+    ]
+  },
+  "validation": {
+    "go": "Selected capture, private capture, session, correction, bounded helper and public contract tests passed with race detector.",
+    "native_cross_language": "Existing native C capture fixture -> Go private/public v1 and v2 -> desktop parser passed. All sample bytes checked by Go; v1 sample bytes and both manifests checked by C++.",
+    "parser_bounds": "Unknown kind, zero/overflow stream, numeric/noncanonical/overflow generation rejected; UINT64_MAX preserved exactly.",
+    "session_fences": "Invalid auth/query/body never reaches session; unsupported v2 does not write to old session; token revocation and session replacement withdraw pending metadata; old capture IDs cannot adopt newer snapshots.",
+    "initial_sandbox_failure": "getsockopt operation not permitted in local inherited Unix socket fixtures; terminal failed log preserved. Exact test set rerun with local socket inspection access passed.",
+    "arm_builds": {
+      "armv7": {
+        "bytes": 21823648,
+        "sha256": "07a81947dfaaf894c9b1a19452ea1d42c80780160c0bd75e9aecf18730e1610d"
+      },
+      "arm64": {
+        "bytes": 21364896,
+        "sha256": "acfaa05c0fac8bef1a62914a64c077ee3af3aed0a037347f34a71b05f6c87890"
+      }
+    },
+    "static_checks": "git diff --check and strict test registration passed"
+  },
+  "remaining": [
+    "Adopt v2 in desktop capture adapter with bounded, explicit compatibility handling.",
+    "Retain sampled stream identity in measurement results/exports and show verified source information in operator UI.",
+    "Channel/panadapter binding is still not reported by this capture metadata; expose only evidence-backed values and unavailable reasons.",
+    "Full desktop rebuild/workflow tests, signed runtime packaging, live installation/reboot/RF and actual6300 qualification.",
+    "Ten-second RF release contract and remaining full P1-P10 goal remain open."
+  ],
+  "evidence_directory": "evidence/20261116-capture-source",
+  "evidence_sha256": {
+    "arm-builds.json": "b456d263ec40b44b4d7ddd76defbbb69118a6b86536ef18c712bf3ce1f97f227",
+    "build-arm64.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "build-armv7.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cpp-build.log": "127e7b61ea1d825ed9728f53ad7780126ee51f771e2e80afa766d223e69aea7c",
+    "cross-language-tests.log": "91e63c3decf07670a1fdd0e69b4a8134c99dcf9da59f4d95b0931c5ddfa166b9",
+    "fixture-sha256.json": "6dde0925f4bf16e30e9b364212a71e7c906e6ed1ddbd4cce666860d5fada6eb6",
+    "go-race-escalated.log": "1a4972bb0ce2b3cda3d3c75a033b46840f080f48fb368bc1c9fd8b3bc40bbc14",
+    "go-race-tests.log": "54042ae5d1e23484842cefdea387032aeca527fbddb2c68aab214622ad0bbe7f",
+    "manifest-v1.json": "78a7c70e671e0cf5ebb2a86e80bc7a680169ef5ed0470472573921f10f49f278",
+    "manifest-v2.json": "095d28ca54a3a76b7a3d6ffc4ae681729b3d0d479c2c00681f01db9d6ccee631"
+  }
+}

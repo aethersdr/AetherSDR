@@ -66,7 +66,7 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 	}
 	hello := "PDTALK02"
 	if testOperation != nil {
-		hello = "PDTALK05"
+		hello = "PDTALK06"
 	}
 	if err := pdWriteAll(conn, []byte(hello)); err != nil {
 		return err

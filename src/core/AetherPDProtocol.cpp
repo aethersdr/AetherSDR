@@ -371,9 +371,9 @@ std::optional<Acknowledgment> parseAcknowledgment(Operation operation, int httpS
     }
     return std::nullopt;
 }
-Request captureBeginRequest()
+Request captureBeginRequest(bool withSourceIdentity)
 {
-    return {"POST", QStringLiteral("/v1/aetherpd/capture"), 4000};
+    return {"POST", withSourceIdentity ? QStringLiteral("/v2/aetherpd/capture") : QStringLiteral("/v1/aetherpd/capture"), 4000};
 }
 
 std::optional<Request> captureChunkRequest(const CaptureManifest& manifest, int chunk)
@@ -388,7 +388,8 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
 {
     if (json.size() > 2048) { return std::nullopt; }
     const std::optional<QJsonObject> parsed = object(json);
-    if (!parsed || parsed->size() != (parsed->contains(QStringLiteral("measurement")) ? 11 : 10)) { return std::nullopt; }
+    if (!parsed || parsed->size() != 10 + int(parsed->contains(QStringLiteral("measurement")))
+        + int(parsed->contains(QStringLiteral("source")))) { return std::nullopt; }
     const QJsonObject& o = *parsed;
     CaptureManifest m;
     m.captureId = o.value(QStringLiteral("capture_id")).toString();
@@ -406,6 +407,21 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
     if (o.contains(QStringLiteral("measurement"))) {
         m.measurement = measurementSource(o.value(QStringLiteral("measurement")));
         if (!m.measurement || (m.measurement->tones && !m.keyed)) { return std::nullopt; }
+    }
+    if (o.contains(QStringLiteral("source"))) {
+        if (!o.value(QStringLiteral("source")).isObject()) { return std::nullopt; }
+        const QJsonObject source = o.value(QStringLiteral("source")).toObject();
+        quint64 stream = 0;
+        bool generationValid = false;
+        const QJsonValue generationValue = source.value(QStringLiteral("generation"));
+        const QString generationText = generationValue.toString();
+        const quint64 generation = generationText.toULongLong(&generationValid);
+        if (source.size() != 3 || source.value(QStringLiteral("kind")).toString() != QLatin1String("local_dax_iq")
+            || !counter(source, "stream_id", stream) || stream == 0 || stream > std::numeric_limits<quint32>::max()
+            || !generationValue.isString() || !generationValid || !generation || generationText != QString::number(generation)) {
+            return std::nullopt;
+        }
+        m.source = CaptureSourceIdentity{quint32(stream), generation};
     }
     m.sampleRateHz = quint32(rate);
     return m;
