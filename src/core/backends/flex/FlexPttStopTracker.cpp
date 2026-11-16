@@ -154,8 +154,9 @@ bool FlexPttStopTracker::requestStop(const TxCoordinator::Operation& operation,
         fail(Failure::Identity);
         return false;
     }
-    const bool recovering = m_phase == Phase::ExternalReleased;
-    if (m_stop.valid() || (!recovering
+    const bool recovering = m_phase == Phase::AwaitExternalReady
+        || m_phase == Phase::AwaitExternalOwnerClear || m_phase == Phase::ExternalReleased;
+    if (m_stopSequence != 0 || (!recovering
         && (m_phase < Phase::AwaitKeyReply || m_phase > Phase::Transmitting))) {
         fail(Failure::State);
         return false;
@@ -164,7 +165,7 @@ bool FlexPttStopTracker::requestStop(const TxCoordinator::Operation& operation,
     m_stopSequence = stopSequence;
     if (recovering) {
         // The first external-unkey observation owns the entire recovery budget.
-        m_phase = Phase::AwaitRecoveryStopWrite;
+        if (m_phase == Phase::ExternalReleased) { m_phase = Phase::AwaitRecoveryStopWrite; }
     } else {
         m_deadlineMs = nowMs + kTransitionTimeoutMs;
     }
@@ -334,18 +335,24 @@ void FlexPttStopTracker::interlock(QStringView body, quint32 envelopeHandle)
     } else if (m_phase == Phase::Transmitting && state == u"TRANSMITTING"
                && source == u"SW" && handle == m_clientHandle) {
         // Repeated current state is not a new keying operation.
-    } else if (m_phase == Phase::Transmitting && !m_stop.valid()
+    } else if ((m_phase == Phase::Transmitting || m_phase == Phase::AwaitStopWrite
+                || m_phase == Phase::AwaitStopReply)
                && state == u"UNKEY_REQUESTED" && source.isEmpty() && handle == m_clientHandle) {
         // A radio-side cutoff can complete while the desktop is stalled. Keep
         // its full transition, but require our subsequent stop ACK and a new
         // idle observation before certifying this original operation.
         m_phase = Phase::AwaitExternalReady;
-        m_deadlineMs = m_lastMs + kTransitionTimeoutMs;
+        if (m_deadlineMs == 0) { m_deadlineMs = m_lastMs + kTransitionTimeoutMs; }
     } else if (m_phase == Phase::AwaitExternalReady && state == u"READY"
                && source.isEmpty() && handle == m_clientHandle) {
         m_phase = Phase::AwaitExternalOwnerClear;
     } else if (m_phase == Phase::AwaitExternalOwnerClear && idle) {
-        m_phase = Phase::ExternalReleased;
+        if (m_stop.matchesOperation(m_operation)) {
+            m_phase = m_stopReplied ? Phase::Confirmed
+                : m_stopWritten ? Phase::AwaitRecoveryStopReply : Phase::AwaitRecoveryStopWrite;
+        } else {
+            m_phase = Phase::ExternalReleased;
+        }
     } else if ((m_phase == Phase::ExternalReleased
                 || m_phase == Phase::AwaitRecoveryStopWrite
                 || m_phase == Phase::AwaitRecoveryStopReply) && idle) {

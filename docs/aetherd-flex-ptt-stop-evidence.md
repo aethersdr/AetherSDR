@@ -165,31 +165,38 @@ an independent helper unkeys during a desktop stall. The captured FLEX-8600
 [`DESKTOP-STALL-QUALIFICATION.json`](../tools/pd-waveform/DESKTOP-STALL-QUALIFICATION.json).
 The original key write, matching success reply, owned PTT_REQUESTED and owned
 TRANSMITTING must already have qualified the original operation. Recovery then
-requires all of the following, in this connection's transport order:
+requires the following observations on that original connection:
 
-1. Complete UNKEY_REQUESTED with the original GUI owner and empty source.
-2. Complete READY retaining that owner, then complete unowned READY.
-3. The original coordinator operation is fenced and its exact stop request is
-   bound to a new full `xmit 0` write on the original connection.
-4. The matching successful stop reply, then another complete unowned READY.
+1. Complete UNKEY_REQUESTED with the original GUI owner and empty source,
+   followed by complete READY retaining that owner, then complete unowned READY.
+2. The original coordinator operation is fenced and its exact stop request is
+   bound to a full `xmit 0` write and matching successful reply on the original
+   connection. This exchange may interleave with the release transitions.
+3. A complete unowned READY arrives after that acknowledgment. It can be the
+   owner-clear in step 1 if it arrives later; otherwise another idle sample is
+   required. An earlier idle sample cannot satisfy this condition retroactively.
 
 The early release sequence alone cannot admit another operation or produce a
 certificate. Neither can the stop reply, nor an idle sample received before it.
-A helper-triggered idle snapshot cannot substitute for step 4. The five-second
-recovery budget starts at the first UNKEY_REQUESTED observation and no later
-request, acknowledgment or idle sample renews it. Contradictory input, a new TX
-interval, missing transitions, ownership changes, partial writes, malformed
-replies and disconnect still invalidate the attempt. Unconsumed evidence keeps
-the same revocation and coordinator entered-writer barriers as ordinary release.
-This path sends no new positive key command and does not rearm a source.
+A helper-triggered idle snapshot cannot substitute for step 3. The five-second
+budget starts at the first stop request or independent UNKEY_REQUESTED,
+whichever arrives first. No later request, acknowledgment or idle renews it.
+Contradictory input, a new TX interval, missing transitions, ownership changes,
+partial writes, malformed replies and disconnect still invalidate the attempt.
+A superseding stop token cannot inherit an earlier write or acknowledgment.
+Unconsumed evidence keeps the same revocation and coordinator entered-writer
+barriers as ordinary release. This path sends no new positive key command and
+does not rearm a source.
 
-This is a bounded extension for the captured complete-release-before-stop
-ordering, not a general recovery from failed evidence. A stop request arriving
-before the independent release sequence is complete is not qualified by this
-path. The ordinary acknowledged-stop sequence remains unchanged. Firmware
-without the final fresh idle observation remains in recovery. Protocol ordering
-and the complete original lifecycle are the basis for this implementation
-inference; an ambient READY alone is never enough.
+This is a bounded extension for overlapping radio-side and desktop stop, not
+a general recovery from failed evidence. The normal acknowledged-stop sequence
+remains supported. Firmware without a complete idle after the matching reply
+remains in recovery. Protocol ordering and the complete original lifecycle are
+the basis for this implementation inference; ambient READY alone is never
+enough. FLEX-8600 traces cover both complete release before the desktop stop and
+stop acknowledgment between owned READY and owner-clear. Socket-free tests
+cover all nine placements of stop and reply around the three transitions;
+that enumeration is not a claim of hardware coverage for every placement.
 
 ## Production composition and qualification
 

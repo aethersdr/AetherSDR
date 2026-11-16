@@ -620,9 +620,10 @@ ADC headroom or calibrated output power.
    expires within the selected timeout, never more than ten seconds from
    **Transmit measurement**, and the helper schedules cleanup earlier. Expiry requests stop and
    ends capture; the panel waits for confirmed release. If the independent helper
-   finishes unkeying while the desktop is stalled, the desktop can confirm that
-   release after it resumes, provided the complete original release sequence,
-   its own stop acknowledgment and fresh idle readback are all available.
+   unkeys while the desktop is stalled, the desktop can confirm release after
+   it resumes, including when ownership is still clearing. This requires the
+   complete original release sequence, its own stop acknowledgment and complete
+   idle readback after that acknowledgment.
    The interrupted measurement is not restarted; another transmission requires
    **Arm measurement source**, a new receive check and **Transmit measurement**.
    Missing release evidence keeps the measurement in recovery.

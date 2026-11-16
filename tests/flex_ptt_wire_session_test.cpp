@@ -196,6 +196,34 @@ void independentReleaseBeforeDesktopStop()
           "recovery retires old operation without automatic keying");
 }
 
+void independentReleaseOverlapsStop()
+{
+    const QList<QStringView> transition{kUnkey, kReadyOwned, kIdle};
+    for (int stopAfter = 0; stopAfter <= 2; ++stopAfter) {
+        for (int replyAfter = stopAfter; replyAfter <= 3; ++replyAfter) {
+            Harness h;
+            h.key(); h.keyReadback();
+            if (stopAfter == 0) { h.cancel(); h.stopWire(); }
+            if (replyAfter == 0) { h.feed(u"R102|0|"); }
+            for (int i = 0; i < 3; ++i) {
+                h.feed(transition[i]);
+                if (i + 1 == stopAfter) { h.cancel(); h.stopWire(); }
+                if (i + 1 == replyAfter) { h.feed(u"R102|0|"); }
+                if (i < 2 || replyAfter == 3) {
+                    check(!h.evidence.valid(h.now),
+                          "overlapping stop requires both complete release and idle after its ACK");
+                }
+            }
+            if (replyAfter == 3) { h.feed(kIdle); }
+            check(h.evidence.valid(h.now) && h.evidence.request.sameRequest(h.stop),
+                  "stop request and ACK may interleave with original independent release");
+            check(h.coordinator.confirmStopped(h.evidence.request)
+                  && h.commands == QStringList{"xmit 1", "xmit 0"},
+                  "overlapping release confirms original operation with no new positive command");
+        }
+    }
+}
+
 void independentReleaseRefusals()
 {
     const QList<QStringView> transition{kUnkey, kReadyOwned, kIdle};
@@ -205,9 +233,10 @@ void independentReleaseRefusals()
         for (int i = 0; i < 3; ++i) {
             if (i != omitted) { h.feed(transition[i]); }
         }
-        h.cancel(); h.stopWire(); h.feed(u"R102|0|"); h.feed(kIdle);
+        h.cancel(); h.stopWire(); h.feed(u"R102|0|");
+        if (omitted != 2) { h.feed(kIdle); }
         check(!h.evidence.valid(h.now) && h.coordinator.recovering(),
-              "fresh stop ACK and idle cannot fill in a missing original release transition");
+              "recovery still requires every original release transition and owner-clear");
     }
     for (QStringView reply : {u"R999|0|", u"R102|1|", u"R102|garbage|"}) {
         Harness h;
@@ -216,6 +245,46 @@ void independentReleaseRefusals()
         check(!h.evidence.valid(h.now) && h.coordinator.recovering(),
               "missing, failed or malformed recovery acknowledgment cannot release operation");
     }
+    for (int stopAfter = 1; stopAfter <= 2; ++stopAfter) {
+        Harness missingReply;
+        missingReply.key(); missingReply.keyReadback(); missingReply.feed(kUnkey);
+        if (stopAfter == 2) { missingReply.feed(kReadyOwned); }
+        missingReply.cancel(); missingReply.stopWire();
+        if (stopAfter == 1) { missingReply.feed(kReadyOwned); }
+        missingReply.feed(kIdle); missingReply.feed(kIdle);
+        check(!missingReply.evidence.valid(missingReply.now) && missingReply.coordinator.recovering(),
+              "overlapping independent release never replaces missing stop ACK");
+
+        Harness deadline;
+        deadline.key(); deadline.keyReadback(); deadline.feed(kUnkey);
+        if (stopAfter == 2) { deadline.feed(kReadyOwned); }
+        deadline.now += 4000;
+        deadline.cancel(); deadline.stopWire(); deadline.feed(u"R102|0|");
+        if (stopAfter == 1) { deadline.feed(kReadyOwned); }
+        deadline.now += 1000;
+        deadline.feed(kIdle);
+        check(!deadline.evidence.valid(deadline.now),
+              "stop during independent release cannot extend its first-unkey deadline");
+    }
+    Harness replacement;
+    replacement.key(); replacement.keyReadback(); replacement.feed(kUnkey);
+    replacement.cancel(); replacement.stopWire(); replacement.feed(u"R102|0|");
+    const TxCoordinator::StopRequest newStop = replacement.coordinator.requestStopConfirmation(replacement.operation);
+    replacement.wire.stop(103, replacement.operation, newStop, replacement.now);
+    replacement.feed(kReadyOwned); replacement.feed(kIdle);
+    check(!replacement.evidence.valid(replacement.now) && replacement.coordinator.recovering(),
+          "replacement stop token cannot inherit the original acknowledgment during partial release");
+
+    Harness earlierStopDeadline;
+    earlierStopDeadline.key(); earlierStopDeadline.keyReadback();
+    earlierStopDeadline.cancel(); earlierStopDeadline.stopWire();
+    earlierStopDeadline.now += 4000;
+    earlierStopDeadline.feed(kUnkey); earlierStopDeadline.feed(u"R102|0|"); earlierStopDeadline.feed(kReadyOwned);
+    earlierStopDeadline.now += 1000;
+    earlierStopDeadline.feed(kIdle);
+    check(!earlierStopDeadline.evidence.valid(earlierStopDeadline.now),
+          "independent unkey cannot renew an already pending stop deadline");
+
     Harness earlyIdle;
     earlyIdle.key(); earlyIdle.keyReadback();
     earlyIdle.feed(kUnkey); earlyIdle.feed(kReadyOwned); earlyIdle.feed(kIdle);
@@ -316,6 +385,7 @@ int main(int argc, char** argv)
     rapidReleaseAndHandoff();
     helperSubscriptionsDuringRelease();
     independentReleaseBeforeDesktopStop();
+    independentReleaseOverlapsStop();
     independentReleaseRefusals();
     partialAndStale();
     return failures ? 1 : 0;

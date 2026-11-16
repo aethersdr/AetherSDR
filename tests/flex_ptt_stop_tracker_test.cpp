@@ -215,9 +215,11 @@ void missingAndReorderedTransitions()
     beforeReply.feed(kUnkey);
     beforeReply.feed(u"R102|0|");
     beforeReply.feed(kReadyOwned);
-    beforeReply.feed(kIdle);
     check(!beforeReply.tracker.evidence(beforeReply.now).valid(),
-          "status before the matching stop reply cannot be relabeled as later evidence");
+          "early unkey and matched stop reply still need owner-clear");
+    beforeReply.feed(kIdle);
+    check(beforeReply.tracker.evidence(beforeReply.now).sameRequest(beforeReply.stop),
+          "complete original release with idle after matched stop reply handles overlapping cutoff");
 
     Harness early;
     check(early.tracker.begin(early.operation, 101, early.now), "prepare early cancellation");
@@ -396,6 +398,15 @@ void attemptIdentityAndReconnect()
           "superseding attempt invalidates captured evidence without new radio events");
     check(!h.tracker.requestStop(h.operation, replacement, 103, h.now),
           "new token cannot be attached to an old READY sequence");
+
+    Harness overlapping;
+    overlapping.start(); overlapping.feed(kUnkey); overlapping.stopReply();
+    const auto superseding = overlapping.coordinator.requestStopConfirmation(overlapping.operation);
+    check(!overlapping.tracker.requestStop(overlapping.operation, superseding, 103, overlapping.now),
+          "partial independent release cannot rebind an already attempted stop");
+    overlapping.feed(kReadyOwned); overlapping.feed(kIdle);
+    check(!overlapping.tracker.evidence(overlapping.now).valid(),
+          "superseding token cannot inherit old write and reply observations");
 
     Harness wrong;
     Harness foreign;
