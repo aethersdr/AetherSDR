@@ -643,8 +643,9 @@ attempt** explicitly authorizes another delivery of that plan. Preparation alone
 makes no radio changes, and a completed or changed local record cannot be used
 for this action. An unconfirmed status does not prove that the previous attempt
 stopped; an existing carrier prevents delivery. The radio accepts only the
-matching transaction. A terminal failed transaction requires separate recovery;
-this control does not replace its identity or erase the installed store.
+matching transaction. Retrying a terminal failed transaction also requires a
+verified package with explicit retry support. Older packages may require separate
+recovery. This control does not replace the identity or erase the installed store.
 
 After that check confirms the exact committed installation, **Remove temporary
 installer packages** rechecks the same commit and removes only the two package

@@ -480,10 +480,9 @@ failed `PDFST001` transaction. The separately signed
 `0.0.0-retry.d60df159f` candidate is built and independently pinned in the
 qualification desktop; its native signatures and three desktop test suites pass.
 Its release is 9,005,703 bytes. Assembly with identical inputs was reproducible;
-complete binary rebuild reproducibility has not been tested. The installed radio
-still runs `0.0.0-first.7c87bc223`. The ordinary pending-upload resume proof above
-does not qualify failed transaction retry; live qualification of the new candidate
-remains required.
+complete binary rebuild reproducibility has not been tested. The candidate is now
+installed on the 8600; its separate failed-transaction retry qualification is below.
+The ordinary pending-upload resume proof above exercises a different interruption.
 
 Only the authenticated bootstrap delivery path can publish `transaction-retry`.
 It requires the exact terminal failed fresh plan, republishes the bounded
@@ -514,7 +513,48 @@ publication/consumption, metadata and lock refusal, identity and selection
 preservation, and committed redelivery without reactivation. A separate mutant
 that accepted a partial retry marker as authorization was rejected by the regression.
 The radio and service adapters in whole-worker tests are fixtures; this is not
-physical power-loss, live retry or FLEX-6000 hardware qualification.
+physical power-loss or FLEX-6000 hardware qualification. Live retry evidence is
+recorded separately below.
+
+## Live failed first-install retry qualification
+
+`DESKTOP-FIRST-INSTALL-FAILED-RETRY-QUALIFICATION.json` records one receive-only
+FLEX-8600 test on firmware 4.3.16.42034 using the signed retry candidate above.
+The previous healthy installation was preserved in a separate protected backup.
+An isolated desktop profile prepared a new identity and approved ordinary public
+waveform delivery without using the predecessor shim. Diagnostics supplied the
+clean fixture, bounded fault injection and audits, never candidate delivery or
+installation authorization.
+
+The fault watcher matched the exact plan and capsule executable, held a process
+file descriptor to prevent PID reuse, stopped the installer during ACTIVATING,
+rechecked the phase, and killed that worker once. The original identity had already
+been published. Independent local recovery reached terminal rollback and removed
+temporary installation authority in 6.651 seconds. Identity bytes were unchanged.
+
+**Prepare saved attempt → Approve saved attempt** re-delivered the original plan,
+credential, installation ID and package names. The radio committed and desktop
+cleanup completed in 37.448 seconds. An independent process authenticated the exact
+committed plan using the promoted system-keychain credential. Host inspection
+confirmed byte-identical identity, retained bounded failure record, consumed retry
+grant, zero capabilities on the UID 78666 primary and no temporary installation
+units, capsule, private bootstrap sockets or fixed ARP.
+
+One software reboot changed the kernel boot ID. The same identity and exact commit
+returned automatically in 45.079 seconds. After desktop reconnection, ordinary
+receive-only start/capture/stop produced 16,384 complex 48 kHz DAX IQ samples with
+FDX disabled; all components were finite and 30,881 were nonzero. No RF was sent.
+
+Cancellation after the injected failure exposed an unresolved reporting case:
+firmware had reported the carrier removed before cancellation, and acknowledged
+native uninstall, but desktop cleanup timed out as unconfirmed. The retry itself
+completed with cleanup confirmed. The wire evidence is retained; the earlier
+carrier-image inventory was not captured, so absence from the waveform list must
+not be promoted to proof that the image was gone. This cancellation case remains
+a separate cleanup reconciliation gate.
+
+These results qualify one process-crash point and one completed-install reboot,
+not physical power loss, every transaction boundary, other firmware or the 6000.
 
 ## Remaining gates
 

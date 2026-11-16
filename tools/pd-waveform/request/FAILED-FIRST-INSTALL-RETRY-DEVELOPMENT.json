@@ -1,6 +1,6 @@
 {
-  "updated_utc": "2026-11-16T07:42:33.158512+00:00",
-  "status": "native_failed_fresh_retry_component_tested_signed_candidate_built_not_installed",
+  "updated_utc": "2026-11-16T07:59:11.649880+00:00",
+  "status": "native_failed_fresh_retry_component_tested_and_live_8600_qualified",
   "production_ready": false,
   "source_base": "9eb3c7ea43044d8a42ad34c42745761226c3b299",
   "evidence": "first-install-failed-retry-development under evidence_root",
@@ -30,11 +30,12 @@
   ],
   "authority_boundary": "Existing approved public-upload boundary; no new isolation from a process sharing waveform UID and able to redeliver the exact approved job.",
   "rf_commands": [],
-  "radio_changed": false,
-  "installed_candidate": "0.0.0-first.7c87bc223 remains unchanged",
+  "radio_changed": true,
+  "installed_candidate": "0.0.0-retry.d60df159f",
   "remaining": [
-    "Induce a bounded actual worker failure during fresh installation; qualify explicit same-plan retry, identity preservation, authority removal, reboot and IQ.",
-    "Complete remaining power-loss boundaries, authenticated catalogue, actual FLEX-6000 adapter/hardware, DSP/PR4770/RF and release gates."
+    "Reconcile failed-install cancellation when the carrier disappeared before cleanup; distinguish absent container from retained image without inferring success.",
+    "Other interrupted transaction boundaries and physical power-loss qualification.",
+    "Authenticated shipping catalogue, cross-platform credentials/transfers, actual FLEX-6000 adapter/hardware, final DSP/PR4770/RF and release gates."
   ],
   "source_files": {
     "tools/pd-waveform/boot/README.md": "69d7026123bd11098b1e0c956d062ad184e5b56761a5be473f93e31f256307a1",
@@ -79,7 +80,7 @@
     "desktop_pins_built": true,
     "desktop_test_suites_passed": 3,
     "private_signing_seed_persisted": false,
-    "installed": false
+    "installed": true
   },
   "negative_evidence": [
     "Initial development version label used an extra hyphen and was rejected by the existing selection schema. Corrected label passed; schema unchanged.",
@@ -94,5 +95,6 @@
     "desktop-build.log": "e843b8523931f20fb40e028388cc24d48f55800fb0b37ca76246579bce060d2c",
     "desktop-tests.log": "eb0f7885859c6374e216e905df3d8379f222af151083beb7f9ff8d6ffc8a58a6",
     "desktop-tests-final.log": "8fb1bf60f2c4dffd9b11d0cedb4abaf4cacadf77991b847140f707c270d0c858"
-  }
+  },
+  "live_qualification": "DESKTOP-FIRST-INSTALL-FAILED-RETRY-QUALIFICATION.json"
 }

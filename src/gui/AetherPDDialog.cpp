@@ -510,7 +510,7 @@ void AetherPDDialog::renderInstallation()
         detail = tr("Saved attempt — review before approving another delivery of this exact plan. "
             "The saved keychain credential, identity and package names are reused. "
             "The previous attempt may already be running; an unconfirmed status is not proof of absence. "
-            "An existing carrier prevents delivery. A failed terminal installation needs separate recovery.\n\n"
+            "An existing carrier prevents delivery. A verified installer with retry support can retry a failed transaction only under this exact plan.\n\n"
             "On approval: re-upload the verified native requester and carrier for this plan. The signed worker temporarily uses host-root authority "
             "to complete or reconcile only this matching transaction, then retires. Fixed pd-boot and boot/session service units "
             "remain for reboot and IQ setup; the shim and AetherPD run without host-root authority. "

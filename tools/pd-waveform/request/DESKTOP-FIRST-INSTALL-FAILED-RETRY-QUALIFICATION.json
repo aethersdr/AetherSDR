@@ -1,0 +1,234 @@
+{
+  "updated_utc": "2026-11-16T07:59:11.649880+00:00",
+  "status": "linux_desktop_failed_fresh_retry_reboot_receive_iq_qualified_on_8600",
+  "production_ready": false,
+  "native_source_commit": "d60df159fe39699e7b3375092d21bbeceeae0bea",
+  "desktop_base": "c599973ec",
+  "desktop_change": "saved-attempt explanatory wording only",
+  "firmware": "4.3.16.42034",
+  "development_package": "0.0.0-retry.d60df159f",
+  "evidence": "first-install-failed-retry-live under evidence_root",
+  "plan_blake2b_256": "acef90b4307c45d321eb2dd91b1c03945c9d7cc8acb8026f232017f8dbc7bdf1",
+  "installation_id": "886f33f6467c998ec6b2fb4884d26eafa0342834f79c6932aa0a71588ce3bc4a",
+  "identity_sha256": "bd97aa9a38d0d6607434a968e54ab14bd891ee3100ad48229b8ce4346da4ec94",
+  "fault": {
+    "passed": true,
+    "plan_digest": "acef90b4307c45d321eb2dd91b1c03945c9d7cc8acb8026f232017f8dbc7bdf1",
+    "rf_commands": [],
+    "root_bridge_used_for_delivery": false,
+    "events": [
+      {
+        "elapsed_s": 0.001,
+        "event": "watcher_ready"
+      },
+      {
+        "elapsed_s": 89.691,
+        "event": "matched_worker_stopped",
+        "pid": 2118,
+        "phase": 4,
+        "identity_sha256": "bd97aa9a38d0d6607434a968e54ab14bd891ee3100ad48229b8ce4346da4ec94"
+      },
+      {
+        "elapsed_s": 89.692,
+        "event": "matched_worker_killed"
+      },
+      {
+        "elapsed_s": 96.343,
+        "event": "independent_rollback_and_cleanup_confirmed"
+      }
+    ],
+    "identity_sha256": "bd97aa9a38d0d6607434a968e54ab14bd891ee3100ad48229b8ce4346da4ec94",
+    "installation_id": "886f33f6467c998ec6b2fb4884d26eafa0342834f79c6932aa0a71588ce3bc4a",
+    "injected": true,
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false
+    },
+    "identity_preserved": true,
+    "runtime_processes": []
+  },
+  "retry": {
+    "commit_and_cleanup_s": 37.448,
+    "same_approved_plan": true,
+    "original_identity_preserved": true,
+    "public_journal_unchanged_before_approval": true,
+    "separate_process_keychain_authentication": true,
+    "failed_record_retained": true,
+    "retry_grant_consumed": true
+  },
+  "reboot": {
+    "ready_s": 45.079,
+    "reboot_commands_sent": 1,
+    "boot_id_before": "2566d48b-4415-46a4-828d-7104cf37ca5e",
+    "boot_id_after": "a1bf06e0-259a-4bae-991c-8d860884ec0a"
+  },
+  "iq": {
+    "capture": {
+      "capture_id": "966b37b8f61170adc0accfb07dd76d82",
+      "center_hz": 7150000,
+      "chunk_samples": 512,
+      "correcting": false,
+      "first_receive_ns": "79036405660",
+      "format": "f32le-iq-v1",
+      "keyed": false,
+      "last_receive_ns": "79377294644",
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "sample_count": 16384,
+      "sample_rate_hz": 48000
+    },
+    "iq_bytes": 131072,
+    "iq_sha256": "c60ab917d5c3ba34fa0b6fdb546454349dc81b29ca360f3b49e7fc91f066b971",
+    "rms": 33.49638506615303,
+    "nonzero_values": 30881
+  },
+  "pre_reboot_audit": {
+    "rf_commands": [],
+    "processes": [
+      {
+        "pid": 8703,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "a949d292ada235f2cf9392e5c92c0162c05c24578901171c2885258e576b68f7",
+        "role": "primary",
+        "ppid": 1,
+        "state": "S (sleeping)",
+        "rss_kb": "19444 kB"
+      }
+    ],
+    "identity_sha256": "bd97aa9a38d0d6607434a968e54ab14bd891ee3100ad48229b8ce4346da4ec94",
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false
+    },
+    "private_sockets": [],
+    "containers": [
+      "nereus-net-probe",
+      "AetherGPS",
+      "nereus-inprocess-job-a0d74d16d2"
+    ],
+    "arp": [],
+    "accept_local": "0",
+    "legacy_container_absent": true,
+    "cached_first_artifacts": [],
+    "boot_id": "2566d48b-4415-46a4-828d-7104cf37ca5e",
+    "all_runtime_unprivileged": true,
+    "failed_record_retained": true,
+    "retry_grant_consumed": true,
+    "passed": true
+  },
+  "post_reboot_audit": {
+    "rf_commands": [],
+    "processes": [
+      {
+        "pid": 913,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "a949d292ada235f2cf9392e5c92c0162c05c24578901171c2885258e576b68f7",
+        "role": "primary",
+        "ppid": 1,
+        "state": "S (sleeping)",
+        "rss_kb": "21752 kB"
+      }
+    ],
+    "identity_sha256": "bd97aa9a38d0d6607434a968e54ab14bd891ee3100ad48229b8ce4346da4ec94",
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false
+    },
+    "private_sockets": [],
+    "containers": [
+      "nereus-net-probe",
+      "AetherGPS",
+      "nereus-inprocess-job-cc74760daa"
+    ],
+    "arp": [],
+    "accept_local": "0",
+    "legacy_container_absent": true,
+    "cached_first_artifacts": [],
+    "boot_id": "a1bf06e0-259a-4bae-991c-8d860884ec0a",
+    "all_runtime_unprivileged": true,
+    "matching_images": [],
+    "passed": true
+  },
+  "rf_commands": [],
+  "fdx_enabled": false,
+  "diagnostics_bridge_for_delivery_or_authorization": false,
+  "diagnostics_bridge_for_fixture_fault_injection_and_audits": true,
+  "prior_installation_preserved": "/var/lib/smartsdr/aetherpd-failed-retry-backup-resume-qualified",
+  "original_settings_database_untouched": true,
+  "current_attempt_journal": "first-install-failed-retry-live/private-profile",
+  "checks": {
+    "full_desktop_build": true,
+    "dialog_test": true,
+    "docs_build": "passed using preinstalled dependencies with identical package-lock SHA256"
+  },
+  "negative_evidence": [
+    "Initial test execution was denied by the filesystem sandbox; the approved unsandboxed rerun passed.",
+    "A retry check before cancellation cleanup finished correctly found the saved-attempt button disabled; no retry was sent then.",
+    "Carrier removed status preceded cancellation; native uninstall was acknowledged, but desktop waited 60 seconds and reported cleanup unconfirmed. No pre-retry image audit was made. Successful retry and final image audit do not erase this unresolved cancellation case.",
+    "The first post-reboot IQ check ran before desktop reconnection and refused before starting a session. It passed after reconnect and reopening controls."
+  ],
+  "remaining": [
+    "Reconcile failed-install cancellation when the carrier disappeared before cleanup; distinguish absent container from retained image without inferring success.",
+    "Other interrupted transaction boundaries and physical power-loss qualification.",
+    "Authenticated shipping catalogue, cross-platform credentials/transfers, actual FLEX-6000 adapter/hardware, final DSP/PR4770/RF and release gates."
+  ],
+  "files": {
+    "profile-fixture.json": "2fba4f8ae7db54b28cc6837882dcbd73513d5a5f7871e9fb49964d7b170b56fd",
+    "launch-desktop.py": "62f05e632ed4081cb13f7059224c74db6852c10bf3ff4b9999c18f4e2cb8de01",
+    "clean-fixture-job.py": "bffc49ad8f12dad947f506070a789122240dcfb84b8dd2963e459688e665b212",
+    "clean-fixture.json": "1ad3a36a3083b1090bedb09707e1e61b9248221647428e94625424a464316ac1",
+    "prepared-panel.json": "3865bbcfe91baf5c2ae354d6b3a2b4a32ca4cd9756c3df57a7d0fb1242724156",
+    "fault-watch-job.py": "f5076d531fbc3ae90f89d8a7c59d32a05d01e8e10f13e9caf9eabcdb20270677",
+    "fault-watch.json": "4eb6d5ffcc5f87330df521f8fb06383a8c5b4a0250af5e3c6868ee93fdb71777",
+    "approve-and-observe.py": "79b54b017c0d0cf73239a338cafc6bea1da897e82f86289203946325108fa44e",
+    "approve-and-observe.json": "e829dc20a6fec8bb4cab1f2d7a625ba2b6a74f520244e9992b1c86a114684323",
+    "pending-public-journal.json": "3fdaa8a8057a41103779910db67ec6363b876dac54c90287f550521b7667610a",
+    "resume-saved.py": "cfe7c68d552aaf9de11cdbf0d7bc4f634d0ddf1bb4c86c8dd29ba7e7c419650a",
+    "resume-saved.json": "1615a96551fa5a6f57c610ba2c75970292360587cc7a556ca7dc6f95f5f9c068",
+    "resume-before-cleanup-negative.json": "d494d763fda824b11d921cc55cd1419ec54ffd2033319dc356231b85062baf18",
+    "resume-audit-job.py": "001653704c77e20c6c5722378bddf78bb95d4fc2c2e3a035990f94e04fe51ceb",
+    "resume-audit.json": "b294dbc043473efcf26bcd0f2975cf4f7bf9095ba0c810e74758400a1472073d",
+    "installation-authenticated.json": "b8450f7deada737711ab68173185e3806d1521603d9cf4377408f479a162e646",
+    "cleanup-wire-excerpt.log": "528df22985489efed1c4bed662629f61c1e49f3c253765d536deded94a16d1df",
+    "waveforms-after-cancel.json": "0e6b32299e54fd35ee418f0a6acf3ed86aee1e6660040e45697b95a950f84529",
+    "reboot-check.py": "9719df3a9f90c23050ce6556f48d81e0d8b9a04c6a97bfbc51d75a764c5b2342",
+    "reboot-check.json": "6272f0019187dd39614b5f8a3721ca8bec00bc9d9130a60e2ee392affef1212c",
+    "receive-iq-check.py": "7c280e384cc637e551aad1f6e94401131682b62178756438d443a69b539bbe21",
+    "receive-iq-check.json": "3b7e02f576235b9b99a9ec732428dd66e6fdbcc9ded16b3fa96075f18f10b820",
+    "receive-before-reconnect-negative.json": "de8f8a75606fa095f90ed4841dd7658f961de52c075c3d76d426bcabb9511eee",
+    "receive-iq.f32le": "c60ab917d5c3ba34fa0b6fdb546454349dc81b29ca360f3b49e7fc91f066b971",
+    "stopped-status.json": "8f27efdfb9504ea710565343a50f208d1bcbcebf7e511462f33089d3efd4d431",
+    "post-reboot-inventory-job.py": "a440b026a73b004fbd185c589abf10f7bfd4c1bf8077d4af92c45dd4b24706f5",
+    "post-reboot-inventory.json": "2154a62b2a2833fde1c7cda0e76ff707c69225338ba4bdf55e89432aae0a6fe7",
+    "docs-build.log": "6a1145372126ca249362ca7585682e498b5686e11362c35b1f701ce623c5b682"
+  }
+}
