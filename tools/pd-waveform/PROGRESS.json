@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T10:26:06.246171+00:00",
+  "updated_utc": "2026-11-16T10:39:30.014570+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Resolve radio unreachability and qualify this exact reboot before any RF. Prepare one bounded 5W installed DSP failure during an operator-initiated source with independent unkey; preserve receive-only proof and full P1-P10 plan.",
+  "next_action": "Continue remaining PR4770 spectrum/PNG scope offline. Resolve radio reachability and qualify exact installed reboot before any further RF; full P1-P10 remains active.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2569,5 +2569,58 @@
     "native_boundary_checks": 32,
     "production_ready": false,
     "ARMv7_prior_standalone_reproduction": "Go 1.27.4 with nodwarf5 exactly reproduces prior binary; paired runtime release remains pinned to Go 1.27.1."
+  },
+  "measurement_csv": {
+    "status": "offline_component_qualified_gui_file_dialog_not_live_qualified",
+    "updated_utc": "2026-11-16T10:39:30.014570+00:00",
+    "base_commit": "5c8a04eb90a736f47369b89443d13eb00f461b99",
+    "changes": [
+      "PR 4770 CSV measurement table via existing Export result dialog",
+      "Explicit raw-IQ and dBc reference conventions; nominal setting distinguished from RF output",
+      "Unknown clipping and noise-limited/unavailable values retained as status with blank values",
+      "CSV withheld until exact transmission-release confirmation; atomic file replacement preserved"
+    ],
+    "checks": {
+      "desktop_and_regression_build": "passed",
+      "tx_operation_integration_test": "passed, 9.77 seconds with desktop audio service access",
+      "documentation_build": "passed using byte-identical existing lockfile dependency installation",
+      "diff_check": "passed"
+    },
+    "negative_evidence": [
+      "Initial sandbox test timed out at 300 seconds; symbolized backtrace in PulseAudio initialization and log reports Operation not permitted. Unrestricted rerun passed without audio source changes.",
+      "Initial documentation build lacked node_modules; matching installed dependencies were temporarily linked, build passed, link removed."
+    ],
+    "limitations": [
+      "No new radio or RF test; radio still unreachable after prior reboot",
+      "GUI format selection/file-save interaction not yet exercised through automation",
+      "PR 4770 spectrum plot/PNG and remaining Phase 1 scope still open",
+      "Full P1-P10 production and actual FLEX-6300 hardware gates remain open"
+    ],
+    "evidence": [
+      {
+        "path": "evidence/20261116-measurement-csv/csv-build-final.log",
+        "sha256": "02c84ac66bd1508b13f5eb13257cd0aa8d179ce423bd5d74a220d3e5e38e216e"
+      },
+      {
+        "path": "evidence/20261116-measurement-csv/csv-tests.log",
+        "sha256": "5be97889de3997428eba544179df151e7046e13448fcd0bb2d975291a6f19603"
+      },
+      {
+        "path": "evidence/20261116-measurement-csv/csv-tests-desktop-access.log",
+        "sha256": "7669c64e1f6a46c96e69fadd467d7e077676536e607eedf9afa42248de18e91e"
+      },
+      {
+        "path": "evidence/20261116-measurement-csv/csv-docs-build.log",
+        "sha256": "9b7c7fa8b2a675370965fc2651cea599b9f6f04a2097efe52ec0f077b0ca8edf"
+      },
+      {
+        "path": "evidence/20261116-measurement-csv/csv-docs-missing-dependency.log",
+        "sha256": "930b0e735f79c1deab80cca9b8e76e4ed5f5fdbad8f9e117528471822b2d16f9"
+      },
+      {
+        "path": "evidence/20261116-measurement-csv/csv-test-symbolized-backtrace.log",
+        "sha256": "3f71edb382d418fd54d7323494cb42780542c6dbf3c59f84d8c4a79352f61784"
+      }
+    ]
   }
 }

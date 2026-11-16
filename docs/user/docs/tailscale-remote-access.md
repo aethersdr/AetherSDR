@@ -571,13 +571,17 @@ ADC headroom or calibrated output power.
 6. Results appear only after confirmed release of the original transmission.
    Background helper connections do not complete that confirmation; AetherSDR
    waits for the original transmission's stop sequence from the radio.
-   **Export result…** saves JSON with the station settings, source and capture
+   **Export result…** offers JSON and CSV. JSON contains the station settings, source and capture
    identities, timestamps, correction state, spectrum, noise limitations and
    reference conventions. Each completed capture includes its original IQ
    samples and a SHA-256 checksum for offline analysis. Exporting collects no
    new samples and never transmits. IMD is labeled both per tone and relative to
    fundamental-derived PEP; the separately measured sample-peak reference is
    retained in the export. Raw IQ levels are not calibrated dBFS or watts.
+   CSV contains the measurement table, station settings, explicit reference
+   units, noise floor, shoulder and ACPR bands. Unknown values and noise-limited
+   products have blank numeric cells with a stated status. CSV excludes the raw
+   IQ and spectrum arrays; use JSON to retain those for independent analysis.
 
 For a matched comparison, use **Bypass correction** in the AetherPD window
 before arming the uncorrected measurement. Then use **Enable correction** and

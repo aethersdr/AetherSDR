@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QList>
 #include <QCryptographicHash>
 #include <QSaveFile>
 #include "TestEventLoop.h"
@@ -1086,7 +1087,8 @@ void aetherPDMeasurementWorkflow()
                 for (int i = 0; i < 32; ++i) { measurementNetwork.captureChunk(i)->complete(200, chunk(i)); }
             }
         }
-        check(model->state() == State::Releasing && !model->result() && model->exportResult().isEmpty() && proof.valid(),
+        check(model->state() == State::Releasing && !model->result() && model->exportResult().isEmpty()
+                  && model->exportResultCsv().isEmpty() && proof.valid(),
               "measurement holds result until exact transmission stop evidence");
         if (scenario == 0) {
             QJsonObject ended = sourceStatus;
@@ -1150,6 +1152,40 @@ void aetherPDMeasurementWorkflow()
             check(model->resultSummary().contains("ADC headroom unknown")
                 && model->resultSummary().contains("dBc per tone / fundamental-derived PEP"),
                 "operator summary names reference conventions and calibration uncertainty");
+            const QByteArray csv = model->exportResultCsv();
+            check(csv.startsWith("Measurement,Value,Unit,Reference,Status\r\n")
+                && csv.contains("\"Nominal power setting\",\"5\",\"W\",\"radio setting; not measured output\"")
+                && csv.contains("\"Capture clipped\",\"\",\"\",\"\",\"unknown\"")
+                && csv.contains("\"sampled envelope PEP\"") && !csv.contains("dBFS"),
+                "CSV export preserves explicit references, nominal power and unknown clipping");
+            bool csvImdFound = false;
+            for (const QByteArray& line : csv.split('\n')) {
+                if (!line.startsWith("\"IMD3 lower\",") || !line.contains("\"one tone\"")) { continue; }
+                const QList<QByteArray> fields = line.split(',');
+                bool numeric = false;
+                const double level = fields[1].mid(1, fields[1].size() - 2).toDouble(&numeric);
+                csvImdFound = numeric && std::abs(level + 40) < .1;
+            }
+            check(csvImdFound, "CSV measures the independent analytic -40 dBc IMD3 vector");
+            AetherPDMeasurementModel::Result limited = *result;
+            limited.serial = QStringLiteral("=untrusted,\"quoted\"\nsecond line");
+            limited.measurement.correctionActive.reset();
+            limited.measurement.measurement->products.front().limitedByNoiseFloor = true;
+            limited.measurement.measurement->acprLow.reset();
+            const QByteArray limitedCsv = limited.toCsv();
+            check(limitedCsv.contains("\"'=untrusted,\"\"quoted\"\"\nsecond line\"")
+                && limitedCsv.contains("\"Correction active\",\"\",\"\",\"\",\"unknown\"")
+                && limitedCsv.contains("\"IMD3 lower\",\"\",\"dBc\",\"one tone\",\"noise limited\"")
+                && limitedCsv.contains("\"ACPR lower\",\"\",\"dBc\",\"\",\"unavailable in capture bandwidth\""),
+                "CSV quotes external metadata and does not turn unknown or noise-limited values into measurements");
+            limited.measurement.measurement->valid = false;
+            limited.measurement.measurement->invalidReason = "capture invalid";
+            check(!limited.toCsv().contains("\"IMD3") && limited.toCsv().contains("capture invalid"),
+                "invalid CSV result cannot expose stale product numbers as measurements");
+            limited.measurement.measurement.reset();
+            limited.measurement.error = "measurement canceled";
+            check(limited.toCsv().contains("measurement canceled") && !limited.toCsv().contains("\"IMD3"),
+                "aborted CSV measurement preserves the error without fabricated spectral results");
             if (result && result->measurement.measurement) {
                 for (const txlin::ImdProduct& product : result->measurement.measurement->products) {
                     if (product.order == 3) {

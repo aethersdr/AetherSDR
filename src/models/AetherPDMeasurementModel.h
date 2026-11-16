@@ -37,6 +37,7 @@ public:
         int powerSetting{0}; // Radio-reported nominal watts, not measured output.
         QDateTime completedAtUtc;
         quint64 sourceId{0};
+        QByteArray toCsv() const;
     };
     explicit AetherPDMeasurementModel(RadioModel& radio);
     AetherPDMeasurementModel(RadioModel& radio, QNetworkAccessManager& network);
@@ -45,6 +46,7 @@ public:
                  const txlin::RunRequest& request, bool dummyLoadConfirmed);
     bool prepareCurrent(const RadioControlSession& session, double maxForwardWatts, bool dummyLoadConfirmed);
     QByteArray exportResult() const;
+    QByteArray exportResultCsv() const;
     QString resultSummary() const;
     QString preparationSummary() const;
     bool start(const RadioControlSession& session, std::function<bool()> operatorCurrent = {});

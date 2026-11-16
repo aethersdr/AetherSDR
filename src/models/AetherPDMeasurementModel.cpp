@@ -17,6 +17,7 @@
 #include <QJsonObject>
 #include <QCryptographicHash>
 #include <QThread>
+#include <QStringList>
 #include <QtEndian>
 #include <bit>
 #include <cstdint>
@@ -196,6 +197,101 @@ bool AetherPDMeasurementModel::prepareCurrent(const RadioControlSession& session
     const bool accepted = prepare(session, config, request, dummyLoadConfirmed);
     if (alive && accepted) { m_bandPlanName = planName; m_licenseClass = license; }
     return alive && accepted;
+}
+
+QByteArray AetherPDMeasurementModel::exportResultCsv() const
+{
+    return m_result ? m_result->toCsv() : QByteArray{};
+}
+
+QByteArray AetherPDMeasurementModel::Result::toCsv() const
+{
+    QByteArray output("Measurement,Value,Unit,Reference,Status\r\n");
+    const auto row = [&output](const QString& name, const QString& value, const QString& unit = {},
+                             const QString& reference = {}, const QString& status = {}) {
+        QStringList fields{name, value, unit, reference, status};
+        for (QString& field : fields) {
+            field.replace(u'"', QStringLiteral("\"\""));
+            field = u'"' + field + u'"';
+        }
+        output += fields.join(u',').toUtf8() + "\r\n";
+    };
+    const auto text = [](QString value) {
+        // Keep externally supplied metadata literal when opened in a spreadsheet.
+        const QString trimmed = value.trimmed();
+        if (!trimmed.isEmpty() && QStringLiteral("=+-@").contains(trimmed.front())) {
+            value.prepend(u'\'');
+        }
+        return value;
+    };
+    const auto number = [](double value) {
+        return std::isfinite(value) ? QString::number(value, 'g', 17) : QString{};
+    };
+    row(QStringLiteral("Schema"), QStringLiteral("aetherpd-linearity-csv-v1"));
+    row(QStringLiteral("Radio serial"), text(serial));
+    row(QStringLiteral("Completed UTC"), completedAtUtc.toString(Qt::ISODateWithMs));
+    row(QStringLiteral("Source"), QStringLiteral("local-dax-iq"));
+    row(QStringLiteral("Source ID"), QStringLiteral("%1").arg(sourceId, 16, 16, QLatin1Char('0')));
+    row(QStringLiteral("Mode"), text(mode));
+    row(QStringLiteral("Transmit antenna"), text(transmitAntenna));
+    row(QStringLiteral("Center frequency"), number(config.capture.centerFreqHz), QStringLiteral("Hz"));
+    row(QStringLiteral("Sample rate"), number(config.capture.sampleRateHz), QStringLiteral("Hz"));
+    row(QStringLiteral("Nominal power setting"), QString::number(powerSetting), QStringLiteral("W"), QStringLiteral("radio setting; not measured output"));
+    row(QStringLiteral("Forward-power abort limit"), number(config.maxForwardWatts), QStringLiteral("W"));
+    row(QStringLiteral("Window"), QString::fromStdString(txlin::windowKindKey(config.window)));
+    row(QStringLiteral("Correction active"), measurement.correctionActive
+        ? (*measurement.correctionActive ? QStringLiteral("yes") : QStringLiteral("no")) : QString{}, {}, {},
+        measurement.correctionActive ? QStringLiteral("known") : QStringLiteral("unknown"));
+    row(QStringLiteral("Absolute power and ADC headroom"), {}, {}, {}, QStringLiteral("uncalibrated"));
+    if (!measurement.error.empty()) {
+        row(QStringLiteral("Run error"), text(QString::fromStdString(measurement.error)), {}, {}, QStringLiteral("invalid"));
+    }
+    if (!measurement.measurement) {
+        row(QStringLiteral("Measurement valid"), QStringLiteral("no"), {}, {}, QStringLiteral("unavailable"));
+        return output;
+    }
+    const txlin::LinearityResult& result = *measurement.measurement;
+    row(QStringLiteral("Measurement valid"), result.valid ? QStringLiteral("yes") : QStringLiteral("no"));
+    row(QStringLiteral("Capture clipped"), result.clippingKnown
+        ? (result.clipped ? QStringLiteral("yes") : QStringLiteral("no")) : QString{}, {}, {},
+        result.clippingKnown ? QStringLiteral("known") : QStringLiteral("unknown"));
+    if (!result.valid) {
+        row(QStringLiteral("Invalid reason"), text(QString::fromStdString(result.invalidReason)), {}, {}, QStringLiteral("invalid"));
+        return output;
+    }
+    row(QStringLiteral("Averages"), QString::number(result.averages));
+    row(QStringLiteral("Tone spacing"), number(result.toneSpacingHz), QStringLiteral("Hz"));
+    row(QStringLiteral("Tone imbalance"), number(result.toneImbalanceDb), QStringLiteral("dB"));
+    row(QStringLiteral("Fundamental-derived PEP"), number(result.pepDb), QStringLiteral("dB raw IQ"), QStringLiteral("fundamental amplitudes"));
+    row(QStringLiteral("Sampled PEP"), result.sampledPepDb ? number(*result.sampledPepDb) : QString{},
+        QStringLiteral("dB raw IQ"), QStringLiteral("captured envelope peak"), result.sampledPepDb ? QStringLiteral("measured") : QStringLiteral("unavailable"));
+    row(QStringLiteral("Instrument noise floor"), number(result.noiseFloorDb), QStringLiteral("dB raw IQ"), QStringLiteral("per analysis bin"));
+    const auto ratios = [&row, &number](const QString& name, double perTone, double pep,
+                                      const std::optional<double>& sampledPep, bool noiseLimited,
+                                      const QString& band = {}) {
+        const QString status = noiseLimited ? QStringLiteral("noise limited") : QStringLiteral("measured");
+        row(name, noiseLimited ? QString{} : number(perTone), QStringLiteral("dBc"), QStringLiteral("one tone") + band, status);
+        row(name, noiseLimited ? QString{} : number(pep), QStringLiteral("dBc"), QStringLiteral("fundamental-derived PEP") + band, status);
+        row(name, !noiseLimited && sampledPep ? number(*sampledPep) : QString{}, QStringLiteral("dBc"),
+            QStringLiteral("sampled envelope PEP") + band, noiseLimited ? status : sampledPep ? status : QStringLiteral("unavailable"));
+    };
+    for (const txlin::ImdProduct& product : result.products) {
+        ratios(QStringLiteral("IMD%1 %2").arg(product.order).arg(product.upper ? QStringLiteral("upper") : QStringLiteral("lower")),
+            product.dbcPerTone, product.dbcPep, product.dbcSampledPep, product.limitedByNoiseFloor);
+    }
+    const auto band = [&row, &ratios, &number](const QString& name, const std::optional<txlin::BandPower>& value) {
+        if (!value) {
+            row(name, {}, QStringLiteral("dBc"), {}, QStringLiteral("unavailable in capture bandwidth"));
+            return;
+        }
+        ratios(name, value->dbcPerTone, value->dbcPep, value->dbcSampledPep, false,
+            QStringLiteral("; %1 to %2 Hz offset").arg(number(value->lowHz), number(value->highHz)));
+    };
+    band(QStringLiteral("Shoulder lower"), result.shoulderLow);
+    band(QStringLiteral("Shoulder upper"), result.shoulderHigh);
+    band(QStringLiteral("ACPR lower"), result.acprLow);
+    band(QStringLiteral("ACPR upper"), result.acprHigh);
+    return output;
 }
 
 QByteArray AetherPDMeasurementModel::exportResult() const

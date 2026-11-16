@@ -1,0 +1,5 @@
+
+> aethersdr-user-docs@0.0.0 build
+> docusaurus build
+
+sh: line 1: docusaurus: command not found

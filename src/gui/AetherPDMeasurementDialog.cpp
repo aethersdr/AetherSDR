@@ -13,6 +13,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QStringList>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -275,15 +276,21 @@ void AetherPDMeasurementDialog::exportResult()
 {
     if (!current()) { return; }
     const QByteArray data = m_radio->aetherPDMeasurementModel().exportResult();
+    const QByteArray csv = m_radio->aetherPDMeasurementModel().exportResultCsv();
     if (data.isEmpty()) { return; }
     auto* dialog = new QFileDialog(this, tr("Export AetherPD measurement"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setAcceptMode(QFileDialog::AcceptSave);
-    dialog->setNameFilter(tr("JSON measurement (*.json)"));
+    const QString csvFilter = tr("CSV measurement (*.csv)");
+    dialog->setNameFilters({tr("JSON measurement (*.json)"), csvFilter});
     dialog->setDefaultSuffix(QStringLiteral("json"));
-    connect(dialog, &QFileDialog::fileSelected, this, [this, data](const QString& path) {
+    connect(dialog, &QFileDialog::filterSelected, dialog, [dialog, csvFilter](const QString& filter) {
+        dialog->setDefaultSuffix(filter == csvFilter ? QStringLiteral("csv") : QStringLiteral("json"));
+    });
+    connect(dialog, &QFileDialog::fileSelected, this, [this, dialog, data, csv, csvFilter](const QString& path) {
+        const QByteArray& selected = dialog->selectedNameFilter() == csvFilter ? csv : data;
         QSaveFile file(path);
-        m_notice = file.open(QIODevice::WriteOnly) && file.write(data) == data.size() && file.commit()
+        m_notice = file.open(QIODevice::WriteOnly) && file.write(selected) == selected.size() && file.commit()
             ? tr("Measurement exported.") : tr("Export failed; the destination was not replaced.");
         render();
     });
