@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T08:25:32.186292+00:00",
+  "updated_utc": "2026-11-16T08:36:31.620938+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Continue final installed-session DSP/alignment and failure qualification on 8600. Preserve current qualified retry identity. Runtime binaries reproduce on both architectures; 6000 first-install adapter, firmware-retained upload budget and actual hardware qualification remain open.",
+  "next_action": "Qualify current desktop measurement diagnostics against the installed shim at bounded5W, recording exact SWR abort evidence; complete cold/warm four-frame capture without weakening source or independent unkey bounds.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2411,6 +2411,17 @@
       "6000 first-install adapter and retained upload storage budget",
       "Actual 6300 kernel, disk/CPU and RF qualification",
       "Final product signing/toolchain/release gates"
+    ]
+  },
+  "measurement_abort_evidence": {
+    "status": "component_verified_live_pending",
+    "evidence": "MEASUREMENT-ABORT-EVIDENCE.json",
+    "description": "Preserve exact telemetry values, sample timestamps/ages, phase and configured limits when safety refuses or aborts a measurement; serialize one diagnostic only after release request and capture stop.",
+    "production_ready": false,
+    "remaining": [
+      "Installed-service live measurement with this desktop diagnostic.",
+      "Actual triggering SWR sample is not yet known; prior periodic readings cannot identify it.",
+      "Cold-start four-frame capture, natural alignment-slip qualification and remaining P1-P10 gates."
     ]
   }
 }

@@ -582,6 +582,13 @@ three seconds, accommodating the radio's slower updates. Forward-power and
 SWR samples retain a two-second limit. Missing or expired required telemetry
 stops the measurement; rereading a cached value does not extend its lifetime.
 
+If a measurement stops for SWR, power, temperature, voltage or stale telemetry,
+the application log includes `TX linearity safety abort` with the exact readings,
+their sample ages and the limits used for that decision. Use this record when a
+brief spike is no longer visible on the meters. Missing readings remain marked
+as missing; the record reports the radio's telemetry and does not independently
+verify the load or confirm that transmission has stopped.
+
 If the source request is refused, check **PD** mode, feedback panadapter
 **IQ Ch 1**, fresh DAX IQ and the transmit interlock before trying again.
 The failure notice remains visible across status refreshes. If an arm or

@@ -410,6 +410,14 @@ until release is confirmed. It then performs FFT/IMD analysis on the owner
 thread, with no RF interval held open for analysis. The bounded analysis cost
 and UI responsiveness still need measurement in the complete desktop workflow.
 
+Telemetry refusals write one `TX linearity safety abort` JSON record under
+`aether.waveform.measurement`, after requesting release and stopping capture.
+It preserves the decision's reading values, original sample timestamps, ages,
+limits and pre-key/awaiting-key/keyed phase. Missing/nonfinite values and
+unavailable ages remain explicit; release callbacks cannot replace the captured
+sample with a later meter value. The record does not confirm RF has stopped
+or establish whether a radio-reported SWR value is physically accurate.
+
 Results retain capture IDs/timestamps, correction state, any observed clipping
 and uncertainty about clipping. `fullScaleKnown` remains false for this raw
 path; absolute levels must not be labeled calibrated dBFS or watts. The two

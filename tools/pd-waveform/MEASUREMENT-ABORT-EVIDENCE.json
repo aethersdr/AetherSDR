@@ -1,0 +1,33 @@
+{
+  "utc": "2026-11-16T08:36:31.620938+00:00",
+  "status": "component_verified_live_pending",
+  "production_ready": false,
+  "change": "Preserve exact telemetry values, sample timestamps/ages, phase and configured limits when safety refuses or aborts a measurement; serialize one diagnostic only after release request and capture stop.",
+  "scope": "Diagnostic evidence only; safety decisions, limits, source duration and RF authorization unchanged.",
+  "checks": [
+    "Pre-change regression fails because the brief SWR spike has no diagnostic record.",
+    "Controller, safety and telemetry CTests pass.",
+    "Missing, nonfinite, future and changed-after-release samples retain truthful provenance.",
+    "Pre-key refusal, selected forward-power limit, successful-run silence and callback destruction covered.",
+    "ASan/UBSan/LeakSanitizer pass on host; sandbox LeakSanitizer unavailable under ptrace.",
+    "Resampling-after-release mutation rejected by exact-spike regression.",
+    "Full desktop build, user-doc build, strict test registration and log rules pass."
+  ],
+  "evidence_files": {
+    "test-before.log": "fc67e3622e6606ff33a2053c0eb1f85f963c35a7e8b0790bb5c075fe398df293",
+    "test-after.log": "17ae2cc101124cd57007c0c49aae162c898fb5dee4cb78fc110e5b9cf16346c1",
+    "sanitizer-run.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "sanitizer-sandbox-unavailable.log": "17344cb1a3930e155100299418a42057daf114ff8a15abe8e0b1eaf9504f5a30",
+    "mutation-run.log": "c9e5f16849d7cf276487827a055130d51605c6bbf099d202742f742a9146b476",
+    "desktop-build.log": "033117dd61f575aa12908c4c050e86e007360baa497c0c765d7f8c58800f3602",
+    "docs-build.log": "40cba0ae2eb63b0c7c263c40e70eca2141bb7c7ffc90b7d05f41fc2a2198f3c8",
+    "registration.log": "159cae34bc871940fca10b3979690db7a3d285db3d4cff2eaca5f580b4e5cbb5",
+    "log-rules.log": "5fee1c3bb48cdea3efdde249508f16db320f2709a419cd23569763e3b4ee8a66",
+    "check-lifetime.py": "2806f9acb924c2c5318276d4c26a0935f3468391102a114a12c16326a86efa5e"
+  },
+  "remaining": [
+    "Installed-service live measurement with this desktop diagnostic.",
+    "Actual triggering SWR sample is not yet known; prior periodic readings cannot identify it.",
+    "Cold-start four-frame capture, natural alignment-slip qualification and remaining P1-P10 gates."
+  ]
+}

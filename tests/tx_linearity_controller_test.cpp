@@ -2,6 +2,9 @@
 #include "TxLinearityTestSignals.h"
 
 #include <QCoreApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QString>
 
 #include <cmath>
 #include <complex>
@@ -18,6 +21,20 @@
 using namespace AetherSDR::txlin;
 namespace {
 int failures = 0;
+std::vector<QJsonObject> abortEvidence;
+std::function<bool()> releaseObserved;
+bool evidenceAfterRelease = true;
+QtMessageHandler previousHandler = nullptr;
+void captureDiagnostic(QtMsgType type, const QMessageLogContext& context, const QString& message)
+{
+    const QString prefix = QStringLiteral("TX linearity safety abort ");
+    if (message.startsWith(prefix)) {
+        evidenceAfterRelease &= !releaseObserved || releaseObserved();
+        abortEvidence.push_back(QJsonDocument::fromJson(message.sliced(prefix.size()).toUtf8()).object());
+    } else if (previousHandler) {
+        previousHandler(type, context, message);
+    }
+}
 void check(bool value, const char* message)
 {
     if (!value) { std::cerr << "FAIL: " << message << '\n'; ++failures; }
@@ -86,6 +103,7 @@ struct Fixture {
     bool current = true;
     bool stale = false;
     double watts = 0;
+    std::optional<TxTelemetry> observedTelemetry;
     int ready = 0;
     int finished = 0;
     std::optional<LinearityRunResult> result;
@@ -100,6 +118,7 @@ struct Fixture {
         environment.nowMs = [&] { return now; };
         environment.sessionCurrent = [&] { return current; };
         environment.telemetry = [&](std::int64_t at) {
+            if (observedTelemetry) { return *observedTelemetry; }
             const std::int64_t stamp = stale ? 0 : at;
             TxTelemetry telemetry;
             telemetry.paTempC = {40.0, stamp}; telemetry.supplyVolts = {13.8, stamp};
@@ -143,8 +162,98 @@ struct Fixture {
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    previousHandler = qInstallMessageHandler(captureDiagnostic);
     {
         Fixture f; f.start();
+        abortEvidence.clear(); evidenceAfterRelease = true;
+        const std::int64_t sampledAt = f.now - 17;
+        f.observedTelemetry = TxTelemetry{{2.58, sampledAt}, {40.0, f.now - 31},
+                                         {13.8, f.now - 42}, {5.0, f.now - 9}};
+        releaseObserved = [&] { return f.lease->releases == 1 && !f.source->running; };
+        f.lease->onRelease = [&] {
+            f.observedTelemetry->swr = {1.08, f.now};
+            f.now += 500;
+        };
+        f.controller->poll();
+        check(f.lease->releases == 1 && !f.source->running && f.finished == 0,
+              "SWR spike did not release before diagnostic completion");
+        check(evidenceAfterRelease && abortEvidence.size() == 1,
+              "SWR abort did not emit exactly one diagnostic after requesting release and stopping capture");
+        if (abortEvidence.size() == 1) {
+            const QJsonObject record = abortEvidence.front();
+            const QJsonObject swr = record.value("swr").toObject();
+            check(record.value("reason").toString() == QStringLiteral("SWR above the configured limit")
+                && record.value("phase").toString() == QStringLiteral("keyed")
+                && record.value("now_ms").toInteger() == sampledAt + 17
+                && swr.value("value").toDouble() == 2.58
+                && swr.value("observed_at_ms").toInteger() == sampledAt
+                && swr.value("age_ms").toInteger() == 17
+                && record.value("limits").toObject().value("max_swr").toDouble() == 2.0
+                && record.value("forward_watts").toObject().value("value").toDouble() == 5.0,
+                "abort evidence resampled the spike or lost its threshold and original timestamp");
+        }
+        f.controller->poll();
+        check(abortEvidence.size() == 1, "pending release repeated abort evidence");
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        check(f.finished == 1 && f.result && !f.result->measurement,
+              "SWR diagnostic altered refusal or release semantics");
+        releaseObserved = {};
+        f.observedTelemetry.reset(); f.now += 30000; f.controller->confirmDummyLoad();
+        check(f.controller->prepare(f.config, f.request), "diagnostic prevented subsequent receive preparation");
+        check(abortEvidence.size() == 1, "new preparation reused old abort evidence");
+    }
+    for (const int fault : {0, 1, 2, 3}) {
+        Fixture f; f.start(); abortEvidence.clear();
+        f.observedTelemetry = TxTelemetry{{1.08, f.now}, {40.0, f.now}, {13.8, f.now}, {5.0, f.now}};
+        if (fault == 0) { f.observedTelemetry->swr = {}; }
+        if (fault == 1) { f.observedTelemetry->swr.value = std::numeric_limits<double>::quiet_NaN(); }
+        if (fault == 2) { f.observedTelemetry->swr.observedAtMs = f.now + 1; }
+        if (fault == 3) { f.observedTelemetry->forwardWatts.value = 10.01; }
+        f.controller->poll();
+        check(f.lease->releases == 1 && abortEvidence.size() == 1, "invalid telemetry lost abort evidence");
+        if (abortEvidence.size() == 1) {
+            const QJsonObject swr = abortEvidence.front().value("swr").toObject();
+            if (fault == 0) {
+                check(!swr.value("present").toBool() && swr.value("value").isNull()
+                    && swr.value("observed_at_ms").isNull() && swr.value("age_ms").isNull(),
+                    "missing telemetry became a zero or fresh reading in the diagnostic");
+            }
+            if (fault == 1) {
+                check(swr.value("present").toBool() && !swr.value("finite").toBool()
+                    && swr.value("value").isNull(), "nonfinite telemetry was serialized as valid");
+            }
+            if (fault == 2) {
+                check(swr.value("observed_at_ms").toInteger() == f.now + 1 && swr.value("age_ms").isNull(),
+                    "future telemetry timestamp was silently clamped to fresh");
+            }
+            if (fault == 3) {
+                check(abortEvidence.front().value("reason").toString() == QStringLiteral("Forward power exceeded the test limit")
+                    && abortEvidence.front().value("limits").toObject().value("max_forward_watts").toDouble() == 10.0,
+                    "selected power-limit abort lost its exact limit");
+            }
+        }
+    }
+    {
+        Fixture f; f.prepare(); abortEvidence.clear();
+        f.observedTelemetry = TxTelemetry{{1.08, f.now}, {40.0, f.now}, {10.8, f.now - 29}, {0.0, f.now}};
+        check(!f.controller->startRun(f.lease) && f.lease->starts == 0 && f.finished == 1,
+              "pre-key diagnostic changed voltage refusal");
+        check(abortEvidence.size() == 1 && abortEvidence.front().value("phase").toString() == QStringLiteral("pre_key")
+            && abortEvidence.front().value("supply_volts").toObject().value("age_ms").toInteger() == 29,
+            "pre-key refusal lost the sampled voltage age");
+    }
+    {
+        Fixture f; abortEvidence.clear();
+        f.controller->setCallbacks([&] { ++f.ready; }, [&](const LinearityRunResult&) {
+            ++f.finished; f.controller.reset();
+        });
+        f.start(); f.lease->releaseImmediately = true; f.watts = 10.01;
+        f.controller->poll();
+        check(!f.controller && f.finished == 1 && abortEvidence.size() == 1,
+              "controller destruction during release lost abort evidence");
+    }
+    {
+        Fixture f; f.start(); abortEvidence.clear();
         check(f.lease->deadline == 11000 && f.lease->starts == 1, "lease deadline did not cover original start");
         f.send(frame(1)); f.send(frame(2));
         check(f.lease->releases == 1 && !f.source->running && f.finished == 0
@@ -157,6 +266,7 @@ int main(int argc, char** argv)
             && f.result->measurement->averages == 2 && f.result->captures.size() == 2
             && f.result->correctionActive == true && f.result->measurement->sampledPepDb,
             "completed result lost averages, provenance, overload uncertainty or PEP");
+        check(abortEvidence.empty(), "successful measurement reported a safety abort");
         f.controller->confirmDummyLoad();
         check(!f.controller->prepare(f.config, f.request), "cooldown bypassed on repeat run");
     }
@@ -297,5 +407,6 @@ int main(int argc, char** argv)
         const auto callback = f.source->ready; callback();
         check(f.ready == 0 && f.finished == 1 && f.lease->starts == 0, "late receive readiness escaped timeout");
     }
+    qInstallMessageHandler(previousHandler);
     return failures == 0 ? 0 : 1;
 }

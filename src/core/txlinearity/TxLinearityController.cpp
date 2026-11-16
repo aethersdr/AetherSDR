@@ -1,6 +1,11 @@
 #include "TxLinearityController.h"
 
 #include <QPointer>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QLoggingCategory>
+#include <QString>
 #include <QThread>
 
 #include <algorithm>
@@ -11,10 +16,26 @@
 #include <utility>
 
 namespace AetherSDR::txlin {
+Q_LOGGING_CATEGORY(lcTxLinearityMeasurement, "aether.waveform.measurement", QtWarningMsg)
 namespace {
 constexpr std::int64_t kReceiveDeadlineMs = 6000;
 constexpr std::int64_t kReadyLifetimeMs = 2000;
 constexpr int kMaxAverages = 32;
+
+QJsonObject telemetryEvidence(const TelemetrySample& sample, std::int64_t now)
+{
+    const bool finite = sample.value && std::isfinite(*sample.value);
+    QJsonObject result{{QStringLiteral("present"), sample.value.has_value()},
+                       {QStringLiteral("finite"), finite},
+                       {QStringLiteral("value"), finite ? QJsonValue(*sample.value) : QJsonValue()},
+                       {QStringLiteral("observed_at_ms"), sample.observedAtMs
+                            ? QJsonValue(qint64(*sample.observedAtMs)) : QJsonValue()},
+                       {QStringLiteral("age_ms"), QJsonValue()}};
+    if (sample.observedAtMs && *sample.observedAtMs >= 0 && now >= *sample.observedAtMs) {
+        result.insert(QStringLiteral("age_ms"), qint64(now - *sample.observedAtMs));
+    }
+    return result;
+}
 }
 
 TxLinearityController::TxLinearityController(std::unique_ptr<ITxCaptureSource> source,
@@ -154,7 +175,8 @@ bool TxLinearityController::startRun(std::shared_ptr<ITxLinearityRunLease> lease
     const AbortReason refusal = m_safety.evaluateTelemetry(now, telemetry);
     if (refusal != AbortReason::None || *telemetry.forwardWatts.value > 0.5
         || lease->state() != ITxLinearityRunLease::State::AwaitingKey) {
-        finishCapture(refusal != AbortReason::None ? abortReasonText(refusal) : "Radio or test operation is not idle");
+        finishTelemetryCapture(refusal != AbortReason::None ? abortReasonText(refusal)
+                               : "Radio or test operation is not idle", now, telemetry);
         return false;
     }
     m_lease = std::move(lease);
@@ -197,8 +219,10 @@ void TxLinearityController::poll()
     }
     const TxTelemetry telemetry = m_environment.telemetry(now);
     const AbortReason abort = m_safety.evaluate(now, telemetry);
-    if (abort != AbortReason::None) { finishCapture(abortReasonText(abort)); return; }
-    if (*telemetry.forwardWatts.value > m_config.maxForwardWatts) { finishCapture("Forward power exceeded the test limit"); return; }
+    if (abort != AbortReason::None) { finishTelemetryCapture(abortReasonText(abort), now, telemetry); return; }
+    if (*telemetry.forwardWatts.value > m_config.maxForwardWatts) {
+        finishTelemetryCapture("Forward power exceeded the test limit", now, telemetry); return;
+    }
     const ITxLinearityRunLease::State tx = m_lease->state();
     if (tx == ITxLinearityRunLease::State::Failed || tx == ITxLinearityRunLease::State::Released
         || (m_keyObservedMs && tx != ITxLinearityRunLease::State::Keyed)) {
@@ -247,6 +271,36 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
     stored.clippingKnown = frame.clippingKnown;
     m_frames.push_back(std::move(stored));
     if (m_frames.size() == std::size_t(m_config.targetAverages)) { finishCapture({}); }
+}
+
+void TxLinearityController::finishTelemetryCapture(const std::string& error, std::int64_t now,
+                                                   const TxTelemetry& telemetry)
+{
+    const TxTelemetry observed = telemetry;
+    const SafetyLimits limits = m_safety.limits();
+    const double maxForward = m_config.maxForwardWatts;
+    const char* phase = !m_lease ? "pre_key" : m_keyObservedMs ? "keyed" : "awaiting_key";
+    // Release can replace meter readings or destroy this controller. Preserve
+    // the decision inputs; serialize/log only after requesting unkey and stop.
+    finishCapture(error);
+    const QJsonObject record{
+        {QStringLiteral("reason"), QString::fromStdString(error)},
+        {QStringLiteral("phase"), QString::fromLatin1(phase)},
+        {QStringLiteral("now_ms"), qint64(now)},
+        {QStringLiteral("swr"), telemetryEvidence(observed.swr, now)},
+        {QStringLiteral("forward_watts"), telemetryEvidence(observed.forwardWatts, now)},
+        {QStringLiteral("pa_temp_c"), telemetryEvidence(observed.paTempC, now)},
+        {QStringLiteral("supply_volts"), telemetryEvidence(observed.supplyVolts, now)},
+        {QStringLiteral("limits"), QJsonObject{
+            {QStringLiteral("max_swr"), limits.maxSwr},
+            {QStringLiteral("max_forward_watts"), maxForward},
+            {QStringLiteral("max_pa_temp_c"), limits.maxPaTempC},
+            {QStringLiteral("min_supply_volts"), limits.minSupplyVolts},
+            {QStringLiteral("telemetry_max_age_ms"), limits.telemetryMaxAgeMs},
+            {QStringLiteral("vitals_max_age_ms"), limits.vitalsMaxAgeMs},
+            {QStringLiteral("max_transmit_ms"), limits.maxTransmitMs}}}};
+    qCWarning(lcTxLinearityMeasurement).noquote() << "TX linearity safety abort"
+        << QJsonDocument(record).toJson(QJsonDocument::Compact);
 }
 
 void TxLinearityController::finishCapture(const std::string& error)

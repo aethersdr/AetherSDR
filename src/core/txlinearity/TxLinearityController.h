@@ -88,6 +88,7 @@ private:
     bool validConfig(const LinearityRunConfig& config, const RunRequest& request) const;
     void receiveReady(std::uint64_t generation);
     void receiveFrame(const CaptureFrame& frame, std::uint64_t generation);
+    void finishTelemetryCapture(const std::string& error, std::int64_t now, const TxTelemetry& telemetry);
     void finishCapture(const std::string& error);
     void complete();
 
