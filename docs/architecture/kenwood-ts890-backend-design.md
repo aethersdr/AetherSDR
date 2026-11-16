@@ -102,7 +102,8 @@ Baseline for this assessment: upstream `9002b51bb2ae4a50fe6776e69aa5e3c82a98868a
 
 [RFC #7277](https://github.com/aethersdr/AetherSDR/issues/7277) now has a
 [maintainer ruling](https://github.com/aethersdr/AetherSDR/issues/7277#issuecomment-6885056767) approving its migration direction: aetherd owns credentials
-and settings; receive DSP is centralized in aetherd; restart resumes a session
+and settings; receive DSP is centralized in aetherd. D2 explicitly says
+“Backends deliver IQ, and WDSP runs in aetherd.” Restart resumes a session
 without a TX grant; packages use the signed updater. These decisions are
 binding direction, not proof the worker protocol/host has landed. Its simulator
 prototype and protocol acceptance gates remain prerequisites. The remote-engine
@@ -134,10 +135,13 @@ connector/host surface. No new discovery probe, login panel or automatic
 power-on is introduced here; any missing connector surface is a separately
 approved prerequisite.
 
-KNS already supplies demodulated audio and a scope. Centralized host DSP does
-not imply inventing an IQ stream from PCM or running a second demodulator.
-The shared data plane must accept this native PCM/spectrum case. Use its approved
-bounded audio ring and latest-complete-spectrum delivery, with sample rate,
+KNS supplies demodulated PCM and scope data, not IQ. Supporting it therefore
+requires the maintainer to interpret or extend D2 explicitly for radio-demodulated,
+non-IQ backends; that permission is not implied by this design or the current
+ruling. Until that decision and its shared protocol support land, this path is
+blocked. The proposed extension carries native PCM/spectrum rather than
+inventing IQ from PCM or running a second demodulator. If approved, use the
+shared bounded audio ring and latest-complete-spectrum delivery, with sample rate,
 sequence, timestamp and incarnation metadata. On overflow, report audio gaps
 and discard obsolete display frames; never grow queues without limit or replay
 old audio after reconnect. One producer reaches each existing engine consumer.
@@ -341,9 +345,10 @@ Decisions requested before step 3:
   specify whether native FC/UD actions belong in a later UX PR.
 - Name the shared #7277 milestone/API the worker should target, its owner and
   Kenwood's migration slot; the published order does not name this new family.
-- Confirm native PCM/scope support within the approved data plane and the honest
-  native-meter/relative-spectrum representation, including whether shared
-  prerequisite records or consumer changes need separate RFC approval.
+- Explicitly interpret or extend #7277 D2 ("Backends deliver IQ") to permit
+  native PCM/scope from radio-demodulated, non-IQ backends. Separately confirm
+  native-meter/relative-spectrum representation and whether the required shared
+  contracts or consumer changes need their own prerequisite RFC approval.
 - Confirm experimental firmware/platform acceptance criteria and the mechanism
   for narrowly recorded firmware exceptions. Historical 1.01 evidence does not
   establish all currently available firmware or Intel/Windows behavior.
