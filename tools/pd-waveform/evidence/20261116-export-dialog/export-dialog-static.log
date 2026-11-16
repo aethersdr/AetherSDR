@@ -1,0 +1,12 @@
+git diff --check
+python3 tools/check_engine_boundary.py --strict src/gui/AetherPDMeasurementExportDialog.cpp src/gui/AetherPDMeasurementExportDialog.h src/gui/AetherPDMeasurementDialog.cpp
+engine-boundary: 3 file(s) scanned (0 engine, 3 above-seam), 0 finding(s), 0 would block under --strict
+python3 tools/check_a11y.py src/gui/AetherPDMeasurementExportDialog.cpp src/gui/AetherPDMeasurementDialog.cpp
+
+=== AetherSDR accessibility check summary ===
+Files scanned      : 2
+Files with findings: 0
+Total findings     : 0
+No accessibility issues found.
+python3 tools/check_test_registration.py --strict
+test registration: OK — all test targets declared in tests/tests.cmake

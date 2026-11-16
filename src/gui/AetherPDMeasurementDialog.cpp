@@ -1,5 +1,6 @@
 #include "AetherPDMeasurementDialog.h"
 #include "AetherPDMeasurementSpectrum.h"
+#include "AetherPDMeasurementExportDialog.h"
 #include "CanonIndicators.h"
 #include "core/TxKeyingMarker.h"
 #include "models/AetherPDMeasurementModel.h"
@@ -8,13 +9,10 @@
 #include <QAccessible>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
-#include <QFileDialog>
 #include <QGridLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSaveFile>
-#include <QStringList>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -293,25 +291,10 @@ void AetherPDMeasurementDialog::exportResult()
     const QByteArray csv = m_radio->aetherPDMeasurementModel().exportResultCsv();
     const QByteArray png = m_spectrum->exportPng();
     if (data.isEmpty()) { return; }
-    auto* dialog = new QFileDialog(this, tr("Export AetherPD measurement"));
+    auto* dialog = new AetherPDMeasurementExportDialog(data, csv, png, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setAcceptMode(QFileDialog::AcceptSave);
-    const QString csvFilter = tr("CSV measurement (*.csv)");
-    const QString pngFilter = tr("PNG spectrum (*.png)");
-    QStringList filters{tr("JSON measurement (*.json)"), csvFilter};
-    if (!png.isEmpty()) { filters.append(pngFilter); }
-    dialog->setNameFilters(filters);
-    dialog->setDefaultSuffix(QStringLiteral("json"));
-    connect(dialog, &QFileDialog::filterSelected, dialog, [dialog, csvFilter, pngFilter](const QString& filter) {
-        dialog->setDefaultSuffix(filter == pngFilter ? QStringLiteral("png")
-            : filter == csvFilter ? QStringLiteral("csv") : QStringLiteral("json"));
-    });
-    connect(dialog, &QFileDialog::fileSelected, this, [this, dialog, data, csv, png, csvFilter, pngFilter](const QString& path) {
-        const QByteArray& selected = dialog->selectedNameFilter() == pngFilter ? png
-            : dialog->selectedNameFilter() == csvFilter ? csv : data;
-        QSaveFile file(path);
-        m_notice = file.open(QIODevice::WriteOnly) && file.write(selected) == selected.size() && file.commit()
-            ? tr("Measurement exported.") : tr("Export failed; the destination was not replaced.");
+    connect(dialog, &AetherPDMeasurementExportDialog::exportCompleted, this, [this](bool saved) {
+        m_notice = saved ? tr("Measurement exported.") : tr("Export failed; the destination was not replaced.");
         render();
     });
     dialog->open();

@@ -1,0 +1,81 @@
+{
+  "updated_utc": "2026-11-16T10:54:09.878014+00:00",
+  "original_pr_head": "2b723cde563ec264999cdfaafe6af8f5707b61e4",
+  "current_base": "23ccdf7fb504e0019759dab249132dfc5b223bd7",
+  "phase1_complete": false,
+  "full_production_goal_complete": false,
+  "scope": [
+    {
+      "feature": "Qt-free spectrum/window/IMD and reference measurements",
+      "status": "implemented; numerical and captured-vector component evidence exists",
+      "evidence": [
+        "pr4770-integration/validation.json under external evidence_root",
+        "CORRECTION-SELECTION-LIVE-QUALIFICATION.json",
+        "MEASUREMENT-CSV-QUALIFICATION.json"
+      ],
+      "remaining": "Final exact-candidate platform and repeated RF qualification"
+    },
+    {
+      "feature": "Capture and TX controller",
+      "status": "Integrated local DAX IQ with FDX off; independent scoped lease and release gate",
+      "sources": [
+        "src/models/AetherPDMeasurementModel.cpp",
+        "src/core/txlinearity/AetherPDCaptureSource.cpp",
+        "src/models/AetherPDRunLease.cpp"
+      ],
+      "remaining": "Full final-process failure matrix; analyzer timeout contract below"
+    },
+    {
+      "feature": "CSV, marked spectrum, PNG",
+      "status": "Implemented; model and offscreen widget/save-dialog tests passed",
+      "evidence": [
+        "MEASUREMENT-CSV-QUALIFICATION.json",
+        "MEASUREMENT-DISPLAY-QUALIFICATION.json",
+        "MEASUREMENT-EXPORT-DIALOG-QUALIFICATION.json"
+      ],
+      "remaining": "Connected final-desktop automation and platform-native save choosers"
+    },
+    {
+      "feature": "Window, averages, IMD order",
+      "status": "Core configurable but GUI prepareCurrent currently hardcodes BH7, four averages, order7",
+      "remaining": "Expose supported analysis options; freeze during preparation/run; per-radio schema/version guarded persistence; tests"
+    },
+    {
+      "feature": "DAX channel and feedback pan selection",
+      "status": "Source fixed to existing local DAX IQ ownership; original independent capture/reconfiguration must not steal it",
+      "remaining": "Show authoritative owned source and unavailable reasons; any selectable alternatives require ownership/capability contract"
+    },
+    {
+      "feature": "Tone spacing and radio power",
+      "status": "Measurement source fixed to710/1900Hz; panel reads nominal radio setting. Original tune-power/tone-spacing UI cannot be copied as functional controls",
+      "remaining": "Reconcile source API capability with original Phase1 controls; no native TUNE bypass or implicit drive changes"
+    },
+    {
+      "feature": "Transmit timeout",
+      "status": "Open contract gap: model overrides default10000ms with14000ms operation budget",
+      "sources": [
+        "src/models/AetherPDMeasurementModel.cpp:initialize",
+        "src/models/AetherPDRunLease.cpp:start/poll",
+        "tools/pd-waveform/guardian/unkey_guard.c:run/query/send_command"
+      ],
+      "facts": [
+        "Model maxTransmitMs=14000 and vitalsMaxAgeMs=3000 use explicit override",
+        "Lease subtracts3500ms cleanup and1000ms startup reserve, yielding roughly9500ms before helper begins cleanup",
+        "Guardian then drains status and waits for a subscription ACK barrier before writing xmit0; cleanup initiation is not confirmed unkey",
+        "Native measurement source has its own8second signal limit; it is not proof of MOX release"
+      ],
+      "remaining": "Separate and name RF/admission/cleanup deadlines, preserve analyzer10second ceiling with downward-only operator adjustment, test delayed helper startup/status/write and release proof. Qualify capture completion within budget on exact installed binaries; do not merely lower a number and call functionality proven."
+    },
+    {
+      "feature": "Settings ownership",
+      "status": "Original PR global TxLinearity flat JSON not ported",
+      "remaining": "Use current per-radio feature document for client analysis preferences; preserve future schemas, reject invalid bounds, do not persist radio drive/DAX live state or per-run authorization"
+    }
+  ],
+  "next_steps": [
+    "Resolve analyzer deadline semantics and causal socket-free regression before exposing timeout adjustment",
+    "Implement supported analysis controls/settings, keeping fixed source constraints explicit",
+    "Complete connected final-desktop/RF and platform qualification after radio returns"
+  ],
+  "radio_state": "Latest probe at2026-11-16T10:43:51Z: API4992,shim48992,SSH22222 No route to host. No further reboot or RF commands."
+}

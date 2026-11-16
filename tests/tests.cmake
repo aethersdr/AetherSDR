@@ -5135,7 +5135,8 @@ set_tests_properties(aetherpd_session_test PROPERTIES TIMEOUT 30)
 # Installer preview/approval UI with injected credentials and HTTP, no sockets.
 add_executable(aetherpd_installation_dialog_test
     tests/aetherpd_installation_dialog_test.cpp
-    src/gui/AetherPDDialog.cpp src/gui/AetherPDMeasurementDialog.cpp src/gui/AetherPDMeasurementSpectrum.cpp src/gui/CanonWindow.cpp ${THEME_TEST_RESOURCES})
+    src/gui/AetherPDDialog.cpp src/gui/AetherPDMeasurementDialog.cpp src/gui/AetherPDMeasurementSpectrum.cpp
+    src/gui/AetherPDMeasurementExportDialog.cpp src/gui/CanonWindow.cpp ${THEME_TEST_RESOURCES})
 target_include_directories(aetherpd_installation_dialog_test PRIVATE src tests)
 target_compile_definitions(aetherpd_installation_dialog_test PRIVATE
     AETHERPD_PACKAGE_TESTDATA="${CMAKE_SOURCE_DIR}/tools/pd-waveform/boot/testdata")
@@ -5149,13 +5150,14 @@ add_executable(aetherpd_dialog_test
     src/gui/AetherPDDialog.cpp
     src/gui/AetherPDMeasurementDialog.cpp
     src/gui/AetherPDMeasurementSpectrum.cpp
+    src/gui/AetherPDMeasurementExportDialog.cpp
     src/gui/CanonWindow.cpp
     ${THEME_TEST_RESOURCES}
 )
 target_include_directories(aetherpd_dialog_test PRIVATE src tests)
 target_compile_definitions(aetherpd_dialog_test PRIVATE
     AETHERPD_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/testdata/aetherpd/public")
-target_link_libraries(aetherpd_dialog_test PRIVATE aethercore Qt6::Widgets Qt6::Network)
+target_link_libraries(aetherpd_dialog_test PRIVATE aethercore Qt6::Widgets Qt6::Network Qt6::Test)
 add_test(NAME aetherpd_dialog_test COMMAND aetherpd_dialog_test)
 set_tests_properties(aetherpd_dialog_test PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 

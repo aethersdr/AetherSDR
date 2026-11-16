@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T10:46:52.898073+00:00",
+  "updated_utc": "2026-11-16T10:54:09.878014+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Complete remaining PR4770 original Phase1 scope and export dialog qualification offline. Resolve radio reachability and qualify exact installed reboot before RF. Full P1-P10 goal remains active and incomplete.",
+  "next_action": "Resolve analyzer10second deadline contract versus14second operation budget with causal offline tests; then supported analysis controls/settings. Radio reboot/live RF qualification and full P1-P10 remain incomplete.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2693,5 +2693,41 @@
         "sha256": "ca1a564afd86d30ceb86453e5efcf928c1d7ca8c50290e3cc152e700465b7d36"
       }
     ]
-  }
+  },
+  "measurement_export_dialog": {
+    "updated_utc": "2026-11-16T10:54:09.878014+00:00",
+    "base_commit": "23ccdf7fb504e0019759dab249132dfc5b223bd7",
+    "status": "offline_export_dialog_qualified",
+    "change": "Extract immutable export snapshot and atomic destination write into the actual QFileDialog subclass, without radio/model authority. Existing operator button uses this dialog.",
+    "validation": [
+      "AetherSDR and both affected widget tests built",
+      "2/2 widget tests passed in 3.41 seconds",
+      "Keyboard format selection sets JSON/CSV/PNG suffixes; accepting chooser writes exact captured bytes in an isolated temporary directory",
+      "Changing caller bytes after opening cannot replace snapshot",
+      "Cancel preserves an existing destination",
+      "Empty selected snapshot reports failure and preserves destination",
+      "Absent valid plot offers JSON/CSV only",
+      "Engine boundary and accessibility: no findings; test registration and diff check passed"
+    ],
+    "limitations": [
+      "Linux Qt6.12 nonnative offscreen dialog tested; macOS/Windows native choosers not yet qualified",
+      "No new RF or live radio evidence",
+      "Default timing budget gap and remaining PR4770 settings/control scope are tracked in PR4770-PHASE1-STATUS.json"
+    ],
+    "evidence": [
+      {
+        "path": "evidence/20261116-export-dialog/export-dialog-build.log",
+        "sha256": "4167d7a8c42eae4567db9d771ad9b0a31e9a108ef4b00e2c2e6a3ffb48d359b6"
+      },
+      {
+        "path": "evidence/20261116-export-dialog/export-dialog-tests.log",
+        "sha256": "2f5511f69f7471a9b5dcde55a7d13b3df86f91881ce8991eac7ba444736eac9e"
+      },
+      {
+        "path": "evidence/20261116-export-dialog/export-dialog-static.log",
+        "sha256": "1d003cbfb70fc5205556d5e0bc3db580baf3b7a40d9c4899ff888e649d39c3ee"
+      }
+    ]
+  },
+  "pr4770_phase1_audit": "PR4770-PHASE1-STATUS.json"
 }

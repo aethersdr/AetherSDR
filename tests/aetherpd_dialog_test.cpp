@@ -6,6 +6,12 @@
 #include "gui/AetherPDDialog.h"
 #include "gui/AetherPDMeasurementDialog.h"
 #include "gui/AetherPDMeasurementSpectrum.h"
+#include "gui/AetherPDMeasurementExportDialog.h"
+#include <QBuffer>
+#include <QComboBox>
+#include <QFile>
+#include <QTemporaryDir>
+#include <QTest>
 #include <QAccessible>
 #include <QImage>
 #include <limits>
@@ -91,6 +97,78 @@ int main(int argc, char** argv)
         if (!check(spectrum.exportPng().isEmpty(), "nonfinite spectrum cannot enter raster output")) { return 1; }
         spectrum.setResult(nullptr);
         if (!check(!spectrum.hasResult() && spectrum.exportPng().isEmpty(), "connection clear withdraws spectrum export")) { return 1; }
+    }
+    {
+        QTemporaryDir destination;
+        if (!check(destination.isValid(), "export destination is isolated")) { return 1; }
+        QByteArray json("{\"capture\":\"original\"}\n");
+        const QByteArray csv("Measurement,Value\r\nIMD3,-40\r\n");
+        QByteArray png;
+        QBuffer encoded(&png);
+        QImage fixture(2, 2, QImage::Format_ARGB32);
+        fixture.fill(Qt::transparent);
+        if (!encoded.open(QIODevice::WriteOnly) || !fixture.save(&encoded, "PNG")) { return 1; }
+        const QByteArray expected[] = {json, csv, png};
+        const QString suffixes[] = {QStringLiteral("json"), QStringLiteral("csv"), QStringLiteral("png")};
+        for (int format = 0; format < 3; ++format) {
+            AetherPDMeasurementExportDialog exporter(json, csv, png);
+            exporter.setOption(QFileDialog::DontUseNativeDialog);
+            exporter.setDirectory(destination.path());
+            exporter.open();
+            QCoreApplication::processEvents();
+            auto* formats = exporter.findChild<QComboBox*>(QStringLiteral("fileTypeCombo"));
+            if (!check(formats != nullptr, "save chooser exposes format selection")) { return 1; }
+            formats->setFocus();
+            QTest::keyClick(formats, Qt::Key_Home);
+            for (int i = 0; i < format; ++i) { QTest::keyClick(formats, Qt::Key_Down); }
+            if (!check(exporter.defaultSuffix() == suffixes[format], "operator format selection updates automatic extension")) { return 1; }
+            const QString base = destination.filePath(QStringLiteral("capture%1").arg(format));
+            exporter.selectFile(base);
+            int receipts = 0;
+            bool saved = false;
+            QObject::connect(&exporter, &AetherPDMeasurementExportDialog::exportCompleted,
+                &exporter, [&](bool success) { ++receipts; saved = success; });
+            const QByteArray original = json;
+            json = "replacement capture";
+            if (!QMetaObject::invokeMethod(&exporter, "accept", Qt::DirectConnection)) { return 1; }
+            json = original;
+            QFile output(base + QLatin1Char('.') + suffixes[format]);
+            if (!check(receipts == 1 && saved && output.open(QIODevice::ReadOnly) && output.readAll() == expected[format],
+                "chooser writes exactly the selected snapshot with its matching extension")) { return 1; }
+        }
+        const QString existingPath = destination.filePath(QStringLiteral("existing.json"));
+        QFile existing(existingPath);
+        if (!existing.open(QIODevice::WriteOnly) || existing.write("keep original") != 13) { return 1; }
+        existing.close();
+        {
+            AetherPDMeasurementExportDialog exporter(json, csv, {});
+            exporter.setOption(QFileDialog::DontUseNativeDialog);
+            exporter.setDirectory(destination.path());
+            exporter.selectFile(existingPath);
+            int receipts = 0;
+            QObject::connect(&exporter, &AetherPDMeasurementExportDialog::exportCompleted, &exporter, [&](bool) { ++receipts; });
+            exporter.open();
+            exporter.reject();
+            if (!check(receipts == 0 && exporter.nameFilters().size() == 2
+                && existing.open(QIODevice::ReadOnly) && existing.readAll() == "keep original",
+                "cancel preserves destination and invalid spectrum offers no PNG export")) { return 1; }
+            existing.close();
+        }
+        {
+            AetherPDMeasurementExportDialog exporter({}, csv, {});
+            exporter.setOption(QFileDialog::DontUseNativeDialog);
+            exporter.setOption(QFileDialog::DontConfirmOverwrite);
+            exporter.setDirectory(destination.path());
+            exporter.selectFile(existingPath);
+            int receipts = 0;
+            bool saved = true;
+            QObject::connect(&exporter, &AetherPDMeasurementExportDialog::exportCompleted,
+                &exporter, [&](bool success) { ++receipts; saved = success; });
+            exporter.open();
+            if (!QMetaObject::invokeMethod(&exporter, "accept", Qt::DirectConnection)) { return 1; }
+            if (!check(receipts == 1 && !saved && existing.open(QIODevice::ReadOnly) && existing.readAll() == "keep original",
+                "missing snapshot reports failure without replacing an existing destination")) { return 1; }
+        }
     }
     Network network, captureNetwork;
     RadioModel radio;
