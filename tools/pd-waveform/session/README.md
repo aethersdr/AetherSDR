@@ -551,6 +551,15 @@ alone. The non-reaping observation uses `waitid(P_PID, ..., WNOWAIT)`, available
 since Linux 2.6.9 according to the [Linux wait manual](https://man7.org/linux/man-pages/man2/waitpid.2.html).
 Actual FLEX-6300 qualification remains required.
 
+An installed receive-only 8600 comparison terminated the exact owned capture
+supervisor before DSP startup. With prompt child-exit observation, original
+worker retirement took 477 ms versus 10.27 seconds on the predecessor; the
+launcher was observed without root or capabilities by 414 ms after the fault.
+An ordinary explicit restart delivered a complete local DAX IQ frame with FDX
+disabled, followed by verified Stop cleanup. Exact artifacts and limits are in
+[`PREPARED-CHILD-EXIT-INSTALLED-QUALIFICATION.json`](../PREPARED-CHILD-EXIT-INSTALLED-QUALIFICATION.json).
+This is one startup-failure comparison, not an RF or FLEX-6000 timing guarantee.
+
 On the installed ARM64 candidate, loss of the IQ-source process retires DSP,
 capture, ARP and guardians. Its unprivileged private control owner and launcher
 can remain to serve explicit receive restoration. Status requests refresh the

@@ -1,0 +1,13 @@
+{
+  "body": {
+    "firmware": "4.3.16.42034",
+    "installation_committed": true,
+    "profile": 1,
+    "selected_release_blake2b_256": "541e6f7318e737342039a00094a5d57fa479cd0aeaced7001df8ab8c911cefd7",
+    "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+    "serial": "2125-1213-8600-8895",
+    "state": "committed",
+    "upgrade_plan_blake2b_256": "3478cb7a95ed460e67d0ce4e06c7962fe0b78e592f608ac598958bad7ecffc29"
+  },
+  "http_status": 200
+}

@@ -1,0 +1,72 @@
+{
+  "arm64": {
+    "changed_files": [
+      "pd-radio-launch"
+    ],
+    "unchanged_files": [
+      "flex-tailnet-shim",
+      "aether-pd",
+      "pd-primary-launch",
+      "pd-start-session",
+      "pd-fixed-arp",
+      "pd-iq-source",
+      "pd-capture-bootstrap",
+      "pd-unkey-guard",
+      "pd-lease-guard",
+      "LICENSES"
+    ],
+    "before": {
+      "pd-radio-launch": {
+        "name": "pd-radio-launch",
+        "bytes": 105136,
+        "gzip_bytes": 57022,
+        "sha256": "8915359c85b7cd552e2a9586319dafed650e58390fb6b630f83dd7dddc4b967f"
+      }
+    },
+    "after": {
+      "pd-radio-launch": {
+        "name": "pd-radio-launch",
+        "bytes": 105472,
+        "gzip_bytes": 57153,
+        "sha256": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877"
+      }
+    },
+    "release_bytes": 9043010,
+    "release_blake2b_256": "541e6f7318e737342039a00094a5d57fa479cd0aeaced7001df8ab8c911cefd7"
+  },
+  "armv7": {
+    "changed_files": [
+      "pd-radio-launch"
+    ],
+    "unchanged_files": [
+      "flex-tailnet-shim",
+      "aether-pd",
+      "pd-primary-launch",
+      "pd-start-session",
+      "pd-fixed-arp",
+      "pd-iq-source",
+      "pd-capture-bootstrap",
+      "pd-unkey-guard",
+      "pd-lease-guard",
+      "LICENSES"
+    ],
+    "before": {
+      "pd-radio-launch": {
+        "name": "pd-radio-launch",
+        "bytes": 91856,
+        "gzip_bytes": 48688,
+        "sha256": "96e892137ae99345419a808c42db48edb1c518441157d01179e746c919183c7f"
+      }
+    },
+    "after": {
+      "pd-radio-launch": {
+        "name": "pd-radio-launch",
+        "bytes": 92208,
+        "gzip_bytes": 48807,
+        "sha256": "1fde0e18f08593aac4458dd6b8bb817a0b50ad2ce1503c9512fef8b1c109d593"
+      }
+    },
+    "release_bytes": 9371061,
+    "release_blake2b_256": "462a5c09cd050d3bb7ea364de7f3c0e3ad11bc83c7e5c306274189a5aecc0d68"
+  }
+}

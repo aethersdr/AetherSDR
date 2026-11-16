@@ -1,0 +1,27 @@
+{
+  "source_commit": "ecbb9742bb48e5072b37c3cf2b369f6e6ff96f52",
+  "binary": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/AetherSDR",
+  "sha256": "6af0923ed865cff9d8f6935b25f5b9ce90bfd652d5f490b1d61cbdda10019d74",
+  "bytes": 796496512,
+  "selection": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upgrade-prepared-child-exit/short/selection.json",
+  "selection_sha256": "aab471d1a644d62d9c598347fbdbe0d35f2db058d703873abbdc48b8065306b9",
+  "commands": [
+    [
+      "cmake",
+      "-S",
+      "/home/jeremy/AetherSDR/build/aetherpd-source",
+      "-B",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project",
+      "-DAETHERPD_DEVELOPMENT_SELECTION=/home/jeremy/AetherSDR/build/aetherpd-shim-integration/upgrade-prepared-child-exit/short/selection.json"
+    ],
+    [
+      "cmake",
+      "--build",
+      "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project",
+      "--target",
+      "AetherSDR",
+      "--parallel",
+      "4"
+    ]
+  ]
+}

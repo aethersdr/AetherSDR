@@ -1,0 +1,41 @@
+{
+  "version": "0.0.0-childexit.ecbb9742b",
+  "firmware": "4.3.16.42034",
+  "profile": 1,
+  "candidate_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+  "previous_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+  "files": {
+    "LICENSES": {
+      "size": 215346,
+      "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+    },
+    "candidate.release": {
+      "size": 9043010,
+      "sha256": "40dc68838d6263a078965f1cc471f5d6f1ee0b377695a44660a78cd5e1c8b2ef"
+    },
+    "pd-accept": {
+      "size": 29984,
+      "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+    },
+    "pd-carrier": {
+      "size": 6291616,
+      "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+    },
+    "pd-deliver": {
+      "size": 109008,
+      "sha256": "b5272d91f8df7a7f6a92f84f5d81169c7ab8672ae71d03dbfbe088b333f6365b"
+    },
+    "pd-send": {
+      "size": 42344,
+      "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+    },
+    "previous.release": {
+      "size": 9042879,
+      "sha256": "689934ed3f06b46ba49299fb9a48d628b78cd79586cc294537747b880dea0eb9"
+    },
+    "worker.envelope": {
+      "size": 467448,
+      "sha256": "e7826bffdb58fe45a5796f8a6ad2add772b3d0fb143d7d08d20fb268eeffe3e0"
+    }
+  }
+}

@@ -1,0 +1,4562 @@
+[
+  {
+    "event": "bridge",
+    "monotonic_ns": 68236842678105,
+    "elapsed_s": 0.02,
+    "request": {
+      "cmd": "whoami"
+    },
+    "result": {
+      "agentName": "Codex AetherPD",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-prepared-child-exit",
+      "ok": true,
+      "pid": 2296936,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-prepared-child-exit",
+      "station": "Codex AetherPD",
+      "txAllowed": true,
+      "version": "26.11.2"
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68236855006556,
+    "elapsed_s": 0.032,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68236867793399,
+    "elapsed_s": 0.045,
+    "request": {
+      "cmd": "get",
+      "model": "slices"
+    },
+    "result": {
+      "ok": true,
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": true,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": true,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": true,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ]
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68236879502690,
+    "elapsed_s": 0.057,
+    "request": {
+      "cmd": "get",
+      "model": "pans"
+    },
+    "result": {
+      "ok": true,
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.2,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x5ecc4ab6",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 0,
+          "minDbm": -180,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68236907265087,
+    "elapsed_s": 0.085,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68236918343150,
+    "elapsed_s": 0.096,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdIqSelection",
+      "action": "setCurrentIndex",
+      "value": 1
+    },
+    "result": {
+      "action": "setCurrentIndex",
+      "class": "QComboBox",
+      "newValue": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+      "ok": true,
+      "target": "pdIqSelection"
+    }
+  },
+  {
+    "event": "fault_observer_ready",
+    "monotonic_ns": 68239831030849,
+    "elapsed_s": 3.008
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68239844110571,
+    "elapsed_s": 3.022,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdStart",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdStart"
+    }
+  },
+  {
+    "event": "receive_only_start_intent",
+    "monotonic_ns": 68239844324977,
+    "elapsed_s": 3.022
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68239855581033,
+    "elapsed_s": 3.033,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68239877403895,
+    "elapsed_s": 3.055,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68240182958265,
+    "elapsed_s": 3.36,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68240206769167,
+    "elapsed_s": 3.384,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68240512620578,
+    "elapsed_s": 3.69,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68240537219089,
+    "elapsed_s": 3.715,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68240888529423,
+    "elapsed_s": 4.066,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68240916223486,
+    "elapsed_s": 4.094,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68241225187398,
+    "elapsed_s": 4.403,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68241251939516,
+    "elapsed_s": 4.429,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68241564566440,
+    "elapsed_s": 4.742,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68241592478910,
+    "elapsed_s": 4.77,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68241904130554,
+    "elapsed_s": 5.082,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68241926916039,
+    "elapsed_s": 5.104,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68242231042795,
+    "elapsed_s": 5.408,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68242254208771,
+    "elapsed_s": 5.432,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68242564177164,
+    "elapsed_s": 5.742,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68242588455940,
+    "elapsed_s": 5.766,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68242891628737,
+    "elapsed_s": 6.069,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68242914699690,
+    "elapsed_s": 6.092,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68243230484311,
+    "elapsed_s": 6.408,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68243256105596,
+    "elapsed_s": 6.434,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68243558174041,
+    "elapsed_s": 6.736,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68243580876671,
+    "elapsed_s": 6.758,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68243885274914,
+    "elapsed_s": 7.063,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68243910882933,
+    "elapsed_s": 7.088,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68244212345305,
+    "elapsed_s": 7.39,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.84375,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68244244735141,
+    "elapsed_s": 7.422,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68244551671205,
+    "elapsed_s": 7.729,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.84375,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68244578040929,
+    "elapsed_s": 7.755,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68244879240959,
+    "elapsed_s": 8.057,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.84375,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68244901747758,
+    "elapsed_s": 8.079,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68245206432640,
+    "elapsed_s": 8.384,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.84375,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68245230477417,
+    "elapsed_s": 8.408,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68245533825877,
+    "elapsed_s": 8.711,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.84375,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68245557838785,
+    "elapsed_s": 8.735,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68245861126956,
+    "elapsed_s": 9.039,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68245884177443,
+    "elapsed_s": 9.062,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68246188787817,
+    "elapsed_s": 9.366,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68246212822831,
+    "elapsed_s": 9.39,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68246524257410,
+    "elapsed_s": 9.702,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68246548799931,
+    "elapsed_s": 9.726,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68246860964775,
+    "elapsed_s": 10.038,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68246885088465,
+    "elapsed_s": 10.063,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68247188401593,
+    "elapsed_s": 10.366,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68247212312312,
+    "elapsed_s": 10.39,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68247523762194,
+    "elapsed_s": 10.701,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68247546318438,
+    "elapsed_s": 10.724,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68247855296678,
+    "elapsed_s": 11.033,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68247878599707,
+    "elapsed_s": 11.056,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68248182126765,
+    "elapsed_s": 11.36,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68248211176169,
+    "elapsed_s": 11.389,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68248528472996,
+    "elapsed_s": 11.706,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68248552962991,
+    "elapsed_s": 11.73,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68248854827892,
+    "elapsed_s": 12.032,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68248880061720,
+    "elapsed_s": 12.057,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68249182506071,
+    "elapsed_s": 12.36,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68249208977488,
+    "elapsed_s": 12.386,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68249518874298,
+    "elapsed_s": 12.696,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68249544204248,
+    "elapsed_s": 12.722,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68249849319090,
+    "elapsed_s": 13.027,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68249874698802,
+    "elapsed_s": 13.052,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68250187993680,
+    "elapsed_s": 13.365,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68250211950294,
+    "elapsed_s": 13.389,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68250524293381,
+    "elapsed_s": 13.702,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68250549035828,
+    "elapsed_s": 13.726,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68250855164785,
+    "elapsed_s": 14.033,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68250879269883,
+    "elapsed_s": 14.057,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68251182005483,
+    "elapsed_s": 14.359,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68251205243933,
+    "elapsed_s": 14.383,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68251518524497,
+    "elapsed_s": 14.696,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68251541507512,
+    "elapsed_s": 14.719,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68251848820287,
+    "elapsed_s": 15.026,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68251872021596,
+    "elapsed_s": 15.049,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68252176059821,
+    "elapsed_s": 15.353,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68252200207516,
+    "elapsed_s": 15.378,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68252503681519,
+    "elapsed_s": 15.681,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68252528368449,
+    "elapsed_s": 15.706,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68252831032622,
+    "elapsed_s": 16.008,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68252853998556,
+    "elapsed_s": 16.031,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68253158375706,
+    "elapsed_s": 16.336,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68253184090380,
+    "elapsed_s": 16.362,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68253484994272,
+    "elapsed_s": 16.662,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68253508742099,
+    "elapsed_s": 16.686,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68253812421438,
+    "elapsed_s": 16.99,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68253836993605,
+    "elapsed_s": 17.014,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68254139916717,
+    "elapsed_s": 17.317,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68254163240624,
+    "elapsed_s": 17.341,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68254473036235,
+    "elapsed_s": 17.65,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68254496437527,
+    "elapsed_s": 17.674,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68254800960257,
+    "elapsed_s": 17.978,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68254826411259,
+    "elapsed_s": 18.004,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68255139694169,
+    "elapsed_s": 18.317,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68255165690440,
+    "elapsed_s": 18.343,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68255467340497,
+    "elapsed_s": 18.645,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68255496282041,
+    "elapsed_s": 18.674,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68255806547256,
+    "elapsed_s": 18.984,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68255831242750,
+    "elapsed_s": 19.009,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68256133978975,
+    "elapsed_s": 19.311,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68256157404859,
+    "elapsed_s": 19.335,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68256460935924,
+    "elapsed_s": 19.638,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68256485177458,
+    "elapsed_s": 19.663,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68256788145691,
+    "elapsed_s": 19.966,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68256814105278,
+    "elapsed_s": 19.992,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68257115375291,
+    "elapsed_s": 20.293,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68257140109195,
+    "elapsed_s": 20.318,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68257442785583,
+    "elapsed_s": 20.62,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68257466735581,
+    "elapsed_s": 20.644,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68257776087423,
+    "elapsed_s": 20.954,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68257799557971,
+    "elapsed_s": 20.977,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68258103609721,
+    "elapsed_s": 21.281,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68258128391405,
+    "elapsed_s": 21.306,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68258437224024,
+    "elapsed_s": 21.615,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68258461530907,
+    "elapsed_s": 21.639,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "probe_result",
+    "monotonic_ns": 68258462304177,
+    "elapsed_s": 21.64,
+    "result": {
+      "case": "capture-startup-exit",
+      "probe_complete": true,
+      "signals": [
+        {
+          "pid": 2973,
+          "start_ticks": 271730,
+          "signal": "SIGKILL",
+          "monotonic_ns": 2717339622162
+        }
+      ],
+      "rf_commands": [],
+      "runtime_restart_requested": false,
+      "boot_id": "839d29c7-c56e-4c61-a87e-05fdf1c6b6b6",
+      "before": [
+        {
+          "pid": 2580,
+          "ppid": 1,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/aetherpd-shim.service"
+          ],
+          "start_ticks": 264054,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        }
+      ],
+      "idle_before": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      },
+      "at_fault": [
+        {
+          "pid": 2580,
+          "ppid": 1,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/aetherpd-shim.service"
+          ],
+          "start_ticks": 264054,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        },
+        {
+          "pid": 2966,
+          "ppid": 1,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271638,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        },
+        {
+          "pid": 2967,
+          "ppid": 2966,
+          "exe": "/run/aetherpd/bin/pd-radio-launch",
+          "uid": "0\t0\t0\t0",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271641,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "000001ffffffffff",
+            "CapEff": "000001ffffffffff",
+            "CapBnd": "000001ffffffffff",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2968,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271641,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2969,
+          "ppid": 2968,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271641,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2970,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/pd-iq-source",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271641,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        },
+        {
+          "pid": 2973,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271730,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2974,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/pd-radio-launch",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "R (running)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271730,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        },
+        {
+          "pid": 2975,
+          "ppid": 2973,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271730,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2976,
+          "ppid": 2975,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271730,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        }
+      ],
+      "target": {
+        "pid": 2973,
+        "ppid": 2967,
+        "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+        ],
+        "start_ticks": 271730,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      "workers_gone_ms": 476.848577,
+      "observations": [
+        {
+          "elapsed_ms": 14.292032,
+          "launcher": [
+            {
+              "pid": 2967,
+              "ppid": 2966,
+              "exe": "/run/aetherpd/bin/pd-radio-launch",
+              "uid": "0\t0\t0\t0",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "000001ffffffffff",
+                "CapEff": "000001ffffffffff",
+                "CapBnd": "000001ffffffffff",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            }
+          ],
+          "active_workers": [
+            {
+              "pid": 2968,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/pd-fixed-arp",
+              "uid": "65534\t65534\t65534\t65534",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000001000",
+                "CapEff": "0000000000001000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            },
+            {
+              "pid": 2969,
+              "ppid": 2968,
+              "exe": "/run/aetherpd/bin/pd-fixed-arp",
+              "uid": "65534\t65534\t65534\t65534",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000001000",
+                "CapEff": "0000000000001000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            },
+            {
+              "pid": 2970,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/pd-iq-source",
+              "uid": "78666\t78666\t78666\t78666",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000000000",
+                "CapEff": "0000000000000000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "1"
+            }
+          ]
+        },
+        {
+          "elapsed_ms": 227.234639,
+          "launcher": [
+            {
+              "pid": 2967,
+              "ppid": 2966,
+              "exe": "/run/aetherpd/bin/pd-radio-launch",
+              "uid": "0\t0\t0\t0",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "000001ffffffffff",
+                "CapEff": "000001ffffffffff",
+                "CapBnd": "000001ffffffffff",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            }
+          ],
+          "active_workers": [
+            {
+              "pid": 2968,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/pd-fixed-arp",
+              "uid": "65534\t65534\t65534\t65534",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000001000",
+                "CapEff": "0000000000001000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            },
+            {
+              "pid": 2969,
+              "ppid": 2968,
+              "exe": "/run/aetherpd/bin/pd-fixed-arp",
+              "uid": "65534\t65534\t65534\t65534",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000001000",
+                "CapEff": "0000000000001000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            },
+            {
+              "pid": 2970,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/pd-iq-source",
+              "uid": "78666\t78666\t78666\t78666",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000000000",
+                "CapEff": "0000000000000000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "1"
+            },
+            {
+              "pid": 2977,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/aether-pd",
+              "uid": "78666\t78666\t78666\t78666",
+              "state": "R (running)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271752,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000000000",
+                "CapEff": "0000000000000000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "1"
+            }
+          ]
+        },
+        {
+          "elapsed_ms": 346.205229,
+          "launcher": [
+            {
+              "pid": 2967,
+              "ppid": 2966,
+              "exe": "/run/aetherpd/bin/pd-radio-launch",
+              "uid": "0\t0\t0\t0",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "000001ffffffffff",
+                "CapEff": "000001ffffffffff",
+                "CapBnd": "000001ffffffffff",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            }
+          ],
+          "active_workers": [
+            {
+              "pid": 2968,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/pd-fixed-arp",
+              "uid": "65534\t65534\t65534\t65534",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000001000",
+                "CapEff": "0000000000001000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            },
+            {
+              "pid": 2969,
+              "ppid": 2968,
+              "exe": "/run/aetherpd/bin/pd-fixed-arp",
+              "uid": "65534\t65534\t65534\t65534",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000001000",
+                "CapEff": "0000000000001000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "0"
+            },
+            {
+              "pid": 2970,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/pd-iq-source",
+              "uid": "78666\t78666\t78666\t78666",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000000000",
+                "CapEff": "0000000000000000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "1"
+            }
+          ]
+        },
+        {
+          "elapsed_ms": 413.591331,
+          "launcher": [
+            {
+              "pid": 2967,
+              "ppid": 2966,
+              "exe": "/run/aetherpd/bin/pd-radio-launch",
+              "uid": "78666\t78666\t78666\t78666",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000000000",
+                "CapEff": "0000000000000000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "1"
+            }
+          ],
+          "active_workers": [
+            {
+              "pid": 2970,
+              "ppid": 2967,
+              "exe": "/run/aetherpd/bin/pd-iq-source",
+              "uid": "78666\t78666\t78666\t78666",
+              "state": "S (sleeping)",
+              "cgroup": [
+                "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+              ],
+              "start_ticks": 271641,
+              "caps": {
+                "CapInh": "0000000000000000",
+                "CapPrm": "0000000000000000",
+                "CapEff": "0000000000000000",
+                "CapBnd": "0000000000000000",
+                "CapAmb": "0000000000000000"
+              },
+              "nnp": "1"
+            }
+          ]
+        },
+        {
+          "elapsed_ms": 476.665486,
+          "launcher": [],
+          "active_workers": []
+        }
+      ],
+      "original_worker_pid_checks_including_zombies": [
+        {
+          "pid": 2968,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271641,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2969,
+          "ppid": 2968,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271641,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2970,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/pd-iq-source",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271641,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        },
+        {
+          "pid": 2973,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271730,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2975,
+          "ppid": 2973,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271730,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2976,
+          "ppid": 2975,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": "65534\t65534\t65534\t65534",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271730,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0"
+        },
+        {
+          "pid": 2977,
+          "ppid": 2967,
+          "exe": "/run/aetherpd/bin/aether-pd",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "R (running)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@6-2580-78666.service"
+          ],
+          "start_ticks": 271752,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        }
+      ],
+      "after": [
+        {
+          "pid": 2580,
+          "ppid": 1,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": "78666\t78666\t78666\t78666",
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/aetherpd-shim.service"
+          ],
+          "start_ticks": 264054,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1"
+        }
+      ],
+      "arp_after": [],
+      "journal_after": {
+        "exists": true,
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "idle_after": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      },
+      "accept_local": "0",
+      "total_s": 3.119
+    }
+  },
+  {
+    "event": "service_status",
+    "monotonic_ns": 68258488232858,
+    "elapsed_s": 21.666,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "event": "bridge",
+    "monotonic_ns": 68258570066113,
+    "elapsed_s": 21.747,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  }
+]
