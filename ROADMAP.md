@@ -281,11 +281,11 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   — focused security review of the macOS shared-memory audio bridge.
   (The RigctlPty side is resolved — RigctlPty was removed in #3380.)
 
-### Approved RFCs (not yet started)
+### Approved RFCs (open)
 
-Approved under the [RFC process](GOVERNANCE.md#rfc-process) and waiting for
-someone to pick them up — **approved for implementation, not scheduled**. Work
-that has started is listed under In flight. Full list:
+Approved under the [RFC process](GOVERNANCE.md#rfc-process) and still open:
+**approved for implementation**, whether or not work has started. Some are
+partly delivered, such as #6964 and #7159. Full list:
 [`label:"RFC Approved"`](https://github.com/aethersdr/AetherSDR/issues?q=is%3Aopen+label%3A%22RFC+Approved%22).
 
 **Panadapter and display**
@@ -326,7 +326,7 @@ that has started is listed under In flight. Full list:
 - [#6863](https://github.com/aethersdr/AetherSDR/issues/6863) — TCI IQ from host-demodulating backends: a per-slice IQ tap on IRadioBackend
 - [#7092](https://github.com/aethersdr/AetherSDR/issues/7092) — KPA500 four-state main-screen status indicator
 - [#7159](https://github.com/aethersdr/AetherSDR/issues/7159) — Data2G in AetherModem: a native, open HF data modem (ARQ and broadcast)
-- [#7296](https://github.com/aethersdr/AetherSDR/issues/7296) — HF Gateway in AetherModem: one station answering Mercury, Data2G and VARA-compatible modems
+- [#7296](https://github.com/aethersdr/AetherSDR/issues/7296) — HF Gateway in AetherModem: one station answering Mercury, Data2G and other HF data modems
 - [#7312](https://github.com/aethersdr/AetherSDR/issues/7312) — TCI extension policy: no one-off verbs; the #7181 set is the only channel
 
 **Interface and workflow**
@@ -439,9 +439,9 @@ complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 - **Radio connection workspace** — Locations, operator profiles and SmartLink
   accounts in one workspace, two recent-radio shortcuts with a drawer for the
   rest, and a confirmed handoff between radios. RFC #6561 (v26.11.3).
-- **Every SmartSDR for Mac action on a key or MIDI control** — 169 of its 201
-  actions mapped through one action registry, without moving a saved binding
-  (v26.11.3).
+- **Keyboard and MIDI actions from one registry** — dozens of new slice,
+  panadapter, memory, antenna, filter and transmit actions on a key or MIDI
+  control, without moving a saved binding (v26.11.3).
 - **The Hermes-Lite 2 is Supported** in the desktop application, board id 6 on
   gateware 74, with ANT or RF1 transmit output (v26.11.3).
 - **IC-7610, IC-7760 and IC-7851** — experimental shared dual-receiver support
