@@ -100,7 +100,7 @@ Baseline for this assessment: upstream `9002b51bb2ae4a50fe6776e69aa5e3c82a98868a
 | Signed application updater | Backend package identity, compatibility, activation/rollback and installer integration still require the approved shared package contract |
 
 [RFC #7277](https://github.com/aethersdr/AetherSDR/issues/7277) now has a
-maintainer ruling approving its migration direction: aetherd owns credentials
+[maintainer ruling](https://github.com/aethersdr/AetherSDR/issues/7277#issuecomment-6885056767) approving its migration direction: aetherd owns credentials
 and settings; receive DSP is centralized in aetherd; restart resumes a session
 without a TX grant; packages use the signed updater. These decisions are
 binding direction, not proof the worker protocol/host has landed. Its simulator
@@ -167,9 +167,9 @@ the new process implementation.
 | Modes and passband | `ReceiveModeControl`, `SliceFilterRequest`, existing mode/filter controls | `OM`, `SL`, `SH`, `FW`, filter-bank context | D/S/H representative modes; first landing only for tested mode/width combinations |
 | RF gain, squelch, AGC | Existing receive records and `SliceAgcRequest` | `RG`, `SQ`, `GC`, `GT` | D/S; first landing after readback/effect tests; no invented AGC-threshold mapping |
 | Native NB/NR/notch/APF | `SliceDspRequest` and existing available controls | `NB1/2`, `NR`, `NT`, `BC`, `AP0` | D/S, APF H; publish only exact supported semantics; native advanced parameters deferred |
-| CW receive pitch, RIT | Existing pitch/RIT controls and confirmed deltas | `PT`, `RT`, `RU`, `RD` | D/S; first landing after effect/restoration tests; XIT and keyer excluded |
+| CW receive pitch, RIT state | Existing pitch/RIT controls and confirmed deltas | `PT`, `RT` On/Off only; shared offset readback | D/S; first landing after effect/restoration tests; `RU`/`RD` offset writes and `RT2` shift deferred, XIT and keyer excluded |
 | Scope and waterfall | Existing pan requests/signals and render route | `DD0`, `##DD2`, `BS3/4/5`, edge/context readbacks | D/S/H; first landing, fixed geometry keeps waterfall stationary while VFO moves; zoom obeys native spans |
-| Receive meter | `MeterModel` and existing meter consumers | `SM` | D/S/H; 0–70 native deflection dots, not invented dBm/S-unit calibration; representation contract requires agreement |
+| Receive meter | `MeterModel` and existing meter consumers | `SM` | D/S/H; 0–70 native deflection dots, not invented dBm/S-unit calibration; invalidate on TX/unknown, fresh RX sample required; representation contract requires agreement |
 | PC receive audio | Existing engine PCM/playback consumer, host gain/mute | `##VP` and receive RTP/PCM | S/H plus KNS manual; first landing; no TX audio socket/encoder or DATA SEND mutation |
 | Preamp/ATT, antenna selection | Existing front-end/antenna controls | `PA`, `RA`, `AN` | D/S; first landing only where individual fields preserve unrelated TX/routing fields |
 | Advanced filter-bank/reset, APF shift/width/gain, EQ, routing, scan/auto-mode, display/beeps, decoders | Proposed native pages in #7118 | Native commands in reference inventory | Mostly D/S, limited H; deferred to separately approved UX/feature PRs |
@@ -184,6 +184,20 @@ above the seam, new global default, changed shortcut or new native widget is
 part of this landing. Native units/relative amplitude must be represented by
 an approved neutral contract; if existing consumers cannot display them honestly,
 that is a separate reviewed prerequisite, not a reason to falsify calibration.
+
+RIT and XIT share an offset register: `RU`/`RD` change both stored offsets,
+even when XIT is Off. First scope therefore reads the shared offset but does
+not write or clear it; `RT` is restricted to On/Off, excluding `RT2` shift.
+Any later offset editing needs explicit approval of shared-register ownership
+and truthful presentation of its TX-state effect, not merely an XIT-Off guard.
+
+`SM` reports S-meter deflection only during confirmed RX; during TX it reports
+power. Invalidate receive level and freshness immediately on observed TX or
+unknown receive state. Do not relabel a power sample as an RX level. Re-enable
+only after fresh, qualified RX-state and meter observations in the current
+session; reject ambiguous or late pre-transition replies. Socket-free tests
+must cover external TX, unknown state, late replies and return to RX without
+ever granting the backend TX authority.
 
 ## 5. RX-only and transport safety contracts
 
@@ -204,8 +218,10 @@ observation of an externally keyed radio grants no write authority.
 
 Bound TCP message/tail lengths, datagrams, arrays and work per event-loop turn.
 Validate scope levels/geometry and full RTP structure before sample access;
-accept UDP only from the authenticated TCP peer, count loss/reordering and
-reject stale-session packets. Fixed UDP port ownership is exclusive; report
+accept UDP only from the configured/resolved TCP peer address, count
+loss/reordering and reject stale-session packets. KNS authenticates the client login, not the
+radio/server identity; source-address matching is filtering, not cryptographic
+authentication. Fixed UDP port ownership is exclusive; report
 contention rather than silently sharing another session's audio. Whether a
 second receive port reservation is actually required is a measured protocol
 question; a TX socket is not justified by the reference doing it.
@@ -245,11 +261,34 @@ hashes, firmware, effective capability profile, RX-only build proof and TX
 permission disabled. Snapshot every field to be touched; no radio power cycle,
 firmware operation, memory write or transmit is part of this plan.
 
+**Mandatory tooling gates before live phases:** current `radiocert` is not
+yet sufficient for the contracts below. Land and verify separately:
+
+- Session/resource-incarnation and per-field edit-revision fences on every
+  test mutation and restoration, including individual-stage guards and the
+  final epilogue. Current `RadioCertification::run()` re-fetches slice 0 and
+  restores captured frequency/mode unconditionally. Capture original ownership;
+  restore only fields still owned by this run and unchanged since its last
+  write. On operator edit, disconnect/reconnect or replacement, retire the run
+  and never write the old snapshot into newer state. Regressions inject each
+  event during a phase and before restoration, and must fail without the fence.
+- Capability-driven, side-effect-free RX phase selection. A TX-disabled
+  `meters` command currently still runs TX-oriented stages: key refusal does
+  not skip their tone/configuration probes. RX runs must skip these stages and
+  report them **not applicable**, without TX test tones, microphone/processor
+  gain changes, TX-monitor changes or RF-power clamping/restoration. Apply the
+  same no-TX-side-effect contract to tune/rx and their common epilogue. Pin it
+  with injected state/transport tests and negative mutation checks. Keep the
+  bridge TX refusal and final backend allowlist as independent backstops.
+
+Do not run the live commands below until these gates are demonstrated. The
+RX-only phase selection is a required tool change, not an existing command flag.
+
 | Phase | Observations and objective evidence | Manual check and restoration |
 |---|---|---|
 | `radiocert tune` | UI → typed request → IPC → radio → observation → UI; absolute/mode round trips; pan/slice/waterfall frequency agreement, native span boundaries and rapid tuning; radio-side changes converge without feedback | Off-centre known carrier and fixed-scope marker motion; restore original VFO/mode/filter/scope context with readback |
 | `radiocert rx` | Known carrier, zero/off-centre and sideband cases; filter change effect; PCM sequence/gap counts and engine-consumer agreement; exercise each declared RX control both ways | Listen for intelligibility and verify carrier location against the radio; restore DSP/filter/audio and any changed receive fields |
-| `radiocert meters`, TX disabled | Fresh meter definition/value/age at weak and stronger signals; both widgets and published model agree on native units; run non-keying control/interlock/squelch stages; record keyed stages as refused/not run | Compare native deflection to front panel with a steady signal; no dBm/S-unit accuracy claim; restore gain/squelch/front-end settings |
+| `radiocert meters`, gated RX-only tooling, TX disabled | Fresh meter definition/value/age at weak and stronger signals; both widgets and published model agree on native units; run non-keying control/interlock/squelch stages; skip TX-oriented stages as not applicable; no tone/TX-config mutations | Compare native deflection to front panel with a steady signal; no dBm/S-unit accuracy claim; restore gain/squelch/front-end settings |
 | `radiocert persist` plus applicable runner | Snapshot alone is read-only. A bounded runner checks representative radio-owned RX values and host-only preferences through normal quit/relaunch, without stale replay; two polls establish continuing convergence | Compare radio/front-panel state before and after reconnect; restore seeded values only if unchanged by the operator; verify each restored readback |
 | Failure/endurance | Two reconnects, worker crash/restart, IPC interruption/backpressure/stale replies, and at least 12 measured minutes receiving; continuous liveness/PCM/display and bounded memory/backlog evidence | Audible RX before/after recovery; verified final baseline and clean teardown; no substituted operator acceptance for timed measurement |
 
@@ -259,20 +298,19 @@ geometry/audio or unbounded backlog. Retain partial evidence and report the
 failure; never restore an older snapshot over a newer operator choice. Every
 phase restores before proceeding, and a restoration failure ends the session.
 
-`radiocert` is a diagnostic, not automatic pass/fail. Its `meters` phase includes
-keying attempts even though it permits operation with TX disabled: the future
-RX build and bridge must both refuse those, and results must say not run.
-Never run `radiocert tx` or unrestricted `all` for this scope. Production
-certification remains a later maintainer decision with the full applicable
-suite and manual checks; experimental acceptance is not `all` certification.
+`radiocert` is a diagnostic, not automatic pass/fail. Never run its current
+unadapted meters path, `radiocert tx` or unrestricted `all` for this scope.
+Production certification remains a later maintainer decision with the full
+applicable suite and manual checks; experimental acceptance is not `all`
+certification.
 
-Potential separate, radio-neutral tooling prerequisites: recognize native meter
-units; report non-applicable DSP stages honestly for radio-demodulated audio;
-add a capability-driven RX-only meter selection; adapt persistence runners
-whose current family lists/scenarios cover Flex/HL2/Icom rather than Kenwood;
-add process incarnation/backlog observations. Do not simply add a family name
-to a runner that assumes different ownership, controls or units. Tool changes
-and tests land separately; this document changes none.
+Other separately verified tooling prerequisites are native meter units,
+non-applicable DSP results for radio-demodulated audio, process incarnation/
+backlog observations, and persistence runners adapted to the actual capability
+and ownership contract. Their current family lists/scenarios cover
+Flex/HL2/Icom rather than Kenwood. Do not simply add a family name to a runner
+that assumes different ownership, controls or units. Tool changes and tests
+land separately; this document changes none.
 
 ## 8. Delivery sequence and decisions
 
@@ -290,7 +328,8 @@ and tests land separately; this document changes none.
    credential deletion and VoIP drain findings before reuse. External-client
    support stays limited to verified generic behavior; its TCI volume and rigctl
    no-change-width findings must not be inherited.
-5. **Certification and experimental docs:** execute §7 on the actual process
+5. **Certification and experimental docs:** first land and verify §7's required
+   restoration and RX-only tooling gates; then execute §7 on the actual process
    candidate, then maintainers decide experimental availability. Native setup
    pages and other advanced UX get separate approval/PRs. TX requires its own
    hardware evidence, protocol-failure safety and Principle VI review.
