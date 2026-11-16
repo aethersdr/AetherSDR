@@ -10,6 +10,8 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QCryptographicHash>
+#include <QSaveFile>
 #include "TestEventLoop.h"
 #include "TxTestAuthority.h"
 #include "CwxControlTestFixture.h"
@@ -1116,6 +1118,26 @@ void aetherPDMeasurementWorkflow()
                 && measured.value("spectrum_db_raw_iq").toArray().size() == 16384
                 && exported.value("captures").toArray().size() == 1,
                 "export preserves source, station, spectra and unknown calibration after release");
+            const QJsonObject capture = exported.value("captures").toArray().first().toObject();
+            const QByteArray raw = QByteArray::fromBase64(capture.value("iq_f32le").toString().toLatin1());
+            QByteArray original;
+            for (int i = 0; i < 32; ++i) {
+                original.append(QByteArray::fromBase64(QJsonDocument::fromJson(chunk(i)).object()
+                    .value("iq_f32le").toString().toLatin1()));
+            }
+            check(exported.value("raw_iq_format").toString() == "f32le-iq-v1"
+                && capture.value("sample_count").toInt() == 16384
+                && raw.size() == 16384 * 8 && raw == original
+                && capture.value("sha256").toString().toLatin1()
+                    == QCryptographicHash::hash(original, QCryptographicHash::Sha256).toHex(),
+                "export lost the exact ordered little-endian IQ used by the analyzer");
+            const QStringList arguments = QCoreApplication::arguments();
+            if (arguments.size() == 3 && arguments[1] == QStringLiteral("--export-linearity-fixture")) {
+                QSaveFile file(arguments[2]);
+                const QByteArray exportedBytes = model->exportResult();
+                check(file.open(QIODevice::WriteOnly) && file.write(exportedBytes) == exportedBytes.size()
+                    && file.commit(), "could not save explicitly requested offline IQ fixture");
+            }
             for (const QJsonValue& value : measured.value("products").toArray()) {
                 const QJsonObject product = value.toObject();
                 if (product.value("order").toInt() == 3) {

@@ -1,0 +1,133 @@
+{
+  "utc": "2026-11-16T08:58:54.351431+00:00",
+  "status": "component_export_and_independent_numerical_check_passed",
+  "production_ready": false,
+  "source_parent": "6933a3cd66f00a5b2125881538f5d7dbb5223a08",
+  "scope": "Desktop retains the existing bounded feedback frames after confirmed release; explicit JSON export includes original f32le IQ and per-frame SHA256. No radio runtime, TX deadline, safety threshold or installation change.",
+  "verification": {
+    "controller": "Two distinguishable frames retain exact ordered samples; result withheld until confirmed original-operation release.",
+    "integration": "Injected 16384-sample f32le HTTP snapshot exports byte-identically, with matching SHA256; no radio connection or RF.",
+    "ctest": "4/4 passed: controller, production TX operation integration, spectrum and IMD. Initial run requested two unbuilt analyzer targets; built both and retained the initial Not Run evidence.",
+    "desktop_build": "passed",
+    "documentation_build": "passed",
+    "independent_numpy": {
+      "file": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/raw-iq-export-evidence/fixture.json",
+      "sha256": "dcfb1b15f8eac77595138cc61eb790b487f789ec5e4a42ab552b73b8c4bb22a2",
+      "frames": 1,
+      "samples_per_frame": 16384,
+      "max_spectrum_error_db": 7.737466461321674e-06,
+      "products": [
+        {
+          "order": 3,
+          "upper": false,
+          "dbc_per_tone": -40.00341027607138,
+          "dbc_fundamental_pep": -46.02401013418464,
+          "dbc_sampled_pep": -46.10627962787536,
+          "exported_noise_limited": false
+        },
+        {
+          "order": 3,
+          "upper": true,
+          "dbc_per_tone": -40.001987782190845,
+          "dbc_fundamental_pep": -46.02258764030411,
+          "dbc_sampled_pep": -46.10485713399483,
+          "exported_noise_limited": false
+        },
+        {
+          "order": 5,
+          "upper": false,
+          "dbc_per_tone": -182.62832058334936,
+          "dbc_fundamental_pep": -188.64892044146262,
+          "dbc_sampled_pep": -188.73118993515334,
+          "exported_noise_limited": false
+        },
+        {
+          "order": 5,
+          "upper": true,
+          "dbc_per_tone": -179.06010757059022,
+          "dbc_fundamental_pep": -185.08070742870348,
+          "dbc_sampled_pep": -185.1629769223942,
+          "exported_noise_limited": false
+        },
+        {
+          "order": 7,
+          "upper": false,
+          "dbc_per_tone": -180.81568858954924,
+          "dbc_fundamental_pep": -186.8362884476625,
+          "dbc_sampled_pep": -186.9185579413532,
+          "exported_noise_limited": false
+        },
+        {
+          "order": 7,
+          "upper": true,
+          "dbc_per_tone": -176.67093760251558,
+          "dbc_fundamental_pep": -182.69153746062884,
+          "dbc_sampled_pep": -182.77380695431955,
+          "exported_noise_limited": false
+        }
+      ],
+      "fundamental_pep_db_raw_iq": -7.954641889048495,
+      "sampled_pep_db_raw_iq": -7.872372395357781,
+      "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument."
+    },
+    "negative_export_checks": [
+      {
+        "case": "legacy-no-IQ",
+        "rejected": true,
+        "reason": "Export has no retained raw IQ"
+      },
+      {
+        "case": "changed-byte",
+        "rejected": true,
+        "reason": "Raw IQ hash mismatch"
+      },
+      {
+        "case": "nonfinite-IQ",
+        "rejected": true,
+        "reason": "Nonfinite IQ"
+      },
+      {
+        "case": "changed-spectrum",
+        "rejected": true,
+        "reason": "Spectrum differs"
+      },
+      {
+        "case": "wrong-IMD-reference",
+        "rejected": true,
+        "reason": "dbc_per_tone mismatch"
+      },
+      {
+        "case": "unmatched-power",
+        "rejected": true,
+        "reason": "Unmatched nominal_power_setting_w"
+      },
+      {
+        "case": "both-corrected",
+        "rejected": true,
+        "reason": "requires corrected current and uncorrected baseline"
+      }
+    ]
+  },
+  "limits": [
+    "New raw-IQ export has no live-radio capture yet; previous corrected GUI captures predate IQ retention.",
+    "Numerical agreement does not establish ADC headroom, calibrated RF power or feedback receiver linearity.",
+    "Installed ordinary-user API/desktop has no correction-OFF selector. Native AETHER_PD_CORRECT is a startup environment setting; do not substitute privileged environment injection for a qualified operator workflow.",
+    "Matched OFF/ON, final failure cases, historical natural128sample slip/cold bypass, final stock APD comparison, actual6000 adapter/disk/hardware and release gates remain."
+  ],
+  "next_action": "Add fixed idle-only correction selection through the authenticated owned session and desktop, fail closed across source/session changes, then separately invoke matched bounded OFF/ON runs and recheck their retained IQ. No automatic RF key or source rearm.",
+  "evidence": {
+    "build.log": "66d8a3299608f0ecb4d3c70589fd143ed7bb01ae1bec57f0d22f7ec366193f1c",
+    "test-build.log": "afa0ff6fda45a3c0fe7dba5e12a45f41ad4c1269e159d7476dcc798589ad0042",
+    "analyzer-build.log": "5d451a471550c0318f42ff64657fa5a573aadd30f18d9ba16480bd8a7b4d6fc2",
+    "final-build.log": "46975ff9ef6f3e511279e9f93549a7bdf89fc223054cff997fd5df7e43033b00",
+    "tests.log": "ea6d4be22402b84a99227b8e1fa38c5353f6b1a2ce6c7b1011b4fcd03a0fb6e2",
+    "tests-after-build.log": "001b85c0351c17a8ba6121c6074c4ab57019f67afc71e86ccaa881036b85505a",
+    "fixture-test.log": "1a261ee466fee8f7f037c0f7a9343737ba09cc9499c9281e3f0bb3991353b0c6",
+    "fixture.json": "dcfb1b15f8eac77595138cc61eb790b487f789ec5e4a42ab552b73b8c4bb22a2",
+    "numpy-recheck.json": "b56bf34dc547f6e28fed3f2857e6d647d97a236771fe4c8c36bc51ea7e7f7462",
+    "negative-checks.json": "0cb10a5eb131101a104b0819d0cb03a195151c8f1a0e786234890f595ceea8ba",
+    "docs-build.log": "a7e8be11b62ba72f94d3dfb7047135d2564d1988216b8efa7876add9bed747a9",
+    "test-registration.log": "159cae34bc871940fca10b3979690db7a3d285db3d4cff2eaca5f580b4e5cbb5",
+    "log-rules.log": "5fee1c3bb48cdea3efdde249508f16db320f2709a419cd23569763e3b4ee8a66"
+  }
+}

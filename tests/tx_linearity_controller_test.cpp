@@ -255,7 +255,10 @@ int main(int argc, char** argv)
     {
         Fixture f; f.start(); abortEvidence.clear();
         check(f.lease->deadline == 11000 && f.lease->starts == 1, "lease deadline did not cover original start");
-        f.send(frame(1)); f.send(frame(2));
+        const CaptureFrame first = frame(1);
+        CaptureFrame second = frame(2);
+        for (std::complex<float>& sample : second.feedback) { sample *= 0.9f; }
+        f.send(first); f.send(second);
         check(f.lease->releases == 1 && !f.source->running && f.finished == 0
             && f.controller->state() == TxLinearityController::State::Releasing,
             "result published before confirmed release or capture left running");
@@ -267,6 +270,10 @@ int main(int argc, char** argv)
             && f.result->correctionActive == true && f.result->measurement->sampledPepDb,
             "completed result lost averages, provenance, overload uncertainty or PEP");
         check(abortEvidence.empty(), "successful measurement reported a safety abort");
+        check(f.result && f.result->captures.size() == 2
+            && f.result->captures[0].feedback == first.feedback
+            && f.result->captures[1].feedback == second.feedback,
+            "completed result discarded or changed original IQ samples");
         f.controller->confirmDummyLoad();
         check(!f.controller->prepare(f.config, f.request), "cooldown bypassed on repeat run");
     }

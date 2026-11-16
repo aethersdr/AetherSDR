@@ -15,7 +15,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QCryptographicHash>
 #include <QThread>
+#include <QtEndian>
+#include <bit>
+#include <cstdint>
 #include <cmath>
 #include <algorithm>
 #include <utility>
@@ -200,14 +204,24 @@ QByteArray AetherPDMeasurementModel::exportResult() const
     const Result& r = *m_result;
     QJsonArray captures;
     for (const txlin::LinearityCaptureStamp& stamp : r.measurement.captures) {
+        QByteArray raw(qsizetype(stamp.feedback.size()) * 8, Qt::Uninitialized);
+        char* cursor = raw.data();
+        for (const std::complex<float>& sample : stamp.feedback) {
+            qToLittleEndian(std::bit_cast<std::uint32_t>(sample.real()), cursor);
+            qToLittleEndian(std::bit_cast<std::uint32_t>(sample.imag()), cursor + 4);
+            cursor += 8;
+        }
         captures.append(QJsonObject{{"id", QString::fromStdString(stamp.id)},
-            {"timestamp_ns", QString::number(stamp.timestampNs)}});
+            {"timestamp_ns", QString::number(stamp.timestampNs)},
+            {"sample_count", qint64(stamp.feedback.size())},
+            {"iq_f32le", QString::fromLatin1(raw.toBase64())},
+            {"sha256", QString::fromLatin1(QCryptographicHash::hash(raw, QCryptographicHash::Sha256).toHex())}});
     }
     QJsonArray allocations;
     for (const txlin::AllocationRange& band : r.request.allocations) {
         allocations.append(QJsonObject{{"low_hz", band.lowHz}, {"high_hz", band.highHz}});
     }
-    QJsonObject out{{"schema", "aetherpd-linearity-v1"}, {"radio_serial", r.serial},
+    QJsonObject out{{"schema", "aetherpd-linearity-v1"}, {"raw_iq_format", "f32le-iq-v1"}, {"radio_serial", r.serial},
         {"completed_at_utc", r.completedAtUtc.toString(Qt::ISODateWithMs)},
         {"source", "local-dax-iq"}, {"source_id", QStringLiteral("%1").arg(r.sourceId, 16, 16, QLatin1Char('0'))},
         {"mode", r.mode}, {"transmit_antenna", r.transmitAntenna},

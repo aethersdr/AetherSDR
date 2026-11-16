@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T08:47:10.213186+00:00",
+  "updated_utc": "2026-11-16T08:58:54.351431+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Run matched correction-OFF/ON through the integrated analyzer with retained raw IQ for numerical cross-check; preserve the successful cold/warm four-frame proof. Historical slip, cold variability, final failure cases, stockAPD,6000 adapter/disk/hardware and release gates remain.",
+  "next_action": "Add fixed idle-only correction selection through the authenticated owned session and desktop, fail closed across source/session changes, then separately invoke matched bounded OFF/ON runs and recheck their retained IQ. No automatic RF key or source rearm. Preserve all other unfinished P1\u2013P10 work.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2456,5 +2456,12 @@
       "Raw IQ was not retained for an independent numerical reanalysis; structured operator exports and capture identities are retained.",
       "No production or all-band claim; remaining P1-P10 failure, RF,6300,installer and release gates remain."
     ]
+  },
+  "raw_iq_export": {
+    "status": "component_export_and_independent_numerical_check_passed",
+    "evidence": "tools/pd-waveform/RAW-IQ-EXPORT-QUALIFICATION.json",
+    "radio_changed": false,
+    "live_raw_iq_pending": true,
+    "comparison_control_gap": "No ordinary-user correction-OFF selector; native startup env only."
   }
 }

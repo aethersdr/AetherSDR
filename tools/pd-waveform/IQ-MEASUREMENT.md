@@ -427,6 +427,21 @@ path; absolute levels must not be labeled calibrated dBFS or watts. The two
 PEP conventions remain separate. Measured fundamentals must match the requested
 test tones within two FFT bins, otherwise the measurement is marked invalid.
 
+After confirmed release, completed results also retain the bounded feedback
+frames used by the analyzer. The JSON export adds `raw_iq_format: f32le-iq-v1`
+and per-capture `sample_count`, base64 `iq_f32le` and `sha256` of the decoded
+bytes. Samples are interleaved little-endian float32 I,Q, without normalization
+or windowing. The checksum detects changed bytes; it does not authenticate a
+measurement. The model discards its previous result on a new preparation.
+Serialization occurs only on explicit export, after the RF operation is over.
+
+`python3 tools/pd-waveform/recheck_iq_export.py result.json` independently
+recomputes the BH7 spectrum and IMD ratios with NumPy. Older exports without
+IQ are refused. Optional `--baseline off.json` requires matching station and
+analysis settings, opposite correction states and fundamental power within
+0.5 dB before reporting improvement. This numerical check does not establish
+ADC headroom, absolute RF power, receiver linearity or sustained correction.
+
 Socket-free controller tests cover confirmed-key settling, stale per-reading
 telemetry, power/deadline/ownership loss, late frames, reentrant stop/release,
 destruction, cooldown and metadata consistency. An integration test drives

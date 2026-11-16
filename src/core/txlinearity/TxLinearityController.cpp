@@ -336,11 +336,11 @@ void TxLinearityController::complete()
         TxSpectrumAnalyzer analyzer(m_config.capture.frameSamples, m_config.window);
         bool clipped = false;
         bool clippingKnown = true;
-        for (const CaptureFrame& frame : m_frames) {
+        for (CaptureFrame& frame : m_frames) {
             if (!analyzer.accumulate(frame.feedback)) { result.error = "Spectrum analysis rejected capture"; break; }
             clipped |= frame.clipped;
             clippingKnown &= frame.clippingKnown;
-            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs});
+            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs, std::move(frame.feedback)});
         }
         if (result.error.empty()) {
             result.correctionActive = m_frames.front().correctionActive;

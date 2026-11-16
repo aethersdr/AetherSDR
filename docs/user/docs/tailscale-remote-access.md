@@ -567,7 +567,9 @@ ADC headroom or calibrated output power.
    waits for the original transmission's stop sequence from the radio.
    **Export result…** saves JSON with the station settings, source and capture
    identities, timestamps, correction state, spectrum, noise limitations and
-   reference conventions. IMD is labeled both per tone and relative to
+   reference conventions. Each completed capture includes its original IQ
+   samples and a SHA-256 checksum for offline analysis. Exporting collects no
+   new samples and never transmits. IMD is labeled both per tone and relative to
    fundamental-derived PEP; the separately measured sample-peak reference is
    retained in the export. Raw IQ levels are not calibrated dBFS or watts.
 

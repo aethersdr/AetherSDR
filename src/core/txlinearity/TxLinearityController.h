@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QTimer>
 
+#include <complex>
 #include <functional>
 #include <memory>
 #include <cstdint>
@@ -43,6 +44,8 @@ struct LinearityRunConfig {
 struct LinearityCaptureStamp {
     std::string id;
     std::uint64_t timestampNs = 0;
+    // Original bounded feedback, retained only after confirmed TX release.
+    std::vector<std::complex<float>> feedback;
 };
 
 struct LinearityRunResult {
