@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T19:05:47.704156+00:00",
+  "updated_utc": "2026-11-16T19:24:19.645650+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Package and deploy acquisition timing, then attribute delayed cold-start tone readiness on the radio; preserve failed cold capture and full P1-P10 remaining gates.",
+  "next_action": "Package and install the baseline-readiness fix through the ordinary desktop workflow; qualify cold5W bypass/corrected captures and retained freshness guards. Continue historical alignment/startup, sustained/fault/recovery, final comparison and actual6300 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2906,7 +2906,7 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
-    "installed_state": "fa8 desktop/runtime: finite5W pair, one ordinary reboot and post-reboot local IQ passed; first cold capture failed. Session stopped and cleanup audited.",
+    "installed_state": "ba00 desktop/runtime ordinary upgrade, IQ4/FDXoff and finite5W pair passed; session stopped and cleanup audited. Baseline-readiness fix remains offline only.",
     "latest_read_only_network_probe": {
       "utc": "2026-11-16T18:58:18.513294+00:00",
       "address": "192.168.50.100",
@@ -2959,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "New5W and one-reboot report attributes runtime/desktopfa8dd7aec. Previous5/10W and stock comparisons remain e8d68ad4b/b1256a165 evidence.",
+    "source_provenance_note": "Latest installed/RF buildba00. Reboot proof remainsfa8; earlier10W/stock results keep their original attribution.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "DIAGNOSTICS-RF-REBOOT-QUALIFICATION.json",
+    "latest_live_report": "ACQUISITION-INSTALLED-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3230,5 +3230,16 @@
     "report": "ACQUISITION-TIMING-QUALIFICATION.json",
     "component_qualified": true,
     "installed": false
+  },
+  "baseline_readiness": {
+    "report": "BYPASS-READINESS-QUALIFICATION.json",
+    "offline_passed": true,
+    "installed": false
+  },
+  "acquisition_installed": {
+    "report": "ACQUISITION-INSTALLED-QUALIFICATION.json",
+    "ordinary_upgrade_passed": true,
+    "finite_5w_pair_passed": true,
+    "session_stopped_and_audited": true
   }
 }

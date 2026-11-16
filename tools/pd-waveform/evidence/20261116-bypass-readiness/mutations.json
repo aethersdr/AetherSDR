@@ -1,0 +1,6 @@
+{
+  "bypass-readiness": {
+    "exit": -6,
+    "assertion": "bypass-readiness-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/bypass-readiness/bypass-readiness-test.c:302: check_bypass_measurement_readiness: Assertion `measurement_tones_ready(&w,now)' failed."
+  }
+}

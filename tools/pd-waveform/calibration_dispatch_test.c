@@ -285,8 +285,44 @@ static void check_acquisition_evidence(void)
     unsetenv("AETHER_PD_MAX_DELAY_MS");
 }
 
+static void check_bypass_measurement_readiness(void)
+{
+    unsetenv("AETHER_PD_TEST_TONES");unsetenv("AETHER_PD_TEST_SECONDS");
+    setenv("AETHER_PD_FEEDBACK","local",1);
+    wf_t w;assert(wf_init(&w));w.api=-1;
+    int64_t now=pd_iq_monotonic_ns();
+    w.calibration.phase=PD_CAL_RUNNING;w.calibration.purpose=PD_SOURCE_MEASUREMENT;
+    w.calibration.source_id=23;w.calibration.deadline_ns=now+2000000000;
+    w.keyed=w.aligned=w.feedback_ok=1;w.correct=0;w.local_iq_fault=1;
+    w.tx_guard.seen=1;w.test_noise_left=0;w.test_left=RATE;
+    w.test_f1=pd_calibration_tone1(&w.calibration);w.test_f2=pd_calibration_tone2(&w.calibration);
+    w.measurement_tone_sent_ns=now-w.measurement_guard_ns-1000000;
+    w.local_iq.last_valid_ns=now;w.local_iq.last_age_ns=0;
+    assert(!pd_core_current_solution(w.core) && !pd_eq_ready(w.eq));
+    assert(measurement_tones_ready(&w,now));
+    assert(!capture_meta(&w).correcting);
+    w.correct=1;assert(!measurement_tones_ready(&w,now));
+    w.local_iq_fault=0;assert(!measurement_tones_ready(&w,now));
+    w.correct=0;w.local_iq_fault=1;
+    w.native_apd_enabled=1;assert(!measurement_tones_ready(&w,now));w.native_apd_enabled=0;
+    w.native_apd_active=1;assert(!measurement_tones_ready(&w,now));w.native_apd_active=0;
+    w.tx_guard.seen=0;assert(!measurement_tones_ready(&w,now));w.tx_guard.seen=1;
+    w.tx_guard.reset_pending=1;assert(!measurement_tones_ready(&w,now));w.tx_guard.reset_pending=0;
+    w.local_iq.last_valid_ns=now-100000001;assert(!measurement_tones_ready(&w,now));w.local_iq.last_valid_ns=now;
+    w.local_iq.last_age_ns=25000001;assert(!measurement_tones_ready(&w,now));w.local_iq.last_age_ns=0;
+    w.aligned=0;assert(!measurement_tones_ready(&w,now));w.aligned=1;
+    w.test_noise_left=1;assert(!measurement_tones_ready(&w,now));w.test_noise_left=0;
+    assert(measurement_tones_ready(&w,now));
+    local_feedback_invalidate(&w,1);
+    assert(w.calibration.phase==PD_CAL_CANCELED && !measurement_tones_ready(&w,now));
+    pd_acquire_destroy(w.acquire);pd_core_destroy(w.core);
+    pd_align_destroy(w.align);pd_eq_destroy(w.eq);pd_eq_destroy(w.trusted_eq);
+    free(w.ref.buf);free(w.fbk.buf);free(w.acq_tx);free(w.acq_rx);
+}
+
 int main(void)
 {
+    check_bypass_measurement_readiness();
     check_acquisition_evidence();
     for(unsigned channel=1;channel<=4;++channel){check_feedback_binding(channel);}
     check_source('A');check_source('M');check_source('Q');

@@ -680,6 +680,11 @@ A change invalidates the previous fit and measurement preparation; wait for
 observed status before continuing. The selection applies to the current
 AetherPD session; a newly started session enables correction by default.
 
+An uncorrected measurement waits for fresh, aligned feedback IQ and settled
+tones; it does not require a correction model. A corrected measurement also
+waits for a usable correction model. Stale IQ or a changed TX stream prevents
+either capture from being accepted.
+
 No source arm or transmission is retried automatically. A changed source,
 frequency, power, session, band-plan selection or revoked original automation
 input cancels the preparation or run. A new receive check is needed after

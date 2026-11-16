@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T19:24:19.645650+00:00",
+  "production_ready": false,
+  "installed": false,
+  "base_commit": "ba00b01c43676ac60d4f05ff1e76fae629a02e2e",
+  "status": "Baseline capture no longer requires a correction model; offline regression, mutation, three CTests, two sanitizer tests, ARMv7/ARM64 builds and user-docs build passed.",
+  "behavior": {
+    "bypass": "Fresh aligned IQ, settled bounded source, valid TX continuity and no native APD required. Missing correction model is allowed.",
+    "corrected": "Also requires fault clear and correction_ready; a clear fault alone cannot stand in for a model.",
+    "unchanged": "No TX keying, source rearm, correction DSP, authorization deadline or IQ age limit changes."
+  },
+  "source_sha256": {
+    "tools/pd-waveform/pd_waveform.c": "d56c14981c36943303eb347cc6383bec99e9bf57eca2095f652d80f8ddb361a3",
+    "tools/pd-waveform/calibration_dispatch_test.c": "d74091c8e0f0bbc4136848f310baee2bb03bd7553766b2d087364c1e2a348ba0",
+    "docs/user/docs/tailscale-remote-access.md": "6af0d38755d1c330c0bfd4bb4357ac4741c416982eab025dd7cf829936cf4973"
+  },
+  "cross_builds": {
+    "armv7": {
+      "bytes": 269644,
+      "sha256": "4be15d85cb21a7e8dfea785e3098a0a1ff6354ad7d10bf81974842d320b5cd50"
+    },
+    "arm64": {
+      "bytes": 280848,
+      "sha256": "c28641355da9dfb2fee2969d8a29b15e8a44362c04abf9aa649890b79c299151"
+    }
+  },
+  "sanitizers": {
+    "pd_dispatch_deadline_test": 0,
+    "pd_calibration_dispatch_test": 0
+  },
+  "mutation": {
+    "bypass-readiness": {
+      "exit": -6,
+      "assertion": "bypass-readiness-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/bypass-readiness/bypass-readiness-test.c:302: check_bypass_measurement_readiness: Assertion `measurement_tones_ready(&w,now)' failed."
+    }
+  },
+  "limits": [
+    "Not deployed or RF-qualified.",
+    "Not a demonstrated resolution of historical128sample slip or all cold-start failures.",
+    "Cross-compilation is not actual6300 hardware qualification.",
+    "Documentation build used existing node_modules; no publication or CI run."
+  ],
+  "evidence_directory": "evidence/20261116-bypass-readiness",
+  "evidence_sha256": {
+    "after-fix-ctest.log": "c026be60cfc88c5a75160d880018e8c3a1e774226abee540c9a594226bff5cc4",
+    "before-fix.log": "4491ee8f3e43e3ea9d5ac0e98e164ba5e5dc1d76c49b8e86d4d779875189be58",
+    "bypass-readiness-mutation.log": "9067843292581ccc400f3928c1fc2a94d3d326d25a461b45511cbd8daf74cefc",
+    "check-native.py": "fdce15b161ceea07484785e7e8851ca0f2ce2858a1e982c70f97e8855eac78d5",
+    "cross-build.py": "82634bdec90e72b536f7eb3e69feff4a40b8bae3fb36a57641fc119bc881254f",
+    "cross-builds.json": "14f3af234aa9aba282627b5a1d5e1ae1321d1e455d03d26a5328556b465a60f9",
+    "docs-build.log": "c6bd864053ee519b671871e00e2a6193b6214ee3de4d3b80021a78f3d8589fb4",
+    "mutation-check.py": "12d3442e386bdb200ffd6cfb106f71f4d68ac88f9ce5be12f11ef5a501b9c4b9",
+    "mutations.json": "df7c9cc3cab648ea6eb6cd38803ec9200f5131e73a47eaf52e1e21ccd0e06c5c",
+    "native-sanitizers.json": "6b79a179955c29abebc97976fbf9fa6eef0fbd79ef471227fb7f1114f0b17547",
+    "pd_calibration_dispatch_test-asan.log": "2875496881e45491dba843bd3be343b34da09b80585275a574e69a23bf7aaad3",
+    "pd_dispatch_deadline_test-asan.log": "00cca1c48c1b6e3de96ee9f4415d38f721556ae45dd55d2b2fd850932c459ed2",
+    "save-evidence.py": "125a2e8a407c8de289f5b33da75d254ee83fb1c871011bb865064fbbd569fd36"
+  }
+}

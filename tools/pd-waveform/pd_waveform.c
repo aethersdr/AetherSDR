@@ -708,11 +708,14 @@ static uint64_t measurement_source_id(const wf_t* w)
 
 static int measurement_tones_ready(const wf_t* w, int64_t now)
 {
-    // A complete emitted tone packet precedes this window by the configured
-    // maximum alignment search delay plus 100 ms for packet/filter settling.
-    // Compare against IQ kernel-arrival time, excluding queued preamble data.
+    // IQ arrival must follow emitted tones by the maximum alignment delay plus
+    // 100 ms for settling. local_iq_fault also marks a missing correction model:
+    // bypass needs fresh, aligned transport; correction additionally needs a
+    // usable model. Actual transport faults retire the bounded source.
     if (!measurement_source_id(w) || w->calibration.phase!=PD_CAL_RUNNING || !w->keyed ||
-        !w->local_iq_mode || w->local_iq_fault || !w->aligned || !w->feedback_ok ||
+        !w->local_iq_mode || !w->aligned || !w->feedback_ok || native_apd_blocked(w) ||
+        !w->tx_guard.seen || w->tx_guard.reset_pending ||
+        (w->correct && (w->local_iq_fault || !correction_ready(w))) ||
         !pd_measurement_spacing_valid(w->calibration.tone_spacing_hz) ||
         w->test_f1!=pd_calibration_tone1(&w->calibration) || w->test_f2!=pd_calibration_tone2(&w->calibration) ||
         w->test_noise_left || w->test_left<=RATE/200 ||
