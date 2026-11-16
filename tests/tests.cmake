@@ -1584,12 +1584,22 @@ target_link_libraries(anan_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME anan_rxdsp_fm_limiter_test COMMAND anan_rxdsp_fm_limiter_test)
 
 # ANAN backend -- IRadioBackend implementor. Pieces testable without a live
-# radio: capabilities() defaults, mode-string parsing, CW BFO math, and the
-# passband-reset-only-on-actual-mode-change idempotence rule.
+# radio: capabilities() defaults, mode-string parsing, CW BFO math, the
+# passband-reset-only-on-actual-mode-change idempotence rule, and RX2's open,
+# close and restore with its DSP builds held (no socket, no WDSP build).
 add_executable(anan_backend_test tests/anan_backend_test.cpp)
 target_include_directories(anan_backend_test PRIVATE src tests)
 target_link_libraries(anan_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_backend_test COMMAND anan_backend_test)
+
+# The speaker mix of host-demodulated receivers (ANAN's RX1 + RX2): one
+# receiver passed through untouched, the aligned sum and its clamp, the stall
+# lag, whole frames, activation. Pure: no Qt, no DSP.
+add_executable(receiver_audio_mixer_test
+    tests/receiver_audio_mixer_test.cpp
+    src/core/ReceiverAudioMixer.cpp)
+target_include_directories(receiver_audio_mixer_test PRIVATE src)
+add_test(NAME receiver_audio_mixer_test COMMAND receiver_audio_mixer_test)
 
 # Socket-free NB publication/readback: actual backend and DSP, injected model
 # connection receipts and direct bridge dispatch; no transport is started.
