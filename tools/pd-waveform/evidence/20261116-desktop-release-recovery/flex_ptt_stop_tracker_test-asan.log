@@ -1,0 +1,322 @@
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] successful xmit-off reply is not stop proof
+[PASS] UNKEY_REQUESTED is transitional
+[PASS] READY retaining our client handle cannot release ownership
+[PASS] another actor remains refused while firmware retains the old owner
+[PASS] later owner-clear completes the captured candidate sequence
+[PASS] test-injected candidate crosses coordinator stop barrier
+[PASS] acknowledgment retires the candidate token
+[PASS] acknowledged stop restores readiness before a new operation is acquired
+[PASS] fresh actor and sequence can begin after acknowledgment, even after old timeout
+[PASS] old proof cannot release replacement operation
+[PASS] arm captured owner-reservation sequence
+[PASS] owned READY before key reply preserves the pending key transition
+[PASS] owner reservation is never stop evidence
+[PASS] captured sequence reaches confirmed software TX
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] reservation still requires the complete correlated stop sequence
+[PASS] arm reservation refusal case
+[PASS] foreign, sourced, inhibited, partial or malformed reservation fails closed
+[PASS] arm reservation refusal case
+[PASS] foreign, sourced, inhibited, partial or malformed reservation fails closed
+[PASS] arm reservation refusal case
+[PASS] foreign, sourced, inhibited, partial or malformed reservation fails closed
+[PASS] arm reservation refusal case
+[PASS] foreign, sourced, inhibited, partial or malformed reservation fails closed
+[PASS] arm reservation refusal case
+[PASS] foreign, sourced, inhibited, partial or malformed reservation fails closed
+[PASS] arm reservation refusal case
+[PASS] foreign, sourced, inhibited, partial or malformed reservation fails closed
+[PASS] arm reservation refusal case
+[PASS] foreign, sourced, inhibited, partial or malformed reservation fails closed
+[PASS] arm reservation phase boundary
+[PASS] reservation exception applies only after key write and before reply
+[PASS] arm reservation phase boundary
+[PASS] reservation exception applies only after key write and before reply
+[PASS] arm reservation phase boundary
+[PASS] reservation exception applies only after key write and before reply
+[PASS] arm reservation deadline check
+[PASS] late reservation cannot extend the original transition deadline
+[PASS] arm missing key acknowledgment
+[PASS] reservation cannot replace the exact successful key acknowledgment
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] enter terminal writer before cancellation
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] candidate evidence cannot release an entered terminal writer
+[PASS] same candidate can complete after writer exits, without a new stop attempt
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] idle with no observed UNKEY_REQUESTED cannot fill in the missing transition
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] owner-clear alone cannot skip READY with old owner
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] status before the matching stop reply cannot be relabeled as later evidence
+[PASS] prepare early cancellation
+[PASS] cancel before keyed status
+[PASS] cancel-before-observed-keying binds stop without delaying unkey
+[PASS] preexisting idle is not no-dispatch proof
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] duplicate current-session ordinal poisons attempt
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] invalid/failed reply cannot become result zero
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] malformed/partial/foreign/physical-key status cannot authorize handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] additional latched sources cannot qualify independent software TX ownership
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] additional latched sources cannot qualify independent software TX ownership
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] additional latched sources cannot qualify independent software TX ownership
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] additional latched sources cannot qualify independent software TX ownership
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] observed OUT_OF_BAND owner-clear is not a qualified READY handoff
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] unrelated real status/replies do not stand in for transitions
+[PASS] valid partial interlock withdraws idle without poisoning the session
+[PASS] partial idle never permits key admission
+[PASS] later complete idle recovers without reconnect
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] recovered session retains complete stop evidence requirements
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] partial status during an armed lifecycle remains terminal and cannot certify stop
+[PASS] valid partial interlock withdraws idle without poisoning the session
+[PASS] partial idle never permits key admission
+[PASS] later complete idle recovers without reconnect
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] recovered session retains complete stop evidence requirements
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] partial status during an armed lifecycle remains terminal and cannot certify stop
+[PASS] valid partial interlock withdraws idle without poisoning the session
+[PASS] partial idle never permits key admission
+[PASS] later complete idle recovers without reconnect
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] recovered session retains complete stop evidence requirements
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] partial status during an armed lifecycle remains terminal and cannot certify stop
+[PASS] valid partial interlock withdraws idle without poisoning the session
+[PASS] partial idle never permits key admission
+[PASS] later complete idle recovers without reconnect
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] recovered session retains complete stop evidence requirements
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] partial status during an armed lifecycle remains terminal and cannot certify stop
+[PASS] valid partial interlock withdraws idle without poisoning the session
+[PASS] partial idle never permits key admission
+[PASS] later complete idle recovers without reconnect
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] recovered session retains complete stop evidence requirements
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] partial status during an armed lifecycle remains terminal and cannot certify stop
+[PASS] valid partial interlock withdraws idle without poisoning the session
+[PASS] partial idle never permits key admission
+[PASS] later complete idle recovers without reconnect
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] recovered session retains complete stop evidence requirements
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] partial status during an armed lifecycle remains terminal and cannot certify stop
+[PASS] initial partial updates never accumulate into complete idle evidence
+[PASS] initial partial updates never accumulate into complete idle evidence
+[PASS] initial partial updates never accumulate into complete idle evidence
+[PASS] initial partial updates never accumulate into complete idle evidence
+[PASS] initial partial updates never accumulate into complete idle evidence
+[PASS] initial partial updates never accumulate into complete idle evidence
+[PASS] complete idle after initial deltas admits readiness
+[PASS] malformed fields still fail closed before arming
+[PASS] malformed fields still fail closed before arming
+[PASS] malformed fields still fail closed before arming
+[PASS] malformed fields still fail closed before arming
+[PASS] another client's global idle update does not poison key readiness
+[PASS] another client's partial update withdraws readiness without accumulating fields
+[PASS] foreign payload TX ownership cannot qualify idle
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] helper-triggered preflight retains the full own-operation stop sequence
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] foreign-triggered idle neither substitutes for nor poisons the active stop sequence
+[PASS] foreign-triggered idle still validates payload ownership syntax
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] superseding attempt invalidates captured evidence without new radio events
+[PASS] new token cannot be attached to an old READY sequence
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] create distinct stopping operations
+[PASS] valid stop token from another coordinator cannot confirm this operation
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] old transport delivery is inert after reconnect
+[PASS] transport session identity cannot be reused
+[PASS] handle zero cannot identify a controlling client
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] partial/failed terminal write cannot be repaired by later idle
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] unexpected TX writer invalidates software-PTT-only attempt
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] exact deadline is a refusal, not a delayed idle certificate
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] candidate expires even if no owner-thread timer runs
+[PASS] new TX observation revokes unconsumed candidate
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] clock regression fails closed
+[PASS] deadline arithmetic cannot overflow
+[PASS] oversized evidence input is bounded
+[PASS] arm original key command identity
+[PASS] own software PTT observed after matched key reply
+[PASS] coordinator fences operation before stop
+[PASS] bind exact operation and stop attempt
+[PASS] off-thread evidence inspection cannot acknowledge or mutate owner state

@@ -1,0 +1,1119 @@
+[
+  {
+    "event": "bridge",
+    "elapsed_s": 0.017901096995046828,
+    "monotonic_ns": 44933037130458,
+    "request": {
+      "cmd": "whoami"
+    },
+    "result": {
+      "agentName": "Codex AetherPD",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-release-recovery",
+      "ok": true,
+      "pid": 1351706,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-release-recovery",
+      "station": "Codex AetherPD",
+      "txAllowed": true,
+      "version": "26.11.2"
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.03375281999615254,
+    "monotonic_ns": 44933052979812,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.04871941499732202,
+    "monotonic_ns": 44933067946616,
+    "request": {
+      "cmd": "get",
+      "model": "transmit"
+    },
+    "result": {
+      "model": "transmit",
+      "ok": true,
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 0,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": false,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.06640067899570568,
+    "monotonic_ns": 44933085627453,
+    "request": {
+      "cmd": "get",
+      "model": "slices"
+    },
+    "result": {
+      "ok": true,
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "off",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "RAW",
+          "daxChannel": 1,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 3000,
+          "filterLow": 300,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "off",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": true,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "PD",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "off",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": true,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": true,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ]
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.07254126499901759,
+    "monotonic_ns": 44933091768283,
+    "request": {
+      "cmd": "get",
+      "model": "pans"
+    },
+    "result": {
+      "ok": true,
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.2,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x2ff3554e",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 0,
+          "minDbm": -180,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 0.09608394200040493,
+    "monotonic_ns": 44933115310344,
+    "result": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 804476238,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.11075617699680151,
+    "monotonic_ns": 44933129983295,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasureDummyLoad",
+      "action": "setChecked",
+      "value": "true"
+    },
+    "result": {
+      "action": "setChecked",
+      "class": "QCheckBox",
+      "newValue": "checked",
+      "ok": true,
+      "target": "pdMeasureDummyLoad"
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.12256445899402024,
+    "monotonic_ns": 44933141791170,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasurePowerLimit",
+      "action": "setValue",
+      "value": 10
+    },
+    "result": {
+      "action": "setValue",
+      "class": "QDoubleSpinBox",
+      "newValue": "10",
+      "ok": true,
+      "target": "pdMeasurePowerLimit"
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.24966367699380498,
+    "monotonic_ns": 44933268890793,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasureArm",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdMeasureArm"
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 0.2937955319939647,
+    "monotonic_ns": 44933313021908,
+    "result": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 804476238,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 0.5501255209965166,
+    "monotonic_ns": 44933569351896,
+    "result": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_samples_left": 192000,
+        "calibration_state": "armed",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 804476238,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000001",
+          "tones": false
+        },
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000001",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "measurement",
+        "state": "measurement_armed"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.6314459950008313,
+    "monotonic_ns": 44933650673150,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasurePrepare",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdMeasurePrepare"
+    }
+  },
+  {
+    "event": "receive_ready",
+    "elapsed_s": 1.1426161329945899,
+    "monotonic_ns": 44934161843429,
+    "widgets": {
+      "pdMeasurement": {
+        "enabled": true,
+        "value": "Measure linearity\u2026",
+        "visible": true
+      },
+      "pdMeasureDummyLoad": {
+        "enabled": false,
+        "value": "checked",
+        "visible": true
+      },
+      "pdMeasureRadioPower": {
+        "enabled": false,
+        "value": "5",
+        "visible": true
+      },
+      "pdMeasureApplyPower": {
+        "enabled": false,
+        "value": "Apply power",
+        "visible": true
+      },
+      "pdMeasurePowerStatus": {
+        "enabled": true,
+        "value": "Radio reports 5 W setting; actual RF output may differ.",
+        "visible": true
+      },
+      "pdMeasurePowerLimit": {
+        "enabled": false,
+        "value": "10",
+        "visible": true
+      },
+      "pdMeasureWindow": {
+        "enabled": false,
+        "value": "Blackman-Harris 7",
+        "visible": true
+      },
+      "pdMeasureAverages": {
+        "enabled": false,
+        "value": "4",
+        "visible": true
+      },
+      "pdMeasureOrder": {
+        "enabled": false,
+        "value": "IMD3 + 5 + 7",
+        "visible": true
+      },
+      "pdMeasureTimeout": {
+        "enabled": false,
+        "value": "10",
+        "visible": true
+      },
+      "pdMeasureToneSpacing": {
+        "enabled": false,
+        "value": "1190",
+        "visible": true
+      },
+      "pdMeasureToneStatus": {
+        "enabled": true,
+        "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000001. Finish the source, transmission, measurement or installation; use FDX off and AetherPD ownership.",
+        "visible": true
+      },
+      "pdMeasureArm": {
+        "enabled": false,
+        "value": "Arm measurement source",
+        "visible": true
+      },
+      "pdMeasureCancelSource": {
+        "enabled": true,
+        "value": "Cancel source",
+        "visible": true
+      },
+      "pdMeasurePrepare": {
+        "enabled": false,
+        "value": "Prepare receive check",
+        "visible": true
+      },
+      "pdMeasureTransmit": {
+        "enabled": true,
+        "value": "Transmit measurement",
+        "visible": true
+      },
+      "pdMeasureStop": {
+        "enabled": true,
+        "value": "Stop measurement",
+        "visible": true
+      },
+      "pdMeasureExport": {
+        "enabled": false,
+        "value": "Export result\u2026",
+        "visible": true
+      },
+      "pdMeasureState": {
+        "enabled": true,
+        "value": "Ready for your Transmit click (valid for two seconds).\n7.150000 MHz \u00b7 PD \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 abort limit 10.0 W\nBlackman-Harris 7 \u00b7 4 averages \u00b7 through IMD7 \u00b7 timeout 10 s\nDAX IQ stream 0x20000000 \u00b7 tone offsets 710.0/1900.0 Hz",
+        "visible": true
+      },
+      "pdMeasureSpectrum": {
+        "enabled": true,
+        "visible": true
+      },
+      "pdMeasureResult": {
+        "enabled": true,
+        "value": "No completed measurement. Results appear after confirmed transmit release.",
+        "visible": true
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 2.060520995997649,
+    "monotonic_ns": 44935079747843,
+    "request": {
+      "cmd": "get",
+      "model": "transmit"
+    },
+    "result": {
+      "model": "transmit",
+      "ok": true,
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 0,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": false,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      }
+    }
+  },
+  {
+    "event": "operator_key_intent",
+    "elapsed_s": 2.060972735998803,
+    "monotonic_ns": 44935080199336,
+    "frequency_mhz": 7.15,
+    "nominal_watts": 5,
+    "configured_maximum_watts": 10,
+    "source_seconds": 8,
+    "native_cleanup_interval_seconds": 9,
+    "desktop_authorization_seconds": 10,
+    "desktop_pause_seconds": 11,
+    "one_positive_GUI_action": true
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 2.076845329000207,
+    "monotonic_ns": 44935096072607,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasureTransmit",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "deferred": true,
+      "ok": true,
+      "target": "pdMeasureTransmit"
+    }
+  },
+  {
+    "event": "observer_outcome",
+    "elapsed_s": 15.296767863997957,
+    "monotonic_ns": 44948315994859,
+    "report": {
+      "mode": "stall-01",
+      "pid": 1351706,
+      "start_ticks": 4487382,
+      "gui_handle": 804476238,
+      "events": [
+        {
+          "elapsed_s": 0.297105,
+          "monotonic_ns": 44935042499387,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=",
+          "desktop_paused": false,
+          "desktop_process_state": "R"
+        },
+        {
+          "elapsed_s": 0.297283,
+          "monotonic_ns": 44935042667408,
+          "event": "observer_ready"
+        },
+        {
+          "elapsed_s": 0.539317,
+          "monotonic_ns": 44935284705904,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x2FF3554E state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier=",
+          "desktop_paused": false,
+          "desktop_process_state": "S"
+        },
+        {
+          "elapsed_s": 0.539499,
+          "monotonic_ns": 44935284883275,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x2FF3554E state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
+          "desktop_paused": false,
+          "desktop_process_state": "S"
+        },
+        {
+          "elapsed_s": 0.539558,
+          "monotonic_ns": 44935284942307,
+          "event": "first_owned_transmitting"
+        },
+        {
+          "elapsed_s": 0.937977,
+          "monotonic_ns": 44935683365041,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x2FF3554E state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
+          "desktop_paused": false,
+          "desktop_process_state": "S"
+        },
+        {
+          "elapsed_s": 1.547823,
+          "monotonic_ns": 44936293211513,
+          "event": "desktop_paused",
+          "process_state": "T"
+        },
+        {
+          "elapsed_s": 9.555177,
+          "monotonic_ns": 44944300564211,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x2FF3554E state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=",
+          "desktop_paused": true,
+          "desktop_process_state": "T"
+        },
+        {
+          "elapsed_s": 9.567934,
+          "monotonic_ns": 44944313321500,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x2FF3554E state=READY reason= source= tx_allowed=1 amplifier=",
+          "desktop_paused": true,
+          "desktop_process_state": "T"
+        },
+        {
+          "elapsed_s": 9.998513,
+          "monotonic_ns": 44944743901611,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=",
+          "desktop_paused": true,
+          "desktop_process_state": "T"
+        },
+        {
+          "elapsed_s": 12.553821,
+          "monotonic_ns": 44947299225247,
+          "event": "desktop_resumed"
+        },
+        {
+          "elapsed_s": 12.799153,
+          "monotonic_ns": 44947544541598,
+          "event": "interlock",
+          "line": "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=",
+          "desktop_paused": false,
+          "desktop_process_state": "R"
+        }
+      ],
+      "rf_commands": [],
+      "paused": true,
+      "resumed": true,
+      "completed": true,
+      "elapsed_s": 13.566
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 15.31464936699922,
+    "monotonic_ns": 44948333877254,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 26.46875,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 15.39927759800048,
+    "monotonic_ns": 44948418504066,
+    "result": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "completed",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 804476238,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000001",
+          "tones": false
+        },
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000001",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "measurement",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "final_state",
+    "elapsed_s": 15.399691346996406,
+    "monotonic_ns": 44948418917768,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 26.46875,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "widgets": {
+      "pdMeasurement": {
+        "enabled": true,
+        "value": "Measure linearity\u2026",
+        "visible": true
+      },
+      "pdMeasureDummyLoad": {
+        "enabled": true,
+        "value": "checked",
+        "visible": true
+      },
+      "pdMeasureRadioPower": {
+        "enabled": true,
+        "value": "5",
+        "visible": true
+      },
+      "pdMeasureApplyPower": {
+        "enabled": false,
+        "value": "Apply power",
+        "visible": true
+      },
+      "pdMeasurePowerStatus": {
+        "enabled": true,
+        "value": "Radio reports 5 W setting; actual RF output may differ.",
+        "visible": true
+      },
+      "pdMeasurePowerLimit": {
+        "enabled": true,
+        "value": "10",
+        "visible": true
+      },
+      "pdMeasureWindow": {
+        "enabled": true,
+        "value": "Blackman-Harris 7",
+        "visible": true
+      },
+      "pdMeasureAverages": {
+        "enabled": true,
+        "value": "4",
+        "visible": true
+      },
+      "pdMeasureOrder": {
+        "enabled": true,
+        "value": "IMD3 + 5 + 7",
+        "visible": true
+      },
+      "pdMeasureTimeout": {
+        "enabled": true,
+        "value": "10",
+        "visible": true
+      },
+      "pdMeasureToneSpacing": {
+        "enabled": true,
+        "value": "1190",
+        "visible": true
+      },
+      "pdMeasureToneStatus": {
+        "enabled": true,
+        "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000001.",
+        "visible": true
+      },
+      "pdMeasureArm": {
+        "enabled": true,
+        "value": "Arm measurement source",
+        "visible": true
+      },
+      "pdMeasureCancelSource": {
+        "enabled": true,
+        "value": "Cancel source",
+        "visible": true
+      },
+      "pdMeasurePrepare": {
+        "enabled": false,
+        "value": "Prepare receive check",
+        "visible": true
+      },
+      "pdMeasureTransmit": {
+        "enabled": false,
+        "value": "Transmit measurement",
+        "visible": true
+      },
+      "pdMeasureStop": {
+        "enabled": false,
+        "value": "Stop measurement",
+        "visible": true
+      },
+      "pdMeasureExport": {
+        "enabled": true,
+        "value": "Export result\u2026",
+        "visible": true
+      },
+      "pdMeasureState": {
+        "enabled": true,
+        "value": "IQ capture session is no longer current",
+        "visible": true
+      },
+      "pdMeasureSpectrum": {
+        "enabled": true,
+        "visible": true
+      },
+      "pdMeasureResult": {
+        "enabled": true,
+        "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 correction unknown\nTransmit authorization timeout 10 s\nDAX IQ stream identity not reported\nIQ capture session is no longer current\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+        "visible": true
+      }
+    },
+    "service": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "completed",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 804476238,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000001",
+        "tones": false
+      },
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000001",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "measurement",
+      "state": "idle"
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 15.419327392999548,
+    "monotonic_ns": 44948438554372,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasureCancelSource",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdMeasureCancelSource"
+    }
+  },
+  {
+    "event": "end",
+    "elapsed_s": 15.41986687899771,
+    "monotonic_ns": 44948439093249,
+    "attempted": true,
+    "error": null,
+    "no_automatic_rearm": true
+  }
+]

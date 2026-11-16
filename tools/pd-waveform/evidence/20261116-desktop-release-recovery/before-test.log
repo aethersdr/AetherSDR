@@ -1,0 +1,65 @@
+[PASS] fence operation before queued stop
+[PASS] consume original stop proof
+[PASS] consumed stop remains ready beyond old deadline without acquiring another grant
+[PASS] readiness recovery sends no keying command
+[PASS] new partial status still withdraws readiness after consumed stop
+[PASS] complete fresh idle restores pre-admission readiness
+[PASS] API 1.4 accepts developer-version changes without a firmware/model allowlist
+[PASS] API 1.4 accepts developer-version changes without a firmware/model allowlist
+[PASS] API 1.4 accepts developer-version changes without a firmware/model allowlist
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] unknown/malformed API and firmware-as-protocol remain unsupported
+[PASS] changed protocol immediately removes readiness
+[PASS] fence operation before queued stop
+[PASS] changed protocol preserves authorized unkey but cannot prove handoff
+[PASS] fence operation before queued stop
+[PASS] complete stop produces evidence before protocol contradiction
+[PASS] protocol contradiction invalidates already queued stop evidence
+[PASS] fence operation before queued stop
+[PASS] canceled queued key has exact no-dispatch proof and sends no unkey to another client
+[PASS] local no-dispatch proof releases exact operation
+[PASS] fresh other actor can acquire after no-dispatch completion
+[PASS] fence operation before queued stop
+[PASS] release without any key request is locally provable
+[PASS] fence operation before queued stop
+[PASS] rapid release writes unkey before waiting for key-on readback
+[PASS] owned READY still cannot release another client
+[PASS] complete ordered rapid-release sequence confirms exact stop
+[PASS] next actor's fresh key-on reaches writer after confirmed handoff
+[PASS] old queued certificate cannot survive the next operation
+[PASS] fence operation before queued stop
+[PASS] helper-triggered idle does not certify the original stop
+[PASS] original owner-clear completes stop despite helper subscription broadcasts
+[PASS] unrelated broadcasts cannot revoke complete original stop evidence
+[PASS] release completes without extra keying or fabricated confirmation
+[PASS] fence operation before queued stop
+[PASS] helper idle never replaces missing owner-clear or extends the deadline
+[PASS] independent release alone cannot certify handoff or admit another key
+[PASS] fence operation before queued stop
+[PASS] recovery sends only the original operation's authorized stop
+[PASS] stop acknowledgment still needs fresh complete idle
+[FAIL] captured stall sequence plus acknowledged stop and fresh idle certifies original operation
+[FAIL] original entered-writer barrier accepts independently released operation
+[FAIL] recovery retires old operation without automatic keying
+[PASS] fence operation before queued stop
+[PASS] partial key write is never no-dispatch proof; cleanup still writes unkey
+[PASS] fence operation before queued stop
+[PASS] contradiction invalidates a certificate before its queued receiver runs
+[PASS] fence operation before queued stop
+[PASS] reconnect invalidates queued old-session stop proof
+[PASS] fence operation before queued stop
+[PASS] receiver rejects expired certificate even before transport timer delivery

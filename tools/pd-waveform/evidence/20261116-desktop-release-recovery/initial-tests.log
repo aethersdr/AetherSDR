@@ -1,0 +1,9 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 66: flex_ptt_stop_tracker_test
+1/2 Test #66: flex_ptt_stop_tracker_test .......   Passed    0.00 sec
+    Start 67: flex_ptt_wire_session_test
+2/2 Test #67: flex_ptt_wire_session_test .......   Passed    0.00 sec
+
+100% tests passed out of 2
+
+Total Test time (real) =   0.02 sec

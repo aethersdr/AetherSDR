@@ -1,0 +1,10 @@
+{
+  "base": "7ccc7664e3df8df858d650771f6b1b2adf2ba1ca",
+  "changed_files": {
+    "src/core/backends/flex/FlexPttStopTracker.cpp": "1f837957c00df5e1b58f1e44b6975d852311c43af0a0323972bea553fdb59010",
+    "src/core/backends/flex/FlexPttStopTracker.h": "e915d536706735abe48ffdfa633ef6cce47252430f68a084b77407fdefc3e3cf",
+    "tests/flex_ptt_wire_session_test.cpp": "66de2039c19422e312fa398c6197e2ab4a2d0b93fe9ab7ba74bc89cea21453ab",
+    "docs/aetherd-flex-ptt-stop-evidence.md": "dfdc9ec3673c9ea04bd02a518c7e1cb9c783c3c277ab8d1f50a7273c8277e8c8",
+    "docs/user/docs/tailscale-remote-access.md": "ee89c359a28c6a0e0770dc53c5e30df8ea4010e5344454bb56c300bbacee6a20"
+  }
+}

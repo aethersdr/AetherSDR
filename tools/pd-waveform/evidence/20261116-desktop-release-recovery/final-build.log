@@ -1,0 +1,20 @@
+[0/2] Re-checking globbed directories...
+[1/20] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/20] Capturing build identity (git describe)
+[3/20] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/20] Automatic MOC and UIC for target flex_ptt_wire_session_test
+[5/19] Completed 'vulkan-shaders-gen'
+[6/19] Automatic MOC and UIC for target aethercore
+[7/18] Building CXX object CMakeFiles/flex_ptt_wire_session_test.dir/tests/flex_ptt_wire_session_test.cpp.o
+[8/18] Building CXX object CMakeFiles/aethercore.dir/src/core/backends/flex/FlexPttStopTracker.cpp.o
+[9/18] Linking CXX executable flex_ptt_wire_session_test
+[10/18] Building CXX object CMakeFiles/aethercore.dir/src/core/backends/flex/FlexPttWireSession.cpp.o
+[11/18] Building CXX object CMakeFiles/aethercore.dir/src/core/backends/flex/RadioConnection.cpp.o
+[12/18] Linking CXX static library libaethercore.a
+[13/18] Building CXX object CMakeFiles/aetherdesktop_support.dir/src/core/AutomationServer.cpp.o
+[14/18] Linking CXX static library libaetherdesktop_support.a
+[15/18] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/CopyAssistController.cpp.o
+[16/18] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Menus.cpp.o
+[17/18] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory

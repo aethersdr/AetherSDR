@@ -1,0 +1,10 @@
+[0/2] Re-checking globbed directories...
+[1/12] Automatic MOC and UIC for target flex_ptt_wire_session_test
+[2/11] Automatic MOC and UIC for target flex_ptt_stop_tracker_test
+[3/10] Building CXX object CMakeFiles/flex_ptt_wire_session_test.dir/src/core/backends/flex/FlexPttStopTracker.cpp.o
+[4/10] Building CXX object CMakeFiles/flex_ptt_wire_session_test.dir/src/core/backends/flex/FlexPttWireSession.cpp.o
+[5/10] Building CXX object CMakeFiles/flex_ptt_stop_tracker_test.dir/tests/flex_ptt_stop_tracker_test.cpp.o
+[6/10] Building CXX object CMakeFiles/flex_ptt_wire_session_test.dir/tests/flex_ptt_wire_session_test.cpp.o
+[7/10] Building CXX object CMakeFiles/flex_ptt_stop_tracker_test.dir/src/core/backends/flex/FlexPttStopTracker.cpp.o
+[8/10] Linking CXX executable flex_ptt_wire_session_test
+[9/10] Linking CXX executable flex_ptt_stop_tracker_test
