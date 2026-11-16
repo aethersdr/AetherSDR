@@ -1,0 +1,71 @@
+{
+  "updated_utc": "2026-11-16T11:20:41.425155+00:00",
+  "source_commit": "fdef108dcd60b807edc6b9739654939787b0b113",
+  "previous_source_commit": "2c72ca0a99a452f96fe1880c916250e06bb36cba",
+  "status": "two-path runtime rebuild and signed old/new capacity boundaries passed",
+  "installed": false,
+  "production_ready": false,
+  "radio_used": false,
+  "architectures": {
+    "armv7": {
+      "identical_release": true,
+      "identical_manifest": true,
+      "release_bytes": 9333714,
+      "expanded_bytes": 22689818,
+      "release_sha256": "77f1d67da666a61433f01e28dee9b37c5e26a5606c6ad4518faa3bd2b623c77b",
+      "changed_payload_files": [
+        {
+          "name": "aether-pd",
+          "byte_delta": 576,
+          "sha256": "3a0abe42998408b45aa8c0fdc710c800f619928a1605493e4dc56abf51c38613"
+        }
+      ]
+    },
+    "arm64": {
+      "identical_release": true,
+      "identical_manifest": true,
+      "release_bytes": 9007729,
+      "expanded_bytes": 22300162,
+      "release_sha256": "2a45a883c578af921d8426787d22f2fa2eb28367642019dc6738347d89e19ccd",
+      "changed_payload_files": [
+        {
+          "name": "aether-pd",
+          "byte_delta": 384,
+          "sha256": "ae501195fe90838dca7baaa554666c8d626af67cf7cb6aac0cdf45133e498984"
+        }
+      ]
+    }
+  },
+  "storage": {
+    "boundary_checks": 32,
+    "scope": "8 architecture/block/filesystem combinations; exact bytes and inodes accepted, one short refused, actual prior/new authenticated development release inventories",
+    "worst_armv7_peak_bytes": 39424000,
+    "headroom_against_41_decimal_MB": 1576000
+  },
+  "limits": [
+    "Same host and pinned toolchains; not independent-host reproduction.",
+    "Development signing seed remained in memory/pipes; no installation and no production trust-key rotation qualification.",
+    "Payload change is measurement-retirement silence fix only. Desktop choices do not add radio runtime code.",
+    "Synthetic capacity and explicit state/metadata allowances, not measured FLEX-6300 use. A full additional persistent upload still exceeds budget.",
+    "Live boot/RF, exact first-install transient disk usage, actual6300 hardware and full production gates remain open.",
+    "The10second RF/unkey deadline contract remains unresolved."
+  ],
+  "evidence": "evidence/20261116-runtime-retirement",
+  "evidence_sha256": {
+    "budget-build.log": "e137b3f80db690ddff9fdc51331179008ed3a183f40de423f60bdfb9ed95f742",
+    "budget-command.json": "f09f08dc6b0b196a54cb525cec76bdcaa8fca3fb2d73a42b90e1c80b92bafc96",
+    "budget-report.json": "7ff7f50cfc3666fe89896e0e369597d2eb641a28fc15a50435c77d2ca6c6a892",
+    "budget-run.log": "fdc3bb10c2d20d5a8b39aff62fa45ba36b681893d376b43d109b9617975b9ecc",
+    "budget_probe.c": "f5d72290ab6e38954c8208eec6990e9d26a75a89bf7ac79f7888c8cd1d04e042",
+    "build-budget.py": "d64c3ce136a7e958cc24008104b0fe6d65832c66cc6faddb9a56a19667c02d06",
+    "measure-budget.py": "3793357418b29b939169b125d749930e0e6b7de7fcda8ee90e6f6d235a774e2c",
+    "report.json": "3e53157c628b3c2defe9ea913e606e78b1813adabe993759682c7693f1f91bc3",
+    "run.log": "f7ae640d40e4abbe2a0c910ad28c4adaffe0d6e83fbf99d527f41a4ed054ae7a",
+    "run.py": "1c70f0e3672700d458aa5775cf2eb9856f3325c261eb6bfbee62d8acc999b15d",
+    "second-distinct-long-source-path-arm64.log": "81b46c6fc18f8ec6e8e0d891886c9f3f0399169bc3d0ecfdca20613db3cabeeb",
+    "second-distinct-long-source-path-armv7.log": "6f2ccb72f401644d9ca2d09422921b15480235e48b30bb3c4ac2e3ce337a5465",
+    "short-arm64.log": "fcc091bbd8929b61a1d6f65e1b056b41cf777e731dd8e12c0f43e1a36dc6ccf6",
+    "short-armv7.log": "7d1afa567934e1b82736aca6411b0577a2d7b85c1a0b6cd8685d23367cbcb59d",
+    "source-sha256.json": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651"
+  }
+}

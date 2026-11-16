@@ -1,0 +1,764 @@
+{
+  "source_commit": "fdef108dcd60b807edc6b9739654939787b0b113",
+  "source_manifest_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+  "script_sha256": "1c70f0e3672700d458aa5775cf2eb9856f3325c261eb6bfbee62d8acc999b15d",
+  "source_files": 3691,
+  "python": "3.14.10",
+  "zlib": "1.4",
+  "zig": "0.17.1",
+  "go": "go version go1.27.1 linux/amd64",
+  "go_binary_sha256": "30969f97169d7f43fe6a085873d75613adc21e30818a8c61d95bd27275df4624",
+  "zig_binary_sha256": "d0245d88934e8e0f377d955b395f8483db0f45d3efd8711d5709afc439989bc5",
+  "separate_source_output_and_compiler_caches": true,
+  "same_host_and_toolchains": true,
+  "development_signing_seed_persisted": false,
+  "installed": false,
+  "production_ready": false,
+  "elapsed_seconds": 165.9193194770014,
+  "architectures": {
+    "armv7": {
+      "identical_manifest": true,
+      "identical_release": true,
+      "first": {
+        "payload": {
+          "format": "AEPDB001",
+          "arch": 7,
+          "files": [
+            {
+              "name": "flex-tailnet-shim",
+              "bytes": 21823648,
+              "gzip_bytes": 8608491,
+              "sha256": "9b34c0a69b104e97abc787c2b89aa64e2091f8e5062963552b7ac5a5844a7885"
+            },
+            {
+              "name": "aether-pd",
+              "bytes": 264908,
+              "gzip_bytes": 146809,
+              "sha256": "3a0abe42998408b45aa8c0fdc710c800f619928a1605493e4dc56abf51c38613"
+            },
+            {
+              "name": "pd-primary-launch",
+              "bytes": 79492,
+              "gzip_bytes": 42789,
+              "sha256": "623b9b8d7fa0bfdf14e7819b850c95f8a7aff664ba0c1a2743668b80118fcc87"
+            },
+            {
+              "name": "pd-start-session",
+              "bytes": 46732,
+              "gzip_bytes": 25297,
+              "sha256": "51d6b79344cbe2dac2e76f71f7da6025a4ec525887df099f20dfd0792b45c675"
+            },
+            {
+              "name": "pd-radio-launch",
+              "bytes": 87932,
+              "gzip_bytes": 46679,
+              "sha256": "9e38425c620d03b5357a7f7cc91568039f1cdb635dba466f723a2b39f8e5816e"
+            },
+            {
+              "name": "pd-fixed-arp",
+              "bytes": 42760,
+              "gzip_bytes": 23282,
+              "sha256": "41a6b3a7cfa78f8472f546df8372a9459c871ed559d780ec792f7bd4ee0197f5"
+            },
+            {
+              "name": "pd-iq-source",
+              "bytes": 42504,
+              "gzip_bytes": 23351,
+              "sha256": "07203c326dcb102e3d5332b31f0edd32a15cc5016fe37e5e68fad5eaaf59eb7f"
+            },
+            {
+              "name": "pd-capture-bootstrap",
+              "bytes": 53724,
+              "gzip_bytes": 29760,
+              "sha256": "f86fbdcd6848d1df04992aa550379328b34d1e696dfa4124c8638def5e42ea6b"
+            },
+            {
+              "name": "pd-unkey-guard",
+              "bytes": 34368,
+              "gzip_bytes": 19431,
+              "sha256": "f80b993f5449fe348bd6ce4b01d0ac282e07b4ae59a4ed789a9948bff3d47a04"
+            },
+            {
+              "name": "pd-lease-guard",
+              "bytes": 37372,
+              "gzip_bytes": 20984,
+              "sha256": "9ad9baac195793530517dab80170bddccb681cbd20e433967f4e84981b0a830c"
+            },
+            {
+              "name": "LICENSES",
+              "bytes": 176378,
+              "gzip_bytes": 23778,
+              "sha256": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+            }
+          ],
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "expanded_bytes": 22689818,
+          "bytes": 9011555,
+          "sha256": "03bd88cf886bf9645a2e7b6502bf0535dfa2d45e697f426420986515efef8d86",
+          "blake2b_256": "e5f9d24aa7c013eba3aaf128a7f2ac0bac9ef3821cfca97b3718e7f0fe074663",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19"
+        },
+        "release": {
+          "format": "AEPDR005",
+          "paired_boot": true,
+          "managed_startup": true,
+          "origin_recovery": true,
+          "generation_selection": true,
+          "profile": "flex6300",
+          "architecture": "armv7",
+          "firmware": "4.2.18.41174",
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "bytes": 9333714,
+          "sha256": "77f1d67da666a61433f01e28dee9b37c5e26a5606c6ad4518faa3bd2b623c77b",
+          "blake2b_256": "b3afa6793fc37dc191c8fb59b36e7aecce9e76c21ba21b5dfefb281b481ea49d",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19",
+          "files": [
+            {
+              "name": "pd-boot",
+              "bytes": 188316,
+              "sha256": "7bd2717c9c28bbccc63f3294590807ab8e716a5f159bc6174fa5568d498f3339",
+              "mode": "0755"
+            },
+            {
+              "name": "pd-update",
+              "bytes": 94680,
+              "sha256": "85cbd570e3d3d7d4ba0a4bf2ed6462274473aae44015f2198c48325daef396be",
+              "mode": "0755"
+            },
+            {
+              "name": "payload.bundle",
+              "bytes": 9011555,
+              "sha256": "03bd88cf886bf9645a2e7b6502bf0535dfa2d45e697f426420986515efef8d86",
+              "mode": "0644"
+            },
+            {
+              "name": "BOOT-LICENSES.txt",
+              "bytes": 37513,
+              "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-boot.service",
+              "bytes": 233,
+              "sha256": "440e55b7212a1ffc66fdeb0f2a2b263eed31317b83979f079bf9d923e5166530",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start.socket",
+              "bytes": 342,
+              "sha256": "2e6529a8605e70700461c4d731510706358ca4a5cb12c86c997302760d457470",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start@.service",
+              "bytes": 295,
+              "sha256": "639eca440b107808d771782753e5d5189c4a58679d29e15488d12c6fee27337f",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-shim.service",
+              "bytes": 348,
+              "sha256": "1f081eb4e5aa9de0b9bbe93b151a1bece221cc681fdc7f2a15d827aeb617b1b5",
+              "mode": "0644"
+            }
+          ],
+          "persistent_store": "/user/aetherpd",
+          "runtime": "/run/aetherpd",
+          "fixed_units": [
+            "aetherpd-boot.service",
+            "aetherpd-start.socket",
+            "aetherpd-start@.service",
+            "aetherpd-shim.service"
+          ],
+          "privileged_actions": [
+            "verify approved release digest and trusted signature",
+            "stage fixed authenticated files in private RAM",
+            "retire the owned runtime before updating",
+            "publish protected payload and boot files",
+            "install fixed boot and local socket units",
+            "start the ordinary-user primary shim after retiring any recognized predecessor"
+          ],
+          "temporary_components": [
+            "pd-update",
+            "installer/bootstrap staging and authority"
+          ],
+          "rf_actions": [],
+          "automatic_calibration": false,
+          "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+        },
+        "native_release_verified": true,
+        "session_helpers": {
+          "pd-capture-bootstrap-armv7": "f86fbdcd6848d1df04992aa550379328b34d1e696dfa4124c8638def5e42ea6b",
+          "pd-fixed-arp-armv7": "41a6b3a7cfa78f8472f546df8372a9459c871ed559d780ec792f7bd4ee0197f5",
+          "pd-iq-source-armv7": "07203c326dcb102e3d5332b31f0edd32a15cc5016fe37e5e68fad5eaaf59eb7f",
+          "pd-iq-stream-armv7": "6ac9361251ef98911496533f955ac23ff3c47ef5fa2fc2aa37f2c5c550def2b8",
+          "pd-kernel-probe-armv7": "b71fe4a12bf76dcfabd4975d334e11ba09034e41c237f0260a5916de09d23989",
+          "pd-lease-guard-armv7": "9ad9baac195793530517dab80170bddccb681cbd20e433967f4e84981b0a830c",
+          "pd-prepared-launch-armv7": "b0f561f8cd2795fa493adc52b34555d41b34e0fdc6805c0d5f1c8cf00595c6a4",
+          "pd-primary-launch-armv7": "623b9b8d7fa0bfdf14e7819b850c95f8a7aff664ba0c1a2743668b80118fcc87",
+          "pd-radio-launch-armv7": "9e38425c620d03b5357a7f7cc91568039f1cdb635dba466f723a2b39f8e5816e",
+          "pd-service-launch-armv7": "cb4904d54fb8ff188160f439025fcacd120bd583f7c6a0909e2e4ab6646a3ba4",
+          "pd-session-launch-armv7": "755b9fc67337e96ec91a69557585a08c65a002d606d9449b986b9289c4700d68",
+          "pd-shim-launch-armv7": "1a212d676da4097b5f5a13508d3133e66bc724bfc8aa26c2658735a0b799785b",
+          "pd-start-session-armv7": "51d6b79344cbe2dac2e76f71f7da6025a4ec525887df099f20dfd0792b45c675"
+        }
+      },
+      "second": {
+        "payload": {
+          "format": "AEPDB001",
+          "arch": 7,
+          "files": [
+            {
+              "name": "flex-tailnet-shim",
+              "bytes": 21823648,
+              "gzip_bytes": 8608491,
+              "sha256": "9b34c0a69b104e97abc787c2b89aa64e2091f8e5062963552b7ac5a5844a7885"
+            },
+            {
+              "name": "aether-pd",
+              "bytes": 264908,
+              "gzip_bytes": 146809,
+              "sha256": "3a0abe42998408b45aa8c0fdc710c800f619928a1605493e4dc56abf51c38613"
+            },
+            {
+              "name": "pd-primary-launch",
+              "bytes": 79492,
+              "gzip_bytes": 42789,
+              "sha256": "623b9b8d7fa0bfdf14e7819b850c95f8a7aff664ba0c1a2743668b80118fcc87"
+            },
+            {
+              "name": "pd-start-session",
+              "bytes": 46732,
+              "gzip_bytes": 25297,
+              "sha256": "51d6b79344cbe2dac2e76f71f7da6025a4ec525887df099f20dfd0792b45c675"
+            },
+            {
+              "name": "pd-radio-launch",
+              "bytes": 87932,
+              "gzip_bytes": 46679,
+              "sha256": "9e38425c620d03b5357a7f7cc91568039f1cdb635dba466f723a2b39f8e5816e"
+            },
+            {
+              "name": "pd-fixed-arp",
+              "bytes": 42760,
+              "gzip_bytes": 23282,
+              "sha256": "41a6b3a7cfa78f8472f546df8372a9459c871ed559d780ec792f7bd4ee0197f5"
+            },
+            {
+              "name": "pd-iq-source",
+              "bytes": 42504,
+              "gzip_bytes": 23351,
+              "sha256": "07203c326dcb102e3d5332b31f0edd32a15cc5016fe37e5e68fad5eaaf59eb7f"
+            },
+            {
+              "name": "pd-capture-bootstrap",
+              "bytes": 53724,
+              "gzip_bytes": 29760,
+              "sha256": "f86fbdcd6848d1df04992aa550379328b34d1e696dfa4124c8638def5e42ea6b"
+            },
+            {
+              "name": "pd-unkey-guard",
+              "bytes": 34368,
+              "gzip_bytes": 19431,
+              "sha256": "f80b993f5449fe348bd6ce4b01d0ac282e07b4ae59a4ed789a9948bff3d47a04"
+            },
+            {
+              "name": "pd-lease-guard",
+              "bytes": 37372,
+              "gzip_bytes": 20984,
+              "sha256": "9ad9baac195793530517dab80170bddccb681cbd20e433967f4e84981b0a830c"
+            },
+            {
+              "name": "LICENSES",
+              "bytes": 176378,
+              "gzip_bytes": 23778,
+              "sha256": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+            }
+          ],
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "expanded_bytes": 22689818,
+          "bytes": 9011555,
+          "sha256": "03bd88cf886bf9645a2e7b6502bf0535dfa2d45e697f426420986515efef8d86",
+          "blake2b_256": "e5f9d24aa7c013eba3aaf128a7f2ac0bac9ef3821cfca97b3718e7f0fe074663",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19"
+        },
+        "release": {
+          "format": "AEPDR005",
+          "paired_boot": true,
+          "managed_startup": true,
+          "origin_recovery": true,
+          "generation_selection": true,
+          "profile": "flex6300",
+          "architecture": "armv7",
+          "firmware": "4.2.18.41174",
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "bytes": 9333714,
+          "sha256": "77f1d67da666a61433f01e28dee9b37c5e26a5606c6ad4518faa3bd2b623c77b",
+          "blake2b_256": "b3afa6793fc37dc191c8fb59b36e7aecce9e76c21ba21b5dfefb281b481ea49d",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19",
+          "files": [
+            {
+              "name": "pd-boot",
+              "bytes": 188316,
+              "sha256": "7bd2717c9c28bbccc63f3294590807ab8e716a5f159bc6174fa5568d498f3339",
+              "mode": "0755"
+            },
+            {
+              "name": "pd-update",
+              "bytes": 94680,
+              "sha256": "85cbd570e3d3d7d4ba0a4bf2ed6462274473aae44015f2198c48325daef396be",
+              "mode": "0755"
+            },
+            {
+              "name": "payload.bundle",
+              "bytes": 9011555,
+              "sha256": "03bd88cf886bf9645a2e7b6502bf0535dfa2d45e697f426420986515efef8d86",
+              "mode": "0644"
+            },
+            {
+              "name": "BOOT-LICENSES.txt",
+              "bytes": 37513,
+              "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-boot.service",
+              "bytes": 233,
+              "sha256": "440e55b7212a1ffc66fdeb0f2a2b263eed31317b83979f079bf9d923e5166530",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start.socket",
+              "bytes": 342,
+              "sha256": "2e6529a8605e70700461c4d731510706358ca4a5cb12c86c997302760d457470",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start@.service",
+              "bytes": 295,
+              "sha256": "639eca440b107808d771782753e5d5189c4a58679d29e15488d12c6fee27337f",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-shim.service",
+              "bytes": 348,
+              "sha256": "1f081eb4e5aa9de0b9bbe93b151a1bece221cc681fdc7f2a15d827aeb617b1b5",
+              "mode": "0644"
+            }
+          ],
+          "persistent_store": "/user/aetherpd",
+          "runtime": "/run/aetherpd",
+          "fixed_units": [
+            "aetherpd-boot.service",
+            "aetherpd-start.socket",
+            "aetherpd-start@.service",
+            "aetherpd-shim.service"
+          ],
+          "privileged_actions": [
+            "verify approved release digest and trusted signature",
+            "stage fixed authenticated files in private RAM",
+            "retire the owned runtime before updating",
+            "publish protected payload and boot files",
+            "install fixed boot and local socket units",
+            "start the ordinary-user primary shim after retiring any recognized predecessor"
+          ],
+          "temporary_components": [
+            "pd-update",
+            "installer/bootstrap staging and authority"
+          ],
+          "rf_actions": [],
+          "automatic_calibration": false,
+          "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+        },
+        "native_release_verified": true,
+        "session_helpers": {
+          "pd-capture-bootstrap-armv7": "f86fbdcd6848d1df04992aa550379328b34d1e696dfa4124c8638def5e42ea6b",
+          "pd-fixed-arp-armv7": "41a6b3a7cfa78f8472f546df8372a9459c871ed559d780ec792f7bd4ee0197f5",
+          "pd-iq-source-armv7": "07203c326dcb102e3d5332b31f0edd32a15cc5016fe37e5e68fad5eaaf59eb7f",
+          "pd-iq-stream-armv7": "6ac9361251ef98911496533f955ac23ff3c47ef5fa2fc2aa37f2c5c550def2b8",
+          "pd-kernel-probe-armv7": "b71fe4a12bf76dcfabd4975d334e11ba09034e41c237f0260a5916de09d23989",
+          "pd-lease-guard-armv7": "9ad9baac195793530517dab80170bddccb681cbd20e433967f4e84981b0a830c",
+          "pd-prepared-launch-armv7": "b0f561f8cd2795fa493adc52b34555d41b34e0fdc6805c0d5f1c8cf00595c6a4",
+          "pd-primary-launch-armv7": "623b9b8d7fa0bfdf14e7819b850c95f8a7aff664ba0c1a2743668b80118fcc87",
+          "pd-radio-launch-armv7": "9e38425c620d03b5357a7f7cc91568039f1cdb635dba466f723a2b39f8e5816e",
+          "pd-service-launch-armv7": "cb4904d54fb8ff188160f439025fcacd120bd583f7c6a0909e2e4ab6646a3ba4",
+          "pd-session-launch-armv7": "755b9fc67337e96ec91a69557585a08c65a002d606d9449b986b9289c4700d68",
+          "pd-shim-launch-armv7": "1a212d676da4097b5f5a13508d3133e66bc724bfc8aa26c2658735a0b799785b",
+          "pd-start-session-armv7": "51d6b79344cbe2dac2e76f71f7da6025a4ec525887df099f20dfd0792b45c675"
+        }
+      }
+    },
+    "arm64": {
+      "identical_manifest": true,
+      "identical_release": true,
+      "first": {
+        "payload": {
+          "format": "AEPDB001",
+          "arch": 64,
+          "files": [
+            {
+              "name": "flex-tailnet-shim",
+              "bytes": 21364896,
+              "gzip_bytes": 8244713,
+              "sha256": "5b6371126432a236f079c794d8c0277673ef2fdfaae7d59e54cea33aea7632e0"
+            },
+            {
+              "name": "aether-pd",
+              "bytes": 276856,
+              "gzip_bytes": 158553,
+              "sha256": "ae501195fe90838dca7baaa554666c8d626af67cf7cb6aac0cdf45133e498984"
+            },
+            {
+              "name": "pd-primary-launch",
+              "bytes": 74520,
+              "gzip_bytes": 41714,
+              "sha256": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc"
+            },
+            {
+              "name": "pd-start-session",
+              "bytes": 57200,
+              "gzip_bytes": 32070,
+              "sha256": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592"
+            },
+            {
+              "name": "pd-radio-launch",
+              "bytes": 101024,
+              "gzip_bytes": 54971,
+              "sha256": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05"
+            },
+            {
+              "name": "pd-fixed-arp",
+              "bytes": 52424,
+              "gzip_bytes": 29609,
+              "sha256": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49"
+            },
+            {
+              "name": "pd-iq-source",
+              "bytes": 51024,
+              "gzip_bytes": 29199,
+              "sha256": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4"
+            },
+            {
+              "name": "pd-capture-bootstrap",
+              "bytes": 61264,
+              "gzip_bytes": 34870,
+              "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+            },
+            {
+              "name": "pd-unkey-guard",
+              "bytes": 40968,
+              "gzip_bytes": 23967,
+              "sha256": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e"
+            },
+            {
+              "name": "pd-lease-guard",
+              "bytes": 43608,
+              "gzip_bytes": 25530,
+              "sha256": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+            },
+            {
+              "name": "LICENSES",
+              "bytes": 176378,
+              "gzip_bytes": 23778,
+              "sha256": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+            }
+          ],
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "expanded_bytes": 22300162,
+          "bytes": 8699878,
+          "sha256": "50bd42da4403bf7034fb3faa626399bc48c4f4143aa3db0c9e88b749abbf8bc4",
+          "blake2b_256": "db300cdc8321f5e63ba0ce6cefe94031ff37cacf673144be960dcafe46722656",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19"
+        },
+        "release": {
+          "format": "AEPDR005",
+          "paired_boot": true,
+          "managed_startup": true,
+          "origin_recovery": true,
+          "generation_selection": true,
+          "profile": "flex8600",
+          "architecture": "arm64",
+          "firmware": "4.3.16.42034",
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "bytes": 9007729,
+          "sha256": "2a45a883c578af921d8426787d22f2fa2eb28367642019dc6738347d89e19ccd",
+          "blake2b_256": "997d1d20da7cc0afbeb462c1cb9cf7a3723cfeb751068ae287f59ce5d988c0b7",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19",
+          "files": [
+            {
+              "name": "pd-boot",
+              "bytes": 189128,
+              "sha256": "1d1a57e50928f5c6d872adc7c032a75287d0c797938bad8e4f56c2c8f81839ed",
+              "mode": "0755"
+            },
+            {
+              "name": "pd-update",
+              "bytes": 79512,
+              "sha256": "7ac1db45849d9d85aeae9b63b31a908c2b0cbca91b36bd6999c268807e002d82",
+              "mode": "0755"
+            },
+            {
+              "name": "payload.bundle",
+              "bytes": 8699878,
+              "sha256": "50bd42da4403bf7034fb3faa626399bc48c4f4143aa3db0c9e88b749abbf8bc4",
+              "mode": "0644"
+            },
+            {
+              "name": "BOOT-LICENSES.txt",
+              "bytes": 37513,
+              "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-boot.service",
+              "bytes": 245,
+              "sha256": "08f24faab3500778cfbf343cf62d00970789a44f63c5915cddd311fc6283a504",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start.socket",
+              "bytes": 354,
+              "sha256": "1d77b02319b737ba07d8fd27cca0ae01479bfde05aca1b5a8270ba4d7b981d21",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start@.service",
+              "bytes": 307,
+              "sha256": "ebd544bc6d39e9f5ca505884ae356385ae504ad0c19a39abc7d4570ac7f7b085",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-shim.service",
+              "bytes": 360,
+              "sha256": "ec48d75a6346751d1440cc166889a75484e3a399935ebdd0877553331355081b",
+              "mode": "0644"
+            }
+          ],
+          "persistent_store": "/var/lib/smartsdr/aetherpd",
+          "runtime": "/run/aetherpd",
+          "fixed_units": [
+            "aetherpd-boot.service",
+            "aetherpd-start.socket",
+            "aetherpd-start@.service",
+            "aetherpd-shim.service"
+          ],
+          "privileged_actions": [
+            "verify approved release digest and trusted signature",
+            "stage fixed authenticated files in private RAM",
+            "retire the owned runtime before updating",
+            "publish protected payload and boot files",
+            "install fixed boot and local socket units",
+            "start the ordinary-user primary shim after retiring any recognized predecessor"
+          ],
+          "temporary_components": [
+            "pd-update",
+            "installer/bootstrap staging and authority"
+          ],
+          "rf_actions": [],
+          "automatic_calibration": false,
+          "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+        },
+        "native_release_verified": true,
+        "session_helpers": {
+          "pd-capture-bootstrap-arm64": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+          "pd-fixed-arp-arm64": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+          "pd-iq-source-arm64": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4",
+          "pd-iq-stream-arm64": "4e55d86a613b09c5e529f1250f0b5ae0184e98d08f8d49598486aaa5f0083291",
+          "pd-kernel-probe-arm64": "b7944e696b4be6a885be46be247d2ab3851c4066d940642a1d3254da51ffaa1f",
+          "pd-lease-guard-arm64": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+          "pd-prepared-launch-arm64": "07ef4fe8d581e74dd0a67394d2bf9282e3e5d8193bae82b4076fbe5709e849a2",
+          "pd-primary-launch-arm64": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+          "pd-radio-launch-arm64": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05",
+          "pd-service-launch-arm64": "b3108a3c9755480bfcd740c90d0d354cd2e2b2a4c7457147505b1c1423457ece",
+          "pd-session-launch-arm64": "4695af772ee39d987146e7de80052c8171073ac4fe6635c6d2920cfb33006c42",
+          "pd-shim-launch-arm64": "1bbc7ecbe06eeed91fd0da01689400652a1a9f0eb1cf1ab1b2f77171a6ff24f7",
+          "pd-start-session-arm64": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592"
+        }
+      },
+      "second": {
+        "payload": {
+          "format": "AEPDB001",
+          "arch": 64,
+          "files": [
+            {
+              "name": "flex-tailnet-shim",
+              "bytes": 21364896,
+              "gzip_bytes": 8244713,
+              "sha256": "5b6371126432a236f079c794d8c0277673ef2fdfaae7d59e54cea33aea7632e0"
+            },
+            {
+              "name": "aether-pd",
+              "bytes": 276856,
+              "gzip_bytes": 158553,
+              "sha256": "ae501195fe90838dca7baaa554666c8d626af67cf7cb6aac0cdf45133e498984"
+            },
+            {
+              "name": "pd-primary-launch",
+              "bytes": 74520,
+              "gzip_bytes": 41714,
+              "sha256": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc"
+            },
+            {
+              "name": "pd-start-session",
+              "bytes": 57200,
+              "gzip_bytes": 32070,
+              "sha256": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592"
+            },
+            {
+              "name": "pd-radio-launch",
+              "bytes": 101024,
+              "gzip_bytes": 54971,
+              "sha256": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05"
+            },
+            {
+              "name": "pd-fixed-arp",
+              "bytes": 52424,
+              "gzip_bytes": 29609,
+              "sha256": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49"
+            },
+            {
+              "name": "pd-iq-source",
+              "bytes": 51024,
+              "gzip_bytes": 29199,
+              "sha256": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4"
+            },
+            {
+              "name": "pd-capture-bootstrap",
+              "bytes": 61264,
+              "gzip_bytes": 34870,
+              "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+            },
+            {
+              "name": "pd-unkey-guard",
+              "bytes": 40968,
+              "gzip_bytes": 23967,
+              "sha256": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e"
+            },
+            {
+              "name": "pd-lease-guard",
+              "bytes": 43608,
+              "gzip_bytes": 25530,
+              "sha256": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+            },
+            {
+              "name": "LICENSES",
+              "bytes": 176378,
+              "gzip_bytes": 23778,
+              "sha256": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+            }
+          ],
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "expanded_bytes": 22300162,
+          "bytes": 8699878,
+          "sha256": "50bd42da4403bf7034fb3faa626399bc48c4f4143aa3db0c9e88b749abbf8bc4",
+          "blake2b_256": "db300cdc8321f5e63ba0ce6cefe94031ff37cacf673144be960dcafe46722656",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19"
+        },
+        "release": {
+          "format": "AEPDR005",
+          "paired_boot": true,
+          "managed_startup": true,
+          "origin_recovery": true,
+          "generation_selection": true,
+          "profile": "flex8600",
+          "architecture": "arm64",
+          "firmware": "4.3.16.42034",
+          "source_sha256": "e9e63fd40d2e068e9aeeda311b17f1e5477e6bcf7694a8eb154b920fe5177651",
+          "bytes": 9007729,
+          "sha256": "2a45a883c578af921d8426787d22f2fa2eb28367642019dc6738347d89e19ccd",
+          "blake2b_256": "997d1d20da7cc0afbeb462c1cb9cf7a3723cfeb751068ae287f59ce5d988c0b7",
+          "public_key": "fd047448f07426defcae0cfaacfb9c74668ca6ed0ce2b0a4252b17084a547e19",
+          "files": [
+            {
+              "name": "pd-boot",
+              "bytes": 189128,
+              "sha256": "1d1a57e50928f5c6d872adc7c032a75287d0c797938bad8e4f56c2c8f81839ed",
+              "mode": "0755"
+            },
+            {
+              "name": "pd-update",
+              "bytes": 79512,
+              "sha256": "7ac1db45849d9d85aeae9b63b31a908c2b0cbca91b36bd6999c268807e002d82",
+              "mode": "0755"
+            },
+            {
+              "name": "payload.bundle",
+              "bytes": 8699878,
+              "sha256": "50bd42da4403bf7034fb3faa626399bc48c4f4143aa3db0c9e88b749abbf8bc4",
+              "mode": "0644"
+            },
+            {
+              "name": "BOOT-LICENSES.txt",
+              "bytes": 37513,
+              "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-boot.service",
+              "bytes": 245,
+              "sha256": "08f24faab3500778cfbf343cf62d00970789a44f63c5915cddd311fc6283a504",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start.socket",
+              "bytes": 354,
+              "sha256": "1d77b02319b737ba07d8fd27cca0ae01479bfde05aca1b5a8270ba4d7b981d21",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-start@.service",
+              "bytes": 307,
+              "sha256": "ebd544bc6d39e9f5ca505884ae356385ae504ad0c19a39abc7d4570ac7f7b085",
+              "mode": "0644"
+            },
+            {
+              "name": "aetherpd-shim.service",
+              "bytes": 360,
+              "sha256": "ec48d75a6346751d1440cc166889a75484e3a399935ebdd0877553331355081b",
+              "mode": "0644"
+            }
+          ],
+          "persistent_store": "/var/lib/smartsdr/aetherpd",
+          "runtime": "/run/aetherpd",
+          "fixed_units": [
+            "aetherpd-boot.service",
+            "aetherpd-start.socket",
+            "aetherpd-start@.service",
+            "aetherpd-shim.service"
+          ],
+          "privileged_actions": [
+            "verify approved release digest and trusted signature",
+            "stage fixed authenticated files in private RAM",
+            "retire the owned runtime before updating",
+            "publish protected payload and boot files",
+            "install fixed boot and local socket units",
+            "start the ordinary-user primary shim after retiring any recognized predecessor"
+          ],
+          "temporary_components": [
+            "pd-update",
+            "installer/bootstrap staging and authority"
+          ],
+          "rf_actions": [],
+          "automatic_calibration": false,
+          "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+        },
+        "native_release_verified": true,
+        "session_helpers": {
+          "pd-capture-bootstrap-arm64": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+          "pd-fixed-arp-arm64": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+          "pd-iq-source-arm64": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4",
+          "pd-iq-stream-arm64": "4e55d86a613b09c5e529f1250f0b5ae0184e98d08f8d49598486aaa5f0083291",
+          "pd-kernel-probe-arm64": "b7944e696b4be6a885be46be247d2ab3851c4066d940642a1d3254da51ffaa1f",
+          "pd-lease-guard-arm64": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+          "pd-prepared-launch-arm64": "07ef4fe8d581e74dd0a67394d2bf9282e3e5d8193bae82b4076fbe5709e849a2",
+          "pd-primary-launch-arm64": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+          "pd-radio-launch-arm64": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05",
+          "pd-service-launch-arm64": "b3108a3c9755480bfcd740c90d0d354cd2e2b2a4c7457147505b1c1423457ece",
+          "pd-session-launch-arm64": "4695af772ee39d987146e7de80052c8171073ac4fe6635c6d2920cfb33006c42",
+          "pd-shim-launch-arm64": "1bbc7ecbe06eeed91fd0da01689400652a1a9f0eb1cf1ab1b2f77171a6ff24f7",
+          "pd-start-session-arm64": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592"
+        }
+      }
+    }
+  }
+}

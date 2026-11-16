@@ -49,8 +49,9 @@ void AetherPDMeasurementModel::initialize(QNetworkAccessManager* network)
             [] { return TxCoordinator::monotonicMs(); },
             [this] { return current(); },
             [this](std::int64_t now) { return m_telemetry.read(now); }});
-    // Includes 4 s of source alignment noise and the independent helper's
-    // 4.5 s startup/cleanup reserves. The RF helper expires after at most 9.5 s.
+    // Operation budget includes alignment and helper startup/cleanup reserves.
+    // The helper begins cleanup at about 9.5 s; this is not confirmed RF release.
+    // The analyzer's 10 s transmit contract remains open (PR4770-PHASE1-STATUS.json).
     txlin::SafetyLimits limits;
     limits.maxTransmitMs = 14000;
     // FLEX-8600 firmware 4.3.16 publishes these vitals about every 2.06 s

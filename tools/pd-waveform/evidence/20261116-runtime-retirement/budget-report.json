@@ -1,0 +1,282 @@
+{
+  "production_ready": false,
+  "radio_used": false,
+  "measurement": "Native production upgrade-space functions, real authenticated release files; synthetic filesystem capacity and block sizes.",
+  "source_commit": "fdef108dcd60b807edc6b9739654939787b0b113",
+  "previous_source_commit": "2c72ca0a99a452f96fe1880c916250e06bb36cba",
+  "measurements": [
+    {
+      "arch": "armv7",
+      "block_bytes": 1024,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 27891712,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 230400,
+      "compacted_generation_allocated_bytes": 9665536,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 65536,
+      "fresh_install_steady_budget_bytes": 10356736,
+      "successor_steady_budget_bytes": 11010048,
+      "successor_peak_including_native_reserve_bytes": 38901760,
+      "remaining_from_41_decimal_MB": 2098240,
+      "remaining_from_41_MiB": 4089856,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "block_bytes": 1024,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 27869184,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8411136,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 230400,
+      "compacted_generation_allocated_bytes": 9665536,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 65536,
+      "fresh_install_steady_budget_bytes": 10356736,
+      "successor_steady_budget_bytes": 11010048,
+      "successor_peak_including_native_reserve_bytes": 38879232,
+      "remaining_from_41_decimal_MB": 2120768,
+      "remaining_from_41_MiB": 4112384,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "block_bytes": 4096,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 28155904,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 245760,
+      "compacted_generation_allocated_bytes": 9711616,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 262144,
+      "fresh_install_steady_budget_bytes": 10571776,
+      "successor_steady_budget_bytes": 11268096,
+      "successor_peak_including_native_reserve_bytes": 39424000,
+      "remaining_from_41_decimal_MB": 1576000,
+      "remaining_from_41_MiB": 3567616,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    },
+    {
+      "arch": "armv7",
+      "block_bytes": 4096,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 28065792,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8478720,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 245760,
+      "compacted_generation_allocated_bytes": 9711616,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 262144,
+      "fresh_install_steady_budget_bytes": 10571776,
+      "successor_steady_budget_bytes": 11268096,
+      "successor_peak_including_native_reserve_bytes": 39333888,
+      "remaining_from_41_decimal_MB": 1666112,
+      "remaining_from_41_MiB": 3657728,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "block_bytes": 1024,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 27239424,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 231424,
+      "compacted_generation_allocated_bytes": 9324544,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 65536,
+      "fresh_install_steady_budget_bytes": 10045440,
+      "successor_steady_budget_bytes": 10670080,
+      "successor_peak_including_native_reserve_bytes": 37909504,
+      "remaining_from_41_decimal_MB": 3090496,
+      "remaining_from_41_MiB": 5082112,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "block_bytes": 1024,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 27216896,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8411136,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 231424,
+      "compacted_generation_allocated_bytes": 9324544,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 65536,
+      "fresh_install_steady_budget_bytes": 10045440,
+      "successor_steady_budget_bytes": 10670080,
+      "successor_peak_including_native_reserve_bytes": 37886976,
+      "remaining_from_41_decimal_MB": 3113024,
+      "remaining_from_41_MiB": 5104640,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "block_bytes": 4096,
+      "units_on_separate_filesystem": false,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 27504640,
+            "required_inodes": 90
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 249856,
+      "compacted_generation_allocated_bytes": 9371648,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 262144,
+      "fresh_install_steady_budget_bytes": 10260480,
+      "successor_steady_budget_bytes": 10932224,
+      "successor_peak_including_native_reserve_bytes": 38436864,
+      "remaining_from_41_decimal_MB": 2563136,
+      "remaining_from_41_MiB": 4554752,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    },
+    {
+      "arch": "arm64",
+      "block_bytes": 4096,
+      "units_on_separate_filesystem": true,
+      "native_admission": {
+        "volumes": [
+          {
+            "required_bytes": 27414528,
+            "required_inodes": 68
+          },
+          {
+            "required_bytes": 8478720,
+            "required_inodes": 22
+          }
+        ],
+        "accepted": true
+      },
+      "boundary_checks_passed": [
+        "exact byte",
+        "one byte short refused",
+        "exact inode",
+        "one inode short refused"
+      ],
+      "worker_size_charged": 524288,
+      "permanent_management_files_allocated_bytes": 249856,
+      "compacted_generation_allocated_bytes": 9371648,
+      "private_state_allowance_bytes": 1048576,
+      "metadata_directory_allowance_bytes": 262144,
+      "fresh_install_steady_budget_bytes": 10260480,
+      "successor_steady_budget_bytes": 10932224,
+      "successor_peak_including_native_reserve_bytes": 38346752,
+      "remaining_from_41_decimal_MB": 2653248,
+      "remaining_from_41_MiB": 4644864,
+      "additional_one_release_upload_fits_41_decimal_MB": false
+    }
+  ],
+  "limitations": [
+    "Prior2c72ca0 runtime and new candidate both authenticated with their distinct development keys. This is capacity qualification, not authorization for changing a deployed trust key.",
+    "Native admission is measured; steady-state storage is calculated from file inventory plus explicit allowances.",
+    "Private state and metadata allowances are budget assumptions, not measured 6300 usage or enforced size caps.",
+    "41 MB is a rounded user report: both decimal and binary interpretations are reported, not a current free-space measurement.",
+    "No FLEX-6000 first-install adapter/carrier archive size is qualified.",
+    "Full signed inputs must remain on tmpfs. Firmware-retained upload archives or other persistent copies are additional.",
+    "Fresh first-install transient capsule/native-waveform overhead needs the final 6000 adapter; these results qualify upgrade admission only."
+  ]
+}
