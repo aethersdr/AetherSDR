@@ -1,0 +1,98 @@
+{
+  "mode": "stall-01",
+  "pid": 1337646,
+  "start_ticks": 4392341,
+  "gui_handle": 363234800,
+  "events": [
+    {
+      "elapsed_s": 0.324758,
+      "monotonic_ns": 44303069998238,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=",
+      "desktop_paused": false,
+      "desktop_process_state": "S"
+    },
+    {
+      "elapsed_s": 0.324959,
+      "monotonic_ns": 44303070192878,
+      "event": "observer_ready"
+    },
+    {
+      "elapsed_s": 0.533798,
+      "monotonic_ns": 44303279036775,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x15A685F0 state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier=",
+      "desktop_paused": false,
+      "desktop_process_state": "S"
+    },
+    {
+      "elapsed_s": 0.534522,
+      "monotonic_ns": 44303279756647,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x15A685F0 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
+      "desktop_paused": false,
+      "desktop_process_state": "S"
+    },
+    {
+      "elapsed_s": 0.534613,
+      "monotonic_ns": 44303279846140,
+      "event": "first_owned_transmitting"
+    },
+    {
+      "elapsed_s": 0.933985,
+      "monotonic_ns": 44303679223099,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x15A685F0 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
+      "desktop_paused": false,
+      "desktop_process_state": "S"
+    },
+    {
+      "elapsed_s": 1.537159,
+      "monotonic_ns": 44304282396819,
+      "event": "desktop_paused",
+      "process_state": "T"
+    },
+    {
+      "elapsed_s": 9.548278,
+      "monotonic_ns": 44312293515139,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x15A685F0 state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=",
+      "desktop_paused": true,
+      "desktop_process_state": "T"
+    },
+    {
+      "elapsed_s": 9.562722,
+      "monotonic_ns": 44312307955978,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x15A685F0 state=READY reason= source= tx_allowed=1 amplifier=",
+      "desktop_paused": true,
+      "desktop_process_state": "T"
+    },
+    {
+      "elapsed_s": 9.991539,
+      "monotonic_ns": 44312736775516,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=",
+      "desktop_paused": true,
+      "desktop_process_state": "T"
+    },
+    {
+      "elapsed_s": 12.553453,
+      "monotonic_ns": 44315298691707,
+      "event": "desktop_resumed"
+    },
+    {
+      "elapsed_s": 12.79264,
+      "monotonic_ns": 44315537878367,
+      "event": "interlock",
+      "line": "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=",
+      "desktop_paused": false,
+      "desktop_process_state": "R"
+    }
+  ],
+  "rf_commands": [],
+  "paused": true,
+  "resumed": true,
+  "completed": true,
+  "elapsed_s": 13.558
+}

@@ -1,0 +1,8 @@
+{
+  "pid": 1337646,
+  "socket": "/tmp/aetherpd-desktop-stall",
+  "binary_sha256": "da649fe8f3d6c4791a87079d3903786577976505b795be34fe50e4112806e936",
+  "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+  "runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "keying_requires_explicit_bridge_action": true
+}

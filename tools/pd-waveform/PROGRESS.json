@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T17:07:45.205072+00:00",
+  "updated_utc": "2026-11-16T17:19:41.305947+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Qualify desktop-stall independent unkey with bounded5W measurement on installede8d68ad4b, preserve any recovery failure, then complete remaining final-process faults, sustained/RF stock comparison and actual6300/release gates.",
+  "next_action": "Resolve operation-bound desktop recovery after independent helper unkey without synthesizing stop proof; preserve the negative trace. Then continue full P1-P10 failure matrix, repeated RF/stock, update/rollback and6300/release gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Native bounded-helper owned-READY fix e8d68ad4b installed through independent desktop first-install flow. ARMv7/ARM64 runtime and full ARM64 distribution reproduced. One reboot and local DAX IQ channel4/FDXoff before/after passed. No RF on new package yet.",
+  "current_focus": "Installede8d68ad4b passed one5W desktop-stall radio-release test: ownership cleared9.457019s after TX while desktop remained SIGSTOPped. Desktop stayed Releasing because helper-owned stop preceded its stop ACK. Native session stopped; cleanup/hash/privilege audit passed.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2896,9 +2896,9 @@
   },
   "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
   "current_delivery_status": {
-    "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
+    "runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
     "desktop_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "runtime_report": "IQ-RUNTIME-PACKAGE-QUALIFICATION.json",
+    "runtime_report": "GUARDIAN-INSTALLED-QUALIFICATION.json",
     "desktop_reports": [
       "CAPTURE-DESKTOP-QUALIFICATION.json",
       "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
@@ -2906,12 +2906,12 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "installed_state": "Independent first install and exact-identity automatic reboot passed; local IQ channel4 before/after with FDXoff; session stopped and temporary resources removed.",
+    "installed_state": "Installede8d68ad4b; first-install/reboot/IQ passed. One5W stalled-desktop radio cutoff passed; desktop release certification remains incomplete. Session stopped and cleanup audited.",
     "latest_read_only_network_probe": {
-      "utc": "2026-11-16T16:05:55.285163+00:00",
+      "utc": "2026-11-16T17:19:41.305947+00:00",
       "address": "192.168.50.100",
       "radio_mutations": false,
-      "status": "final authenticated installation/status and connected GUI readback succeeded"
+      "status": "final stopped API state and read-only exact-runtime/privilege/ARP audit passed"
     },
     "historical_failure_audit": "HISTORICAL-STARTUP-AUDIT.json",
     "pending_gates": [
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "GUARDIAN-INSTALLED-QUALIFICATION.json",
+    "latest_live_report": "DESKTOP-STALL-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3089,5 +3089,11 @@
     "report": "GUARDIAN-INSTALLED-QUALIFICATION.json",
     "installed_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
     "new_RF": false
+  },
+  "desktop_stall": {
+    "report": "DESKTOP-STALL-QUALIFICATION.json",
+    "radio_release_observed_while_desktop_stopped": true,
+    "desktop_recovery_qualified": false,
+    "final_native_session_stopped": true
   }
 }

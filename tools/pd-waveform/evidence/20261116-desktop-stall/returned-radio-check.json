@@ -1,0 +1,521 @@
+{
+  "utc": "2026-11-16T17:13:49.377739+00:00",
+  "aetherpd/installation": {
+    "body": {
+      "firmware": "4.3.16.42034",
+      "first_install_plan_blake2b_256": "cc0929ab2bd881ac33b45a812be2d0f37230c779815150c1608fb41d007fd30d",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "4c46f23f345be774ea51168745f844927e23b1313f287b7254613c62e59164d7",
+      "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed"
+    },
+    "http_status": 200
+  },
+  "aetherpd/status": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "idle",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 363234800,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000000",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "calibration",
+      "state": "idle"
+    },
+    "http_status": 200
+  },
+  "radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.765625,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "transmit": {
+    "model": "transmit",
+    "ok": true,
+    "transmit": {
+      "accTxDelay": 0,
+      "activeMicProfile": "Default",
+      "activeProfile": "Default",
+      "amCarrierLevel": 34,
+      "apdEnabled": false,
+      "atuEnabled": true,
+      "atuMemories": false,
+      "atuStatus": "manual_bypass",
+      "cwBreakIn": true,
+      "cwDelay": 41,
+      "cwIambic": true,
+      "cwIambicMode": 1,
+      "cwPitch": 600,
+      "cwSidetone": true,
+      "cwSpeed": 30,
+      "cwSwapPaddles": false,
+      "cwlEnabled": false,
+      "dax": false,
+      "dexp": false,
+      "dexpLevel": 50,
+      "maxPowerLevel": 10,
+      "micAcc": false,
+      "micBias": false,
+      "micBoost": false,
+      "micLevel": 0,
+      "micSelection": "PC",
+      "monGainCw": 80,
+      "monGainSb": 10,
+      "monPanCw": 50,
+      "monitor": false,
+      "mox": false,
+      "pttMicOverride": false,
+      "rfPower": 5,
+      "showTxInWaterfall": false,
+      "speechProc": false,
+      "speechProcLevel": 1,
+      "speechProcLevelMaximum": 2,
+      "transmitting": false,
+      "tunePower": 5,
+      "tuning": false,
+      "tx1Delay": 0,
+      "tx2Delay": 0,
+      "tx3Delay": 0,
+      "txDelay": 0,
+      "txFilterHigh": 4000,
+      "txFilterLow": 50,
+      "voxDelay": 5,
+      "voxEnable": false,
+      "voxLevel": 0
+    }
+  },
+  "slices": {
+    "ok": true,
+    "slices": [
+      {
+        "active": true,
+        "adaptiveActive": false,
+        "adaptiveFilterEnabled": false,
+        "adaptiveHetReject": false,
+        "adaptiveMaxHighCut": 4000,
+        "adaptiveMinLowCut": 0,
+        "adaptiveMinSnr": 1,
+        "adaptiveResponse": 1,
+        "adaptiveSplatter": 1,
+        "agcMode": "off",
+        "agcThreshold": 60,
+        "agcThresholdMode": "manual",
+        "anf": false,
+        "apf": false,
+        "apfLevel": 30,
+        "audioGain": 50,
+        "audioMute": false,
+        "audioPan": 50,
+        "automaticAgcThresholdActiveOrPending": false,
+        "automaticSquelch": false,
+        "automaticSquelchMarginDb": 10,
+        "chainMode": "RAW",
+        "daxChannel": 1,
+        "diversity": false,
+        "diversityChild": false,
+        "diversityIndex": 1342177293,
+        "diversityParent": false,
+        "externalReceiveReplacement": false,
+        "filterHigh": 3000,
+        "filterLow": 300,
+        "filterPreset": "",
+        "filterPresetId": 0,
+        "flexAgcMode": "off",
+        "flexAgcOffLevel": 10,
+        "flexAgcThreshold": 60,
+        "flexAudioGain": 50,
+        "flexAudioMute": false,
+        "flexAudioPan": 50,
+        "flexSquelch": true,
+        "flexSquelchLevel": 20,
+        "fmRepeaterOffsetFreq": 0,
+        "fmToneMode": "off",
+        "fmToneValue": "67.0",
+        "frequency": 7.15,
+        "inCapture": true,
+        "letter": "A",
+        "linkedTo": -1,
+        "locked": false,
+        "manualSquelchLevel": 20,
+        "mode": "PD",
+        "nb": false,
+        "nbFill": 0,
+        "nbKind": 0,
+        "nbLevel": 50,
+        "nr": false,
+        "nrLevel": 50,
+        "panId": "0x40000000",
+        "receiveAgcMode": "off",
+        "receiveAgcOffLevel": 10,
+        "receiveAgcThreshold": 60,
+        "receiveSquelch": true,
+        "receiveSquelchLevel": 20,
+        "repeaterOffsetDir": "simplex",
+        "rfGain": 0,
+        "ritFreq": 0,
+        "ritOn": false,
+        "rxAntenna": "RX_A",
+        "sliceId": 0,
+        "squelch": true,
+        "squelchLevel": 20,
+        "stepHz": 100,
+        "txAntenna": "ANT1",
+        "txOffsetFreq": 0,
+        "txSlice": true,
+        "xitFreq": 0,
+        "xitOn": false
+      }
+    ]
+  },
+  "pans": {
+    "ok": true,
+    "pans": [
+      {
+        "antennas": [
+          "ANT1",
+          "ANT2",
+          "RX_A",
+          "RX_B",
+          "XVTA",
+          "XVTB"
+        ],
+        "average": 50,
+        "averageIsRequest": false,
+        "bandwidthMhz": 0.2,
+        "centerKnown": true,
+        "centerMhz": 7.15,
+        "clientHandle": "0x15a685f0",
+        "fps": 25,
+        "fpsIsRequest": false,
+        "maxDbm": 0,
+        "minDbm": -180,
+        "ownedByUs": true,
+        "panId": "0x40000000",
+        "radioReportedAverage": 50,
+        "radioReportedFps": 25,
+        "rfGain": 0,
+        "rxAntenna": "RX_A",
+        "transmitInhibitReason": "",
+        "transmitInhibited": false,
+        "waterfallLineDuration": 80,
+        "weightedAverage": false,
+        "weightedAverageKnown": true,
+        "wide": false,
+        "wnb": false,
+        "wnbLevel": 90
+      }
+    ]
+  },
+  "identity": {
+    "agentName": "Codex AetherPD",
+    "automationIdentity": "aetherpd-shim-integration",
+    "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+    "guiClientIdTransient": true,
+    "label": "",
+    "name": "aetherpd-desktop-stall",
+    "ok": true,
+    "pid": 1337646,
+    "readOnly": false,
+    "socket": "/tmp/aetherpd-desktop-stall",
+    "station": "Codex AetherPD",
+    "txAllowed": true,
+    "version": "26.11.2"
+  },
+  "controls": {
+    "pdState": {
+      "enabled": true,
+      "value": "Idle",
+      "visible": true
+    },
+    "pdDetail": {
+      "enabled": true,
+      "value": "Dispatch faults: 0 \u00b7 Send errors: 0 \u00b7 Rejected input: 0 \u00b7 Stale IQ: 0\nInput-limited samples: 0",
+      "visible": true
+    },
+    "pdReceipt": {
+      "enabled": true,
+      "value": "Start requested; waiting for observed status.",
+      "visible": true
+    },
+    "pdMessage": {
+      "enabled": true,
+      "visible": true
+    },
+    "pdIqSelection": {
+      "currentIndex": 1,
+      "enabled": false,
+      "value": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+      "visible": true
+    },
+    "pdIqObserved": {
+      "enabled": true,
+      "value": "Service reports IQ Ch 4, pan 0x40000000: binding confirmed.",
+      "visible": true
+    },
+    "pdStart": {
+      "enabled": false,
+      "value": "Start AetherPD",
+      "visible": true
+    },
+    "pdStop": {
+      "enabled": true,
+      "value": "Stop AetherPD",
+      "visible": true
+    },
+    "pdArm": {
+      "enabled": true,
+      "value": "Arm calibration",
+      "visible": true
+    },
+    "pdCancel": {
+      "enabled": true,
+      "value": "Cancel calibration",
+      "visible": true
+    },
+    "pdRestore": {
+      "enabled": true,
+      "value": "Restore receive",
+      "visible": true
+    },
+    "pdRefresh": {
+      "enabled": true,
+      "value": "Refresh",
+      "visible": true
+    },
+    "pdMeasurement": {
+      "enabled": true,
+      "value": "Measure linearity\u2026",
+      "visible": true
+    },
+    "pdEnableCorrection": {
+      "enabled": false,
+      "value": "Enable correction",
+      "visible": true
+    },
+    "pdBypassCorrection": {
+      "enabled": true,
+      "value": "Bypass correction",
+      "visible": true
+    },
+    "pdInstallState": {
+      "enabled": true,
+      "value": "No update prepared",
+      "visible": true
+    },
+    "pdInstallPlan": {
+      "enabled": true,
+      "value": "First-install development package 0.0.0-guardian.e8d68ad4b \u2014 not qualified for production.\nNo verified update is prepared. Qualified package selection is not yet available in this development build. Installing the released Remote Access shim alone does not install AetherPD.\nPrepare first installation is for a radio without a managed AetherPD installation. Review and approve its plan before any upload. Check saved installation only reads the previous attempt's outcome.",
+      "visible": true
+    },
+    "pdInstallCancel": {
+      "enabled": false,
+      "value": "Cancel update",
+      "visible": true
+    },
+    "pdInstallApprove": {
+      "enabled": false,
+      "value": "Approve update",
+      "visible": true
+    },
+    "pdDone": {
+      "enabled": true,
+      "value": "Done",
+      "visible": true
+    },
+    "pdInstallPrepare": {
+      "enabled": false,
+      "value": "Prepare update",
+      "visible": true
+    },
+    "pdInstallFirst": {
+      "enabled": false,
+      "value": "Prepare first installation",
+      "visible": true
+    },
+    "pdInstallCheck": {
+      "enabled": true,
+      "value": "Check saved installation",
+      "visible": true
+    },
+    "pdInstallSaved": {
+      "enabled": false,
+      "value": "Prepare saved attempt",
+      "visible": true
+    },
+    "pdInstallCleanup": {
+      "enabled": false,
+      "value": "Remove temporary installer packages",
+      "visible": true
+    },
+    "pdMeasureDummyLoad": {
+      "enabled": true,
+      "value": "unchecked",
+      "visible": true
+    },
+    "pdMeasureRadioPower": {
+      "enabled": true,
+      "value": "5",
+      "visible": true
+    },
+    "pdMeasureApplyPower": {
+      "enabled": false,
+      "value": "Apply power",
+      "visible": true
+    },
+    "pdMeasurePowerStatus": {
+      "enabled": true,
+      "value": "Radio reports 5 W setting; actual RF output may differ.",
+      "visible": true
+    },
+    "pdMeasurePowerLimit": {
+      "enabled": true,
+      "value": "0",
+      "visible": true
+    },
+    "pdMeasureWindow": {
+      "currentIndex": 0,
+      "enabled": true,
+      "value": "Blackman-Harris 7",
+      "visible": true
+    },
+    "pdMeasureAverages": {
+      "enabled": true,
+      "value": "4",
+      "visible": true
+    },
+    "pdMeasureOrder": {
+      "currentIndex": 2,
+      "enabled": true,
+      "value": "IMD3 + 5 + 7",
+      "visible": true
+    },
+    "pdMeasureTimeout": {
+      "enabled": true,
+      "value": "10",
+      "visible": true
+    },
+    "pdMeasureToneSpacing": {
+      "enabled": true,
+      "value": "1190",
+      "visible": true
+    },
+    "pdMeasureToneStatus": {
+      "enabled": true,
+      "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000000.",
+      "visible": true
+    },
+    "pdMeasureArm": {
+      "enabled": false,
+      "value": "Arm measurement source",
+      "visible": true
+    },
+    "pdMeasureCancelSource": {
+      "enabled": true,
+      "value": "Cancel source",
+      "visible": true
+    },
+    "pdMeasurePrepare": {
+      "enabled": false,
+      "value": "Prepare receive check",
+      "visible": true
+    },
+    "pdMeasureTransmit": {
+      "enabled": false,
+      "value": "Transmit measurement",
+      "visible": true
+    },
+    "pdMeasureStop": {
+      "enabled": false,
+      "value": "Stop measurement",
+      "visible": true
+    },
+    "pdMeasureExport": {
+      "enabled": false,
+      "value": "Export result\u2026",
+      "visible": true
+    },
+    "pdMeasureState": {
+      "enabled": true,
+      "value": "Idle. Arm the source, then prepare.",
+      "visible": true
+    },
+    "pdMeasureSpectrum": {
+      "enabled": true,
+      "visible": true
+    },
+    "pdMeasureResult": {
+      "enabled": true,
+      "value": "No completed measurement. Results appear after confirmed transmit release.",
+      "visible": true
+    }
+  }
+}
