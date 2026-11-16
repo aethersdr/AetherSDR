@@ -69,6 +69,9 @@ void AetherPDMeasurementModel::initialize(QNetworkAccessManager* network)
     connect(&m_radio->transmitModel(), &TransmitModel::rfPowerChanged, this, &AetherPDMeasurementModel::poll);
     connect(&m_radio->transmitModel(), &TransmitModel::powerProvenanceChanged, this, &AetherPDMeasurementModel::poll);
     connect(&m_radio->transmitModel(), &TransmitModel::stateChanged, this, &AetherPDMeasurementModel::changed);
+    connect(&m_radio->transmitModel(), &TransmitModel::transmittingChanged, this, &AetherPDMeasurementModel::changed);
+    connect(&m_radio->transmitModel(), &TransmitModel::moxChanged, this, &AetherPDMeasurementModel::changed);
+    connect(&m_radio->transmitModel(), &TransmitModel::tuneChanged, this, &AetherPDMeasurementModel::changed);
     connect(&m_radio->transmitModel(), &TransmitModel::powerProvenanceChanged, this, &AetherPDMeasurementModel::changed);
     connect(&m_radio->transmitModel(), &TransmitModel::maxPowerLevelChanged, this, &AetherPDMeasurementModel::changed);
     connect(m_radio, &RadioModel::radioTransmittingChanged, this, &AetherPDMeasurementModel::changed);
@@ -271,6 +274,61 @@ AetherPDMeasurementSettings::ReadResult AetherPDMeasurementModel::analysisOption
         return {false, {}, QStringLiteral("Original radio is unavailable.")};
     }
     return AetherPDMeasurementSettings(m_radio->settingsScope()).load();
+}
+
+QString AetherPDMeasurementModel::toneSelectionReason(quint32 spacingHz) const
+{
+    const aetherpd::MeasurementToneConfig tones{0, spacingHz};
+    if (!tones.valid()) { return tr("Tone spacing must be between 200 and 10000 Hz."); }
+    const auto preferences = analysisOptions();
+    if (!preferences.usable) { return preferences.reason; }
+    txlin::LinearityRunConfig config;
+    config.capture.sampleRateHz = 48000;
+    config.capture.centerFreqHz = 0;
+    config.window = preferences.values.window;
+    config.imd.maxOrder = preferences.values.maxOrder;
+    txlin::RunRequest request;
+    request.maxOrder = preferences.values.maxOrder;
+    request.tone1Hz = tones.lowerOffsetHz();
+    request.tone2Hz = tones.upperOffsetHz();
+    return QString::fromStdString(txlin::TxLinearityController::spectralConfigurationError(config, request));
+}
+
+QString AetherPDMeasurementModel::sourceArmReason(const RadioControlSession& session, quint32 spacingHz) const
+{
+    if (m_shuttingDown || QThread::currentThread() != thread() || !m_radio || !m_radio->controlSessionCurrent(session)) {
+        return tr("Original radio session is unavailable.");
+    }
+    const auto source = m_radio->aetherPDModel().status();
+    if (!source || !source->available || !source->registered || !source->measurementControl
+        || !source->calibrationControl || m_radio->aetherPDModel().pendingOperation()) {
+        return tr("Wait for a fresh measurement-capable service with no pending request.");
+    }
+    const TransmitModel& tx = m_radio->transmitModel();
+    if (state() != State::Idle || source->keyed || source->calibrationState == aetherpd::CalibrationState::Armed
+        || source->calibrationState == aetherpd::CalibrationState::Running || tx.isTransmitting() || tx.isTuning()
+        || tx.isMox() || m_radio->isRadioTransmitting() || !m_radio->txOwnedByUs()
+        || m_radio->transmitOwnershipPending() || m_radio->transmitRecovering()
+        || m_radio->aetherPDInstallationModel().active() || m_radio->fullDuplexEnabled()
+        || source->state == aetherpd::State::BlockedByRadioApd) {
+        return tr("Finish the source, transmission, measurement or installation; use FDX off and AetherPD ownership.");
+    }
+    if ((!source->measurementToneControl || !source->measurementToneConfig)
+        && spacingHz != aetherpd::kDefaultToneSpacingHz) {
+        return tr("This shim supports only 1190 Hz spacing (710/1900 Hz tones). Update it to select spacing.");
+    }
+    return toneSelectionReason(spacingHz);
+}
+
+bool AetherPDMeasurementModel::armSource(const RadioControlSession& session, quint32 spacingHz)
+{
+    const QString reason = sourceArmReason(session, spacingHz);
+    if (!reason.isEmpty()) { return false; }
+    const auto source = m_radio->aetherPDModel().status();
+    if (!source) { return false; }
+    const std::optional<quint32> configured = source->measurementToneControl
+        ? std::optional<quint32>{spacingHz} : std::nullopt;
+    return m_radio->requestAetherPD(session, aetherpd::Operation::ArmMeasurement, configured);
 }
 
 bool AetherPDMeasurementModel::setAnalysisOptions(const RadioControlSession& session, const AnalysisOptions& options)

@@ -1,0 +1,9 @@
+[
+  {
+    "mutation": "configured-spacing",
+    "caught": true,
+    "exit": 1,
+    "assertion": "explicit arm sends exact configured spacing through original-session route",
+    "restored_source_sha256": "1575860b175e4b97ecc92b146c3c2afd0e0ff0bb0ad753d9343afa5998e71101"
+  }
+]

@@ -82,6 +82,7 @@ public:
     bool setCallbacks(ReadyCallback ready, FinishedCallback finished);
     bool setSafetyLimits(const SafetyLimits& limits, bool allowOverride = false);
     void confirmDummyLoad();
+    static std::string spectralConfigurationError(const LinearityRunConfig& config, const RunRequest& request);
     bool prepare(const LinearityRunConfig& config, const RunRequest& request);
     bool startRun(std::shared_ptr<ITxLinearityRunLease> lease);
     void stop();

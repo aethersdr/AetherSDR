@@ -402,6 +402,83 @@ int main(int argc, char** argv)
             && captureNetwork.sent.empty(), "power controls send no shim arm, capture or key requests");
         Access::backendCommandSink(radio, [](const QString&) {});
     }
+    auto* toneChoice = measurement->findChild<QSpinBox*>(QStringLiteral("pdMeasureToneSpacing"));
+    auto* toneStatus = measurement->findChild<QLabel*>(QStringLiteral("pdMeasureToneStatus"));
+    ok &= check(toneChoice && toneStatus && !toneChoice->isEnabled() && !toneChoice->isHidden()
+        && toneChoice->value() == 1190 && toneChoice->accessibleDescription().contains("legacy")
+        && mb("pdMeasureArm")->isEnabled(), "legacy source keeps default arm and explains disabled spacing control");
+    if (!toneChoice || !toneStatus) { return 1; }
+    {
+        auto& model = radio.aetherPDMeasurementModel();
+        const RadioControlSession session = radio.controlSession();
+        const size_t beforeTones = network.sent.size();
+        ok &= check(!model.armSource(session, 1001) && !model.armSource({}, 1190)
+            && network.sent.size() == beforeTones, "unsupported spacing and foreign session cannot arm");
+        QJsonObject configurable = unarmedStatus;
+        configurable["measurement_tone_control"] = true;
+        configurable["measurement_tone_capture_version"] = 3;
+        configurable["measurement"] = QJsonObject{{"source_id", "0000000000000000"}, {"tones", false}};
+        configurable["measurement_tone_config"] = QJsonObject{{"source_id", "0000000000000000"},
+            {"spacing_hz", 1190}, {"min_spacing_hz", 200}, {"max_spacing_hz", 10000}, {"center_hz", 1305}};
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(configurable).toJson());
+        ok &= check(toneChoice->isEnabled(), "configured source enables tone selection");
+        toneChoice->setValue(1001);
+        ok &= check(network.sent.size() == beforeTones + 1 && captureNetwork.sent.empty()
+            && toneStatus->text().contains("804.5 / 1805.5") && toneStatus->text().contains("710.0 / 1900.0"),
+            "editing sends no command and requested half-Hz offsets remain distinct from observed tones");
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(configurable).toJson());
+        ok &= check(toneChoice->value() == 1001, "status poll preserves the unsubmitted tone draft");
+        toneChoice->setValue(2610);
+        ok &= check(toneChoice->isEnabled() && !mb("pdMeasureArm")->isEnabled()
+            && toneStatus->text().contains("DC exclusion") && !model.armSource(session, 2610),
+            "DC-overlapping tones are refused before arm while selector remains editable");
+        toneChoice->setValue(870);
+        ok &= check(!mb("pdMeasureArm")->isEnabled() && toneStatus->text().contains("DC leakage")
+            && !model.armSource(session, 870), "DC-contaminated IMD product is refused before arm");
+        toneChoice->setValue(10000);
+        ok &= check(!mb("pdMeasureArm")->isEnabled() && toneStatus->text().contains("IQ bandwidth")
+            && !model.armSource(session, 10000), "out-of-band IMD products are refused before arm");
+        orderChoice->setCurrentIndex(orderChoice->findData(3));
+        ok &= check(mb("pdMeasureArm")->isEnabled(), "lower order fits captured bandwidth");
+        orderChoice->setCurrentIndex(orderChoice->findData(5));
+        toneChoice->setValue(1001);
+        radio.transmitModel().setTransmitting(true);
+        ok &= check(!toneChoice->isEnabled() && !mb("pdMeasureArm")->isEnabled() && !model.armSource(session, 1001),
+            "radio key state independently locks tone selection and arm");
+        radio.transmitModel().setTransmitting(false);
+        mb("pdMeasureArm")->click();
+        ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/measurement/arm")
+            && QJsonDocument::fromJson(network.sent.back().body).object() == QJsonObject{{"spacing_hz", 1001}}
+            && !toneChoice->isEnabled(), "explicit arm sends exact configured spacing through original-session route");
+        const size_t afterConfiguredArm = network.sent.size();
+        network.last->complete(404, "{}");
+        ok &= check(network.sent.size() == afterConfiguredArm && !mb("pdMeasureTransmit")->isEnabled(),
+            "configured arm failure never falls back or keys");
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(configurable).toJson());
+        mb("pdMeasureArm")->click();
+        network.last->complete(200, R"({"state":"measurement_arm_accepted"})");
+        ok &= check(toneStatus->text().contains("No configured tone profile reported") && !mb("pdMeasurePrepare")->isEnabled(),
+            "arm acknowledgment does not invent observed tones");
+        QJsonObject configuredArmed = measurementStatus;
+        configuredArmed["measurement_tone_control"] = true;
+        configuredArmed["measurement_tone_capture_version"] = 3;
+        QJsonObject toneProfile = configurable["measurement_tone_config"].toObject();
+        toneProfile["source_id"] = "0000000000000001";
+        toneProfile["spacing_hz"] = 1001;
+        configuredArmed["measurement_tone_config"] = toneProfile;
+        network.last->complete(200, QJsonDocument(configuredArmed).toJson());
+        ok &= check(!toneChoice->isEnabled() && mb("pdMeasurePrepare")->isEnabled()
+            && !model.armSource(session, 1001), "observed armed profile locks edits and permits receive preparation");
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(configurable).toJson());
+        button(*dialog, "pdRefresh")->click();
+        network.last->complete(200, QJsonDocument(unarmedStatus).toJson());
+        ok &= check(toneChoice->value() == 1190 && !toneChoice->isEnabled() && mb("pdMeasureArm")->isEnabled(),
+            "observed legacy capability resets unsupported draft without silently arming");
+    }
     const auto measurementText = [measurement] {
         return measurement->findChild<QLabel*>(QStringLiteral("pdMeasureState"))->text();
     };
@@ -428,7 +505,7 @@ int main(int argc, char** argv)
     ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::CheckingReceive
         && captureNetwork.sent.size() == 1 && !mb("pdMeasureTransmit")->isEnabled(),
         "UI preparation uses real station configuration and receive-only capture");
-    ok &= check(!windowChoice->isEnabled() && !averageChoice->isEnabled() && !orderChoice->isEnabled() && !timeoutChoice->isEnabled()
+    ok &= check(!toneChoice->isEnabled() && !windowChoice->isEnabled() && !averageChoice->isEnabled() && !orderChoice->isEnabled() && !timeoutChoice->isEnabled()
         && !radio.aetherPDMeasurementModel().setAnalysisOptions(radio.controlSession(), {})
         && radio.aetherPDMeasurementModel().analysisOptions().values == selectedOptions.values,
         "analysis options freeze in both GUI and model throughout measurement preparation");
@@ -466,6 +543,8 @@ int main(int argc, char** argv)
     if (!screenshotPath.isEmpty()) {
         measurement->resize(680, 700);
         QCoreApplication::processEvents();
+        ok &= check(mb("pdMeasureTransmit")->height() >= mb("pdMeasureTransmit")->fontMetrics().height() + 14,
+            "short measurement window must not clip action labels");
         ok &= check(measurement->grab().save(screenshotPath), "measurement preview saved");
     }
     mb("pdMeasureStop")->click();

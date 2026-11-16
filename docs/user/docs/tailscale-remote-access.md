@@ -556,13 +556,19 @@ ADC headroom or calibrated output power.
    cutoff, not a command to change radio drive. The nominal radio power setting
    must be within the limit. The active band plan and license-class filter must
    cover both the tones and the wider alignment-noise band.
-3. Click **Arm measurement source**, then **Prepare receive check** once the
+3. Choose **Tone spacing (Hz)** (200–10000 Hz, default 1190). The pair is
+   centered 1305 Hz above the carrier; odd spacings produce half-Hz offsets.
+   The display separates requested offsets from the shim's reported profile.
+   Editing sends no command. The draft lasts for this window only.
+   Older shims reset the draft to 1190 Hz, keep the selector disabled with a
+   reason, and use 710/1900 Hz.
+   Click **Arm measurement source**, then **Prepare receive check** once the
    arm is observed. These actions do not transmit. Preparation downloads a
    complete receive-only IQ frame.
 4. Click **Transmit measurement** within two seconds of readiness. This is the
    explicit RF action. An independent cleanup helper must be ready before the
    original-session TX request is dispatched. The source emits four seconds of
-   alignment noise followed by 710/1900 Hz tones, for at most eight seconds.
+   alignment noise followed by the confirmed tone pair, for at most eight seconds.
    Before preparing, choose **Analysis window**, **Averages** (one to four frames)
    and **Highest order** (IMD3, IMD5 or IMD7). **Transmit timeout (s)** defaults
    to ten seconds and can be shortened to three through nine seconds. It counts
@@ -571,11 +577,14 @@ ADC headroom or calibrated output power.
    These client measurement preferences are remembered separately for each
    radio; they do not change its power, tones or IQ stream. Analysis defaults
    are Blackman–Harris 7, four frames and IMD7.
-   **Arm measurement source** selects 710/1900 Hz. If the shim reports a
-   configured pair, preparation uses its confirmed frequencies and requires
+   **Arm measurement source** submits the chosen spacing when the shim
+   supports it. A rejected configured request never falls back to fixed tones.
+   The selector locks while arming, armed, transmitting, measuring or installing.
+   Preparation uses the confirmed frequencies and requires
    matching metadata on every capture. A configured capture never falls back
-   to a legacy endpoint. Preparation refuses a highest IMD order outside the
-   IQ bandwidth, or a fundamental overlapping the analyzer's DC exclusion;
+   to a legacy endpoint. Arming and preparation refuse a highest IMD order outside the
+   IQ bandwidth, a fundamental overlapping the analyzer's DC exclusion,
+   or an IMD product overlapping DC leakage;
    use a narrower spacing or lower order as appropriate.
    The controls lock while a measurement is pending. More averages reduce
    estimate variance, not the physical noise floor; the four-frame ceiling

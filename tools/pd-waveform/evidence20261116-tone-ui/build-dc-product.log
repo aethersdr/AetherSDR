@@ -1,0 +1,19 @@
+[0/2] Re-checking globbed directories...
+[1/24] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/24] Capturing build identity (git describe)
+[3/20] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[4/20] Automatic MOC and UIC for target tx_linearity_controller_test
+[5/19] Completed 'vulkan-shaders-gen'
+[6/19] Automatic MOC and UIC for target aethercore
+[7/18] Building CXX object CMakeFiles/tx_linearity_controller_test.dir/src/core/txlinearity/TxLinearityController.cpp.o
+[8/18] Building CXX object CMakeFiles/tx_linearity_controller_test.dir/tests/tx_linearity_controller_test.cpp.o
+[9/18] Building CXX object CMakeFiles/aethercore.dir/src/core/txlinearity/TxLinearityController.cpp.o
+[10/18] Linking CXX executable tx_linearity_controller_test
+[11/18] Linking CXX static library libaethercore.a
+[12/18] Automatic MOC and UIC for target aetherpd_dialog_test
+[13/17] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/tests/aetherpd_dialog_test.cpp.o
+[14/17] Linking CXX executable tx_operation_integration_test
+[15/17] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory
+[16/17] Linking CXX executable aetherpd_dialog_test

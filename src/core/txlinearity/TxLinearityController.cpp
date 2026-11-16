@@ -110,19 +110,52 @@ bool TxLinearityController::validConfig(const LinearityRunConfig& config, const 
         && std::isfinite(config.imd.acprGapHz) && config.imd.acprGapHz >= 0
         && std::isfinite(config.imd.acprBandwidthHz) && config.imd.acprBandwidthHz > 0;
     if (!bounded) { return false; }
+    return spectralConfigurationError(config, request).empty();
+}
+
+std::string TxLinearityController::spectralConfigurationError(const LinearityRunConfig& config, const RunRequest& request)
+{
+    const CaptureConfig& capture = config.capture;
+    if (capture.frameSamples != 16384 || !std::isfinite(capture.sampleRateHz)
+        || capture.sampleRateHz <= 0 || capture.sampleRateHz > 192000
+        || !std::isfinite(capture.centerFreqHz)
+        || !std::isfinite(request.tone1Hz) || !std::isfinite(request.tone2Hz)
+        || (request.maxOrder != 3 && request.maxOrder != 5 && request.maxOrder != 7)
+        || config.imd.maxOrder != request.maxOrder
+        || config.imd.dcNotchBins < 0 || config.imd.dcNotchBins >= capture.frameSamples / 2
+        || (config.window != WindowKind::BlackmanHarris7 && config.window != WindowKind::BlackmanHarris4
+            && config.window != WindowKind::Hann && config.window != WindowKind::FlatTop)) {
+        return "Invalid spectral analysis configuration.";
+    }
+    const double halfRate = capture.sampleRateHz / 2;
     const double binHz = capture.sampleRateHz / capture.frameSamples;
     const double lobeBins = makeWindow(config.window, 2).mainLobeHalfBins;
     const double lower = std::min(request.tone1Hz, request.tone2Hz) - capture.centerFreqHz;
     const double upper = std::max(request.tone1Hz, request.tone2Hz) - capture.centerFreqHz;
     const double spacing = upper - lower;
     const double products = double(request.maxOrder - 1) / 2 * spacing;
-    // Reject before RF if a requested product would be truncated, or a tone's
-    // main lobe overlaps the DC exclusion used by the peak search.
-    return spacing >= 2 * lobeBins * binHz
-        && std::abs(lower) > (config.imd.dcNotchBins + lobeBins) * binHz
-        && std::abs(upper) > (config.imd.dcNotchBins + lobeBins) * binHz
-        && lower - products > -halfRate + lobeBins * binHz
-        && upper + products < halfRate - lobeBins * binHz;
+    if (!std::isfinite(lower) || !std::isfinite(upper) || !std::isfinite(products)) {
+        return "Tone frequencies exceed the supported analysis range.";
+    }
+    if (spacing < 2 * lobeBins * binHz) {
+        return "Tone spacing is too small for the selected analysis window.";
+    }
+    if (std::abs(lower) <= (config.imd.dcNotchBins + lobeBins) * binHz
+        || std::abs(upper) <= (config.imd.dcNotchBins + lobeBins) * binHz) {
+        return "A tone overlaps the analyzer's DC exclusion. Choose a different spacing.";
+    }
+    for (int order = 3; order <= request.maxOrder; order += 2) {
+        const double offset = double(order - 1) / 2 * spacing;
+        if (std::abs(lower - offset) <= (config.imd.dcNotchBins + lobeBins) * binHz
+            || std::abs(upper + offset) <= (config.imd.dcNotchBins + lobeBins) * binHz) {
+            return "A requested IMD product overlaps DC leakage. Choose a different spacing or lower order.";
+        }
+    }
+    if (lower - products <= -halfRate + lobeBins * binHz
+        || upper + products >= halfRate - lobeBins * binHz) {
+        return "Requested IMD products exceed the captured IQ bandwidth. Reduce spacing or highest order.";
+    }
+    return {};
 }
 
 bool TxLinearityController::prepare(const LinearityRunConfig& config, const RunRequest& request)

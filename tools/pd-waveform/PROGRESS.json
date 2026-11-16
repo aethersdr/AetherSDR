@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T13:39:45.340810+00:00",
+  "updated_utc": "2026-11-16T14:00:06.495700+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Add operator tone-spacing selection with observed capability/readback and actionable bandwidth/order/DC refusal. Wire explicit arm through the original-session route without automatic keying, fallback or rearm. Then channel/pan ownership, fresh packages and outstanding live/full-goal gates.",
+  "next_action": "Complete channel/pan ownership contract and operator integration, then rebuild authenticated reproducible packages with disk budgets. Preserve final live qualification gates; no blind reboot or RF while radio is unreachable.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Confirmed configured-tone desktop transport, capture, controller and exports qualified offline; operator spacing selector is next. Radio still unreachable.",
+  "current_focus": "Operator tone spacing implemented and qualified offline; channel/panadapter ownership and fresh packages next. Radio remains unreachable after the authorized reboot.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2908,20 +2908,20 @@
     "installed_runtime_source": "e0563d1e285d36bba21da3f791364dd27642e26a",
     "installed_state": "No successful readiness or new boot identity observed after the authorized reboot; latest runtime and desktop changes are not live-qualified.",
     "latest_read_only_network_probe": {
-      "utc": "2026-11-16T12:59:57.353393+00:00",
+      "utc": "2026-11-16T13:50:02.551748+00:00",
       "address": "192.168.50.100",
       "radio_mutations": false,
       "tcp_ports": {
-        "4992": "[Errno 113] No route to host",
+        "4992": "timed out",
         "48992": "[Errno 113] No route to host",
-        "22222": "[Errno 113] No route to host"
+        "22222": "timed out"
       }
     },
     "historical_failure_audit": "HISTORICAL-STARTUP-AUDIT.json",
     "pending_gates": [
       "Installed-service reboot recovery and exact-candidate first-install/update/rollback",
       "Historical cold-start cancellation and natural alignment failure reproduction/attribution",
-      "Remaining PR4770 channel/pan and tone controls",
+      "Remaining PR4770 channel/pan ownership and operator controls",
       "Final process-graph faults and actual RF release timing",
       "Repeated exact-candidate 5/10 W tone/speech and matched stock APD comparison",
       "Actual FLEX-6300 teammate qualification",
@@ -2953,9 +2953,18 @@
         10000
       ],
       "mutations_caught": 2,
-      "operator_spacing_selector": false,
+      "operator_spacing_selector": true,
       "installed": false
-    }
+    },
+    "tone_ui": {
+      "report": "TONE-UI-QUALIFICATION.json",
+      "status": "operator_tone_controls_qualified_offline",
+      "registered_tests_passed": 3,
+      "sanitizer_suites_passed": 1,
+      "mutations_caught": 1,
+      "installed": false
+    },
+    "source_provenance_note": "runtime_source/desktop_source identify earlier packaged checkpoints. The tone_shim, tone_desktop and tone_ui reports identify later component changes; no updated complete runtime package is qualified."
   },
   "power_control": {
     "report": "POWER-CONTROL-QUALIFICATION.json",

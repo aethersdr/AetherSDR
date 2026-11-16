@@ -45,7 +45,7 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     auto* hint = new QLabel(tr("Experimental · local DAX IQ · FDX off. Select your frequency, ANT1 dummy load and "
         "attenuated RXA feedback before arming. Assign IQ Ch 1 to the feedback panadapter in its DAX panel, "
         "start AetherPD, then select PD mode on your TX slice. The source runs four seconds of alignment noise, then "
-        "710/1900 Hz tones, for at most eight seconds. Prepare checks reception; only Transmit keys RF."), bodyWidget());
+        "the selected tones, for at most eight seconds. Prepare checks reception; only Transmit keys RF."), bodyWidget());
     hint->setWordWrap(true);
     layout->addWidget(hint);
     m_dummyLoad = new QCheckBox(tr("Dummy load connected; feedback attenuation checked"), bodyWidget());
@@ -124,12 +124,29 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     analysisField(tr("Highest order"), m_order, 2);
     analysisField(tr("Transmit timeout (s)"), m_timeout, 3);
     layout->addLayout(analysis);
+    auto* toneLayout = new QGridLayout;
+    auto* toneLabel = new QLabel(tr("Tone spacing (Hz):"), bodyWidget());
+    m_toneSpacing = new QSpinBox(bodyWidget());
+    m_toneSpacing->setObjectName(QStringLiteral("pdMeasureToneSpacing"));
+    m_toneSpacing->setRange(aetherpd::kMinToneSpacingHz, aetherpd::kMaxToneSpacingHz);
+    m_toneSpacing->setValue(aetherpd::kDefaultToneSpacingHz);
+    m_toneSpacing->setAccessibleName(toneLabel->text());
+    toneLabel->setBuddy(m_toneSpacing);
+    m_toneStatus = new QLabel(bodyWidget());
+    m_toneStatus->setObjectName(QStringLiteral("pdMeasureToneStatus"));
+    m_toneStatus->setWordWrap(true);
+    toneLayout->addWidget(toneLabel, 0, 0);
+    toneLayout->addWidget(m_toneSpacing, 0, 1);
+    toneLayout->addWidget(m_toneStatus, 1, 0, 1, 2);
+    layout->addLayout(toneLayout);
+    connect(m_toneSpacing, &QSpinBox::valueChanged, this, &AetherPDMeasurementDialog::render);
     auto* grid = new QGridLayout;
     const auto button = [this, grid](const QString& text, const char* name, int row, int col) {
         auto* result = new QPushButton(text, bodyWidget());
         result->setObjectName(QString::fromLatin1(name));
         result->setAccessibleName(text);
         result->setAutoDefault(false);
+        result->setMinimumHeight(result->fontMetrics().height() + 14);
         grid->addWidget(result, row, col);
         return result;
     };
@@ -168,7 +185,9 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
         if (!current()) { return; }
         const QPointer<AetherPDMeasurementDialog> alive(this);
         m_notice.clear();
-        const bool submitted = m_radio->requestAetherPD(m_session, operation);
+        const bool submitted = operation == aetherpd::Operation::ArmMeasurement
+            ? m_radio->aetherPDMeasurementModel().armSource(m_session, m_toneSpacing->value())
+            : m_radio->requestAetherPD(m_session, operation);
         if (!alive) { return; }
         if (!submitted && m_notice.isEmpty()) { m_notice = tr("Source request was not submitted. Check the current connection and service status."); }
         render();
@@ -298,7 +317,6 @@ void AetherPDMeasurementDialog::render()
     const std::optional<aetherpd::Status> source = valid ? m_radio->aetherPDModel().status() : std::nullopt;
     const std::optional<aetherpd::Operation> pending = valid
         ? m_radio->aetherPDModel().pendingOperation() : std::nullopt;
-    const bool busy = pending.has_value();
     const bool changingSource = pending && *pending != aetherpd::Operation::Status;
     const bool installed = valid && !m_radio->aetherPDInstallationModel().active();
     const bool idle = state == State::Idle;
@@ -359,17 +377,59 @@ void AetherPDMeasurementDialog::render()
     }
     const bool readySource = source && source->available && source->registered && source->measurementControl && !source->keyed
         && !m_radio->fullDuplexEnabled() && source->state != aetherpd::State::BlockedByRadioApd;
-    availability(m_arm, installed && idle && readySource && !busy && m_dummyLoad->isChecked()
-        && source->calibrationState != aetherpd::CalibrationState::Armed && source->calibrationState != aetherpd::CalibrationState::Running,
-        tr("Confirm the bench path and wait for a fresh, unkeyed service with measurement support."));
+    const bool toneCapable = source && source->measurementToneControl && source->measurementToneConfig;
+    if (source && source->measurementControl && !toneCapable) {
+        const QSignalBlocker blocker(m_toneSpacing);
+        m_toneSpacing->setValue(aetherpd::kDefaultToneSpacingHz);
+    }
+    const QString armReason = model ? model->sourceArmReason(m_session, m_toneSpacing->value())
+        : tr("Original radio session is unavailable.");
+    const QString selectionReason = model ? model->toneSelectionReason(m_toneSpacing->value()) : armReason;
+    const QString editReason = !source ? armReason : !toneCapable
+        ? tr("This shim does not advertise selectable tones. The legacy source uses 1190 Hz spacing (710/1900 Hz).")
+        : (armReason == selectionReason ? QString{} : armReason);
+    availability(m_toneSpacing, toneCapable && editReason.isEmpty(), editReason);
+    if (!alive) { return; }
+    if (m_toneSpacing->isEnabled()) {
+        m_toneSpacing->setAccessibleDescription(tr("200 to 10000 Hz between tones, centered 1305 Hz above the carrier. Editing sends no command; Arm measurement source submits the pair."));
+        if (!alive) { return; }
+    }
+    const aetherpd::MeasurementToneConfig draft{0, static_cast<quint32>(m_toneSpacing->value())};
+    QString toneText = tr("Requested offsets: %1 / %2 Hz from carrier.")
+        .arg(draft.lowerOffsetHz(), 0, 'f', 1).arg(draft.upperOffsetHz(), 0, 'f', 1);
+    if (source && source->measurementToneConfig) {
+        const auto& observed = *source->measurementToneConfig;
+        toneText += tr(" Reported offsets: %1 / %2 Hz; source %3.")
+            .arg(observed.lowerOffsetHz(), 0, 'f', 1).arg(observed.upperOffsetHz(), 0, 'f', 1)
+            .arg(observed.sourceId, 16, 16, QLatin1Char('0'));
+    } else {
+        toneText += tr(" No configured tone profile reported.");
+    }
+    if (!selectionReason.isEmpty()) { toneText += QLatin1Char(' ') + selectionReason; }
+    if (!editReason.isEmpty()) { toneText += QLatin1Char(' ') + editReason; }
+    if (m_toneStatus->text() != toneText) {
+        m_toneStatus->setText(toneText);
+        if (!alive) { return; }
+        m_toneStatus->setAccessibleName(toneText);
+        if (!alive) { return; }
+        QAccessibleEvent event(m_toneStatus, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+        if (!alive) { return; }
+    }
+    availability(m_arm, installed && idle && armReason.isEmpty() && m_dummyLoad->isChecked(),
+        armReason.isEmpty() ? tr("Confirm the dummy load and feedback attenuation before arming.") : armReason);
     if (!alive) { return; }
     availability(m_cancelSource, valid && source && source->measurementControl,
         tr("A current authenticated measurement-capable service is required."));
     if (!alive) { return; }
-    availability(m_prepare, installed && idle && preferences.usable && readySource && !changingSource && m_dummyLoad->isChecked() && m_limit->value() > 0
+    const QString observedToneReason = model && source
+        ? model->toneSelectionReason(source->measurementToneConfig.value_or(aetherpd::MeasurementToneConfig{}).spacingHz)
+        : tr("Wait for service status.");
+    availability(m_prepare, observedToneReason.isEmpty() && installed && idle && preferences.usable && readySource && !changingSource && m_dummyLoad->isChecked() && m_limit->value() > 0
         && source->measurement && source->measurement->sourceId && source->sourcePurpose == aetherpd::SourcePurpose::Measurement
         && source->calibrationState == aetherpd::CalibrationState::Armed,
-        preferences.usable ? tr("Arm the measurement source, confirm the bench path and choose a forward-power limit.") : preferences.reason);
+        !observedToneReason.isEmpty() ? observedToneReason
+            : (preferences.usable ? tr("Arm the measurement source, confirm the bench path and choose a forward-power limit.") : preferences.reason));
     if (!alive) { return; }
     availability(m_transmit, installed && state == State::Ready && m_dummyLoad->isChecked(),
         tr("Prepare must complete a fresh receive check. Readiness expires after two seconds."));

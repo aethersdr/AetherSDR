@@ -1,0 +1,82 @@
+{
+  "updated_utc": "2026-11-16T14:00:06.495700+00:00",
+  "status": "operator_tone_controls_qualified_offline",
+  "production_ready": false,
+  "installed": false,
+  "source_base": "38766c07a3488c7a2ac155bf5533869d08ac4334",
+  "evidence": "evidence20261116-tone-ui",
+  "implemented": [
+    "Tone spacing (Hz), 200..10000 with default1190; previews exact half-Hz carrier-relative offsets separately from observed source profile. Editing sends no request and draft is window-local.",
+    "Explicit arm passes the selected spacing through the original RadioControlSession route, requiring fresh observed capability. Configured request failures never fall back, retry or key RF. Legacy capability resets the draft to1190 and visibly disables selection with a reason.",
+    "Measurement model and GUI refuse arm during source/TX/measurement/installation activity, pending requests, lost ownership or FDX. TX, MOX and tune signals immediately refresh availability.",
+    "Shared spectral preflight validates ranges/order before arithmetic; refuses unresolved tones, fundamental DC exclusion, requested products overlapping DC leakage, and highest IMD products outside the IQ band. Observed source frequencies remain authoritative for preparation.",
+    "Visible and accessible refusal reasons, current user guide, and minimum button height to prevent clipped action labels in short windows."
+  ],
+  "validation": {
+    "linux_application_built": true,
+    "registered_tests": [
+      "tx_linearity_controller_test",
+      "aetherpd_dialog_test",
+      "tx_operation_integration_test"
+    ],
+    "registered_tests_passed": 3,
+    "ctest_seconds": 10.12,
+    "controller_address_undefined_leak_sanitizers": {
+      "tx_linearity_controller_test": 0
+    },
+    "configured_spacing_mutation": [
+      {
+        "mutation": "configured-spacing",
+        "caught": true,
+        "exit": 1,
+        "assertion": "explicit arm sends exact configured spacing through original-session route",
+        "restored_source_sha256": "1575860b175e4b97ecc92b146c3c2afd0e0ff0bb0ad753d9343afa5998e71101"
+      }
+    ],
+    "docs_build_passed": true,
+    "engine_boundary_no_new_blockers": true,
+    "test_registration_passed": true,
+    "accessibility_findings": 0,
+    "offscreen_preview": "measurement.png; 680x700 requested; action labels readable"
+  },
+  "negative_evidence": [
+    "Initial widget test detected missing immediate availability refresh on TransmitModel::transmittingChanged. Added TX/MOX/tune observers; final test passes.",
+    "New DC-product refusal exposed an old unrelated-tone fixture whose requested IMD3 was25Hz from DC. Changed its deliberate frequency mismatch from200Hz to100Hz so preflight is valid while captured tones still differ; mismatch assertion and all final tests pass. Initial sanitizer failure preserved.",
+    "Wrong-spacing mutation substituted1190 for the requested1001 and the exact-body assertion failed. Original source SHA restored, rebuilt test passed; no mutation remains."
+  ],
+  "latest_read_only_network_probe": {
+    "utc": "2026-11-16T13:50:02.551748+00:00",
+    "address": "192.168.50.100",
+    "radio_mutations": false,
+    "tcp_ports": {
+      "4992": "timed out",
+      "48992": "[Errno 113] No route to host",
+      "22222": "timed out"
+    }
+  },
+  "source_sha256": {
+    "docs/user/docs/tailscale-remote-access.md": "b15b85527d5bfcb6f2bb849b75e1791ab177b45addcb5703153d74508f9a02df",
+    "src/core/txlinearity/TxLinearityController.cpp": "aa2e2aa2a0c228631fdd3f08ffa93dd119628e1e2f9f5d2fae4775567691587a",
+    "src/core/txlinearity/TxLinearityController.h": "6bbd4712ff6600ffdbdaf27ee1c7b035ec5b87e3d828d1c4f9886e4e878e048c",
+    "src/gui/AetherPDMeasurementDialog.cpp": "e225b2ef1132aa07ce62070a91e0cd3d12c3273dd69ba71298606a2811cb1b48",
+    "src/gui/AetherPDMeasurementDialog.h": "64378340c70bbabf907cc37de08949caf82dc07efd8152e6aa8d28bb0e3449b4",
+    "src/models/AetherPDMeasurementModel.cpp": "1575860b175e4b97ecc92b146c3c2afd0e0ff0bb0ad753d9343afa5998e71101",
+    "src/models/AetherPDMeasurementModel.h": "0e540781558c7ae8bded2ca35008ad9efcb977cb09dc6e85328ae44d633cd4b2",
+    "src/models/RadioModel.h": "a826e7d4687851bb5cb31579c6723bc8f07bd119ab80ac246ba9ab06a78076d2",
+    "src/models/RadioModel_AetherPD.cpp": "608268002e091a4ad8b1fa16975b7a757faffdefcda148833ee544d511830063",
+    "tests/aetherpd_dialog_test.cpp": "82bb99ea3479e7236fb6539824bf02f0bd6e29370e9bee732a9f0ca8a493fbb9",
+    "tests/tx_linearity_controller_test.cpp": "726f2d38b31d31aee82424c537f3a93e96f25abbb20336ed1266eef327655d1e"
+  },
+  "limitations": [
+    "No radio installation, reboot, RF or live automation qualification in this checkpoint.",
+    "No complete runtime package rebuild or new disk-budget qualification.",
+    "Sanitizers cover the standalone controller and its dependencies, not the full Qt widget/application graph.",
+    "No Windows/macOS CI or actual6300 qualification; independent review and release gates remain."
+  ],
+  "next": [
+    "Channel/panadapter ownership contract and operator integration.",
+    "Fresh authenticated reproducible runtime packages with actual peak disk accounting.",
+    "Recover reachable radio; qualify installed first-install/update/rollback/reboot and local IQ against the exact candidate.",
+    "Finish natural alignment/cold-start attribution, process faults/confirmed release, repeated5/10W tones/speech, matched stockAPD, actual6300 and release gates."
+  ]
+}

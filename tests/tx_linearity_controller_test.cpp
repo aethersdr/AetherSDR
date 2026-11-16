@@ -438,7 +438,7 @@ int main(int argc, char** argv)
         check(f.result && !f.result->error.empty() && !f.result->measurement, "empty source failure became a success");
     }
     {
-        Fixture f; f.request.tone1Hz += 200; f.start();
+        Fixture f; f.request.tone1Hz += 100; f.start();
         f.lease->releaseImmediately = true;
         f.send(frame(1)); f.send(frame(2));
         check(f.result && f.result->measurement && !f.result->measurement->valid,
@@ -472,7 +472,8 @@ int main(int argc, char** argv)
     }
     for (const int order : {std::numeric_limits<int>::min(), -1, 0, 8, std::numeric_limits<int>::max()}) {
         Fixture f; f.config.imd.maxOrder = f.request.maxOrder = order;
-        check(!f.controller->prepare(f.config, f.request) && f.lease->starts == 0,
+        check(!TxLinearityController::spectralConfigurationError(f.config, f.request).empty()
+            && !f.controller->prepare(f.config, f.request) && f.lease->starts == 0,
             "invalid IMD order reached product-span arithmetic");
     }
     for (const int order : {3, 5, 7}) {
@@ -490,6 +491,16 @@ int main(int argc, char** argv)
         f.request.tone1Hz = 7150000; f.request.tone2Hz = 7152610;
         check(!f.controller->prepare(f.config, f.request) && !f.source->running && f.lease->starts == 0,
             "DC-overlapping fundamental entered receive/TX preparation");
+    }
+    for (const int order : {3, 5, 7}) {
+        Fixture f; f.config.capture.sampleRateHz = 48000;
+        f.config.imd.maxOrder = f.request.maxOrder = order;
+        const double spacing = 2610.0 / order;
+        f.request.tone1Hz = 7151305 - spacing / 2;
+        f.request.tone2Hz = 7151305 + spacing / 2;
+        check(TxLinearityController::spectralConfigurationError(f.config, f.request).find("DC leakage") != std::string::npos
+            && !f.controller->prepare(f.config, f.request) && !f.source->running && f.lease->starts == 0,
+            "DC leakage could be reported as a requested IMD product");
     }
     for (const int fault : {0, 1, 2, 3}) {
         Fixture f; f.start();

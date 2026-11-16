@@ -48,13 +48,14 @@ bool RadioModel::attachAetherPD(const RadioControlSession& session, const QStrin
     return owner && m_aetherPDModel->active();
 }
 
-bool RadioModel::requestAetherPD(const RadioControlSession& session, aetherpd::Operation operation)
+bool RadioModel::requestAetherPD(const RadioControlSession& session, aetherpd::Operation operation,
+                                 std::optional<quint32> toneSpacingHz)
 {
     if (QThread::currentThread() != thread() || !controlSessionCurrent(session)
         || !sessionTransportCurrent() || !m_sessionCommands.current()) {
         return false;
     }
-    return m_aetherPDModel->request(operation);
+    return m_aetherPDModel->request(operation, toneSpacingHz);
 }
 
 std::function<bool()> RadioModel::bindAetherPDCapture(const RadioControlSession& session,

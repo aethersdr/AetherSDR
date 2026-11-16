@@ -55,6 +55,9 @@ public:
         QString unavailableReason;
     };
     PowerControl powerControl(const RadioControlSession& session) const;
+    QString toneSelectionReason(quint32 spacingHz) const;
+    QString sourceArmReason(const RadioControlSession& session, quint32 spacingHz) const;
+    bool armSource(const RadioControlSession& session, quint32 spacingHz);
     bool requestPower(const RadioControlSession& session, int nominalWatts);
     AetherPDMeasurementSettings::ReadResult analysisOptions() const;
     bool setAnalysisOptions(const RadioControlSession& session, const AnalysisOptions& options);
