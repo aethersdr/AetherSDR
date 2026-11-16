@@ -5398,7 +5398,7 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
 }
 
 // A host-modulated radio's own PTT press is a host key through the gated
-// producer path a footswitch takes, so every transmit preflight applies. Only
+// producer path, so every transmit preflight applies. Only
 // what this path keyed is released here; a key the host already held owns its
 // own release. CW keys itself.
 void RadioModel::followRadioPtt(bool down)

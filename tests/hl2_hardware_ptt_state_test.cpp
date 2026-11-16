@@ -3,14 +3,15 @@
 // or touches drive. RadioModel follows it with a host key through the gated
 // producer path, so the front-panel PTT modulates like MOX, and releases only that.
 // A PTT already held when the stream starts or resumes is shown and keys nothing:
-// only a press after a release seen on the wire is a key request (#7067 review).
+// only a press after a release seen on the wire is a key request.
 // So is only a level carried by a packet newer than every one already believed: a
-// rewound or duplicate EP6 packet neither presses, releases nor arms (#7067 review).
+// rewound or duplicate EP6 packet neither presses, releases nor arms.
 // Socket-free: EP6 status frames go into the backend's own MetisClient on its I/O
 // thread. The silence legs wait out MetisClient's real silence timeout, twice.
 
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
+#include "SeamThreadAffinityProbe.h"
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
@@ -29,6 +30,7 @@
 #include <QElapsedTimer>
 #include <QList>
 #include <QThread>
+#include <QTimer>
 
 #include <array>
 #include <cstdint>
@@ -56,6 +58,27 @@ struct MetisClientTestAccess {
     static Cc driveBank(const MetisClient& client) { return client.m_ccTxDrive; }
     static int silenceTimeoutMs() { return MetisClient::kSilenceTimeoutMs; }
     static void watchdogTick(MetisClient& client) { client.onWatchdogTick(); }
+    static bool restartReceivers(MetisClient& client)
+    {
+        client.m_commandSinkForTest = [](const std::array<std::uint8_t, 64>& bytes) {
+            return static_cast<qint64>(bytes.size());
+        };
+        client.m_packetSinkForTest = [](const std::array<std::uint8_t, kUsbPacketSize>& bytes) {
+            return static_cast<qint64>(bytes.size());
+        };
+        client.setReceiverCount(client.effectiveNumRx() == 1 ? 2 : 1);
+        // Drive the real paced state machine on its own thread, with no socket.
+        for (int i = 0; i < 4; ++i) {
+            QThread::msleep(MetisClient::kPrimingBankSpacingMs + 1);
+            client.advanceReceiverCountRestart();
+        }
+        const bool finished = client.m_restartStep == MetisClient::RestartStep::Idle;
+        client.m_restartTimer->stop();
+        client.m_startRetryTimer->stop();
+        client.m_commandSinkForTest = {};
+        client.m_packetSinkForTest = {};
+        return finished;
+    }
 };
 
 struct Hl2HardwarePttTestAccess {
@@ -593,12 +616,12 @@ void testModelKeysForRadioPtt()
 
 // A delayed or duplicated EP6 packet is not a press. The loss accounting lets
 // rewinds and duplicates through for their IQ; their ptt_resp must not move the
-// PTT (#7067 review).
+// PTT.
 void testStalePacketsAreNoKeyIntent()
 {
     std::printf("\n  rewound and duplicate EP6 packets\n");
     {
-        // The review's replay, through the real model: release N, press N+1,
+        // Replay through the real model: release N, press N+1,
         // release N+2, then the same press N+1 again.
         RadioModel model;
         if (!model.rebuildBackendForTest(QStringLiteral("hl2"))) {
@@ -707,6 +730,68 @@ void testStalePacketsAreNoKeyIntent()
     }
 }
 
+void testReceiverRestartRequiresNewRelease()
+{
+    std::printf("\n  receiver-count restart and delayed PTT\n");
+    RadioModel model;
+    if (!model.rebuildBackendForTest(QStringLiteral("hl2"))) {
+        qFatal("No HL2 backend in this build");
+    }
+    installTxSlice(model);
+    auto* backend = qobject_cast<Hl2Backend*>(model.backend());
+    if (!backend) {
+        qFatal("The HL2 family did not build an Hl2Backend");
+    }
+    AetherSDR::test::SeamThreadAffinityProbe probe(backend);
+    AetherSDR::test::attachAllSeamSignals(probe);
+    Access::prepare(*backend);
+    Access::setHoldMs(*backend, 0);
+    const auto restart = [&] {
+        bool finished = false;
+        Access::onIo(*backend, [&finished](AetherSDR::hl2::MetisClient& metis) {
+            finished = AetherSDR::hl2::MetisClientTestAccess::restartReceivers(metis);
+        });
+        Access::drain(*backend);
+        check(finished, "the real receiver-count restart finishes through injected sinks");
+    };
+
+    Access::radioPttAt(*backend, false, 50000);
+    Access::radioPttAt(*backend, true, 50001);
+    check(Access::hostMoxOnWire(*backend), "control: a fresh press keys before restart");
+    Access::radioPttAt(*backend, false, 50002);
+    check(!Access::hostMoxOnWire(*backend), "control: the release unkeys before restart");
+    restart();
+    Access::radioPttAt(*backend, true, 50001);
+    check(!Access::hostMoxOnWire(*backend), "a delayed old-stream press after restart keys no host");
+    check(!model.transmitModel().isTransmitting(), "nor creates model transmit intent");
+    check(model.isRadioTransmitting(), "the held radio PTT remains an observation");
+
+    // A straggler can seed the fence ahead of the restarted sequence. Recovery
+    // must still require a fresh release, even after the 64-packet stale run.
+    for (std::uint32_t seq = 0; seq < 64; ++seq) {
+        Access::radioPttAt(*backend, true, seq);
+    }
+    check(!Access::hostMoxOnWire(*backend), "a held PTT across fence recovery never keys");
+    Access::radioPttAt(*backend, false, 64);
+    Access::radioPttAt(*backend, true, 65);
+    check(Access::hostMoxOnWire(*backend), "a new-stream release then press keys normally");
+
+    // Changing receiver count during a followed over must not synthesize a
+    // release. The existing key stays owned until the radio really releases.
+    restart();
+    check(Access::hostMoxOnWire(*backend), "restart preserves the host key already held");
+    Access::radioPttAt(*backend, true, 0);
+    check(Access::hostMoxOnWire(*backend), "a still-held first frame preserves that key");
+    Access::radioPttAt(*backend, false, 1);
+    check(!Access::hostMoxOnWire(*backend) && !model.transmitModel().isTransmitting(),
+          "the new-stream release ends the original key");
+    Access::radioPttAt(*backend, true, 2);
+    check(Access::hostMoxOnWire(*backend), "the next fresh press keys again");
+    Access::radioPttAt(*backend, false, 3);
+    Access::tearDown(*backend);
+    check(probe.violations().isEmpty(), "restart PTT seam signals stay on the backend thread");
+}
+
 // A backend that publishes mox and does not declare radioPttObservation.
 class PlainBackend final : public IRadioBackend {
 public:
@@ -781,6 +866,7 @@ int main(int argc, char** argv)
     testHeldPttIsNotAKeyRequest();
     testModelKeysForRadioPtt();
     testStalePacketsAreNoKeyIntent();
+    testReceiverRestartRequiresNewRelease();
     testUndeclaredBackendIsUnchanged();
 
     std::printf("\n%s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,

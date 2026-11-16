@@ -8097,8 +8097,8 @@ add_test(NAME hl2_unkey_hold_test COMMAND hl2_unkey_hold_test)
 # fresh press after a seen release keys the host through RadioModel's gated
 # producer path. A PTT held at stream start, after silence or a restart, or
 # carried by a rewound or duplicate EP6 packet, keys nothing. Socket-free; EP6
-# status frames are fed to the backend's own MetisClient. Two legs wait out the
-# 2 s silence timeout.
+# status frames and receiver-count restarts use the backend's own MetisClient
+# with injected sinks. Two legs wait out the 2 s silence timeout.
 add_executable(hl2_hardware_ptt_state_test tests/hl2_hardware_ptt_state_test.cpp)
 target_include_directories(hl2_hardware_ptt_state_test PRIVATE src tests)
 target_link_libraries(hl2_hardware_ptt_state_test PRIVATE aethercore Qt6::Core Qt6::Network)

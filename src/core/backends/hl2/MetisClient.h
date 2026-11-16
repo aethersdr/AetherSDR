@@ -504,9 +504,9 @@ signals:
     // stream ends or goes silent with the bit set.
     //
     // keyRequest is true only on a rising edge that follows a released level
-    // seen on the wire since the last start(), stop() or silence. A PTT that is
+    // seen on the wire since the last stream restart or silence. A PTT that is
     // already held when the stream starts or resumes is shown (keyed) but is not
-    // an operator action, so it must not key the host (#7067 review, Principle VI).
+    // an operator action, so it must not key the host.
     void radioPttChanged(bool keyed, bool keyRequest);
     // setTxRoute() refused; `actual` is the route still in force (TxRoute as int).
     void txRouteRefused(int actual);

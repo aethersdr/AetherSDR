@@ -960,6 +960,9 @@ void MetisClient::advanceReceiverCountRestart()
         // And the PTT freshness fence, which is measured on the same counter.
         m_havePttFence = false;
         m_pttStaleRun = 0;
+        // A release from the old stream cannot authorize a new-stream press.
+        // Preserve an already-held PTT and its host key until a real release.
+        m_radioPttArmed = false;
         // Same for the bandscope, and for the same reason: the restart puts 0x00 and
         // then 0x01 on the wire, RUNSTOP clears wide_spectrum along with run, and
         // ep4_seq_no restarts from zero.
@@ -2161,7 +2164,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     m_haveRxSeq = true;
     // The loss accounting above lets rewinds and duplicates through, and their IQ
     // is still delivered. Their ptt_resp is not: a level from before the newest one
-    // already believed is not operator intent (#7067 review, Principle VI).
+    // already believed cannot authorize another press.
     const bool pttFresh = acceptPttSequence(*seq);
 
     // Telemetry rides in the C&C bytes of each EP6 frame. The radio
