@@ -200,10 +200,10 @@ Three pieces, and one seam:
   cannot silently delete fields it does not understand.
 - **`LocalMemoryBank`** — owns the slots, allocates the lowest free index,
   answers `memory create` / `set` / `remove` / `apply`, and debounces saves.
-- **`RadioModel::tryMemoryCommand()`** — the seam, in `sendCmd()`. Every
-  memory path in the app funnels through those four commands, so answering them
-  there is what let all of the UX above keep working with **no changes to the
-  memory dialog, the browse panel, the CSV codec, or the spot feed**.
+- **`RadioModel::requestMemory()` / `createMemory()`** — the typed seam used by
+  the dialog, browse panel, CSV flow and spot feed. Local edits go directly to
+  `LocalMemoryBank`; radio-owned edits enter the backend. The model no longer
+  parses Flex command text to choose a store.
 
 Two ordering rules are load-bearing:
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/IRadioBackend.h"
+#include "FlexCommandSession.h"
 
 #include <QObject>
 #include <QSemaphore>
@@ -20,17 +21,20 @@ class FlexStatusIngress;
 // (retry, GUI registration, settings) stays with the session's consumer.
 class FlexLanSession final : public QObject {
     Q_OBJECT
+    friend class FlexLanSessionTestAccess;
 public:
     FlexLanSession(RadioConnection* connection, PanadapterStream* stream,
                    FlexStatusIngress* ingress, QObject* parent = nullptr);
     ~FlexLanSession() override;
     void connectRadio(const RadioConnectRequest& request);
-    void disconnectRadio(const RadioDisconnectRequest& request = {}, quint32 sequence = 0);
+    void disconnectRadio(const RadioDisconnectRequest& request = {}, quint32 sequence = 0,
+                         quint32 keepaliveSequence = 0);
     bool isConnected() const { return m_connected; }
     bool active() const { return m_active; }
     bool closing() const { return bool(m_cleanup); }
     std::optional<ConnectionSession> snapshot() const { return m_snapshot; }
     ReceiveTransportResult startReceiveTransport(bool rebind);
+    FlexCommandSession& commands() { return m_commands; }
 
 signals:
     void starting(quint64 epoch);
@@ -55,6 +59,7 @@ private:
     bool m_synthetic{false};
     std::optional<ConnectionSession> m_snapshot;
     RadioConnectRequest m_request;
+    FlexCommandSession m_commands;
 };
 
 } // namespace AetherSDR

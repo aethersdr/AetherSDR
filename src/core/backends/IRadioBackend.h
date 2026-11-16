@@ -202,6 +202,7 @@ public:
     // hear the radio's reply leaves it to RadioModel, which reports it as not
     // confirmed rather than assume the radio agreed.
     virtual bool answersTransmitControl() const { return false; }
+    virtual void setRadioStateWriteHold(qint64) {}
     virtual ReceiveDispatch requestSessionControl(const SessionControlRequest&,
         const SessionCommandGuard&, const SessionControlCompletion& = {})
     { return ReceiveDispatch::Unsupported; }

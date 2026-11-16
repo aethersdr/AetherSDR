@@ -55,13 +55,11 @@ int main(int argc, char** argv)
             {{"client_handle", "0xdeadbeef"}, {"min_dbm", "-130"}, {"max_dbm", "-40"}});
         const PanadapterModel* foreign = radio.panadapter(panId);
         CHECK(foreign && !foreign->ownedByClient(radio.ourClientHandle()));
-        bool replied = false;
-        CHECK(!radio.sendCmdPublic(QStringLiteral("display pan set ") + panId
-                + QStringLiteral(" min_dbm=-154 max_dbm=-40"),
-            [&](int, const QString&) { replied = true; }));
-        CHECK(!replied);
-        CHECK(!radio.sendCommand(QStringLiteral("display pan set ") + panId
-                + QStringLiteral(" min_dbm=-154 max_dbm=-40")));
+        fixture.clear();
+        CHECK(radio.requestPanDisplay(radio.panadapter(panId),
+            {PanDisplayField::LevelRange, PanLevelRange{-154, -40}}) == ReceiveDispatch::Unsupported);
+        CHECK(fixture.backend->writes.empty());
+        CHECK(foreign->minDbm() == -130 && foreign->maxDbm() == -40);
     }
 
     int dispatches = 0;

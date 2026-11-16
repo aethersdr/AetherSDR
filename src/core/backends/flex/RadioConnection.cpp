@@ -366,7 +366,8 @@ void RadioConnection::disconnectFromRadio()
 
 void RadioConnection::gracefulDisconnect(quint32 handle,
                                          const QString& rxStreamId,
-                                         quint32 streamRemoveSeq)
+                                         quint32 streamRemoveSeq,
+                                         quint32 keepaliveStopSeq)
 {
     if (!m_socket || m_socket->state() == QAbstractSocket::UnconnectedState) {
         disconnectFromRadio();
@@ -377,6 +378,14 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
 
     QElapsedTimer totalTimer;
     totalTimer.start();
+    // The keepalive disable command is outside FlexLib. On FLEX-6700 firmware
+    // 4.3.16.42034, its sequenced acknowledgement before TCP close prevents
+    // the radio from rejecting the next connection after idle.
+    const bool keepaliveStopped = m_syntheticDemo ||
+        sendCommandAndWait(keepaliveStopSeq, QStringLiteral("keepalive disable"), 2000);
+    if (!keepaliveStopped) {
+        qCWarning(lcConnection) << "RadioConnection: keepalive shutdown was not acknowledged before close";
+    }
     bool streamRemoveAcked = rxStreamId.isEmpty();
     qint64 streamRemoveMs = -1;
 
@@ -400,6 +409,7 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
     qCInfo(lcConnection).nospace()
         << "RadioConnection: disconnect summary "
         << "handle=" << formatHexId(handle)
+        << " keepaliveAck=" << (keepaliveStopped ? "yes" : "no")
         << " streamId=" << (rxStreamId.isEmpty() ? QStringLiteral("<none>") : rxStreamId)
         << " streamSeq=" << streamRemoveSeq
         << " streamAck=" << (streamRemoveAcked ? "yes" : "no")
@@ -429,6 +439,19 @@ bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& com
     }
     return guard.current() && generation == m_sessionGeneration && isConnected()
         && writeSocketCommand(seq, command);
+}
+
+FlexCommandSession::WriteResult RadioConnection::dispatchCommand(quint32 seq, const QString& command)
+{
+    if (!isConnected()) { return FlexCommandSession::WriteResult::NotWritten; }
+    if (m_commandSinkForTest || m_syntheticDemo) {
+        writeCommand(seq, command);
+        return FlexCommandSession::WriteResult::Written;
+    }
+    if (m_independentPtt) {
+        m_independentPtt->otherCommand(command, TxCoordinator::monotonicMs());
+    }
+    return writeSocketCommandResult(seq, command);
 }
 
 void RadioConnection::writeCommand(quint32 seq, const QString& command)
@@ -615,8 +638,13 @@ void RadioConnection::updateIndependentPttTimer()
 
 bool RadioConnection::writeSocketCommand(quint32 seq, const QString& command)
 {
+    return writeSocketCommandResult(seq, command) == FlexCommandSession::WriteResult::Written;
+}
+
+FlexCommandSession::WriteResult RadioConnection::writeSocketCommandResult(quint32 seq, const QString& command)
+{
     if (!isConnected() || !m_socket || isSyntheticDemo()) {
-        return false;
+        return FlexCommandSession::WriteResult::NotWritten;
     }
 
     const QByteArray data = CommandParser::buildCommand(seq, command);
@@ -626,9 +654,10 @@ bool RadioConnection::writeSocketCommand(quint32 seq, const QString& command)
     } else {
         qCDebug(lcConnection) << "TX:" << data.trimmed();
     }
-    const bool written = m_socket->write(data) == data.size();
+    const qint64 written = m_socket->write(data);
     m_socket->flush();   // force immediate kernel send for keepalive reliability
-    return written;
+    return written == data.size() ? FlexCommandSession::WriteResult::Written
+        : written <= 0 ? FlexCommandSession::WriteResult::NotWritten : FlexCommandSession::WriteResult::Unknown;
 }
 
 void RadioConnection::onSocketConnected()
@@ -853,9 +882,11 @@ bool RadioConnection::sendCommandAndWait(quint32 seq, const QString& command, in
 
     connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
 
-    writeCommand(seq, command);
     timer.start(timeoutMs);
-    loop.exec();
+    writeCommand(seq, command);
+    if (!received && m_socket->state() != QAbstractSocket::UnconnectedState) {
+        loop.exec();
+    }
 
     disconnect(responseConn);
     disconnect(disconnectedConn);
@@ -870,7 +901,7 @@ bool RadioConnection::sendCommandAndWait(quint32 seq, const QString& command, in
                           << "seq" << seq
                           << "code" << Qt::hex << responseCode
                           << "body" << responseBody;
-    return true;
+    return responseCode == 0;
 }
 
 void RadioConnection::writeDisconnectMarker()
