@@ -88,10 +88,11 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "FAIL: need both multi-receiver scope and no-scope profiles\n");
         ++failures;
     }
-    // Other families declare a positive capacity even before connection.
+    // Other families declare a positive capacity even before connection. ANAN's
+    // is one pan per receiver route (RX1, RX2).
     for (const auto& [family, expected] : std::vector<std::pair<QString, int>>{
              {QStringLiteral("sim"), 4}, {QStringLiteral("hl2"), 1},
-             {QStringLiteral("anan"), 1}, {QStringLiteral("rtl"), 1}}) {
+             {QStringLiteral("anan"), 2}, {QStringLiteral("rtl"), 1}}) {
         if (!radio.rebuildBackendForTest(family)) {
 #ifndef AETHER_BACKEND_RTL
             if (family == QLatin1String("rtl")) {

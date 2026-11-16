@@ -4,6 +4,7 @@
 #include "core/backends/ReconnectBusyProbe.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSliceAudio.h"
+#include "core/ReceiverAudioMixer.h"
 #include "core/Resampler.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/AnanReceiverRoutes.h"
@@ -11,6 +12,7 @@
 #include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QMap>
 #include <QString>
 #include <QThread>
@@ -27,7 +29,9 @@ namespace AetherSDR::anan {
 // IRadioBackend for the ANAN-G2 (openHPSDR Protocol 2). Owns one P2Client and,
 // per receiver, one AnanRxDsp, all on a dedicated I/O thread. A receiver is a
 // slice, the pan that shows its DDC, and the DSP behind them (Receiver below);
-// kReceiverRoutes says how many there are and where each sits. RX only.
+// kReceiverRoutes says how many there are and where each sits. RX1 runs while
+// connected; another receiver opens and closes with its pan
+// (createPanadapter()/removePanadapter()). RX only.
 //   - No NCO/WDSP-shift split: a receiver's DDC retunes on every
 //     setSliceFrequency()/setPanCenter(), so "the shift is ALWAYS exactly
 //     -cwBfoHz(mode), because the NCO IS the slice frequency".
@@ -90,6 +94,21 @@ public:
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
+
+    // A pan IS a receiver: creating one opens the next closed route, and its
+    // pan and slice are published before this returns. Removing RX2's closes
+    // it; RX1's is refused.
+    bool createPanadapter() override;
+    bool removePanadapter(const QString& panId) override;
+    // A create that arrives while a zoom or another open is rebuilding a chain
+    // is held, not refused (the GUI reads a refusal as a full radio), and opens
+    // the receiver when the rebuild ends, if its fence still holds then: the
+    // same session, and RadioModel's deadline not passed. Anything else goes
+    // to IRadioBackend's dispatch.
+    ReceiveDispatch requestPanLifecycle(const PanLifecycleRequest& request,
+                                        const PanLifecycleCompletion& completion = {},
+                                        const RadioControlFence& current = {}) override;
+    void setActiveSlice(int sliceId) override;
 
     // The RADIO's own output level and mute, applied to the speaker stream only.
     //
@@ -270,20 +289,21 @@ public:
     // What applyRestoredState() accepted; connectRadio() consumes it behind a socket.
     [[nodiscard]] double restoredFrequencyHzForTest() const noexcept { return m_restoredFreqHz; }
     [[nodiscard]] QString restoredModeForTest() const { return m_restoredMode; }
-    // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
+    // Drives RX1's S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
-    void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
+    void feedMeterForTest(float dbfs) { onDspMeter(0, dbfs); }
     // The smoothed value itself, whether or not the publish tick has come
     // round. Without this the ballistics can only be observed through the
     // tick, which makes the assertion depend on wall-clock timing and lets a
     // test pass with the smoothing replaced by a plain assignment.
-    [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
+    [[nodiscard]] double sMeterDbmForTest() const noexcept { return rx1().sMeter.value(); }
 
 private:
     friend class AnanBusyProbeTestAccess;
     friend class AnanNoiseBlankerTestAccess;
     friend class AnanLinkStatsTestAccess;
     friend class AnanSupplyRailTestAccess;
+    friend class AnanReceiverTestAccess;
 
     // One receiver: the slice the operator tunes, the pan that shows its DDC,
     // and the DSP between them. m_receivers is indexed like kReceiverRoutes:
@@ -294,6 +314,17 @@ private:
     struct Receiver {
         int index = 0;
         ReceiverRoute route;
+        // Running: its DDC is in the session, and its slice and pan exist. A
+        // closed receiver keeps its state for the next open; nothing it emits
+        // is published.
+        bool open = false;
+        // The DSP build an open started, so a close or a newer open orphans
+        // it. 0 = none in flight.
+        quint64 openBuild = 0;
+        // Restored open, but its chain failed to build at connect: closed for
+        // this session, still saved open so the next connect tries it again.
+        // The operator opening it again ends that; a close is then saved.
+        bool reopenFailed = false;
         // The ADC this receiver listens to: the route's, unless the operator
         // picked the other input (anan.ddc0AdcIndex, which only RX1 reads).
         int adc = 0;
@@ -339,14 +370,83 @@ private:
         bool audioMuted = false;
         int audioGainPercent = 100;
         int audioPanPercent = 50;
+        // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
+        // The same smoother Hl2Backend publishes through, so the two families'
+        // needles move alike by construction -- see WdspSMeter.h.
+        SMeterSmoother sMeter;
     };
     std::array<Receiver, kReceiverRoutes.size()> m_receivers;
     [[nodiscard]] Receiver& rx1() noexcept { return m_receivers.front(); }
     [[nodiscard]] const Receiver& rx1() const noexcept { return m_receivers.front(); }
-    // The receiver a seam call addresses, or nullptr for a slice or pan this
-    // backend does not have; such a call changes nothing.
+    // The open receiver a seam call addresses, or nullptr for a slice or pan
+    // this backend does not have or has closed; such a call changes nothing.
     [[nodiscard]] Receiver* receiverForSlice(int sliceId) noexcept;
     [[nodiscard]] Receiver* receiverForPan(const QString& panId) noexcept;
+
+    // The slice the operator last selected (setActiveSlice()); RX1 at connect.
+    int m_activeReceiver = 0;
+    // The receiver whose open is building its DSP, or -1. A rate change waits
+    // for it as it waits for another rate change: both rebuild a chain, and
+    // both send the session's DDC list.
+    int m_openingReceiver = -1;
+    quint64 m_nextOpenBuild = 0;
+    // A zoom or an open is rebuilding a chain; another open waits for it.
+    [[nodiscard]] bool rebuildingChain() const noexcept
+    {
+        return m_rateChanging || m_openingReceiver >= 0;
+    }
+    // The fence of the create requestPanLifecycle() held, or empty. One at a
+    // time: RadioModel serializes native creates.
+    RadioControlFence m_heldPanCreate;
+    // The held create's open, if its fence still holds. Called once no chain
+    // is rebuilding.
+    void openHeldPanadapter();
+    // Where the last rebuild ends: the held create opens first, then a zoom
+    // that waited (which then waits for that open).
+    void resumeAfterRebuild();
+
+    // Mid-session open: seeds a receiver never opened from RX1, publishes its
+    // pan and slice at once, then builds its DSP. finishReceiverOpen() adds
+    // its DDC to the session only once that chain exists.
+    void openReceiver(Receiver& rx);
+    void finishReceiverOpen(int index, quint64 build, bool ok, const QString& error);
+    // Takes the receiver's DDC out of the session and withdraws its slice, pan
+    // and meter.
+    void closeReceiver(Receiver& rx);
+    // The session's DDC list as it now stands, to the running session, sent
+    // again across the rate change's resend offsets for UDP loss.
+    void sendActiveDdcs();
+    // A receiver's DSP config for a connect or an open, from its live state.
+    void prepareDspConfig(Receiver& rx);
+    // One receiver's channel, built on m_dspBuildThread and installed on the
+    // I/O thread; `done` then runs here with the receiver's index and `token`.
+    using DspBuildDone = void (AnanBackend::*)(int, quint64, bool, const QString&);
+    void startDspBuild(const Receiver& rx, quint64 token, DspBuildDone done);
+    // The pan's zoom limits and RF gain range, published with the pan.
+    void emitPanLimits(const Receiver& rx);
+    // RX1's S-meter keeps meter 1 and the bare "SLC:LEVEL" every consumer binds;
+    // another receiver's carries its slice as the source index, the convention
+    // MeterModel::splitMeterId() reads. Meter 2 is the supply rail.
+    [[nodiscard]] static int levelMeterIndex(int receiver) noexcept
+    {
+        return receiver == 0 ? 1 : 2 + receiver;
+    }
+    [[nodiscard]] static QString levelMeterId(int receiver);
+    void defineLevelMeter(const Receiver& rx);
+
+    // One receiver's entry in the saved "receivers" array, where entry i is
+    // receiver i. Every entry carries RIT and NR under HL2's key names
+    // (receiverMemoryJson()); RX1's dial, mode and AGC are the document's own
+    // fields, so only a later receiver's entry adds them, with whether it is open.
+    [[nodiscard]] static QJsonObject receiverEntryJson(const Receiver& rx);
+    // An entry's RIT and NR onto `rx`. A missing or bad value is the default,
+    // never clamped into one nobody chose.
+    static void restoreRitAndNr(Receiver& rx, const QJsonObject& entry);
+
+    // This computer's speaker: every open receiver, summed. 100 ms at the
+    // 24 kHz the DSP delivers, so a stalled receiver mutes the rest no longer.
+    static constexpr std::size_t kSpeakerMixMaxLagFrames = 2400;
+    ReceiverAudioMixer m_speakerMix{kSpeakerMixMaxLagFrames};
     // The step attenuation in front of one ADC (0 or 1), as m_pendingParams
     // holds it for the session. Every receiver on that ADC shares it.
     [[nodiscard]] int attenuationDbForAdc(int adc) const noexcept
@@ -354,8 +454,9 @@ private:
         return adc == 1 ? m_pendingParams.adc1AttenuationDb
                         : m_pendingParams.adc0AttenuationDb;
     }
-    // m_pendingParams with the session's DDC list built from the receivers,
-    // RX1 first (P2Client::Params::activeDdcs: the first entry is the link DDC).
+    // m_pendingParams with the session's DDC list built from the open
+    // receivers whose chain is built, RX1 first (P2Client::Params::activeDdcs:
+    // the first entry is the link DDC).
     [[nodiscard]] P2Client::Params sessionParams() const;
 
     // A receiver's DSP outputs (audio, spectrum) to this object, on its own
@@ -371,9 +472,10 @@ private:
     ReconnectBusyProbe* m_busyProbe = nullptr;
     RadioConnectRequest m_busyProbeRequest;
     bool m_busyWarned = false;   // one warning per busy spell, not one per 5 s retry
-    void finishDspSetup(quint64 generation, bool ok, const QString& error);
-    // beginDspSetup() builds one channel per receiver; finishDspSetup() starts
-    // the session once the last of them is in. The first failure is kept.
+    void finishDspSetup(int index, quint64 generation, bool ok, const QString& error);
+    // beginDspSetup() builds one channel per open receiver; finishDspSetup()
+    // starts the session once the last of them is in. RX1's failure fails the
+    // connect; another receiver's closes that receiver alone.
     int m_dspSetupPending = 0;
     QString m_dspSetupError;
     // The "restart P2Client with m_pendingParams, then retune" half of what
@@ -421,12 +523,9 @@ private:
     // bound and counting but has gone quiet must read as dead, which a
     // cumulative total alone cannot say.
     quint64 m_lastSnapshotRxBytes = 0;
-    // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
-    // RX1's: SLC:LEVEL is the one receive meter defineMeters() declares.
-    void onDspMeter(float dbfs);
-    // The same smoother Hl2Backend publishes through, so the two receivers'
-    // needles move alike by construction -- see WdspSMeter.h.
-    SMeterSmoother m_sMeter;
+    // One receiver's WDSP S-meter reading, with its ADC's attenuation added
+    // back, into that receiver's smoother and level meter.
+    void onDspMeter(int receiver, float dbfs);
     // One status packet's supply-rail count -> RAD:+13.8A, in volts, as the MEAN
     // of every count since the last publication, once a second. A plain mean
     // and not the S-meter's attack/decay: the readout wants the rail's level,

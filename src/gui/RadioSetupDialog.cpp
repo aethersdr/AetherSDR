@@ -1365,7 +1365,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // gated on the CAPABILITY (RadioCapabilities::hostDroopCalibration, the
     // ANAN-G2 today), with the ANAN namespace enforced at the request boundary.
     QTreeWidgetItem* droopItem = addPage(radioCategory, QStringLiteral("Droop Correction"),
-        QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
+        QStringLiteral("droop calibration ddc panadapter spectrum sweep decimation edge cic"),
         [this] { return buildDroopCalibrationTab(); });
     m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
     setNavigationItemHidden(droopItem, !droopCalibrationAvailable(m_model->backend()));
@@ -4882,7 +4882,7 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
 
 
 
-    auto* group = new QGroupBox("DDC0 Droop Correction");
+    auto* group = new QGroupBox("DDC Droop Correction");
     auto* gvb = new QVBoxLayout(group);
     gvb->setSpacing(8);
 
@@ -4918,7 +4918,7 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     // reads "Stop" -- worse than saying nothing. The description supplements
     // the live text instead of replacing it.
     startStopBtn->setAccessibleDescription(QStringLiteral(
-        "Steps the radio through every DDC0 sample rate and measures the "
+        "Steps the radio through every DDC sample rate and measures the "
         "panadapter's edge droop at each one. Takes several minutes."));
 
     auto* progressBar = new QProgressBar;
@@ -4949,7 +4949,7 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     setTone(summaryLbl, Tone::Hint);
     summaryLbl->setWordWrap(true);
     summaryLbl->setAccessibleDescription(QStringLiteral(
-        "Measured correction per DDC0 rate"));
+        "Measured correction per DDC rate"));
     gvb->addWidget(summaryLbl);
 
     auto* applyBtn = new QPushButton("Apply");
@@ -5147,12 +5147,14 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     AetherSDR::applyComboStyle(feRateCombo);
     for (const int ksps : AnanSettings::validDdc0RatesKsps())
         feRateCombo->addItem(QStringLiteral("%1 ksps").arg(ksps), ksps);
-    feRateCombo->setAccessibleName(QStringLiteral("ANAN DDC0 sample rate"));
+    feRateCombo->setAccessibleName(QStringLiteral("ANAN starting sample rate"));
     feRateCombo->setAccessibleDescription(QStringLiteral(
-        "DDC0 sample rate in ksps, and the panadapter span a session starts at. Higher "
-        "rates use more of the radio's Ethernet link. Takes effect on the next connect."));
+        "Sample rate in ksps every receiver starts a session at, and the width of its "
+        "panadapter span. Higher rates use more of the radio's Ethernet link. Takes effect "
+        "on the next connect."));
     feRateCombo->setToolTip(QStringLiteral(
-        "DDC0 sample rate — also the width of the panadapter span a session starts at.\n"
+        "Sample rate every receiver starts a session at — also the width of its\n"
+        "panadapter span.\n"
         "Higher rates use more of the radio's Ethernet link.\n\n"
         "Takes effect on the next connect. A live zoom can still change the span\n"
         "afterwards; this is where a session begins."));
@@ -5170,10 +5172,11 @@ QWidget* RadioSetupDialog::buildAnanFrontEndTab()
     feAdcCombo->addItem(QStringLiteral("ADC1 — the RX2 jack"), 1);
     feAdcCombo->setAccessibleName(QStringLiteral("ANAN ADC select"));
     feAdcCombo->setAccessibleDescription(QStringLiteral(
-        "Which receive chain feeds the receiver: ADC0, behind the switched ANT1/2/3 relay "
-        "bank, or ADC1, wired directly to its own RX2 jack. Takes effect on the next connect."));
+        "Which receive chain feeds RX1: ADC0, behind the switched ANT1/2/3 relay bank, or "
+        "ADC1, wired directly to its own RX2 jack. RX2 always listens to the RX2 jack. "
+        "Takes effect on the next connect."));
     feAdcCombo->setToolTip(QStringLiteral(
-        "Which receive chain feeds the receiver.\n\n"
+        "Which receive chain feeds RX1. RX2 always listens to the RX2 jack.\n\n"
         "ADC0 sits behind the switched ANT1/2/3 relay bank. ADC1's chain is wired\n"
         "straight to its own RX2 jack with no relay in front of it — two physically\n"
         "different paths, not a label swap.\n\n"

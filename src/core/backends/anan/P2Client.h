@@ -77,8 +77,8 @@ public:
         // authoritative and those two fields are ignored. Each entry names its DDC;
         // one outside 0..kMaxDdcs-1, or repeating an earlier entry's DDC, is
         // dropped, and start() returns false if none is left. The FIRST entry is
-        // the session's link DDC: linkUp(), the connect timeout and the band
-        // filters key on it.
+        // the session's link DDC: linkUp() and the connect timeout key on it,
+        // and a band-pass bank with no DDC on its ADC follows it.
         std::vector<DdcConfig> activeDdcs;
     };
 
@@ -149,6 +149,16 @@ public:
     // caller still rebuilds its WdspChannel. Resends the whole packet, since it
     // carries the enable bitmap and every DDC's row.
     Q_INVOKABLE bool setDdcRateLive(int ddcIndex, int rateKsps);
+
+    // Replace the running session's DDC list, no restart: a receiver opened or
+    // closed. Refused (false, nothing sent) when not running, when no DDC is
+    // left, or when the first entry is not the link DDC start() chose. A DDC
+    // already running keeps its rate (resolveLiveDdcs()). Sends DDC-Specific,
+    // whose enable bitmap p2app applies on every packet (IncomingDDCSpecific.c),
+    // then High Priority unless a DDC it enables has no frequency yet
+    // (highPriorityWithDdcChange()); the caller retries for UDP loss. Not
+    // Q_INVOKABLE: called from a lambda on this object's thread.
+    bool setActiveDdcsLive(const std::vector<DdcConfig>& ddcs);
 
     [[nodiscard]] bool isRunning() const noexcept { return m_running; }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
@@ -309,6 +319,7 @@ private:
     // setDdcRateLive() can rebuild a complete DDC-Specific packet: that
     // packet carries every DDC's row plus the enable bitmap, so resending it
     // with only the changed rate known would disable every other DDC.
+    // setActiveDdcsLive() replaces it; the band filters read it per ADC.
     std::vector<DdcConfig> m_activeDdcs;
     bool m_ditherEnabled = true;
     bool m_randomEnabled = true;

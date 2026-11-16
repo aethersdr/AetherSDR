@@ -57,8 +57,8 @@ This table lists only what has been confirmed for each family. A **?** means not
 | | FlexRadio | Hermes-Lite 2 | Networked Icom | ANAN-G2 | RTL-SDR | Demo |
 |---|---|---|---|---|---|---|
 | **Transmit** | Yes | Yes (SSB voice, CW, data) | Yes on recognized models; none on an unrecognized model | No | No | No |
-| **Receivers / slices** | As reported by the radio | Up to 4 (A–D) | Per model | 1 | 1 | 1 |
-| **Panadapters** | As reported by the radio | One per receiver | 1 | 1 | 1 | ? |
+| **Receivers / slices** | As reported by the radio | Up to 4 (A–D) | Per model | 2 (RX1, RX2) | 1 | 1 |
+| **Panadapters** | As reported by the radio | One per receiver | 1 | One per receiver | 1 | ? |
 | **DAX virtual audio and IQ** | Yes | No | No | No | No | No |
 | **TCI server** | Yes | Yes | Yes (receive audio, FT8, WSPR) | ? | ? | ? |
 | **CAT (rigctld)** | Yes | Yes | ? | ? | ? | ? |
@@ -70,6 +70,7 @@ This table lists only what has been confirmed for each family. A **?** means not
 
 Notes:
 - **Receivers on the HL2:** up to four receivers at spans up to 192 kHz, three at 384 kHz. The span is one value for the whole board.
+- **Receivers on the ANAN-G2:** RX2 listens to the RX2 jack and has its own span. The radio's own speaker plays RX1 only. See [ANAN-G2](./anan-g2.md).
 - **Icom panadapters:** the IC-7610, IC-7760 and modern-scope IC-785x profiles share a two-pan MAIN/SUB implementation. These models remain experimental. The IC-9700 offers one selectable panadapter.
 - **Memory channels:** a FlexRadio keeps its memories. Every other family uses one shared bank stored on this computer. On an Icom whose model supports it, the radio's own memories can be read into that bank; the IC-9700's radio memories are read-only. See [Memory Channels](./memory-channels.md).
 

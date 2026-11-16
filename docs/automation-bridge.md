@@ -5201,8 +5201,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 
 `droopcal status|start|stop|apply|discard` requires a connected ANAN backend
 with `hostDroopCalibration`. Other families refuse the request before any
-backend call. `start` measures the receiver noise floor across ANAN's six
-DDC0 rates; use an antenna termination as described in Radio Setup → Droop
+backend call. `start` measures RX1's noise floor across ANAN's six DDC
+rates; use an antenna termination as described in Radio Setup → Droop
 Correction. `stop` keeps the partial result, `apply` installs and saves it,
 and `discard` drops the staged measurements.
 
@@ -5283,7 +5283,7 @@ audio devices require separate hardware validation.
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
 | `bandscope` | — | bandscope [status\|on\|off] — Hermes-Lite 2 wideband bandscope gate (endpoint 0x04); uncalibrated pre-DDC ADC headroom, reported in `health` |
-| `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
+| `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |

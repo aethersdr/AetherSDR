@@ -3454,7 +3454,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("droopcal", {},
-            "droopcal [status|start|stop|apply|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop)",
+            "droopcal [status|start|stop|apply|discard] — ANAN-G2 DDC droop calibration sweep (radios with a measured DDC edge droop)",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doDroopCal(a.action, a.value);

@@ -186,6 +186,33 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(std::span<const DdcConfig> ddcs,
                                                 bool ditherEnabled = true,
                                                 bool randomEnabled = true) noexcept;
 
+// A session's DDC list as the radio is asked for it: the entries
+// buildDdcSpecific() would ignore are dropped and the rest keep their order.
+// `mask` has bit n set for each DDC n kept; the first entry kept is the
+// session's link DDC.
+struct ActiveDdcSet {
+    std::vector<DdcConfig> ddcs;
+    std::uint8_t mask = 0;
+};
+[[nodiscard]] ActiveDdcSet resolveActiveDdcs(std::span<const DdcConfig> requested);
+
+// The list a running session is sent when its receivers change: `requested` as
+// resolveActiveDdcs() keeps it, except that a DDC already in `running` keeps
+// the rate it runs at. A running DDC's rate changes only through its own live
+// rate change (P2Client::setDdcRateLive()), sent once the new rate's DSP
+// channel exists; a list sent while that channel builds must not change the
+// rate early. A DDC not yet running takes its requested rate.
+[[nodiscard]] ActiveDdcSet resolveLiveDdcs(std::span<const DdcConfig> requested,
+                                           std::span<const DdcConfig> running);
+
+// Whether a live change of the enabled DDCs, from `wasMask` to `isMask`, sends
+// High Priority with it. Not while a DDC it enables has no frequency yet
+// (`ddcFreqHz`, indexed by DDC number, is 0): that DDC's ADC bank would follow
+// 0 Hz and switch to bypass for one packet. Its frequency follows the enable
+// and sends High Priority itself (P2Client::setDdcFrequencyHz()).
+[[nodiscard]] bool highPriorityWithDdcChange(std::uint8_t wasMask, std::uint8_t isMask,
+                                             const std::array<double, kMaxDdcs>& ddcFreqHz) noexcept;
+
 // ---- High Priority to Hardware (spec p.31-34) ----
 
 // One selection of a receive band-pass bank, named as the spec's SATURN/ANAN-G2
@@ -212,6 +239,14 @@ enum class AlexRxFilter {
 // cover the tuned frequency removes the signal path, so the selection stays
 // opt-in. Below 1.5 MHz, and for a non-finite frequency, it is Bypass.
 [[nodiscard]] AlexRxFilter alexRxFilterFor(double tunedHz) noexcept;
+
+// The frequency each bank follows, [0] for ADC0 and [1] for ADC1: the first
+// DDC in `ddcs` fed by that ADC, else the first DDC, so a bank with no
+// receiver behind it follows RX1. deskHPSDR gives a shared ADC's bank to the
+// active receiver (new_protocol.c, SATURN); here the earlier entry has it.
+// `ddcFreqHz` is indexed by DDC number. Empty `ddcs`: both zero.
+[[nodiscard]] std::array<double, 2> bandFilterFrequenciesHz(
+    std::span<const DdcConfig> ddcs, const std::array<double, kMaxDdcs>& ddcFreqHz) noexcept;
 
 // The High Priority fields that apply live, beyond the bypass flags. Defaults
 // reproduce the bytes this client sends with no options.

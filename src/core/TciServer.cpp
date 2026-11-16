@@ -2047,6 +2047,15 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
     // Paired receiver/pan topologies create their receiver through the native
     // pan lifecycle. Independent creation uses the answered slice contract.
     if (!m_model->backendCapabilities().canCreateSlices) {
+        // VFO B is a transmit route. On a radio that cannot transmit its TX
+        // selection is always refused, so no receiver is opened for it only to
+        // be closed again: the operator's receivers stay as they are.
+        if (!m_model->backendCanTransmit()) {
+            reportVfoBRouteFailure(client, request,
+                QStringLiteral("cannot create VFO B: this radio cannot transmit"),
+                !routeConfirmation.isEmpty());
+            return;
+        }
         if (m_model->slices().size() >= m_model->maxSlices()) {
             reportVfoBRouteFailure(client, request,
                 QStringLiteral("cannot create VFO B: receiver capacity reached"),
