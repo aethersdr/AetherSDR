@@ -1,0 +1,63 @@
+{
+  "updated_utc": "2026-11-16T12:10:02.350255+00:00",
+  "base_commit": "8fc36ace5c2a6c0b20b0def9b2d1c118c6d1def5",
+  "status": "Ten-second desktop authorization ceiling component-qualified; physical RF release and operator adjustment remain incomplete",
+  "installed": false,
+  "production_ready": false,
+  "radio_used": false,
+  "contract": {
+    "authorization_ms": 10000,
+    "starts_at": "Explicit operator measurement start, before helper startup",
+    "override": "Telemetry-age override cannot raise controller ceiling; lease independently rejects deadlines above ceiling.",
+    "helper_startup_reserve_ms": 1000,
+    "maximum_helper_cleanup_interval_ms": 9000,
+    "minimum_usable_key_window_ms": 1000,
+    "cleanup_upper_bound": "After separate verification, conservative cleanup-start upper estimate must fit before original authorization deadline.",
+    "worker_gate": "Can only shorten to conservative helper usable window; expiry does not depend on delivery of owner-thread timers.",
+    "release": "Requests stop on expiry; no further capture or analysis publication until qualified release. Guardian ownership verification and best-effort negative action remain unchanged.",
+    "physical_rf_off_guaranteed_ms": null
+  },
+  "default_change": {
+    "old_model_authorization_ms": 14000,
+    "new_model_authorization_ms": 10000,
+    "old_helper_cleanup_interval_ms": 9500,
+    "new_helper_cleanup_interval_ms": 9000,
+    "native_generated_source_ms": 8000,
+    "qualification": "Current model defaults are tighter; helper cleanup is no longer described as reserved completion inside authorization. Physical release may occur later."
+  },
+  "validation": {
+    "desktop_build": "Full AetherSDR and affected test targets built successfully; correct binaries rebuilt after mutation.",
+    "workflow": "Five injected-transport capture/controller/model/dialog/TX integration tests passed before mutation and after restoration; final19.43s.",
+    "mutation": "Removing controller upper-bound check and raising lease maximum to15000 each triggered the corresponding refusal assertion; two affected tests failed, then restored.",
+    "boundaries": [
+      "10001ms controller limit refused even with telemetry override",
+      "8000ms limit propagated to lease and expiry requested release while withholding result",
+      "14000ms lease deadline refused before helper request or positive key",
+      "Helper startup delay1100ms refused",
+      "Worker dispatch denied after short helper window with owner-thread timers undelivered",
+      "Valid v2 IQ fixture retains meaning of session-retirement refusal tests"
+    ],
+    "docs": "Docusaurus build passed; registration/generated-reference/log-rule checks passed with12 pre-existing unrelated moved line-number notes."
+  },
+  "remaining": [
+    "Expose operator timeout adjustment bounded downward from ten seconds.",
+    "Live cold corrected four-frame capture and actual release timing on the exact desktop/runtime pair; prior live captures were measured with the14second authorization configuration.",
+    "Physical10second RF cessation under process/API scheduling stalls is not proved. Existing delayed-unkey evidence remains valid.",
+    "Final-process failure matrix, radio reboot recovery, actual6300 and fullP1-P10 qualification remain open."
+  ],
+  "runtime": "No radio runtime code changed; CAPTURE-GUARDIAN-RUNTIME-QUALIFICATION.json packages remain the current native/Go candidate, not installed.",
+  "evidence_directory": "evidence/20261116-authorization-deadline",
+  "evidence_sha256": {
+    "baseline-build.log": "0f337d8a6997512cbbd65488e30cdebfb857c38521d35cfd6f22c507195cb13b",
+    "baseline-tests.log": "4a6773f75f10989dcf4ce46c50b002d5889ae2d3efc4513dec00a4cdfa24aa86",
+    "capture-build.log": "42d2309c1d618c49010e64132991f4020033e1db5f7c97ebb612d25475cba375",
+    "docs-build.log": "d54e93a7199842a4a9551b0a58bcdb8a8ecb18bcbe067af7adce4943706a3eeb",
+    "mutate.py": "e0093f5f1d322c3cf5708d2460edd306cf29586f1cbf226512f6ae73e0e3b3e9",
+    "mutation-build.log": "fa12d02c3a58abbaeef735f7b572119723ba24630628e0f386110ea8e66add2c",
+    "mutation-result.json": "73a4faf1a0848170cc0603d5b58d941ebe4a50a37b086d1710e57de6e2461acd",
+    "mutation-run.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mutation-tests.log": "9dd8a8f0154482c189304a827674284b6402ce5efd5d6f04b5b8c15eeb1d26e4",
+    "restored-build.log": "92b221fbfa6903af0661cdbf26d62c4457554b15fb65fcea8506bde9faff1254",
+    "restored-tests.log": "63e1e60b929db9d0051a4365b29ec3558c0b0d865e9dbfb3f28f6ba4a561d1c8"
+  }
+}

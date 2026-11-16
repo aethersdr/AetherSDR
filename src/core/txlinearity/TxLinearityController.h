@@ -64,6 +64,7 @@ struct LinearityRunResult {
 // runs only after confirmed release so FFT work cannot extend the TX interval.
 class TxLinearityController final : public QObject {
 public:
+    static constexpr int kMaxTransmitMs = 10000;
     enum class State { Idle, CheckingReceive, Ready, AwaitingKey, Capturing, Releasing, Analyzing };
     struct Environment {
         std::function<std::int64_t()> nowMs;

@@ -1,0 +1,9 @@
+[0/2] Re-checking globbed directories...
+[1/11] Automatic MOC and UIC for target tx_linearity_controller_test
+[2/10] Automatic MOC and UIC for target aethercore
+[3/9] Building CXX object CMakeFiles/tx_linearity_controller_test.dir/src/core/txlinearity/TxLinearityController.cpp.o
+[4/9] Linking CXX executable tx_linearity_controller_test
+[5/9] Building CXX object CMakeFiles/aethercore.dir/src/core/txlinearity/TxLinearityController.cpp.o
+[6/9] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDRunLease.cpp.o
+[7/9] Linking CXX static library libaethercore.a
+[8/9] Linking CXX executable tx_operation_integration_test

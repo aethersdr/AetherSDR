@@ -66,7 +66,8 @@ bool TxLinearityController::setCallbacks(ReadyCallback ready, FinishedCallback f
 
 bool TxLinearityController::setSafetyLimits(const SafetyLimits& limits, bool allowOverride)
 {
-    return m_state == State::Idle && m_safety.setLimits(limits, allowOverride);
+    return m_state == State::Idle && limits.maxTransmitMs <= kMaxTransmitMs
+        && m_safety.setLimits(limits, allowOverride);
 }
 
 void TxLinearityController::confirmDummyLoad()

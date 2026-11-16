@@ -574,8 +574,12 @@ ADC headroom or calibrated output power.
    eight-second window and reports a failure if enough qualified frames do not
    arrive. The independent helper initiates cleanup on its fixed timer;
    ownership verification and the radio's response can delay actual unkeying.
-   A delayed startup reply cannot make the helper ready. The development
-   workflow does not yet qualify a ten-second RF-release guarantee. Routine status
+   A delayed startup reply cannot make the helper ready. Transmit authorization
+   expires within ten seconds of **Transmit measurement**, including helper
+   startup, and the helper schedules cleanup earlier. Expiry requests stop and
+   ends capture; the panel waits for confirmed release. Process scheduling or
+   radio/API delays can postpone actual RF release, so a ten-second physical
+   RF-off guarantee remains unqualified. Routine status
    polling keeps **Prepare receive check** available while the last status is
    fresh; a failed status request or pending source change disables it.
 5. **Stop measurement** requests release of that measurement. Closing the

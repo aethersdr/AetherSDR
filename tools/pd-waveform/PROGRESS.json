@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Current guardian/capture runtime packages reproduce byte-for-byte and pass modeled upgrade capacity boundaries. Radio API/shim/SSH unavailable; passive discovery found no target broadcast. Resolve analyzer deadline semantics and remaining offline production gates; live first-install/reboot/RF and actual6300 qualification remain open.",
+  "current_focus": "Ten-second controller/model/lease authorization ceiling and tighter default helper timing component-qualified with guard mutations. Next expose downward-only timeout control. Live cold capture/release, radio reboot recovery, actual6300 and full P1-P10 gates remain open.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2881,6 +2881,12 @@
     "report": "CAPTURE-GUARDIAN-RUNTIME-QUALIFICATION.json",
     "source_commit": "5eb8f87a462897d6608d99527e8239c67990d45a",
     "status": "Two-path ARMv7/ARM64 complete releases and 32 upgrade capacity boundaries passed; not installed",
+    "installed": false
+  },
+  "authorization_deadline": {
+    "report": "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
+    "status": "Ten-second desktop authorization ceiling component-qualified; physical RF release and operator adjustment remain incomplete",
+    "physical_10second_release_proven": false,
     "installed": false
   }
 }

@@ -325,7 +325,7 @@ center minus 4.5 kHz to center plus 7.5 kHz. Changing or canceling the source
 retires the original preparation and prevents later key admission.
 
 After original-owner TX readback, the adapter polls status within the same
-six-second capture deadline until the bound source reports guarded tones.
+eight-second measurement capture deadline until the bound source reports guarded tones.
 It then requires matching provenance on the complete captured frame. Polling
 cannot extend the deadline or arm/key/retry a source. Stop and replacement
 fence delayed polls and responses.
@@ -334,16 +334,21 @@ The native tone window begins after an emitted tone packet plus the configured
 maximum alignment search delay (400 ms by default) and a 100 ms settling guard.
 It compares that boundary against IQ kernel-arrival time, and requires fresh,
 aligned, nonfaulted local IQ while the original source is running. Noise,
-the final microphone blend, stale/queued IQ and source expiry are excluded.
+the final fade to silence, stale/queued IQ and source expiry are excluded.
 These are local timing guards, not FPGA timestamps or independent analog
 settling/ADC-headroom proof; the guard needs live hardware qualification.
 A partial frame crossing a boundary is rejected; a previously complete valid
 frame remains available for bounded retrieval after unkey.
 
-The composed model budgets 14 seconds for startup, capture and cleanup.
-After the independent helper's startup/cleanup reserves, its cleanup timer
-is at most 9.5 seconds; generated source duration remains eight seconds.
-These provisional margins do not prove RF cessation with an unresponsive API.
+The controller and composed model cap transmit authorization at ten seconds
+from the operator's start, including helper startup. A telemetry-age override
+cannot raise that ceiling. The helper cleanup interval is at most nine seconds;
+the generated source remains bounded to eight seconds. Cleanup, command
+acceptance and confirmed release are separate: the controller waits for
+qualified release without extending authorization or collecting more IQ.
+This is not a ten-second physical RF-off guarantee under process scheduling
+stalls, delayed API responses or unknown ownership. The exact candidate's
+capture completion and physical release timing still require live qualification.
 
 ## Verification and remaining integration
 
@@ -440,12 +445,15 @@ before that original input is dispatched. There is no retry or source rearm.
 The lease does not create tones: source selection/arming remains a separate,
 explicit operation before measurement preparation.
 
-A run is at most 15 seconds. Startup reserves 1 second, and cleanup reserves
-3.5 seconds (the native protocol's 3 seconds plus a provisional scheduling
-allowance). Runs too short to leave a 1-second keying window are refused.
-The later cleanup estimate must fit before the original deadline minus that
-reserve. These margins need hardware qualification, especially on Linux 2.6;
-they do not guarantee RF cessation under an unresponsive API or unknown owner.
+The lease rejects an authorization deadline more than ten seconds away.
+It reserves one second for startup and requires at least a one-second usable
+keying window. After a separate verification request, the conservative upper
+estimate of the helper's cleanup start must fit before the original deadline.
+The dispatch gate additionally expires at the earlier conservative usable
+helper deadline. Native ownership refresh and unkey writes remain best effort
+after expiry; they cannot authorize a new key or certify RF cessation.
+Actual startup, capture completion and release timing require qualification,
+especially on Linux 2.6.
 
 The worker-safe gate captures only atomic lifetime/deadline state. After helper
 verification its deadline can only shorten to the helper's conservative usable

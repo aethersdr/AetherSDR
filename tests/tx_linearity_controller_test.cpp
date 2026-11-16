@@ -163,6 +163,24 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     previousHandler = qInstallMessageHandler(captureDiagnostic);
+    {
+        Fixture f;
+        SafetyLimits limits;
+        limits.maxTransmitMs = 10001;
+        check(!f.controller->setSafetyLimits(limits, true),
+              "even telemetry override cannot extend analyzer transmit ceiling");
+        limits.maxTransmitMs = 8000;
+        check(f.controller->setSafetyLimits(limits), "shorter analyzer deadline refused");
+        f.start();
+        check(f.lease->deadline == 9000, "shorter deadline did not reach lease");
+        f.now = 9000;
+        f.controller->poll();
+        check(f.lease->releases == 1 && !f.source->gate && f.finished == 0,
+              "deadline did not withdraw capture and request release before analysis");
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        check(f.finished == 1 && f.result && !f.result->measurement,
+              "deadline expiry fabricated a measurement or skipped qualified release");
+    }
     for (const int variant : {0, 1, 2, 3, 4, 5, 6}) {
         Fixture f; f.start();
         CaptureFrame first = frame(1), second = frame(2);

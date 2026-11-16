@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T11:56:38.549047+00:00",
+  "updated_utc": "2026-11-16T12:09:20.390644+00:00",
   "original_pr_head": "2b723cde563ec264999cdfaafe6af8f5707b61e4",
   "current_base": "23ccdf7fb504e0019759dab249132dfc5b223bd7",
   "phase1_complete": false,
@@ -59,19 +59,24 @@
     },
     {
       "feature": "Transmit timeout",
-      "status": "Open contract gap: model overrides default10000ms with14000ms operation budget",
+      "status": "Desktop authorization capped at10000ms; helper cleanup start and qualified release are separate. Physical RF-release and operator adjustment remain incomplete.",
       "sources": [
         "src/models/AetherPDMeasurementModel.cpp:initialize",
         "src/models/AetherPDRunLease.cpp:start/poll",
         "tools/pd-waveform/guardian/unkey_guard.c:run/query/send_command"
       ],
       "facts": [
-        "Model maxTransmitMs=14000 and vitalsMaxAgeMs=3000 use explicit override",
-        "Lease subtracts3500ms cleanup and1000ms startup reserve, yielding roughly9500ms before helper begins cleanup",
-        "Guardian then drains status and waits for a subscription ACK barrier before writing xmit0; cleanup initiation is not confirmed unkey",
-        "Native measurement source has its own8second signal limit; it is not proof of MOX release"
+        "Controller rejects limits above10000ms even with telemetry override; model uses10000ms and retains radio-informed vitalsMaxAgeMs=3000.",
+        "Lease independently rejects deadlines over10000ms, reserves1000ms for startup, and requests cleanup after at most9000ms. Its conservative cleanup-start upper estimate must fit before the authorization deadline.",
+        "Worker dispatch gate expires at the earlier conservative helper window, including when owner-thread timers stall.",
+        "Guardian ownership refresh/write and radio release may occur after expiry; existing best-effort cleanup and qualified release proof remain required.",
+        "Native measurement source remains bounded to8seconds and silence after retirement; that is not proof of MOX release."
       ],
-      "remaining": "Separate and name RF/admission/cleanup deadlines, preserve analyzer10second ceiling with downward-only operator adjustment, test delayed helper startup/status/write and release proof. Qualify capture completion within budget on exact installed binaries; do not merely lower a number and call functionality proven."
+      "remaining": "Expose downward-only operator adjustment; live-qualify cold four-frame capture and actual unkey on exact candidate. Process/API scheduling stalls still preclude claiming a hard10second physical RF-release guarantee.",
+      "evidence": [
+        "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
+        "GUARDIAN-DEADLINE-QUALIFICATION.json"
+      ]
     },
     {
       "feature": "Settings ownership",
@@ -83,8 +88,9 @@
     }
   ],
   "next_steps": [
-    "Resolve analyzer deadline semantics and causal socket-free regression before exposing timeout adjustment",
-    "Complete connected final-desktop/RF and platform qualification after radio returns"
+    "Expose downward-only analyzer timeout using the bounded authorization contract.",
+    "Complete exact-candidate connected cold capture, RF-release and failure qualification after radio returns; retain physical-deadline limitation.",
+    "Finish remaining channel/pan capability and tone/power controls, actual6300 and production gates."
   ],
   "radio_state": "2026-11-16T11:52:17Z API4992/shim48992/SSH22222 timed out. No new reboot or RF commands.",
   "measurement_retirement_fix": "MEASUREMENT-RETIREMENT-QUALIFICATION.json: prevents microphone fall-through and late prepared-packet output after source expiry; component-qualified, not installed. Does not prove physical RF-off or close10second unkey contract.",

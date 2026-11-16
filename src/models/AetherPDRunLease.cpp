@@ -8,12 +8,11 @@
 
 namespace AetherSDR {
 namespace {
-// Native cleanup includes a refresh write, ownership reply and unkey write
-// (up to 3 s). The extra scheduling allowance still needs hardware qualification.
-constexpr qint64 kCleanupReserveMs = 3500;
+// Start helper cleanup before the authorization ceiling. Its ownership check,
+// unkey write and radio release can finish later; they never extend TX authority.
 constexpr qint64 kStartupReserveMs = 1000;
 constexpr qint64 kMinimumKeyWindowMs = 1000;
-constexpr qint64 kMaximumRunMs = 15000;
+constexpr qint64 kMaximumRunMs = txlin::TxLinearityController::kMaxTransmitMs;
 }
 
 bool AetherPDRunLease::Gate::current()
@@ -75,7 +74,7 @@ bool AetherPDRunLease::start(std::int64_t absoluteDeadlineMs)
     const qint64 now = TxCoordinator::monotonicMs();
     const qint64 duration = absoluteDeadlineMs > now ? absoluteDeadlineMs - now : 0;
     if (!current() || duration > kMaximumRunMs
-        || duration < kCleanupReserveMs + kStartupReserveMs + kMinimumKeyWindowMs
+        || duration < kStartupReserveMs + kMinimumKeyWindowMs
         || !m_radio->independentTxReady() || m_radio->isRadioTransmitting()) {
         fail(QStringLiteral("Original session or bounded test budget is unavailable")); return false;
     }
@@ -96,7 +95,7 @@ bool AetherPDRunLease::start(std::int64_t absoluteDeadlineMs)
     m_input = TxController::fromGrantedPtt(m_radio, admission.input, m_operation);
     if (!m_input.valid()) { fail(QStringLiteral("Original transmit input is unavailable")); return false; }
     m_timer.start();
-    const int cleanupAfterMs = static_cast<int>(duration - kCleanupReserveMs - kStartupReserveMs);
+    const int cleanupAfterMs = static_cast<int>(duration - kStartupReserveMs);
     if (!m_helper->begin(cleanupAfterMs)) { fail(QStringLiteral("Independent helper refused startup")); return false; }
     return !m_releasing;
 }
@@ -150,7 +149,7 @@ void AetherPDRunLease::poll()
     const qint64 remaining = m_helper->remainingMs();
     const qint64 cleanupUpper = m_helper->cleanupRemainingUpperMs();
     if (remaining <= 0 || cleanupUpper <= 0 || now >= m_deadline
-        || cleanupUpper > m_deadline - now - kCleanupReserveMs) {
+        || cleanupUpper > m_deadline - now) {
         fail(QStringLiteral("Helper timing cannot fit the original test deadline")); return;
     }
     if (!m_keyRequested) {

@@ -1,0 +1,5 @@
+[0/2] Re-checking globbed directories...
+[1/6] Automatic MOC and UIC for target aetherpd_capture_source_test
+[2/5] Building CXX object CMakeFiles/aetherpd_capture_source_test.dir/src/core/txlinearity/TxLinearityController.cpp.o
+[3/5] Building CXX object CMakeFiles/aetherpd_capture_source_test.dir/tests/aetherpd_capture_source_test.cpp.o
+[4/5] Linking CXX executable aetherpd_capture_source_test

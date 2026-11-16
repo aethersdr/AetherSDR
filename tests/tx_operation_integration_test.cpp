@@ -827,7 +827,7 @@ void aetherPDRunLeaseLifecycle()
     QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
     check(fixture.open(QIODevice::ReadOnly), "PD lease has public status fixture");
     const QByteArray idle = fixture.readAll();
-    for (int scenario = 0; scenario < 10; ++scenario) {
+    for (int scenario = 0; scenario < 11; ++scenario) {
         RadioConnection connection;
         AetherPDTest::Network controlNetwork, helperNetwork;
         Fixture f;
@@ -841,18 +841,20 @@ void aetherPDRunLeaseLifecycle()
         if (!lease) { continue; }
         TxCoordinator::StopRequest proof;
         f.backend->stopWriter = [&](const auto&, const auto& request) { proof = request; };
-        const qint64 deadline = TxCoordinator::monotonicMs() + (scenario == 6 ? 1000 : scenario == 7 ? 5600 : 10000);
+        const qint64 deadline = TxCoordinator::monotonicMs() + (scenario == 6 ? 1000 : scenario == 7 ? 2100 : scenario == 10 ? 14000 : 10000);
         const bool started = lease->start(deadline);
-        if (scenario == 6) {
+        if (scenario == 6 || scenario == 10) {
             check(!started && helperNetwork.sent.empty() && !f.commands.contains("mox:on")
                       && lease->state() == LeaseState::Released,
-                  "insufficient cleanup budget refuses before any admission or helper request");
+                  "insufficient startup budget or ceiling violation refuses before admission or helper request");
             continue;
         }
         check(started && helperNetwork.sent.size() == 1 && !f.commands.contains("mox:on"),
               "explicit start admits original intent but waits for helper verification");
         check(!lease->start(deadline), "lease cannot rearm or replace original intent");
         const int helperBudget = QJsonDocument::fromJson(helperNetwork.sent.front().body).object().value("cleanup_after_ms").toInt();
+        check(helperBudget > 0 && helperBudget <= 9000,
+              "helper cleanup cannot exceed the ten-second authorization ceiling minus startup reserve");
         const QByteArray observing = QByteArray(R"({"test_id":"0123456789abcdef0123456789abcdef","state":"observing","cleanup_due_ms":"20000","remaining_ms":)")
             + QByteArray::number(helperBudget) + '}';
         if (scenario == 1) { lease->release(); }

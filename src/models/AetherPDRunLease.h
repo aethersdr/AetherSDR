@@ -31,7 +31,8 @@ public:
     AetherPDRunLease(ConstructionKey, RadioModel& radio, RadioControlSession session,
                      std::unique_ptr<txlin::AetherPDTestClient> helper, std::function<bool()> runCurrent);
     ~AetherPDRunLease() override;
-    // Absolute deadline uses TxCoordinator::monotonicMs(), also used by the controller.
+    // Absolute authorization deadline uses TxCoordinator::monotonicMs().
+    // Neither helper cleanup nor confirmed release can extend it.
     bool start(std::int64_t absoluteDeadlineMs) override;
     void release() override;
     State state() const override;

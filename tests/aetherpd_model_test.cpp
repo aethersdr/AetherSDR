@@ -64,7 +64,7 @@ int main(int argc, char** argv)
                 controlNetwork.last->complete(200, idle);
             }
             bindingOk &= check(!fence(), "retired measurement session remained current");
-            captureNetwork.last->complete(200, R"({"capture_id":"0123456789abcdef0123456789abcdef","format":"f32le-iq-v1","sample_rate_hz":192000,"center_hz":7150000,"sample_count":16384,"chunk_samples":512,"keyed":true,"correcting":true,"first_receive_ns":"1000000000","last_receive_ns":"1085000000"})");
+            captureNetwork.last->complete(200, R"({"capture_id":"0123456789abcdef0123456789abcdef","format":"f32le-iq-v1","source":{"kind":"local_dax_iq","stream_id":1073741825,"generation":"7"},"sample_rate_hz":192000,"center_hz":7150000,"sample_count":16384,"chunk_samples":512,"keyed":true,"correcting":true,"first_receive_ns":"1000000000","last_receive_ns":"1085000000"})");
             bindingOk &= check(frames == 0 && errors == 1 && captureNetwork.sent.size() == 1,
                                "old capture advanced after session retirement");
             if (change == 3) {
