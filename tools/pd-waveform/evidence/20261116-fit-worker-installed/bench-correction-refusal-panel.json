@@ -1,0 +1,568 @@
+{
+  "pdState": {
+    "accessibleName": "Correction disabled",
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 20,
+      "w": 470,
+      "x": 25,
+      "y": 115
+    },
+    "objectName": "pdState",
+    "value": "Correction disabled",
+    "visible": true
+  },
+  "pdDetail": {
+    "accessibleName": "Dispatch faults: 0 \u00b7 Send errors: 0 \u00b7 Rejected input: 0 \u00b7 Stale IQ: 0\nInput-limited samples: 0",
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 32,
+      "w": 470,
+      "x": 25,
+      "y": 149
+    },
+    "objectName": "pdDetail",
+    "value": "Dispatch faults: 0 \u00b7 Send errors: 0 \u00b7 Rejected input: 0 \u00b7 Stale IQ: 0\nInput-limited samples: 0",
+    "visible": true
+  },
+  "pdReceipt": {
+    "accessibleName": "Cancel request accepted; waiting for observed status.",
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 19,
+      "w": 470,
+      "x": 25,
+      "y": 195
+    },
+    "objectName": "pdReceipt",
+    "value": "Cancel request accepted; waiting for observed status.",
+    "visible": true
+  },
+  "pdMessage": {
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 18,
+      "w": 470,
+      "x": 25,
+      "y": 228
+    },
+    "objectName": "pdMessage",
+    "visible": true
+  },
+  "pdIqSelection": {
+    "accessibleDescription": "Stop the running session and finish pending work before choosing feedback. Only this GUI's assigned IQ pans are listed.",
+    "accessibleName": "Feedback DAX IQ pan and channel",
+    "class": "QComboBox",
+    "currentIndex": 1,
+    "enabled": false,
+    "geometry": {
+      "h": 26,
+      "w": 470,
+      "x": 25,
+      "y": 293
+    },
+    "items": [
+      "Select a feedback pan with IQ assigned\u2026",
+      "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000"
+    ],
+    "objectName": "pdIqSelection",
+    "toolTip": "Stop the running session and finish pending work before choosing feedback. Only this GUI's assigned IQ pans are listed.",
+    "value": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+    "visible": true
+  },
+  "pdIqObserved": {
+    "accessibleName": "Service reports IQ Ch 4, pan 0x40000000: binding confirmed.",
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 19,
+      "w": 470,
+      "x": 25,
+      "y": 333
+    },
+    "objectName": "pdIqObserved",
+    "value": "Service reports IQ Ch 4, pan 0x40000000: binding confirmed.",
+    "visible": true
+  },
+  "pdStart": {
+    "accessibleDescription": "Select an owned pan with IQ Ch 1\u20134 assigned, authenticate this radio session, and stop any running AetherPD session before starting.",
+    "accessibleName": "Start AetherPD",
+    "class": "QPushButton",
+    "enabled": false,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 25,
+      "y": 366
+    },
+    "objectName": "pdStart",
+    "toolTip": "Select an owned pan with IQ Ch 1\u20134 assigned, authenticate this radio session, and stop any running AetherPD session before starting.",
+    "value": "Start AetherPD",
+    "visible": true
+  },
+  "pdStop": {
+    "accessibleName": "Stop AetherPD",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 263,
+      "y": 366
+    },
+    "objectName": "pdStop",
+    "value": "Stop AetherPD",
+    "visible": true
+  },
+  "pdArm": {
+    "accessibleDescription": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+    "accessibleName": "Arm calibration",
+    "class": "QPushButton",
+    "enabled": false,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 25,
+      "y": 402
+    },
+    "objectName": "pdArm",
+    "toolTip": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+    "value": "Arm calibration",
+    "visible": true
+  },
+  "pdCancel": {
+    "accessibleName": "Cancel calibration",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 263,
+      "y": 402
+    },
+    "objectName": "pdCancel",
+    "value": "Cancel calibration",
+    "visible": true
+  },
+  "pdRestore": {
+    "accessibleName": "Restore receive",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 25,
+      "y": 438
+    },
+    "objectName": "pdRestore",
+    "value": "Restore receive",
+    "visible": true
+  },
+  "pdRefresh": {
+    "accessibleName": "Refresh",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 263,
+      "y": 438
+    },
+    "objectName": "pdRefresh",
+    "value": "Refresh",
+    "visible": true
+  },
+  "pdMeasurement": {
+    "accessibleName": "Measure linearity\u2026",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 25,
+      "y": 474
+    },
+    "objectName": "pdMeasurement",
+    "value": "Measure linearity\u2026",
+    "visible": true
+  },
+  "pdEnableCorrection": {
+    "accessibleName": "Enable correction",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 25,
+      "y": 510
+    },
+    "objectName": "pdEnableCorrection",
+    "value": "Enable correction",
+    "visible": true
+  },
+  "pdBypassCorrection": {
+    "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+    "accessibleName": "Bypass correction",
+    "class": "QPushButton",
+    "enabled": false,
+    "geometry": {
+      "h": 30,
+      "w": 232,
+      "x": 263,
+      "y": 510
+    },
+    "objectName": "pdBypassCorrection",
+    "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+    "value": "Bypass correction",
+    "visible": true
+  },
+  "pdDone": {
+    "accessibleName": "Done",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 30,
+      "w": 59,
+      "x": 436,
+      "y": 1037
+    },
+    "objectName": "pdDone",
+    "value": "Done",
+    "visible": true
+  },
+  "pdMeasureDummyLoad": {
+    "accessibleName": "Dummy load connected; feedback attenuation checked",
+    "checked": true,
+    "class": "QCheckBox",
+    "enabled": true,
+    "geometry": {
+      "h": 18,
+      "w": 623,
+      "x": 25,
+      "y": 147
+    },
+    "objectName": "pdMeasureDummyLoad",
+    "text": "Dummy load connected; feedback attenuation checked",
+    "value": "checked",
+    "visible": true
+  },
+  "pdMeasureRadioPower": {
+    "accessibleDescription": "Requests the nominal radio setting without transmitting. Wait for radio readback before arming; actual output is measured separately.",
+    "accessibleName": "Radio power setting (W):",
+    "class": "QSpinBox",
+    "enabled": true,
+    "geometry": {
+      "h": 23,
+      "w": 203,
+      "x": 235,
+      "y": 174
+    },
+    "objectName": "pdMeasureRadioPower",
+    "range": {
+      "max": 10,
+      "min": -1
+    },
+    "toolTip": "Requests the nominal radio setting without transmitting. Wait for radio readback before arming; actual output is measured separately.",
+    "value": "5",
+    "visible": true
+  },
+  "pdMeasureApplyPower": {
+    "accessibleDescription": "Choose a different radio power setting first.",
+    "class": "QPushButton",
+    "enabled": false,
+    "geometry": {
+      "h": 30,
+      "w": 204,
+      "x": 444,
+      "y": 171
+    },
+    "objectName": "pdMeasureApplyPower",
+    "toolTip": "Choose a different radio power setting first.",
+    "value": "Apply power",
+    "visible": true
+  },
+  "pdMeasurePowerStatus": {
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 16,
+      "w": 623,
+      "x": 25,
+      "y": 207
+    },
+    "objectName": "pdMeasurePowerStatus",
+    "value": "Radio reports 5 W setting; actual RF output may differ.",
+    "visible": true
+  },
+  "pdMeasurePowerLimit": {
+    "accessibleDescription": "Does not change radio drive. Choose a limit above the nominal radio power setting and within your bench rating.",
+    "accessibleName": "Measured forward-power abort limit (W):",
+    "class": "QDoubleSpinBox",
+    "enabled": true,
+    "geometry": {
+      "h": 23,
+      "w": 623,
+      "x": 25,
+      "y": 251
+    },
+    "objectName": "pdMeasurePowerLimit",
+    "range": {
+      "max": 100,
+      "min": 0
+    },
+    "value": "10",
+    "visible": true
+  },
+  "pdMeasureWindow": {
+    "accessibleDescription": "Window choice changes leakage and frequency resolution; no window guarantees a fixed measurable IMD depth.",
+    "accessibleName": "Analysis window",
+    "class": "QComboBox",
+    "currentIndex": 0,
+    "enabled": true,
+    "geometry": {
+      "h": 26,
+      "w": 151,
+      "x": 25,
+      "y": 302
+    },
+    "items": [
+      "Blackman-Harris 7",
+      "Blackman-Harris 4",
+      "Flat Top",
+      "Hann"
+    ],
+    "objectName": "pdMeasureWindow",
+    "value": "Blackman-Harris 7",
+    "visible": true
+  },
+  "pdMeasureAverages": {
+    "accessibleDescription": "One to four frames within the bounded source window. Averaging reduces estimate variance, not the physical noise floor.",
+    "accessibleName": "Averages",
+    "class": "QSpinBox",
+    "enabled": true,
+    "geometry": {
+      "h": 23,
+      "w": 152,
+      "x": 182,
+      "y": 303
+    },
+    "objectName": "pdMeasureAverages",
+    "range": {
+      "max": 4,
+      "min": 1
+    },
+    "value": "4",
+    "visible": true
+  },
+  "pdMeasureOrder": {
+    "accessibleDescription": "Highest odd distortion product to analyze: three, five or seven.",
+    "accessibleName": "Highest intermodulation order",
+    "class": "QComboBox",
+    "currentIndex": 2,
+    "enabled": true,
+    "geometry": {
+      "h": 26,
+      "w": 151,
+      "x": 340,
+      "y": 302
+    },
+    "items": [
+      "IMD3",
+      "IMD3 + 5",
+      "IMD3 + 5 + 7"
+    ],
+    "objectName": "pdMeasureOrder",
+    "value": "IMD3 + 5 + 7",
+    "visible": true
+  },
+  "pdMeasureTimeout": {
+    "accessibleDescription": "Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later.",
+    "accessibleName": "Transmit timeout in seconds",
+    "class": "QSpinBox",
+    "enabled": true,
+    "geometry": {
+      "h": 23,
+      "w": 151,
+      "x": 497,
+      "y": 303
+    },
+    "objectName": "pdMeasureTimeout",
+    "range": {
+      "max": 10,
+      "min": 3
+    },
+    "toolTip": "Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later.",
+    "value": "10",
+    "visible": true
+  },
+  "pdMeasureToneSpacing": {
+    "accessibleDescription": "200 to 10000 Hz between tones, centered 1305 Hz above the carrier. Editing sends no command; Arm measurement source submits the pair.",
+    "accessibleName": "Tone spacing (Hz):",
+    "class": "QSpinBox",
+    "enabled": true,
+    "geometry": {
+      "h": 23,
+      "w": 308,
+      "x": 340,
+      "y": 334
+    },
+    "objectName": "pdMeasureToneSpacing",
+    "range": {
+      "max": 10000,
+      "min": 200
+    },
+    "value": "1190",
+    "visible": true
+  },
+  "pdMeasureToneStatus": {
+    "accessibleName": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000002.",
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 32,
+      "w": 623,
+      "x": 25,
+      "y": 363
+    },
+    "objectName": "pdMeasureToneStatus",
+    "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000002.",
+    "visible": true
+  },
+  "pdMeasureArm": {
+    "accessibleName": "Arm measurement source",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 28,
+      "w": 309,
+      "x": 25,
+      "y": 401
+    },
+    "objectName": "pdMeasureArm",
+    "value": "Arm measurement source",
+    "visible": true
+  },
+  "pdMeasureCancelSource": {
+    "accessibleName": "Cancel source",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 28,
+      "w": 308,
+      "x": 340,
+      "y": 401
+    },
+    "objectName": "pdMeasureCancelSource",
+    "value": "Cancel source",
+    "visible": true
+  },
+  "pdMeasurePrepare": {
+    "accessibleDescription": "Arm the measurement source, confirm the bench path and choose a forward-power limit.",
+    "accessibleName": "Prepare receive check",
+    "class": "QPushButton",
+    "enabled": false,
+    "geometry": {
+      "h": 28,
+      "w": 309,
+      "x": 25,
+      "y": 435
+    },
+    "objectName": "pdMeasurePrepare",
+    "toolTip": "Arm the measurement source, confirm the bench path and choose a forward-power limit.",
+    "value": "Prepare receive check",
+    "visible": true
+  },
+  "pdMeasureTransmit": {
+    "accessibleDescription": "Prepare must complete a fresh receive check. Readiness expires after two seconds.",
+    "accessibleName": "Transmit measurement",
+    "class": "QPushButton",
+    "enabled": false,
+    "geometry": {
+      "h": 28,
+      "w": 308,
+      "x": 340,
+      "y": 435
+    },
+    "keying": true,
+    "objectName": "pdMeasureTransmit",
+    "toolTip": "Prepare must complete a fresh receive check. Readiness expires after two seconds.",
+    "value": "Transmit measurement",
+    "visible": true
+  },
+  "pdMeasureStop": {
+    "accessibleDescription": "No measurement is pending.",
+    "accessibleName": "Stop measurement",
+    "class": "QPushButton",
+    "enabled": false,
+    "geometry": {
+      "h": 28,
+      "w": 309,
+      "x": 25,
+      "y": 469
+    },
+    "objectName": "pdMeasureStop",
+    "toolTip": "No measurement is pending.",
+    "value": "Stop measurement",
+    "visible": true
+  },
+  "pdMeasureExport": {
+    "accessibleName": "Export result\u2026",
+    "class": "QPushButton",
+    "enabled": true,
+    "geometry": {
+      "h": 28,
+      "w": 308,
+      "x": 340,
+      "y": 469
+    },
+    "objectName": "pdMeasureExport",
+    "value": "Export result\u2026",
+    "visible": true
+  },
+  "pdMeasureState": {
+    "accessibleName": "Measurement exported.",
+    "class": "QLabel",
+    "enabled": true,
+    "geometry": {
+      "h": 16,
+      "w": 623,
+      "x": 25,
+      "y": 503
+    },
+    "objectName": "pdMeasureState",
+    "value": "Measurement exported.",
+    "visible": true
+  },
+  "pdMeasureSpectrum": {
+    "accessibleDescription": "7.150000 MHz \u00b7 5 W setting \u00b7 correction off \u00b7 2026-11-16 21:13:53 UTC \u00b7 timeout 10 s \u00b7 DAX IQ stream 0x20000000 \u00b7 IQ Ch 4 \u00b7 pan 0x40000000 \u00b7 GUI 0x28deea1c \u00b7 captured tone offsets 710.0/1900.0 Hz. Uncalibrated raw IQ level; ADC headroom unknown. Tone spacing 1190.0 Hz. Noise floor -5.8 dB raw IQ per bin. IMD3 lower: -28.0 dBc per tone. IMD3 upper: -27.5 dBc per tone. IMD5 lower: -41.6 dBc per tone. IMD5 upper: -41.8 dBc per tone. IMD7 lower: -53.0 dBc per tone. IMD7 upper: -53.2 dBc per tone. Lower shoulder: -4790.0 to -3790.0 Hz from capture center. Upper shoulder: 6400.0 to 7400.0 Hz from capture center. Lower ACPR: -3885.0 to -885.0 Hz from capture center. Upper ACPR: 3495.0 to 6495.0 Hz from capture center. ",
+    "accessibleName": "AetherPD measurement spectrum",
+    "class": "AetherSDR::AetherPDMeasurementSpectrum",
+    "enabled": true,
+    "geometry": {
+      "h": 270,
+      "w": 623,
+      "x": 25,
+      "y": 525
+    },
+    "objectName": "pdMeasureSpectrum",
+    "visible": true
+  },
+  "pdMeasureResult": {
+    "accessibleName": "Linearity measurement result",
+    "class": "QPlainTextEdit",
+    "enabled": true,
+    "geometry": {
+      "h": 70,
+      "w": 623,
+      "x": 25,
+      "y": 651
+    },
+    "objectName": "pdMeasureResult",
+    "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 uncorrected\nTransmit authorization timeout 10 s\nDAX IQ stream 0x20000000 \u00b7 IQ Ch 4 \u00b7 pan 0x40000000 \u00b7 GUI 0x28deea1c \u00b7 captured tone offsets 710.0/1900.0 Hz\n4 averages \u00b7 tone imbalance 0.24 dB\nIMD: dBc per tone / fundamental-derived PEP\nIMD3 lower: -28.0 / -34.0\nIMD3 upper: -27.5 / -33.5\nIMD5 lower: -41.6 / -47.6\nIMD5 upper: -41.8 / -47.8\nIMD7 lower: -53.0 / -59.1\nIMD7 upper: -53.2 / -59.2\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+    "visible": true
+  }
+}

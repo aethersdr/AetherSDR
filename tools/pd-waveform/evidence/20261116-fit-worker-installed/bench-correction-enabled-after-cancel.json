@@ -1,0 +1,68 @@
+{
+  "bridge": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdEnableCorrection"
+  },
+  "status": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "canceled",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=8292118284094 submitted_ns=8293870702285 started_ns=8293870776970 completed_ns=8294097841622 consumed_ns=8294105333451 delay=1730.970 envelope=0.997373 phase=0.999153 offset_hz=-0.024666 noise_left=48256 samples_left=144256 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=8298035926382 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=49920 generated=142080 iq_frames=6024 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1233748 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=28deea1c slice=0 correction=0 native_apd=0 iq_valid_ns=8298032267077",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 685697564,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000002",
+        "tones": false
+      },
+      "measurement_capture_batch_version": 1,
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000002",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "measurement",
+      "state": "idle"
+    },
+    "http_status": 200
+  }
+}

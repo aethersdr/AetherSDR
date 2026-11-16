@@ -1,0 +1,6 @@
+{"elapsed_s": 0.069, "state": "Requesting the temporary installer\u2026"}
+{"elapsed_s": 0.608, "state": "Waiting for the radio to publish the installer\u2026"}
+{"elapsed_s": 2.247, "state": "Transferring authenticated package files\u2026"}
+{"elapsed_s": 26.295, "state": "Waiting for the radio to confirm the update\u2026"}
+{"elapsed_s": 48.126, "state": "Removing temporary installer components\u2026"}
+{"elapsed_s": 48.683, "state": "Radio confirmed the update. Temporary installer cleanup confirmed."}
