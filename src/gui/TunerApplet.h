@@ -6,6 +6,7 @@
 #include <QWidget>
 
 class QPushButton;
+class QAction;
 class QLabel;
 class QTimer;
 class QVBoxLayout;
@@ -38,10 +39,6 @@ public:
 
     // Store MeterModel pointer for reading SWR at tune completion.
     void setMeterModel(MeterModel* meter) { m_meter = meter; }
-
-    // Switch Fwd Power gauge scale: barefoot (0–200W), Aurora (0–600W), amplifier (0–2000W).
-    void setAmplifierMode(bool hasAmp);  // legacy — calls setPowerScale internally
-    void setPowerScale(int maxWatts, bool hasAmplifier);
 
     // Docked (applet rail) vs floating/canvas presentation. Driven by the
     // container's dockModeChanged — see the TUN entry in AppletPanel.
@@ -78,7 +75,7 @@ public slots:
     // fwdPeak is the TGXL's own peak reading. The radio-relayed path has no
     // equivalent, so setRadioMeters falls back to peaking the instantaneous
     // value -- see updateMeters.
-    void setDeviceMeters(float fwdPower, float swr, float fwdPeak);
+    void setDeviceMeters(float fwdPower, float swr, float fwdPeak, float maxPower = 0.0f);
 
     // The floor the panel may be shrunk to. Derived from the minimum scale,
     // not from the children's current sizes. Public because QWidget declares
@@ -96,7 +93,12 @@ private:
     // from the wiring — both stamped entry points above end here.
     // fwdPeak < 0 means "no device peak available"; the peak tick then
     // tracks fwdPower as it always did.
-    void updateMeters(float fwdPower, float swr, float fwdPeak = -1.0f);
+    void updateMeters(float fwdPower, float swr, float fwdPeak = -1.0f,
+                      float maxPower = 0.0f);
+    void setPowerHighRange(bool high);
+    void setFixedPowerRange(bool fixed);
+    void setSwrHighRange(bool high);
+    void updateMeterAccessibility(bool force = false);
 
     void buildUI();
     void buildExpandedUI(QVBoxLayout* vbox);
@@ -256,6 +258,17 @@ private:
 
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
+    bool m_fixedPowerRange{false};
+    QPushButton* m_settingsButton{nullptr};
+    QAction* m_powerAutoAction{nullptr};
+    QAction* m_power600Action{nullptr};
+    QTimer* m_powerRangeTimer{nullptr};
+    QElapsedTimer m_accessibleReadoutClock;
+    // Latched by the first forward-power sample at or above 5 W; released by
+    // m_labelClearTimer (800 ms after power drops below the threshold).
+    // The active antenna button turns red while set, mirroring the hardware
+    // display. Only the latch and release edges call updateAntennaButtons.
+    bool  m_antTxActive{false};
 
     // Throttles the numeric PWR/SWR text; the bar itself is not throttled.
     QElapsedTimer m_readoutClock;
@@ -266,12 +279,8 @@ private:
     int m_relayC2{0};
 
 
-    // setPowerScale() no-ops when neither input moved (#4845) — it's called
-    // on every RadioModel::infoChanged, most of which carry no scale-relevant
-    // change, and gauge->setRange() forces a repaint.
-    int  m_lastMaxWatts{-1};
-    bool m_lastHasAmplifier{false};
-    bool m_havePowerScale{false};
+    bool m_powerHighRange{false};
+    bool m_swrHighRange{false};
 };
 
 } // namespace AetherSDR

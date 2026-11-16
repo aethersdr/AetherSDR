@@ -37,7 +37,7 @@ void TunerModel::applyChanges(const TunerDelta& d)
 {
     // Apply only the present fields, change-gated — faithful to the prior
     // applyStatus (which iterated the wire kv-set). The SmartSDR key names and
-    // "1"/toInt parsing now live in FlexBackend::decodeTunerStatus; informational
+    // "1"/toInt parsing now live in FlexStatusIngress::decodeTunerStatus; informational
     // fields (nickname/version/dhcp/netmask/gateway) are dropped there.
     // Edge-signal emit order matches the old QMap key-sorted iteration:
     // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").
@@ -211,10 +211,23 @@ void TunerModel::abortTune()
     emit autotuneRequested();
 }
 
+bool TunerModel::hasAntennaSwitch() const
+{
+    if (hasDirectConnection()) {
+        return m_directConn->isThreeWay().value_or(m_oneByThree);
+    }
+    // Relay-only identification is informational; antenna commands require a direct link.
+    return m_oneByThree;
+}
+
 void TunerModel::setAntennaA(int ant)
 {
     if (!m_directConn || !m_directConn->isConnected()) {
         qCDebug(lcTuner) << "TunerModel::setAntennaA: no direct connection";
+        return;
+    }
+    if (!hasAntennaSwitch()) {
+        qCDebug(lcTuner) << "TunerModel::setAntennaA: no confirmed 3-way switch";
         return;
     }
     if (ant < 1 || ant > 3) return;
@@ -224,11 +237,59 @@ void TunerModel::setAntennaA(int ant)
 
 // ── Direct TGXL connection (port 9010) ──────────────────────────────────────
 
+void TunerModel::applyDirectMeters(const QMap<QString, QString>& kvs)
+{
+    bool meters = false;
+    if (kvs.contains("fwd")) {
+        const float dBm = kvs.value("fwd").toFloat();
+        m_fwdPower = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+        meters = true;
+    }
+    if (kvs.contains("peak")) {
+        const float dBm = kvs.value("peak").toFloat();
+        m_fwdPeak = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+        meters = true;
+    }
+    if (kvs.contains("max")) {
+        // Firmware 1.2.17 reported 0.00 fresh and 62.43 after TX (about
+        // 1,750 W). That observation does not establish MAX's display meaning.
+        bool ok = false;
+        const float dBm = kvs.value("max").toFloat(&ok);
+        const float watts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+        if (!ok || !std::isfinite(dBm) || !std::isfinite(watts)) {
+            qCWarning(lcTuner) << "TunerModel: invalid direct TGXL max field" << kvs.value("max");
+        } else {
+            m_maxPower = dBm > 0.0f ? watts : 0.0f;
+            meters = true;
+        }
+    }
+    if (kvs.contains("swr")) {
+        bool ok = false;
+        const float rl = kvs.value("swr").toFloat(&ok);
+        if (!ok || !std::isfinite(rl)) {
+            qCWarning(lcTuner) << "TunerModel: invalid direct TGXL swr field" << kvs.value("swr");
+        } else {
+            const float rho = std::pow(10.0f, rl / 20.0f);
+            m_swr = rl <= -60.0f ? 1.0f
+                : (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+            meters = true;
+        }
+    }
+    if (meters) {
+        emit metersChanged(m_fwdPower, m_swr, m_fwdPeak, m_maxPower);
+    }
+}
+
 void TunerModel::setDirectConnection(TgxlConnection* conn)
 {
     if (m_directConn == conn) return;
     if (m_directConn) {
         disconnect(m_directConn, nullptr, this, nullptr);
+        emit antennaNamesChanged(QString(), QString(), QString());
+        if (m_directConn->isConnected() && m_antennaA != -1) {
+            m_antennaA = -1;
+            emit antennaAChanged(m_antennaA);
+        }
     }
     m_directConn = conn;
     if (m_directConn) {
@@ -242,7 +303,12 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         });
         connect(m_directConn, &TgxlConnection::disconnected, this, [this]() {
             qCDebug(lcTuner) << "TunerModel: direct TGXL connection lost";
+            m_maxPower = 0.0f;
             m_directPresence = false;
+            if (m_antennaA != -1) {
+                m_antennaA = -1;
+                emit antennaAChanged(m_antennaA);
+            }
             if (!isPresent())
                 emit presenceChanged(false);
             emit directConnectionChanged(false);
@@ -257,6 +323,9 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         });
         connect(m_directConn, &TgxlConnection::antennaNamesChanged,
                 this, &TunerModel::antennaNamesChanged);
+        connect(m_directConn, &TgxlConnection::variantChanged, this, [this](bool) {
+            emit stateChanged();
+        });
         // Clear a stale alert on disconnect — it describes a tuner we can no
         // longer see, and the tuner's own clear can never reach us now.
         connect(m_directConn, &TgxlConnection::disconnected, this, [this]() {
@@ -301,36 +370,7 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 if (m_antennaA != v) { m_antennaA = v; changed = true; emit antennaAChanged(v); }
             }
             if (changed) emit stateChanged();
-            // Forward power and SWR from direct TGXL connection (#625)
-            // TGXL reports fwd in dBm and swr as return loss (negative dB).
-            // Convert to watts and SWR ratio for the gauge.
-            // Always emit when meter fields are present — suppressing identical
-            // values caused meter-freeze when SWR settled to exactly 1.0 (#1530).
-            bool meters = false;
-            if (kvs.contains("fwd")) {
-                float dBm = kvs.value("fwd").toFloat();
-                float watts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
-                m_fwdPower = watts;
-                meters = true;
-            }
-            // The device's rolling peak. Measured on a live transmission it
-            // holds for about a second after the last peak, then re-arms --
-            // a window, not a latch (`max` is the latch, and nothing here
-            // reads it). Our poll is slower than that window, so this is
-            // read every time it arrives rather than tracked for changes.
-            if (kvs.contains("peak")) {
-                float dBm = kvs.value("peak").toFloat();
-                m_fwdPeak = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
-                meters = true;
-            }
-            if (kvs.contains("swr")) {
-                float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
-                float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
-                float ratio = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
-                m_swr = ratio;
-                meters = true;
-            }
-            if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak);
+            applyDirectMeters(kvs);
         });
         // Also parse antA + meters + the per-port block from 1/sec status
         // poll responses. The port fields appear only in `status`, never in
@@ -374,35 +414,14 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                     emit stateChanged();
                 }
             }
-            // Forward power and SWR from direct TGXL status poll (#625)
-            // Always emit — see #1530 for why equality suppression was removed.
-            bool meters = false;
-            if (kvs.contains("fwd")) {
-                float dBm = kvs.value("fwd").toFloat();
-                float watts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
-                m_fwdPower = watts;
-                meters = true;
-            }
-            // The device's rolling peak. Measured on a live transmission it
-            // holds for about a second after the last peak, then re-arms --
-            // a window, not a latch (`max` is the latch, and nothing here
-            // reads it). Our poll is slower than that window, so this is
-            // read every time it arrives rather than tracked for changes.
-            if (kvs.contains("peak")) {
-                float dBm = kvs.value("peak").toFloat();
-                m_fwdPeak = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
-                meters = true;
-            }
-            if (kvs.contains("swr")) {
-                float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
-                float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
-                float ratio = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
-                m_swr = ratio;
-                meters = true;
-            }
-            if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak);
+            applyDirectMeters(kvs);
         });
     }
+    if (m_directConn && m_directConn->isConnected()) {
+        // An already-handshaken replacement sent its names before we subscribed.
+        m_directConn->sendCommand(QStringLiteral("antenna read"));
+    }
+    emit stateChanged();
 }
 
 bool TunerModel::hasDirectConnection() const

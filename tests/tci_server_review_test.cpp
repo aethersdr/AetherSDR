@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "PanControlTestFixture.h"
 #include "core/AppSettings.h"
@@ -8,6 +9,7 @@
 #include "core/TciServer.h"
 #include "core/TciTrxMap.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/InterlockStatusDelta.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/sim/SimBackend.h"
@@ -15,6 +17,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "IqStatusFixture.h"
 
 #include <QCoreApplication>
 #include <QAbstractSocket>
@@ -37,6 +40,8 @@
 #include <cstdio>
 #include <memory>
 #include <utility>
+
+
 
 namespace AetherSDR
 {
@@ -2159,7 +2164,7 @@ public:
     {
         QMap<QString, QString> kvs;
         kvs.insert(QStringLiteral("pan"), panId);
-        model.handleSliceStatusForTest(sliceId, kvs, false);
+        applyFlexSliceStatus(model, sliceId, kvs, false);
     }
 
     struct IqHarness {
@@ -2417,7 +2422,7 @@ public:
         QMap<QString, QString> kvs;
         kvs.insert(QStringLiteral("daxiq_channel"), QStringLiteral("1"));
         kvs.insert(QStringLiteral("daxiq_rate"), QStringLiteral("192000"));
-        model.daxIqModel().applyStreamStatus(0x2000abcd, kvs);
+        model.daxIqModel().applyStreamDelta(iqStatus(0x2000abcd, kvs));
         if (!model.daxIqModel().stream(1).exists) {
             std::printf("      applet stream fixture did not take\n");
             return false;
@@ -2669,9 +2674,9 @@ public:
         const QMap<QString, QString> sliceStatus{
             {QStringLiteral("in_use"), QStringLiteral("1")},
         };
-        model.handleSliceStatusForTest(0, sliceStatus);
-        model.handleSliceStatusForTest(1, sliceStatus);
-        model.handleSliceStatusForTest(2, sliceStatus);
+        applyFlexSliceStatus(model, 0, sliceStatus);
+        applyFlexSliceStatus(model, 1, sliceStatus);
+        applyFlexSliceStatus(model, 2, sliceStatus);
         SliceDelta first;
         first.panId = QStringLiteral("pan-a");
         first.frequency = 14.074;
@@ -2800,7 +2805,7 @@ public:
         // A band-change recreation retains its receiver and permission, but
         // a genuine close must revoke permission before that receiver is reused.
         sent.clear();
-        model.handleSliceStatusForTest(1, {}, true);
+        applyFlexSliceStatus(model, 1, {}, true);
         model.emitBackendSliceChangedForTest(1, second);
         spin(600);
         if (sent.contains(QStringLiteral("tx_enable:1,false;"))) {
@@ -2808,7 +2813,7 @@ public:
             return false;
         }
         sent.clear();
-        model.handleSliceStatusForTest(1, {}, true);
+        applyFlexSliceStatus(model, 1, {}, true);
         spin(600);
         if (!sent.contains(QStringLiteral("tx_enable:1,false;"))
             || sent.contains(QStringLiteral("tx_enable:0,false;"))
@@ -2828,7 +2833,7 @@ public:
         RadioModel receiveOnly;
         receiveOnly.setBackendForTest(std::make_unique<TxCapableBackend>(false),
                                       QStringLiteral("test"));
-        receiveOnly.handleSliceStatusForTest(0, sliceStatus);
+        applyFlexSliceStatus(receiveOnly, 0, sliceStatus);
         SliceDelta receiveOnlySlice;
         receiveOnlySlice.panId = QStringLiteral("pan-a");
         receiveOnly.emitBackendSliceChangedForTest(0, receiveOnlySlice);
@@ -2989,6 +2994,78 @@ public:
             return false;
         }
         return true;
+    }
+
+    // tx_sensors goes out during tune, not only during a MOX/PTT transmit.
+    static bool txSensorsFollowTune()
+    {
+        bool ok = true;
+        const auto expect = [&ok](bool cond, const char* what) {
+            if (!cond) {
+                std::printf("      %s\n", what);
+                ok = false;
+            }
+        };
+
+        RadioModel model;
+        expect(!TciServer::txSensorsKeyed(model), "idle: no tx_sensors");
+        TransmitDelta tune;
+        tune.tune = true;
+        model.transmitModel().applyChanges(tune);
+        expect(TciServer::txSensorsKeyed(model), "tune alone sends tx_sensors");
+        tune.tune = false;
+        model.transmitModel().applyChanges(tune);
+        expect(!TciServer::txSensorsKeyed(model), "tune off stops tx_sensors");
+
+        return ok;
+    }
+
+    // tx_sensors follows this station's own transmission only: when another
+    // multiFLEX station holds the transmitter, its power and SWR are not ours.
+    static bool txSensorsFollowOwnTransmissionOnly()
+    {
+        bool ok = true;
+        const auto expect = [&ok](bool cond, const char* what) {
+            if (!cond) {
+                std::printf("      %s\n", what);
+                ok = false;
+            }
+        };
+        const auto holder = [](RadioModel& model, quint32 handle) {
+            InterlockStatusDelta d;
+            d.txClientHandle = handle;
+            model.applyInterlockStatus(d);
+        };
+
+        RadioModel model;
+        expect(model.txOwnedByUs(), "nobody holds the transmitter at start");
+
+        // The radio reports a key held by this station (or by nobody, as on a
+        // single-station backend): tx_sensors goes out.
+        model.m_radioTransmitting = true;
+        expect(TciServer::txSensorsKeyed(model), "own radio-keyed transmission sends tx_sensors");
+
+        // Another station holds the transmitter and keys it.
+        holder(model, 0x40000001u);
+        expect(!model.txOwnedByUs(), "fixture: another station holds the transmitter");
+        expect(!TciServer::txSensorsKeyed(model),
+               "another station's transmission sends no tx_sensors");
+
+        // Its tune neither.
+        TransmitDelta tune;
+        tune.tune = true;
+        model.transmitModel().applyChanges(tune);
+        expect(!TciServer::txSensorsKeyed(model), "another station's tune sends no tx_sensors");
+        tune.tune = false;
+        model.transmitModel().applyChanges(tune);
+
+        // The transmitter comes back to nobody: this station's key counts again.
+        holder(model, 0u);
+        expect(TciServer::txSensorsKeyed(model), "transmitter released: own key sends again");
+        model.m_radioTransmitting = false;
+        expect(!TciServer::txSensorsKeyed(model), "un-keyed: no tx_sensors");
+
+        return ok;
     }
 
     // Split made in the GUI (another slice holds TX) is reported as
@@ -3325,6 +3402,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::guiSplitAndRitOffsetReachClients();
     const bool valueSeed
         = AetherSDR::TciServerReviewTest::valueRelaySeedsAfterRewire();
+    const bool txSensorsNow
+        = AetherSDR::TciServerReviewTest::txSensorsFollowTune();
+    const bool txSensorsOwn
+        = AetherSDR::TciServerReviewTest::txSensorsFollowOwnTransmissionOnly();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -3432,6 +3513,10 @@ int main(int argc, char** argv)
                 guiSplit ? "PASS" : "FAIL");
     std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
                 valueSeed ? "PASS" : "FAIL");
+    std::printf("%s  tx_sensors follows tune\n",
+                txSensorsNow ? "PASS" : "FAIL");
+    std::printf("%s  tx_sensors follows this station's own transmission only\n",
+                txSensorsOwn ? "PASS" : "FAIL");
 
     const bool tciSwrGated = AetherSDR::TciServerReviewTest::tciSwrIsGatedOnInstantForwardPower();
     std::printf("%s  tx_sensors SWR is gated on instant forward power and resets on un-key\n",
@@ -3459,6 +3544,6 @@ int main(int argc, char** argv)
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp && daxRestored && initProtocol
-        && dsbMode && rxCtunEx && guiSplit && valueSeed && tciSwrGated
+        && dsbMode && rxCtunEx && guiSplit && valueSeed && txSensorsNow && txSensorsOwn && tciSwrGated
         ? 0 : 1;
 }

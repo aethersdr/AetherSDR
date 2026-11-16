@@ -81,7 +81,7 @@ See [docs/BUILDING.md § Windows 11](https://github.com/aethersdr/AetherSDR/blob
 sudo cmake --install build
 ```
 
-This installs the binary, a desktop entry and the icon. The installed binary keeps using the Qt it was built with. `setup-qt.sh` keeps older Qt installs until you run it with `--prune`, so rebuild and reinstall AetherSDR before pruning.
+This installs the binary, `aetherd` (the headless engine, started as `AetherSDR --aetherd`), a desktop entry and the icon. The installed binary keeps using the Qt it was built with. `setup-qt.sh` keeps older Qt installs until you run it with `--prune`, so rebuild and reinstall AetherSDR before pruning.
 
 ## Developing AetherSDR
 

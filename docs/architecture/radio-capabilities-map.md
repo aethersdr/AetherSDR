@@ -45,7 +45,7 @@ require a live eligible slice; zero bounds or unknown authority fail closed.
 | HL2 | engine | 100,000–38,400,000 | TX-enabled sessions need normalized idle readback, currently absent |
 | Sim | engine | 1–1,000,000,000,000 | Explicit simulator API domain, not RF coverage |
 | Icom | radio | Profile `tuningMinHz` / `tuningMaxHz` | Declared band union and confirmed idle; no current daemon catalogue connection |
-| ANAN | engine | 0 / 0 (unknown) | Unavailable pending verified coverage |
+| ANAN | engine | 10,000–61,430,000 | Measured G2 (gateware 27) tuning span, not sensitivity; below `phaseWord()`'s alias at 61.44 MHz; the pan follows every tune (one DDC, centered on the slice); no TX capability |
 | RTL-SDR | engine | 24,000–1,766,000,000 | Backend/build availability; no TX capability |
 
 The default struct declares unknown authority and zero bounds. Every backend
@@ -152,6 +152,12 @@ reaches the desktop through `ModeFilters` (`RxApplet`, `VfoWidget`): which FM ro
 are declared decides whether the FM width presets show and whether the passband
 widget is enabled or replaced by the "Filter unavailable" placeholder, and a
 declared row range-checks saved presets for its mode.
+`receivePanRfGainControl` gates `panadapter.setRfGain` and `radioSpeakerControl`
+gates `radioSession.setRadioSpeaker` the same way; only ANAN declares them. `receiveDspControl`
+gates `slice.setAgcThreshold`, `slice.setNoiseBlanker`, `slice.setNoiseReduction`
+and `slice.setRit` per observed mode, but only with a known authority, which only
+ANAN sets: RTL's record keeps an unknown authority and stays GUI gating. On the
+desktop the record decides which DSP buttons the VFO shows, per declared feature.
 Null or unknown authority fails closed. Their full per-backend support matrix,
 range contracts, TX-idle restrictions and remaining no-op/coupling limitations
 are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).
@@ -237,6 +243,25 @@ shared receiver map, but neither a listening TCI server nor an attached TCI
 client. Builds without it retain their existing Flex bridge and do not offer
 native DAX. See [native DAX receive routing](../native-dax-receive.md).
 
+### Receive audio playout
+
+`receiveAudioPlayout` gives the host playback prefill and queue cap the
+backend wants for the primary receive PCM queue. `MainWindow` hands it to
+`AudioEngine::setReceiveJitterBuffer()` on each capability change and clears it
+on disconnect. Icom sets 200 ms prefill and a 400 ms cap when the session
+negotiated stereo LAN receive (MAIN/SUB radios); every other backend, and Icom
+with mono receive, explicitly leaves it absent, so no extra prefill or cap applies.
+It is serialized in the daemon catalogue as timing metadata only.
+
+| Backend | Value |
+|---|---|
+| Flex | absent |
+| HL2 | absent |
+| ANAN | absent |
+| RTL | absent |
+| Icom | 200/400 ms with stereo LAN receive; absent otherwise |
+| Demo | absent |
+
 ### Native squelch
 
 `squelchLevelScale` adds `automaticInEngine` for backend-owned Auto SQL, dispatched
@@ -291,6 +316,29 @@ consumer never names a family.
 | Flex | — | Structural: the radio computes the panadapter and sends the result, so there is no raw converter stream on the host to build a wideband view from |
 | Icom / RTL / Sim | — | No such stream |
 
+Read by `BandscopeDialog` (the Tools ▸ Wideband Bandscope window) and by nothing
+else. **The record is what gates the menu entry** — not `family == "hl2"`, which
+is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam
+and whose sanctioned alternative is exactly this.
+
+**The levels the window draws are on the same scale as the `ADC peak
+(uncalibrated pre-DDC dBFS)` health row**, which is a true time-domain peak of
+the same block. `BandscopeDialog` adds `ClientEqFftAnalyzer::
+coherentGainCorrectionDb()` to every bin before drawing, because the analyzer's
+own normalisation is the unwindowed one and leaves its bins 6.02 dB low — a
+detail the EQ editor never had to care about and this window cannot avoid, since
+comparing against the converter's clip threshold is the whole point of it. The
+two readouts agree for a single carrier; a broadband signal spreads its energy
+over bins, so the peak *bin* sits below the peak *sample* by however wide the
+signal is. Both are uncalibrated, and neither has been checked against a
+converter driven to a known level.
+
+`wideband_converter_view_test` pins the record's contents, its absence while
+disconnected, and that it names a verb the backend answers. Connected publication
+remains a hardware-verification gap. `bandscope_analyzer_test` pins the analyzer's
+dB scale and correction; `bandscope_trace_render_test` feeds known records through
+the production dialog and checks its displayed peak level and frequency.
+
 ### Firmware update source
 
 `firmwareUpdateSource` is the optional record for *"this radio's firmware version
@@ -334,28 +382,19 @@ Absence means **nobody has said**: it is not a claim that the radio's firmware i
 current, nor that it cannot be checked. A radio whose backend declares nothing
 draws its version row exactly as it always has.
 
-Read by `BandscopeDialog` (the Tools ▸ Wideband Bandscope window) and by nothing
-else. **The record is what gates the menu entry** — not `family == "hl2"`, which
-is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam
-and whose sanctioned alternative is exactly this.
+### Board identity
 
-**The levels the window draws are on the same scale as the `ADC peak
-(uncalibrated pre-DDC dBFS)` health row**, which is a true time-domain peak of
-the same block. `BandscopeDialog` adds `ClientEqFftAnalyzer::
-coherentGainCorrectionDb()` to every bin before drawing, because the analyzer's
-own normalisation is the unwindowed one and leaves its bins 6.02 dB low — a
-detail the EQ editor never had to care about and this window cannot avoid, since
-comparing against the converter's clip threshold is the whole point of it. The
-two readouts agree for a single carrier; a broadband signal spreads its energy
-over bins, so the peak *bin* sits below the peak *sample* by however wide the
-signal is. Both are uncalibrated, and neither has been checked against a
-converter driven to a known level.
+`boardIdentity` is the optional record for *"the backend knows which board this
+is"*: a stable lowercase `board` id and the `gatewareMajor` it runs, both derived
+below the seam (#7311). The support tier reads it
+(`ExperimentalRadioSupport.h`, `isSupportedHl2Identity`), never
+`RadioInfo::versionLabel`, which is display text and may be reworded or
+translated without changing any tier.
 
-`wideband_converter_view_test` pins the record's contents, its absence while
-disconnected, and that it names a verb the backend answers. Connected publication
-remains a hardware-verification gap. `bandscope_analyzer_test` pins the analyzer's
-dB scale and correction; `bandscope_trace_render_test` feeds known records through
-the production dialog and checks its displayed peak level and frequency.
+| Backend | Declares | Why |
+|---|---|---|
+| HL2 | ✅ **while connected**: `board` from `hl2::boardIdFor(boardForGatewareMinor(minor))` (`"hl2"`, `"square-sdr-2"`, `"square-3"`), `gatewareMajor` from the discovery version (`"74.3"` → 74; absent when not reported) | Supported means `board == "hl2"` and `gatewareMajor == 74`; anything else, or no record, stays experimental |
+| Flex / Icom / ANAN / RTL / Sim | — | No tier reads a board identity; Icom's tier reads the CI-V-derived `model` |
 
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|

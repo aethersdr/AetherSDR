@@ -51,7 +51,7 @@ namespace AetherSDR::hl2 {
 // Give receiver 0 a CONFIGURED chain on the backend's real I/O thread, so every
 // verb below travels the queued path it takes in production. Configured on this
 // thread before the move, then published to the EP6 fan-out's list, which is
-// what dspChains() gathers from.
+// what dspChains()' cache is published from.
 struct Hl2ApfAgcOffTestAccess {
     static bool attachChain(Hl2Backend& backend, const Hl2RxDsp::Config& cfg)
     {
@@ -391,8 +391,8 @@ int main(int argc, char** argv)
     //
     // Read back from dspChains(), which reports what the WDSP channel ACCEPTED
     // rather than what was asked, so a verb that stored its value and never
-    // reached the chain fails here. dspChains() blocks on the I/O thread,
-    // behind the queued pushes these verbs made.
+    // reached the chain fails here. Each read settles the cache first, so it
+    // reports the chain behind the queued pushes these verbs made.
     {
         using AetherSDR::IRadioBackend;
         using AetherSDR::SliceDelta;
@@ -401,6 +401,7 @@ int main(int argc, char** argv)
                   backend, baseConfig(WdspChannel::Mode::Usb, 0)),
               "receiver 0 has a configured chain on the I/O thread");
         const auto rx0 = [&backend]() {
+            backend.settleDspChainsForTest();
             for (const QVariant& v : backend.dspChains()) {
                 const QVariantMap m = v.toMap();
                 if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")

@@ -11,6 +11,7 @@
 #  include <ws2tcpip.h>
 #else
 #  include <netinet/in.h>
+#  include <signal.h>
 #  include <sys/socket.h>
 #endif
 
@@ -55,13 +56,7 @@ using socket_t = SOCKET;
 
 extern "C" void terminatingSignalHandler(int sig)
 {
-    fireEmergencyStop();
-
-    // Restore the default disposition and re-raise, so the process dies exactly
-    // as it would have without us: same exit status, same core dump, same
-    // crash reporter. Swallowing the signal here would turn a kill into a hang.
-    std::signal(sig, SIG_DFL);
-    std::raise(sig);
+    fireEmergencyStopAndReraise(sig);
 }
 
 }  // namespace
@@ -120,6 +115,42 @@ void fireEmergencyStop() noexcept
     }
 }
 
+void fireEmergencyStopAndReraise(int sig) noexcept
+{
+    fireEmergencyStop();
+
+    // Restore the default disposition and re-raise, so the process dies exactly
+    // as it would have without us: same exit status, same core dump, same
+    // crash reporter. Swallowing the signal here would turn a kill into a hang.
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
+bool installSignalHandlerUnlessIgnored(int sig, void (*handler)(int)) noexcept
+{
+#ifdef Q_OS_WIN
+    const auto previous = std::signal(sig, handler);
+    if (previous == SIG_IGN) {
+        std::signal(sig, SIG_IGN);
+        return false;
+    }
+    return true;
+#else
+    // Read before writing, so an ignored signal never has a handler at all.
+    struct sigaction current {};
+    sigaction(sig, nullptr, &current);
+    if (current.sa_handler == SIG_IGN) {
+        return false;
+    }
+    struct sigaction action {};
+    action.sa_handler = handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    sigaction(sig, &action, nullptr);
+    return true;
+#endif
+}
+
 void installEmergencyStopSignalHandlers() noexcept
 {
     // Termination signals only. SIGSEGV/SIGABRT/SIGBUS belong to the platform
@@ -132,11 +163,7 @@ void installEmergencyStopSignalHandlers() noexcept
 #endif
     };
     for (const int sig : kSignals) {
-        // Never override an inherited SIG_IGN (POSIX): nohup ignores SIGHUP,
-        // and a handler here would make it fatal again.
-        const auto previous = std::signal(sig, terminatingSignalHandler);
-        if (previous == SIG_IGN)
-            std::signal(sig, SIG_IGN);
+        installSignalHandlerUnlessIgnored(sig, terminatingSignalHandler);
     }
 }
 

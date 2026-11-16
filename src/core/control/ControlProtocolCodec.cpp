@@ -384,7 +384,7 @@ ParseResult ControlProtocolCodec::parseRequest(const QByteArray& bytes)
     }
 
     const QJsonValue sessionValue = object.value(QStringLiteral("sessionId"));
-    if (request.isHello()) {
+    if (request.isHello() || request.isPairingComplete()) {
         if (!sessionValue.isUndefined()) {
             out.error = error(QStringLiteral("protocol.invalid_envelope"),
                               QStringLiteral("hello must not carry a sessionId"));

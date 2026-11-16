@@ -25,11 +25,14 @@
 
 #include "core/AutomationBridgeSettings.h"
 #include "core/LogManager.h"
+#include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 #include "core/backends/hl2/Hl2FreqCal.h"
 #include "core/backends/hl2/Hl2Settings.h"
 
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QPointer>
@@ -308,6 +311,13 @@ QByteArray floatBytes(const std::vector<float>& v)
             static_cast<qsizetype>(v.size() * sizeof(float))};
 }
 
+// The TX entry gatherDspChains() writes for an unconfigured modulator.
+QVariantMap notConfiguredTxChain()
+{
+    return {{QStringLiteral("chain"), QStringLiteral("hl2-tx")},
+            {QStringLiteral("level"), QStringLiteral("not-configured")}};
+}
+
 }  // namespace
 
 Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
@@ -333,19 +343,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_rx.assign(1, Receiver{});
 
     // Transmit availability, decided once so it cannot change under a key.
-    // Interactive runs can transmit; automation runs defer to the bridge's TX
-    // gate (AETHER_AUTOMATION_ALLOW_TX) rather than an HL2-specific variable.
+    // Interactive runs can transmit; automation runs take the bridge's own
+    // launch answer (ALLOW_TX, the persisted toggle, NO_TX), so the two gates agree.
     const bool automation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
-    // The bridge's TX gate has TWO sources and both must be honoured, or this
-    // backend disagrees with the layer the operator actually configured:
-    // AutomationServer::start() reads the env var, and MainWindow applies the
-    // persisted GUI toggle through setTxAllowed(). Checking only the env var
-    // meant the bridge would accept a key, log "key ptt ON" and return ok:true
-    // while nothing keyed — a silent disagreement, which is worse than either
-    // answer on its own.
-    const bool automationAllowsTx =
-        qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
-        || AutomationBridgeSettings::txAllowed();
+    const bool automationAllowsTx = AutomationBridgeSettings::launchTxAllowed();
     m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
@@ -355,13 +356,29 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
-                   "without AETHER_AUTOMATION_ALLOW_TX";
+                   "without AETHER_AUTOMATION_ALLOW_TX, or with AETHER_AUTOMATION_NO_TX";
     }
 
     m_ioThread = new QThread(this);
     m_ioThread->setObjectName(QStringLiteral("hl2-io"));
     m_metis->moveToThread(m_ioThread);
     m_txDsp->moveToThread(m_ioThread);
+    // PureSignal lives with the TXA channel it drives and the wire it sets the
+    // keyed feedback gain on, so neither needs a lock.
+    qRegisterMetaType<Hl2PureSignalStatus>("AetherSDR::hl2::Hl2PureSignalStatus");
+    m_pureSignal = new Hl2PureSignal(m_txDsp);
+    m_pureSignal->setTxGainSink([metis = m_metis](int db) { metis->setPureSignalTxGainDb(db); });
+    m_pureSignal->moveToThread(m_ioThread);
+    connect(m_pureSignal, &Hl2PureSignal::statusChanged, this,
+            [this](const Hl2PureSignalStatus& s) {
+        m_psStatus = s;
+        // Worker updates queued before linkDown must not publish after the
+        // seam's final disconnected notification (IRadioBackend rule 6).
+        if (m_connected) {
+            emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
+                                 pureSignalFields());
+        }
+    }, Qt::QueuedConnection);
     AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
 
     // The rate-change build thread — see the member declarations. Started here
@@ -427,6 +444,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             if (m_ioDsps[i])
                 m_ioDsps[i]->processIqBlock(blocks[i]);
         }
+        // PureSignal: DDC 3 carries the TX DAC samples and DDC 2 the coupler
+        // feedback while keyed (MetisClient::setPureSignal). feed() drops them
+        // unless PureSignal is on and keyed, and it is on this thread too.
+        if (blocks.size() >= 4 && m_pureSignal)
+            m_pureSignal->feed(blocks[3], blocks[2]);
     }, Qt::DirectConnection);
 
     // EP6 interleaves every active DDC. Invalidate each partial FFT before
@@ -480,6 +502,9 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // Once per connect, after receiver A is published: the remembered
         // notches and receivers B.. come back through the operator's own paths.
         replayRestoredSession();
+        refreshPureSignalAvailability();
+        // After the restored receivers: they decide whether PureSignal fits.
+        restorePureSignalEnabled();
         // Tell the IO board where we came up. applyBandFilter() is NOT called on
         // this path — the connect-time filter byte is primed straight into
         // MetisClient::Params instead — so without this the board would hold
@@ -532,6 +557,9 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             m_linkStatsTimer->stop();
             resetIoBoardSchedule();
             resetBandscopeMirrors();
+            refreshPureSignalAvailability();
+            emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
+                                 pureSignalFields());
             emit disconnected();
         }
     });
@@ -551,6 +579,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_linkStatsTimer->stop();
         resetIoBoardSchedule();
         resetBandscopeMirrors();
+        refreshPureSignalAvailability();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
     });
 
@@ -758,6 +787,21 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_linkStatsTimer = new QTimer(this);
     m_linkStatsTimer->setInterval(kLinkStatsIntervalMs);
     connect(m_linkStatsTimer, &QTimer::timeout, this, &Hl2Backend::publishLinkStats);
+
+    // A fresh modulator is unconfigured and m_ioDsps is empty, so this is what
+    // the first gather would return.
+    m_dspChains = {notConfiguredTxChain()};
+    m_dspChainsPublishTimer = new QTimer(this);
+    m_dspChainsPublishTimer->setSingleShot(true);
+    m_dspChainsPublishTimer->setInterval(0);
+    connect(m_dspChainsPublishTimer, &QTimer::timeout, this,
+            &Hl2Backend::postDspChainsGather);
+    // Never stopped, like the poll-state timer: the cache has no connected state.
+    m_dspChainsRefreshTimer = new QTimer(this);
+    m_dspChainsRefreshTimer->setInterval(kDspChainsRefreshIntervalMs);
+    connect(m_dspChainsRefreshTimer, &QTimer::timeout, this,
+            &Hl2Backend::postDspChainsGather);
+    m_dspChainsRefreshTimer->start();
 }
 
 void Hl2Backend::publishLinkStats()
@@ -1038,11 +1082,16 @@ int Hl2Backend::receiverCeiling() const
     p.numRx = kMaxReceivers;
     p.boardMaxRx = m_boardMaxRx;
     const int board = MetisClient::effectiveNumRx(p);
-    return std::min(board, maxReceiversAtRate(m_sampleRateHz, board));
+    const int ceiling = std::min(board, maxReceiversAtRate(m_sampleRateHz, board));
+    // PureSignal holds DDC 2 and 3 for feedback and TX reference.
+    return m_psEnabled ? std::min(ceiling, 2) : ceiling;
 }
 
 void Hl2Backend::announceReceiverCeilingRevision()
 {
+    // A committed span change is also PureSignal's: the feedback rate follows
+    // the RX rate, and a span four receivers do not fit takes it away.
+    refreshPureSignalAvailability();
     // Disconnected, the ceiling reported by capabilities() is not receiverCeiling()
     // at all (it falls back to the receiver count), and the connect/disconnect
     // edges already republish capabilities on their own. Nothing to announce.
@@ -1816,6 +1865,334 @@ void Hl2Backend::publishIoDsps()
     for (const Receiver& r : m_rx)
         next.push_back(r.dsp);
     publishIoDspList(std::move(next));
+    // The receiver count is one of PureSignal's conditions.
+    refreshPureSignalAvailability();
+}
+
+QString Hl2Backend::pureSignalBlocker() const
+{
+    if (!AETHER_HL2_TX_TXA)
+        return tr("Needs the WDSP TXA transmit build");
+    if (!m_txAllowed)
+        return tr("Transmit is not available on this host");
+    if (!m_connected)
+        return tr("Connect to the radio");
+    if (m_boardMaxRx > 0 && m_boardMaxRx < 4)
+        return tr("The gateware offers %1 receivers; PureSignal needs 4").arg(m_boardMaxRx);
+    if (maxReceiversAtRate(m_sampleRateHz, 4) < 4)
+        return tr("Span too wide: zoom in so four receivers fit the link");
+    if (!m_psEnabled && m_rx.size() > 2)
+        return tr("Close receivers down to two: PureSignal uses DDC 2 and 3");
+    return {};
+}
+
+void Hl2Backend::applyPureSignalWire(bool on)
+{
+    if (on == m_psEnabled)
+        return;
+    m_psEnabled = on;
+    // Order on the I/O thread: claim the DDCs before the controller starts,
+    // and stop the controller before the DDCs go back.
+    if (on) {
+        QMetaObject::invokeMethod(m_metis, "setPureSignal", Qt::QueuedConnection,
+                                  Q_ARG(bool, true));
+        QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::QueuedConnection,
+                                  Q_ARG(bool, true));
+    } else {
+        QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::QueuedConnection,
+                                  Q_ARG(bool, false));
+        QMetaObject::invokeMethod(m_metis, "setPureSignal", Qt::QueuedConnection,
+                                  Q_ARG(bool, false));
+    }
+    qCInfo(lcHl2) << "HL2: PureSignal" << (on ? "on — DDC 2/3 claimed, receiver ceiling 2"
+                                              : "off");
+    announceReceiverCeilingRevision();
+}
+
+void Hl2Backend::refreshPureSignalAvailability()
+{
+    if (!m_pureSignal || !m_metis)
+        return;
+    const QString blocker = pureSignalBlocker();
+    const bool available = blocker.isEmpty();
+    if (!available && m_psEnabled)
+        applyPureSignalWire(false);
+    if (m_sampleRateHz > 0 && m_sampleRateHz != m_psFeedbackRateHz) {
+        m_psFeedbackRateHz = m_sampleRateHz;
+        QMetaObject::invokeMethod(m_pureSignal, "setFeedbackRateHz", Qt::QueuedConnection,
+                                  Q_ARG(int, m_sampleRateHz));
+    }
+    if (available == m_psAvailable && blocker == m_psUnavailableReason)
+        return;
+    m_psAvailable = available;
+    m_psUnavailableReason = blocker;
+    QMetaObject::invokeMethod(m_pureSignal, "setAvailability", Qt::QueuedConnection,
+                              Q_ARG(bool, available), Q_ARG(QString, blocker));
+}
+
+bool Hl2Backend::setPureSignalEnabled(bool on)
+{
+    if (on) {
+        refreshPureSignalAvailability();
+        if (!m_psAvailable) {
+            qCWarning(lcHl2) << "HL2: PureSignal refused —" << m_psUnavailableReason;
+            return false;
+        }
+    }
+    applyPureSignalWire(on);
+    return true;
+}
+
+void Hl2Backend::restorePureSignalEnabled()
+{
+    // Link-up, unkeyed: the operator left PureSignal on last time, so turn it
+    // on again. A radio that cannot run it now (rate, receivers) keeps the
+    // preference and says why; the operator's next on/off replaces it.
+    if (!m_psWanted || m_psEnabled || m_keyed || !m_pureSignal || !m_metis)
+        return;
+    if (setPureSignalEnabled(true))
+        qCInfo(lcHl2) << "HL2: PureSignal on again, as the operator left it";
+    else
+        qCInfo(lcHl2) << "HL2: PureSignal was left on but cannot run now —"
+                      << m_psUnavailableReason;
+}
+
+QVariantMap Hl2Backend::pureSignalFields() const
+{
+    // The controller's last report, with the three facts the GUI thread owns
+    // laid over it: the controller hears about them a queued hop later.
+    Hl2PureSignalStatus s = m_psStatus;
+    s.enabled = m_psEnabled;
+    s.available = m_psAvailable;
+    s.unavailableReason = m_psUnavailableReason;
+    s.autoCalibrate = m_psAutoCalibrate;
+    s.autoAttenuate = m_psAutoAttenuate;
+    // Auto-attenuate moves the attenuation on the I/O thread; only a manual
+    // setting is this thread's to report.
+    if (!m_psAutoAttenuate)
+        s.attenuationDb = m_psAttenuationDb;
+    return pureSignalStatusFields(s);
+}
+
+namespace {
+constexpr auto kPureSignalFeature = "PureSignal";
+constexpr int kPureSignalSchemaVersion = 1;
+// PSSaveCorr / PSRestoreCorr ignore a name of this many bytes or more
+// (calcc.c), without telling the caller.
+constexpr int kPureSignalMaxPathBytes = 256;
+}  // namespace
+
+void Hl2Backend::loadPureSignalPreferences()
+{
+    // Consumer read: this radio's row, else the family-wide default, else the
+    // built-in defaults. An empty serial reads the family-wide row only.
+    const RadioSettingsScope scope(QStringLiteral("hl2"), m_radioSerial);
+    int version = 0;
+    const QJsonObject doc = scope.feature(QLatin1String(kPureSignalFeature), &version);
+    m_psWanted = false;
+    m_psAutoCalibrate = true;
+    m_psAutoAttenuate = true;
+    // Only a manual attenuation is stored. What auto-attenuate reaches depends
+    // on the band, the drive and the coupler of the moment, so it is not
+    // persisted: each session starts at kAttMax and auto-attenuate finds its
+    // level again on the first calibration.
+    m_psAttenuationDb = Hl2PsGain::kAttMax;
+    if (!doc.isEmpty() && version <= kPureSignalSchemaVersion) {
+        // "enabled" came later in schema 1; a row without it reads as off.
+        m_psWanted = doc.value(QStringLiteral("enabled")).toBool(false);
+        m_psAutoCalibrate = doc.value(QStringLiteral("autoCalibrate")).toBool(m_psAutoCalibrate);
+        m_psAutoAttenuate = doc.value(QStringLiteral("autoAttenuate")).toBool(m_psAutoAttenuate);
+        const QJsonValue att = doc.value(QStringLiteral("attenuationDb"));
+        if (!m_psAutoAttenuate && att.isDouble())
+            m_psAttenuationDb = Hl2PsGain::clampAtt(att.toInt(m_psAttenuationDb));
+    } else if (version > kPureSignalSchemaVersion) {
+        qCWarning(lcHl2) << "HL2: PureSignal preferences are schema" << version
+                         << "— newer than this build; using defaults";
+    }
+    setPureSignalAutoCalibrate(m_psAutoCalibrate);
+    setPureSignalAutoAttenuate(m_psAutoAttenuate);
+    setPureSignalAttenuationDb(m_psAttenuationDb);
+    // The controller publishes only on a change of its own; this radio's
+    // preferences may differ from the last one's without changing that.
+    emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"), pureSignalFields());
+}
+
+void Hl2Backend::savePureSignalPreferences()
+{
+    // Never write an empty radio_id row: it would hand this station's coupler
+    // attenuation to every HL2 (same guard as applyHardwareOptions()).
+    if (m_radioSerial.isEmpty()) {
+        qCWarning(lcHl2) << "HL2: not persisting PureSignal preferences —"
+                         << "no radio identity yet; applying for this session only";
+        return;
+    }
+    const RadioSettingsScope scope(QStringLiteral("hl2"), m_radioSerial);
+    int version = 0;
+    QJsonObject doc = scope.featureExact(QLatin1String(kPureSignalFeature), &version);
+    if (version > kPureSignalSchemaVersion) {
+        qCWarning(lcHl2) << "HL2: not overwriting PureSignal preferences of schema" << version;
+        return;
+    }
+    doc.insert(QStringLiteral("enabled"), m_psWanted);
+    doc.insert(QStringLiteral("autoCalibrate"), m_psAutoCalibrate);
+    doc.insert(QStringLiteral("autoAttenuate"), m_psAutoAttenuate);
+    doc.insert(QStringLiteral("attenuationDb"), m_psAttenuationDb);
+    if (!scope.setFeature(QLatin1String(kPureSignalFeature), kPureSignalSchemaVersion, doc))
+        qCWarning(lcHl2) << "HL2: PureSignal preferences did not persist";
+    AppSettings::instance().save();
+}
+
+void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const QVariant& arg)
+{
+    const auto refuse = [this, requestId](const QString& reason) {
+        if (requestId != 0)
+            emit extensionError(requestId, reason);
+    };
+    const auto boolArg = [&arg](bool& out) {
+        if (!arg.canConvert<bool>())
+            return false;
+        out = arg.toBool();
+        return true;
+    };
+    bool on = false;
+    if (verb == QLatin1String("puresignal.get")) {
+        refreshPureSignalAvailability();
+    } else if (verb == QLatin1String("puresignal.enable")) {
+        if (!boolArg(on))
+            return refuse(QStringLiteral("puresignal.enable: expects a bool"));
+        // Claiming or releasing DDC 2/3 can change the receiver count on the
+        // wire, which restarts EP6: not in the middle of an over. A loss of
+        // availability still turns it off while keyed (refreshPureSignalAvailability).
+        if (on != m_psEnabled && m_keyed)
+            return refuse(tr("Unkey to change PureSignal"));
+        if (!setPureSignalEnabled(on))
+            return refuse(m_psUnavailableReason);
+        if (on != m_psWanted) {
+            m_psWanted = on;
+            savePureSignalPreferences();
+        }
+    } else if (verb == QLatin1String("puresignal.auto")) {
+        if (!boolArg(on))
+            return refuse(QStringLiteral("puresignal.auto: expects a bool"));
+        setPureSignalAutoCalibrate(on);
+        if (on != m_psAutoCalibrate) {
+            m_psAutoCalibrate = on;
+            savePureSignalPreferences();
+        }
+    } else if (verb == QLatin1String("puresignal.autoatt")) {
+        if (!boolArg(on))
+            return refuse(QStringLiteral("puresignal.autoatt: expects a bool"));
+        setPureSignalAutoAttenuate(on);
+        if (on != m_psAutoAttenuate) {
+            // Turning it off keeps the attenuation it had reached, which then
+            // becomes the manual setting.
+            if (!on)
+                m_psAttenuationDb = Hl2PsGain::clampAtt(m_psStatus.attenuationDb);
+            m_psAutoAttenuate = on;
+            savePureSignalPreferences();
+        }
+    } else if (verb == QLatin1String("puresignal.att")) {
+        bool ok = false;
+        const int att = arg.toInt(&ok);
+        if (!ok)
+            return refuse(QStringLiteral("puresignal.att: expects an integer in dB"));
+        const int clamped = Hl2PsGain::clampAtt(att);
+        setPureSignalAttenuationDb(clamped);
+        if (clamped != m_psAttenuationDb) {
+            m_psAttenuationDb = clamped;
+            savePureSignalPreferences();
+        }
+    } else if (verb == QLatin1String("puresignal.single")
+               || verb == QLatin1String("puresignal.reset")) {
+        if (!m_psEnabled)
+            return refuse(QStringLiteral("PureSignal is off"));
+        clearPureSignalAutoCalibrate();
+        if (verb == QLatin1String("puresignal.single"))
+            pureSignalCalibrateOnce();
+        else
+            pureSignalResetCorrection();
+    } else if (verb == QLatin1String("puresignal.save")
+               || verb == QLatin1String("puresignal.restore")) {
+        const QString path = arg.toString();
+        if (path.isEmpty())
+            return refuse(QStringLiteral("%1: expects a file path").arg(verb));
+        if (path.toLocal8Bit().size() >= kPureSignalMaxPathBytes)
+            return refuse(QStringLiteral("%1: the file path is too long for WDSP (at most %2 bytes)").arg(verb)
+                              .arg(kPureSignalMaxPathBytes - 1));
+        if (!m_psEnabled)
+            return refuse(QStringLiteral("PureSignal is off"));
+        if (verb == QLatin1String("puresignal.save")) {
+            savePureSignalCorrection(path);
+        } else {
+            clearPureSignalAutoCalibrate();
+            restorePureSignalCorrection(path);
+        }
+    } else {
+        return refuse(QStringLiteral("hl2: unknown verb %1").arg(verb));
+    }
+    // Completes locally, like freqcal.*: the reply is the state as this thread
+    // knows it now. What the controller does with the request follows as
+    // extensionStatus once it has acted.
+    if (requestId != 0)
+        emit extensionResult(requestId, pureSignalFields());
+}
+
+void Hl2Backend::clearPureSignalAutoCalibrate()
+{
+    // Single, Reset and Restore switch Auto off; Hl2PureSignal does the same
+    // on the I/O thread. Persisted, so the next session starts with the switch
+    // the operator last saw.
+    if (!m_psAutoCalibrate)
+        return;
+    m_psAutoCalibrate = false;
+    savePureSignalPreferences();
+}
+
+void Hl2Backend::setPureSignalAutoCalibrate(bool on)
+{
+    if (m_pureSignal)
+        QMetaObject::invokeMethod(m_pureSignal, "setAutoCalibrate", Qt::QueuedConnection,
+                                  Q_ARG(bool, on));
+}
+
+void Hl2Backend::pureSignalCalibrateOnce()
+{
+    if (m_pureSignal)
+        QMetaObject::invokeMethod(m_pureSignal, "calibrateOnce", Qt::QueuedConnection);
+}
+
+void Hl2Backend::pureSignalResetCorrection()
+{
+    if (m_pureSignal)
+        QMetaObject::invokeMethod(m_pureSignal, "resetCorrection", Qt::QueuedConnection);
+}
+
+void Hl2Backend::setPureSignalAutoAttenuate(bool on)
+{
+    if (m_pureSignal)
+        QMetaObject::invokeMethod(m_pureSignal, "setAutoAttenuate", Qt::QueuedConnection,
+                                  Q_ARG(bool, on));
+}
+
+void Hl2Backend::setPureSignalAttenuationDb(int att)
+{
+    if (m_pureSignal)
+        QMetaObject::invokeMethod(m_pureSignal, "setAttenuationDb", Qt::QueuedConnection,
+                                  Q_ARG(int, att));
+}
+
+void Hl2Backend::savePureSignalCorrection(const QString& path)
+{
+    if (m_pureSignal)
+        QMetaObject::invokeMethod(m_pureSignal, "saveCorrection", Qt::QueuedConnection,
+                                  Q_ARG(QString, path));
+}
+
+void Hl2Backend::restorePureSignalCorrection(const QString& path)
+{
+    if (m_pureSignal)
+        QMetaObject::invokeMethod(m_pureSignal, "restoreCorrection", Qt::QueuedConnection,
+                                  Q_ARG(QString, path));
 }
 
 void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
@@ -1825,8 +2202,11 @@ void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
     // the thread that CREATED it, which is this one).
     if (m_metis && m_ioThread && m_ioThread->isRunning()
         && QThread::currentThread() != m_ioThread) {
+        // A gather already queued runs first and sees the old list: retire it.
+        ++m_dspChainsEpoch;
         QMetaObject::invokeMethod(m_metis, [this, next] { m_ioDsps = next; },
                                   Qt::BlockingQueuedConnection);
+        requestDspChainsPublish();
         return;
     }
     // No I/O thread to hand it to: before it starts, after it is joined, or when
@@ -1848,6 +2228,12 @@ Hl2Backend::~Hl2Backend()
         // Stop the wire on its own thread and wait: a queued stop() would never
         // run after quit(). Blocks on the GUI thread for an in-flight DSP build
         // (docs/HERMES.md §22.4); beginDspSetup()'s QPointer relies on this.
+        // PureSignal goes off first, on its own thread: that stops its tick
+        // timer there (a QTimer cannot be stopped from another thread) and
+        // takes the correction off the TXA channel before the wire stops.
+        if (m_pureSignal)
+            QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::BlockingQueuedConnection,
+                                      Q_ARG(bool, false));
         if (m_metis)
             QMetaObject::invokeMethod(m_metis, "stop", Qt::BlockingQueuedConnection);
         m_ioThread->quit();
@@ -1864,6 +2250,7 @@ Hl2Backend::~Hl2Backend()
     m_rx.clear();
     m_ioDsps.clear();   // the thread that read this is joined; plain clear is safe
     m_ids.clear();
+    delete m_pureSignal;   // reads m_txDsp's channel; goes first
     delete m_txDsp;
     delete m_metis;
     // After both joins, so nothing can be posting to it.
@@ -1929,6 +2316,16 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
+    // The board this connect's gateware names (#7311). Only while connected:
+    // m_gatewareBoard and m_gatewareMajor are what the last connectRadio() loaded.
+    if (m_connected) {
+        RadioCapabilities::BoardIdentity identity;
+        identity.board = QString::fromLatin1(hl2::boardIdFor(m_gatewareBoard));
+        identity.gatewareMajor = m_gatewareMajor;
+        c.boardIdentity = identity;
+    } else {
+        c.boardIdentity = std::nullopt;
+    }
     // No repeater duplex and no tone encode, although the TXA build keys FM:
     // hasFmRepeaterOffset defaults true and this backend overrides no
     // repeater-offset setter, and no tone control reaches TXA's CTCSS encoder,
@@ -2027,6 +2424,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
         c.cwPitchMinHz, c.cwPitchMaxHz, c.cwPitchStepHz};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    c.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
         static_cast<qint64>(kTuningMinHz), static_cast<qint64>(kTuningMaxHz)};
@@ -2152,6 +2550,14 @@ RadioCapabilities Hl2Backend::capabilities() const
     // an extension call, so leaving it empty while the verbs work would report
     // the opposite of the truth.
     c.extensionNamespaces << QStringLiteral("hl2");
+    // The puresignal.* verbs and the "puresignal" status kind, version 1.
+    // Declared on every HL2: whether it can run right now (TXA build, board,
+    // span, receivers open) is in the status map's available/unavailableReason.
+    {
+        QVariantMap hl2Ext = c.extensions.value(QStringLiteral("hl2")).toMap();
+        hl2Ext.insert(QStringLiteral("puresignal"), 1);
+        c.extensions.insert(QStringLiteral("hl2"), hl2Ext);
+    }
     // Wideband converter view (docs/HERMES.md §13 item 18), declared rather than
     // inferred from the family string. Only while connected: the verb raises
     // wide_spectrum on a streaming radio and MetisClient refuses otherwise.
@@ -2285,6 +2691,63 @@ RadioCapabilities Hl2Backend::capabilities() const
 
 void Hl2Backend::connectRadio(const RadioConnectRequest& request)
 {
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbe->cancel();
+    const QHostAddress probeHost(request.host);
+    if (request.automaticReconnect && !probeHost.isNull()) {
+        // A session still running (its silence recovery declared link loss but
+        // keeps sending EP2) is abandoned first, without a metis-stop: another
+        // host may be running the radio, and the gateware obeys RUNSTOP from any
+        // host. The probe below finds out which; a busy answer starts nothing.
+        if (m_metis && m_metis->isRunning())
+            QMetaObject::invokeMethod(m_metis, "abandon", Qt::BlockingQueuedConnection);
+        m_busyProbeRequest = request;
+        const auto discovery = discoveryRequest();
+        m_busyProbe->start(probeHost, kMetisPort,
+            QByteArray(reinterpret_cast<const char*>(discovery.data()),
+                       static_cast<qsizetype>(discovery.size())),
+            [](std::span<const std::uint8_t> datagram) -> std::optional<bool> {
+                const auto reply = parseDiscoveryReply(datagram);
+                return reply ? std::optional<bool>(reply->streaming) : std::nullopt;
+            },
+            [this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
+        return;
+    }
+    m_busyWarned = false;
+    startConnect(request);
+}
+
+void Hl2Backend::armBusyProbeForTest(const RadioConnectRequest& request)
+{
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbeRequest = request;
+    m_busyProbe->armForTest([this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
+}
+
+void Hl2Backend::finishBusyProbe(std::optional<bool> streaming)
+{
+    // An HL2 streaming to another host does not answer our discovery, so only
+    // an explicit idle reply lets the reconnect go ahead.
+    if (!ReconnectBusyProbe::mayProceed(streaming, ReconnectBusyProbe::Silence::Wait)) {
+        qCInfo(lcHl2) << "HL2: not reconnecting to" << m_busyProbeRequest.host
+                      << (streaming ? "- another client has the radio" : "- no idle answer");
+        if (!m_busyWarned) {
+            m_busyWarned = true;
+            emit configurationWarning(QStringLiteral(
+                "HL2: the radio at %1 is not answering, or is in use by another client. "
+                "AetherSDR will reconnect once it answers free, without taking it over.")
+                .arg(m_busyProbeRequest.host));
+        }
+        return;   // RadioModel's reconnect timer asks again
+    }
+    m_busyWarned = false;
+    startConnect(m_busyProbeRequest);
+}
+
+void Hl2Backend::startConnect(const RadioConnectRequest& request)
+{
     const QHostAddress host(request.host);
     if (host.isNull()) {
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));
@@ -2334,8 +2797,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // fields are start() parameters — the dither bit rides the config register
     // the very first frame carries, and the codec decides whether that frame's
     // audio slot may hold anything at all.
-    loadHardwareOptions(
-        hl2::gatewareMinorFromVersionText(request.version.toStdString()));
+    loadBoardIdentity(request.version);
     // AND RECONCILE THE TWO DOCUMENTS BEFORE ANYTHING IS COMPUTED FROM THEM.
     // The calibration and the hardware options are separate rows, loaded by the
     // two independent calls above and written by two independent operations, so
@@ -2516,6 +2978,14 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         qCInfo(lcHl2) << "HL2: board reports" << m_boardMaxRx << "receiver(s)";
     }
     mp.boardMaxRx = m_boardMaxRx;
+    // PureSignal starts each session off on the wire: it claims receivers,
+    // which only fits once the restored session's receivers are known. Its
+    // preferences are this radio's, so they follow the radio, and one of them
+    // is whether the operator left it on: restorePureSignalEnabled() turns it
+    // back on at link-up.
+    applyPureSignalWire(false);
+    mp.pureSignal = false;
+    loadPureSignalPreferences();
     // The filter board must be right from the first config frame: the radio
     // reports no state. All receivers start on one frequency, so this is that
     // frequency's filter (see applyBandFilter()). The receive byte, since some
@@ -2840,7 +3310,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
         if (m_queuedConnect) {
             const RadioConnectRequest queued = *m_queuedConnect;
             m_queuedConnect.reset();
-            connectRadio(queued);
+            startConnect(queued);   // already past any busy probe
         }
         return;
     }
@@ -2962,6 +3432,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // UI yet, so anything higher would be an un-commanded power level chosen by
     // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
+    requestDspChainsPublish();
     emit dspSetupFinished();
 
     // Initial slice/pan state is published from the linkUp handler above, once
@@ -2973,6 +3444,7 @@ void Hl2Backend::invalidateTxDspConfiguration()
     if (!m_txDsp) {
         return;
     }
+    withdrawCachedTxChain();
     if (!m_ioThread || !m_ioThread->isRunning()
         || QThread::currentThread() == m_txDsp->thread()) {
         m_txDsp->invalidateConfiguration();
@@ -2987,6 +3459,8 @@ void Hl2Backend::invalidateTxDspConfiguration()
 
 void Hl2Backend::disconnectRadio()
 {
+    if (m_busyProbe)
+        m_busyProbe->cancel();
     retirePcmStreams();
     invalidateTxDspConfiguration();
     // Invalidate any DSP build still in flight. Without this, a disconnect
@@ -3255,6 +3729,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
             Q_ARG(WdspChannel::Mode, wdsp));
         pushTxPassband(mode);
     }
+    requestDspChainsPublish();
     emitSliceState(ddc);
     notifyOperatingStateChanged();
 }
@@ -3275,6 +3750,7 @@ void Hl2Backend::setSliceFilter(int sliceId, int lowHz, int highHz)
         const auto [dspLo, dspHi] = dspFilterHz(*r);
         QMetaObject::invokeMethod(r->dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, dspLo), Q_ARG(double, dspHi));
+        requestDspChainsPublish();
     }
     emitSliceState(ddc);
     notifyOperatingStateChanged();
@@ -3325,9 +3801,11 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // threshold-only change), which used to send medium over whatever mode the
     // receiver was actually running.
     const double ceilingDb = m_dbRef.agcCeilingDb(r->agcThresholdDb);
-    if (r->dsp)
+    if (r->dsp) {
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r->agcMode)), Q_ARG(double, ceilingDb));
+        requestDspChainsPublish();
+    }
     emitSliceState(ddc);
     // The capture half. setSliceMode/setSliceFilter next door have always said
     // this and AGC never did, so the operator's AGC was the one control on this
@@ -3761,6 +4239,7 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
         Q_ARG(WdspChannel::NoiseBlanker, AetherSDR::toWdsp(r.nbKind)),
         Q_ARG(int, r.nbLevel),
         Q_ARG(WdspChannel::NoiseBlankerFill, AetherSDR::toWdsp(r.nbFill)));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushApf(const Receiver& r)
@@ -3774,6 +4253,7 @@ void Hl2Backend::pushApf(const Receiver& r)
     QMetaObject::invokeMethod(r.dsp, "setApf", Qt::QueuedConnection,
         Q_ARG(bool, r.apfOn), Q_ARG(int, r.apfLevel),
         Q_ARG(double, static_cast<double>(m_cwPitchHz)));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushAgcOffLevel(const Receiver& r)
@@ -3782,6 +4262,7 @@ void Hl2Backend::pushAgcOffLevel(const Receiver& r)
         return;
     QMetaObject::invokeMethod(r.dsp, "setAgcOffLevel", Qt::QueuedConnection,
         Q_ARG(int, r.agcOffLevel));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushSquelch(const Receiver& r)
@@ -3814,6 +4295,7 @@ void Hl2Backend::seedNotches(const Receiver& r)
     }
     QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
         Q_ARG(bool, m_notchesEnabled));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::createNotch(double centerHz, double widthHz)
@@ -3853,6 +4335,7 @@ void Hl2Backend::createNotch(double centerHz, double widthHz)
     // The id is minted HERE, so nothing above knows about this notch until it
     // is told. Same contract as a Flex, where the radio assigns the id and
     // reports it back as status.
+    requestDspChainsPublish();
     AetherSDR::NotchDelta delta;
     delta.centerHz = notch.centerHz;
     delta.widthHz = notch.widthHz;
@@ -3896,6 +4379,7 @@ void Hl2Backend::setNotch(int notchId, const AetherSDR::NotchDelta& delta)
     // Echo the APPLIED values, which may differ from what was asked (width
     // clamping). Reporting the request instead would let the overlay drift away
     // from the audio a little more with every drag.
+    requestDspChainsPublish();
     AetherSDR::NotchDelta applied;
     applied.centerHz = notch.centerHz;
     applied.widthHz = notch.widthHz;
@@ -3918,6 +4402,7 @@ void Hl2Backend::removeNotch(int notchId)
             QMetaObject::invokeMethod(r.dsp, "removeNotch", Qt::QueuedConnection,
                 Q_ARG(int, index));
     }
+    requestDspChainsPublish();
     emit notchRemoved(notchId);
     notifyOperatingStateChanged();
 }
@@ -3930,6 +4415,7 @@ void Hl2Backend::setNotchesEnabled(bool on)
             QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
                 Q_ARG(bool, on));
     }
+    requestDspChainsPublish();
 }
 
 // Intent ignored — the HL2's DDC window is independent of any slice.
@@ -4103,6 +4589,15 @@ void Hl2Backend::applyPanBandwidth(double hz)
             << " Mbit/s on a 100BASE-T link (max " << allowed
             << " receivers at this span). Close a receiver to zoom out further.";
         emitAllPanState();   // snap the widget back to the span that is real
+        return;
+    }
+    // PureSignal keeps four DDCs on the wire whatever is open.
+    if (m_psEnabled && maxReceiversAtRate(rate, 4) < 4) {
+        qCWarning(lcHl2).nospace()
+            << "HL2: refusing " << rate / 1000 << " kHz span — PureSignal streams"
+               " four receivers and they do not fit the link at this span."
+               " Turn PureSignal off to zoom out further.";
+        emitAllPanState();
         return;
     }
 
@@ -4345,6 +4840,7 @@ void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
     // installed nothing — this one only stops the REPORT.
     if (!m_rateLedger.isCurrent(generation))
         return;
+    requestDspChainsPublish();
 
     if (!ok) {
         // NOTHING TO UNDO ON THE RADIO. The register is written only on the
@@ -4525,7 +5021,8 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     if (!m_txAllowed) {
         if (key)
             qWarning() << "Hl2Backend: key refused — automation bridge is active "
-                          "without AETHER_AUTOMATION_ALLOW_TX";
+                          "without AETHER_AUTOMATION_ALLOW_TX"
+                          ", or with AETHER_AUTOMATION_NO_TX";
         return;
     }
     // A key with no running session is refused here too, so this backend never
@@ -4637,6 +5134,12 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         m_keyedSwrGateClears = 0;
     }
     m_keyed = key;
+    // PureSignal collects only while keyed (calcc's MOX). Queued to the I/O
+    // thread behind the MOX write, so feedback after the edge is the keyed one.
+    if (keyChanged && m_pureSignal) {
+        QMetaObject::invokeMethod(m_pureSignal, "setKeyed", Qt::QueuedConnection,
+                                  Q_ARG(bool, key));
+    }
     // Manual PTT is already mirrored optimistically by RadioModel, but CW
     // break-in keys inside this backend. Publish that edge so the TX
     // indicator, TCI clients and receive-side TX gates see the real state.
@@ -4702,11 +5205,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         applyAtuTuneRequest(false);
     }
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation, cwBreakIn] {
-            if (cwBreakIn) {
-                metis->setCwMox(key, operation);
-            } else {
-                metis->setMox(key, operation);
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, key, operation, cwBreakIn] {
+            const bool newOver = cwBreakIn ? metis->setCwMox(key, operation)
+                                           : metis->setMox(key, operation);
+            // #7216: the previous over's skipped cleanup (below) is run here
+            // instead. The modulator shares this thread (see m_ioThread), and
+            // resetting it in this same event leaves its exchange timer no
+            // chance to emit that over's residue into the new one.
+            if (newOver && dsp) {
+                dsp->reset();
             }
         }, Qt::QueuedConnection);
     }
@@ -4826,7 +5333,8 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
     if (!m_txAllowed) {
         if (down) {
             qWarning() << "Hl2Backend: CW key refused — automation bridge is active "
-                          "without AETHER_AUTOMATION_ALLOW_TX";
+                          "without AETHER_AUTOMATION_ALLOW_TX"
+                          ", or with AETHER_AUTOMATION_NO_TX";
         }
         return;
     }
@@ -5033,6 +5541,7 @@ void Hl2Backend::setCwPitch(int hz)
         QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, lo), Q_ARG(double, hi));
     }
+    requestDspChainsPublish();
     reportPitch();
 }
 
@@ -5150,6 +5659,15 @@ void Hl2Backend::applyAtuTuneRequest(bool tuning)
                       && m_txRoute == hl2::TxRoute::Ant;
     QMetaObject::invokeMethod(m_metis, "setAtuTuneRequest", Qt::QueuedConnection,
                               Q_ARG(bool, request));
+}
+
+void Hl2Backend::loadBoardIdentity(const QString& gatewareVersion)
+{
+    // The board and the gateware major both come from the discovery reply's
+    // version ("74.3"), never from its display label (#7311).
+    const std::string text = gatewareVersion.toStdString();
+    m_gatewareMajor = hl2::gatewareMajorFromVersionText(text);
+    loadHardwareOptions(hl2::gatewareMinorFromVersionText(text));
 }
 
 void Hl2Backend::loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor)
@@ -5724,6 +6242,7 @@ void Hl2Backend::pushTxPassband(const QString& mode)
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(lo)),
             Q_ARG(double, static_cast<double>(hi)));
+        requestDspChainsPublish();
     }
     TransmitDelta delta;
     delta.txFilterLow = lo;
@@ -5765,6 +6284,7 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(applyLo)),
             Q_ARG(double, static_cast<double>(applyHi)));
+        requestDspChainsPublish();
     }
 
     // Client-authoritative state moved, so the capture half has to know — the
@@ -5786,9 +6306,11 @@ void Hl2Backend::setMicGain(int level)
 
     const double linear = micSliderToLinear(level);
 
-    if (m_txDsp)
+    if (m_txDsp) {
         QMetaObject::invokeMethod(m_txDsp, "setMicGain", Qt::QueuedConnection,
             Q_ARG(double, linear));
+        requestDspChainsPublish();
+    }
 
     // Capture half of TxSetpoints memory; RadioModel debounces the store.
     // Only on change: setupBackend() re-asserts the level on every rebuild,
@@ -5920,8 +6442,8 @@ QString agcModeName(int wdspMode)
 //
 // The gather is a STATIC member taking the two lists it may read, so it has no
 // `this` and cannot reach m_rx — see the declaration in the header for why that
-// is the enforcement rather than a comment. dspChains() below is the one place
-// that chooses what to hand it.
+// is the enforcement rather than a comment. postDspChainsGather() below is the
+// one place that chooses what to hand it.
 QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
                                          Hl2TxDsp* txDsp)
 {
@@ -6039,37 +6561,79 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
     return chains;
 }
 
-// Gathered on the I/O thread, because that is where both chains live and this
-// is called from the GUI thread. Same shape as AutomationServer's
-// dspSnapshotOnObjectThread(): a same-thread fast path, otherwise a blocking
-// queued invocation. A failed invocation returns empty rather than a
-// half-filled list — "we could not ask" and "it answered zero" must not look
-// alike, which is the same rule healthSnapshot() follows.
+// A plain read, per IRadioBackend rule 3: the I/O thread publishes into
+// m_dspChains (postDspChainsGather()), so this never waits on it. The answer is
+// as of the last publish; a withdraw is visible at once (withdrawCachedTxChain()).
 QVariantList Hl2Backend::dspChains() const
 {
-    // THE ONE LINE THAT CHOOSES. m_ioDsps, never m_rx: the I/O side gets its own
-    // DDC-indexed list, rebuilt by publishIoDsps() when the receiver set
-    // changes, and the EP6 fan-out reads it for the same reason. Nothing in the
-    // gather needs Receiver anyway — every field it reports comes from the DSP
-    // object, which was the point of reading the DSP rather than the mirror.
-    if (!m_txDsp || m_txDsp->thread() == QThread::currentThread()) {
-        return gatherDspChains(m_ioDsps, m_txDsp);
-    }
-    if (!m_ioThread || !m_ioThread->isRunning()) {
-        return {};  // no event loop can answer a blocking invocation
-    }
+    return m_dspChains;
+}
 
-    QVariantList out;
-    const bool invoked = QMetaObject::invokeMethod(
-        m_txDsp, [this, &out]() { out = gatherDspChains(m_ioDsps, m_txDsp); },
-        Qt::BlockingQueuedConnection);
-    return invoked ? out : QVariantList{};
+void Hl2Backend::requestDspChainsPublish()
+{
+    if (m_dspChainsPublishTimer && !m_dspChainsPublishTimer->isActive()) {
+        m_dspChainsPublishTimer->start();
+    }
+}
+
+// Posted to the I/O thread, so it runs after every DSP change already queued
+// there. m_ioDsps, never m_rx: see gatherDspChains().
+void Hl2Backend::postDspChainsGather()
+{
+    if (!m_metis || !m_ioThread || !m_ioThread->isRunning()) {
+        return;
+    }
+    const quint64 generation = m_connectGeneration;
+    const quint64 epoch = m_dspChainsEpoch;
+    QMetaObject::invokeMethod(m_metis, [this, generation, epoch] {
+        QVariantList chains = gatherDspChains(m_ioDsps, m_txDsp);
+        QMetaObject::invokeMethod(this, [this, chains = std::move(chains), generation, epoch] {
+            acceptDspChains(chains, generation, epoch);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+void Hl2Backend::acceptDspChains(const QVariantList& chains, quint64 connectGeneration,
+                                 quint64 epoch)
+{
+    if (connectGeneration != m_connectGeneration || epoch != m_dspChainsEpoch) {
+        return;
+    }
+    m_dspChains = chains;
+}
+
+void Hl2Backend::withdrawCachedTxChain()
+{
+    ++m_dspChainsEpoch;
+    for (QVariant& entry : m_dspChains) {
+        if (entry.toMap().value(QStringLiteral("chain")).toString()
+            == QLatin1String("hl2-tx")) {
+            entry = notConfiguredTxChain();
+        }
+    }
+    // The receivers' half re-converges once the queued invalidation has run.
+    requestDspChainsPublish();
+}
+
+void Hl2Backend::settleDspChainsForTest()
+{
+    if (!m_metis || !m_ioThread || !m_ioThread->isRunning()
+        || QThread::currentThread() == m_ioThread) {
+        return;
+    }
+    postDspChainsGather();
+    QMetaObject::invokeMethod(m_metis, [] {}, Qt::BlockingQueuedConnection);
+    QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
 }
 
 void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                                  const QVariant& arg)
 {
     if (ns == QLatin1String("hl2")) {
+        if (verb.startsWith(QLatin1String("puresignal."))) {
+            invokePureSignal(verb, requestId, arg);
+            return;
+        }
         // Manual frequency calibration. Completes LOCALLY — unlike the Flex
         // tuner/amp verbs this namespace is modelled on, there is no device
         // round trip to await: the correction is a host-side scalar and the
@@ -8215,6 +8779,7 @@ void Hl2Backend::pushEffectiveLnaGain()
         // The squelch gate is referred to the LNA the same way.
         pushSquelch(r);
     }
+    requestDspChainsPublish();
     // Echo what the hardware actually took, to every pan — a slider that
     // asked for something outside the register's range finds out here, and so
     // does an operator whose gain is being held down by an automatic control.
@@ -8482,6 +9047,7 @@ void Hl2Backend::pushInitialState()
                   modeFromString(txRx ? txRx->mode : QStringLiteral("USB"))));
         QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
     }
+    requestDspChainsPublish();
 
     // This radio's remembered mic level, staged by applyRestoredState() for one
     // connect-time application. Applied here because m_txDsp is built by
@@ -8536,6 +9102,10 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission. The radio's own
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
+    if (m_pureSignal) {
+        QMetaObject::invokeMethod(m_pureSignal, "setKeyed", Qt::QueuedConnection,
+                                  Q_ARG(bool, false));
+    }
     m_radioPtt = false;
     m_swrGate.reset();
     publishTransmitState();

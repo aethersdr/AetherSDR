@@ -7,19 +7,19 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
-#include "core/ClientDeEss.h"
 #include "core/ClientGate.h"
 #include "core/ClientReverb.h"
 #include "core/ClientTube.h"
 #include "gui/ClientCompApplet.h"
 #include "gui/ClientCompKnob.h"
-#include "gui/ClientDeEssApplet.h"
 #include "gui/ClientGateApplet.h"
+#include "gui/StripTubePanel.h"
 #include "gui/ClientReverbApplet.h"
 #include "gui/ClientTubeApplet.h"
 #include "gui/StripReverbPanel.h"
 
 #include <QApplication>
+#include <QPushButton>
 #include <QtTest>
 
 using namespace AetherSDR;
@@ -50,6 +50,7 @@ private slots:
         QCOMPARE(engine.clientCompTx()->thresholdDb(), -23.0f);
     }
 
+    // The gate applet is AetherRX's only: AetherTX has no gate.
     void gateThreshold()
     {
         AudioEngine engine;
@@ -58,7 +59,31 @@ private slots:
         ClientCompKnob* knob = firstKnob(applet);
         QVERIFY(knob);
         emit knob->valueChanged(-47.0f);
-        QCOMPARE(engine.clientGateTx()->thresholdDb(), -47.0f);
+        QCOMPARE(engine.clientGateRx()->thresholdDb(), -47.0f);
+    }
+
+    // RN2, which replaced the TX gate, is on the Tube page, TX only.
+    void tubePageRn2()
+    {
+        AudioEngine engine;
+        StripTubePanel panel(&engine);
+        auto* rn2 = panel.findChild<QPushButton*>(QStringLiteral("aetherTxRn2"));
+        QVERIFY(rn2);
+        panel.showForTx();
+        QVERIFY(rn2->isVisibleTo(&panel));
+        rn2->click();
+        QCOMPARE(engine.rn2TxEnabled(), rn2->isChecked());
+        QVERIFY(engine.rn2TxEnabled());
+        rn2->click();
+        QVERIFY(!engine.rn2TxEnabled());
+        // A change made elsewhere (a profile, the gate migration) shows at
+        // once, without waiting for the page's poll.
+        engine.setRn2TxEnabled(true);
+        QVERIFY(rn2->isChecked());
+        engine.setRn2TxEnabled(false);
+        QVERIFY(!rn2->isChecked());
+        panel.showForRx();
+        QVERIFY(!rn2->isVisibleTo(&panel));
     }
 
     void tubeDrive()
@@ -70,17 +95,6 @@ private slots:
         QVERIFY(knob);
         emit knob->valueChanged(7.0f);
         QCOMPARE(engine.clientTubeTx()->driveDb(), 7.0f);
-    }
-
-    void deEssFrequency()
-    {
-        AudioEngine engine;
-        ClientDeEssApplet applet;
-        applet.setAudioEngine(&engine);
-        ClientCompKnob* knob = firstKnob(applet);
-        QVERIFY(knob);
-        emit knob->valueChanged(5500.0f);
-        QCOMPARE(engine.clientDeEssTx()->frequencyHz(), 5500.0f);
     }
 
     void reverbAppletSize()
@@ -109,11 +123,10 @@ private slots:
         ClientCompApplet comp;
         ClientGateApplet gate;
         ClientTubeApplet tube;
-        ClientDeEssApplet deEss;
         ClientReverbApplet reverb;
         StripReverbPanel strip(nullptr);
         for (QWidget* w : {static_cast<QWidget*>(&comp), static_cast<QWidget*>(&gate),
-                           static_cast<QWidget*>(&tube), static_cast<QWidget*>(&deEss),
+                           static_cast<QWidget*>(&tube),
                            static_cast<QWidget*>(&reverb), static_cast<QWidget*>(&strip)}) {
             ClientCompKnob* knob = firstKnob(*w);
             QVERIFY(knob);

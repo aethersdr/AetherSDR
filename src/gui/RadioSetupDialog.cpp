@@ -28,12 +28,14 @@
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/NetworkSettings.h"
+#include "core/TxOffDelaySettings.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
 #include "KiwiPublicReceiverPicker.h"
 #include "core/LogManager.h"
 #include "core/PeripheralSettings.h"
 #include <QApplication>
+#include <QDeadlineTimer>
 #include <QHash>
 #include <QHostAddress>
 #include <QAbstractSocket>
@@ -1696,13 +1698,12 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
             tr("Not supported by this radio"));
     }
     if (m_ipDhcpButton) {
-        const bool canConfigure = caps.hasClientNetworkConfig;
+        const QString tip = ipConfigUnavailableReason(
+            caps.hasClientNetworkConfig, m_model->isRemoteForIpConfiguration());
+        const bool canConfigure = tip.isEmpty();
         const QString sessionKey = connected
             ? QStringLiteral("%1:%2").arg(m_model->family(), m_model->serial())
             : QString();
-        const QString tip = canConfigure
-            ? QString()
-            : tr("Changing the radio's IP configuration is not supported by this radio.");
         const bool isStatic = m_model->hasStaticIp();
         applyIpConfigPresentation(
             m_ipConfigPresentation, sessionKey, canConfigure, isStatic,
@@ -2124,6 +2125,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // Row 0: Subscription | Expiration
         m_licSubscriptionLabel = makeValueLabel(
             m_model->licenseSubscription().isEmpty() ? "—" : m_model->licenseSubscription());
+        m_licSubscriptionLabel->setObjectName(QStringLiteral("licenseSubscriptionValue"));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Subscription"),
                                               QStringLiteral("Subscription:"),
                                               m_licSubscriptionLabel),
@@ -2131,6 +2133,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         m_licExpirationLabel = makeValueLabel(
             m_model->licenseExpirationDate().isEmpty() ? "—" : m_model->licenseExpirationDate());
+        m_licExpirationLabel->setObjectName(QStringLiteral("licenseExpirationValue"));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Expiration"),
                                               QStringLiteral("Expiration:"),
                                               m_licExpirationLabel,
@@ -2140,6 +2143,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // Row 1: Radio ID | Licensed version
         m_licRadioIdLabel = makeValueLabel(
             m_model->licenseRadioId().isEmpty() ? "—" : m_model->licenseRadioId());
+        m_licRadioIdLabel->setObjectName(QStringLiteral("licenseRadioIdValue"));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Radio ID"),
                                               QStringLiteral("Radio ID:"),
                                               m_licRadioIdLabel),
@@ -2147,6 +2151,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         m_licMaxVersionLabel = makeValueLabel(
             m_model->licenseMaxVersion().isEmpty() ? "—" : m_model->licenseMaxVersion());
+        m_licMaxVersionLabel->setObjectName(QStringLiteral("licenseMaximumVersionValue"));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Licensed version"),
                                               QStringLiteral("Licensed version:"),
                                               m_licMaxVersionLabel,
@@ -2399,8 +2404,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             auto* txCheck = new QCheckBox("Enable transmit control");
             const bool envForcesTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
             const bool envBlocksTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
-            txCheck->setChecked(!envBlocksTx
-                                && (AutomationBridgeSettings::txAllowed() || envForcesTx));
+            txCheck->setChecked(AutomationBridgeSettings::launchTxAllowed());
             txCheck->setToolTip(
                 "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
@@ -2625,15 +2629,17 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     btnRow->setSpacing(4);
 
     const bool isStatic = m_model->hasStaticIp();
-    const bool canConfigure = m_model->backendCapabilities().hasClientNetworkConfig;
-    const QString unavailableTip = tr("Changing the radio's IP configuration is not supported by this radio.");
+    const QString unavailableTip = ipConfigUnavailableReason(
+        m_model->backendCapabilities().hasClientNetworkConfig, m_model->isRemoteForIpConfiguration());
+    const bool canConfigure = unavailableTip.isEmpty();
 
     auto* dhcpBtn = new QPushButton("DHCP");
     m_ipDhcpButton = dhcpBtn;
     dhcpBtn->setCheckable(true);
     dhcpBtn->setChecked(!isStatic);
     dhcpBtn->setEnabled(canConfigure);
-    dhcpBtn->setToolTip(canConfigure ? QString() : unavailableTip);
+    dhcpBtn->setToolTip(unavailableTip);
+    dhcpBtn->setAccessibleDescription(unavailableTip);
     setButtonRole(dhcpBtn, ButtonRole::Select);
     btnRow->addWidget(dhcpBtn);
 
@@ -2642,7 +2648,8 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     staticBtn->setCheckable(true);
     staticBtn->setChecked(isStatic);
     staticBtn->setEnabled(canConfigure);
-    staticBtn->setToolTip(dhcpBtn->toolTip());
+    staticBtn->setToolTip(unavailableTip);
+    staticBtn->setAccessibleDescription(unavailableTip);
     setButtonRole(staticBtn, ButtonRole::Select);
     btnRow->addWidget(staticBtn);
 
@@ -2673,8 +2680,12 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     m_staticGatewayEdit = staticGw;
     staticGw->setEnabled(canConfigure && isStatic);
     fieldsGrid->addWidget(staticGw, 3, 1);
-    for (QLineEdit* edit : {staticIp, staticMask, staticGw})
+    for (QLineEdit* edit : {staticIp, staticMask, staticGw}) {
         edit->setFixedWidth(180);
+        // A dimmed field says why; validateInputs owns the tips otherwise.
+        edit->setToolTip(unavailableTip);
+        edit->setAccessibleDescription(unavailableTip);
+    }
 
     gvbox->addLayout(fieldsGrid);
     for (auto* lbl : group->findChildren<QLabel*>())
@@ -2687,7 +2698,7 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
         : QString();
     m_ipConfigPresentation.canConfigure = canConfigure;
     applyBtn->setEnabled(false);
-    applyBtn->setToolTip(canConfigure ? QString() : unavailableTip);
+    applyBtn->setToolTip(unavailableTip);
     applyBtn->setAccessibleDescription(applyBtn->toolTip());
     fieldsGrid->addWidget(applyBtn, 4, 1, Qt::AlignLeft);
 
@@ -2745,6 +2756,13 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
             [this, dhcpBtn, staticIp, staticMask, staticGw, applyBtn, validateInputs] {
         validateInputs(false);
         if (!applyBtn->isEnabled()) { return; }
+        // Re-check the gate at the write: a session's Tailscale transport is
+        // learned at GUI-client registration, after the dialog may have gated.
+        if (!ipConfigUnavailableReason(m_model->backendCapabilities().hasClientNetworkConfig,
+                                       m_model->isRemoteForIpConfiguration()).isEmpty()) {
+            applyBtn->setEnabled(false);
+            return;
+        }
         if (dhcpBtn->isChecked()) {
             m_model->requestRadioSetup({SetupField::Dhcp, std::monostate{}});
             qDebug() << "RadioSetupDialog: network set to DHCP";
@@ -2925,6 +2943,47 @@ QWidget* RadioSetupDialog::buildTxTab()
 
         auto* tx3Edit = addTimingField(3, 0, "RCA TX3:", tx.tx3Delay());
         connectTimingField(tx3Edit, SetupField::Tx3DelayMs);
+
+        // Client-side, so deliberately not in timingEdits: it never depends on
+        // the radio accepting setup fields and stays enabled while disconnected.
+        {
+            auto* lbl = new QLabel(tr("TX Off Delay (ms):"));
+            applyLabelStyle(lbl);
+            grid->addWidget(lbl, 2, 2);
+            auto* edit = new QLineEdit(QString::number(tx.txOffDelayMs()));
+            edit->setFixedWidth(60);
+            edit->setAccessibleName(tr("TX Off Delay (milliseconds)"));
+            const QString tip = tr(
+                "Keeps transmitting this many ms (0-%1) after you release PTT in "
+                "voice modes, so the end of your last word is not cut off. 0 = off.\n"
+                "With the PC mic, your mic stays live for the first %2 ms and the rest "
+                "of the delay is silent.\n"
+                "With a mic on the radio (MIC, BAL, LINE, ACC), AetherSDR cannot mute it: "
+                "your mic stays live for the whole delay, and anything you say during it "
+                "goes on the air.\n"
+                "Applies to PTT handled by AetherSDR: MOX, keyboard, serial-port "
+                "footswitch, RC-28 and TCI hardware PTT. A footswitch or mic PTT wired to the radio "
+                "unkeys at the radio and cannot be delayed from here.\n"
+                "Stored on this computer, not on the radio.")
+                .arg(TxOffDelaySettings::kMaxMs)
+                .arg(TxOffDelaySettings::kAudioWindowMs);
+            edit->setToolTip(tip);
+            edit->setAccessibleDescription(tip);
+            grid->addWidget(edit, 2, 3);
+            connect(edit, &QLineEdit::editingFinished, this, [this, edit] {
+                bool valid = false;
+                const int parsed = edit->text().toInt(&valid);
+                TransmitModel& model = m_model->transmitModel();
+                if (!valid) {
+                    edit->setText(QString::number(model.txOffDelayMs()));
+                    return;
+                }
+                const int ms = TxOffDelaySettings::clampMs(parsed);
+                edit->setText(QString::number(ms));
+                model.setTxOffDelayMs(ms);
+                TxOffDelaySettings::setDelayMs(ms);
+            });
+        }
 
         // TX Band Settings button
         bandSetBtn = new QPushButton("TX Band Settings");
@@ -3567,20 +3626,15 @@ QWidget* RadioSetupDialog::buildRxTab()
                 ppbEdit->setText(QString::number(m_model->freqErrorPpb()));
         });
 
-        connect(m_model, &RadioModel::statusReceived, this,
-                [startBtn, calStatus, calibrationActive, pllRunningSeen](
-                    const QString& object, const QMap<QString, QString>& kvs) {
-            if (object != QStringLiteral("radio") || !kvs.contains(QStringLiteral("pll_done")))
-                return;
-
-            const QString pllDone = kvs.value(QStringLiteral("pll_done"));
-            const QString freqError = kvs.value(QStringLiteral("freq_error_ppb"));
-            const QString calFreq = kvs.value(QStringLiteral("cal_freq"));
+        connect(m_model, &RadioModel::frequencyCalibrationReported, this,
+                [this, startBtn, calStatus, calibrationActive, pllRunningSeen](
+                    bool done, const QString& freqError) {
+            const QString pllDone = done ? QStringLiteral("1") : QStringLiteral("0");
             qCDebug(lcProtocol)
                 << "RadioSetupDialog: frequency calibration status"
                 << "pll_done=" << pllDone
                 << "freq_error_ppb=" << freqError
-                << "cal_freq=" << calFreq
+                << "cal_freq=" << m_model->calFreqMhz()
                 << "active=" << *calibrationActive
                 << "running_seen=" << *pllRunningSeen;
 
@@ -3598,7 +3652,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                 qCDebug(lcProtocol)
                     << "RadioSetupDialog: ignoring pll_done=1 before pll_done=0 for active calibration"
                     << "freq_error_ppb=" << freqError
-                    << "cal_freq=" << calFreq;
+                    << "cal_freq=" << m_model->calFreqMhz();
                 return;
             }
 
@@ -3613,7 +3667,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                 qCDebug(lcProtocol)
                     << "RadioSetupDialog: frequency calibration completed"
                     << "freq_error_ppb=" << freqError
-                    << "cal_freq=" << calFreq;
+                    << "cal_freq=" << m_model->calFreqMhz();
             }
         });
 
@@ -6065,13 +6119,20 @@ QWidget* RadioSetupDialog::buildFiltersTab()
             applyLabelStyle(lbl);
             grid->addWidget(lbl, row, 0);
 
+            const QString controlPrefix = QStringLiteral("filterSharpness")
+                + (r.mode == SharpnessMode::Voice ? QStringLiteral("Voice")
+                    : r.mode == SharpnessMode::Cw ? QStringLiteral("Cw") : QStringLiteral("Digital"));
             auto* slider = new GuardedSlider(Qt::Horizontal);
+            slider->setObjectName(controlPrefix + QStringLiteral("Level"));
+            slider->setAccessibleName(QString(r.label).chopped(1) + QStringLiteral(" filter sharpness"));
             slider->setRange(0, 3);
             slider->setValue(r.level);
             slider->setEnabled(!r.autoOn);
             grid->addWidget(slider, row, 1, 1, 2);
 
             auto* autoBtn = new QPushButton("Auto");
+            autoBtn->setObjectName(controlPrefix + QStringLiteral("Auto"));
+            autoBtn->setAccessibleName(QString(r.label).chopped(1) + QStringLiteral(" automatic filter sharpness"));
             autoBtn->setCheckable(true);
             autoBtn->setChecked(r.autoOn);
             setButtonRole(autoBtn, ButtonRole::Select);
@@ -6084,6 +6145,16 @@ QWidget* RadioSetupDialog::buildFiltersTab()
             connect(autoBtn, &QPushButton::toggled, this, [this, slider, mode](bool on) {
                 slider->setEnabled(!on);
                 m_model->requestRadioSetup({SetupField::SharpnessAuto, SharpnessAuto{mode, on}});
+            });
+            connect(m_model, &RadioModel::infoChanged, slider, [this, slider, autoBtn, mode] {
+                const int level = mode == SharpnessMode::Voice ? m_model->filterSharpnessVoice()
+                    : mode == SharpnessMode::Cw ? m_model->filterSharpnessCw() : m_model->filterSharpnessDigital();
+                const bool automatic = mode == SharpnessMode::Voice ? m_model->filterSharpnessVoiceAuto()
+                    : mode == SharpnessMode::Cw ? m_model->filterSharpnessCwAuto() : m_model->filterSharpnessDigitalAuto();
+                const QSignalBlocker sliderBlock(slider), autoBlock(autoBtn);
+                if (!slider->isSliderDown()) { slider->setValue(level); }
+                autoBtn->setChecked(automatic);
+                slider->setEnabled(!automatic);
             });
         }
 
@@ -6123,11 +6194,13 @@ QWidget* RadioSetupDialog::buildXvtrTab()
 
     auto buildXvtrPage = [this, xvtrTabs](int idx, const RadioModel::XvtrInfo& x) {
         const RadioControlSession session = m_model->controlSession();
-        const auto submit = [this, session](const TransverterRequest& request) {
+        const auto submit = [this, session, identity = x.lifetime](TransverterRequest request) {
+            request.expectedLifetime = identity;
             return m_model->requestTransverter(request, nullptr, {}, session);
         };
         auto* pg = new QWidget;
         pg->setProperty("transverterId", idx);
+        pg->setProperty("transverterLifetime", QVariant::fromValue(x.lifetime));
         auto* grid = new QGridLayout(pg);
         grid->setSpacing(6);
 
@@ -6174,11 +6247,8 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         // Remove button
         auto* removeBtn = new QPushButton("Remove");
         setButtonRole(removeBtn, ButtonRole::Danger);
-        connect(removeBtn, &QPushButton::clicked, pg, [submit, idx, xvtrTabs, pg] {
-            if (submit({idx, XvtrField::Remove, std::monostate{}})
-                == ReceiveDispatch::Unsupported) { return; }
-            int tabIdx = xvtrTabs->indexOf(pg);
-            if (tabIdx >= 0) xvtrTabs->removeTab(tabIdx);
+        connect(removeBtn, &QPushButton::clicked, pg, [submit, idx] {
+            submit({idx, XvtrField::Remove, std::monostate{}});
         });
         grid->addWidget(removeBtn, 4, 3);
 
@@ -6253,6 +6323,27 @@ QWidget* RadioSetupDialog::buildXvtrTab()
             submitMaxPower(true);
         });
 
+        connect(m_model, &RadioModel::infoChanged, pg,
+                [=, this, identity = x.lifetime] {
+            const auto value = m_model->xvtrList().value(idx);
+            if (!identity || !identity->current() || value.lifetime != identity) { return; }
+            const auto refresh = [](QLineEdit* edit, const QString& text) {
+                if (!edit->hasFocus()) { const QSignalBlocker blocker(edit); edit->setText(text); }
+            };
+            refresh(nameEdit, value.name);
+            refresh(rfEdit, QString::number(value.rfFreq, 'f', 3));
+            refresh(ifEdit, QString::number(value.ifFreq, 'f', 3));
+            refresh(loEdit, QString::number(value.rfFreq - value.ifFreq, 'f', 3));
+            refresh(errEdit, QString::number(value.loError, 'f', 6));
+            refresh(rxGainEdit, QString::number(value.rxGain, 'f', 1));
+            refresh(maxPwrEdit, QString::number(value.maxPower, 'f', 1));
+            const QSignalBlocker blocker(rxOnlyBtn);
+            rxOnlyBtn->setChecked(value.rxOnly);
+            rxOnlyBtn->setText(value.rxOnly ? "Enabled" : "Disabled");
+            validLbl->setText(value.isValid ? "Valid" : "Invalid");
+            setTone(validLbl, value.isValid ? Tone::Ok : Tone::Error);
+        });
+
         return pg;
     };
 
@@ -6267,40 +6358,48 @@ QWidget* RadioSetupDialog::buildXvtrTab()
     auto* addPage = new QWidget;
     auto* addVb = new QVBoxLayout(addPage);
     auto* addBtn = new QPushButton("Create New Transverter");
-    connect(addBtn, &QPushButton::clicked, this, [this, xvtrTabs, buildXvtrPage] {
-        const RadioControlSession session = m_model->controlSession();
-        const QPointer<RadioSetupDialog> dialog(this);
-        const QPointer<QTabWidget> tabs(xvtrTabs);
-        m_model->requestTransverter({-1, XvtrField::Create, std::monostate{}}, this,
-            [dialog, tabs, buildXvtrPage, session](const RadioSetupReply& reply) {
-                if (reply.kind != RadioSetupReply::Kind::Accepted || !dialog || !tabs) { return; }
-                // Wait briefly for the radio's status update to arrive
-                QTimer::singleShot(300, dialog, [dialog, tabs, buildXvtrPage, session] {
-                    if (!dialog || !tabs || !dialog->m_model->controlSessionCurrent(session)) { return; }
-                    // Find the newest XVTR that doesn't have a tab yet
-                    const auto& xvtrs = dialog->m_model->xvtrList();
-                    for (auto it = xvtrs.constBegin(); it != xvtrs.constEnd(); ++it) {
-                        // Check if we already have a tab for this index
-                        bool found = false;
-                        for (int t = 0; t < tabs->count() - 1; ++t) {
-                            if (tabs->widget(t)->property("transverterId").toInt() == it.key())
-                                found = true;
-                        }
-                        if (!found) {
-                            QString tabName = it.value().name.isEmpty()
-                                ? QString("New") : it.value().name;
-                            int insertIdx = tabs->count() - 1; // before "+"
-                            tabs->insertTab(insertIdx,
-                                buildXvtrPage(it.key(), it.value()), tabName);
-                            tabs->setCurrentIndex(insertIdx);
-                        }
-                    }
-                });
-            });
+    // The radio's reply does not name the transverter it made, so the first
+    // one that appears soon after our own Create is taken to be it.
+    const auto selectCreated = std::make_shared<QDeadlineTimer>();
+    connect(addBtn, &QPushButton::clicked, this, [this, selectCreated] {
+        if (m_model->requestTransverter({-1, XvtrField::Create, std::monostate{}}, this)
+                == ReceiveDispatch::Dispatched) {
+            *selectCreated = QDeadlineTimer(5000);
+        }
     });
     addVb->addWidget(addBtn, 0, Qt::AlignCenter);
     addVb->addStretch(1);
     xvtrTabs->addTab(addPage, "+");
+    connect(m_model, &RadioModel::infoChanged, xvtrTabs, [this, xvtrTabs, buildXvtrPage, selectCreated] {
+        const auto inventory = m_model->xvtrList();
+        for (int tab = xvtrTabs->count() - 2; tab >= 0; --tab) {
+            QWidget* editor = xvtrTabs->widget(tab);
+            const int id = editor->property("transverterId").toInt();
+            const auto identity = editor->property("transverterLifetime").value<std::shared_ptr<SetupStatusLifetime>>();
+            if (!inventory.contains(id) || inventory.value(id).lifetime != identity) {
+                editor->setEnabled(false);
+                xvtrTabs->removeTab(tab);
+                editor->deleteLater();
+            } else {
+                const QString name = inventory.value(id).name;
+                xvtrTabs->setTabText(tab, name.isEmpty() ? QString::number(id) : name);
+            }
+        }
+        for (auto it = inventory.cbegin(); it != inventory.cend(); ++it) {
+            bool found = false;
+            for (int tab = 0; tab < xvtrTabs->count() - 1; ++tab) {
+                if (xvtrTabs->widget(tab)->property("transverterId").toInt() == it.key()) { found = true; break; }
+            }
+            if (!found) {
+                const int tab = xvtrTabs->insertTab(xvtrTabs->count() - 1, buildXvtrPage(it.key(), it.value()),
+                    it->name.isEmpty() ? QString::number(it.key()) : it->name);
+                if (!selectCreated->hasExpired()) {
+                    *selectCreated = QDeadlineTimer();   // expired: one tab only
+                    xvtrTabs->setCurrentIndex(tab);
+                }
+            }
+        }
+    });
 
     vbox->addWidget(xvtrTabs);
     vbox->addStretch(1);
@@ -7515,9 +7614,17 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         return CableHeaderWidgets{group, nameEdit, enabledCheck, statusLabel, typeCombo};
     };
 
+    using CableEditor = std::pair<QString, std::shared_ptr<SetupStatusLifetime>>;
+    const auto editors = std::make_shared<std::array<CableEditor, 7>>();
+    const auto sendEditor = [cableModel, editors](int page, UsbField field, const QString& value, int bit = -1) {
+        const CableEditor editor = (*editors)[page];
+        if (editor.second && editor.second->current()) {
+            cableModel->requestSetting(editor.first, field, value, bit, editor.second);
+        }
+    };
     // Serial of a cable being retyped, so cableAdded (see "Wire model signals"
     // below) reselects it after a type change rebuilds the entry
-    // (UsbCableModel::applyStatus). Also cleared by a deferred 0 ms timer on
+    // (UsbCableModel::applyObservation). Also cleared by a deferred 0 ms timer on
     // cableRemoved (a genuine retype's cableAdded runs first, synchronously) and
     // by a bounded timeout if the radio never echoes.
     auto pendingTypeChangeSn = std::make_shared<QString>();
@@ -7529,16 +7636,18 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     // reintroducing the stuck-panel bug on exactly the lossy radios the timeout
     // exists to protect.
     auto pendingTypeChangeGen = std::make_shared<quint64>(0);
-    auto sendCableType = [cableModel, cableList, pendingTypeChangeSn,
+    auto sendCableType = [cableModel, cableList, editors, stack, pendingTypeChangeSn,
                           pendingTypeChangeGen](const QString& proto) {
         auto* item = cableList->currentItem();
         if (!item) {
             return;
         }
         const QString sn = item->data(Qt::UserRole).toString();
+        const CableEditor editor = (*editors)[stack->currentIndex()];
+        if (editor.first != sn || !editor.second || !editor.second->current()) { return; }
         *pendingTypeChangeSn = sn;
         const quint64 gen = ++(*pendingTypeChangeGen);
-        cableModel->requestSetting(sn, UsbField::Type, proto);
+        cableModel->requestSetting(sn, UsbField::Type, proto, -1, editor.second);
         QTimer::singleShot(5000, [pendingTypeChangeSn, pendingTypeChangeGen, gen]() {
             if (*pendingTypeChangeGen == gen) {
                 pendingTypeChangeSn->clear();
@@ -7840,7 +7949,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         if (!item) return;
         const QString sn = item->data(Qt::UserRole).toString();
         if (!cableModel->cables().contains(sn)) return;
-        const auto& cable = cableModel->cables()[sn];
+        const UsbCable cable = cableModel->cables().value(sn);
         if (cable.type != "bit") return;
         const int b = qBound(0, *currentBit, 7);
         const auto& bit = cable.bits[b];
@@ -8017,10 +8126,11 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             stack->setCurrentIndex(0);
             return;
         }
-        const auto& cable = cableModel->cables()[sn];
+        const UsbCable cable = cableModel->cables().value(sn);
         const QString& t = cable.type;
 
         if (t == "cat") {
+            (*editors)[1] = {sn, cable.lifetime};
             stack->setCurrentIndex(1);
             QSignalBlocker b1(catNameEdit), b2(catEnabledCheck), b3(catSourceCombo),
                            b4(catAutoReportCheck), b5(catTypeCombo);
@@ -8041,6 +8151,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             catSerialWidgets.stop->setCurrentText(QString::number(cable.stopBits));
             catSerialWidgets.flow->setCurrentText(cable.flowControl);
         } else if (t == "bcd" || t == "vbcd" || t == "bcd_vbcd") {
+            (*editors)[2] = {sn, cable.lifetime};
             stack->setCurrentIndex(2);
             QSignalBlocker b1(bcdNameEdit), b2(bcdEnabledCheck), b3(bcdSourceCombo),
                            b4(bcdTypeCombo), b5(bcdPolarityCombo), b6(bcdCableTypeCombo);
@@ -8055,6 +8166,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             bcdPolarityCombo->setCurrentIndex(cable.activeHigh ? 0 : 1);
             bcdCableTypeCombo->setCurrentIndex(protoToTypeIndex(t));
         } else if (t == "bit") {
+            (*editors)[3] = {sn, cable.lifetime};
             stack->setCurrentIndex(3);
             QSignalBlocker b1(bitNameEdit), b2(bitEnabledCheck), b3(bitTypeCombo);
             bitNameEdit->setText(cable.name);
@@ -8068,6 +8180,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             }
             refreshBitDetail();
         } else if (t == "passthrough") {
+            (*editors)[4] = {sn, cable.lifetime};
             stack->setCurrentIndex(4);
             QSignalBlocker b1(ptNameEdit), b2(ptEnabledCheck), b3(ptTypeCombo);
             QSignalBlocker b4(ptSerialWidgets.speed), b5(ptSerialWidgets.data),
@@ -8085,6 +8198,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             ptSerialWidgets.stop->setCurrentText(QString::number(cable.stopBits));
             ptSerialWidgets.flow->setCurrentText(cable.flowControl);
         } else if (t == "ldpa") {
+            (*editors)[5] = {sn, cable.lifetime};
             stack->setCurrentIndex(5);
             QSignalBlocker b1(ldpaNameEdit), b2(ldpaEnabledCheck), b3(ldpaTypeCombo),
                            b4(ldpaBandCombo), b5(ldpaPreampCheck), b6(ldpaSourceCombo);
@@ -8101,6 +8215,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             // that hasn't been assigned a type yet — distinct from "nothing
             // plugged in" (index 0), which is handled by the isEmpty()/
             // not-found guard above and by the cableRemoved handler.
+            (*editors)[6] = {sn, cable.lifetime};
             stack->setCurrentIndex(6);
             QSignalBlocker b1(unconfiguredNameEdit), b2(unconfiguredTypeCombo);
             unconfiguredNameEdit->setText(cable.name);
@@ -8121,7 +8236,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             [refreshList, cableList, showCableProps, pendingTypeChangeSn](const QString& sn) {
         refreshList();
         // A retype tears the old cable entry down and rebuilds it fresh
-        // (UsbCableModel::applyStatus), which drops the list selection along
+        // (UsbCableModel::applyObservation), which drops the list selection along
         // the way (see the cableRemoved handler below). Reselect and
         // repopulate the detail panel so a successful retype doesn't leave
         // it stuck on the empty-state page until manually re-clicked.
@@ -8137,19 +8252,20 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         }
     });
     connect(cableModel, &UsbCableModel::cableRemoved, this,
-            [refreshList, stack, pendingTypeChangeSn](const QString& sn) {
+            [refreshList, stack, pendingTypeChangeSn, pendingTypeChangeGen](const QString& sn) {
         refreshList();
         stack->setCurrentIndex(0);
         // Defer the clear to the next event-loop tick: a genuine retype's own
         // cableAdded for this serial fires synchronously right after this
-        // handler returns (same applyStatus() call) and clears the pointer
+        // handler returns (same applyObservation() call) and clears the pointer
         // itself first, so this is a no-op for that case. It only matters for
         // a standalone removal unrelated to any pending retype, preventing a
         // later unplug/replug's cableAdded from being mistaken for a retype
         // completion.
         if (*pendingTypeChangeSn == sn) {
-            QTimer::singleShot(0, [pendingTypeChangeSn, sn]() {
-                if (*pendingTypeChangeSn == sn) {
+            const quint64 generation = *pendingTypeChangeGen;
+            QTimer::singleShot(0, stack, [pendingTypeChangeSn, pendingTypeChangeGen, generation, sn]() {
+                if (*pendingTypeChangeGen == generation && *pendingTypeChangeSn == sn) {
                     pendingTypeChangeSn->clear();
                 }
             });
@@ -8165,10 +8281,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
 
     // ── Wire property edits → commands ──────────────────────────────────
     // CAT
-    auto sendCatProp = [cableModel, cableList](UsbField field, const QString& val) {
-        auto* item = cableList->currentItem();
-        if (!item) return;
-        cableModel->requestSetting(item->data(Qt::UserRole).toString(), field, val);
+    auto sendCatProp = [sendEditor](UsbField field, const QString& val) {
+        sendEditor(1, field, val);
     };
     connect(catNameEdit, &QLineEdit::editingFinished, this, [catNameEdit, sendCatProp]() {
         sendCatProp(UsbField::Name, catNameEdit->text());
@@ -8192,10 +8306,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     connect(catSerialWidgets.flow, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp(UsbField::FlowControl, val); });
 
     // BCD
-    auto sendBcdProp = [cableModel, cableList](UsbField field, const QString& val) {
-        auto* item = cableList->currentItem();
-        if (!item) return;
-        cableModel->requestSetting(item->data(Qt::UserRole).toString(), field, val);
+    auto sendBcdProp = [sendEditor](UsbField field, const QString& val) {
+        sendEditor(2, field, val);
     };
     connect(bcdNameEdit, &QLineEdit::editingFinished, this, [bcdNameEdit, sendBcdProp]() {
         sendBcdProp(UsbField::Name, bcdNameEdit->text());
@@ -8219,10 +8331,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     wireTypeCombo(bcdCableTypeCombo);
 
     // Whole-cable identity and enable settings stay distinct from bit settings.
-    auto sendBitProp = [cableModel, cableList](UsbField field, const QString& val) {
-        auto* item = cableList->currentItem();
-        if (!item) return;
-        cableModel->requestSetting(item->data(Qt::UserRole).toString(), field, val);
+    auto sendBitProp = [sendEditor](UsbField field, const QString& val) {
+        sendEditor(3, field, val);
     };
     connect(bitNameEdit, &QLineEdit::editingFinished, this, [bitNameEdit, sendBitProp]() {
         sendBitProp(UsbField::Name, bitNameEdit->text());
@@ -8233,10 +8343,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     wireTypeCombo(bitTypeCombo);
 
     // Detail controls edit the currently selected bit, not the cable header.
-    auto sendBitFieldProp = [cableModel, cableList, currentBit](UsbField field, const QString& val) {
-        auto* item = cableList->currentItem();
-        if (!item) return;
-        cableModel->requestSetting(item->data(Qt::UserRole).toString(), field, val, *currentBit);
+    auto sendBitFieldProp = [sendEditor, currentBit](UsbField field, const QString& val) {
+        sendEditor(3, field, val, *currentBit);
     };
     connect(bitWidgets.enabled, &QCheckBox::toggled, this, [sendBitFieldProp](bool on) {
         sendBitFieldProp(UsbField::Enabled, on ? "1" : "0");
@@ -8291,10 +8399,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     });
 
     // Passthrough
-    auto sendPtProp = [cableModel, cableList](UsbField field, const QString& val) {
-        auto* item = cableList->currentItem();
-        if (!item) return;
-        cableModel->requestSetting(item->data(Qt::UserRole).toString(), field, val);
+    auto sendPtProp = [sendEditor](UsbField field, const QString& val) {
+        sendEditor(4, field, val);
     };
     connect(ptNameEdit, &QLineEdit::editingFinished, this, [ptNameEdit, sendPtProp]() {
         sendPtProp(UsbField::Name, ptNameEdit->text());
@@ -8305,10 +8411,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     wireTypeCombo(ptTypeCombo);
 
     // LDPA
-    auto sendLdpaProp = [cableModel, cableList](UsbField field, const QString& val) {
-        auto* item = cableList->currentItem();
-        if (!item) return;
-        cableModel->requestSetting(item->data(Qt::UserRole).toString(), field, val);
+    auto sendLdpaProp = [sendEditor](UsbField field, const QString& val) {
+        sendEditor(5, field, val);
     };
     connect(ldpaNameEdit, &QLineEdit::editingFinished, this, [ldpaNameEdit, sendLdpaProp]() {
         sendLdpaProp(UsbField::Name, ldpaNameEdit->text());
@@ -8330,10 +8434,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     });
 
     // Unconfigured cable
-    auto sendUnconfiguredProp = [cableModel, cableList](UsbField field, const QString& val) {
-        auto* item = cableList->currentItem();
-        if (!item) return;
-        cableModel->requestSetting(item->data(Qt::UserRole).toString(), field, val);
+    auto sendUnconfiguredProp = [sendEditor](UsbField field, const QString& val) {
+        sendEditor(6, field, val);
     };
     connect(unconfiguredNameEdit, &QLineEdit::editingFinished, this,
             [unconfiguredNameEdit, sendUnconfiguredProp]() {

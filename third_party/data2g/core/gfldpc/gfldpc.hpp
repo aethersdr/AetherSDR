@@ -53,6 +53,7 @@ private:
 struct Decoded {
     Mat<std::uint8_t> hard;  // (B, n) symbol decisions
     std::vector<std::uint8_t> ok;  // (B,) every check holds
+    Mat<float> post;  // decode(posterior): (B, n * q) log a-posteriori probabilities, max 0 per symbol (floored)
 };
 
 // Immutable after construction: decode is reentrant.
@@ -62,7 +63,8 @@ public:
     const Code& code() const { return code_; }
     // (B, n * q) symbol log-likelihoods (any per-symbol offset), flooding
     // FFT-BP as gfldpc.Decoder, each codeword stopping once its checks hold.
-    Decoded decode(const Mat<float>& ll, int iters) const;
+    // posterior: also the last pass's log-posteriors (gfldpc.Decoder.decode's third output).
+    Decoded decode(const Mat<float>& ll, int iters, bool posterior = false) const;
 
 private:
     Code code_;
