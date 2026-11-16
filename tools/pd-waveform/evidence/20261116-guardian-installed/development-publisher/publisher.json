@@ -1,0 +1,9 @@
+{
+  "created": true,
+  "public_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+  "private_storage": "OS credential store via QtKeychain; insecure fallback disabled",
+  "service": "AetherPD development publisher",
+  "key": "flex8600-bench-20261116",
+  "shipping_publisher": false,
+  "private_seed_in_files": false
+}

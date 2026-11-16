@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T16:50:29.727286+00:00",
+  "updated_utc": "2026-11-16T17:07:45.205072+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Package and install the native bounded-helper reservation fix, then qualify desktop-stall independent unkey and remaining process failures; continue sustained RF/stock APD and actual6300/release gates.",
+  "next_action": "Qualify desktop-stall independent unkey with bounded5W measurement on installede8d68ad4b, preserve any recovery failure, then complete remaining final-process faults, sustained/RF stock comparison and actual6300/release gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Desktop owned-READY startup fix and 5/10 W RF pairs committed. Found the same captured READY shape prematurely retires the native bounded unkey helper; parser/run-loop fix passes offline and cross-builds but is not installed. Further RF fault tests await updated authenticated runtime.",
+  "current_focus": "Native bounded-helper owned-READY fix e8d68ad4b installed through independent desktop first-install flow. ARMv7/ARM64 runtime and full ARM64 distribution reproduced. One reboot and local DAX IQ channel4/FDXoff before/after passed. No RF on new package yet.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2897,7 +2897,7 @@
   "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
   "current_delivery_status": {
     "runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
-    "desktop_source": "fdf0a40861ddbc0a11308303656429fdfcbc9f78",
+    "desktop_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
     "runtime_report": "IQ-RUNTIME-PACKAGE-QUALIFICATION.json",
     "desktop_reports": [
       "CAPTURE-DESKTOP-QUALIFICATION.json",
@@ -2905,8 +2905,8 @@
       "TIMEOUT-CONTROL-QUALIFICATION.json",
       "POWER-CONTROL-QUALIFICATION.json"
     ],
-    "installed_runtime_source": "88280414febdaa69c42f4a7190a38b3f94b90238",
-    "installed_state": "Same independently installed runtime; receive/idle after three matched RF pairs. DAX IQ channel 4, FDX off.",
+    "installed_runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+    "installed_state": "Independent first install and exact-identity automatic reboot passed; local IQ channel4 before/after with FDXoff; session stopped and temporary resources removed.",
     "latest_read_only_network_probe": {
       "utc": "2026-11-16T16:05:55.285163+00:00",
       "address": "192.168.50.100",
@@ -2959,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "Runtime remains 88280414; desktop base31bdd plus owned-READY tracker fix. Earlier installation/channel reports retain their original build provenance.",
+    "source_provenance_note": "Current runtime/desktope8d68ad4b with persistent OS-keychain development publisher. Previous 5/10W RF evidence belongs to88280414runtime and31bdd+desktop tracker fix.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "INSTALLED-RF-QUALIFICATION.json",
+    "latest_live_report": "GUARDIAN-INSTALLED-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3082,6 +3082,12 @@
   },
   "guardian_owner_ready": {
     "report": "GUARDIAN-OWNER-READY-QUALIFICATION.json",
-    "installed": false
+    "installed": true,
+    "installed_report": "GUARDIAN-INSTALLED-QUALIFICATION.json"
+  },
+  "guardian_installed": {
+    "report": "GUARDIAN-INSTALLED-QUALIFICATION.json",
+    "installed_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+    "new_RF": false
   }
 }

@@ -1,0 +1,126 @@
+{
+  "updated_utc": "2026-11-16T17:07:45.205072+00:00",
+  "status": "installed_reboot_and_local_IQ_passed_keyed_fault_test_pending",
+  "production_ready": false,
+  "source_commit": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "desktop": {
+    "pid": 1329919,
+    "socket": "/tmp/aetherpd-guardian-first",
+    "binary_sha256": "da649fe8f3d6c4791a87079d3903786577976505b795be34fe50e4112806e936",
+    "desktop_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+    "package_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+    "automation_TX_disabled": true
+  },
+  "publisher": {
+    "created": true,
+    "public_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+    "private_storage": "OS credential store via QtKeychain; insecure fallback disabled",
+    "service": "AetherPD development publisher",
+    "key": "flex8600-bench-20261116",
+    "shipping_publisher": false,
+    "private_seed_in_files": false
+  },
+  "runtime_packages": {
+    "armv7": {
+      "reproduced": true,
+      "bytes": 9355653,
+      "sha256": "616f30eb463cae00c133e8a554801654ea0eb8109ed587e507bc27bdc96ac193"
+    },
+    "arm64": {
+      "reproduced": true,
+      "bytes": 9029511,
+      "sha256": "3e4c1ce394e7c5909e4670be2edea330d23875a67b71dba7239869ec1d89dee7"
+    }
+  },
+  "complete_ARM64_distribution_reproduced": true,
+  "release_sha256": "3e4c1ce394e7c5909e4670be2edea330d23875a67b71dba7239869ec1d89dee7",
+  "release_blake2b_256": "4c46f23f345be774ea51168745f844927e23b1313f287b7254613c62e59164d7",
+  "first_install_plan_blake2b_256": "cc0929ab2bd881ac33b45a812be2d0f37230c779815150c1608fb41d007fd30d",
+  "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+  "provision_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+  "installation_seconds": 39.564,
+  "installation_via": "ordinary desktop public waveform upload and independent first-install authorization; predecessor absent",
+  "diagnostics_scope": "Existing authorized bench diagnostics used only to preserve the prior installation and audit host state, not to deliver or authorize the new package. Separate diagnostics SSH container remains a bench tool.",
+  "prior_backup": "/var/lib/smartsdr/aetherpd-guardian-backup-54e21aa67",
+  "reboot": {
+    "commands_sent": 1,
+    "ready_seconds": 45.324,
+    "boot_before": "e7c4dffa-907e-4c8e-b1f8-4c29e310a92e",
+    "boot_after": "25906499-8a2f-48aa-8b97-94eb6624db32",
+    "identity_preserved": true,
+    "explicit_start_required": false
+  },
+  "IQ": {
+    "transport": "local_dax_iq",
+    "channel": 4,
+    "full_duplex": false,
+    "complex_samples_before_and_after": [
+      16384,
+      16384
+    ],
+    "gui_owner_changed": true,
+    "rf_commands": []
+  },
+  "final_audit": {
+    "workers_gone": true,
+    "ARP_absent": true,
+    "accept_local": "0",
+    "remaining_processes": 3,
+    "remaining_UID_78666_capabilities_zero_NNP_1": true,
+    "temporary_installer_paths_absent": true,
+    "runtime_hashes": {
+      "flex-tailnet-shim": "e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690",
+      "aether-pd": "0d5e25818628286a07c510b0c7627fa06f07ff207f8c5bb795cde1c3a95a948c",
+      "pd-primary-launch": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+      "pd-start-session": "7772765fd596722dc342f2579c83f3a3186614979c9defbc141223f7ae18c525",
+      "pd-radio-launch": "4ca6468b3eb9f023937170fdd0bac1c4c38bf017d29e8f3310b94010596cc1d5",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    }
+  },
+  "disk_budget": {
+    "worst_armv7_peak_bytes": 39510016,
+    "basis": "Production native space admission using real release files and simulated capacity; 41 MB rounded teammate report",
+    "actual_6300": false
+  },
+  "limitations": [
+    "Native guardian fix replayed offline and installed; desktop-stall independent-unkey RF test has NOT run.",
+    "No new RF measurement on this package; previous 5/10 W pairs retain their original 88280414 runtime provenance.",
+    "One software reboot, not repeated cold power-cut qualification.",
+    "The previous development signer was intentionally discarded by its build; this move used a backed-up clean fixture, not authenticated cross-publisher upgrade. New development signer is retained only in OS credential storage for future same-publisher updates.",
+    "Normal package install and capture require no end-user root commands. Bench fixture preparation and audits are privileged test machinery, excluded from shipping.",
+    "6300 first-install adapter/hardware, sustained correction, stock APD, final failure matrix and release gates remain open.",
+    "LP-100A deferred; no calibrated absolute-power/ADC-headroom claim."
+  ],
+  "evidence_directory": "evidence/20261116-guardian-installed",
+  "evidence_sha256": {
+    "clean-fixture-job.py": "b465ed7d0720b85048a17519648afe7135c2daac16c995e8499883a1efd83e78",
+    "clean-fixture-result.json": "148e483412ceac638c39b8004014db0f8090598bb458d1d2adb1d1bae7b03496",
+    "committed-audit-job.py": "995f34fd0c7d19fae6fc357767d45c6f43bd5d51cd9307ec4f73f0f95739ad26",
+    "committed-audit-result.json": "377876bf194dc6350acd7afd9feaba63f915d460df0d74d6361db6b564ef11d2",
+    "development-publisher/publisher.json": "19378f262c62f19ba69728b0614e171e59de7d9a27bbc2b3118a0c0513eecff8",
+    "development-publisher/vault.cpp": "d327ddcc515d834b57b46bc62d26f5302ef2c6dc6118fb119563c85ab5a991cb",
+    "first-guardian-owner-ready/build.py": "fb2bd6c3e531e1b6b00354272aa8248128e24b47f18f69aa292222fe01024be6",
+    "first-guardian-owner-ready/report.json": "a6292c07ae19d143b786dc9838e0a46b7b3399dda44039f0a629162f0188921a",
+    "fresh/install-result.json": "e717261dac6059e632073aef0a3b80e777cd31cd09660630185b6719c58a91d9",
+    "fresh/install.py": "0f53efee339ef7c6cfe13426af5c938da18f93377575f573d734dbe32aeb2826",
+    "fresh/instance.json": "ff6427f3d9e9c2c90e18733878a09218f817fb9258bd349da880592b7258e29e",
+    "fresh/post-reboot/receive-iq-check.json": "54b689c34165faf5b648b6d70dc3a5c7b5c5de5f746594f3f2123e29fe9181b3",
+    "fresh/prepared.json": "62c675cdaefd947ac0f71f20e44f70075b1fe6f3ef5e080546348b1843f28cb3",
+    "fresh/receive-iq-check.json": "c54d78c3b32ac1c3d4eed15b6480245e07b2d84e17924d9e625dbdbcd2f7a1a1",
+    "idle-verified-result.json": "bb7f2b91f8606f421bab890eca18398f96c5443ff310b2e5a46188a41e6d6c61",
+    "post-reboot-audit-result.json": "2aa43ad7d8bb035755b8510d8b77e5d60ba0a7bc817523dd9e2739b0b8fd64b9",
+    "prior-stopped.json": "d97424d2bab7801463afaa28548a3196f326a22b7eac40520158e1b5ca68dec9",
+    "reboot-check.json": "1dc4b861615b06dfdb8906bdc0292c5c05ff4e6be00529cb69db71ecc67a82a0",
+    "reboot-check.py": "48f430b26cf08457e74e756e1f704170c5a2956dd8fcf344390c735acbdddb43",
+    "runtime-guardian-owner-ready/budget-report.json": "7942c5c512a84a16ce764459372731f6e52f29b4f49faef713ee34527bb90402",
+    "runtime-guardian-owner-ready/budget_probe.c": "f5d72290ab6e38954c8208eec6990e9d26a75a89bf7ac79f7888c8cd1d04e042",
+    "runtime-guardian-owner-ready/measure-budget.py": "1e225e1dcaaa45c08bc5b8cf7642d25858c0a6c521c679890a9a547229df735b",
+    "runtime-guardian-owner-ready/report.json": "37f63ef52901851ea4618f1095e1ec81b7067a9ca03d7a0a8ded14c419578e8a",
+    "runtime-guardian-owner-ready/run.py": "1dcdf2536e3066e47854aa562b31980e303a395779a968554d822be1c49752a7",
+    "runtime-guardian-owner-ready/source-sha256.json": "318a6e6ec469137db5bf9e415188f10e481b65857f550c45114b77afeee48a68"
+  }
+}

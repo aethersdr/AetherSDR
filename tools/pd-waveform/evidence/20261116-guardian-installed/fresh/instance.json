@@ -1,0 +1,8 @@
+{
+  "pid": 1329919,
+  "socket": "/tmp/aetherpd-guardian-first",
+  "binary_sha256": "da649fe8f3d6c4791a87079d3903786577976505b795be34fe50e4112806e936",
+  "desktop_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "package_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "automation_TX_disabled": true
+}
