@@ -1,0 +1,48 @@
+{
+  "updated_utc": "2026-11-16T20:48:04.610787+00:00",
+  "status": "ordinary_upgrade_receive_IQ_passed_bench_blocked_by_session_envelope_collision_fix_component_tested",
+  "production_ready": false,
+  "installed_release": "2bb2851277b269de9eee5720f2de4423ec1735a586146ffda43fdb46d80f75e4",
+  "runtime_source": "edf42ee85a63395d18935e1aa603515e1515fd2c",
+  "installation_seconds": 49.532,
+  "receive_IQ_bytes": 131072,
+  "FDX": false,
+  "batch_capability_reported": 1,
+  "operator_key_actions": 1,
+  "transmission_observed": false,
+  "measurement_valid": false,
+  "failure": "Unkey helper status opcode G was encoded with batch PDCMD004 envelope; server rejected invalid count and closed the original session before keying.",
+  "fix": "Select batch envelope only for two-byte batch arguments; 18-byte unkey helper status retains PDCMD002.",
+  "regression": "Mixed unkey-status/batch-begin calls on one v8 session; old encoder fails, fixed encoder and batch/unkey suites pass under race detector.",
+  "stopped_cleanup": {
+    "temporary_ARP_absent": true,
+    "runtime_processes": [
+      "/run/aetherpd/bin/flex-tailnet-shim"
+    ],
+    "diagnostic_jobs_removed": true
+  },
+  "pending": [
+    "Rebuild signed fixed runtime/upgrade, retaining current installed release as predecessor.",
+    "Ordinary upgrade and repeat receive-only checks before new separately named finite RF attempts.",
+    "Cold/warm four-frame batch timing, matched RF and all remaining P1-P10 gates."
+  ],
+  "evidence_sha256": {
+    "install-instance.json": "457a8a666015fa0aa4565dc2d521cb5123489de173f68de3dafe3d2b74950c1a",
+    "install-install-result.json": "c03a0cd5dd85e6f9440d742480b898f3173d16f1a20f14a2af80234a3fd8b953",
+    "install-prepared.json": "928cc05c4672430610e89b756fbd52fee621c62b995c985606cadf3344e0d707",
+    "install-receive-iq-check.json": "7cf59879c047fb875802bba612f67e93fbd6c27f0904815a02fd175677f08d07",
+    "install-receive-iq.log": "b6baa0ede8788a7549c6b84f4711568ed2de920276202bb4b3284498e980d310",
+    "install-install.log": "19d83c446c97cb895008fd7f00cc3d6cc173fdb35def01e276a701bcbcb4424d",
+    "bench-prepare.log": "9fd701bc0a04d7252811f66f00d4bf36b3adbb526c0541b199f9b3b847587b62",
+    "bench-preflight.json": "9bc8b876459df3cd1bc6707f3b8c2d321505d328464ffa18970799c45d5a0dcb",
+    "bench-off-01.log": "7a795e7689adf576966d5131e39654f220a9f7ac2608bbbd7db92f2d9b92bd49",
+    "bench-off-01-desktop-tail.log": "cff533a828722a60cffd4f87d4791fdd7ca1146f92fbaa44def1861b53fa7da1",
+    "bench-failed-controls.json": "823c46e4bd440c9ba5ef89e61f91834eebefb1d3929283f5235d0247f371def8",
+    "bench-off-01-events.json": "b827e73cf0c2e197310ce71803195e0db18ae969995ebe5fcaa8bcab4cf1578f",
+    "bench-off-01-failed.json": "1e95b329a0c2d8703f9be75aa410208555952983ee06246007deb7e2cbcace21",
+    "audit-batch-failure-result.json": "f54cc5f33a713b1d0be93f621c02fa8f275607eac1327aa24414e490448e6d7f",
+    "audit-batch-session-log-result.json": "853ee2b0fd6ae69aa7c2fe03654b277a5ee2fd00c08858a5cc191a47560809fc",
+    "regression-shared-session-fix.log": "0c970ecb5e02c210505194c4b961be72113d141cd6541103f164f18fc606a2b1",
+    "regression-shared-session-before.log": "a1296f4eccfaa5336356d4d034c893a5e18ec6c27a3e869e40e2a6be3b7e8d3a"
+  }
+}

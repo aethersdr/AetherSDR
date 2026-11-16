@@ -1,0 +1,6 @@
+=== RUN   TestPDCaptureBatchAndUnkeyStatusShareSession
+    aetherpd_capture_batch_test.go:69: unkey status used batch envelope io: read/write on closed pipe 0
+--- FAIL: TestPDCaptureBatchAndUnkeyStatusShareSession (0.00s)
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.006s
+FAIL

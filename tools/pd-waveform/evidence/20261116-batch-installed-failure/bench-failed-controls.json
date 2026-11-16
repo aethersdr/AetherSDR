@@ -1,0 +1,85 @@
+{
+  "pdMeasurement": {
+    "value": "Measure linearity\u2026",
+    "enabled": true
+  },
+  "pdMeasureDummyLoad": {
+    "value": "checked",
+    "enabled": true
+  },
+  "pdMeasureRadioPower": {
+    "value": "5",
+    "enabled": false
+  },
+  "pdMeasureApplyPower": {
+    "value": "Apply power",
+    "enabled": false
+  },
+  "pdMeasurePowerStatus": {
+    "value": "Radio reports 5 W setting; actual RF output may differ.",
+    "enabled": true
+  },
+  "pdMeasurePowerLimit": {
+    "value": "10",
+    "enabled": true
+  },
+  "pdMeasureWindow": {
+    "value": "Blackman-Harris 7",
+    "enabled": true
+  },
+  "pdMeasureAverages": {
+    "value": "4",
+    "enabled": true
+  },
+  "pdMeasureOrder": {
+    "value": "IMD3 + 5 + 7",
+    "enabled": true
+  },
+  "pdMeasureTimeout": {
+    "value": "10",
+    "enabled": true
+  },
+  "pdMeasureToneSpacing": {
+    "value": "1190",
+    "enabled": false
+  },
+  "pdMeasureToneStatus": {
+    "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. No configured tone profile reported. Wait for a fresh measurement-capable service with no pending request.",
+    "enabled": true
+  },
+  "pdMeasureArm": {
+    "value": "Arm measurement source",
+    "enabled": false
+  },
+  "pdMeasureCancelSource": {
+    "value": "Cancel source",
+    "enabled": false
+  },
+  "pdMeasurePrepare": {
+    "value": "Prepare receive check",
+    "enabled": false
+  },
+  "pdMeasureTransmit": {
+    "value": "Transmit measurement",
+    "enabled": false
+  },
+  "pdMeasureStop": {
+    "value": "Stop measurement",
+    "enabled": false
+  },
+  "pdMeasureExport": {
+    "value": "Export result\u2026",
+    "enabled": true
+  },
+  "pdMeasureState": {
+    "value": "Test transmission ended before capture completed",
+    "enabled": true
+  },
+  "pdMeasureSpectrum": {
+    "enabled": true
+  },
+  "pdMeasureResult": {
+    "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 correction unknown\nTransmit authorization timeout 10 s\nDAX IQ stream identity not reported\nTest transmission ended before capture completed\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+    "enabled": true
+  }
+}

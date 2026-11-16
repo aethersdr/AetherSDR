@@ -33,6 +33,50 @@ func batchSessionPair(t *testing.T, operation pdSessionBatchOperation) *pdSessio
 	return s
 }
 
+func TestPDCaptureBatchAndUnkeyStatusShareSession(t *testing.T) {
+	a, b := net.Pipe()
+	done := make(chan error, 1)
+	id := [16]byte{1}
+	var tests, batches atomic.Int32
+	go func() {
+		done <- servePDSessionWithBatch(b, func(context.Context, byte) pdSessionReply {
+			return pdCaptureJSON(200, map[string]string{"state": "ready"})
+		}, func() {}, func(_ context.Context, op byte, received [16]byte, duration uint16) pdSessionReply {
+			if op != pdTestStatus || received != id || duration != 0 {
+				return pdCaptureJSON(400, nil)
+			}
+			tests.Add(1)
+			return pdCaptureJSON(200, map[string]string{"state": "observing"})
+		}, nil, func(_ context.Context, op byte, count uint16) pdSessionReply {
+			if op != pdCaptureBatchBegin || count != 4 {
+				return pdCaptureJSON(400, nil)
+			}
+			batches.Add(1)
+			return pdCaptureJSON(200, map[string]string{"state": "captured"})
+		})
+	}()
+	var hello [8]byte
+	if _, err := io.ReadFull(a, hello[:]); err != nil || string(hello[:]) != "PDTALK08" {
+		t.Fatal("missing batch handshake", err)
+	}
+	s := newPDSessionChannel(a)
+	s.batchSupported, s.testSupported = true, true
+	t.Cleanup(func() { s.Close(); <-done })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for i := 0; i < 2; i++ {
+		if reply := s.CallTest(ctx, pdTestStatus, id, 0); reply.err != nil || reply.code != 200 {
+			t.Fatal("unkey status used batch envelope", reply.err, reply.code)
+		}
+		if reply := s.CallBatch(ctx, pdCaptureBatchBegin, 4); reply.err != nil || reply.code != 200 {
+			t.Fatal("batch begin used unkey envelope", reply.err, reply.code)
+		}
+	}
+	if tests.Load() != 2 || batches.Load() != 2 || !s.alive() {
+		t.Fatal("mixed operations lost their handler or session")
+	}
+}
+
 func captureBatchStoreFixture(count uint32) []aetherPDIQCapture {
 	frames := make([]aetherPDIQCapture, count)
 	for i := range frames {

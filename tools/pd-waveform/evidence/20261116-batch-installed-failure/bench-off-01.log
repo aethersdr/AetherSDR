@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/batch-rf/5w/measure.py", line 103, in <module>
+    status()
+    ~~~~~~^^
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/batch-rf/5w/measure.py", line 57, in status
+    assert body['http_status']==200,body
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'body': {'available': False, 'state': 'unavailable'}, 'http_status': 503}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/batch-rf/5w/measure.py", line 125, in <module>
+    body=status();assert not body['keyed']
+  File "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/batch-rf/5w/measure.py", line 57, in status
+    assert body['http_status']==200,body
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'body': {'available': False, 'state': 'unavailable'}, 'http_status': 503}

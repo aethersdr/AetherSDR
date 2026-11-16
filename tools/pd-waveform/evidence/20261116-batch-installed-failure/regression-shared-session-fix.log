@@ -1,0 +1,232 @@
+=== RUN   TestPDCaptureBatchParserBounds
+--- PASS: TestPDCaptureBatchParserBounds (0.00s)
+=== RUN   TestPDCaptureBatchAssembly
+=== RUN   TestPDCaptureBatchAssembly/1
+=== RUN   TestPDCaptureBatchAssembly/2
+=== RUN   TestPDCaptureBatchAssembly/3
+=== RUN   TestPDCaptureBatchAssembly/4
+--- PASS: TestPDCaptureBatchAssembly (0.24s)
+    --- PASS: TestPDCaptureBatchAssembly/1 (0.02s)
+    --- PASS: TestPDCaptureBatchAssembly/2 (0.05s)
+    --- PASS: TestPDCaptureBatchAssembly/3 (0.07s)
+    --- PASS: TestPDCaptureBatchAssembly/4 (0.09s)
+=== RUN   TestPDCaptureBatchRejectsMixedFrames
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field28_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field28_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field28_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field32_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field32_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field32_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field40_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field40_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field40_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field64_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field64_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field64_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field68_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field68_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field68_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field72_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field72_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field72_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field80_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field80_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field80_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field84_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field84_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field84_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field88_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field88_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field88_at64512
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field92_at1024
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field92_at16384
+=== RUN   TestPDCaptureBatchRejectsMixedFrames/field92_at64512
+--- PASS: TestPDCaptureBatchRejectsMixedFrames (0.10s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field28_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field28_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field28_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field32_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field32_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field32_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field40_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field40_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field40_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field64_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field64_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field64_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field68_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field68_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field68_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field72_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field72_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field72_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field80_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field80_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field80_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field84_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field84_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field84_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field88_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field88_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field88_at64512 (0.01s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field92_at1024 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field92_at16384 (0.00s)
+    --- PASS: TestPDCaptureBatchRejectsMixedFrames/field92_at64512 (0.01s)
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/query
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/pending
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/invalid
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/expired
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/unavailable
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/clock_reverse
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/gap
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/timestamp_change
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/unkeyed
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/no_tones
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/no_binding
+=== RUN   TestPDCaptureBatchFailuresReturnNoFrames/wrong_id
+--- PASS: TestPDCaptureBatchFailuresReturnNoFrames (0.05s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/query (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/pending (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/invalid (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/expired (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/unavailable (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/clock_reverse (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/gap (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/timestamp_change (0.01s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/unkeyed (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/no_tones (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/no_binding (0.00s)
+    --- PASS: TestPDCaptureBatchFailuresReturnNoFrames/wrong_id (0.00s)
+=== RUN   TestPDCaptureBatchCancellation
+=== RUN   TestPDCaptureBatchCancellation/before_begin
+=== RUN   TestPDCaptureBatchCancellation/pending
+=== RUN   TestPDCaptureBatchCancellation/after_frames
+=== RUN   TestPDCaptureBatchCancellation/last_chunk
+--- PASS: TestPDCaptureBatchCancellation (0.01s)
+    --- PASS: TestPDCaptureBatchCancellation/before_begin (0.00s)
+    --- PASS: TestPDCaptureBatchCancellation/pending (0.00s)
+    --- PASS: TestPDCaptureBatchCancellation/after_frames (0.00s)
+    --- PASS: TestPDCaptureBatchCancellation/last_chunk (0.01s)
+=== RUN   TestPDCaptureBatchNativeQueryBounds
+--- PASS: TestPDCaptureBatchNativeQueryBounds (0.00s)
+=== RUN   TestPDCaptureBatchNativeFixture
+    aetherpd_capture_batch_linux_test.go:285: explicit native C batch fixture not provided
+--- SKIP: TestPDCaptureBatchNativeFixture (0.00s)
+=== RUN   TestPDCaptureBatchNativePublicFixture
+    aetherpd_capture_batch_linux_test.go:333: explicit native C batch fixture not provided
+--- SKIP: TestPDCaptureBatchNativePublicFixture (0.00s)
+=== RUN   TestPDCaptureBatchAndUnkeyStatusShareSession
+--- PASS: TestPDCaptureBatchAndUnkeyStatusShareSession (0.00s)
+=== RUN   TestPDCaptureBatchPublicLifecycle
+--- PASS: TestPDCaptureBatchPublicLifecycle (0.13s)
+=== RUN   TestPDCaptureBatchStoreInterrupted
+=== RUN   TestPDCaptureBatchStoreInterrupted/close
+=== RUN   TestPDCaptureBatchStoreInterrupted/cancel
+=== RUN   TestPDCaptureBatchStoreInterrupted/owner_exit
+=== RUN   TestPDCaptureBatchStoreInterrupted/partial
+=== RUN   TestPDCaptureBatchStoreInterrupted/mixed
+--- PASS: TestPDCaptureBatchStoreInterrupted (0.01s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/close (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/cancel (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/owner_exit (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/partial (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/mixed (0.00s)
+=== RUN   TestPDCaptureBatchPublicOwnerFence
+=== RUN   TestPDCaptureBatchPublicOwnerFence/credential
+=== RUN   TestPDCaptureBatchPublicOwnerFence/successor
+=== RUN   TestPDCaptureBatchPublicOwnerFence/stopped
+=== RUN   TestPDCaptureBatchPublicOwnerFence/starting
+--- PASS: TestPDCaptureBatchPublicOwnerFence (0.01s)
+    --- PASS: TestPDCaptureBatchPublicOwnerFence/credential (0.00s)
+    --- PASS: TestPDCaptureBatchPublicOwnerFence/successor (0.00s)
+    --- PASS: TestPDCaptureBatchPublicOwnerFence/stopped (0.00s)
+    --- PASS: TestPDCaptureBatchPublicOwnerFence/starting (0.00s)
+=== RUN   TestPDCaptureBatchSessionCancellation
+=== RUN   TestPDCaptureBatchSessionCancellation/G
+=== RUN   TestPDCaptureBatchSessionCancellation/H
+--- PASS: TestPDCaptureBatchSessionCancellation (0.00s)
+    --- PASS: TestPDCaptureBatchSessionCancellation/G (0.00s)
+    --- PASS: TestPDCaptureBatchSessionCancellation/H (0.00s)
+=== RUN   TestPDCaptureBatchSessionBounds
+=== RUN   TestPDCaptureBatchSessionBounds/0
+=== RUN   TestPDCaptureBatchSessionBounds/5
+=== RUN   TestPDCaptureBatchSessionBounds/65535
+--- PASS: TestPDCaptureBatchSessionBounds (0.00s)
+    --- PASS: TestPDCaptureBatchSessionBounds/0 (0.00s)
+    --- PASS: TestPDCaptureBatchSessionBounds/5 (0.00s)
+    --- PASS: TestPDCaptureBatchSessionBounds/65535 (0.00s)
+=== RUN   TestPDCaptureBatchManifestValidation
+=== RUN   TestPDCaptureBatchManifestValidation/id
+=== RUN   TestPDCaptureBatchManifestValidation/size
+=== RUN   TestPDCaptureBatchManifestValidation/rate
+=== RUN   TestPDCaptureBatchManifestValidation/source
+=== RUN   TestPDCaptureBatchManifestValidation/tone
+=== RUN   TestPDCaptureBatchManifestValidation/binding
+=== RUN   TestPDCaptureBatchManifestValidation/clock
+=== RUN   TestPDCaptureBatchManifestValidation/gap
+=== RUN   TestPDCaptureBatchManifestValidation/count
+=== RUN   TestPDCaptureBatchManifestValidation/unkeyed
+=== RUN   TestPDCaptureBatchManifestValidation/correction
+--- PASS: TestPDCaptureBatchManifestValidation (0.01s)
+    --- PASS: TestPDCaptureBatchManifestValidation/id (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/size (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/rate (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/source (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/tone (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/binding (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/clock (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/gap (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/count (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/unkeyed (0.00s)
+    --- PASS: TestPDCaptureBatchManifestValidation/correction (0.00s)
+=== RUN   TestPDTestDurationAndObservationBoundaries
+--- PASS: TestPDTestDurationAndObservationBoundaries (0.00s)
+=== RUN   TestPDTestPublicLifecycle
+--- PASS: TestPDTestPublicLifecycle (0.00s)
+=== RUN   TestPDTestPublicBoundary
+--- PASS: TestPDTestPublicBoundary (0.00s)
+=== RUN   TestPDTestPublicOwnerFence
+=== RUN   TestPDTestPublicOwnerFence/false
+=== RUN   TestPDTestPublicOwnerFence/true
+--- PASS: TestPDTestPublicOwnerFence (0.00s)
+    --- PASS: TestPDTestPublicOwnerFence/false (0.00s)
+    --- PASS: TestPDTestPublicOwnerFence/true (0.00s)
+=== RUN   TestPDTestMalformedPrivateRequest
+=== RUN   TestPDTestMalformedPrivateRequest/zero-status-id
+=== RUN   TestPDTestMalformedPrivateRequest/begin-with-id
+=== RUN   TestPDTestMalformedPrivateRequest/too-long
+=== RUN   TestPDTestMalformedPrivateRequest/duration-on-stop
+--- PASS: TestPDTestMalformedPrivateRequest (0.00s)
+    --- PASS: TestPDTestMalformedPrivateRequest/zero-status-id (0.00s)
+    --- PASS: TestPDTestMalformedPrivateRequest/begin-with-id (0.00s)
+    --- PASS: TestPDTestMalformedPrivateRequest/too-long (0.00s)
+    --- PASS: TestPDTestMalformedPrivateRequest/duration-on-stop (0.00s)
+=== RUN   TestPDTestCanceledBeginClosesSession
+--- PASS: TestPDTestCanceledBeginClosesSession (0.00s)
+=== RUN   TestPDTestStatusCancellationKeepsDeadlineOwner
+--- PASS: TestPDTestStatusCancellationKeepsDeadlineOwner (0.00s)
+=== RUN   TestPDTestObservationRoundTrip
+--- PASS: TestPDTestObservationRoundTrip (0.00s)
+=== RUN   TestPDTestCanceledStaleStopKeepsSuccessor
+--- PASS: TestPDTestCanceledStaleStopKeepsSuccessor (0.00s)
+=== RUN   TestPDTestUnkeyBind
+--- PASS: TestPDTestUnkeyBind (0.00s)
+=== RUN   TestPDTestUnkeyBindRefusals
+--- PASS: TestPDTestUnkeyBindRefusals (0.01s)
+=== RUN   TestPDTestUnkeySerialization
+--- PASS: TestPDTestUnkeySerialization (0.00s)
+=== RUN   TestPDTestUnkeyPendingSessionStop
+--- PASS: TestPDTestUnkeyPendingSessionStop (0.00s)
+=== RUN   TestPDTestUnkeyFailedChildRetained
+--- PASS: TestPDTestUnkeyFailedChildRetained (0.00s)
+=== RUN   TestPDTestUnkeyOwnedProcessStop
+--- PASS: TestPDTestUnkeyOwnedProcessStop (0.00s)
+=== RUN   TestPDTestUnkeyRealLauncherSupervision
+--- PASS: TestPDTestUnkeyRealLauncherSupervision (0.00s)
+=== RUN   TestPDTestUnkeyCancelAtBindBarrier
+--- PASS: TestPDTestUnkeyCancelAtBindBarrier (0.00s)
+=== RUN   TestPDCaptureBatchCapabilityStatus
+--- PASS: TestPDCaptureBatchCapabilityStatus (0.00s)
+PASS
+ok  	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	1.620s

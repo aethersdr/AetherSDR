@@ -172,7 +172,7 @@ func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSe
 		if op == 'Q' {
 			copy(frame[:8], "PDCMD003")
 		}
-		if pdCaptureBatchOpcode(op) {
+		if len(extra) == 2 && pdCaptureBatchOpcode(op) {
 			copy(frame[:8], "PDCMD004")
 		}
 		copy(frame[16:], extra)

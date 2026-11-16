@@ -1,0 +1,17 @@
+{
+  "purpose": "owner-authorized bounded native in-process experiment",
+  "workdir": "/var/tmp/nereus-inprocess-1235a3a7f3554f37aa514fda525443cd",
+  "job_container": "fa4da08e1f4f178ddf0c8cfd23b33ff07bb9f9582287986341b56506355841c1",
+  "wait": {
+    "StatusCode": 0,
+    "Error": null
+  },
+  "logs": "{\"RF_commands\": [], \"aetherpd-shim.service\": \"Nov 16 14:43:02 2125-1213-8600-8895 systemd[1]: Stopping aetherpd-shim.service - AetherPD ordinary-user control service...\\nNov 16 14:43:02 2125-1213-8600-8895 systemd[1]: aetherpd-shim.service: Deactivated successfully.\\nNov 16 14:43:02 2125-1213-8600-8895 systemd[1]: Stopped aetherpd-shim.service - AetherPD ordinary-user control service.\\nNov 16 14:43:02 2125-1213-8600-8895 systemd[1]: aetherpd-shim.service: Consumed 5.321s CPU time.\\nNov 16 14:43:11 2125-1213-8600-8895 systemd[1]: Started aetherpd-shim.service - AetherPD ordinary-user control service.\\nNov 16 14:43:11 2125-1213-8600-8895 pd-boot[5318]: 2026/11/16 20:43:11 flex-tailnet-shim 0.5.2 starting; state in /var/lib/smartsdr/aetherpd/state\\n\", \"aetherpd-start@1.service\": \"-- No entries --\\n\", \"sessions\": \"  UNIT                             LOAD   ACTIVE   SUB       DESCRIPTION\\n  aetherpd-boot.service            loaded active   exited    AetherPD authenticated RAM payload\\n  aetherpd-shim.service            loaded active   running   AetherPD ordinary-user control service\\n  aetherpd-upgrade-recover.service loaded inactive dead      AetherPD interrupted upgrade recovery\\n  aetherpd-start.socket            loaded active   listening AetherPD fixed local session entry\\n\\nLOAD   = Reflects whether the unit definition was properly loaded.\\nACTIVE = The high-level unit activation state, i.e. generalization of SUB.\\nSUB    = The low-level unit activation state, values depend on unit type.\\n4 loaded units listed.\\nTo show all installed unit files use 'systemctl list-unit-files'.\\n\", \"processes\": [{\"pid\": 5318, \"exe\": \"/run/aetherpd/bin/flex-tailnet-shim\", \"status\": \"Name:\\t3\\nUmask:\\t0077\\nState:\\tS (sleeping)\\nTgid:\\t5318\\nNgid:\\t0\\nPid:\\t5318\\nPPid:\\t1\\nTracerPid:\\t0\\nUid:\\t78666\\t78666\\t78666\\t78666\\nGid:\\t20\\t20\\t20\\t20\\nFDSize:\\t128\\nGroups:\\t \\nNStgid:\\t5318\\nNSpid:\\t5318\\nNSpgid:\\t5318\\nNSsid:\\t5318\\nVmPeak:\\t 1308940 kB\\nVmSize:\\t 1280996 kB\\nVmLck:\\t       0 kB\\nVmPin:\\t       0 kB\\nVmHWM:\\t   23256 kB\\nVmRSS:\\t   23256 kB\\nRssAnon:\\t    6176 kB\\nRssFile:\\t       4 kB\\nRssShmem:\\t   17076 kB\\nVmData:\\t   84084 kB\\nVmStk:\\t     132 kB\\nVmExe:\\t    8740 kB\\nVmLib:\\t       4 kB\\nVmPTE:\\t     124 kB\\nVmSwap:\\t       0 kB\\nCoreDumping:\\t0\\nTHP_enabled:\\t0\\nThreads:\\t6\\nSigQ:\\t0/7320\\nSigPnd:\\t0000000000000000\\nShdPnd:\\t0000000000000000\\nSigBlk:\\t0000000000000000\\nSigIgn:\\t0000000000000000\\nSigCgt:\\tfffffffd7fc1feff\\nCapInh:\\t0000000000000000\\nCapPrm:\\t0000000000000000\\nCapEff:\\t0000000000000000\\nCapBnd:\\t0000000000000000\\nCapAmb:\\t0000000000000000\\nNoNewPrivs:\\t1\\nSeccomp:\\t0\\nSeccomp_filters:\\t0\\nSpeculation_Store_Bypass:\\tvulnerable\\nSpeculationIndirectBranch:\\tunknown\\nCpus_allowed:\\tf\\nCpus_allowed_list:\\t0-3\\nMems_allowed:\\t1\\nMems_allowed_list:\\t0\\nvoluntary_ctxt_switches:\\t583\\nnonvoluntary_ctxt_switches:\\t247\\n\"}], \"arp\": []}\n",
+  "job_container_deleted": true,
+  "temporary_host_directory_deleted": true,
+  "orchestration": {
+    "receiver_exit": 0,
+    "waveform_upload_exit": 0,
+    "authenticated_native_bridge_delivered": true
+  }
+}
