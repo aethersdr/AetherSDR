@@ -366,7 +366,8 @@ void RadioConnection::disconnectFromRadio()
 
 void RadioConnection::gracefulDisconnect(quint32 handle,
                                          const QString& rxStreamId,
-                                         quint32 streamRemoveSeq)
+                                         quint32 streamRemoveSeq,
+                                         quint32 keepaliveStopSeq)
 {
     if (!m_socket || m_socket->state() == QAbstractSocket::UnconnectedState) {
         disconnectFromRadio();
@@ -377,6 +378,14 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
 
     QElapsedTimer totalTimer;
     totalTimer.start();
+    // Closing before keepalive is acknowledged on Flex 4.3.16 can cause the
+    // next client to be rejected after idle. Acknowledge disable on the old
+    // session before TCP teardown so its watchdog cannot outlive that session.
+    const bool keepaliveStopped = m_syntheticDemo ||
+        sendCommandAndWait(keepaliveStopSeq, QStringLiteral("keepalive disable"), 2000);
+    if (!keepaliveStopped) {
+        qCWarning(lcConnection) << "RadioConnection: keepalive shutdown was not acknowledged before close";
+    }
     bool streamRemoveAcked = rxStreamId.isEmpty();
     qint64 streamRemoveMs = -1;
 
@@ -400,6 +409,7 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
     qCInfo(lcConnection).nospace()
         << "RadioConnection: disconnect summary "
         << "handle=" << formatHexId(handle)
+        << " keepaliveAck=" << (keepaliveStopped ? "yes" : "no")
         << " streamId=" << (rxStreamId.isEmpty() ? QStringLiteral("<none>") : rxStreamId)
         << " streamSeq=" << streamRemoveSeq
         << " streamAck=" << (streamRemoveAcked ? "yes" : "no")
@@ -862,9 +872,11 @@ bool RadioConnection::sendCommandAndWait(quint32 seq, const QString& command, in
 
     connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
 
-    writeCommand(seq, command);
     timer.start(timeoutMs);
-    loop.exec();
+    writeCommand(seq, command);
+    if (!received && m_socket->state() != QAbstractSocket::UnconnectedState) {
+        loop.exec();
+    }
 
     disconnect(responseConn);
     disconnect(disconnectedConn);
@@ -879,7 +891,7 @@ bool RadioConnection::sendCommandAndWait(quint32 seq, const QString& command, in
                           << "seq" << seq
                           << "code" << Qt::hex << responseCode
                           << "body" << responseBody;
-    return true;
+    return responseCode == 0;
 }
 
 void RadioConnection::writeDisconnectMarker()

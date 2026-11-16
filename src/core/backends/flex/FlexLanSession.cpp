@@ -58,10 +58,14 @@ FlexLanSession::~FlexLanSession()
     m_epoch->store(0);
     QObject::disconnect(m_connection, nullptr, this, nullptr);
     QObject::disconnect(m_connection, nullptr, &m_commands, nullptr);
-    // Cancel ordinary writes before the worker drain. Classified cleanup may
-    // finish while the direct-capture receiver is still alive; the backend
-    // owns worker shutdown and object destruction.
-    QMetaObject::invokeMethod(m_connection, [] {}, Qt::BlockingQueuedConnection);
+    // Ordinary writes are retired before the worker drain. The old transport's
+    // keepalive must also be acknowledged off before its socket is closed.
+    const quint32 keepaliveSequence = m_commands.allocateSequence();
+    QMetaObject::invokeMethod(m_connection, [connection = m_connection, keepaliveSequence] {
+        if (connection->isConnected()) {
+            connection->gracefulDisconnect(connection->clientHandle(), {}, 0, keepaliveSequence);
+        }
+    }, Qt::BlockingQueuedConnection);
 }
 
 bool FlexLanSession::current(quint64 epoch) const
@@ -106,7 +110,8 @@ void FlexLanSession::stopReceiveTransport()
     }, Qt::BlockingQueuedConnection);
 }
 
-void FlexLanSession::disconnectRadio(const RadioDisconnectRequest& request, quint32 sequence)
+void FlexLanSession::disconnectRadio(const RadioDisconnectRequest& request, quint32 sequence,
+                                    quint32 keepaliveSequence)
 {
     if (!m_active) { return; }
     const quint64 epoch = m_epoch->exchange(0);
@@ -115,11 +120,11 @@ void FlexLanSession::disconnectRadio(const RadioDisconnectRequest& request, quin
     m_ingress->retire(epoch);
     // Revoke queued starts immediately, while retaining the old transport's
     // immutable cleanup arguments until its bounded command drain completes.
-    QMetaObject::invokeMethod(m_connection, [connection = m_connection, handle, request, sequence] {
+    QMetaObject::invokeMethod(m_connection, [connection = m_connection, handle, request, sequence, keepaliveSequence] {
         if (connection->isConnected()) {
             const QString streamId = request.receiveStreamId && sequence
                 ? QString::number(request.receiveStreamId, 16) : QString();
-            connection->gracefulDisconnect(handle, streamId, sequence);
+            connection->gracefulDisconnect(handle, streamId, sequence, keepaliveSequence);
         } else {
             connection->disconnectFromRadio();
         }

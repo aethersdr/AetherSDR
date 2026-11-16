@@ -70,7 +70,8 @@ public slots:
     // Send sequenced teardown commands, wait for radio responses, then close.
     void gracefulDisconnect(quint32 handle,
                             const QString& rxStreamId,
-                            quint32 streamRemoveSeq);
+                            quint32 streamRemoveSeq,
+                            quint32 keepaliveStopSeq);
     // Transport-thread writes use the backend session's sequence allocator.
     void writeCommand(quint32 seq, const QString& command);
     FlexCommandSession::WriteResult dispatchCommand(quint32 seq, const QString& command);

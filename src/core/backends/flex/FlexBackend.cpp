@@ -1061,8 +1061,9 @@ void FlexBackend::disconnectRadio()
 
 void FlexBackend::disconnectRadio(const RadioDisconnectRequest& request)
 {
+    const quint32 keepaliveSequence = m_sequenceProvider ? m_sequenceProvider() : 0;
     const quint32 sequence = request.receiveStreamId && m_sequenceProvider ? m_sequenceProvider() : 0;
-    m_lanSession->disconnectRadio(request, sequence);
+    m_lanSession->disconnectRadio(request, sequence, keepaliveSequence);
 }
 
 std::optional<ConnectionSession> FlexBackend::connectionSession() const

@@ -26,7 +26,8 @@ public:
                    FlexStatusIngress* ingress, QObject* parent = nullptr);
     ~FlexLanSession() override;
     void connectRadio(const RadioConnectRequest& request);
-    void disconnectRadio(const RadioDisconnectRequest& request = {}, quint32 sequence = 0);
+    void disconnectRadio(const RadioDisconnectRequest& request = {}, quint32 sequence = 0,
+                         quint32 keepaliveSequence = 0);
     bool isConnected() const { return m_connected; }
     bool active() const { return m_active; }
     std::optional<ConnectionSession> snapshot() const { return m_snapshot; }

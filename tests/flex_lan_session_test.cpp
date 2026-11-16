@@ -15,6 +15,7 @@
 #include <QThread>
 #include <QtTest>
 #include <atomic>
+#include <functional>
 #include <memory>
 
 using namespace AetherSDR;
@@ -62,16 +63,21 @@ public:
             wire.m_socket = new NoDialSocket(&wire, attempts);
         }, Qt::BlockingQueuedConnection);
     }
-    static void installCleanupSink(RadioConnection& wire, QStringList& commands, QList<quint32>& sequences)
+    static void installCleanupSink(RadioConnection& wire, QStringList& commands, QList<quint32>& sequences,
+                                  std::function<void(quint32)> reply = {})
     {
         wire.m_socket->deleteLater(); // unbound wrapper, on its owner thread
         wire.m_socket = new CleanupMemorySocket(&wire);
         wire.m_syntheticDemo = false;
         QObject::connect(wire.m_socket, &QTcpSocket::disconnected,
                          &wire, &RadioConnection::onSocketDisconnected);
-        wire.m_commandSinkForTest = [&wire, &commands, &sequences](quint32 sequence, const QString& command) {
+        wire.m_commandSinkForTest = [&wire, &commands, &sequences, reply](quint32 sequence, const QString& command) {
             sequences.append(sequence);
             commands.append(command);
+            if (reply) {
+                reply(sequence);
+                return;
+            }
             QTimer::singleShot(0, &wire, [&wire, sequence] { emit wire.commandResponse(sequence, 0, {}); });
         };
     }
@@ -80,6 +86,10 @@ public:
         wire.m_radioAddr = QHostAddress(QStringLiteral("192.0.2.1"));
         wire.m_localAddr = local;
         wire.m_localPort = 32123;
+    }
+    static bool waitForCleanupReply(RadioConnection& wire, quint32 sequence)
+    {
+        return wire.sendCommandAndWait(sequence, QStringLiteral("keepalive disable"), 25);
     }
 };
 }
@@ -207,10 +217,87 @@ private slots:
             RadioConnectionSessionTestAccess::installCleanupSink(*wire, commands, sequences);
         }, Qt::BlockingQueuedConnection);
         backend.disconnectRadio({0x40000001});
-        QCOMPARE(commands, QStringList({"stream remove 0x40000001"}));
-        QCOMPARE(sequences, QList<quint32>({700}));
-        QCOMPARE(nextSequence, 701u);
+        QCOMPARE(commands, QStringList({"keepalive disable", "stream remove 0x40000001"}));
+        QCOMPARE(sequences, QList<quint32>({700, 701}));
+        QCOMPARE(nextSequence, 702u);
         QVERIFY(!backend.isConnected());
+    }
+
+    void keepaliveShutdownAcknowledgedBeforeClose_data()
+    {
+        QTest::addColumn<bool>("destroy");
+        QTest::newRow("disconnect") << false;
+        QTest::newRow("destruction") << true;
+    }
+
+    void keepaliveShutdownAcknowledgedBeforeClose()
+    {
+        QFETCH(bool, destroy);
+        QStringList commands;
+        QList<quint32> sequences;
+        std::atomic<bool> acknowledged{false};
+        std::atomic<bool> closedBeforeReply{false};
+        auto backend = std::make_unique<FlexBackend>();
+        backend->connectRadio(demoRequest());
+        QTRY_VERIFY(backend->connectionSession().has_value());
+        RadioConnection* wire = backend->connection();
+        QMetaObject::invokeMethod(wire, [&] {
+            RadioConnectionSessionTestAccess::installCleanupSink(*wire, commands, sequences,
+                [wire, &acknowledged](quint32 sequence) {
+                    // An unrelated reply must not release the shutdown barrier.
+                    emit wire->commandResponse(sequence + 1, 0, {});
+                    QTimer::singleShot(0, wire, [wire, sequence, &acknowledged] {
+                        acknowledged.store(true);
+                        emit wire->commandResponse(sequence, 0, {});
+                    });
+                });
+            connect(wire, &RadioConnection::disconnected, wire, [&] {
+                closedBeforeReply.store(!acknowledged.load());
+            }, Qt::DirectConnection);
+        }, Qt::BlockingQueuedConnection);
+        if (destroy) {
+            backend.reset();
+        } else {
+            backend->disconnectRadio();
+        }
+        QCOMPARE(commands, QStringList({"keepalive disable"}));
+        QCOMPARE(sequences.size(), 1);
+        QVERIFY(sequences.front() != 0);
+        QVERIFY(acknowledged.load());
+        QVERIFY(!closedBeforeReply.load());
+    }
+
+    void cleanupRequiresSuccessfulMatchingReply_data()
+    {
+        QTest::addColumn<int>("response");
+        QTest::addColumn<bool>("expected");
+        QTest::newRow("success") << 0 << true;
+        QTest::newRow("radio-refusal") << 1 << false;
+        QTest::newRow("unrelated-reply") << -1 << false;
+        QTest::newRow("peer-close") << -2 << false;
+    }
+
+    void cleanupRequiresSuccessfulMatchingReply()
+    {
+        QFETCH(int, response);
+        QFETCH(bool, expected);
+        QStringList commands;
+        QList<quint32> sequences;
+        RadioConnection wire;
+        wire.init();
+        RadioConnectionSessionTestAccess::installCleanupSink(wire, commands, sequences,
+            [&wire, response](quint32 sequence) {
+                if (response == -2) {
+                    wire.disconnectFromRadio();
+                } else {
+                    emit wire.commandResponse(response == -1 ? sequence + 1 : sequence,
+                                              response < 0 ? 0 : response, {});
+                }
+            });
+        QCOMPARE(RadioConnectionSessionTestAccess::waitForCleanupReply(wire, 91), expected);
+        QCOMPARE(commands, QStringList({"keepalive disable"}));
+        QCOMPARE(sequences, QList<quint32>({91}));
+        wire.disconnectFromRadio();
     }
 
     void endpointSnapshotDoesNotBorrowMutableWorkerState()

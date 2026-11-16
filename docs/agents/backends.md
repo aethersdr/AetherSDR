@@ -134,9 +134,13 @@ attempt cannot connect, publish status, or close its replacement.
 The backend publishes a copied `ConnectionSession` at the accepted handshake.
 Endpoint classification and receive startup use that snapshot rather than
 borrowing mutable TCP-worker fields. `startReceiveTransport` returns the bound
-port after startup or rebind. Disconnect removes only the supplied session-owned
-receive stream using the existing shared sequence allocator, then clears receive
-registrations before announcing the session's end.
+port after startup or rebind. Disconnect retires ordinary command admission,
+waits up to two seconds for a sequenced keepalive-disable acknowledgment, then
+removes only the supplied session-owned receive stream and closes TCP. Cleanup
+uses the existing shared sequence allocator; backend destruction also retires
+keepalive before closing its transport. A missing or refused cleanup reply is
+logged, and shutdown remains bounded. Receive registrations are cleared before
+announcing the session's end.
 
 RadioModel retains GUI registration, settings, presentation, and desktop retry
 policy. The daemon's connection target requires fresh intent after failure.
