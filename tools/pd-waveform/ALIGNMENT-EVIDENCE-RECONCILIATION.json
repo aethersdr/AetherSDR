@@ -1,0 +1,125 @@
+{
+  "updated_utc": "2026-11-16T22:31:35.642259+00:00",
+  "status": "historical_trigger_not_attributable_from_preserved_trace_controlled_evidence_kept_separate",
+  "production_ready": false,
+  "historical_record": {
+    "item": "Original128sample alignment slip",
+    "state": "still not root-caused",
+    "proved": "Controlled20ms scheduling pause reproduced a128sample slip; dispatch deadline retires stale correction before resumed output. Later phase-settling and warm-speech fixes have separate RF evidence.",
+    "not_proved": "Natural initial stall cause or universal automatic recovery. Changed FIFO epochs do not measure physical delay changes."
+  },
+  "controlled_record": {
+    "reported_pause_ms": 20.652852,
+    "injection_correlated": true,
+    "event": {
+      "reason": "tx_dispatch",
+      "mono_ns": "197729173639913",
+      "ref_generation": "11",
+      "delay": "1794.970",
+      "coherence": "1.000",
+      "tx_packets": "1883",
+      "tx_discontinuities": "0",
+      "tx_dropped": "0",
+      "tx_age_ns": "16403906",
+      "sent": "1883",
+      "send_errors": "0",
+      "deadlines": "1",
+      "session_max_send_gap_ns": "5725435",
+      "session_max_work_ns": "552680",
+      "iq_frames": "3751",
+      "iq_discontinuities": "0",
+      "iq_stale": "0",
+      "iq_invalid": "0",
+      "iq_duplicates": "0",
+      "iq_old": "0",
+      "iq_age_ns": "3449676",
+      "ref_fifo": "384",
+      "fb_fifo": "832"
+    },
+    "limits": [
+      "Controlled SIGSTOP injection identifies this event only; does not attribute the historical128sample change.",
+      "session_max timing includes earlier keys; not event latency.",
+      "Counters describe CPU-side observations and cannot independently prove FPGA buffer behavior."
+    ]
+  },
+  "source_equivalence": [
+    {
+      "file": "pd_acquire.c",
+      "historical_sha256": "ddedb9a4629fee06bcf0479a607ccd411de7a5ff4400cf751d4d6207df20a5bb",
+      "current_sha256": "b9cea991ea517105c9a1ced35ef281dc77bb8d257eb1721ccfb11dc712187b48",
+      "identical": false
+    },
+    {
+      "file": "pd_acquire.h",
+      "historical_sha256": "7646f0a0b8e16cdbc30b128aca2c992ed6736a76924885ab2ca138d41e184ca9",
+      "current_sha256": "011d9eb50f46e43dd7a06b5afd46657fda48a5c03244e6c9957ccd9b13474b87",
+      "identical": false
+    },
+    {
+      "file": "pd_align.c",
+      "historical_sha256": "8f1aba82bcad64622cb5c1d5b8ecb3cf2a5ba63083c2e78f74d04a8510a2faa0",
+      "current_sha256": "8f1aba82bcad64622cb5c1d5b8ecb3cf2a5ba63083c2e78f74d04a8510a2faa0",
+      "identical": true
+    },
+    {
+      "file": "pd_align.h",
+      "historical_sha256": "3a112c98ac320dbc0254026afbce34765f443586cbc8c4feac10b6f6220bac7b",
+      "current_sha256": "3a112c98ac320dbc0254026afbce34765f443586cbc8c4feac10b6f6220bac7b",
+      "identical": true
+    },
+    {
+      "file": "pd_local_iq.c",
+      "historical_sha256": "b85d0f3f6a899ebc3ed21dad05aab349bb467c7d7eb2ed870e01cd7234a34b34",
+      "current_sha256": "b85d0f3f6a899ebc3ed21dad05aab349bb467c7d7eb2ed870e01cd7234a34b34",
+      "identical": true
+    },
+    {
+      "file": "pd_local_iq.h",
+      "historical_sha256": "d403b8913d8018b6183c4472a84317dd1da5e556d45301a89ab3306352a133c4",
+      "current_sha256": "d403b8913d8018b6183c4472a84317dd1da5e556d45301a89ab3306352a133c4",
+      "identical": true
+    },
+    {
+      "file": "pd_stream_guard.c",
+      "historical_sha256": "59b178a052fd3fa9696bae1a362943bed7d79039de5660d35b2f526dc97c7215",
+      "current_sha256": "59b178a052fd3fa9696bae1a362943bed7d79039de5660d35b2f526dc97c7215",
+      "identical": true
+    },
+    {
+      "file": "pd_stream_guard.h",
+      "historical_sha256": "fe501af6b128b66390d8b0afc1129e3e9a6d0a6d5575a481988d1dbfc220c7da",
+      "current_sha256": "fe501af6b128b66390d8b0afc1129e3e9a6d0a6d5575a481988d1dbfc220c7da",
+      "identical": true
+    },
+    {
+      "file": "pd_tx_guard.c",
+      "historical_sha256": "644361930f558bbd8ae88e89fcbab22c69c9f7b5ee3b271870921125c9f9246b",
+      "current_sha256": "644361930f558bbd8ae88e89fcbab22c69c9f7b5ee3b271870921125c9f9246b",
+      "identical": true
+    },
+    {
+      "file": "pd_tx_guard.h",
+      "historical_sha256": "748348b938bf6236374bc25774d567574c176024fae02fc44687e7cbb361c50b",
+      "current_sha256": "748348b938bf6236374bc25774d567574c176024fae02fc44687e7cbb361c50b",
+      "identical": true
+    },
+    {
+      "file": "pd_waveform.c",
+      "historical_sha256": "2dd5e15c5147ef23a499a88ce646805ab7456e23de4ccedf7c600720144cbd63",
+      "current_sha256": "8af5a2af588e759a385fb793ed427997dfcdc16481fcedc0a8a647f3d5266642",
+      "identical": false
+    }
+  ],
+  "source_archive_sha256": "c3f7001e39a793246e7ccaf89ae4149cde3d712e9a3340e7a1306d632ded3a60",
+  "source_archive_path": "calibration-admission-diagnostics/source.tar.gz",
+  "historical_report_sha256": "ed570ca8d6af6ad96b263f1660206857bc056578ea266c0c00056202d00bfd4f",
+  "source_limit": "8 guard/alignment source files match; acquisition and waveform files differ. This is component comparison, not transfer of old RF qualification to the current full runtime.",
+  "missing_observation": "Original natural event lacks dispatch/ownership/sequence/freshness trace spanning its alignment change. A later controlled stall cannot retrospectively identify its trigger.",
+  "current_observability_limits": [
+    "Latest alignment record can be overwritten by subsequent acquisition; count alone does not preserve every event. This is the documented bounded-latest-record design, not a full event journal.",
+    "Unaligned receive-only fault increments stale counters without an alignment event.",
+    "DSP exit loses in-memory records; collect beforeStop."
+  ],
+  "current_stall_reference": "RECEIVE-STALL-QUALIFICATION.json",
+  "next_causal_capture": "On recurrence, retain status beforeStop, event monotonic clocks, TX continuity/age, IQ freshness/sequence, reference generation and control/ownership/pan changes; do not equate FIFO epoch change with physicalRFdelay."
+}

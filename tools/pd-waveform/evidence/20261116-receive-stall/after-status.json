@@ -1,0 +1,59 @@
+{
+  "body": {
+    "available": true,
+    "calibration_control": true,
+    "calibration_required": true,
+    "calibration_state": "idle",
+    "correcting": false,
+    "correction_control": true,
+    "correction_enabled": true,
+    "diagnostics": {
+      "alignment": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "source_end": {
+        "count": 0,
+        "text": "",
+        "truncated": false
+      },
+      "version": 1
+    },
+    "faults": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 36
+    },
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 1212940326,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "input_limited_samples": 0,
+    "keyed": false,
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "measurement_capture_batch_version": 1,
+    "measurement_control": true,
+    "measurement_tone_capture_version": 3,
+    "measurement_tone_config": {
+      "center_hz": 1305,
+      "max_spacing_hz": 10000,
+      "min_spacing_hz": 200,
+      "source_id": "0000000000000000",
+      "spacing_hz": 1190
+    },
+    "measurement_tone_control": true,
+    "registered": true,
+    "source_purpose": "calibration",
+    "state": "recalibration_required"
+  },
+  "http_status": 200
+}

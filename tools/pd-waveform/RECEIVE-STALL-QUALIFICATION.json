@@ -1,0 +1,54 @@
+{
+  "updated_utc": "2026-11-16T22:31:35.642259+00:00",
+  "status": "installed_receive_only150ms_DSP_stall_stale_IQ_rejection_fresh_capture_and_Stop_cleanup_passed",
+  "production_ready": false,
+  "runtime_source": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "desktop_source": "8d06b8300",
+  "release_blake2b_256": "9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce",
+  "RF_transmissions": 0,
+  "FDX": false,
+  "receive_mode": "USB",
+  "feedback": "localDAXIQ48k/channel4/RXA",
+  "stopped_interval_ms": 150.676458,
+  "same_DSP_PID_and_start_time_survived": true,
+  "resume_watchdog_fallback_used": false,
+  "stale_IQ_before": 0,
+  "stale_IQ_after": 36,
+  "after_state": "recalibration_required",
+  "after_calibration_required": true,
+  "after_correcting": false,
+  "after_source_id": "0000000000000000",
+  "after_calibration_state": "idle",
+  "fresh_capture": {
+    "IQ_bytes": 131072,
+    "IQ_sha256": "0cd749fa22c988db6904a8eeff062ee30201580f89d2f2c800b6dd4aa9332038",
+    "new_capture_id": "a4737ebb147a9d11e37d4cc1fa60a3fb",
+    "old_capture_id": "2c8933b0499e0bc43fa3fce585064045"
+  },
+  "final_cleanup": {
+    "service_state": "stopped",
+    "remaining_processes": 3,
+    "UID78666_caps_zero_NNP1": true,
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "temporary_installation_and_probe_jobs_removed": true
+  },
+  "limitations": [
+    "One receive-only stall with no calibrated model or TX source. Does not prove stale-curve retirement, automatic model recovery or RF unkey under a scheduling stall.",
+    "Fixed ARP and64byte ownership journal remain while the live session holds IQ, then disappear/clear at explicitStop; continued ownership is not a cleanup leak.",
+    "No alignment event retained because the session was unaligned; cumulative staleIQ counter and public recalibration state are the observed rejection evidence.",
+    "Historical natural128sample trigger remains unattributed. Full P1-P10 obligations and actual6300 hardware gates remain open."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-receive-stall/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-receive-stall/stall-job.py": "458534655c687e84a79c4dada955c0fde667543a67c0210b4cb125f5b66ff0ed",
+    "tools/pd-waveform/evidence/20261116-receive-stall/stall-result.json": "511a302ecbb29c7862227d3d8b2bb79f0c66188428a5d23d865b84101ef2f8e4",
+    "tools/pd-waveform/evidence/20261116-receive-stall/before-stall.json": "643b32fc8dae052d70fc20ac58cf256a1f51989a751f4fe3dc590695f4125ba5",
+    "tools/pd-waveform/evidence/20261116-receive-stall/after-status.json": "9691b7cc742a3060bc99390ed4dfb1e7e0c67491210ea3f6ba151ee14960ce60",
+    "tools/pd-waveform/evidence/20261116-receive-stall/capture-after-stall.py": "44c0da6e2bb6637db4725758a29bfeb958949d34570c5a686ecf987be5ff423e",
+    "tools/pd-waveform/evidence/20261116-receive-stall/capture-after-stall.json": "39cc443d1f7852923521b8494b61da8ce6970e3e3c95942a5cc34b89c5ee98d2",
+    "tools/pd-waveform/evidence/20261116-receive-stall/fresh-after-stall.f32le": "0cd749fa22c988db6904a8eeff062ee30201580f89d2f2c800b6dd4aa9332038",
+    "tools/pd-waveform/evidence/20261116-receive-stall/final-audit-job.py": "9e79e24534f4189c21ce5bae3f65e451579dfabfe44d886c4c69ea95cbdc7a21",
+    "tools/pd-waveform/evidence/20261116-receive-stall/final-audit-result.json": "a6afe600c7ad0f879a982c1b71fdafbc9010908f94c191c2f16b1296f3c8fc65"
+  }
+}
