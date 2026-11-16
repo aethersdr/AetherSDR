@@ -4,6 +4,8 @@
 #include <QString>
 #include <QVector>
 
+#include <optional>
+
 namespace AetherSDR {
 
 // A transverter the CLIENT owns, for a backend whose radio keeps no transverter
@@ -26,7 +28,10 @@ struct ClientTransverter {
     double txLo() const { return txLoMhz > 0.0 ? txLoMhz : rxLoMhz; }
     double rfLowMhz() const { return ifLowMhz + rxLoMhz; }
     double rfHighMhz() const { return ifHighMhz + rxLoMhz; }
+    // Complete, enabled, and bounded: nothing above kMaxRfMhz is a real band,
+    // and an unbounded LO would overflow the Hz conversions downstream.
     bool   isUsable() const;
+    static constexpr double kMaxRfMhz = 3.0e5;   // 300 GHz
 
     QJsonObject toJson() const;
     static ClientTransverter fromJson(const QJsonObject& o);
@@ -50,7 +55,12 @@ public:
 
     // Outbound: the frequency the operator asked for (RF or native) to the
     // frequency the radio must tune. Activates or clears the transverter.
-    double toRadioMhz(double requestedMhz);
+    // Empty when the radio cannot reach the request at all: outside its own
+    // range, outside every RF window, and further than kEdgeHoldReachMhz past
+    // the active window (a wheel step or drag off the edge is held; a tune to
+    // an unrelated band is refused). Nothing changes on a refusal.
+    std::optional<double> toRadioMhz(double requestedMhz);
+    static constexpr double kEdgeHoldReachMhz = 1.0;
 
     // Inbound: a receive frequency the radio reports, to what the operator sees.
     // Clears the active transverter when the IF leaves its window.

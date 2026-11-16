@@ -60,8 +60,9 @@ to check transverter drive with a carrier; set the transverter's **Max Power
 
 ### Transverters on a networked Icom
 
-On a networked Icom, **Settings → Radio Setup... → Transverters** shows a table
-that AetherSDR stores for that radio. The radio only ever tunes the IF;
+On a single-receiver networked Icom, **Settings → Radio Setup... →
+Transverters** shows a table that AetherSDR stores for that radio. (The
+dual-receiver IC-7610, IC-7760 and IC-7851 are not served.) The radio only ever tunes the IF;
 AetherSDR adds the LO, so the VFO, the panadapter, spots, TCI and CAT show the
 operating (RF) frequency.
 
@@ -79,8 +80,10 @@ operating (RF) frequency.
 
 A transverter becomes active when you tune into its RF range: by its band
 button, a typed frequency or a spot. It stays active while the radio's IF stays
-inside the IF range. Tuning past either end of the RF range holds the radio at
-that edge. Tuning to one of the radio's own frequencies, or turning the radio's
+inside the IF range. Tuning up to 1 MHz past either end of the RF range holds
+the radio at that edge. A frequency that is outside the radio's own range and
+outside every transverter's RF range is refused with a notice, and the radio
+does not move. Tuning to one of the radio's own frequencies, or turning the radio's
 dial out of the IF range, returns to the radio's own frequencies.
 
 Transverter bands on a networked Icom are **receive-only**. While one is

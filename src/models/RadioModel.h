@@ -2931,7 +2931,16 @@ private:
     void loadClientTransverters();
     void saveClientTransverters();
     void noteClientTransverterActivation(int previousIndex);
-    double clientTransverterRadioMhz(double requestedMhz);
+    // Empty when the radio cannot reach the request; the operator is told and
+    // nothing is sent.
+    std::optional<double> clientTransverterRadioMhz(double requestedMhz);
+    // The record, on a backend with one receiver: the active transverter is a
+    // single model-wide state.
+    bool backendQualifiesForClientTransverters() const;
+    // Puts back what the radio last reported after a refused tune, so the
+    // slice does not go on showing a frequency the radio is not on.
+    void showLastReportedSliceFrequency(SliceModel* slice);
+    QHash<int, double> m_xvtrReportedRadioMhz;
 
     // Backward-compat helpers for active panadapter (Phase 1)
     QString activeWfId() const {

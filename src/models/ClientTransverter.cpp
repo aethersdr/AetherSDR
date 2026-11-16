@@ -10,7 +10,8 @@ bool ClientTransverter::isUsable() const
     return enabled && std::isfinite(ifLowMhz) && std::isfinite(ifHighMhz)
         && std::isfinite(rxLoMhz) && std::isfinite(txLoMhz)
         && ifLowMhz > 0.0 && ifHighMhz > ifLowMhz && rxLoMhz > 0.0
-        && txLoMhz >= 0.0;
+        && txLoMhz >= 0.0
+        && rfHighMhz() <= kMaxRfMhz && ifHighMhz + txLo() <= kMaxRfMhz;
 }
 
 QJsonObject ClientTransverter::toJson() const
@@ -69,19 +70,24 @@ bool ClientTransverterSet::isNative(double mhz) const
         || (mhz >= m_nativeMinMhz && mhz <= m_nativeMaxMhz);
 }
 
-double ClientTransverterSet::toRadioMhz(double requestedMhz)
+std::optional<double> ClientTransverterSet::toRadioMhz(double requestedMhz)
 {
     if (const int idx = indexForRf(requestedMhz); idx >= 0) {
         m_active = idx;
         return requestedMhz - m_list[idx].rxLoMhz;
     }
-    if (m_active >= 0 && !isNative(requestedMhz)) {
+    if (isNative(requestedMhz)) {
+        m_active = -1;
+        return requestedMhz;
+    }
+    if (m_active >= 0) {
         const ClientTransverter& t = m_list[m_active];
         const double held = std::clamp(requestedMhz, t.rfLowMhz(), t.rfHighMhz());
-        return held - t.rxLoMhz;
+        if (std::fabs(requestedMhz - held) <= kEdgeHoldReachMhz) {
+            return held - t.rxLoMhz;
+        }
     }
-    m_active = -1;
-    return requestedMhz;
+    return std::nullopt;
 }
 
 double ClientTransverterSet::toDisplayMhz(double radioMhz)

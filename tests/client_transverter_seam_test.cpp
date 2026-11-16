@@ -108,7 +108,8 @@ struct Fixture {
     SliceModel* slice{nullptr};
     QStringList interlocks;
 
-    explicit Fixture(bool qualified = true, const QString& serial = QStringLiteral("xvtr-a"))
+    explicit Fixture(bool qualified = true, const QString& serial = QStringLiteral("xvtr-a"),
+                     int receivers = 1)
     {
         auto owned = std::make_unique<RecordingBackend>();
         backend = owned.get();
@@ -120,6 +121,7 @@ struct Fixture {
         } else {
             backend->caps.clientTransverters.reset();
         }
+        backend->caps.maxSlices = receivers;
         backend->caps.tuningMinHz = 30.0e3;
         backend->caps.tuningMaxHz = 470.0e6;
         backend->caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
@@ -190,9 +192,13 @@ static void tunePastTheEdgeIsHeld()
     f.slice->setFrequency(10489.200);
     check(near(f.backend->lastTuneHz, 28.500e6) && f.active("QO-100"),
           "a tune below the RF window holds the radio at the bottom IF edge");
-    f.slice->setFrequency(10495.000);
+    f.slice->setFrequency(10490.600);
     check(near(f.backend->lastTuneHz, 29.000e6) && f.active("QO-100"),
           "a tune above the RF window holds the radio at the top IF edge");
+    const int tunes = f.backend->tunes;
+    f.slice->setFrequency(10495.000);
+    check(f.backend->tunes == tunes && f.active("QO-100"),
+          "a tune further than the hold reach past the edge is refused, not held");
 }
 
 static void transmitFrequencyUsesTheTxLo()
@@ -294,10 +300,74 @@ static void editingTheListKeepsTheRadioOnItsIf()
     const int tunes = f.backend->tunes;
     f.radio.setClientTransverters({twoMetres()});
     check(f.backend->tunes == tunes, "removing the active transverter does not retune the radio");
-    check(near(f.slice->frequency(), 144.540) || near(f.slice->frequency(), 28.540),
-          "the slice is re-derived from the IF the radio is still on");
+    check(near(f.slice->frequency(), 28.540) && f.active(nullptr),
+          "the slice shows the IF the radio is still on, under no transverter");
     check(!near(f.slice->frequency(), 10489.540),
           "the removed transverter's RF frequency is no longer shown");
+}
+
+// A third transverter whose IF window does not overlap the other two.
+static ClientTransverter sixMetreIf()
+{
+    ClientTransverter t;
+    t.name = QStringLiteral("23cm");
+    t.ifLowMhz = 50.0;
+    t.ifHighMhz = 52.0;
+    t.rxLoMhz = 1246.0;
+    return t;
+}
+
+static void removingAnotherRowKeepsTheActiveTransverter()
+{
+    Fixture f;
+    // [23cm, QO-100, 2m]: removing the first row moves QO-100 to the index
+    // 2m then holds, and 2m's IF window also contains 28.540.
+    f.radio.setClientTransverters({sixMetreIf(), qo100(), twoMetres()});
+    f.slice->setFrequency(10489.540);
+    const int tunes = f.backend->tunes;
+    f.radio.setClientTransverters({qo100(), twoMetres()});
+    check(f.active("QO-100") && near(f.slice->frequency(), 10489.540),
+          "removing a row above the active transverter keeps it active by name");
+    f.radio.setClientTransverters({twoMetres(), qo100()});
+    check(f.active("QO-100") && near(f.slice->frequency(), 10489.540),
+          "reordering the rows keeps it active by name");
+    f.radio.setClientTransverters({qo100()});
+    check(f.active("QO-100") && near(f.slice->frequency(), 10489.540),
+          "removing an unrelated row below it keeps it active");
+    check(f.backend->tunes == tunes, "none of those edits retunes the radio");
+    f.radio.transmitModel().setMox(true);
+    check(f.backend->keys == 0 && f.interlocks.contains(QStringLiteral("xvtr-rx-only:QO-100")),
+          "and the receive-only refusal still names it");
+}
+
+static void aSecondReceiverIsNotServed()
+{
+    Fixture f(true, QStringLiteral("xvtr-dual"), 2);
+    check(!f.radio.usesClientTransverters() && f.radio.clientTransverters().transverters().isEmpty(),
+          "a two-receiver backend does not engage client transverters, whatever it declares");
+    f.slice->setFrequency(28.540);
+    check(near(f.backend->lastTuneHz, 28.540e6), "its tunes are sent raw");
+}
+
+static void aFrequencyNothingReachesIsRefused()
+{
+    Fixture f;
+    f.backend->reportFrequency(14.200);
+    const int tunes = f.backend->tunes;
+    f.slice->setFrequency(1296.200);
+    check(f.backend->tunes == tunes, "a frequency outside the radio and every window is not sent");
+    check(f.interlocks.contains(QStringLiteral("xvtr-tune-range")), "the operator is told why");
+    check(near(f.slice->frequency(), 14.200), "the slice goes back to what the radio reported");
+
+    f.slice->setFrequency(10489.540);
+    f.backend->reportFrequency(28.540);
+    const int onBand = f.backend->tunes;
+    f.interlocks.clear();
+    f.slice->setFrequency(1296.200);
+    check(f.backend->tunes == onBand && f.active("QO-100"),
+          "on a transverter, an unrelated band is refused, not held at the band edge");
+    check(near(f.slice->frequency(), 10489.540),
+          "and the slice still shows the transverter frequency");
 }
 
 static void listIsStoredPerRadio()
@@ -368,6 +438,9 @@ int main(int argc, char** argv)
     internalTunerIsLockedOut();
     headlessTargetsUseTheSameSeam();
     editingTheListKeepsTheRadioOnItsIf();
+    removingAnotherRowKeepsTheActiveTransverter();
+    aSecondReceiverIsNotServed();
+    aFrequencyNothingReachesIsRefused();
     listIsStoredPerRadio();
     unidentifiedRadioStoresNothing();
     unqualifiedBackendIsUntouched();
