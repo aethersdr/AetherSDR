@@ -564,8 +564,21 @@ per-tone, fundamental-derived PEP and sampled-peak references, with noise-floor
 and clipping uncertainty. Nominal radio power is separate from the measured
 forward-power abort limit. No IQ absolute-scale calibration is inferred.
 
-Preparation derives fixed source tones and four requested averages from the
-current TX slice. Allowed regions come from the selected BandPlanManager plan
+Preparation derives fixed source tones and center from the current TX slice,
+and snapshots the selected window, averages, IMD order and authorization timeout.
+The per-radio `AetherPDMeasurement` schema2 document stores those client choices.
+Schema1 documents retain their ten-second default until an explicit save migrates
+atomically to schema2; unknown fields survive. Schema2 requires an integral
+`timeoutMs` from3000 through10000 in1000ms steps. Missing/malformed values and
+future schemas refuse use without overwriting data. Older schema1-only clients
+refuse schema2 instead of silently ignoring a shorter stored timeout.
+
+The timeout control locks during preparation, capture and release. The controller
+uses the shorter of the selected timeout and its safety-policy limit; callers
+cannot extend an in-flight snapshot. JSON, CSV and PNG descriptions retain the
+selected timeout separately from confirmed release. Short choices can expire
+before calibration or capture completes and do not authorize another attempt.
+Allowed regions come from the selected BandPlanManager plan
 and operator license-class filter. This is a software preflight, not permission
 to transmit; the normal radio TX gate still applies. Changing plan selection or
 license filter invalidates the original preparation.

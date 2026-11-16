@@ -181,6 +181,21 @@ int main(int argc, char** argv)
         check(f.finished == 1 && f.result && !f.result->measurement,
               "deadline expiry fabricated a measurement or skipped qualified release");
     }
+    for (int timeout : {3000, 8000, 10000}) {
+        Fixture f; f.config.timeoutMs = timeout; f.start();
+        check(f.lease->deadline == 1000 + timeout, "selected timeout was not snapped into lease deadline");
+        f.config.timeoutMs = 10000;
+        f.now = 1000 + timeout;
+        f.controller->poll();
+        check(f.lease->releases == 1 && f.finished == 0, "selected expiry did not request release independently of caller changes");
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        check(f.result && f.result->error == "Transmit timeout reached", "selected expiry lost timeout reason");
+    }
+    for (int timeout : {0, -1, 10001, 14000}) {
+        Fixture f; f.config.timeoutMs = timeout;
+        check(!f.controller->prepare(f.config, f.request) && !f.source->running && f.lease->starts == 0,
+              "invalid requested timeout passed preflight");
+    }
     for (const int variant : {0, 1, 2, 3, 4, 5, 6}) {
         Fixture f; f.start();
         CaptureFrame first = frame(1), second = frame(2);

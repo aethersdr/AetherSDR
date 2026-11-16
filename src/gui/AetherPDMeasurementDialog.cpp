@@ -81,6 +81,10 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     m_order->addItem(tr("IMD3"), 3);
     m_order->addItem(tr("IMD3 + 5"), 5);
     m_order->addItem(tr("IMD3 + 5 + 7"), 7);
+    m_timeout = new QSpinBox(bodyWidget());
+    m_timeout->setObjectName(QStringLiteral("pdMeasureTimeout"));
+    m_timeout->setAccessibleName(tr("Transmit timeout in seconds"));
+    m_timeout->setRange(AetherPDMeasurementSettings::kMinTimeoutMs / 1000, AetherPDMeasurementSettings::kMaxTimeoutMs / 1000);
     const auto analysisField = [this, analysis](const QString& title, QWidget* field, int column) {
         auto* label = new QLabel(title, bodyWidget());
         label->setBuddy(field);
@@ -90,6 +94,7 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     analysisField(tr("Analysis window"), m_window, 0);
     analysisField(tr("Averages"), m_averages, 1);
     analysisField(tr("Highest order"), m_order, 2);
+    analysisField(tr("Transmit timeout (s)"), m_timeout, 3);
     layout->addLayout(analysis);
     auto* grid = new QGridLayout;
     const auto button = [this, grid](const QString& text, const char* name, int row, int col) {
@@ -155,16 +160,17 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
         if (!current()) { return; }
         const QPointer<AetherPDMeasurementDialog> alive(this);
         const AetherPDMeasurementModel::AnalysisOptions options{
-            static_cast<txlin::WindowKind>(m_window->currentData().toInt()), m_averages->value(), m_order->currentData().toInt()};
+            static_cast<txlin::WindowKind>(m_window->currentData().toInt()), m_averages->value(), m_order->currentData().toInt(), m_timeout->value() * 1000};
         m_notice.clear();
         const bool saved = m_radio->aetherPDMeasurementModel().setAnalysisOptions(m_session, options);
         if (!alive) { return; }
-        if (!saved) { m_notice = tr("Analysis preferences were not changed: %1").arg(m_radio->aetherPDMeasurementModel().status()); }
+        if (!saved) { m_notice = tr("Measurement preferences were not changed: %1").arg(m_radio->aetherPDMeasurementModel().status()); }
         render();
     };
     connect(m_window, &QComboBox::currentIndexChanged, this, saveAnalysis);
     connect(m_averages, &QSpinBox::valueChanged, this, saveAnalysis);
     connect(m_order, &QComboBox::currentIndexChanged, this, saveAnalysis);
+    connect(m_timeout, &QSpinBox::valueChanged, this, saveAnalysis);
     markTxKeying(m_transmit);
     connect(m_transmit, &QPushButton::clicked, this, [this] {
         if (!current()) { return; }
@@ -271,13 +277,14 @@ void AetherPDMeasurementDialog::render()
     const AetherPDMeasurementSettings::ReadResult preferences = model ? model->analysisOptions()
         : AetherPDMeasurementSettings::ReadResult{false, {}, tr("Original radio is unavailable.")};
     if (idle) {
-        const QSignalBlocker windowBlock(m_window), averagesBlock(m_averages), orderBlock(m_order);
+        const QSignalBlocker windowBlock(m_window), averagesBlock(m_averages), orderBlock(m_order), timeoutBlock(m_timeout);
         m_window->setCurrentIndex(m_window->findData(static_cast<int>(preferences.values.window)));
         m_averages->setValue(preferences.values.averages);
         m_order->setCurrentIndex(m_order->findData(preferences.values.maxOrder));
+        m_timeout->setValue(preferences.values.timeoutMs / 1000);
     }
-    const QString analysisReason = preferences.usable ? tr("Analysis options are locked until this measurement ends.") : preferences.reason;
-    for (QWidget* control : {static_cast<QWidget*>(m_window), static_cast<QWidget*>(m_averages), static_cast<QWidget*>(m_order)}) {
+    const QString analysisReason = preferences.usable ? tr("Measurement options are locked until this measurement ends.") : preferences.reason;
+    for (QWidget* control : {static_cast<QWidget*>(m_window), static_cast<QWidget*>(m_averages), static_cast<QWidget*>(m_order), static_cast<QWidget*>(m_timeout)}) {
         availability(control, valid && idle && preferences.usable, analysisReason);
         if (!alive) { return; }
     }
@@ -285,6 +292,10 @@ void AetherPDMeasurementDialog::render()
         m_window->setAccessibleDescription(tr("Window choice changes leakage and frequency resolution; no window guarantees a fixed measurable IMD depth."));
         if (!alive) { return; }
         m_averages->setAccessibleDescription(tr("One to four frames within the bounded source window. Averaging reduces estimate variance, not the physical noise floor."));
+        if (!alive) { return; }
+        m_timeout->setAccessibleDescription(tr("Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later."));
+        if (!alive) { return; }
+        m_timeout->setToolTip(m_timeout->accessibleDescription());
         if (!alive) { return; }
         m_order->setAccessibleDescription(tr("Highest odd distortion product to analyze: three, five or seven."));
         if (!alive) { return; }

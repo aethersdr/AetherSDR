@@ -42,6 +42,7 @@ private:
     QComboBox* m_window{nullptr};
     QSpinBox* m_averages{nullptr};
     QComboBox* m_order{nullptr};
+    QSpinBox* m_timeout{nullptr};
     QLabel* m_state{nullptr};
     QPlainTextEdit* m_result{nullptr};
     AetherPDMeasurementSpectrum* m_spectrum{nullptr};

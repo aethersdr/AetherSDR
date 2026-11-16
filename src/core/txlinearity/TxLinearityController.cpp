@@ -91,7 +91,8 @@ bool TxLinearityController::validConfig(const LinearityRunConfig& config, const 
         && capture.sampleRateHz > 0 && capture.sampleRateHz <= 192000
         && std::isfinite(capture.centerFreqHz) && capture.centerFreqHz > 0
         && capture.settleMsAfterKey >= 0 && capture.settleMsBeforeUnkey >= 0
-        && guards < m_safety.limits().maxTransmitMs
+        && config.timeoutMs > 0 && config.timeoutMs <= kMaxTransmitMs
+        && guards < std::min(config.timeoutMs, m_safety.limits().maxTransmitMs)
         && config.targetAverages > 0 && config.targetAverages <= kMaxAverages
         && (config.window == WindowKind::BlackmanHarris7 || config.window == WindowKind::BlackmanHarris4
             || config.window == WindowKind::Hann || config.window == WindowKind::FlatTop)
@@ -182,7 +183,7 @@ bool TxLinearityController::startRun(std::shared_ptr<ITxLinearityRunLease> lease
     }
     m_lease = std::move(lease);
     m_state = State::AwaitingKey;
-    m_deadlineMs = now + m_safety.limits().maxTransmitMs;
+    m_deadlineMs = now + std::min(m_config.timeoutMs, m_safety.limits().maxTransmitMs);
     m_safety.noteRunStarted(now);
     const QPointer<TxLinearityController> guard(this);
     const std::uint64_t generation = m_generation;
@@ -219,7 +220,7 @@ void TxLinearityController::poll()
         return;
     }
     const TxTelemetry telemetry = m_environment.telemetry(now);
-    const AbortReason abort = m_safety.evaluate(now, telemetry);
+    const AbortReason abort = now >= m_deadlineMs ? AbortReason::TransmitTimeout : m_safety.evaluate(now, telemetry);
     if (abort != AbortReason::None) { finishTelemetryCapture(abortReasonText(abort), now, telemetry); return; }
     if (*telemetry.forwardWatts.value > m_config.maxForwardWatts) {
         finishTelemetryCapture("Forward power exceeded the test limit", now, telemetry); return;

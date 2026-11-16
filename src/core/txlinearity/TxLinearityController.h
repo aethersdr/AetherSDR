@@ -39,6 +39,7 @@ struct LinearityRunConfig {
     int targetAverages = 8;
     double maxForwardWatts = 0.0; // Required operator-selected limit.
     std::optional<bool> expectedCorrection;
+    int timeoutMs = 10000; // Authorization interval from explicit start, including setup.
 };
 
 struct LinearityCaptureStamp {

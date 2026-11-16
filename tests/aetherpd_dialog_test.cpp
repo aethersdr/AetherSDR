@@ -78,6 +78,7 @@ int main(int argc, char** argv)
             && image.text(QStringLiteral("Description")).contains("-40.0 dBc per tone")
             && image.text(QStringLiteral("Description")).contains("noise limited")
             && image.text(QStringLiteral("Description")).contains("5 W setting")
+            && image.text(QStringLiteral("Description")).contains("timeout 10 s")
             && image.text(QStringLiteral("Description")).contains("DAX IQ stream 0x40000001")
             && !image.text(QStringLiteral("Description")).contains("dBFS")
             && accessible && accessible->role() == QAccessible::Graphic
@@ -308,12 +309,17 @@ int main(int argc, char** argv)
     auto* windowChoice = measurement->findChild<QComboBox*>(QStringLiteral("pdMeasureWindow"));
     auto* averageChoice = measurement->findChild<QSpinBox*>(QStringLiteral("pdMeasureAverages"));
     auto* orderChoice = measurement->findChild<QComboBox*>(QStringLiteral("pdMeasureOrder"));
+    auto* timeoutChoice = measurement->findChild<QSpinBox*>(QStringLiteral("pdMeasureTimeout"));
+    ok &= check(timeoutChoice && timeoutChoice->minimum() == 3 && timeoutChoice->maximum() == 10
+        && timeoutChoice->value() == 10, "timeout defaults to ten seconds and can only shorten within supported range");
+    if (!timeoutChoice) { return 1; }
     const size_t beforeOptions = network.sent.size();
     windowChoice->setCurrentIndex(windowChoice->findData(static_cast<int>(txlin::WindowKind::Hann)));
     averageChoice->setValue(2);
     orderChoice->setCurrentIndex(orderChoice->findData(5));
+    timeoutChoice->setValue(8);
     const auto selectedOptions = radio.aetherPDMeasurementModel().analysisOptions();
-    ok &= check(selectedOptions.usable && selectedOptions.values == AetherPDMeasurementModel::AnalysisOptions{txlin::WindowKind::Hann, 2, 5}
+    ok &= check(selectedOptions.usable && selectedOptions.values == AetherPDMeasurementModel::AnalysisOptions{txlin::WindowKind::Hann, 2, 5, 8000}
         && network.sent.size() == beforeOptions && captureNetwork.sent.empty(),
         "analysis controls persist locally for this radio without capture or RF commands");
     ok &= check(!radio.aetherPDMeasurementModel().setAnalysisOptions({}, {}),
@@ -366,7 +372,7 @@ int main(int argc, char** argv)
     ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::CheckingReceive
         && captureNetwork.sent.size() == 1 && !mb("pdMeasureTransmit")->isEnabled(),
         "UI preparation uses real station configuration and receive-only capture");
-    ok &= check(!windowChoice->isEnabled() && !averageChoice->isEnabled() && !orderChoice->isEnabled()
+    ok &= check(!windowChoice->isEnabled() && !averageChoice->isEnabled() && !orderChoice->isEnabled() && !timeoutChoice->isEnabled()
         && !radio.aetherPDMeasurementModel().setAnalysisOptions(radio.controlSession(), {})
         && radio.aetherPDMeasurementModel().analysisOptions().values == selectedOptions.values,
         "analysis options freeze in both GUI and model throughout measurement preparation");
@@ -387,7 +393,7 @@ int main(int argc, char** argv)
     const QString readyText = measurement->findChild<QLabel*>(QStringLiteral("pdMeasureState"))->text();
     ok &= check(readyText.contains("7.150000 MHz") && readyText.contains("ANT1")
         && readyText.contains("nominal setting 5 W") && readyText.contains("abort limit 10.0 W")
-        && readyText.contains("DAX IQ stream 0x40000001") && readyText.contains("Hann") && readyText.contains("2 averages") && readyText.contains("IMD5"),
+        && readyText.contains("DAX IQ stream 0x40000001") && readyText.contains("timeout 8 s") && readyText.contains("Hann") && readyText.contains("2 averages") && readyText.contains("IMD5"),
         "ready display identifies the original station and separates drive from abort limit");
     const auto bridge = std::make_shared<TxController>(&radio);
     TxKeyingAction::Prepared queued = prepareTxKeyingAction(mb("pdMeasureTransmit"), bridge, "click", {});

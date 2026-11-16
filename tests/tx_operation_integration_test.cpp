@@ -985,6 +985,7 @@ void aetherPDMeasurementWorkflow()
         config.capture.sampleRateHz = 48000;
         config.capture.settleMsAfterKey = 0;
         config.targetAverages = 1;
+        config.timeoutMs = 8000;
         config.maxForwardWatts = 10;
         config.expectedCorrection = true;
         txlin::RunRequest request;
@@ -1000,6 +1001,11 @@ void aetherPDMeasurementWorkflow()
                 "source capability without observed arm identity cannot prepare");
             check(f.radio.requestAetherPD(session, aetherpd::Operation::Status), "original session refresh accepted");
             controlNetwork.last->complete(200, idle);
+            for (int timeout : {0, 2000, 3500, 10001, 14000}) {
+                txlin::LinearityRunConfig bad = config; bad.timeoutMs = timeout;
+                check(!model->prepare(session, bad, request, true) && measurementNetwork.sent.empty(),
+                      "invalid operator timeout cannot prepare capture or helper");
+            }
             txlin::RunRequest wrongTones = request; wrongTones.tone1Hz += 100;
             check(!model->prepare(session, config, wrongTones, true), "unmatched generated tones refused");
             txlin::RunRequest narrow = request; narrow.allocations = {{7147000, 7156000}};
@@ -1048,6 +1054,7 @@ void aetherPDMeasurementWorkflow()
         check(model->start(session, [&] { return operatorCurrent; }) && !f.commands.contains("mox:on"),
               "explicit measurement start waits for helper readiness");
         const int budget = QJsonDocument::fromJson(measurementNetwork.sent.back().body).object().value("cleanup_after_ms").toInt();
+        check(budget > 0 && budget <= 7000, "selected eight-second timeout reached independent cleanup helper");
         const QByteArray observing = encode({{"test_id", captureId}, {"state", "observing"},
             {"cleanup_due_ms", "20000"}, {"remaining_ms", budget}});
         QPointer<AetherPDTest::Reply> begin = measurementNetwork.last;
@@ -1122,6 +1129,9 @@ void aetherPDMeasurementWorkflow()
                 && measured.value("spectrum_db_raw_iq").toArray().size() == 16384
                 && exported.value("captures").toArray().size() == 1,
                 "export preserves source, station, spectra and unknown calibration after release");
+            check(exported.value("transmit_authorization_timeout_ms").toInt() == 8000
+                && result->config.timeoutMs == 8000 && model->resultSummary().contains("timeout 8 s"),
+                "JSON and completed result retain selected authorization timeout");
             const QJsonObject capture = exported.value("captures").toArray().first().toObject();
             const QJsonObject identity = capture.value("source_stream").toObject();
             check(identity.value("stream_id").toInteger() == 1073741825
@@ -1163,6 +1173,7 @@ void aetherPDMeasurementWorkflow()
             check(csv.startsWith("Measurement,Value,Unit,Reference,Status\r\n")
                 && csv.contains("\"Nominal power setting\",\"5\",\"W\",\"radio setting; not measured output\"")
                 && csv.contains("\"Capture clipped\",\"\",\"\",\"\",\"unknown\"")
+                && csv.contains("\"Transmit authorization timeout\",\"8000\",\"ms\"")
                 && csv.contains("\"Capture IQ stream ID\",\"0x40000001\"")
                 && csv.contains("\"sampled envelope PEP\"") && !csv.contains("dBFS"),
                 "CSV export preserves explicit references, nominal power and unknown clipping");

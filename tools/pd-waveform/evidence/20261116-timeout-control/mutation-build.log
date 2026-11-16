@@ -1,0 +1,4 @@
+[0/2] Re-checking globbed directories...
+[1/5] Automatic MOC and UIC for target tx_linearity_controller_test
+[2/4] Building CXX object CMakeFiles/tx_linearity_controller_test.dir/src/core/txlinearity/TxLinearityController.cpp.o
+[3/4] Linking CXX executable tx_linearity_controller_test

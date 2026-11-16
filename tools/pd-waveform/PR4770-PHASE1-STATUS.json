@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T12:09:20.390644+00:00",
+  "updated_utc": "2026-11-16T12:19:43.138626+00:00",
   "original_pr_head": "2b723cde563ec264999cdfaafe6af8f5707b61e4",
   "current_base": "23ccdf7fb504e0019759dab249132dfc5b223bd7",
   "phase1_complete": false,
@@ -59,7 +59,7 @@
     },
     {
       "feature": "Transmit timeout",
-      "status": "Desktop authorization capped at10000ms; helper cleanup start and qualified release are separate. Physical RF-release and operator adjustment remain incomplete.",
+      "status": "Ten-second authorization ceiling plus per-radio3..10second operator control implemented and component-qualified. Physical RF-release guarantee remains unqualified.",
       "sources": [
         "src/models/AetherPDMeasurementModel.cpp:initialize",
         "src/models/AetherPDRunLease.cpp:start/poll",
@@ -72,23 +72,24 @@
         "Guardian ownership refresh/write and radio release may occur after expiry; existing best-effort cleanup and qualified release proof remain required.",
         "Native measurement source remains bounded to8seconds and silence after retirement; that is not proof of MOX release."
       ],
-      "remaining": "Expose downward-only operator adjustment; live-qualify cold four-frame capture and actual unkey on exact candidate. Process/API scheduling stalls still preclude claiming a hard10second physical RF-release guarantee.",
+      "remaining": "Live-qualify cold four-frame capture and actual unkey on exact candidate. Process/API scheduling stalls still preclude claiming a hard10second physical RF-release guarantee.",
       "evidence": [
         "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
-        "GUARDIAN-DEADLINE-QUALIFICATION.json"
+        "GUARDIAN-DEADLINE-QUALIFICATION.json",
+        "TIMEOUT-CONTROL-QUALIFICATION.json"
       ]
     },
     {
       "feature": "Settings ownership",
-      "status": "Exact per-radio schema1 feature implemented; invalid/future documents preserved; only analysis choices persist",
+      "status": "Exact per-radio schema2 includes analyzer choices and bounded timeout; schema1 migrates on explicit save, invalid/future documents preserved; no drive or RF permission stored.",
       "remaining": "Final platform and connected-desktop qualification",
       "evidence": [
-        "MEASUREMENT-OPTIONS-QUALIFICATION.json"
+        "MEASUREMENT-OPTIONS-QUALIFICATION.json",
+        "TIMEOUT-CONTROL-QUALIFICATION.json"
       ]
     }
   ],
   "next_steps": [
-    "Expose downward-only analyzer timeout using the bounded authorization contract.",
     "Complete exact-candidate connected cold capture, RF-release and failure qualification after radio returns; retain physical-deadline limitation.",
     "Finish remaining channel/pan capability and tone/power controls, actual6300 and production gates."
   ],

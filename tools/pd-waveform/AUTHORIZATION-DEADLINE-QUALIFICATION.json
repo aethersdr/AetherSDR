@@ -40,7 +40,6 @@
     "docs": "Docusaurus build passed; registration/generated-reference/log-rule checks passed with12 pre-existing unrelated moved line-number notes."
   },
   "remaining": [
-    "Expose operator timeout adjustment bounded downward from ten seconds.",
     "Live cold corrected four-frame capture and actual release timing on the exact desktop/runtime pair; prior live captures were measured with the14second authorization configuration.",
     "Physical10second RF cessation under process/API scheduling stalls is not proved. Existing delayed-unkey evidence remains valid.",
     "Final-process failure matrix, radio reboot recovery, actual6300 and fullP1-P10 qualification remain open."
@@ -59,5 +58,6 @@
     "mutation-tests.log": "9dd8a8f0154482c189304a827674284b6402ce5efd5d6f04b5b8c15eeb1d26e4",
     "restored-build.log": "92b221fbfa6903af0661cdbf26d62c4457554b15fb65fcea8506bde9faff1254",
     "restored-tests.log": "63e1e60b929db9d0051a4365b29ec3558c0b0d865e9dbfb3f28f6ba4a561d1c8"
-  }
+  },
+  "timeout_control_followup": "TIMEOUT-CONTROL-QUALIFICATION.json: per-radio3..10second operator control implemented and component-qualified; physical release qualification remains open."
 }

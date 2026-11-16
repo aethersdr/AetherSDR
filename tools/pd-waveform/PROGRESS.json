@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Ten-second controller/model/lease authorization ceiling and tighter default helper timing component-qualified with guard mutations. Next expose downward-only timeout control. Live cold capture/release, radio reboot recovery, actual6300 and full P1-P10 gates remain open.",
+  "current_focus": "Per-radio3..10second timeout control and schema2 persistence/export snapshot component-qualified. Complete remaining P4 source/control scope and offline qualification while live radio/reboot/RF and actual6300 gates remain unavailable.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2887,6 +2887,11 @@
     "report": "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
     "status": "Ten-second desktop authorization ceiling component-qualified; physical RF release and operator adjustment remain incomplete",
     "physical_10second_release_proven": false,
+    "installed": false
+  },
+  "timeout_control": {
+    "report": "TIMEOUT-CONTROL-QUALIFICATION.json",
+    "status": "Per-radio shorter timeout control, settings migration and exported provenance component-qualified",
     "installed": false
   }
 }

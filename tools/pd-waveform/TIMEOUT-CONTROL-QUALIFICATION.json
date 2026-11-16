@@ -1,0 +1,59 @@
+{
+  "updated_utc": "2026-11-16T12:19:43.138626+00:00",
+  "base_commit": "3bde8170998198071e581ab8f48bacd652374765",
+  "status": "Per-radio shorter timeout control, settings migration and exported provenance component-qualified",
+  "installed": false,
+  "production_ready": false,
+  "radio_used": false,
+  "contract": {
+    "control": "Transmit timeout (s)",
+    "range_seconds": [
+      3,
+      10
+    ],
+    "step_seconds": 1,
+    "default_seconds": 10,
+    "scope": "Exact radio feature document; no family fallback, RF setting, source rearm or permission stored",
+    "schema": 2,
+    "legacy": "Read schema1 using ten-second default when timeout absent; explicit save atomically migrates while preserving unknown fields. Schema2 requires timeout; older schema1-only readers refuse schema2.",
+    "invalid": "Missing current-schema timeout, malformed type/value, out-of-range values and future schema refuse use without replacing stored data.",
+    "snapshot": "Locks from preparation through release; controller uses shorter of selected timeout and policy ceiling. Caller changes cannot extend active lease.",
+    "exports": "Selected authorization timeout retained in JSON/CSV, summary and PNG description; not a physical RF-duration claim."
+  },
+  "validation": {
+    "desktop": "Full AetherSDR and affected targets built successfully. No native/Go payload changes.",
+    "tests": "Five focused capture/controller/settings/dialog/TX integration tests passed16.39s.",
+    "mutation": "Ignoring selected timeout triggered the deadline assertion; exact source restored and controller test passed0.08s.",
+    "boundaries": [
+      "Saved eight-second limit round-trips per radio; other radios retain independent default.",
+      "Unsupported persisted timeouts0,2000,3500,10001,14000 refused.",
+      "Null,string,bool,fractional,oversized and missing current-schema timeout refuse without overwriting.",
+      "Legacy settings migrate only on explicit save; future-schema and unknown-field preservation tested.",
+      "Controller selected3,8,10second deadlines reach lease and expire even if caller config later changes.",
+      "Model rejects invalid timeout before capture; eight-second composed run requests at most seven-second helper interval.",
+      "Completed eight-second fixture retains timeout in JSON, CSV and result summary; PNG description retains selected default.",
+      "GUI timeout bounded3..10, defaults10, persists8, locks during preparation and displays snapshot."
+    ],
+    "docs": "Docusaurus build and registration/generated-reference/log-rule checks passed; twelve unrelated pre-existing moved-line notes remain.",
+    "preview": "680x700 offscreen preview inspected; timeout field and snapshot visible without clipping."
+  },
+  "remaining": [
+    "Exact-candidate live cold four-frame capture and actual release timing after radio returns. Short limits deliberately can stop before capture completes.",
+    "A hard ten-second physical RF-off guarantee under scheduler/API stalls remains unproved.",
+    "Channel/pan and tone/power scope reconciliation, full final-process failure qualification, reboot recovery, actual6300 and all production gates remain open."
+  ],
+  "evidence_directory": "evidence/20261116-timeout-control",
+  "evidence_sha256": {
+    "desktop-build.log": "757063d6c559d5b4bb615cfbfcff9eff45a701bf4ca3279be74c6c2a43e30149",
+    "docs-build.log": "543bbb785f8d8ef8d5c2da1b9db2d29c5392434997bf91ceb5e22bf1dbcdc982",
+    "mutate.py": "37ac00eaefc4fbff87adb727311f4575fa7f7c6cb228da4787730ba104132713",
+    "mutation-build.log": "d054e36c3071e369662694cf8fa450000df2ce9e12646371e999b4fe4cdeb5de",
+    "mutation-result.json": "3944eaf33bade15bf7a6e178caff502587b0c49d226279868765b3172e7189e2",
+    "mutation-run.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mutation-tests.log": "12e46edbf32817450dccbc1a07160fcf410a464ad2067729e500d405bd574ed0",
+    "preview.png": "4e3552744f854c3023c68efad8cabcd6d8367e5a28445b9c8be9455e62afa1ab",
+    "restored-build.log": "d054e36c3071e369662694cf8fa450000df2ce9e12646371e999b4fe4cdeb5de",
+    "restored-tests.log": "7925c27b30edb6e5e93c6772da3b2bbf8c1d64a0d89baa426f5c4fe55b650ab6",
+    "tests.log": "47a4d230ca67d49d7b8ef4a367199d4fec196600e2c44f2df1622d86aad76819"
+  }
+}

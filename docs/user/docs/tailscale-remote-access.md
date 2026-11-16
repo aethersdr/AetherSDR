@@ -557,9 +557,13 @@ ADC headroom or calibrated output power.
    original-session TX request is dispatched. The source emits four seconds of
    alignment noise followed by 710/1900 Hz tones, for at most eight seconds.
    Before preparing, choose **Analysis window**, **Averages** (one to four frames)
-   and **Highest order** (IMD3, IMD5 or IMD7). These client analysis preferences
-   are remembered separately for each radio; they do not change its power,
-   tones or IQ stream. Defaults are Blackman–Harris 7, four frames and IMD7.
+   and **Highest order** (IMD3, IMD5 or IMD7). **Transmit timeout (s)** defaults
+   to ten seconds and can be shortened to three through nine seconds. It counts
+   from **Transmit measurement**, including startup. Short limits may stop
+   before alignment or capture completes; they never extend the source window.
+   These client measurement preferences are remembered separately for each
+   radio; they do not change its power, tones or IQ stream. Analysis defaults
+   are Blackman–Harris 7, four frames and IMD7.
    The controls lock while a measurement is pending. More averages reduce
    estimate variance, not the physical noise floor; the four-frame ceiling
    reserves time for snapshot retrieval within the bounded source window.
@@ -575,8 +579,8 @@ ADC headroom or calibrated output power.
    arrive. The independent helper initiates cleanup on its fixed timer;
    ownership verification and the radio's response can delay actual unkeying.
    A delayed startup reply cannot make the helper ready. Transmit authorization
-   expires within ten seconds of **Transmit measurement**, including helper
-   startup, and the helper schedules cleanup earlier. Expiry requests stop and
+   expires within the selected timeout, never more than ten seconds from
+   **Transmit measurement**, and the helper schedules cleanup earlier. Expiry requests stop and
    ends capture; the panel waits for confirmed release. Process scheduling or
    radio/API delays can postpone actual RF release, so a ten-second physical
    RF-off guarantee remains unqualified. Routine status
@@ -600,7 +604,8 @@ ADC headroom or calibrated output power.
    reference conventions. Each completed capture includes its original IQ
    samples and a SHA-256 checksum for offline analysis. JSON and CSV also retain
    each capture's reported IQ stream ID and acquisition generation; unavailable
-   identities remain explicitly unknown. Exporting collects no
+   identities remain explicitly unknown. All export formats include the selected
+   transmit authorization timeout; it does not certify the measured RF duration. Exporting collects no
    new samples and never transmits. IMD is labeled both per tone and relative to
    fundamental-derived PEP; the separately measured sample-peak reference is
    retained in the export. Raw IQ levels are not calibrated dBFS or watts.

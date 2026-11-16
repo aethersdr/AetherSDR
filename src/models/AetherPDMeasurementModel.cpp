@@ -26,6 +26,7 @@
 #include <utility>
 
 namespace AetherSDR {
+static_assert(AetherPDMeasurementSettings::kMaxTimeoutMs == txlin::TxLinearityController::kMaxTransmitMs);
 AetherPDMeasurementModel::AetherPDMeasurementModel(RadioModel& radio)
     : m_radio(&radio), m_telemetry(&radio.meterModel()), m_observer(this)
 {
@@ -122,6 +123,7 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
     if (!source || !source->measurementControl || !source->measurement || !source->measurement->sourceId
         || source->sourcePurpose != aetherpd::SourcePurpose::Measurement || source->keyed
         || source->calibrationState != aetherpd::CalibrationState::Armed
+        || !AetherPDMeasurementSettings::validTimeout(config.timeoutMs)
         || config.capture.sampleRateHz != 48000
         || std::abs(request.tone1Hz - (config.capture.centerFreqHz + 710)) > 0.5
         || std::abs(request.tone2Hz - (config.capture.centerFreqHz + 1900)) > 0.5
@@ -182,6 +184,7 @@ bool AetherPDMeasurementModel::prepareCurrent(const RadioControlSession& session
     config.capture.centerFreqHz = m_radio->txSlice()->frequency() * 1e6;
     config.capture.sampleRateHz = 48000;
     config.targetAverages = preferences.values.averages;
+    config.timeoutMs = preferences.values.timeoutMs;
     config.window = preferences.values.window;
     config.imd.maxOrder = preferences.values.maxOrder;
     config.maxForwardWatts = maxForwardWatts;
@@ -271,6 +274,7 @@ QByteArray AetherPDMeasurementModel::Result::toCsv() const
     row(QStringLiteral("Sample rate"), number(config.capture.sampleRateHz), QStringLiteral("Hz"));
     row(QStringLiteral("Nominal power setting"), QString::number(powerSetting), QStringLiteral("W"), QStringLiteral("radio setting; not measured output"));
     row(QStringLiteral("Forward-power abort limit"), number(config.maxForwardWatts), QStringLiteral("W"));
+    row(QStringLiteral("Transmit authorization timeout"), QString::number(config.timeoutMs), QStringLiteral("ms"), QStringLiteral("from operator start; not confirmed RF release"));
     row(QStringLiteral("Window"), QString::fromStdString(txlin::windowKindKey(config.window)));
     row(QStringLiteral("Correction active"), measurement.correctionActive
         ? (*measurement.correctionActive ? QStringLiteral("yes") : QStringLiteral("no")) : QString{}, {}, {},
@@ -371,7 +375,7 @@ QByteArray AetherPDMeasurementModel::exportResult() const
         {"center_hz", r.config.capture.centerFreqHz}, {"sample_rate_hz", r.config.capture.sampleRateHz},
         {"requested_tone1_hz", r.request.tone1Hz}, {"requested_tone2_hz", r.request.tone2Hz},
         {"window", QString::fromStdString(txlin::windowKindKey(r.config.window))},
-        {"requested_averages", r.config.targetAverages}, {"full_scale_known", r.measurement.fullScaleKnown},
+        {"requested_averages", r.config.targetAverages}, {"transmit_authorization_timeout_ms", r.config.timeoutMs}, {"full_scale_known", r.measurement.fullScaleKnown},
         {"correction_active", r.measurement.correctionActive ? QJsonValue(*r.measurement.correctionActive) : QJsonValue()},
         {"error", QString::fromStdString(r.measurement.error)}, {"captures", captures}, {"allocations", allocations},
         {"limitations", "Raw IQ levels are not calibrated dBFS or watts. Spectral validity does not prove ADC headroom. Timestamps are radio process monotonic receipt times, not FPGA timestamps. Null numbers are unavailable."}};
@@ -413,10 +417,10 @@ QString AetherPDMeasurementModel::preparationSummary() const
     const std::optional<aetherpd::CaptureSourceIdentity> source = m_capture ? m_capture->receiveSourceIdentity() : std::nullopt;
     const QString identity = source ? tr("DAX IQ stream 0x%1").arg(source->streamId, 8, 16, QLatin1Char('0'))
         : state() == State::CheckingReceive ? tr("Checking DAX IQ stream identity") : tr("DAX IQ stream identity not reported");
-    return tr("%1 MHz · %2 · %3 · nominal setting %4 W · abort limit %5 W\n%6 · %7 averages · through IMD%8\n%9")
+    return tr("%1 MHz · %2 · %3 · nominal setting %4 W · abort limit %5 W\n%6 · %7 averages · through IMD%8 · timeout %9 s\n%10")
         .arg(m_config.capture.centerFreqHz / 1e6, 0, 'f', 6).arg(m_mode).arg(m_antenna)
         .arg(m_powerSetting).arg(m_config.maxForwardWatts, 0, 'f', 1)
-        .arg(QString::fromStdString(txlin::windowKindLabel(m_config.window))).arg(m_config.targetAverages).arg(m_config.imd.maxOrder).arg(identity);
+        .arg(QString::fromStdString(txlin::windowKindLabel(m_config.window))).arg(m_config.targetAverages).arg(m_config.imd.maxOrder).arg(m_config.timeoutMs / 1000).arg(identity);
 }
 
 QString AetherPDMeasurementModel::resultSummary() const
@@ -426,6 +430,7 @@ QString AetherPDMeasurementModel::resultSummary() const
     QString text = tr("%1 MHz · %2 · nominal setting %3 W · %4\n")
         .arg(r.config.capture.centerFreqHz / 1e6, 0, 'f', 6).arg(r.transmitAntenna).arg(r.powerSetting)
         .arg(r.measurement.correctionActive ? (*r.measurement.correctionActive ? tr("corrected") : tr("uncorrected")) : tr("correction unknown"));
+    text += tr("Transmit authorization timeout %1 s\n").arg(r.config.timeoutMs / 1000);
     text += r.sourceSummary() + QLatin1Char('\n');
     if (!r.measurement.error.empty()) { text += QString::fromStdString(r.measurement.error) + QLatin1Char('\n'); }
     if (r.measurement.measurement) {
