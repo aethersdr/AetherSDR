@@ -1,0 +1,5926 @@
+[
+  {
+    "event": "bridge",
+    "elapsed_s": 0.001,
+    "monotonic_ns": 61656071359065,
+    "request": {
+      "cmd": "whoami"
+    },
+    "result": {
+      "agentName": "Codex AetherPD",
+      "automationIdentity": "aetherpd-shim-integration",
+      "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "guiClientIdTransient": true,
+      "label": "",
+      "name": "aetherpd-usb-start",
+      "ok": true,
+      "pid": 2037172,
+      "readOnly": false,
+      "socket": "/tmp/aetherpd-usb-start",
+      "station": "Codex AetherPD",
+      "txAllowed": true,
+      "version": "26.11.2"
+    }
+  },
+  {
+    "event": "desktop_pin",
+    "elapsed_s": 0.585,
+    "monotonic_ns": 61656655402258,
+    "pid": 2037172,
+    "start_ticks": 5992572,
+    "sha256": "571e811bfd871c83adabd47cda863809c44add9e0b82f0086c4813c4e3e7f847"
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.587,
+    "monotonic_ns": 61656657127056,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.593,
+    "monotonic_ns": 61656663323152,
+    "request": {
+      "cmd": "get",
+      "model": "transmit"
+    },
+    "result": {
+      "model": "transmit",
+      "ok": true,
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": false,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.594,
+    "monotonic_ns": 61656663667760,
+    "request": {
+      "cmd": "get",
+      "model": "slices"
+    },
+    "result": {
+      "ok": true,
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "off",
+          "agcThreshold": 60,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "RAW",
+          "daxChannel": 0,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 3000,
+          "filterLow": 300,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "off",
+          "flexAgcOffLevel": 10,
+          "flexAgcThreshold": 60,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": true,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "PD",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 50,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "off",
+          "receiveAgcOffLevel": 10,
+          "receiveAgcThreshold": 60,
+          "receiveSquelch": true,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": true,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ]
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 0.594,
+    "monotonic_ns": 61656663921953,
+    "request": {
+      "cmd": "get",
+      "model": "pans"
+    },
+    "result": {
+      "ok": true,
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.2,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x484c0026",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 0,
+          "minDbm": -180,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 0.629,
+    "monotonic_ns": 61656699587656,
+    "status": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "canceled",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 1,
+            "text": "bounded source ended: reason=interlock_ineligible mono_ns=1150638548693 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=163200 generated=28800 iq_frames=36269 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1937742 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=484c0026 slice=0 correction=1 native_apd=0 iq_valid_ns=1150636364747",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 1212940326,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000001",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000001",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "measurement",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "independent_meters_ready",
+    "elapsed_s": 2.635,
+    "monotonic_ns": 61658705212451,
+    "snapshot": {
+      "age_ms": {
+        "8": 5.795044,
+        "9": 5.795044,
+        "10": 5.795044,
+        "4": 17.234143,
+        "11": 17.234143
+      },
+      "raw": {
+        "8": 0,
+        "9": 0,
+        "10": 128,
+        "4": 3498,
+        "11": 1529
+      },
+      "replies": {
+        "1": 0,
+        "2": 0
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 2.638,
+    "monotonic_ns": 61658707855186,
+    "request": {
+      "cmd": "get",
+      "model": "meters"
+    },
+    "result": {
+      "meters": {
+        "alc": {
+          "ageMs": 69,
+          "unit": "dBFS",
+          "value": -150
+        },
+        "all": [
+          {
+            "age_ms": 8,
+            "description": "Signal strength of MIC output in CODEC",
+            "has_value": true,
+            "high": 20,
+            "index": 1,
+            "low": -150,
+            "name": "MICPEAK",
+            "source": "COD-",
+            "source_index": 1,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 32,
+            "description": "Average Signal strength of MIC ouput in CODEC",
+            "has_value": true,
+            "high": 20,
+            "index": 2,
+            "low": -150,
+            "name": "MIC",
+            "source": "COD-",
+            "source_index": 2,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 32,
+            "description": "Voltage present at the Hardware ALC RCA Plug",
+            "has_value": true,
+            "high": 20,
+            "index": 3,
+            "low": -150,
+            "name": "HWALC",
+            "source": "TX-",
+            "source_index": 5,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": 0
+          },
+          {
+            "age_ms": 32,
+            "description": "Main radio input voltage at PA",
+            "has_value": true,
+            "high": 15,
+            "index": 4,
+            "low": 10.5,
+            "name": "+13.8A",
+            "source": "RAD",
+            "source_index": 334,
+            "unavailable_reason": "",
+            "unit": "Volts",
+            "value": 13.6640625
+          },
+          {
+            "age_ms": 32,
+            "description": "PA current",
+            "has_value": true,
+            "high": 10,
+            "index": 5,
+            "low": 0,
+            "name": "PACURRENT",
+            "note": "clips at the declared 10A cap on FLEX-8000 series (SMART-11281); omitted from the UI \u2014 do not trust",
+            "reliable": false,
+            "source": "RAD",
+            "source_index": 300,
+            "unavailable_reason": "",
+            "unit": "Amps",
+            "value": 0
+          },
+          {
+            "age_ms": 32,
+            "description": "Main radio input voltage at CPU (continuous)",
+            "has_value": true,
+            "high": 15,
+            "index": 6,
+            "low": 10.5,
+            "name": "+13.8B",
+            "source": "RAD",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "Volts",
+            "value": 14.2109375
+          },
+          {
+            "age_ms": 32,
+            "description": "Main radio fan RPM",
+            "has_value": true,
+            "high": 8192,
+            "index": 7,
+            "low": 0,
+            "name": "MAINFAN",
+            "source": "RAD",
+            "source_index": 3,
+            "unavailable_reason": "",
+            "unit": "RPM",
+            "value": 1144
+          },
+          {
+            "age_ms": 8,
+            "description": "RF Power Forward",
+            "has_value": true,
+            "high": 53,
+            "index": 8,
+            "low": 0,
+            "name": "FWDPWR",
+            "source": "TX-",
+            "source_index": 1,
+            "unavailable_reason": "",
+            "unit": "dBm",
+            "value": 0
+          },
+          {
+            "age_ms": 8,
+            "description": "RF Power Reflected",
+            "has_value": true,
+            "high": 53,
+            "index": 9,
+            "low": 0,
+            "name": "REFPWR",
+            "source": "TX-",
+            "source_index": 2,
+            "unavailable_reason": "",
+            "unit": "dBm",
+            "value": 0
+          },
+          {
+            "age_ms": -1,
+            "description": "RF SWR",
+            "has_value": false,
+            "high": 999,
+            "index": 10,
+            "low": 1,
+            "name": "SWR",
+            "source": "TX-",
+            "source_index": 3,
+            "unavailable_reason": "",
+            "unit": "SWR",
+            "value": null
+          },
+          {
+            "age_ms": 32,
+            "description": "PA Temperature",
+            "has_value": true,
+            "high": 120,
+            "index": 11,
+            "low": 0,
+            "name": "PATEMP",
+            "source": "TX-",
+            "source_index": 4,
+            "unavailable_reason": "",
+            "unit": "degC",
+            "value": 23.890625
+          },
+          {
+            "age_ms": -1,
+            "description": "Estimated wideband noise floor",
+            "has_value": false,
+            "high": 20,
+            "index": 12,
+            "low": -180,
+            "name": "NOISE_FLOOR",
+            "source": "PAN",
+            "source_index": 1073741824,
+            "unavailable_reason": "",
+            "unit": "dBm",
+            "value": null
+          },
+          {
+            "age_ms": 69,
+            "description": "24kHz broadband slice receiver signal level",
+            "has_value": true,
+            "high": 20,
+            "index": 13,
+            "low": -150,
+            "name": "24kHz",
+            "source": "SLC",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBm",
+            "value": -92.515625
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength after AGC",
+            "has_value": true,
+            "high": 20,
+            "index": 14,
+            "low": -150,
+            "name": "AGC+",
+            "source": "SLC",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBm",
+            "value": -92.515625
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of CODEC output",
+            "has_value": true,
+            "high": 20,
+            "index": 15,
+            "low": -150,
+            "name": "CODEC",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength post AGC/FIXED GAIN",
+            "has_value": true,
+            "high": 20,
+            "index": 16,
+            "low": -150,
+            "name": "TXAGC",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of MIC output",
+            "has_value": true,
+            "high": 20,
+            "index": 17,
+            "low": -150,
+            "name": "SC_MIC",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 8,
+            "description": "Signal strength of signals after the EQ",
+            "has_value": true,
+            "high": 20,
+            "index": 18,
+            "low": -150,
+            "name": "AFTEREQ",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 8,
+            "description": "Signal strength of signals just before CLIPPER (Compression)",
+            "has_value": true,
+            "high": 20,
+            "index": 19,
+            "low": -150,
+            "name": "COMPPEAK",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": 0
+          },
+          {
+            "age_ms": 8,
+            "description": "Signal strength after Filter 1",
+            "has_value": true,
+            "high": 20,
+            "index": 20,
+            "low": -150,
+            "name": "SC_FILT_1",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of signals after SW ALC (SSB Peak)",
+            "has_value": true,
+            "high": 20,
+            "index": 21,
+            "low": -150,
+            "name": "ALC",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of signals after RM TX AGC",
+            "has_value": true,
+            "high": 20,
+            "index": 22,
+            "low": -150,
+            "name": "RM_TX_AGC",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength after Filter 2",
+            "has_value": true,
+            "high": 20,
+            "index": 23,
+            "low": -150,
+            "name": "SC_FILT_2",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of signals after TX AGC",
+            "has_value": true,
+            "high": 20,
+            "index": 24,
+            "low": -150,
+            "name": "TX_AGC",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of signals before the ramp",
+            "has_value": true,
+            "high": 20,
+            "index": 25,
+            "low": -150,
+            "name": "B4RAMP",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of signals after the ramp",
+            "has_value": true,
+            "high": 20,
+            "index": 26,
+            "low": -150,
+            "name": "AFRAMP",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength after all processing is done but before attenuation for power control",
+            "has_value": true,
+            "high": 20,
+            "index": 27,
+            "low": -150,
+            "name": "POST_P",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          },
+          {
+            "age_ms": 69,
+            "description": "Signal strength of signals after Fine Tune, HW ALC, SWR Foldback attenuation (FPGA)",
+            "has_value": true,
+            "high": 20,
+            "index": 28,
+            "low": -150,
+            "name": "ATTN_FPGA",
+            "source": "TX-",
+            "source_index": 0,
+            "unavailable_reason": "",
+            "unit": "dBFS",
+            "value": -150
+          }
+        ],
+        "compLevel": 0,
+        "compPeak": 0,
+        "fwdPower": 0,
+        "fwdPowerAgeMs": 8,
+        "fwdPowerInstant": 0.0010000000474974513,
+        "hasCompression": true,
+        "hwAlc": 0,
+        "micLevel": -150,
+        "micPeak": -150,
+        "paTemp": 23.890625,
+        "reflectedPower": 0.0010000000474974513,
+        "reflectedPowerAgeMs": 8,
+        "reflectedPowerMeasured": true,
+        "sLevel": null,
+        "supplyVolts": 13.6640625,
+        "swAlc": -150,
+        "swr": null,
+        "swrAgeMs": 8,
+        "temperature": {
+          "ageMs": 32,
+          "status": "fresh",
+          "unit": "degC",
+          "value": 23.890625
+        },
+        "txMetersAgeMs": 8,
+        "txMetersFresh": true,
+        "voltage": {
+          "ageMs": 32,
+          "status": "fresh",
+          "unit": "Volts",
+          "value": 13.6640625
+        }
+      },
+      "model": "meters",
+      "ok": true
+    }
+  },
+  {
+    "event": "observer_before",
+    "elapsed_s": 3.204,
+    "monotonic_ns": 61659274537053,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 3.213,
+    "monotonic_ns": 61659282945445,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasureDummyLoad",
+      "action": "setChecked",
+      "value": "true"
+    },
+    "result": {
+      "action": "setChecked",
+      "class": "QCheckBox",
+      "newValue": "checked",
+      "ok": true,
+      "target": "pdMeasureDummyLoad"
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 3.219,
+    "monotonic_ns": 61659288715258,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasurePowerLimit",
+      "action": "setValue",
+      "value": 10
+    },
+    "result": {
+      "action": "setValue",
+      "class": "QDoubleSpinBox",
+      "newValue": "10",
+      "ok": true,
+      "target": "pdMeasurePowerLimit"
+    }
+  },
+  {
+    "event": "configured_controls",
+    "elapsed_s": 3.282,
+    "monotonic_ns": 61659352024912,
+    "widgets": {
+      "pdMeasurement": {
+        "value": "Measure linearity\u2026",
+        "enabled": true
+      },
+      "pdMeasureDummyLoad": {
+        "value": "checked",
+        "enabled": true
+      },
+      "pdMeasureRadioPower": {
+        "value": "5",
+        "enabled": true,
+        "toolTip": "Requests the nominal radio setting without transmitting. Wait for radio readback before arming; actual output is measured separately.",
+        "accessibleDescription": "Requests the nominal radio setting without transmitting. Wait for radio readback before arming; actual output is measured separately."
+      },
+      "pdMeasureApplyPower": {
+        "value": "Apply power",
+        "enabled": false,
+        "toolTip": "Choose a different radio power setting first.",
+        "accessibleDescription": "Choose a different radio power setting first."
+      },
+      "pdMeasurePowerStatus": {
+        "value": "Radio reports 5 W setting; actual RF output may differ.",
+        "enabled": true
+      },
+      "pdMeasurePowerLimit": {
+        "value": "10",
+        "enabled": true,
+        "accessibleDescription": "Does not change radio drive. Choose a limit above the nominal radio power setting and within your bench rating."
+      },
+      "pdMeasureWindow": {
+        "value": "Blackman-Harris 7",
+        "enabled": true,
+        "accessibleDescription": "Window choice changes leakage and frequency resolution; no window guarantees a fixed measurable IMD depth."
+      },
+      "pdMeasureAverages": {
+        "value": "4",
+        "enabled": true,
+        "accessibleDescription": "One to four frames within the bounded source window. Averaging reduces estimate variance, not the physical noise floor."
+      },
+      "pdMeasureOrder": {
+        "value": "IMD3 + 5 + 7",
+        "enabled": true,
+        "accessibleDescription": "Highest odd distortion product to analyze: three, five or seven."
+      },
+      "pdMeasureTimeout": {
+        "value": "10",
+        "enabled": true,
+        "toolTip": "Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later.",
+        "accessibleDescription": "Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later."
+      },
+      "pdMeasureToneSpacing": {
+        "value": "1190",
+        "enabled": true,
+        "accessibleDescription": "200 to 10000 Hz between tones, centered 1305 Hz above the carrier. Editing sends no command; Arm measurement source submits the pair."
+      },
+      "pdMeasureToneStatus": {
+        "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000001.",
+        "enabled": true
+      },
+      "pdMeasureArm": {
+        "value": "Arm measurement source",
+        "enabled": true
+      },
+      "pdMeasureCancelSource": {
+        "value": "Cancel source",
+        "enabled": true
+      },
+      "pdMeasurePrepare": {
+        "value": "Prepare receive check",
+        "enabled": false,
+        "toolTip": "Arm the measurement source, confirm the bench path and choose a forward-power limit.",
+        "accessibleDescription": "Arm the measurement source, confirm the bench path and choose a forward-power limit."
+      },
+      "pdMeasureTransmit": {
+        "value": "Transmit measurement",
+        "enabled": false,
+        "toolTip": "Prepare must complete a fresh receive check. Readiness expires after two seconds.",
+        "accessibleDescription": "Prepare must complete a fresh receive check. Readiness expires after two seconds."
+      },
+      "pdMeasureStop": {
+        "value": "Stop measurement",
+        "enabled": false,
+        "toolTip": "No measurement is pending.",
+        "accessibleDescription": "No measurement is pending."
+      },
+      "pdMeasureExport": {
+        "value": "Export result\u2026",
+        "enabled": true
+      },
+      "pdMeasureState": {
+        "value": "SWR above the configured limit",
+        "enabled": true
+      },
+      "pdMeasureSpectrum": {
+        "enabled": true,
+        "accessibleDescription": "No valid completed measurement."
+      },
+      "pdMeasureResult": {
+        "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 correction unknown\nTransmit authorization timeout 10 s\nDAX IQ stream identity not reported\nSWR above the configured limit\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+        "enabled": true
+      }
+    }
+  },
+  {
+    "event": "fault_observer_ready",
+    "elapsed_s": 6.888,
+    "monotonic_ns": 61662958553592,
+    "notice": {
+      "ready": true,
+      "target": {
+        "pid": 1864,
+        "ppid": 1852,
+        "exe": "/run/aetherpd/bin/aether-pd",
+        "uid": [
+          "78666",
+          "78666",
+          "78666",
+          "78666"
+        ],
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+        ],
+        "start_ticks": 101722,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "guard_argv": []
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 6.956,
+    "monotonic_ns": 61663026073576,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasureArm",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdMeasureArm"
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 6.982,
+    "monotonic_ns": 61663051870777,
+    "status": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "canceled",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 1,
+            "text": "bounded source ended: reason=interlock_ineligible mono_ns=1150638548693 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=163200 generated=28800 iq_frames=36269 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1937742 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=484c0026 slice=0 correction=1 native_apd=0 iq_valid_ns=1150636364747",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 1212940326,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000001",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000001",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "measurement",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 7.107,
+    "monotonic_ns": 61663177423300,
+    "status": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "canceled",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 1,
+            "text": "bounded source ended: reason=interlock_ineligible mono_ns=1150638548693 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=163200 generated=28800 iq_frames=36269 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1937742 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=484c0026 slice=0 correction=1 native_apd=0 iq_valid_ns=1150636364747",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 1212940326,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000001",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000001",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "measurement",
+        "state": "idle"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 7.234,
+    "monotonic_ns": 61663304494980,
+    "status": {
+      "body": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_samples_left": 192000,
+        "calibration_state": "armed",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": true,
+        "diagnostics": {
+          "alignment": {
+            "count": 0,
+            "text": "",
+            "truncated": false
+          },
+          "source_end": {
+            "count": 1,
+            "text": "bounded source ended: reason=interlock_ineligible mono_ns=1150638548693 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=163200 generated=28800 iq_frames=36269 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1937742 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=484c0026 slice=0 correction=1 native_apd=0 iq_valid_ns=1150636364747",
+            "truncated": false
+          },
+          "version": 1
+        },
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 1212940326,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000002",
+          "tones": false
+        },
+        "measurement_capture_batch_version": 1,
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000002",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "measurement",
+        "state": "measurement_armed"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 7.303,
+    "monotonic_ns": 61663373622663,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasurePrepare",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "pdMeasurePrepare"
+    }
+  },
+  {
+    "event": "prepared_for_one_key",
+    "elapsed_s": 7.846,
+    "monotonic_ns": 61663916142652,
+    "widgets": {
+      "pdMeasurement": {
+        "value": "Measure linearity\u2026",
+        "enabled": true
+      },
+      "pdMeasureDummyLoad": {
+        "value": "checked",
+        "enabled": false
+      },
+      "pdMeasureRadioPower": {
+        "value": "5",
+        "enabled": false,
+        "toolTip": "Cancel the source and finish transmission, measurement or installation before changing power.",
+        "accessibleDescription": "Cancel the source and finish transmission, measurement or installation before changing power."
+      },
+      "pdMeasureApplyPower": {
+        "value": "Apply power",
+        "enabled": false,
+        "toolTip": "Cancel the source and finish transmission, measurement or installation before changing power.",
+        "accessibleDescription": "Cancel the source and finish transmission, measurement or installation before changing power."
+      },
+      "pdMeasurePowerStatus": {
+        "value": "Radio reports 5 W setting; actual RF output may differ.",
+        "enabled": true
+      },
+      "pdMeasurePowerLimit": {
+        "value": "10",
+        "enabled": false,
+        "accessibleDescription": "Does not change radio drive. Choose a limit above the nominal radio power setting and within your bench rating."
+      },
+      "pdMeasureWindow": {
+        "value": "Blackman-Harris 7",
+        "enabled": false,
+        "toolTip": "Measurement options are locked until this measurement ends.",
+        "accessibleDescription": "Measurement options are locked until this measurement ends."
+      },
+      "pdMeasureAverages": {
+        "value": "4",
+        "enabled": false,
+        "toolTip": "Measurement options are locked until this measurement ends.",
+        "accessibleDescription": "Measurement options are locked until this measurement ends."
+      },
+      "pdMeasureOrder": {
+        "value": "IMD3 + 5 + 7",
+        "enabled": false,
+        "toolTip": "Measurement options are locked until this measurement ends.",
+        "accessibleDescription": "Measurement options are locked until this measurement ends."
+      },
+      "pdMeasureTimeout": {
+        "value": "10",
+        "enabled": false,
+        "toolTip": "Measurement options are locked until this measurement ends.",
+        "accessibleDescription": "Measurement options are locked until this measurement ends."
+      },
+      "pdMeasureToneSpacing": {
+        "value": "1190",
+        "enabled": false,
+        "toolTip": "Finish the source, transmission, measurement or installation; use FDX off and AetherPD ownership.",
+        "accessibleDescription": "Finish the source, transmission, measurement or installation; use FDX off and AetherPD ownership."
+      },
+      "pdMeasureToneStatus": {
+        "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000002. Finish the source, transmission, measurement or installation; use FDX off and AetherPD ownership.",
+        "enabled": true
+      },
+      "pdMeasureArm": {
+        "value": "Arm measurement source",
+        "enabled": false,
+        "toolTip": "Finish the source, transmission, measurement or installation; use FDX off and AetherPD ownership.",
+        "accessibleDescription": "Finish the source, transmission, measurement or installation; use FDX off and AetherPD ownership."
+      },
+      "pdMeasureCancelSource": {
+        "value": "Cancel source",
+        "enabled": true
+      },
+      "pdMeasurePrepare": {
+        "value": "Prepare receive check",
+        "enabled": false,
+        "toolTip": "Arm the measurement source, confirm the bench path and choose a forward-power limit.",
+        "accessibleDescription": "Arm the measurement source, confirm the bench path and choose a forward-power limit."
+      },
+      "pdMeasureTransmit": {
+        "value": "Transmit measurement",
+        "enabled": true
+      },
+      "pdMeasureStop": {
+        "value": "Stop measurement",
+        "enabled": true
+      },
+      "pdMeasureExport": {
+        "value": "Export result\u2026",
+        "enabled": false,
+        "toolTip": "A completed result is required.",
+        "accessibleDescription": "A completed result is required."
+      },
+      "pdMeasureState": {
+        "value": "Ready for your Transmit click (valid for two seconds).\n7.150000 MHz \u00b7 PD \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 abort limit 10.0 W\nBlackman-Harris 7 \u00b7 4 averages \u00b7 through IMD7 \u00b7 timeout 10 s\nDAX IQ stream 0x20000000 \u00b7 tone offsets 710.0/1900.0 Hz",
+        "enabled": true
+      },
+      "pdMeasureSpectrum": {
+        "enabled": true,
+        "accessibleDescription": "No valid completed measurement."
+      },
+      "pdMeasureResult": {
+        "value": "No completed measurement. Results appear after confirmed transmit release.",
+        "enabled": true
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 7.848,
+    "monotonic_ns": 61663917908745,
+    "request": {
+      "cmd": "get",
+      "model": "transmit"
+    },
+    "result": {
+      "model": "transmit",
+      "ok": true,
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 80,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 5,
+        "showTxInWaterfall": false,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 7.849,
+    "monotonic_ns": 61663919270212,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": 23.890625,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "operator_key_intent",
+    "elapsed_s": 7.85,
+    "monotonic_ns": 61663919683061,
+    "nominal_watts": 5,
+    "frequency_mhz": 7.15,
+    "source_limit_s": 8,
+    "independent_cleanup_s": 9,
+    "desktop_limit_s": 10,
+    "one_GUI_action": true
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 7.852,
+    "monotonic_ns": 61663921824716,
+    "request": {
+      "cmd": "invoke",
+      "target": "pdMeasureTransmit",
+      "action": "click"
+    },
+    "result": {
+      "action": "click",
+      "deferred": true,
+      "ok": true,
+      "target": "pdMeasureTransmit"
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 7.862,
+    "monotonic_ns": 61663932448851,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 7.872,
+    "monotonic_ns": 61663941896682,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 7.914,
+    "monotonic_ns": 61663984258482,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 7.923,
+    "monotonic_ns": 61663993370209,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 7.964,
+    "monotonic_ns": 61664034158560,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 7.973,
+    "monotonic_ns": 61664043099556,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.016,
+    "monotonic_ns": 61664086348953,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.025,
+    "monotonic_ns": 61664095224307,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.066,
+    "monotonic_ns": 61664136426803,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.075,
+    "monotonic_ns": 61664145648953,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.116,
+    "monotonic_ns": 61664186375420,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.125,
+    "monotonic_ns": 61664195639327,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 11.2109375,
+      "ref_dbm": 7.3515625,
+      "temp_c": 23.890625,
+      "watts": 0.013215808895645087
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.166,
+    "monotonic_ns": 61664236353780,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.175,
+    "monotonic_ns": 61664245405246,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 22.7890625,
+      "ref_dbm": 7.5546875,
+      "temp_c": 23.890625,
+      "watts": 0.19006679434788926
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.216,
+    "monotonic_ns": 61664286060329,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.225,
+    "monotonic_ns": 61664295105296,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 22.5859375,
+      "ref_dbm": 7.671875,
+      "temp_c": 23.890625,
+      "watts": 0.1813818177740934
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.266,
+    "monotonic_ns": 61664335810279,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.275,
+    "monotonic_ns": 61664344899003,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 24.4921875,
+      "ref_dbm": 8.1171875,
+      "temp_c": 23.890625,
+      "watts": 0.28133175148587763
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.316,
+    "monotonic_ns": 61664385886311,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.325,
+    "monotonic_ns": 61664395073055,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 24.4921875,
+      "ref_dbm": 8.1171875,
+      "temp_c": 23.890625,
+      "watts": 0.28133175148587763
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.366,
+    "monotonic_ns": 61664435974043,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.375,
+    "monotonic_ns": 61664445014151,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 28.3828125,
+      "ref_dbm": 8.0859375,
+      "temp_c": 23.890625,
+      "watts": 0.6890984134258036
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.416,
+    "monotonic_ns": 61664485728004,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.424,
+    "monotonic_ns": 61664494373700,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 28.0,
+      "ref_dbm": 8.1328125,
+      "temp_c": 23.890625,
+      "watts": 0.6309573444801932
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.465,
+    "monotonic_ns": 61664535440225,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.475,
+    "monotonic_ns": 61664545027639,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 27.5859375,
+      "ref_dbm": 8.1015625,
+      "temp_c": 23.890625,
+      "watts": 0.5735796703077475
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.516,
+    "monotonic_ns": 61664586171210,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.526,
+    "monotonic_ns": 61664596072670,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 27.1796875,
+      "ref_dbm": 8.0703125,
+      "temp_c": 23.890625,
+      "watts": 0.5223586009240562
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.567,
+    "monotonic_ns": 61664637337468,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.577,
+    "monotonic_ns": 61664647059802,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 26.8359375,
+      "ref_dbm": 8.0390625,
+      "temp_c": 23.890625,
+      "watts": 0.4826071479433915
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.618,
+    "monotonic_ns": 61664687892595,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.627,
+    "monotonic_ns": 61664697010523,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 26.8359375,
+      "ref_dbm": 8.0390625,
+      "temp_c": 23.890625,
+      "watts": 0.4826071479433915
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.668,
+    "monotonic_ns": 61664738027567,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.678,
+    "monotonic_ns": 61664747666888,
+    "values": {
+      "volts": 13.6640625,
+      "fwd_dbm": 26.4921875,
+      "ref_dbm": 8.015625,
+      "temp_c": 23.890625,
+      "watts": 0.44588077775312923
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.719,
+    "monotonic_ns": 61664788916147,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.729,
+    "monotonic_ns": 61664798685105,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 26.1875,
+      "ref_dbm": 8.0625,
+      "temp_c": 23.890625,
+      "watts": 0.415671261997731
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.77,
+    "monotonic_ns": 61664839969290,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.78,
+    "monotonic_ns": 61664849896199,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 25.90625,
+      "ref_dbm": 8.03125,
+      "temp_c": 23.890625,
+      "watts": 0.3896054290239529
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.821,
+    "monotonic_ns": 61664891298776,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.83,
+    "monotonic_ns": 61664900452889,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 25.9765625,
+      "ref_dbm": 8.0078125,
+      "temp_c": 23.890625,
+      "watts": 0.39596449889187924
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.872,
+    "monotonic_ns": 61664941761641,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.881,
+    "monotonic_ns": 61664951481350,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 25.9765625,
+      "ref_dbm": 8.0078125,
+      "temp_c": 23.890625,
+      "watts": 0.39596449889187924
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.923,
+    "monotonic_ns": 61664992759096,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.932,
+    "monotonic_ns": 61665002368745,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 25.6796875,
+      "ref_dbm": 7.984375,
+      "temp_c": 23.890625,
+      "watts": 0.3698015694609818
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 8.973,
+    "monotonic_ns": 61665043385581,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 8.982,
+    "monotonic_ns": 61665052470632,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.1796875,
+      "ref_dbm": 8.125,
+      "temp_c": 23.890625,
+      "watts": 0.5223586009240562
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.023,
+    "monotonic_ns": 61665093208784,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.032,
+    "monotonic_ns": 61665102288664,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.5859375,
+      "ref_dbm": 8.09375,
+      "temp_c": 23.890625,
+      "watts": 0.5735796703077475
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.073,
+    "monotonic_ns": 61665143072134,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.082,
+    "monotonic_ns": 61665152143431,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.2890625,
+      "ref_dbm": 8.0625,
+      "temp_c": 23.890625,
+      "watts": 0.5356810089902422
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.123,
+    "monotonic_ns": 61665193107673,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.132,
+    "monotonic_ns": 61665202455317,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 26.9453125,
+      "ref_dbm": 8.0390625,
+      "temp_c": 23.890625,
+      "watts": 0.4949157216879155
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.173,
+    "monotonic_ns": 61665243407817,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.183,
+    "monotonic_ns": 61665252732807,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 26.9453125,
+      "ref_dbm": 8.0390625,
+      "temp_c": 23.890625,
+      "watts": 0.4949157216879155
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.224,
+    "monotonic_ns": 61665293696317,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.232,
+    "monotonic_ns": 61665302442543,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.96875,
+      "ref_dbm": 8.015625,
+      "temp_c": 23.890625,
+      "watts": 0.6264335366568856
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.273,
+    "monotonic_ns": 61665343522041,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.283,
+    "monotonic_ns": 61665353267978,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.6640625,
+      "ref_dbm": 7.984375,
+      "temp_c": 23.890625,
+      "watts": 0.5839911288663803
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.324,
+    "monotonic_ns": 61665394261589,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.333,
+    "monotonic_ns": 61665403624804,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.25,
+      "ref_dbm": 8.0859375,
+      "temp_c": 23.890625,
+      "watts": 0.5308844442309884
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.375,
+    "monotonic_ns": 61665445061095,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.384,
+    "monotonic_ns": 61665454292766,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.0625,
+      "ref_dbm": 8.0625,
+      "temp_c": 23.890625,
+      "watts": 0.5084520468600938
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.425,
+    "monotonic_ns": 61665495440539,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.435,
+    "monotonic_ns": 61665505114419,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.0625,
+      "ref_dbm": 8.0625,
+      "temp_c": 23.890625,
+      "watts": 0.5084520468600938
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.476,
+    "monotonic_ns": 61665546252620,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.485,
+    "monotonic_ns": 61665555614256,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 26.59375,
+      "ref_dbm": 8.03125,
+      "temp_c": 23.890625,
+      "watts": 0.4564308599328051
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.527,
+    "monotonic_ns": 61665596730869,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.536,
+    "monotonic_ns": 61665605705953,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 26.265625,
+      "ref_dbm": 8.0,
+      "temp_c": 23.890625,
+      "watts": 0.4232164110717593
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.576,
+    "monotonic_ns": 61665646646451,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.586,
+    "monotonic_ns": 61665655969296,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 25.96875,
+      "ref_dbm": 7.984375,
+      "temp_c": 23.890625,
+      "watts": 0.3952528407823643
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.627,
+    "monotonic_ns": 61665696936823,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.636,
+    "monotonic_ns": 61665706469948,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 29.6640625,
+      "ref_dbm": 7.9609375,
+      "temp_c": 23.890625,
+      "watts": 0.9255635645980069
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.678,
+    "monotonic_ns": 61665747842613,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.688,
+    "monotonic_ns": 61665757748541,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 29.328125,
+      "ref_dbm": 7.9375,
+      "temp_c": 23.890625,
+      "watts": 0.8566679121113688
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.729,
+    "monotonic_ns": 61665799309575,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.738,
+    "monotonic_ns": 61665808345043,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 29.328125,
+      "ref_dbm": 7.9375,
+      "temp_c": 23.890625,
+      "watts": 0.8566679121113688
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.779,
+    "monotonic_ns": 61665849499354,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.789,
+    "monotonic_ns": 61665859257354,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 28.9453125,
+      "ref_dbm": 7.9140625,
+      "temp_c": 23.890625,
+      "watts": 0.7843885581451563
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.83,
+    "monotonic_ns": 61665900536419,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.84,
+    "monotonic_ns": 61665910410564,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 28.578125,
+      "ref_dbm": 7.8984375,
+      "temp_c": 23.890625,
+      "watts": 0.7207962192538387
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.882,
+    "monotonic_ns": 61665951722972,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.891,
+    "monotonic_ns": 61665961513971,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 28.6015625,
+      "ref_dbm": 7.875,
+      "temp_c": 23.890625,
+      "watts": 0.7246966437543148,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.933,
+    "monotonic_ns": 61666003236193,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.943,
+    "monotonic_ns": 61666012858835,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 28.15625,
+      "ref_dbm": 7.84375,
+      "temp_c": 23.890625,
+      "watts": 0.6540711597277761,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 9.984,
+    "monotonic_ns": 61666054258113,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 9.994,
+    "monotonic_ns": 61666064167507,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.8125,
+      "ref_dbm": 7.828125,
+      "temp_c": 23.890625,
+      "watts": 0.6042963902381329,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.035,
+    "monotonic_ns": 61666105439782,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.045,
+    "monotonic_ns": 61666115307916,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.8125,
+      "ref_dbm": 7.828125,
+      "temp_c": 23.890625,
+      "watts": 0.6042963902381329,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "desktop_stopped",
+    "elapsed_s": 10.053,
+    "monotonic_ns": 61666122796085,
+    "pid": 2037172,
+    "start_ticks": 5992572,
+    "state": "T",
+    "stop_observed_ns": 61666122789869
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.053,
+    "monotonic_ns": 61666123560909,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.084,
+    "monotonic_ns": 61666154266904,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.093,
+    "monotonic_ns": 61666163462782,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 28.5390625,
+      "ref_dbm": 7.8125,
+      "temp_c": 23.890625,
+      "watts": 0.7143421062913623,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.094,
+    "monotonic_ns": 61666164034207,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.125,
+    "monotonic_ns": 61666194705044,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.134,
+    "monotonic_ns": 61666203875791,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 28.1796875,
+      "ref_dbm": 7.7890625,
+      "temp_c": 23.890625,
+      "watts": 0.6576105167725425,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.134,
+    "monotonic_ns": 61666204389165,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.166,
+    "monotonic_ns": 61666235799846,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "TRANSMITTING",
+        "reason": "",
+        "source": "SW",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.175,
+    "monotonic_ns": 61666244983829,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 28.1796875,
+      "ref_dbm": 7.7890625,
+      "temp_c": 23.890625,
+      "watts": 0.6576105167725425,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.176,
+    "monotonic_ns": 61666245730632,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.209,
+    "monotonic_ns": 61666278808701,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.218,
+    "monotonic_ns": 61666288057150,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 27.5390625,
+      "ref_dbm": 7.765625,
+      "temp_c": 23.890625,
+      "watts": 0.5674221042796429,
+      "swr": 1.0
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.219,
+    "monotonic_ns": 61666289025287,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.25,
+    "monotonic_ns": 61666319670980,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.259,
+    "monotonic_ns": 61666328970124,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.259,
+    "monotonic_ns": 61666329641643,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.29,
+    "monotonic_ns": 61666360352764,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.3,
+    "monotonic_ns": 61666370116041,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.301,
+    "monotonic_ns": 61666370679832,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.333,
+    "monotonic_ns": 61666403170499,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.342,
+    "monotonic_ns": 61666412479836,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.343,
+    "monotonic_ns": 61666413122231,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.374,
+    "monotonic_ns": 61666443925141,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.383,
+    "monotonic_ns": 61666453204935,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.384,
+    "monotonic_ns": 61666453866082,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.419,
+    "monotonic_ns": 61666489313668,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.429,
+    "monotonic_ns": 61666499311006,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.43,
+    "monotonic_ns": 61666499980131,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.461,
+    "monotonic_ns": 61666530866469,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.471,
+    "monotonic_ns": 61666540796906,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.472,
+    "monotonic_ns": 61666541675641,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.504,
+    "monotonic_ns": 61666574544143,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.514,
+    "monotonic_ns": 61666584206718,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.515,
+    "monotonic_ns": 61666584825265,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.546,
+    "monotonic_ns": 61666616118451,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.555,
+    "monotonic_ns": 61666625355383,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.556,
+    "monotonic_ns": 61666626204656,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.589,
+    "monotonic_ns": 61666659446781,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x484C0026",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.599,
+    "monotonic_ns": 61666668782209,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.599,
+    "monotonic_ns": 61666669568161,
+    "state": "T"
+  },
+  {
+    "event": "independent_observer",
+    "elapsed_s": 10.638,
+    "monotonic_ns": 61666707875192,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    }
+  },
+  {
+    "event": "independent_power_guard",
+    "elapsed_s": 10.647,
+    "monotonic_ns": 61666717441871,
+    "values": {
+      "volts": 13.53515625,
+      "fwd_dbm": 0.0,
+      "ref_dbm": 0.0,
+      "temp_c": 23.890625,
+      "watts": 0.001
+    }
+  },
+  {
+    "event": "desktop_still_stopped",
+    "elapsed_s": 10.648,
+    "monotonic_ns": 61666718210601,
+    "state": "T"
+  },
+  {
+    "event": "unkey_before_desktop_resume",
+    "elapsed_s": 10.649,
+    "monotonic_ns": 61666718738532,
+    "snapshot": {
+      "apd": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "5",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x484C0026",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "sampler": {
+        "tx_ant": "ANT1",
+        "valid_samplers": "RX_A,XVTA",
+        "selected_sampler": "RX_A"
+      },
+      "interlock": {
+        "tx_client_handle": "0x00000000",
+        "state": "READY",
+        "reason": "",
+        "source": "",
+        "tx_allowed": "1",
+        "amplifier": ""
+      }
+    },
+    "desktop_state": "T"
+  },
+  {
+    "event": "desktop_resumed",
+    "elapsed_s": 10.649,
+    "monotonic_ns": 61666719345910,
+    "pid": 2037172
+  },
+  {
+    "event": "fault_result",
+    "elapsed_s": 24.454,
+    "monotonic_ns": 61680524355641,
+    "result": {
+      "passed": true,
+      "signals": [
+        {
+          "pid": 1864,
+          "start_ticks": 101722,
+          "signal": "SIGKILL",
+          "monotonic_ns": 1269101899037
+        }
+      ],
+      "rf_commands": [],
+      "events": [
+        {
+          "monotonic_ns": 1265108166883,
+          "fields": {
+            "tx_client_handle": "0x00000000",
+            "state": "READY",
+            "reason": "",
+            "source": "",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        },
+        {
+          "monotonic_ns": 1266309292671,
+          "fields": {
+            "tx_client_handle": "0x00000000",
+            "state": "READY",
+            "reason": "",
+            "source": "",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        },
+        {
+          "monotonic_ns": 1267075408923,
+          "fields": {
+            "tx_client_handle": "0x484C0026",
+            "state": "PTT_REQUESTED",
+            "reason": "",
+            "source": "SW",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        },
+        {
+          "monotonic_ns": 1267075434090,
+          "fields": {
+            "tx_client_handle": "0x484C0026",
+            "state": "TRANSMITTING",
+            "reason": "",
+            "source": "SW",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        },
+        {
+          "monotonic_ns": 1267475149617,
+          "fields": {
+            "tx_client_handle": "0x484C0026",
+            "state": "TRANSMITTING",
+            "reason": "",
+            "source": "SW",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        },
+        {
+          "monotonic_ns": 1269241112905,
+          "fields": {
+            "tx_client_handle": "0x484C0026",
+            "state": "UNKEY_REQUESTED",
+            "reason": "",
+            "source": "",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        },
+        {
+          "monotonic_ns": 1269241262811,
+          "fields": {
+            "tx_client_handle": "0x484C0026",
+            "state": "READY",
+            "reason": "",
+            "source": "",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        },
+        {
+          "monotonic_ns": 1269672428139,
+          "fields": {
+            "tx_client_handle": "0x00000000",
+            "state": "READY",
+            "reason": "",
+            "source": "",
+            "tx_allowed": "1",
+            "amplifier": ""
+          }
+        }
+      ],
+      "before": [
+        {
+          "pid": 1310,
+          "ppid": 1,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/aetherpd-shim.service"
+          ],
+          "start_ticks": 4043,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1851,
+          "ppid": 1,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101617,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1852,
+          "ppid": 1851,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1854,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1855,
+          "ppid": 1854,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1856,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-iq-source",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1860,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1862,
+          "ppid": 1860,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1863,
+          "ppid": 1862,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1864,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/aether-pd",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101722,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1872,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101742,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x0cd44146",
+            "0x484c0026"
+          ]
+        },
+        {
+          "pid": 1874,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-lease-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101761,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1876,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101761,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        }
+      ],
+      "key": {
+        "monotonic_ns": 1267075434090,
+        "fields": {
+          "tx_client_handle": "0x484C0026",
+          "state": "TRANSMITTING",
+          "reason": "",
+          "source": "SW",
+          "tx_allowed": "1",
+          "amplifier": ""
+        }
+      },
+      "at_fault": [
+        {
+          "pid": 1310,
+          "ppid": 1,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/aetherpd-shim.service"
+          ],
+          "start_ticks": 4043,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1851,
+          "ppid": 1,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101617,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1852,
+          "ppid": 1851,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1854,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1855,
+          "ppid": 1854,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1856,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-iq-source",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1860,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1862,
+          "ppid": 1860,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1863,
+          "ppid": 1862,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1864,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/aether-pd",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101722,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1872,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101742,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x0cd44146",
+            "0x484c0026"
+          ]
+        },
+        {
+          "pid": 1874,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-lease-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101761,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1876,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101761,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 2011,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 126694,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x60c7adef",
+            "0x484c0026",
+            "9000"
+          ]
+        }
+      ],
+      "independent_guards": {
+        "lifetime": {
+          "pid": 1872,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101742,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x0cd44146",
+            "0x484c0026"
+          ]
+        },
+        "measurement_9000ms": {
+          "pid": 2011,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 126694,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x60c7adef",
+            "0x484c0026",
+            "9000"
+          ]
+        }
+      },
+      "desktop_stop_ack": {
+        "desktop_stopped": true,
+        "pid": 2037172,
+        "start_ticks": 5992572,
+        "stop_observed_ns": 61666122789869
+      },
+      "unkey": {
+        "monotonic_ns": 1269672428139,
+        "fields": {
+          "tx_client_handle": "0x00000000",
+          "state": "READY",
+          "reason": "",
+          "source": "",
+          "tx_allowed": "1",
+          "amplifier": ""
+        }
+      },
+      "unkey_after_signal_ms": 570.529102,
+      "key_to_idle_ms": 2596.994049,
+      "workers_gone_after_signal_ms": 1617.544736,
+      "original_worker_pid_checks_including_zombies": [
+        {
+          "pid": 1854,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1855,
+          "ppid": 1854,
+          "exe": "/run/aetherpd/bin/pd-fixed-arp",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000001000",
+            "CapEff": "0000000000001000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1856,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-iq-source",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1860,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1862,
+          "ppid": 1860,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1863,
+          "ppid": 1862,
+          "exe": "/run/aetherpd/bin/pd-capture-bootstrap",
+          "uid": [
+            "65534",
+            "65534",
+            "65534",
+            "65534"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101700,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "0",
+          "guard_argv": []
+        },
+        {
+          "pid": 1864,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/aether-pd",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101722,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1872,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101742,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x0cd44146",
+            "0x484c0026"
+          ]
+        },
+        {
+          "pid": 1874,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-lease-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101761,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1876,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101761,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 2011,
+          "ppid": 1852,
+          "exe": "/run/aetherpd/bin/pd-unkey-guard",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 126694,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": [
+            "/run/aetherpd/bin/pd-unkey-guard",
+            "3",
+            "4",
+            "0x60c7adef",
+            "0x484c0026",
+            "9000"
+          ]
+        }
+      ],
+      "arp": [],
+      "arp_journal_bytes": 0,
+      "after": [
+        {
+          "pid": 1310,
+          "ppid": 1,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/aetherpd-shim.service"
+          ],
+          "start_ticks": 4043,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1851,
+          "ppid": 1,
+          "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101617,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        },
+        {
+          "pid": 1852,
+          "ppid": 1851,
+          "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+          "uid": [
+            "78666",
+            "78666",
+            "78666",
+            "78666"
+          ],
+          "state": "S (sleeping)",
+          "cgroup": [
+            "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@3-1310-78666.service"
+          ],
+          "start_ticks": 101620,
+          "caps": {
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000"
+          },
+          "nnp": "1",
+          "guard_argv": []
+        }
+      ],
+      "accept_local": "0"
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 24.466,
+    "monotonic_ns": 61680535735857,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "bridge",
+    "elapsed_s": 24.472,
+    "monotonic_ns": 61680542169456,
+    "request": {
+      "cmd": "get",
+      "model": "radio"
+    },
+    "result": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    }
+  },
+  {
+    "event": "service_status",
+    "elapsed_s": 24.497,
+    "monotonic_ns": 61680567355216,
+    "status": {
+      "body": {
+        "available": false,
+        "state": "cleanup_unconfirmed"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "event": "measurement_state_after",
+    "elapsed_s": 24.56,
+    "monotonic_ns": 61680630042577,
+    "widgets": {
+      "pdMeasurement": {
+        "value": "Measure linearity\u2026",
+        "enabled": true
+      },
+      "pdMeasureDummyLoad": {
+        "value": "checked",
+        "enabled": true
+      },
+      "pdMeasureRadioPower": {
+        "value": "5",
+        "enabled": false,
+        "toolTip": "A fresh AetherPD service status with no pending control request is required.",
+        "accessibleDescription": "A fresh AetherPD service status with no pending control request is required."
+      },
+      "pdMeasureApplyPower": {
+        "value": "Apply power",
+        "enabled": false,
+        "toolTip": "A fresh AetherPD service status with no pending control request is required.",
+        "accessibleDescription": "A fresh AetherPD service status with no pending control request is required."
+      },
+      "pdMeasurePowerStatus": {
+        "value": "Radio reports 5 W setting; actual RF output may differ.",
+        "enabled": true
+      },
+      "pdMeasurePowerLimit": {
+        "value": "10",
+        "enabled": true,
+        "accessibleDescription": "Does not change radio drive. Choose a limit above the nominal radio power setting and within your bench rating."
+      },
+      "pdMeasureWindow": {
+        "value": "Blackman-Harris 7",
+        "enabled": true,
+        "accessibleDescription": "Window choice changes leakage and frequency resolution; no window guarantees a fixed measurable IMD depth."
+      },
+      "pdMeasureAverages": {
+        "value": "4",
+        "enabled": true,
+        "accessibleDescription": "One to four frames within the bounded source window. Averaging reduces estimate variance, not the physical noise floor."
+      },
+      "pdMeasureOrder": {
+        "value": "IMD3 + 5 + 7",
+        "enabled": true,
+        "accessibleDescription": "Highest odd distortion product to analyze: three, five or seven."
+      },
+      "pdMeasureTimeout": {
+        "value": "10",
+        "enabled": true,
+        "toolTip": "Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later.",
+        "accessibleDescription": "Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later."
+      },
+      "pdMeasureToneSpacing": {
+        "value": "1190",
+        "enabled": false,
+        "toolTip": "This shim does not advertise selectable tones. The legacy source uses 1190 Hz spacing (710/1900 Hz).",
+        "accessibleDescription": "This shim does not advertise selectable tones. The legacy source uses 1190 Hz spacing (710/1900 Hz)."
+      },
+      "pdMeasureToneStatus": {
+        "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. No configured tone profile reported. This shim does not advertise selectable tones. The legacy source uses 1190 Hz spacing (710/1900 Hz).",
+        "enabled": true
+      },
+      "pdMeasureArm": {
+        "value": "Arm measurement source",
+        "enabled": false,
+        "toolTip": "Wait for a fresh measurement-capable service with no pending request.",
+        "accessibleDescription": "Wait for a fresh measurement-capable service with no pending request."
+      },
+      "pdMeasureCancelSource": {
+        "value": "Cancel source",
+        "enabled": false,
+        "toolTip": "A current authenticated measurement-capable service is required.",
+        "accessibleDescription": "A current authenticated measurement-capable service is required."
+      },
+      "pdMeasurePrepare": {
+        "value": "Prepare receive check",
+        "enabled": false,
+        "toolTip": "Arm the measurement source, confirm the bench path and choose a forward-power limit.",
+        "accessibleDescription": "Arm the measurement source, confirm the bench path and choose a forward-power limit."
+      },
+      "pdMeasureTransmit": {
+        "value": "Transmit measurement",
+        "enabled": false,
+        "toolTip": "Prepare must complete a fresh receive check. Readiness expires after two seconds.",
+        "accessibleDescription": "Prepare must complete a fresh receive check. Readiness expires after two seconds."
+      },
+      "pdMeasureStop": {
+        "value": "Stop measurement",
+        "enabled": false,
+        "toolTip": "No measurement is pending.",
+        "accessibleDescription": "No measurement is pending."
+      },
+      "pdMeasureExport": {
+        "value": "Export result\u2026",
+        "enabled": true
+      },
+      "pdMeasureState": {
+        "value": "Test transmission ended before capture completed",
+        "enabled": true
+      },
+      "pdMeasureSpectrum": {
+        "enabled": true,
+        "accessibleDescription": "No valid completed measurement."
+      },
+      "pdMeasureResult": {
+        "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 correction unknown\nTransmit authorization timeout 10 s\nDAX IQ stream identity not reported\nTest transmission ended before capture completed\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+        "enabled": true
+      }
+    }
+  },
+  {
+    "event": "observer_rows",
+    "elapsed_s": 24.561,
+    "monotonic_ns": 61680631214532,
+    "rows": [
+      {
+        "monotonic_ns": 61658720312201,
+        "body": "interlock acc_txreq_enable=0 rca_txreq_enable=0 acc_tx_enabled=0 tx1_enabled=0 tx2_enabled=0 tx3_enabled=0 tx_delay=0 acc_tx_delay=0 tx1_delay=0 tx2_delay=0 tx3_delay=0 acc_txreq_polarity=0 rca_txreq_polarity=0 timeout=20000 tune_tx_suppress=0"
+      },
+      {
+        "monotonic_ns": 61658875827569,
+        "body": "interlock acc_txreq_enable=0 rca_txreq_enable=0 acc_tx_enabled=0 tx1_enabled=0 tx2_enabled=0 tx3_enabled=0 tx_delay=0 acc_tx_delay=0 tx1_delay=0 tx2_delay=0 tx3_delay=0 acc_txreq_polarity=0 rca_txreq_polarity=0 timeout=20000 tune_tx_suppress=0"
+      },
+      {
+        "monotonic_ns": 61658875834255,
+        "body": "interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61658929856001,
+        "body": "interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61658969692597,
+        "body": "interlock acc_txreq_enable=0 rca_txreq_enable=0 acc_tx_enabled=0 tx1_enabled=0 tx2_enabled=0 tx3_enabled=0 tx_delay=0 acc_tx_delay=0 tx1_delay=0 tx2_delay=0 tx3_delay=0 acc_txreq_polarity=0 rca_txreq_polarity=0 timeout=20000 tune_tx_suppress=0"
+      },
+      {
+        "monotonic_ns": 61659047119589,
+        "body": "apd enable=0 configurable=1"
+      },
+      {
+        "monotonic_ns": 61659047128591,
+        "body": "apd sampler tx_ant=ANT1 valid_samplers=RX_A,XVTA selected_sampler=RX_A"
+      },
+      {
+        "monotonic_ns": 61659047671970,
+        "body": "apd sampler tx_ant=ANT2 valid_samplers=RX_B,XVTB selected_sampler=RX_B"
+      },
+      {
+        "monotonic_ns": 61659050040376,
+        "body": "apd sampler tx_ant=XVTA valid_samplers=RX_A selected_sampler=INVALID"
+      },
+      {
+        "monotonic_ns": 61659050064010,
+        "body": "apd sampler tx_ant=XVTB valid_samplers=RX_B selected_sampler=INVALID"
+      },
+      {
+        "monotonic_ns": 61659050070343,
+        "body": "apd ant=ANT1 freq=7.150000 rfpower=5 state=OFF deployed=0"
+      },
+      {
+        "monotonic_ns": 61659050075674,
+        "body": "apd slice=0 mmx=0 client_handle=0x484C0026 ant=ANT1 freq=7.150000 rfpower=5 rx_error_mHz=3.814694 equalizer_active=0 configurable=1"
+      },
+      {
+        "monotonic_ns": 61659050078662,
+        "body": "apd sampler tx_ant=ANT1 selected_sampler=RX_A"
+      },
+      {
+        "monotonic_ns": 61663922258633,
+        "body": "interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61663922304016,
+        "body": "interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61663922382579,
+        "body": "interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61664126299768,
+        "body": "interlock tx_client_handle=0x484C0026 state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61664126305502,
+        "body": "interlock tx_client_handle=0x484C0026 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61664525355402,
+        "body": "interlock tx_client_handle=0x484C0026 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61666266673313,
+        "body": "interlock tx_client_handle=0x484C0026 state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61666268713008,
+        "body": "interlock tx_client_handle=0x484C0026 state=READY reason= source= tx_allowed=1 amplifier= "
+      },
+      {
+        "monotonic_ns": 61666646917397,
+        "body": "apd slice=0 mmx=0 client_handle=0x484C0026 ant=ANT1 freq=7.150000 rfpower=5 rx_error_mHz=3.814694 equalizer_active=0 configurable=1"
+      },
+      {
+        "monotonic_ns": 61666646922104,
+        "body": "apd sampler tx_ant=ANT1 selected_sampler=RX_A"
+      },
+      {
+        "monotonic_ns": 61666697693625,
+        "body": "interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier= "
+      }
+    ]
+  }
+]

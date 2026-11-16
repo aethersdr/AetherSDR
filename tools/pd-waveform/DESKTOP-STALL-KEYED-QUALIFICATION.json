@@ -1,0 +1,149 @@
+{
+  "updated_utc": "2026-11-16T22:07:52.237927+00:00",
+  "status": "one_installed_DSP_death_unkeys_with_desktop_stopped_cleanup_and_explicit_IQ_restart_passed",
+  "production_ready": false,
+  "runtime_source": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "desktop_source": "8d06b8300",
+  "release_blake2b_256": "9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce",
+  "bench": {
+    "frequency_MHz": 7.15,
+    "ANT1_dummy_load_sampler_RXA": true,
+    "nominal_W": 5,
+    "configured_max_W": 10,
+    "FDX": false,
+    "local_DAX_IQ_channel": 4,
+    "source_limit_s": 8,
+    "measurement_unkey_ms": 9000,
+    "desktop_authorization_ms": 10000,
+    "separate_resume_watchdog_ms_from_key_request": 10000,
+    "independent_telemetry_max_age_ms": 2000,
+    "max_SWR": 2,
+    "max_PA_C": 75,
+    "min_volts": 11,
+    "forward_abort_W": 10
+  },
+  "attempts": [
+    {
+      "label": "swr-abort",
+      "positive_GUI_key_actions": 1,
+      "DSP_signals": 0,
+      "desktop_paused": false,
+      "reason": "Desktop SWR guard stopped source before unchanged2second fault window. Refusal and raw trace preserved; no automatic retry."
+    },
+    {
+      "label": "isolated",
+      "positive_GUI_key_actions": 1,
+      "DSP_signals": 1,
+      "desktop_paused": true,
+      "result": "Radio READY observed while exact desktop process remained inT state. No GUI bridge requests occurred during pause."
+    }
+  ],
+  "isolated": {
+    "desktop_pid": 2037172,
+    "desktop_start_ticks": 5992572,
+    "desktop_sha256": "571e811bfd871c83adabd47cda863809c44add9e0b82f0086c4813c4e3e7f847",
+    "desktop_paused_ms": 596.549825,
+    "resume_watchdog_action": "canceled",
+    "unkey_after_signal_ms": 570.529102,
+    "key_to_idle_ms": 2596.994049,
+    "workers_gone_after_signal_ms": 1617.544736,
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0",
+    "original_worker_pid_checks_including_zombies": 11,
+    "remaining_control_processes": 3,
+    "all_remaining_UID78666_caps_zero_NNP1": true
+  },
+  "independent_meter_watch": {
+    "setup": "Separate unbound API client and own UDP receive port; no change to GUI UDP endpoint. Current meter identifiers verified against GUI metadata; VITA length/PCC/source/bounds checked. Scale matches local FlexLib Meter.UpdateValue.",
+    "max_observed_forward_W": 0.9255635645980069,
+    "max_observed_SWR_after_2s": 1,
+    "power_scale": "radio-reported directional meters; no independent absolute calibration"
+  },
+  "preserved_SWR_discrepancy": {
+    "reported_SWR": 2.15625,
+    "same_packet_forward_W": 0.6241838102866438,
+    "same_packet_reflected_W": 0.006264335366568855,
+    "same_packet_derived_SWR": 1.2226668824353053,
+    "raw": {
+      "8": 3578,
+      "9": 1020,
+      "10": 276
+    },
+    "interpretation": "Reported and derived SWR disagree. No conclusion about physical SWR or firmware root cause from this probe; default guard unchanged."
+  },
+  "public_state_after_fault": {
+    "body": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "http_status": 200
+  },
+  "explicit_receive_only_restart": {
+    "passed": true,
+    "IQ_bytes": 131072,
+    "IQ_sha256": "544c96c53d958312954c3e7ad9fec673d2a91348d25082651df003226f8f7077",
+    "stopped_status": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    }
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/prepare.py": "60a2257ae8af99a603e41383834827a8b31659d37a0b341a865abf143656b783",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/fault-template.py": "a450270d33ad60966a279ef40b3bd340e0018ed0ac26fc498dcfccf85506160e",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/run-keyed-once.py": "920acd88ff14b9543b1d83e6560759667ec904ea4d598f349c56c7c49d643356",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/resume-watchdog.py": "0ad00ba94b0d520a3c4bcbb925c46be6f0b7b36b1d55c0078cf23dd4ecc40598",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/meter-watch.py": "0b7aeb98994c044a046709db698a764bf3e7e5eda7a7b88a2be011f4d37c2840",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/meter-preflight.json": "f921da24cb406a49c2d44df7d4e92f1911f0fef7b5dff46a96df14d2c669e126",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/keyed-events.json": "8363414c0fc2e5524755e079bc0bb19655106074fb6c0a2a6417d3ffb02a5939",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/keyed-result.json": "c64a5ac3accbe6edab202044693610d7f66f48a97181ce7d9794131fddc8a6a3",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/outcome.json": "86231d0daf50502ef5c63ef514575e42596ce96c907aedcdaa1d9bac08395710",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/independent-meters.json": "96fb906d624ff3480c2ccc9a50fcaf9b8ea5d0d810b5410429b7e0d3e273fd20",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/watchdog.json": "19ecfb432dda0e6bd587654d3159d810a36ff508ce396447bffe771e1fe25647",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/swr-abort/terminal-controls.json": "3bc91671294c2642caecc03e994640027f4b1ccd3a3fb60f819d5cfcf79be335",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/fault-template.py": "a450270d33ad60966a279ef40b3bd340e0018ed0ac26fc498dcfccf85506160e",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/run-keyed-once.py": "95b1075ca3e2dfa56ae1c5f1d50d4bef57caf952efc29f2a1c54bd6b931bff19",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/resume-watchdog.py": "0ad00ba94b0d520a3c4bcbb925c46be6f0b7b36b1d55c0078cf23dd4ecc40598",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/meter-watch.py": "0b7aeb98994c044a046709db698a764bf3e7e5eda7a7b88a2be011f4d37c2840",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/keyed-events.json": "02d51affcf5247ff4b11f6daa2a5fd8235053c1e779f8b6ec9364614269b21c6",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/keyed-result.json": "b006673b9aa19586797eea34df62e25796d429565eaa7cdfe0381567d577ff09",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/outcome.json": "46d1ee658014b2eed2968d308a044dc44fd50b604e856217f1341180593c99ad",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/independent-meters.json": "3321ccc08f4ad80f81543f65f52e2994ae39ad6f91c4e00949204cf4eb2d46c8",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/isolated/watchdog.json": "0cad6125b4a5016ea2ca743b1c3e8a7d68c82ab5d5a1b7472af43aa8cb486cd2",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/USB-readback.json": "d4914ba62323d577b0cfcfb932422913900301c070b49149e596644efb8b0f60",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/instance.json": "82e429dd72f8ab8def413ee9c3a90938697580a732ed803e0204eee20c0efafa",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/receive-iq-check.py": "d3ad0d4ced430973e86a69e9be51488f5ea2062b1345e9a5185e7b811ec7ba08",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/usb-receive-iq-check.json": "2b41ecb57459b10aeee8d2503891a4bbd37c6aaa7f081959955ede09ac704ff7",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/usb-receive-iq.f32le": "544c96c53d958312954c3e7ad9fec673d2a91348d25082651df003226f8f7077",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/after-restart-job.py": "9e79e24534f4189c21ce5bae3f65e451579dfabfe44d886c4c69ea95cbdc7a21",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-desktop-stall/restart/after-restart-result.json": "92f2964a027bfffb07b3573b109f9e44c56afdf4ea6ae52011eb4ef501506024"
+  },
+  "local_generated_job_sha256": {
+    "desktop-stall-keyed/keyed-job.py": "18058cc491d263ae1515385fe94e22148dea541c25df74009ac56454dd6c12f8",
+    "desktop-stall-keyed-02/keyed-job.py": "47ffefc0a1b62a8ae052b8b2ea526a31408697e780b12f1b13934bbdf84d4cd0"
+  },
+  "limitations": [
+    "One successful combined desktop pause and DSP death at a5Wsetting on FLEX8600, not a worst-case timing bound.",
+    "Failure was injected about2seconds into source startup. Observed directional power peaked at 0.926W before unkey, so this is not a5Wmeasured-output or steady corrected-tone failure qualification.",
+    "Desktop was paused for about0.6seconds around DSP death; this does not qualify a full-duration desktop-only stall or deadline expiry with DSP still alive.",
+    "Radio-side unkey without desktop execution is demonstrated. This probe does not distinguish which native guardian or firmware release mechanism acted first.",
+    "Reported-SWR transient can abort valid acquisition; discrepancy and release behavior remain tracked locally. No guard thresholds were relaxed.",
+    "Raw IQ amplitude and absolute RF power/headroom remain uncalibrated; LP100A remains deferred.",
+    "Remaining P1-P10 gates include other process/API/credential/partial-start/scheduling cases, natural128sample alignment slip, sustained/matched RF and stockAPD comparison, actual6300, production signing and independent release review."
+  ],
+  "final_cleanup": {
+    "passed": true,
+    "remaining_processes": 3,
+    "UID78666_all_caps_zero_NNP1": true,
+    "fixed_ARP_absent": true,
+    "temporary_installer_paths_absent": true,
+    "all_temporary_job_containers_and_host_directories_removed": true,
+    "runtime_hashes_match_manifest": true,
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5"
+  }
+}

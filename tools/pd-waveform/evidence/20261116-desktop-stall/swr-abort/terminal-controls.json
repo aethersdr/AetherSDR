@@ -1,0 +1,64 @@
+{
+  "controls": {
+    "pdMeasureArm": {
+      "enabled": true,
+      "value": "Arm measurement source"
+    },
+    "pdMeasureCancelSource": {
+      "enabled": true,
+      "value": "Cancel source"
+    },
+    "pdMeasureStop": {
+      "enabled": false,
+      "value": "Stop measurement"
+    },
+    "pdMeasureState": {
+      "enabled": true,
+      "value": "SWR above the configured limit"
+    },
+    "pdMeasureResult": {
+      "enabled": true,
+      "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 correction unknown\nTransmit authorization timeout 10 s\nDAX IQ stream identity not reported\nSWR above the configured limit\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated."
+    }
+  },
+  "radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.890625,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  }
+}
