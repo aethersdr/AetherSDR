@@ -20,16 +20,16 @@ The capture constructor's fixed `172.30.2.1`/`eth0.10` profile is measured
 only on the 8600. The 6300 probe reported `172.30.1.1`; that alone does not
 identify the complete FPGA IQ path.
 
-The independently rebuilt ARMv7 runtime release is 9,331,383 bytes; its
-expanded executables/licenses occupy 22,688,874 bytes in RAM. Both ARMv7 and
+The independently rebuilt ARMv7 runtime release is 9,333,427 bytes; its
+expanded executables/licenses occupy 22,689,242 bytes in RAM. Both ARMv7 and
 ARM64 runtime releases reproduced byte for byte with pinned compilers on the
 same host. This does not qualify the first-install adapter or radio operation.
-See [runtime package qualification](./RUNTIME-PACKAGE-QUALIFICATION.md).
+See [current runtime qualification](./RESTART-RUNTIME-QUALIFICATION.md).
 
-The calculated ARMv7 successor-upgrade budget is up to 39,411,712 bytes,
+The calculated ARMv7 successor-upgrade budget is up to 39,424,000 bytes,
 including the existing compacted installation, stated state/metadata allowances,
 transient files and the native 8 MiB reserve. Against a conservative decimal
-interpretation of the reported 41 MB free, only 1,588,288 bytes remain.
+interpretation of the reported 41 MB free, only 1,576,000 bytes remain.
 One extra full release archive does not fit. The final 6000 adapter must account
 for firmware-retained upload/extraction copies as well as signed input staging;
 that adapter and first-install high-water measurement remain unqualified.

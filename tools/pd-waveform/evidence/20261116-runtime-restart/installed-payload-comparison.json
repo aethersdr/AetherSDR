@@ -50,7 +50,8 @@
       "\tbuild\tGOEXPERIMENT=nodwarf5",
       "\tbuild\tGOOS=linux",
       "\tbuild\tGOARM=7"
-    ]
+    ],
+    "compiler_version": "go1.27.4-X:nodwarf5"
   },
   "current_default": {
     "sha256": "9b34c0a69b104e97abc787c2b89aa64e2091f8e5062963552b7ac5a5844a7885",
@@ -102,7 +103,8 @@
       "\tbuild\tGOARCH=arm",
       "\tbuild\tGOOS=linux",
       "\tbuild\tGOARM=7"
-    ]
+    ],
+    "compiler_version": "go1.27.1"
   },
   "current_nodwarf5": {
     "sha256": "297c2b70df7da186af55b43864bdf85cba109e9e46f6f01ff69e9c12eb87d9e0",
@@ -155,14 +157,15 @@
       "\tbuild\tGOEXPERIMENT=nodwarf5",
       "\tbuild\tGOOS=linux",
       "\tbuild\tGOARM=7"
-    ]
+    ],
+    "compiler_version": "go1.27.1-X:nodwarf5"
   },
   "nodwarf5_comparison": {
     "differing_bytes": 17300258,
     "first_offset": 24,
     "last_offset": 21804749,
     "matched": false,
-    "cause": "Unresolved; matching GOEXPERIMENT alone does not reproduce the earlier standalone binary. Earlier crossbuild has no complete immutable build-input manifest."
+    "cause": "GOEXPERIMENT alone was insufficient: this comparison used Go 1.27.1, while the earlier binary used Go 1.27.4."
   },
   "arm64_payload_files_match_installed_successor": {
     "flex-tailnet-shim": "5b6371126432a236f079c794d8c0277673ef2fdfaae7d59e54cea33aea7632e0",
@@ -176,5 +179,14 @@
     "pd-unkey-guard": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e",
     "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
     "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+  },
+  "resolution": {
+    "status": "earlier_standalone_ARMv7_reproduced_exactly_with_its_compiler",
+    "sha256": "408da41dd84f9e22a738fd1a82dca78124b1e54913e534f33bcaa7e5e15125ed",
+    "bytes": 21823648,
+    "compiler_version": "go version go1.27.4-X:nodwarf5 linux/amd64",
+    "build_record": "armv7-go1274-build.json",
+    "cause": "Earlier standalone build used system Go 1.27.4 with nodwarf5; paired release qualification pins Go 1.27.1. Matching compiler and experiment reproduces the earlier binary from the captured source.",
+    "initial_comparison_limitation": "The first comparison dropped the go version -m header containing the compiler version; complete compiler versions are now retained."
   }
 }

@@ -1,0 +1,26 @@
+{
+  "command": [
+    "/usr/bin/go",
+    "build",
+    "-mod=vendor",
+    "-trimpath",
+    "-buildvcs=false",
+    "-ldflags=-s -w",
+    "-o",
+    "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/restart-runtime-reproducibility/armv7-go1274",
+    "."
+  ],
+  "cwd": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/restart-runtime-reproducibility/short/source/tools/flex-tailnet-shim",
+  "go_version": "go version go1.27.4-X:nodwarf5 linux/amd64",
+  "go_binary_sha256": "2ffad463dade83f99b9c601073826e6d8efd47e1a56b36927b1314e74d6d7fdd",
+  "explicit_environment": {
+    "CGO_ENABLED": "0",
+    "GOOS": "linux",
+    "GOARCH": "arm",
+    "GOARM": "7",
+    "GOEXPERIMENT": "nodwarf5",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off",
+    "GOCACHE": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/restart-runtime-reproducibility/go1274-cache"
+  }
+}

@@ -22,14 +22,18 @@ reboot or imply new RF results.
 
 ## Earlier ARMv7 standalone build
 
-The previously recorded standalone ARMv7 shim hash does not match the new
-paired build. Its Go build information includes `GOEXPERIMENT=nodwarf5`.
-Rebuilding the current source with that flag also did not reproduce the old
-binary. No complete immutable input manifest was located for the earlier
-standalone build; its discrepancy remains unresolved. Do not substitute that
-old binary for the new reproducible artifact or describe the mismatch as
-explained by the experiment flag alone. The exact hashes and build information
-are retained in the structured report.
+The earlier standalone ARMv7 shim was built with system Go 1.27.4 and
+`GOEXPERIMENT=nodwarf5`; the paired release qualification uses pinned Go 1.27.1.
+A controlled rebuild from the captured source with Go 1.27.4/nodwarf5 reproduced
+the earlier binary exactly: SHA-256
+`408da41dd84f9e22a738fd1a82dca78124b1e54913e534f33bcaa7e5e15125ed`.
+The discrepancy is resolved as differing compiler configurations.
+
+The initial comparison omitted the `go version -m` header containing the compiler
+version. Its flag-only rebuild therefore remained on 1.27.1 and did not match.
+That negative result remains in the evidence alongside the complete versions
+and successful reproduction. Use the pinned release toolchain and exact artifact
+manifest; do not mix standalone binaries from a different compiler configuration.
 
 ## Storage admission
 
@@ -54,7 +58,7 @@ in RAM. Actual signed update pairs must pass admission independently.
 ## Evidence and remaining gates
 
 [Structured report](RESTART-RUNTIME-QUALIFICATION.json) includes both builds,
-all payload/member hashes, native budgets and the prior-binary discrepancy.
+all payload/member hashes, native budgets and the resolved compiler discrepancy.
 The [recipe snapshot](evidence/20261116-runtime-restart/run.py) and adjacent
 budget fixture/logs preserve the local qualification procedure; paths are the
 recorded development workspace, not a shipping installation entry point.

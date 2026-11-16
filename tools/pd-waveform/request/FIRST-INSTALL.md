@@ -12,15 +12,17 @@ The operator approves a `PDFST001` plan bound to the radio serial, firmware,
 signed release digest, new admin-token SHA256, hostname and random installation
 ID. The publisher key is compiled into the native requester, delivery adapter and
 worker. Artifact assembly does not grant consent. The qualification uploader
-requires the exact plan digest through `--approve-plan`; it is a development
-client, not a shipping catalogue or desktop credential-management flow.
+requires the exact plan digest through `--approve-plan`. The normal development
+desktop instead previews and approves the exact plan through its installation
+coordinator and stores the new credential in QtKeychain before uploading.
+Neither path supplies the unfinished shipping package catalogue.
 
 The first-install waveform contains public inputs only. Its shell entry uses
 `exec` to start the fixed native requester and has an empty setup section. It
 contains no bearer token, transport key, configurable commands or arbitrary
-installer path. The new bearer token remains in a private client file during
-qualification. Production desktop integration must store it in the credential
-vault and bind its reference to this attempt.
+installer path. The CLI qualification client keeps the new bearer token in a
+private client file. The desktop keeps it in QtKeychain and binds its reference to the durable
+attempt journal before any upload; it is absent from public package bytes.
 
 `pd-first-request` runs as UID 78666/GID 20 with no capabilities and NoNewPrivs.
 It verifies the release, worker, plan and live radio identity, snapshots inputs
@@ -66,8 +68,11 @@ Interrupted installation uses the existing independent recovery service.
 Recovery disables the new runtime and preserves the owned identity; it never
 reconstructs an absent predecessor. Interrupted preparation may resume only
 when its protected intent matches. A different attempt cannot adopt that store.
-A terminal failed installation needs an explicit owned-store recovery/removal
-workflow before a new attempt; this client does not silently erase it.
+A terminal failed fresh installation can receive an explicit authenticated
+same-plan retry grant through the bounded bootstrap delivery path. It preserves
+the failed record and identity, and consumes the grant before forward work.
+Boot recovery never grants or performs a retry; a different attempt cannot adopt
+or erase the store. The failed-install retry qualification below covers this path.
 
 ## Qualification procedure
 
@@ -427,8 +432,9 @@ An unreachable status endpoint is not evidence of an absent installation. The
 native worker binds re-entry to the existing protected plan, reconciles an
 interrupted transaction and refuses unrelated stores. A terminal committed
 transaction only completes cleanup; it is not reinitialized. A terminal failed
-fresh transaction remains failed and needs a separate explicit recovery path.
-This action does not erase identity or override that failure fence.
+fresh transaction remains failed unless the explicit same-plan delivery obtains
+the protected one-use retry grant described below. Status polling and boot
+recovery cannot grant it. This action does not erase identity or adopt another plan.
 
 ## Live interruption before carrier delivery
 

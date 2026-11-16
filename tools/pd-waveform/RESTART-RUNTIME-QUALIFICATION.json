@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T10:21:46.728399+00:00",
+  "updated_utc": "2026-11-16T10:26:06.246171+00:00",
   "status": "two_path_ARMv7_ARM64_runtime_rebuild_and_native_space_boundaries_passed_with_limits",
   "production_ready": false,
   "radio_used": false,
@@ -1100,7 +1100,8 @@
         "\tbuild\tGOEXPERIMENT=nodwarf5",
         "\tbuild\tGOOS=linux",
         "\tbuild\tGOARM=7"
-      ]
+      ],
+      "compiler_version": "go1.27.4-X:nodwarf5"
     },
     "current_default": {
       "sha256": "9b34c0a69b104e97abc787c2b89aa64e2091f8e5062963552b7ac5a5844a7885",
@@ -1152,7 +1153,8 @@
         "\tbuild\tGOARCH=arm",
         "\tbuild\tGOOS=linux",
         "\tbuild\tGOARM=7"
-      ]
+      ],
+      "compiler_version": "go1.27.1"
     },
     "current_nodwarf5": {
       "sha256": "297c2b70df7da186af55b43864bdf85cba109e9e46f6f01ff69e9c12eb87d9e0",
@@ -1205,14 +1207,15 @@
         "\tbuild\tGOEXPERIMENT=nodwarf5",
         "\tbuild\tGOOS=linux",
         "\tbuild\tGOARM=7"
-      ]
+      ],
+      "compiler_version": "go1.27.1-X:nodwarf5"
     },
     "nodwarf5_comparison": {
       "differing_bytes": 17300258,
       "first_offset": 24,
       "last_offset": 21804749,
       "matched": false,
-      "cause": "Unresolved; matching GOEXPERIMENT alone does not reproduce the earlier standalone binary. Earlier crossbuild has no complete immutable build-input manifest."
+      "cause": "GOEXPERIMENT alone was insufficient: this comparison used Go 1.27.1, while the earlier binary used Go 1.27.4."
     },
     "arm64_payload_files_match_installed_successor": {
       "flex-tailnet-shim": "5b6371126432a236f079c794d8c0277673ef2fdfaae7d59e54cea33aea7632e0",
@@ -1226,6 +1229,15 @@
       "pd-unkey-guard": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e",
       "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
       "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+    },
+    "resolution": {
+      "status": "earlier_standalone_ARMv7_reproduced_exactly_with_its_compiler",
+      "sha256": "408da41dd84f9e22a738fd1a82dca78124b1e54913e534f33bcaa7e5e15125ed",
+      "bytes": 21823648,
+      "compiler_version": "go version go1.27.4-X:nodwarf5 linux/amd64",
+      "build_record": "armv7-go1274-build.json",
+      "cause": "Earlier standalone build used system Go 1.27.4 with nodwarf5; paired release qualification pins Go 1.27.1. Matching compiler and experiment reproduces the earlier binary from the captured source.",
+      "initial_comparison_limitation": "The first comparison dropped the go version -m header containing the compiler version; complete compiler versions are now retained."
     }
   },
   "evidence_sha256": {
@@ -1239,11 +1251,13 @@
     "tools/pd-waveform/evidence/20261116-runtime-restart/budget-build-missing-test-define.log": "e186ce088c2c48fbb240c70c40a2d1392eddff8ae1e6d9a254036d26e5842d67",
     "tools/pd-waveform/evidence/20261116-runtime-restart/budget-run.log": "fdc3bb10c2d20d5a8b39aff62fa45ba36b681893d376b43d109b9617975b9ecc",
     "tools/pd-waveform/evidence/20261116-runtime-restart/armv7-nodwarf5.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "tools/pd-waveform/evidence/20261116-runtime-restart/installed-payload-comparison.json": "2c9fd3f2877ca6b2094fe0c7ec399611cafb86bc938317223190d21a471ea519"
+    "tools/pd-waveform/evidence/20261116-runtime-restart/installed-payload-comparison.json": "7bee9c6faa543e0b6f99f8313a45cbdf534239231f5d67532843dd58536481f8",
+    "tools/pd-waveform/evidence/20261116-runtime-restart/armv7-go1274-build.json": "db7a62a2a0ba1e3a3342faab8b152039a29ab5de7703eb9710feea38d974d88d",
+    "tools/pd-waveform/evidence/20261116-runtime-restart/armv7-go1274.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   "limits": [
     "Complete paired rebuilds use a fresh RAM-only development signing key; envelopes are not the installed signed release. All 11 ARM64 payload files match the installed successor.",
-    "The earlier standalone ARMv7 crossbuild does not match either current default or nodwarf5 build. Matching GOEXPERIMENT alone did not reproduce it. No complete immutable input manifest was located for that earlier standalone build; its provenance discrepancy remains unresolved.",
+    "The earlier standalone ARMv7 binary is reproduced with Go 1.27.4/nodwarf5. It is a different toolchain configuration from the pinned Go 1.27.1 release; do not mix artifacts without an exact manifest.",
     "Same host/toolchains and two source paths/caches only; not cross-host reproducibility.",
     "Native admission uses actual current signed release bytes but equal previous/candidate sizes and synthetic filesystem capacity. Every actual shipping update pair must be admitted independently.",
     "State/metadata allowances and the rounded 41 MB free-space report are assumptions; actual FLEX-6300 disk and retained-upload high-water usage remain unqualified.",

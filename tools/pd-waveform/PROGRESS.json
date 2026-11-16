@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T10:21:46.728399+00:00",
+  "updated_utc": "2026-11-16T10:26:06.246171+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -2563,10 +2563,11 @@
       "arm64"
     ],
     "installed_ARM64_payload_match": true,
-    "ARMv7_prior_standalone_provenance_discrepancy_open": true,
+    "ARMv7_prior_standalone_provenance_discrepancy_open": false,
     "armv7_peak_budget_bytes": 39424000,
     "armv7_headroom_from_41_decimal_MB": 1576000,
     "native_boundary_checks": 32,
-    "production_ready": false
+    "production_ready": false,
+    "ARMv7_prior_standalone_reproduction": "Go 1.27.4 with nodwarf5 exactly reproduces prior binary; paired runtime release remains pinned to Go 1.27.1."
   }
 }

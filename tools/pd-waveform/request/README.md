@@ -2,10 +2,13 @@
 
 This directory contains the unprivileged temporary native installer waveform,
 its RAM input receiver, a Python desktop transfer client and private package
-builder. It is development code, not a complete desktop installation workflow.
+builder. The current development desktop integrates public first installation,
+upgrade, saved-attempt recovery and QtKeychain credentials. See
+[FIRST-INSTALL.md](FIRST-INSTALL.md) for exact qualified cases and limits;
+production package selection and FLEX-6000 installation remain incomplete.
 
-**Live packaging blocker:** on FLEX-8600 firmware 4.3.16.42034, native extraction
-assigns UID/GID 1001 to these files, while the intended waveform identity is
+**Rejected private-archive format:** on FLEX-8600 firmware 4.3.16.42034, native
+extraction assigns UID/GID 1001 to these files, while the intended waveform identity is
 UID 78666/GID 20. The private configuration fails both read access and the
 owner check. The firmware also retains `/tmp/AetherPDInstall.ssdr_waveform` as
 root-owned mode 0644 after uninstall. Therefore this package format cannot
@@ -20,15 +23,18 @@ credentials delivered into process memory through an authenticated channel,
 without including them in the native archive or another public upload artifact.
 The installed shim's authenticated API now implements the upgrade request's
 RAM handoff to the fixed native requester and carrier credential receivers.
-Public-path upgrade and rollback tests exercise that handoff. The independent
-first-install implementation below remains unqualified on hardware; shipping
-operator and credential-vault integration remain unfinished.
+Public-path upgrade and rollback tests exercise that handoff. Independent
+first installation, Linux desktop credential storage, selected crash/retry cases
+and receive-only IQ have FLEX-8600 evidence linked below. These development
+results do not qualify production package distribution, other desktop platforms
+or the FLEX-6000 adapter.
 
 ### Independent first installation
 
 The development implementation now has an explicit first-install plan and
 transaction; see [FIRST-INSTALL.md](FIRST-INSTALL.md) for its authorization
-boundary, identity behavior, local coverage and remaining radio qualification.
+boundary, identity behavior, component and live evidence, and remaining
+qualification.
 The legacy migration path still refuses a missing predecessor.
 
 The standalone admission probe runs through a shell launcher on the 8600. It
@@ -158,7 +164,8 @@ Crash paths and actual FLEX-6000 qualification remain incomplete.
 `DELETE` cancels it. Both require the current operator token. Readiness and
 delivery results do not assert installed commit. This API inherits the shim's
 existing trusted-LAN, plain-HTTP transport; RAM-only storage does not add
-transport encryption. It is not yet connected to the normal desktop installer.
+transport encryption. The development desktop coordinator connects this API to
+normal operator approval, upload, exact-plan monitoring and public cleanup.
 
 ## Offline verification
 
@@ -195,9 +202,10 @@ simulated carrier, and checks cancellation and unsafe credential rejection.
 
 `--sanitize` enables ASan/UBSan; `--arch arm64` and `--arch armv7` cross-build.
 Cross-builds do not establish Linux 2.6 runtime, resource or actual FLEX-6300
-qualification. Native extraction permissions, the combined live carrier graph,
-automatic outer waveform/image removal, exact-plan approval and the normal
-desktop installation UI remain separate qualification requirements.
+qualification. The rejected private archive remains unsafe regardless of those
+builds. The public-input desktop workflow has scoped 8600 live qualification;
+interrupted transactions, platform coverage and the final 6000 carrier remain
+separate gates.
 
 ## Desktop request client
 
@@ -221,9 +229,11 @@ that installation failed. An authorization refusal retires the context.
 installer already handed off to the carrier. Destruction aborts local HTTP
 observation without sending an additional remote mutation. Neither delivery
 result zero nor any request-client state asserts commit; the separate monitor
-must match the approved transaction. Operator UI, credential/session lifetime
-integration, authenticated input transfer and package upload coordination remain
-required. This class does not solve initial-install trust or the 6000 adapter.
+must match the approved transaction. The desktop installation coordinator and
+model supply operator UI, credential/session fences and package upload
+coordination. Independent first installation uses its separate public-plan
+path; this request client does not establish initial-install trust or a 6000
+adapter.
 
 ## Desktop authenticated upload
 
@@ -253,4 +263,6 @@ transferred the public candidate/predecessor set (18,452,908 input bytes) into
 read-only unlinked RAM files, checked every hash and descriptor cleanup, and
 exercised EOF and both replies. Its stage-two refusal was injected by the test
 adapter; it did not execute an installer or contact the radio. Windows/macOS
-socket qualification and the combined operator workflow remain required.
+socket qualification remains required. The combined development operator workflow
+has separate 8600 live evidence; the release catalogue and final platform/hardware
+gates remain open.
