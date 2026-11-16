@@ -223,12 +223,18 @@ private slots:
     void prepareButtonDoesNotApprove()
     {
         Fixture f;
+        if (qEnvironmentVariableIsSet("AETHERPD_EXPECT_BOTH_SELECTIONS")) {
+            QVERIFY(!f.model().selectedDevelopmentVersion().isEmpty());
+            QVERIFY(!f.model().selectedFirstDevelopmentVersion().isEmpty());
+        }
         if (f.model().selectedDevelopmentVersion().isEmpty()) {
             QVERIFY(!f.button("pdInstallPrepare")->isEnabled());
             return;
         }
         QTest::mouseClick(f.button("pdInstallPrepare"), Qt::LeftButton);
         QTRY_COMPARE_WITH_TIMEOUT(f.model().state(), AetherPDInstallationModel::State::AwaitingApproval, 30000);
+        QVERIFY(!f.preview().contains("First-install development package"));
+        QVERIFY(f.preview().contains("Previous release (BLAKE2b-256)"));
         QVERIFY(!f.button("pdInstallPrepare")->isEnabled());
         QVERIFY(f.button("pdInstallApprove")->isEnabled());
         QCOMPARE(f.loads, 0); QVERIFY(f.network.sent.empty());

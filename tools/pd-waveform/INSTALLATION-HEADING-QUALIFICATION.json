@@ -1,0 +1,11 @@
+{
+  "status": "heading_fix_component_passed_live_recheck_pending",
+  "before": "Actual upgrade plan was correct but its heading included unrelated first-install development package version when both selections were configured. No approval or upload occurred.",
+  "fix": "Only prefix a prepared plan with the first-install label when that preview is a first installation.",
+  "verification": "Installation dialog suite run with AETHERPD_EXPECT_BOTH_SELECTIONS=1; checks both selections exist, update preview omits first-install heading and includes previous-release identity.",
+  "evidence": {
+    "prepared-panel.json": "d630544ae0c54fb990db3e717b9faacd5e66405a43293fd56bd3701ce077f40e",
+    "heading-build.log": "feae5fef50b78dd15aec587e6f74a4ed5a350d4d8bfde4c1677b1a1e6ddd5610",
+    "heading-test.log": "8c9619ad3b2896976b55b99f3756bd46b2ce2aee9a302e4957f770c01b61f9f3"
+  }
+}

@@ -507,7 +507,7 @@ void AetherPDDialog::renderInstallation()
         detail = preview ? tr("Development build — not qualified for production.\n") + detail
             : selection + tr("Choose Prepare update to verify the package and review its plan. Preparation does not change the radio.");
     }
-    if (!firstVersion.isEmpty()) {
+    if (!firstVersion.isEmpty() && (!preview || preview->firstInstallation)) {
         detail = tr("First-install development package %1 — not qualified for production.\n").arg(firstVersion) + detail;
         if (!preview) {
             detail += tr("\nPrepare first installation is for a radio without a managed AetherPD installation. "

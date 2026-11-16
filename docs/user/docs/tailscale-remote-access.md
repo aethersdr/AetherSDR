@@ -616,7 +616,8 @@ by these controls.
 The **AetherPD service installation** section shows a prepared update's target radio,
 firmware, planned changes and authenticated package identifiers. Qualified package
 selection is not yet available. Builds explicitly configured with a development
-package show its version and **not qualified for production**. **Prepare update**
+package show its version and **not qualified for production**. A prepared plan
+labels its selected installation type. **Prepare update**
 verifies that package against the hashes and signing keys compiled into the app
 and prepares a plan without changing the radio or loading credentials. This
 button is dimmed when no package is compiled for the connected firmware.
