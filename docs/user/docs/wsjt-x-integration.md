@@ -80,6 +80,10 @@ AetherSDR can listen to WSJT-X's UDP decode messages and put the stations it dec
 
 AetherSDR can draw live bracket markers on the panadapter and waterfall showing exactly where each running WSJT-X instance's Rx and Tx frequencies sit. The brackets are scaled to the mode's occupied bandwidth (FT8: 50 Hz, FT4: 90 Hz, FT2: 150 Hz). Rx brackets use the theme's receive-marker color; Tx brackets use the transmit-marker color and appear only when WSJT-X is transmitting or has set a split Tx frequency.
 
+In 3D (DSS) mode, the markers appear on the waterfall only.
+
+The Rx label shows the audio offset above the WSJT-X dial frequency (for example, **1500 Hz**). On the 2D panadapter it sits below the VFO flags.
+
 To enable the overlay, right-click on a panadapter and tick **Show WSJT-X Rx/Tx Frequency**. The setting is per-panadapter and independent of decode spotting. AetherSDR starts the WSJT-X UDP listener automatically when the overlay is enabled, so you do not need to turn on **Autostart** in SpotHub separately.
 
 To post decoded stations as spots independently of the overlay, use the **Post decoded stations as spots** checkbox on the WSJT-X tab in [SpotHub](./spothub.md). The two settings can be used in any combination.

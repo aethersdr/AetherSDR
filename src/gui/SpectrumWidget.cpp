@@ -16574,6 +16574,7 @@ void SpectrumWidget::setWsjtxMarkers(const QVector<WsjtxMarker>& markers)
             const auto& b = markers.at(i);
             if (a.id != b.id || a.transmitting != b.transmitting ||
                 a.mode != b.mode ||
+                std::abs(a.dialFreqHz - b.dialFreqHz) > 0.5 ||
                 std::abs(a.rxFreqHz - b.rxFreqHz) > 0.5 ||
                 std::abs(a.txFreqHz - b.txFreqHz) > 0.5) {
                 return true;
@@ -18269,7 +18270,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
 // markers are unaffected — those already exist via SpotHub's WSJT-X feed and
 // drawSpotMarkers(), per the triage on #4526.
 // Occupied-bandwidth widths per WSJT-X mode, used to render each Rx/Tx cue as
-// a double line (two edges) instead of a single centre line. These are fixed
+// a double line (two edges) instead of a single center line. These are fixed
 // protocol values (not derived from tone/symbol-rate math) per operator
 // direction, 2026-09-16.
 constexpr double kWsjtxFt8WidthHz = 50.0;
@@ -18299,8 +18300,8 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         return;
     }
 
-    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
-    const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
+    const double startMhz = m_centerMhz - effectiveBandwidthMhz() / 2.0;
+    const double endMhz   = m_centerMhz + effectiveBandwidthMhz() / 2.0;
 
     // docs/style/theme-style-guide.md names these roles explicitly:
     // Receive / RX marker → color.highlight.rx
@@ -18315,10 +18316,12 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
     const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
     auto drawFrequencyLine = [&](int x, const QColor& col) {
         p.setPen(QPen(col, 1));
-        if (!specRect.isEmpty() && !is3D)
+        if (!specRect.isEmpty() && !is3D && x >= specRect.left() && x <= specRect.right()) {
             p.drawLine(x, specRect.top(), x, specRect.bottom());
-        if (!wfRect.isEmpty())
+        }
+        if (!wfRect.isEmpty() && x >= wfRect.left() && x <= wfRect.right()) {
             p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+        }
     };
 
     // Double line: one at each edge of the mode's occupied bandwidth,
@@ -18332,14 +18335,31 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         drawFrequencyLine(mhzToX(freqMhz + widthHz / 1.0e6), col);
     };
 
+    p.save();
     QFont labelFont = p.font();
     labelFont.setPixelSize(10);
     labelFont.setBold(true);
     p.setFont(labelFont);
     const QFontMetrics fm(labelFont);
-    // Labels: near the top of the waterfall and near the top of the spectrum.
-    const int wfLabelY   = wfRect.isEmpty()   ? 0 : wfRect.top()   + fm.height();
-    const int specLabelY = specRect.isEmpty() ? 0 : specRect.top()  + fm.height();
+    // Keep the spectrum label below the VFO flags, whose height follows the
+    // current page and display scale. The waterfall label stays at its top.
+    int flagHeight = 0;
+    for (const VfoWidget* flag : std::as_const(m_vfoWidgets)) {
+        if (flag->isVisible()) {
+            flagHeight = std::max(flagHeight, flag->height());
+        }
+    }
+    const int specLabelTop = specRect.top() + flagTopPad() + flagHeight + 3;
+    auto drawLabel = [&](const QRect& rect, int x, int top, const QString& text) {
+        if (rect.isEmpty() || top + fm.height() > rect.bottom()) {
+            return;
+        }
+        p.save();
+        p.setClipRect(rect, Qt::IntersectClip);
+        const int rightmostX = std::max(rect.left(), rect.right() - fm.horizontalAdvance(text));
+        p.drawText(std::clamp(x, rect.left(), rightmostX), top + fm.ascent(), text);
+        p.restore();
+    };
 
     for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
         // No dial-frequency gate here: WSJT-X Rx DF is an audio offset above
@@ -18355,15 +18375,13 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         if (rxMhz <= endMhz && rxMhz + modeWidthMhz >= startMhz) {
             drawModeWidthLines(rxMhz, rxColor, marker.mode);
             p.setPen(rxColor);
-            // Label at the center of the bracket (lower edge + half width).
-            const double rxCenterMhz = rxMhz + modeWidthMhz / 2.0;
-            const int labelX = mhzToX(rxCenterMhz) + 3;
-            if (!wfRect.isEmpty())
-                p.drawText(labelX, wfLabelY,
-                           QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
-            if (!specRect.isEmpty() && !is3D)
-                p.drawText(labelX, specLabelY,
-                           QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
+            // Keep the text clear of the bracket's upper edge.
+            const int labelX = mhzToX(rxMhz + modeWidthMhz) + 3;
+            const QString label = QString::number(marker.rxFreqHz - marker.dialFreqHz, 'f', 0) + " Hz";
+            drawLabel(wfRect, labelX, wfRect.top() + 3, label);
+            if (!is3D) {
+                drawLabel(specRect, labelX, specLabelTop, label);
+            }
         }
 
         // Tx marker only when it means something: actively transmitting, or
@@ -18378,6 +18396,7 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
             }
         }
     }
+    p.restore();
 }
 
 // ─── Frequency scale bar ──────────────────────────────────────────────────────

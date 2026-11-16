@@ -25,8 +25,11 @@ inline QJsonObject wsjtxOverlayRead()
             .toString().toUtf8()).object();
 }
 
-inline void wsjtxOverlayWrite(const QJsonObject& obj)
+inline void wsjtxOverlayWrite(QJsonObject obj)
 {
+    if (!obj.contains("version")) {
+        obj.insert("version", 1);
+    }
     auto& s = AppSettings::instance();
     s.setValue(kWsjtxOverlayKey,
                QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
