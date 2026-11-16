@@ -123,6 +123,32 @@ cancellation retains its existing session-retirement behavior. Transport
 framing errors and explicit session/credential revocation still close the
 session.
 
+## Correction selection (development)
+
+`POST /v1/aetherpd/correction/enable` and `/v1/aetherpd/correction/bypass`
+accept no body or query parameters and require the current admin credential.
+They select correction for the current owned DSP only; no startup environment,
+path, gain, frequency, duration or arbitrary radio command is accepted.
+`correction_control: true` advertises support. Older native processes and private
+sessions are refused without dispatching these commands.
+
+The native private commands are nine bytes: `1` (enable) or `0` (bypass), then
+BE64 nonce on the existing source-control channel. They share its monotonic
+replay counter and return the same bounded result codes. Admission requires
+fresh local IQ, the bound GUI's idle interlock and slice ownership, no keyed
+state, no active test source, and stock APD off. An armed/running source refuses
+selection. A changed selection invalidates the fit; it never arms or keys.
+Repeated commands cannot extend a source lifetime. The default on a new DSP
+session remains correction enabled.
+
+Private session `PDTALK05` adds fixed opcodes `0` and `1`; older versions cannot
+receive them. HTTP mutation admission serializes with source arm/cancel, and
+an uncertain native reply or credential revocation retires that owned lifetime.
+Desktop requests invalidate their original capture fence immediately. A receipt
+is followed by status readback and never presented as observed correction state.
+This control requires matching updated desktop/shim/native packages; installed
+radio qualification remains pending until recorded separately.
+
 ## Bounded test cleanup API (development)
 
 These authenticated operations create and observe a separate unprivileged

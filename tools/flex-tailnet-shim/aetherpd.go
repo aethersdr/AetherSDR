@@ -23,6 +23,7 @@ var aetherPDReads = make(chan struct{}, 1)
 type aetherPDStatus struct {
 	Measurement            *pdMeasurementSource `json:"measurement,omitempty"`
 	InputLimitedSamples    uint64               `json:"input_limited_samples"`
+	CorrectionControl      bool                 `json:"correction_control,omitempty"`
 	MeasurementControl     bool                 `json:"measurement_control,omitempty"`
 	SourcePurpose          string               `json:"source_purpose,omitempty"`
 	CalibrationControl     bool                 `json:"calibration_control"`
@@ -130,6 +131,11 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 		return result, errors.New("partial calibration status")
 	} else if _, present := fields["calibration_samples_left"]; present {
 		return result, errors.New("partial calibration status")
+	}
+	if _, present := fields["correction_control"]; present {
+		if err = read("correction_control", &result.CorrectionControl); err != nil || (result.CorrectionControl && !result.CalibrationControl) {
+			return result, errors.New("invalid correction control capability")
+		}
 	}
 	if _, present := fields["measurement_control"]; present {
 		if err = read("measurement_control", &result.MeasurementControl); err != nil {

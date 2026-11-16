@@ -117,6 +117,8 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     m_restore = button(tr("Restore receive"), "pdRestore", 2, 0);
     m_refresh = button(tr("Refresh"), "pdRefresh", 2, 1);
     m_measurementOpen = button(tr("Measure linearity…"), "pdMeasurement", 3, 0);
+    m_enableCorrection = button(tr("Enable correction"), "pdEnableCorrection", 4, 0);
+    m_bypassCorrection = button(tr("Bypass correction"), "pdBypassCorrection", 4, 1);
     connect(m_measurementOpen, &QPushButton::clicked, this, [this] {
         if (!current()) { return; }
         if (!m_measurement) {
@@ -234,6 +236,8 @@ AetherPDDialog::AetherPDDialog(RadioModel* radio, TokenLoader loadToken, QWidget
     layout->invalidate();
     connect(done, &QPushButton::clicked, this, &QDialog::close);
     connect(m_refresh, &QPushButton::clicked, this, &AetherPDDialog::refresh);
+    connect(m_enableCorrection, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::EnableCorrection); });
+    connect(m_bypassCorrection, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::BypassCorrection); });
     connect(m_start, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::Start); });
     connect(m_arm, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::ArmCalibration); });
     connect(m_cancel, &QPushButton::clicked, this, [this] { request(aetherpd::Operation::CancelCalibration); });
@@ -332,6 +336,8 @@ void AetherPDDialog::render()
     if (model && model->lastAcknowledgment()) {
         using aetherpd::Acknowledgment;
         switch (*model->lastAcknowledgment()) {
+        case Acknowledgment::CorrectionEnabled: receipt = tr("Correction enable accepted; waiting for observed status."); break;
+        case Acknowledgment::CorrectionBypassed: receipt = tr("Correction bypass accepted; waiting for observed status."); break;
         case Acknowledgment::StartRequested: receipt = tr("Start requested; waiting for observed status."); break;
         case Acknowledgment::MeasurementArmAccepted: receipt = tr("Measurement arm accepted; waiting for observed status."); break;
         case Acknowledgment::ArmAccepted: receipt = tr("Arm request accepted; waiting for observed status."); break;
@@ -370,6 +376,18 @@ void AetherPDDialog::render()
         && status->calibrationState != aetherpd::CalibrationState::Running && !pending;
     enable(m_arm, active && !installing && arm, installing ? tr("Wait for the service update to finish before arming calibration.")
         : tr("Fresh, unkeyed status with calibration available is required. Radio APD must be off."));
+    if (!alive) { return; }
+    const bool correction = active && !installing && !pending && status && status->available
+        && status->registered && !status->keyed && status->correctionControl
+        && status->state != aetherpd::State::BlockedByRadioApd
+        && status->calibrationState != aetherpd::CalibrationState::Armed
+        && status->calibrationState != aetherpd::CalibrationState::Running;
+    const QString correctionReason = status && !status->correctionControl
+        ? tr("The installed service does not support correction selection.")
+        : tr("Fresh idle status and no armed source or pending update are required. The requested state must differ from the current state.");
+    enable(m_enableCorrection, correction && !status->correctionEnabled, correctionReason);
+    if (!alive) { return; }
+    enable(m_bypassCorrection, correction && status->correctionEnabled, correctionReason);
     if (!alive) { return; }
     enable(m_cancel, active && (!pending || pending == Operation::Status || pending == Operation::ArmCalibration || pending == Operation::ArmMeasurement), unavailable);
     if (!alive) { return; }

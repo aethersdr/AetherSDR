@@ -1,0 +1,61 @@
+{
+  "utc": "2026-11-16T09:15:37.869216+00:00",
+  "status": "native_shim_desktop_component_checks_passed_not_installed",
+  "production_ready": false,
+  "source_parent": "90873f4f7f4b66871c776f8c13e7721fbcd67cd0",
+  "behavior": [
+    "Fixed enable/bypass commands over existing private native channel and authenticated HTTP; no arbitrary environment, executable, frequency, gain or RF command.",
+    "Only bound-GUI idle state with fresh local IQ and no armed/running source is eligible. Changed selection invalidates fit; duplicate nonce cannot repeat a change or extend a source.",
+    "PDTALK05 advertises correction selection; older sessions refuse it without dispatch. Native correction_control capability is required.",
+    "Selection serializes with source arms. Uncertain native reply or credential revocation retires the owned DSP lifetime.",
+    "Desktop invalidates old capture preparation on request, treats ACK as receipt, reads status, and never keys or rearms automatically. Stop preempts selection.",
+    "Selection belongs to one DSP session; new-session correction-enabled default unchanged."
+  ],
+  "verification": {
+    "native": "Existing calibration suite plus correction on/off, replay, armed/keyed/wrong-owner/stale-IQ refusal passed with no radio or RF.",
+    "mutation": "Isolated mutation bypassing native selection admission rejected specifically by keyed-state assertion. Initial isolated build lacked include path; corrected rerun retained separately.",
+    "Go": "Focused control tests passed normally and under race detector; capture/bounded-unkey/session regressions passed under race detector. Sandbox denied socket getsockopt; host rerun used local test sockets only.",
+    "desktop": "4/4 protocol/client/model/dialog tests passed. Initial test request preceded dialog link completion; Not Run evidence preserved and complete build rerun passed.",
+    "builds": "Desktop build and ARMv7/Cortex-A8 plus ARM64 DSP builds passed. These are not complete runtime packages or actual6000 hardware qualification.",
+    "docs": "User docs build, test registration and log rules passed."
+  },
+  "arm_dsp_binaries": [
+    {
+      "arch": "armv7",
+      "size": 264332,
+      "sha256": "d3bc1f50360ee0e19b4fc380ae17dba1a09faa3ecf31615c48b9a806a32ba5a3"
+    },
+    {
+      "arch": "arm64",
+      "size": 276472,
+      "sha256": "e06154f34cda20899578e35685ad5b414ddee6b402bd3e38e67432fd1bed3df9"
+    }
+  ],
+  "radio_changed": false,
+  "rf": false,
+  "limits": [
+    "No installed-radio validation of the new commands yet.",
+    "No new raw-IQ live OFF/ON comparison, stock APD, final failure graph or actual6300 proof.",
+    "Production publisher pins/catalogue and release gates remain unfinished."
+  ],
+  "packaging_next": "Use existing upgrade transaction with separately pinned previous/candidate keys. Previous signed release and public key are retained; its discarded private key is not required. Verify a new signed candidate, then qualify normal operator-approved upgrade, idle selection, separately keyed OFF/ON captures and independent raw-IQ recheck.",
+  "evidence": {
+    "native-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native-test.log": "06b84ee307107ce2247d0bc8cf129022edc06a1861156badd7c7a2485bbe129a",
+    "native-mutation.log": "c9402662df987569cffc22e8f9e97707cf2d79ecf0ea78f9026e3ba151717377",
+    "native-mutation-checked.log": "0f82ae49ecec13e39f752161f2c21db206e34fd1db0d0705d374f0a6d0cbdd5f",
+    "go-tests.log": "515dff9f84022ea0b863ede57ff392c3c28f06ae6154cecc3e1a4d8366fc9ab3",
+    "go-host-tests.log": "19be0681bff174af9a92acd698bf8666732edd0d72bc2ef3f32f9cdae0f58743",
+    "go-race-tests.log": "f3b542adb4835a6c09215bf4d87eb642ab6523cf4787d4f3ef4cd060558f8784",
+    "go-session-regression.log": "12bec49fde171b17013e57fa473060be16a13e3a72c5be96c1d27f0995a12113",
+    "desktop-build.log": "f6c3fd01d63474e9c0a872ae74dfe389a35a4a49806e0479b627c40abb1d9aa3",
+    "desktop-tests.log": "5e39f1249c7ba7ce952ddef2430c8ef6c6c1e980240e6f1f94f76e266708d862",
+    "desktop-tests-complete.log": "47f02f23fbaa320c49dbe5cd32edd257eca4cd8e9c20b09eb6c5cacee81210f4",
+    "desktop-final-build.log": "51bab888b744000f80add6b5cf547c3d474020a520990fa610316323f9a1042c",
+    "dialog-final-test.log": "3d2b3fb32fd6d947c2a47d002b68da52740302de5daee37c5b1eabec1bad5c2e",
+    "arm-build.log": "12ee9b2a3ec1f9fa3622614470747920abe0ba0c337714e06fedebed3d9f35ff",
+    "docs-build.log": "13ac369614226cb9a693c8f44568d503693ce63c25268d7dbe34822d3a7e61f1",
+    "test-registration.log": "159cae34bc871940fca10b3979690db7a3d285db3d4cff2eaca5f580b4e5cbb5",
+    "log-rules.log": "5fee1c3bb48cdea3efdde249508f16db320f2709a419cd23569763e3b4ee8a66"
+  }
+}

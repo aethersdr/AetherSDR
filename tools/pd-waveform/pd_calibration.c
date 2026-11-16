@@ -24,7 +24,8 @@ struct pd_calibration_reply pd_calibration_command(struct pd_calibration* s,
     const unsigned char* bytes, size_t size, int64_t now, int eligible)
 {
     struct pd_calibration_reply reply = {PD_CAL_INVALID, 0};
-    if (!bytes || size != 9 || (bytes[0] != 'A' && bytes[0] != 'M' && bytes[0] != 'X')) { return reply; }
+    if (!bytes || size != 9 || (bytes[0] != 'A' && bytes[0] != 'M' && bytes[0] != 'X'
+        && bytes[0] != '0' && bytes[0] != '1')) { return reply; }
     uint64_t nonce = 0;
     for (unsigned i = 1; i < 9; ++i) { nonce = (nonce << 8) | bytes[i]; }
     if (!nonce) { return reply; }
@@ -37,6 +38,7 @@ struct pd_calibration_reply pd_calibration_command(struct pd_calibration* s,
     if (bytes[0] == 'X') { pd_calibration_cancel(s); reply.applied = 1; }
     else if (active(s)) { reply.result = PD_CAL_BUSY; }
     else if (!eligible || now <= 0 || now > INT64_MAX - kArmNs) { reply.result = PD_CAL_BLOCKED; }
+    else if (bytes[0] == '0' || bytes[0] == '1') { reply.applied = 1; }
     else {
         s->phase = PD_CAL_ARMED; s->samples_left = PD_CAL_SAMPLES;
         s->source_id = nonce;

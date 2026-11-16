@@ -50,7 +50,8 @@ type pdSessionReply struct {
 }
 
 type pdSessionChannel struct {
-	// Immutable after publication: capture v2, bounded tests v3, measurement source v4.
+	// Immutable after publication: capture v2, bounded tests v3, measurement source v4, correction selection v5.
+	correctionSupported  bool
 	captureSupported     bool
 	measurementSupported bool
 	testSupported        bool
@@ -90,8 +91,9 @@ func (s *pdSessionChannel) busy() bool {
 	defer s.mu.Unlock()
 	return len(s.pending) != 0
 }
+func pdCorrectionOpcode(op byte) bool { return op == '0' || op == '1' }
 func pdSessionOpcode(op byte) bool {
-	return op == 'S' || op == 'M' || op == 'A' || op == 'X' || op == 'T' || op == 'R' || pdCaptureOpcode(op)
+	return op == 'S' || op == 'M' || op == 'A' || op == 'X' || op == 'T' || op == 'R' || pdCorrectionOpcode(op) || pdCaptureOpcode(op)
 }
 func (s *pdSessionChannel) Call(ctx context.Context, op byte) pdSessionReply {
 	return s.call(ctx, op, nil)
@@ -106,7 +108,7 @@ func (s *pdSessionChannel) CallTest(ctx context.Context, op byte, id [16]byte, d
 	return s.call(ctx, op, extra[:])
 }
 func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSessionReply {
-	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && (!s.testSupported || !pdTestOpcode(op))) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == 'M' && !s.measurementSupported) {
+	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && (!s.testSupported || !pdTestOpcode(op))) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == 'M' && !s.measurementSupported) || (pdCorrectionOpcode(op) && !s.correctionSupported) {
 		return pdSessionReply{err: errors.New("invalid session operation")}
 	}
 	if err := ctx.Err(); err != nil {

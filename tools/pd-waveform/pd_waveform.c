@@ -1908,9 +1908,10 @@ static int wf_init(wf_t* w)
 static struct pd_calibration_reply operator_calibration_command(wf_t* w,
     const unsigned char* request, size_t size, int64_t now)
 {
+    int correction_selection=size==9 && request && (request[0]=='0' || request[0]=='1');
     int eligible=w->calibration_control && w->calibration_idle && w->calibration_gui && !w->keyed && !w->tx_on && w->api>=0 && w->api_leased && w->tx_in &&
         w->active_slice>=0 && w->active_slice<16 && w->calibration_slice_owner[w->active_slice]==w->calibration_gui &&
-        (w->correct || (size==9 && request && request[0]=='M')) && !native_apd_blocked(w) && w->local_iq_mode &&
+        (w->correct || correction_selection || (size==9 && request && request[0]=='M')) && !native_apd_blocked(w) && w->local_iq_mode &&
         w->local_iq.frames>0 && w->daxiq_sid && w->tx_mhz>0 && w->pan_mhz>0 &&
         w->local_iq.last_valid_ns>0 && now>=w->local_iq.last_valid_ns && now-w->local_iq.last_valid_ns<=100000000 &&
         !(w->test_f1>0);
@@ -1930,6 +1931,10 @@ static struct pd_calibration_reply operator_calibration_command(wf_t* w,
             struct pd_calibration accepted=w->calibration;
             w->test_started=0;model_changed(w);w->calibration=accepted;
         } else if (request[0]=='X') { disarm_bounded_test(w, "operator_cancel"); }
+        else if (correction_selection && w->correct != (request[0]=='1')) {
+            w->correct=request[0]=='1';
+            model_changed(w);
+        }
     }
     return reply;
 }
@@ -1972,7 +1977,7 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         "\"correcting\":%s,\"calc_state\":%d,\"tx_pkts\":%ld,\"tx_held\":%ld,\"fb_pkts\":%ld,"
         "\"other_pkts\":%ld,\"other_last\":\"sid 0x%08x cls 0x%04x\",\"ref_fifo\":%d,"
         "\"fb_fifo\":%d,\"acq\":%d,\"eq_ready\":%s,\"eq_residual_db\":%.1f,"
-        "\"feedback\":\"%s\",\"fb_slice\":%d,\"fb_mhz\":%.6f,\"fb_dax_stream\":\"0x%08x\",\"local_iq_fault\":%s,\"local_iq_frames\":%llu,\"local_iq_stale\":%llu,\"tx_rejected\":%llu,\"model_resets\":%llu,\"model_recoveries\":%llu,\"rejected_fits\":%u,\"cached_model\":%s,\"warm_starts\":%llu,\"cached_packets\":%llu,\"tx_sent_datagrams\":%llu,\"tx_send_errors\":%llu,\"tx_max_send_gap_ns\":%lld,\"tx_max_work_ns\":%lld,\"tx_trace_rows\":%u,\"tx_trace_dropped\":%u,\"scheduler_policy\":%d,\"scheduler_priority\":%d,\"tx_deadline_faults\":%llu,\"api_leased\":%s,\"native_apd_blocked\":%s,\"collection_full_bins\":%d,\"collection_bin_counts\":[%s],\"transport_cache_enabled\":%s,\"transport_pending\":%s,\"transport_recoveries\":%llu,\"transport_eq_distance\":%.6f,\"mic_peak\":%.6f,\"prelimit_peak\":%.6f,\"limited_samples\":%llu,\"generated_samples\":%llu,\"quiet_blocks\":%llu,\"reference_power\":%.9f,\"signal_present\":%s,\"test_active\":%s,\"test_remaining_samples\":%d,\"mic_gain\":%.6f,\"base_peak\":%.6f,\"measurement\":{\"source_id\":\"%016llx\",\"tones\":%s},\"measurement_control\":%s,\"source_purpose\":\"%s\",\"calibration_control\":%s,\"calibration_state\":\"%s\",\"calibration_samples_left\":%d}\n",
+        "\"feedback\":\"%s\",\"fb_slice\":%d,\"fb_mhz\":%.6f,\"fb_dax_stream\":\"0x%08x\",\"local_iq_fault\":%s,\"local_iq_frames\":%llu,\"local_iq_stale\":%llu,\"tx_rejected\":%llu,\"model_resets\":%llu,\"model_recoveries\":%llu,\"rejected_fits\":%u,\"cached_model\":%s,\"warm_starts\":%llu,\"cached_packets\":%llu,\"tx_sent_datagrams\":%llu,\"tx_send_errors\":%llu,\"tx_max_send_gap_ns\":%lld,\"tx_max_work_ns\":%lld,\"tx_trace_rows\":%u,\"tx_trace_dropped\":%u,\"scheduler_policy\":%d,\"scheduler_priority\":%d,\"tx_deadline_faults\":%llu,\"api_leased\":%s,\"native_apd_blocked\":%s,\"collection_full_bins\":%d,\"collection_bin_counts\":[%s],\"transport_cache_enabled\":%s,\"transport_pending\":%s,\"transport_recoveries\":%llu,\"transport_eq_distance\":%.6f,\"mic_peak\":%.6f,\"prelimit_peak\":%.6f,\"limited_samples\":%llu,\"generated_samples\":%llu,\"quiet_blocks\":%llu,\"reference_power\":%.9f,\"signal_present\":%s,\"test_active\":%s,\"test_remaining_samples\":%d,\"mic_gain\":%.6f,\"base_peak\":%.6f,\"measurement\":{\"source_id\":\"%016llx\",\"tones\":%s},\"measurement_control\":%s,\"correction_control\":%s,\"source_purpose\":\"%s\",\"calibration_control\":%s,\"calibration_state\":\"%s\",\"calibration_samples_left\":%d}\n",
         WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
         w->daxiq_sid, w->daxiq_reply, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
@@ -1996,7 +2001,7 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         (unsigned long long)w->quiet_blocks, pd_align_reference_power(w->align),
         pd_align_signal_present(w->align) ? "true" : "false", w->test_f1 > 0 ? "true" : "false",
         w->test_f1 > 0 && !w->test_duration_samples ? -1 : w->test_left, w->gain, w->peak, (unsigned long long)measurement_source_id(w),
-        measurement_tones_ready(w,pd_iq_monotonic_ns()) ? "true" : "false", w->calibration_control ? "true" : "false",
+        measurement_tones_ready(w,pd_iq_monotonic_ns()) ? "true" : "false", w->calibration_control ? "true" : "false", w->calibration_control ? "true" : "false",
         w->calibration.purpose==PD_SOURCE_MEASUREMENT ? "measurement" : "calibration", w->calibration_control ? "true" : "false",
         pd_calibration_name(&w->calibration), w->calibration.samples_left);
 }

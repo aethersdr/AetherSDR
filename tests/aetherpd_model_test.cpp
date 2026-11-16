@@ -154,6 +154,50 @@ int main(int argc, char** argv)
         if (!check(!measurement.lastAcknowledgment() && measurement.pendingOperation() == Operation::CancelCalibration,
             "late measurement receipt overrode cancellation")) { return 1; }
     }
+    {
+        Network controls, captures;
+        AetherPDModel owner(controls);
+        owner.setSession(address, token, [] { return true; },
+            StartIdentity{QStringLiteral("0D3EA0E8-B052-4AC6-9D32-D96918634469"), 0x321b4de});
+        controls.last->complete(200, idle);
+        const size_t legacyRequests = controls.sent.size();
+        if (!check(!owner.request(Operation::BypassCorrection) && !owner.request(Operation::EnableCorrection)
+            && controls.sent.size() == legacyRequests, "legacy service accepted correction selection")) { return 1; }
+        QJsonObject supported = QJsonDocument::fromJson(idle).object();
+        supported["correction_control"] = true;
+        owner.refresh(); controls.last->complete(200, QJsonDocument(supported).toJson());
+        AetherSDR::txlin::AetherPDCaptureSource source(captures);
+        const std::function<bool()> fence = owner.bindCaptureSource(source);
+        if (!check(fence && fence(), "supported service could not bind capture")) { return 1; }
+        if (!check(owner.request(Operation::BypassCorrection) && !owner.status() && !fence()
+            && controls.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/correction/bypass"),
+            "explicit bypass failed to invalidate old capture preparation")) { return 1; }
+        controls.last->complete(200, R"({"state":"correction_bypass_accepted"})");
+        if (!check(!owner.status() && owner.pendingOperation() == Operation::Status,
+            "correction receipt was treated as observed state")) { return 1; }
+        supported["correction_enabled"] = false; supported["state"] = "disabled";
+        controls.last->complete(200, QJsonDocument(supported).toJson());
+        if (!check(owner.status() && !owner.status()->correctionEnabled && !fence(),
+            "fresh bypass status revived old preparation or lost state")) { return 1; }
+        if (!check(owner.request(Operation::EnableCorrection), "explicit enable refused")) { return 1; }
+        Reply* enable = controls.last;
+        if (!check(owner.request(Operation::Stop) && enable->aborted,
+            "Stop could not preempt correction selection")) { return 1; }
+        enable->complete(200, R"({"state":"correction_enable_accepted"})");
+        if (!check(owner.pendingOperation() == Operation::Stop && !owner.lastAcknowledgment(),
+            "late correction receipt replaced Stop")) { return 1; }
+        controls.last->complete(202, R"({"state":"stop_requested"})");
+        controls.last->complete(200, R"({"available":false,"state":"stopped"})");
+        for (bool keyed : {false, true}) {
+            QJsonObject busy = QJsonDocument::fromJson(idle).object(); busy["correction_control"] = true;
+            if (keyed) { busy["keyed"] = true; busy["state"] = "calibrating"; }
+            else { busy["calibration_state"] = "armed"; busy["calibration_samples_left"] = 192000; busy["state"] = "calibration_armed"; }
+            owner.refresh(); controls.last->complete(200, QJsonDocument(busy).toJson());
+            const size_t before = controls.sent.size();
+            if (!check(owner.status() && !owner.request(Operation::BypassCorrection)
+                && controls.sent.size() == before, "armed/keyed selection reached HTTP")) { return 1; }
+        }
+    }
     Network network;
     AetherPDModel model(network);
     bool ok = true;

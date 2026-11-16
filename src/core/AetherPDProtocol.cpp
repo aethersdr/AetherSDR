@@ -236,6 +236,8 @@ bool Faults::any() const
 std::optional<Request> request(Operation operation)
 {
     switch (operation) {
+    case Operation::EnableCorrection: return Request{"POST", QStringLiteral("/v1/aetherpd/correction/enable"), 8'000};
+    case Operation::BypassCorrection: return Request{"POST", QStringLiteral("/v1/aetherpd/correction/bypass"), 8'000};
     case Operation::Status: return Request{"GET", QStringLiteral("/v1/aetherpd/status"), 2'000};
     case Operation::ArmMeasurement: return Request{"POST", QStringLiteral("/v1/aetherpd/measurement/arm"), 8'000};
     case Operation::ArmCalibration: return Request{"POST", QStringLiteral("/v1/aetherpd/calibration/arm"), 8'000};
@@ -283,7 +285,7 @@ std::optional<Status> parseStatus(const QByteArray& json)
     }
     static const QSet<QString> known{
         QStringLiteral("available"), QStringLiteral("state"), QStringLiteral("registered"),
-        QStringLiteral("keyed"), QStringLiteral("correction_enabled"), QStringLiteral("correcting"),
+        QStringLiteral("keyed"), QStringLiteral("correction_control"), QStringLiteral("correction_enabled"), QStringLiteral("correcting"),
         QStringLiteral("calibration_required"), QStringLiteral("calibration_control"),
         QStringLiteral("calibration_state"), QStringLiteral("calibration_samples_left"),
         QStringLiteral("measurement_control"), QStringLiteral("source_purpose"), QStringLiteral("measurement"),
@@ -298,6 +300,9 @@ std::optional<Status> parseStatus(const QByteArray& json)
         || !counter(o, "input_limited_samples", s.inputLimitedSamples)) {
         return std::nullopt;
     }
+    if (o.contains(QStringLiteral("correction_control"))
+        && (!boolean(o, "correction_control", s.correctionControl)
+            || (s.correctionControl && !s.calibrationControl))) { return std::nullopt; }
     const QJsonValue faults = o.value(QStringLiteral("faults"));
     if (!faults.isObject() || faults.toObject().size() != 4) { return std::nullopt; }
     const QJsonObject f = faults.toObject();
@@ -338,6 +343,12 @@ std::optional<Acknowledgment> parseAcknowledgment(Operation operation, int httpS
     }
     const QString value = parsed->value(QStringLiteral("state")).toString();
     switch (operation) {
+    case Operation::EnableCorrection:
+        if (httpStatus == 200 && value == QLatin1String("correction_enable_accepted")) { return Acknowledgment::CorrectionEnabled; }
+        break;
+    case Operation::BypassCorrection:
+        if (httpStatus == 200 && value == QLatin1String("correction_bypass_accepted")) { return Acknowledgment::CorrectionBypassed; }
+        break;
     case Operation::Start:
         if (httpStatus == 202 && value == QLatin1String("start_requested")) { return Acknowledgment::StartRequested; }
         break;

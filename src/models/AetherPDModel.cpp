@@ -188,6 +188,14 @@ bool AetherPDModel::request(aetherpd::Operation operation)
         emit operationFailed(operation, Failure::InvalidRequest);
         return false;
     }
+    if ((operation == Operation::EnableCorrection || operation == Operation::BypassCorrection)
+        && (!observed || !observed->available || !observed->registered || !observed->correctionControl
+            || observed->keyed || observed->state == aetherpd::State::BlockedByRadioApd
+            || observed->calibrationState == aetherpd::CalibrationState::Armed
+            || observed->calibrationState == aetherpd::CalibrationState::Running)) {
+        emit operationFailed(operation, Failure::InvalidRequest);
+        return false;
+    }
     if ((operation == Operation::ArmCalibration || operation == Operation::ArmMeasurement)
         && (!observed || !observed->available || !observed->registered
             || observed->keyed || !observed->calibrationControl

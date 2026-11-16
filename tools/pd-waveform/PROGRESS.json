@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T08:58:54.351431+00:00",
+  "updated_utc": "2026-11-16T09:15:37.869216+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Add fixed idle-only correction selection through the authenticated owned session and desktop, fail closed across source/session changes, then separately invoke matched bounded OFF/ON runs and recheck their retained IQ. No automatic RF key or source rearm. Preserve all other unfinished P1\u2013P10 work.",
+  "next_action": "Use existing upgrade transaction with separately pinned previous/candidate keys. Previous signed release and public key are retained; its discarded private key is not required. Verify a new signed candidate, then qualify normal operator-approved upgrade, idle selection, separately keyed OFF/ON captures and independent raw-IQ recheck. Preserve all other unfinished P1\u2013P10 work.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2463,5 +2463,10 @@
     "radio_changed": false,
     "live_raw_iq_pending": true,
     "comparison_control_gap": "No ordinary-user correction-OFF selector; native startup env only."
+  },
+  "correction_selection": {
+    "status": "native_shim_desktop_component_checks_passed_not_installed",
+    "evidence": "tools/pd-waveform/CORRECTION-SELECTION-QUALIFICATION.json",
+    "installed": false
   }
 }

@@ -127,10 +127,10 @@ int main(int argc, char** argv)
         check(fixture.open(QIODevice::ReadOnly), "shared measured fixture missing");
         check(parseStatus(fixture.readAll()).has_value(), "measured Go HTTP status contract rejected");
     }
-    const std::array<Operation, 7> operations{Operation::Status, Operation::ArmCalibration,
-        Operation::CancelCalibration, Operation::Stop, Operation::RestoreReceive, Operation::Start, Operation::ArmMeasurement};
-    const std::array<const char*, 7> paths{"/v1/aetherpd/status", "/v1/aetherpd/calibration/arm",
-        "/v1/aetherpd/calibration/cancel", "/v1/aetherpd/stop", "/v1/aetherpd/receive/restore", "/v1/aetherpd/start", "/v1/aetherpd/measurement/arm"};
+    const std::array<Operation, 9> operations{Operation::Status, Operation::ArmCalibration,
+        Operation::CancelCalibration, Operation::Stop, Operation::RestoreReceive, Operation::Start, Operation::ArmMeasurement, Operation::EnableCorrection, Operation::BypassCorrection};
+    const std::array<const char*, 9> paths{"/v1/aetherpd/status", "/v1/aetherpd/calibration/arm",
+        "/v1/aetherpd/calibration/cancel", "/v1/aetherpd/stop", "/v1/aetherpd/receive/restore", "/v1/aetherpd/start", "/v1/aetherpd/measurement/arm", "/v1/aetherpd/correction/enable", "/v1/aetherpd/correction/bypass"};
     for (std::size_t i = 0; i < operations.size(); ++i) {
         const std::optional<Request> r = request(operations[i]);
         check(r && r->path == QLatin1String(paths[i]) && r->timeoutMs > 0 && r->timeoutMs <= (operations[i] == Operation::Start ? 22'000 : 8'000),
@@ -278,8 +278,22 @@ int main(int argc, char** argv)
     o[QStringLiteral("measurement_control")] = false;
     rejects(o, "measurement purpose admitted without capability");
 
+    QJsonObject correction = idle();
+    check(!parseStatus(encode(correction))->correctionControl, "legacy status advertised correction selection");
+    correction["correction_control"] = true;
+    check(parseStatus(encode(correction))->correctionControl, "correction capability lost");
+    for (const QJsonValue& bad : {QJsonValue(QJsonValue::Null), QJsonValue("true"), QJsonValue(1)}) {
+        correction["correction_control"] = bad;
+        rejects(correction, "malformed correction capability accepted");
+    }
+    correction["correction_control"] = true;
+    correction["calibration_control"] = false;
+    rejects(correction, "correction selection advertised without private source control");
+
     struct AckCase { Operation operation; int code; const char* body; Acknowledgment expected; };
-    const std::array<AckCase, 6> replies{{
+    const std::array<AckCase, 8> replies{{
+        {Operation::EnableCorrection, 200, R"({"state":"correction_enable_accepted"})", Acknowledgment::CorrectionEnabled},
+        {Operation::BypassCorrection, 200, R"({"state":"correction_bypass_accepted"})", Acknowledgment::CorrectionBypassed},
         {Operation::ArmMeasurement, 200, R"({"state":"measurement_arm_accepted"})", Acknowledgment::MeasurementArmAccepted},
         {Operation::Start, 202, R"({"state":"start_requested"})", Acknowledgment::StartRequested},
         {Operation::ArmCalibration, 200, R"({"state":"calibration_arm_accepted"})", Acknowledgment::ArmAccepted},

@@ -16,6 +16,7 @@ func aetherPDCalibrationHandler(n *Node, opcode byte) http.HandlerFunc {
 
 func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(context.Context, pdReceiveOriginal) (pdReceiveView, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		correction := pdCorrectionOpcode(opcode)
 		token := bearer(r)
 		n.mu.Lock()
 		authorized := n.checkTokenLocked(token)
@@ -35,7 +36,7 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			return
 		}
 		operationContext := r.Context()
-		if opcode == 'A' || opcode == 'M' {
+		if opcode == 'A' || opcode == 'M' || correction {
 			armContext, finish, err := process.calibrationIntents.beginArm(operationContext)
 			if errors.Is(err, errPDCalibrationStopped) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
@@ -54,6 +55,17 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			status, err := process.queryStatus(operationContext)
 			if err != nil || !status.Available || !status.Registered || !status.MeasurementControl {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "measurement_unavailable"})
+				return
+			}
+		}
+		if correction {
+			status, err := process.queryStatus(operationContext)
+			if err != nil || !status.Available || !status.Registered || !status.CorrectionControl {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "correction_unavailable"})
+				return
+			}
+			if status.Keyed || status.CalibrationState == "armed" || status.CalibrationState == "running" {
+				writeJSON(w, http.StatusConflict, map[string]string{"state": "correction_busy"})
 				return
 			}
 		}
@@ -76,6 +88,11 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			return
 		}
 		result, err := process.calibrate(operationContext, opcode)
+		if correction && (err != nil || operationContext.Err() != nil) {
+			process.Stop()
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "correction_unavailable"})
+			return
+		}
 		if (opcode == 'A' || opcode == 'M') && (err != nil || operationContext.Err() != nil) {
 			cancelFailedAetherPDArm(process)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
@@ -91,6 +108,9 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			log.Print("AetherPD: recorded owned PD receiver in receive-recovery journal")
 		}
 		if !n.checkToken(token) {
+			if correction {
+				process.Stop()
+			}
 			if (opcode == 'A' || opcode == 'M') && err == nil && result == 0 {
 				cancelFailedAetherPDArm(process)
 			}
@@ -115,6 +135,12 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 		}
 		if opcode == 'X' {
 			state = "calibration_cancel_accepted"
+		}
+		if correction {
+			state = "correction_bypass_accepted"
+			if opcode == '1' {
+				state = "correction_enable_accepted"
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"state": state})
 	}

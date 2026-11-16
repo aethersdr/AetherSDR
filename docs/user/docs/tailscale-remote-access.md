@@ -573,6 +573,15 @@ ADC headroom or calibrated output power.
    fundamental-derived PEP; the separately measured sample-peak reference is
    retained in the export. Raw IQ levels are not calibrated dBFS or watts.
 
+For a matched comparison, use **Bypass correction** in the AetherPD window
+before arming the uncorrected measurement. Then use **Enable correction** and
+prepare a separate corrected measurement with the same frequency, power and
+feedback settings. These controls require a supporting installed service,
+fresh idle status and no armed source. They never key or arm the radio.
+A change invalidates the previous fit and measurement preparation; wait for
+observed status before continuing. The selection applies to the current
+AetherPD session; a newly started session enables correction by default.
+
 No source arm or transmission is retried automatically. A changed source,
 frequency, power, session, band-plan selection or revoked original automation
 input cancels the preparation or run. A new receive check is needed after

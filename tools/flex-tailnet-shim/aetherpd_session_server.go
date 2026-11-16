@@ -66,7 +66,7 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 	}
 	hello := "PDTALK02"
 	if testOperation != nil {
-		hello = "PDTALK04"
+		hello = "PDTALK05"
 	}
 	if err := pdWriteAll(conn, []byte(hello)); err != nil {
 		return err
@@ -151,6 +151,8 @@ func pdSessionOperations(n *Node) pdSessionOperation {
 		'S': aetherPDStatusHandler(n, n.pdProcess.queryStatus),
 		'A': aetherPDCalibrationHandler(n, 'A'),
 		'M': aetherPDCalibrationHandler(n, 'M'),
+		'0': aetherPDCalibrationHandler(n, '0'),
+		'1': aetherPDCalibrationHandler(n, '1'),
 		'X': aetherPDCalibrationHandler(n, 'X'),
 		'R': aetherPDReceiveRestoreHandler(n),
 		'T': func(w http.ResponseWriter, r *http.Request) {

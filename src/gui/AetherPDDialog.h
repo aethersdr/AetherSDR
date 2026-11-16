@@ -67,6 +67,8 @@ private:
     QPushButton* m_measurementOpen{nullptr};
     QPushButton* m_refresh{nullptr};
     QPushButton* m_start{nullptr};
+    QPushButton* m_enableCorrection{nullptr};
+    QPushButton* m_bypassCorrection{nullptr};
     QPushButton* m_arm{nullptr};
     QPushButton* m_cancel{nullptr};
     QPushButton* m_stop{nullptr};

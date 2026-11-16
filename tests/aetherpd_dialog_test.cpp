@@ -110,6 +110,28 @@ int main(int argc, char** argv)
     network.last->complete(200, idleBody);
     ok &= check(!button(*dialog, "pdStart")->isEnabled() && button(*dialog, "pdArm")->isEnabled(),
                 "fresh registered state gates calibration and duplicate startup");
+    ok &= check(!button(*dialog, "pdEnableCorrection")->isEnabled()
+        && !button(*dialog, "pdBypassCorrection")->isEnabled()
+        && !button(*dialog, "pdBypassCorrection")->accessibleDescription().isEmpty(),
+        "legacy correction controls were active or lacked an unavailable reason");
+    QJsonObject selectable = QJsonDocument::fromJson(idleBody).object();
+    selectable["correction_control"] = true;
+    button(*dialog, "pdRefresh")->click();
+    network.last->complete(200, QJsonDocument(selectable).toJson());
+    ok &= check(button(*dialog, "pdBypassCorrection")->isEnabled()
+        && !button(*dialog, "pdEnableCorrection")->isEnabled(), "correction choice did not follow observed state");
+    button(*dialog, "pdBypassCorrection")->click();
+    ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v1/aetherpd/correction/bypass")
+        && !button(*dialog, "pdBypassCorrection")->isEnabled(), "bypass click did not use bounded model request");
+    network.last->complete(200, R"({"state":"correction_bypass_accepted"})");
+    ok &= check(label("pdState") == QStringLiteral("Status unknown"), "bypass ACK became observed state");
+    selectable["correction_enabled"] = false; selectable["state"] = "disabled";
+    network.last->complete(200, QJsonDocument(selectable).toJson());
+    ok &= check(button(*dialog, "pdEnableCorrection")->isEnabled()
+        && !button(*dialog, "pdBypassCorrection")->isEnabled(), "bypass status lost inverse control");
+    button(*dialog, "pdEnableCorrection")->click();
+    network.last->complete(200, R"({"state":"correction_enable_accepted"})");
+    network.last->complete(200, idleBody);
     QJsonObject measurementStatus = QJsonDocument::fromJson(idleBody).object();
     measurementStatus[QStringLiteral("measurement_control")] = true;
     measurementStatus[QStringLiteral("source_purpose")] = QStringLiteral("measurement");

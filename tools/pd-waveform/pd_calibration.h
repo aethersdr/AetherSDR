@@ -18,7 +18,8 @@ struct pd_calibration {
     unsigned char opcode, result;
 };
 struct pd_calibration_reply { enum pd_calibration_result result; int applied; };
-// Fixed private commands: 'A' calibrate, 'M' measure, or 'X' cancel, then BE64 nonce.
+// Fixed commands: 'A' calibrate, 'M' measure, 'X' cancel, '0' bypass or '1' correct,
+// then BE64 nonce. Correction selection never arms a source or extends its life.
 // Measurement selects the same bounded tones without invalidating the PA model.
 // Duplicate requests return their original result without extending an arm.
 struct pd_calibration_reply pd_calibration_command(struct pd_calibration* state,

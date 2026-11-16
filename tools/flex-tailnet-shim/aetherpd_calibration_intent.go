@@ -10,8 +10,9 @@ var errPDCalibrationStopped = errors.New("AetherPD session is stopped")
 
 type pdCalibrationArmIntent struct{ cancel context.CancelFunc }
 
-// A pending arm spans observation and the native request. Cancel invalidates
-// that intent before sending X, so an older snapshot cannot re-arm afterward.
+// Source arms and correction selection share one pending mutation from
+// observation through the native reply. Cancel invalidates that intent before
+// sending X, so an older observation cannot dispatch a new mutation afterward.
 type pdCalibrationIntents struct {
 	mu      sync.Mutex
 	pending *pdCalibrationArmIntent
