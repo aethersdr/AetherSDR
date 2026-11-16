@@ -16,8 +16,9 @@ name: Update Manifest
 #          key, verifies each signature against packaging/update-signing.pub,
 #          puts the bundles where manifest-v2.json names them (the release, or
 #          updates.aethersdr.com with UPDATE_PAYLOAD_BASE=r2) and puts both
-#          manifests on updates.aethersdr.com (an R2 bucket written by this
-#          job alone).
+#          manifests on updates.aethersdr.com (an R2 bucket written only
+#          by jobs in the update-signing environment: this one and Release
+#          Offload's, which moves the files people don't download there).
 #
 # A dispatch with publish=false is a dry run: build only, the outputs kept as
 # a workflow artifact.

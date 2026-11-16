@@ -41,6 +41,7 @@
 #include "ModeFilterPresets.h"
 #include "DisplaySquelchRouting.h"
 #include "WfmApplet.h"
+#include "PureSignalApplet.h"
 #include "BandApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
@@ -7851,8 +7852,6 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(tunerMaxWatts(radioMaxWatts, selection),
-                                                   selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };
@@ -8406,6 +8405,15 @@ void MainWindow::announceAntennaChoiceRefused(bool tx)
                          << "antenna choice refused: this radio publishes no"
                          << "antenna port to choose";
     showUnsupportedControlNotice();
+}
+
+
+void MainWindow::wirePureSignalApplet(IRadioBackend* backend)
+{
+    // The applet binds only to an advertised extension and otherwise unbinds.
+    if (m_appletPanel && m_appletPanel->pureSignalApplet()) {
+        m_appletPanel->pureSignalApplet()->setBackend(backend);
+    }
 }
 
 } // namespace AetherSDR

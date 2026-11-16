@@ -1,6 +1,6 @@
 ---
 name: tag-release
-description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store submission is committed, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows and the signing runs, verifies the twenty-four-asset set on the files, reads the Store publish step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
+description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store submission is committed, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows, the signing runs and Release Offload, verifies the assets on the files (the fourteen-file page and what Release Offload moved to updates.aethersdr.com), reads the Store publish step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
 ---
 
 # Tag the release — tag, publish, watch, verify, announce
@@ -15,11 +15,14 @@ which). Nine deliverables, in this order:
    the title that equals the tag's first line and the derived notes.
 4. **The three build workflows and the signing runs watched to conclusion** —
    re-run or dispatched by hand where the record says they stall.
-5. **The asset set verified on the files** — twenty-four assets (twenty-three
-   for a hotfix), every `.asc` postdating what it signs, `SHA256SUMS.txt` (which
-   now lists the PDF manual, RFC #6964) and one artifact signature actually
-   checked with `gpg`. Releases through v26.11.2 carry 25/24 assets, the
-   manual's `.pdf.asc` among them.
+5. **The asset set verified on the files** — from v26.11.4, fourteen files on
+   the page and, once **Release Offload** has run, the per-file `.asc`
+   signatures, the five symbol archives and the `.msixupload` on
+   `updates.aethersdr.com/releases/vX.Y.Z/` (RFC #6964). Every `.asc` still on
+   the page postdates what it signs, `SHA256SUMS.txt` lists the PDF manual,
+   and one artifact signature is actually checked with `gpg`. v26.11.3 keeps
+   all twenty-four assets (twenty-three for a hotfix) on the page; releases
+   through v26.11.2 carry 25/24, the manual's `.pdf.asc` among them.
 6. **The Microsoft Store step read** — production submission committed (or a
    draft staged when the switch is off), or the reason it failed
    and the recovery, stated.
@@ -370,7 +373,7 @@ tag push to the asset's `created_at`:
 | Apple Silicon DMG | 15–19 min |
 | Windows setup, ZIP and `.msixupload` | 27–40 min |
 | Intel DMG | 30–42 min (July's Intel legs took 1.7–2 h) |
-| PDF manual and its `.asc` | no record yet: started by the release, not the tag (below) |
+| PDF manual | no record yet: started by the release, not the tag (below) |
 
 Poll every few minutes; read `conclusion`, not `status`. The Intel leg is the
 one that fails: v26.7.4.1's succeeded on attempt 2 a day later; v26.7.2's
@@ -396,6 +399,30 @@ branch, so `gh run list --branch vX.Y.Z` never shows them:
 ```sh
 gh run list --workflow sign-release.yml --limit 6 --json event,status,conclusion,createdAt,updatedAt,url
 ```
+
+**Release Offload** (`release-offload.yml`, from v26.11.4) follows each
+signing run that succeeded. Its read-only `plan` job asks nothing until the
+release is settled: every build and Docs run for the tag finished, no
+signing run unfinished, `SHA256SUMS.txt` newer than every build artifact.
+Then its `offload` job parks at the **update-signing** gate, one approval
+per release, which the maintainer gives. It copies the per-file `.asc`
+signatures (not `SHA256SUMS.txt.asc`), the symbol archives and the
+`.msixupload` to `updates.aethersdr.com/releases/vX.Y.Z/` and checks each
+one. Only after every copy is checked does it delete them from the page,
+which ends at fourteen files. If a copy fails, the page is left whole. A
+re-sign or build re-run after it re-attaches signatures, and the next
+signing run asks again. To list what it would move, or to finish a run that
+stopped partway:
+
+```sh
+gh workflow run release-offload.yml -f tag=vX.Y.Z -f dry_run=true   # lists, writes nothing
+gh workflow run release-offload.yml -f tag=vX.Y.Z -f dry_run=false  # moves, after approval
+```
+
+Its patch bundles never reach the page once `UPDATE_PAYLOAD_BASE` is `r2`:
+Update Manifest puts them on `updates.aethersdr.com` itself. Bundles on a
+v26.11.4-or-later page mean the variable was unset, and the offload leaves
+them, because `manifest-v2.json` names them there.
 
 Match `createdAt` to the build completions: the first run starts seconds
 after AppImage concludes and spends its time in the wait step until the
@@ -482,7 +509,11 @@ report. What it checks, and what you check by hand where it cannot run:
   Store package" steps; the signing runs since the tag push and whether
   one succeeded.
 - **The set** (`references/asset-manifest.md`; v26.9.3 and v26.9.4 have
-  the first fifteen, before the manual was attached to releases):
+  the first fifteen, before the manual was attached to releases). From
+  v26.11.4 every `.asc` below except `SHA256SUMS.txt.asc`, and the
+  `.msixupload`, are on `updates.aethersdr.com/releases/vX.Y.Z/` once
+  Release Offload has run, with the symbol archives; the script checks them
+  there by size and downloads the signatures it verifies from there:
   - `AetherSDR-vX.Y.Z-x86_64.AppImage` and `-aarch64.AppImage`, each with `.asc`
   - `AetherSDR-vX.Y.Z-x86_64.tar.zst` and `-aarch64.tar.zst`, each with `.asc`
     (the Linux release tarballs: AppImage builds them from the image, Update
@@ -495,8 +526,9 @@ report. What it checks, and what you check by hand where it cannot run:
   - `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` and `-Windows-x64-portable.zip`, each with `.asc`
   - `AetherSDR-vX.Y.Z-source.tar.gz` with `.asc`
   - `SHA256SUMS.txt` with `.asc`
-  - `AetherSDR-Manual-vX.Y.Z.pdf` with `.asc` (made, signed and attached by
-    **Docs**, not Sign Release Artifacts; deliberately not in `SHA256SUMS.txt`)
+  - `AetherSDR-Manual-vX.Y.Z.pdf` (made and attached by **Docs**, listed in
+    `SHA256SUMS.txt` with no `.asc` of its own; through v26.11.2 Docs signed
+    it apart and the sums left it out)
   - `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` — absent for a hotfix
 
   Every `.asc` on the six CI-built binaries postdates its binary (a re-run
@@ -507,15 +539,19 @@ report. What it checks, and what you check by hand where it cannot run:
   `.msixupload` version is the release version plus `.0`: v26.9.2's read
   `26.9.205.0` (the workflow run counter, fixed in #5467) and v26.7.4.1's
   `26.7.4.1` (a hotfix number the Store cannot take; a hotfix now produces
-  none). Anything else on the release is a `WARN` to explain.
+  none). Patch bundles on the page are `INFO` through v26.11.3 and a `WARN`
+  from v26.11.4. Files Release Offload has not moved yet are a `WARN`: approve
+  its run. A signature or the `.msixupload` on neither the page nor
+  `updates.aethersdr.com` is a `FAIL`. Anything else on the release is a
+  `WARN` to explain.
 - **Actually verify, do not list.** The script downloads `SHA256SUMS.txt`,
   its `.asc`, the source tarball and the x86_64 AppImage (`--all` downloads
   every signable), imports `docs/RELEASE-SIGNING-KEY.pub.asc` (fingerprint
   `B765 6E6B CB2E 022B 79F0 F97B 5578 D10E 3D59 18F3`), runs `gpg --verify
   SHA256SUMS.txt.asc SHA256SUMS.txt`, recomputes SHA-256 over every
   downloaded file against `SHA256SUMS.txt`, runs `gpg --verify` on one
-  artifact's `.asc` and on the manual's, checks that `SHA256SUMS.txt` names exactly the seven
-  files, and opens the tarball to read `AetherSDR-vX.Y.Z/CMakeLists.txt`'s
+  artifact's `.asc` (and on the manual's through v26.11.2), checks that
+  `SHA256SUMS.txt` names exactly the ten files (nine through v26.11.2), and opens the tarball to read `AetherSDR-vX.Y.Z/CMakeLists.txt`'s
   `project(AetherSDR VERSION …)` — the pre-#5029 tarballs were archived from
   `main`, not the tag. Where `gpg` is absent the signature checks print
   `SKIP` with the reason, and the report says they did not run.
@@ -656,10 +692,11 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 | macOS DMG | <url> | 1 | success | Sign DMG / Notarize DMG success on both legs |
 | Sign Release Artifacts | <url> | — | success | workflow_run, after AppImage |
 | Sign Release Artifacts | <url> | — | skipped | workflow_run, Windows red |
-| Docs | <url> | 1 | success | release: published; manual PDF signed and attached |
+| Docs | <url> | 1 | success | release: published; manual PDF attached |
+| Release Offload | <url> | — | success | approved <time>; 15 files moved (14 for a hotfix) / n/a (before v26.11.4) |
 Re-run or dispatched by hand: <what, when> / none.
 
-### Assets (24 / 23 for a hotfix)
+### Assets (from v26.11.4: 14 on the page + 15 on updates.aethersdr.com, 14 for a hotfix; before: 24 / 23 for a hotfix)
 - [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (source tarball and SHA256SUMS: same upload as their .asc)
 - … one line per expected asset, ticked or **missing** …
 - [x] AetherSDR-X.Y.Z.0-Windows-x64.msixupload — version checked / n/a (hotfix)

@@ -2351,6 +2351,18 @@ add_test(NAME client_eq_smoothing_test COMMAND client_eq_smoothing_test)
 set_tests_properties(client_eq_smoothing_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
 
+# ClientFinalLimiter, the look-ahead brickwall at the end of the TX chain: no
+# sample above the ceiling at any look-ahead without the safety clip, the delay
+# and reported latency are the look-ahead, the gain ramps instead of stepping,
+# and a look-ahead or enable change fades the delay tap. Standalone DSP.
+add_executable(client_final_limiter_test
+    tests/client_final_limiter_test.cpp
+    src/core/ClientFinalLimiter.cpp
+)
+target_include_directories(client_final_limiter_test PRIVATE src)
+target_link_libraries(client_final_limiter_test PRIVATE Qt6::Core)
+add_test(NAME client_final_limiter_test COMMAND client_final_limiter_test)
+
 add_executable(client_comp_test
     tests/client_comp_test.cpp
     src/core/ClientComp.cpp
@@ -7281,6 +7293,7 @@ add_executable(mqtt_radio_state_test
     src/core/MqttRadioState.cpp
     src/models/TransmitModel.cpp
     src/core/ClientQuindarTone.cpp
+    src/core/TxOffDelaySettings.cpp
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
@@ -8110,6 +8123,14 @@ if(Qt6WebSockets_FOUND)
     target_include_directories(tci_trxmap_test PRIVATE src)
     target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_trxmap_test COMMAND tci_trxmap_test)
+
+    # Socket-free: the tx_sensors gate (TciServer::txSensorsKeyed) against the
+    # real RadioModel, and the TX ownership reset on disconnect. No TciServer
+    # is started; no listener, client or radio.
+    add_executable(tci_tx_sensors_gate_test tests/tci_tx_sensors_gate_test.cpp)
+    target_include_directories(tci_tx_sensors_gate_test PRIVATE src tests)
+    target_link_libraries(tci_tx_sensors_gate_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_tx_sensors_gate_test COMMAND tci_tx_sensors_gate_test)
 
     add_executable(tci_automation_test tests/tci_automation_test.cpp)
     target_include_directories(tci_automation_test PRIVATE src tests)
@@ -10135,6 +10156,25 @@ add_executable(hl2_tx_alc_test
 target_include_directories(hl2_tx_alc_test PRIVATE src)
 add_test(NAME hl2_tx_alc_test COMMAND hl2_tx_alc_test)
 
+# PureSignal's control loop, driven tick by tick, and the 0x0a/DDC facts it
+# relies on. Socket-free; also drives a real, unkeyed TXA channel offline.
+add_executable(hl2_puresignal_test
+    tests/hl2_puresignal_test.cpp
+)
+target_include_directories(hl2_puresignal_test PRIVATE src)
+target_link_libraries(hl2_puresignal_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_puresignal_test COMMAND hl2_puresignal_test)
+
+# Private disk profile, child-process restart, injected link edges and applet
+# error presentation. MetisClient is never started: no socket or peer.
+add_executable(hl2_puresignal_state_test tests/hl2_puresignal_state_test.cpp
+    src/gui/PureSignalApplet.cpp src/gui/DragValuePopup.cpp src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp ${THEME_TEST_RESOURCES})
+target_include_directories(hl2_puresignal_state_test PRIVATE src tests)
+target_link_libraries(hl2_puresignal_state_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME hl2_puresignal_state_test COMMAND hl2_puresignal_state_test)
+
+
 add_executable(hl2_dsp_readback_test
     tests/hl2_dsp_readback_test.cpp
 )
@@ -11589,6 +11629,7 @@ set(AETHER_SETTINGS_CONSUMERS
     squelch_level_scale_test
     hl2_pan_create_async_test
     hl2_session_memory_test
+    hl2_puresignal_state_test
     anan_backend_test
     anan_noise_blanker_readback_test
     noise_blanker_kind_model_test

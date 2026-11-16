@@ -780,6 +780,7 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
         QJsonObject o;
         o["enabled"]      = lim->isEnabled();
         o["ceilingDb"]    = lim->ceilingDb();
+        o["lookaheadMs"]  = lim->lookaheadMs();
         o["outputTrimDb"] = lim->outputTrimDb();
         o["dcBlock"]      = lim->dcBlockEnabled();
         preset["finalLimiter"] = o;
@@ -909,6 +910,7 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
         const auto o = preset.value("finalLimiter").toObject();
         lim->setEnabled(jbool(o, "enabled", lim->isEnabled()));
         lim->setCeilingDb(jnum(o, "ceilingDb", lim->ceilingDb()));
+        lim->setLookaheadMs(jnum(o, "lookaheadMs", lim->lookaheadMs()));
         lim->setOutputTrimDb(jnum(o, "outputTrimDb", lim->outputTrimDb()));
         lim->setDcBlockEnabled(jbool(o, "dcBlock", lim->dcBlockEnabled()));
     }

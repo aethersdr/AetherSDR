@@ -20,6 +20,7 @@
 
 #include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
+#include "core/TxOffDelaySettings.h"
 #include "RttyDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
@@ -1376,6 +1377,7 @@ MainWindow::MainWindow(QWidget* parent)
         }
         return QString();
     });
+    m_radioModel.transmitModel().setTxOffDelayMs(TxOffDelaySettings::delayMs());
     // QUIN chip flash via signal hop — see TransmitModel::quindarActiveChanged.
     // Strip is created lazily; the lambda checks for existence each fire so
     // we don't need to re-connect when the strip pops up.
@@ -7698,6 +7700,8 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
         connect(backend, &IRadioBackend::audioFrameReady,
                 m_audio, &AudioEngine::feedPcmFrame);
     }
+
+    wirePureSignalApplet(backend);
 
     // HL2 only: opening its client-side WDSP chains measures FFTW plans, ~20 s
     // without cached wisdom, so the operator needs a visible explanation. The
