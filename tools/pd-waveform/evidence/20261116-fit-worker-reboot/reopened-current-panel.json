@@ -1,0 +1,212 @@
+{
+  "close_stale": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdDone"
+  },
+  "open_current": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "openAetherPD"
+  },
+  "raw_tree_receipt_sha256": "9eba3bf75b9a3d8baf32e2b83be1a901b22ecbe3a493f459f0a0b1c47a098120",
+  "relevant_controls": [
+    {
+      "objectName": "pdState",
+      "class": "QLabel",
+      "enabled": true,
+      "visible": true,
+      "value": "Status unknown"
+    },
+    {
+      "objectName": "pdDetail",
+      "class": "QLabel",
+      "enabled": true,
+      "visible": true
+    },
+    {
+      "objectName": "pdReceipt",
+      "class": "QLabel",
+      "enabled": true,
+      "visible": true
+    },
+    {
+      "objectName": "pdMessage",
+      "class": "QLabel",
+      "enabled": true,
+      "visible": true,
+      "value": "No current status is available. The request may have failed or its reply may have been lost; controls are not retried automatically."
+    },
+    {
+      "objectName": "pdIqSelection",
+      "class": "QComboBox",
+      "enabled": true,
+      "visible": true,
+      "value": "Select a feedback pan with IQ assigned\u2026",
+      "accessibleDescription": "Choose an owned feedback pan. Assign its IQ channel in the pan's DAX panel first. This choice sends no radio commands."
+    },
+    {
+      "objectName": "pdIqObserved",
+      "class": "QLabel",
+      "enabled": true,
+      "visible": true,
+      "value": "No confirmed native IQ binding. Choose a pan, then start AetherPD."
+    },
+    {
+      "objectName": "pdStart",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Start AetherPD",
+      "toolTip": "Select an owned pan with IQ Ch 1\u20134 assigned, authenticate this radio session, and stop any running AetherPD session before starting.",
+      "accessibleDescription": "Select an owned pan with IQ Ch 1\u20134 assigned, authenticate this radio session, and stop any running AetherPD session before starting."
+    },
+    {
+      "objectName": "pdStop",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Stop AetherPD"
+    },
+    {
+      "objectName": "pdArm",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Arm calibration",
+      "toolTip": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+      "accessibleDescription": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off."
+    },
+    {
+      "objectName": "pdCancel",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Cancel calibration"
+    },
+    {
+      "objectName": "pdRestore",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Restore receive"
+    },
+    {
+      "objectName": "pdRefresh",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Refresh"
+    },
+    {
+      "objectName": "pdMeasurement",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Measure linearity\u2026"
+    },
+    {
+      "objectName": "pdEnableCorrection",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Enable correction",
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    {
+      "objectName": "pdBypassCorrection",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Bypass correction",
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    {
+      "objectName": "pdInstallState",
+      "class": "QLabel",
+      "enabled": true,
+      "visible": true,
+      "value": "No update prepared"
+    },
+    {
+      "objectName": "pdInstallPlan",
+      "class": "QPlainTextEdit",
+      "enabled": true,
+      "visible": true,
+      "value": "First-install development package 0.0.0-guardian.e8d68ad4b \u2014 not qualified for production.\nDevelopment package 0.0.0-batch.489b1ed5f \u2014 not qualified for production.\nChoose Prepare update to verify the package and review its plan. Preparation does not change the radio.\nPrepare first installation is for a radio without a managed AetherPD installation. Review and approve its plan before any upload. Check saved installation only reads the previous attempt's outcome.",
+      "accessibleDescription": "Read-only target, changes and authenticated package identifiers to review before approving."
+    },
+    {
+      "objectName": "pdInstallCancel",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Cancel update",
+      "toolTip": "No pending update can be canceled in this connection.",
+      "accessibleDescription": "No pending update can be canceled in this connection."
+    },
+    {
+      "objectName": "pdInstallApprove",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Approve update",
+      "toolTip": "A verified plan for this connection and an idle transmitter are required.",
+      "accessibleDescription": "A verified plan for this connection and an idle transmitter are required."
+    },
+    {
+      "objectName": "pdDone",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Done"
+    },
+    {
+      "objectName": "pdInstallPrepare",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Prepare update"
+    },
+    {
+      "objectName": "pdInstallFirst",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Prepare first installation",
+      "toolTip": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first.",
+      "accessibleDescription": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first."
+    },
+    {
+      "objectName": "pdInstallCheck",
+      "class": "QPushButton",
+      "enabled": true,
+      "visible": true,
+      "value": "Check saved installation"
+    },
+    {
+      "objectName": "pdInstallSaved",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Prepare saved attempt",
+      "toolTip": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first.",
+      "accessibleDescription": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first."
+    },
+    {
+      "objectName": "pdInstallCleanup",
+      "class": "QPushButton",
+      "enabled": false,
+      "visible": true,
+      "value": "Remove temporary installer packages",
+      "toolTip": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required.",
+      "accessibleDescription": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."
+    }
+  ]
+}
