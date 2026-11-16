@@ -1,0 +1,6 @@
+--- FAIL: TestPDCaptureBatchSessionCancellation (0.00s)
+    --- FAIL: TestPDCaptureBatchSessionCancellation/H (0.00s)
+        aetherpd_capture_batch_test.go:231: cancel retired session or lost pending slot
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.008s
+FAIL

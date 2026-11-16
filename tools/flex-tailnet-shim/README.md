@@ -187,6 +187,38 @@ provisioning and its production installer remain integration work.
 
 ### AetherPD IQ snapshots (development)
 
+The batch capture candidate adds authenticated `POST /v4/aetherpd/capture/{count}`
+for one to four consecutive 16,384-sample frames from an already-keyed, ready
+measurement source. Its response contains one random `capture_id` and an ordered
+`frames` array of v3-style manifests. Each frame retains the same capture ID,
+source, correction state, tone profile and feedback binding. Fetch samples with
+`GET /v4/aetherpd/capture/{capture_id}/{frame}/{chunk}`, with zero-based frame
+and chunk indices (at most 4 frames and 32 chunks per frame). Chunk replies add
+`frame_index` to the existing chunk schema. Neither endpoint keys, tunes, rearms
+the source nor extends any RF deadline. Acquisition proceeds on the radio without
+waiting for client downloads. The shim publishes the manifest only after
+every requested frame has passed validation; partial success is never returned.
+
+This path requires private session `PDTALK08`; older sessions return 501 without
+falling back. `PDCMD004` adds a BE16 argument to the 16-byte command header:
+`G` takes a frame count 1–4; `H` takes a linear **public chunk index** 0–127
+(distinct from the native descriptor's sample offset). Replies remain bounded
+to 8 KiB. Native retrieval has a four-second deadline; immutable shim snapshots
+expire ten seconds after publication or immediately on process retirement or
+replacement by a new batch. Abandoned observation requests retain the session
+and bounded reply slots until drained. Credential revocation and owner changes
+are checked again before returning data. Desktop integration and installed RF
+qualification of batch capture remain pending.
+
+The native-to-HTTP fixture is opt-in and uses only an inherited unnamed Unix
+socket. From this module directory, compile
+`cc -std=c11 -Wall -Wextra -Werror ../pd-waveform/capture_batch_fixture.c ../pd-waveform/pd_capture.c ../pd-waveform/pd_status.c -o /tmp/pd-batch-fixture`,
+then run
+`AETHER_PD_CAPTURE_BATCH_FIXTURE=/tmp/pd-batch-fixture go test -mod=vendor -race -run '^TestPDCaptureBatch' .`.
+Without the environment variable, Go skips only the explicit native fixture
+tests. `BATCH-CAPTURE-SHIM-QUALIFICATION.json` under `tools/pd-waveform` retains
+the executed fixture, mutation and build evidence.
+
 An authenticated `POST /v1/aetherpd/capture` collects 16,384 samples from the
 owned DSP's existing raw DAX IQ stream. It returns a capture manifest; fetch
 its 32 bounded chunks with `GET /v1/aetherpd/capture/{capture_id}/{chunk}`.

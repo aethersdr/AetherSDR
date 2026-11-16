@@ -9,6 +9,7 @@ import (
 )
 
 type aetherPDProcess struct {
+	captureBatches     pdCaptureBatchStore
 	captures           pdCaptureStore
 	calibrationIntents pdCalibrationIntents
 	receiveJournal     *pdReceiveJournal
@@ -17,6 +18,7 @@ type aetherPDProcess struct {
 func (p *aetherPDProcess) Stop() {
 	if p != nil {
 		p.captures.close()
+		p.captureBatches.close()
 		p.calibrationIntents.close()
 	}
 }
@@ -52,4 +54,8 @@ func runPDReceiveGuardianMode() bool { return false }
 
 func (*aetherPDProcess) calibrateTone(context.Context, uint32) (int, error) {
 	return 0, errors.New("on-radio AetherPD requires Linux")
+}
+
+func (*aetherPDProcess) readNativeCaptureBatch(context.Context, uint32) ([]aetherPDIQCapture, error) {
+	return nil, errors.New("on-radio IQ capture requires Linux")
 }

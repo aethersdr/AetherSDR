@@ -1,0 +1,14 @@
+{
+  "linux-armv7": {
+    "bytes": 21889184,
+    "sha256": "d0451d9efb50e99482795ea8908d623caf5dc18fb992434d9ce6a8c46944bb11"
+  },
+  "linux-arm64": {
+    "bytes": 21495968,
+    "sha256": "ca79136849ff69782dd39a0d78bea9a2298985950b84cdff16f2716fe936d5bf"
+  },
+  "darwin-arm64-test-compile": {
+    "bytes": 32439090,
+    "sha256": "7fdc3133354459e9582c803f2c2eccef158d80cfbc4cd76583ee06371b0cd54a"
+  }
+}

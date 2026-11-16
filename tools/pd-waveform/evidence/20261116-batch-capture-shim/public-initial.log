@@ -1,0 +1,4 @@
+# github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim [github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.test]
+./aetherpd_capture_batch_test.go:135:179: cannot use make(chan struct{}) (value of type chan struct{}) as *pdSessionStart value in assignment
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim [build failed]
+FAIL

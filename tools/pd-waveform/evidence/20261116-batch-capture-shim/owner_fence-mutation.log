@@ -1,0 +1,6 @@
+--- FAIL: TestPDCaptureBatchPublicOwnerFence (0.00s)
+    --- FAIL: TestPDCaptureBatchPublicOwnerFence/successor (0.00s)
+        aetherpd_capture_batch_test.go:203: retired owner returned batch 200
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.008s
+FAIL

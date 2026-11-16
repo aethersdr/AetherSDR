@@ -273,7 +273,8 @@ source cancellation, or a per-frame collection timeout invalidates an unfinished
 batch. Completed batches survive normal unkey and remain readable only within
 five seconds of batch start. A newer batch replaces the previous one.
 
-This native component is not yet exposed by the shim HTTP API or used by the
-desktop. `BATCH-CAPTURE-NATIVE-QUALIFICATION.json` records component tests and
-the remaining shim, desktop, timing and installed-RF qualification work. The
-installed release still uses sequential single-frame capture.
+The shim candidate exposes this through its authenticated v4 capture API and
+version-8 private session. The desktop has not yet switched to batch acquisition.
+`BATCH-CAPTURE-NATIVE-QUALIFICATION.json` records native component tests;
+`BATCH-CAPTURE-SHIM-QUALIFICATION.json` records shim tests and remaining work.
+The installed release still uses sequential single-frame capture.

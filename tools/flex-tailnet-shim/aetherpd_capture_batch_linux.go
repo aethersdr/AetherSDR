@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-const aetherPDCaptureBatchMax = 4
 const aetherPDCaptureBatchHeader = 104
 
 type pdNativeCaptureQuery func(context.Context, byte, uint64, uint32) ([]byte, uint64, error)
@@ -23,14 +22,6 @@ func parseAetherPDCaptureBatch(data []byte, id uint64, offset, count uint32) (ae
 		return aetherPDIQCapture{}, 0, errors.New("invalid private IQ batch")
 	}
 	return parseAetherPDCapturePayload(data, id, offset, aetherPDCaptureBatchHeader)
-}
-
-func samePDCaptureBatchSource(a, b aetherPDIQCapture) bool {
-	return a.ID == b.ID && a.CenterHz == b.CenterHz && a.Generation == b.Generation &&
-		a.Rate == b.Rate && a.Stream == b.Stream && a.Flags == b.Flags &&
-		a.Binding != nil && b.Binding != nil && *a.Binding == *b.Binding &&
-		a.ToneConfig != nil && b.ToneConfig != nil && *a.ToneConfig == *b.ToneConfig &&
-		a.Measurement != nil && b.Measurement != nil && *a.Measurement == *b.Measurement
 }
 
 func (p *aetherPDProcess) readNativeCaptureBatch(ctx context.Context, count uint32) ([]aetherPDIQCapture, error) {

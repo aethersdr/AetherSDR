@@ -1,0 +1,61 @@
+=== RUN   TestPDCaptureBatchPublicLifecycle
+--- PASS: TestPDCaptureBatchPublicLifecycle (0.01s)
+=== RUN   TestPDCaptureBatchStoreInterrupted
+=== RUN   TestPDCaptureBatchStoreInterrupted/close
+=== RUN   TestPDCaptureBatchStoreInterrupted/cancel
+=== RUN   TestPDCaptureBatchStoreInterrupted/owner_exit
+=== RUN   TestPDCaptureBatchStoreInterrupted/partial
+=== RUN   TestPDCaptureBatchStoreInterrupted/mixed
+--- PASS: TestPDCaptureBatchStoreInterrupted (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/close (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/cancel (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/owner_exit (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/partial (0.00s)
+    --- PASS: TestPDCaptureBatchStoreInterrupted/mixed (0.00s)
+=== RUN   TestPDCaptureBatchPublicOwnerFence
+=== RUN   TestPDCaptureBatchPublicOwnerFence/credential
+2026/11/16 12:05:15 api: refused POST /v4/aetherpd/capture/4 from 192.0.2.1
+panic: test timed out after 30s
+	running tests:
+		TestPDCaptureBatchPublicOwnerFence (30s)
+		TestPDCaptureBatchPublicOwnerFence/credential (30s)
+
+goroutine 190 [running]:
+testing.(*M).startAlarm.func1()
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2959 +0x34a
+created by time.goFunc
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/time/sleep.go:182 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x251dec756d88, {0xef7f89?, 0x251dec9f7aa0?}, 0x1afe3d8)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2266 +0x4f2
+testing.runTests.func1(0x251dec756d88)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2742 +0x37
+testing.tRunner(0x251dec756d88, 0x251dec9f7bc8)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2193 +0xea
+testing.runTests({0xf19446, 0x36}, {0xf19446, 0x36}, 0x251dec8999e0, {0x1badd50, 0x11f, 0x11f}, {0xc2b6f66659fbe00e, 0x6fc478dc8, ...})
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2740 +0x510
+testing.(*M).Run(0x251deca56280)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2600 +0x6af
+main.main()
+	_testmain.go:618 +0x9b
+
+goroutine 182 [chan receive]:
+testing.(*T).Run(0x251deca1a6c8, {0xecad76?, 0x11939a1?}, 0x251deca741b0)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2266 +0x4f2
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.TestPDCaptureBatchPublicOwnerFence(0x251deca1a6c8)
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:165 +0x90
+testing.tRunner(0x251deca1a6c8, 0x1afe3d8)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2193 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2258 +0x4d4
+
+goroutine 183 [chan receive]:
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.TestPDCaptureBatchPublicOwnerFence.func1(0x251deca1a908)
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:181 +0x394
+testing.tRunner(0x251deca1a908, 0x251deca741b0)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2193 +0xea
+created by testing.(*T).Run in goroutine 182
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2258 +0x4d4
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	30.022s
+FAIL

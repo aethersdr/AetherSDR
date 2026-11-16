@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T20:10:46.036087+00:00",
+  "status": "native_to_authenticated_batch_HTTP_component_qualified_not_installed",
+  "production_ready": false,
+  "installed": false,
+  "radio_changed": false,
+  "RF_transmissions": 0,
+  "base_commit": "41824ee537249e2c165b657636726f7de24f5a2e",
+  "source_sha256": {
+    "tools/flex-tailnet-shim/aetherpd_capture_batch.go": "ba9f4af83702e358e6d55bc7636ea113836297937e349e3ceb8f8020031d0f2b",
+    "tools/flex-tailnet-shim/aetherpd_capture_batch_handler.go": "5622059de24bf2acbc34ae4a9a4810069fad6f6d50a9a14a9291dd867c81e67e",
+    "tools/flex-tailnet-shim/aetherpd_capture_batch_linux.go": "80516e30cd505b682bb15ee47dde4e17c21c0d3909e90555160a8a13496700dd",
+    "tools/flex-tailnet-shim/aetherpd_capture_batch_linux_test.go": "8e76f65e13ad274f3d9e6f5b0c4acb0aeee536952ec469071b9222f12967a198",
+    "tools/flex-tailnet-shim/aetherpd_capture_batch_test.go": "8228ce7a07025795504b1543cea803db6051bad2d1f5abf1c6fe686bd46d30f5",
+    "tools/flex-tailnet-shim/aetherpd_process_linux.go": "4756e7a0cbfd636082ba11596a2aabd02d2eefaa26468f75fb59a712d165e6a6",
+    "tools/flex-tailnet-shim/aetherpd_process_other.go": "f6a5072377ae4719144f70aeb301e5e7cf3568deecf7ece8b8a4b660d2d7e6be",
+    "tools/flex-tailnet-shim/aetherpd_session_linux.go": "8372d145e394551660a32054a36fb43622bec59d65a6a62eb356878d6544ce6a",
+    "tools/flex-tailnet-shim/aetherpd_session_server.go": "b5fd31fb4cf30510cbc7c8f881b59db3c306dc112f97a8f9539c98558204159e",
+    "tools/flex-tailnet-shim/aetherpd_session_wire.go": "aa70444ed685205ae64fa408a6d7534428336459ab82016b639cf7f5b84d5df2",
+    "tools/flex-tailnet-shim/api.go": "9a81ceb4f9bef2ba8230e2e3a317eb51522c6f1198b4f39ab5025c66684578f1",
+    "tools/pd-waveform/capture_batch_fixture.c": "0839e6c2ea1aa8c9d2921f3408d76199b9d6326976d846e11ce5ea3f617c6e81",
+    "tools/pd-waveform/pd_capture.c": "474dbbe7574e7bf28946e2c7ba780bded493131e5208875170b2a31ada1997f9",
+    "tools/pd-waveform/pd_capture.h": "6b515f5322a6dab936eb951bca963939e2f76ae697b9ea893a2ca6480315e992",
+    "tools/pd-waveform/pd_status.c": "7c8c24c8126e82b1ae2eda80b1396d695736da1cdc8e5fe7067cccb002fa134d",
+    "tools/pd-waveform/pd_status.h": "de41b77e5b09bdb9d5b446dfe90c009faec16b1586f16134c52369d0808cc504"
+  },
+  "contract": {
+    "private_native_header": "PDIQ0005",
+    "private_session": "PDTALK08 / PDCMD004",
+    "begin": "POST /v4/aetherpd/capture/{count}",
+    "read": "GET /v4/aetherpd/capture/{captureID}/{frame}/{chunk}",
+    "frames_max": 4,
+    "samples_per_frame": 16384,
+    "public_chunk_samples": 512,
+    "reply_bytes_max": 8192,
+    "native_read_deadline_s": 4,
+    "shim_snapshot_ttl_s": 10,
+    "source_or_RF_deadlines_extended": false
+  },
+  "validation": {
+    "go_version": "go1.27.1",
+    "top_level_tests_passed": 71,
+    "top_level_batch_tests_passed": 14,
+    "go_race_detector": true,
+    "native_ASan_UBSan": true,
+    "explicit_native_fixtures": [
+      "capture_fixture.c",
+      "capture_batch_fixture.c"
+    ],
+    "native_C_to_Go_counts": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "native_C_to_private_session_to_HTTP_samples_checked": 65536,
+    "mutation_results": [
+      {
+        "name": "frame_index",
+        "returncode": 1,
+        "behavioral_failure_detected": true
+      },
+      {
+        "name": "correction_identity",
+        "returncode": 1,
+        "behavioral_failure_detected": true
+      },
+      {
+        "name": "owner_fence",
+        "returncode": 1,
+        "behavioral_failure_detected": true
+      },
+      {
+        "name": "cancel_retention",
+        "returncode": 1,
+        "behavioral_failure_detected": true
+      }
+    ],
+    "test_registration": "strict passed",
+    "cross_builds": {
+      "linux-armv7": {
+        "bytes": 21889184,
+        "sha256": "d0451d9efb50e99482795ea8908d623caf5dc18fb992434d9ce6a8c46944bb11"
+      },
+      "linux-arm64": {
+        "bytes": 21495968,
+        "sha256": "ca79136849ff69782dd39a0d78bea9a2298985950b84cdff16f2716fe936d5bf"
+      },
+      "darwin-arm64-test-compile": {
+        "bytes": 32439090,
+        "sha256": "7fdc3133354459e9582c803f2c2eccef158d80cfbc4cd76583ee06371b0cd54a"
+      }
+    }
+  },
+  "coverage": [
+    "Exhaustive truncated ready frames, bad size/ID/index/count/offset, legacy-version confusion and nonfinite samples.",
+    "Exact native packet tails across 375-sample packets, all 65536 samples read through private session and public HTTP chunks.",
+    "Changed source, correction state, generation, rate, binding and tone profile within/across frames; no partial success on failures.",
+    "Cancellation before begin, during pending acquisition, after completed frames and on final chunk.",
+    "Version capability refusal, bounded command arguments, concurrent begin conflict, expiry, replacement and stale identifiers.",
+    "Original-owner fencing after credential change, session replacement, stopped state and pending new startup.",
+    "Canceled batch observations retain session and pending slot; status remains usable after late reply."
+  ],
+  "remaining": [
+    "Desktop batch manifest/chunk parser and selected-average acquisition integration.",
+    "Separate RF acquisition completion from download time while preserving cancellation and qualified unkey.",
+    "Signed runtime/desktop package, cold/warm RF timing and regression qualification on8600.",
+    "Late model acquisition can still exhaust8second source; batch transport alone does not prove readiness timing solved.",
+    "All remaining P1-P10 gates: historical alignment/cold-bypass root cause, sustained tone/speech, final faults/reboot/update, stockAPD comparison, actual6300 and independent release review."
+  ],
+  "limitations": [
+    "Component only; host sanitizers and cross-builds do not establish radio latency, disk budgets or6300 compatibility.",
+    "Darwin test binary compiled but was not executed; Windows not qualified here.",
+    "Installed radio remains on dd33027 runtime with sequential single-frame capture; desktop unchanged.",
+    "LP100A deferred; no power/headroom calibration claim."
+  ],
+  "evidence_directory": "evidence/20261116-batch-capture-shim",
+  "evidence_sha256": {
+    "builds.json": "d9043151320a4f1bf65c55e36b893697322b3ee3611103c81242f29c657b013f",
+    "cancel-retention-fixture-cleanup-failure.log": "691c03aee26126d09fdace8df368eb2105e99bd2850968ef1998a5675c46df16",
+    "cancel_retention-mutation.log": "f51ae63161361495b2b81b92a84929a3ed10bac1558dc17726707676fe76da18",
+    "correction_identity-mutation.log": "ccf60e0d5121ffe3e63dbe7a69557f9a2491e2a2f574ac3024f040c13d988825",
+    "final-race.log": "0a5d90c73dd7c52cda272c69812219ecf48db7474f92c8bf36d108fe45f3f748",
+    "frame_index-mutation.log": "ded051a146b1e87479f5146d6fba1c5e69a04201c9764b059fac4060d4721da0",
+    "mutation-results.json": "6282694b4c8aff1efceedb30940accb294f49e7412415bab2b27f6d53ff2f95a",
+    "mutations.py": "df093a2d0c21ecfad921a56028c0ed07ec93b24fbf62344885fccc583bfe4d2a",
+    "negative-evidence.json": "4f84376873e4f18ec2efe2d8d8c7fb541c14006f8f72d396ea4be154e46ec637",
+    "owner_fence-mutation.log": "ac6d2d0b6ca9ca2c7b44101f2f86c27db5b03a58b1f6e0415775afaaa48d3853",
+    "public-initial.log": "11e592c91335aebebce845f9c59fa6ff23d389ad22d913e0b4b6675ae26bb1f0",
+    "public.log": "9b7a1fdd9aa3193abb96f20ccf3779f6c0327521c71e2e8086422f1cdd0f89e3"
+  }
+}

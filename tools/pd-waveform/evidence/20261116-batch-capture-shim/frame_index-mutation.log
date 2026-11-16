@@ -1,0 +1,5 @@
+--- FAIL: TestPDCaptureBatchParserBounds (0.00s)
+    aetherpd_capture_batch_linux_test.go:62: accepted changed field 96/2
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.005s
+FAIL

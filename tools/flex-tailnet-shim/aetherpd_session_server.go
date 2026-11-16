@@ -41,6 +41,7 @@ func (w *pdSessionResponse) Write(b []byte) (int, error) {
 
 type pdSessionOperation func(context.Context, byte) pdSessionReply
 type pdSessionToneOperation func(context.Context, uint32) pdSessionReply
+type pdSessionBatchOperation func(context.Context, byte, uint16) pdSessionReply
 
 type pdSessionTestOperation func(context.Context, byte, [16]byte, uint16) pdSessionReply
 
@@ -58,6 +59,10 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 }
 
 func servePDSessionWithTone(conn net.Conn, operation pdSessionOperation, stop func(), testOperation pdSessionTestOperation, toneOperation pdSessionToneOperation) error {
+	return servePDSessionWithBatch(conn, operation, stop, testOperation, toneOperation, nil)
+}
+
+func servePDSessionWithBatch(conn net.Conn, operation pdSessionOperation, stop func(), testOperation pdSessionTestOperation, toneOperation pdSessionToneOperation, batchOperation pdSessionBatchOperation) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer conn.Close()
@@ -77,6 +82,9 @@ func servePDSessionWithTone(conn net.Conn, operation pdSessionOperation, stop fu
 	if toneOperation != nil {
 		hello = "PDTALK07"
 	}
+	if batchOperation != nil {
+		hello = "PDTALK08"
+	}
 	if err := pdWriteAll(conn, []byte(hello)); err != nil {
 		return err
 	}
@@ -94,8 +102,9 @@ func servePDSessionWithTone(conn net.Conn, operation pdSessionOperation, stop fu
 		op := frame[12]
 		isTest := string(frame[:8]) == "PDCMD002" && testOperation != nil && pdTestOpcode(op)
 		isTone := string(frame[:8]) == "PDCMD003" && toneOperation != nil && op == 'Q'
+		isBatch := string(frame[:8]) == "PDCMD004" && batchOperation != nil && pdCaptureBatchOpcode(op)
 		legacy := string(frame[:8]) == "PDCMD001" && pdSessionOpcode(op) && (op != pdCaptureBeginWithTones || toneOperation != nil)
-		if (!isTest && !isTone && !legacy) || id <= last || frame[13] != 0 || frame[14] != 0 || frame[15] != 0 {
+		if (!isTest && !isTone && !isBatch && !legacy) || id <= last || frame[13] != 0 || frame[14] != 0 || frame[15] != 0 {
 			return errors.New("invalid session request")
 		}
 		var testID [16]byte
@@ -122,6 +131,17 @@ func servePDSessionWithTone(conn net.Conn, operation pdSessionOperation, stop fu
 				return errors.New("invalid measurement spacing")
 			}
 		}
+		var batchValue uint16
+		if isBatch {
+			var extra [2]byte
+			if _, err := io.ReadFull(conn, extra[:]); err != nil {
+				return err
+			}
+			batchValue = binary.BigEndian.Uint16(extra[:])
+			if !pdCaptureBatchRequestValid(op, batchValue) {
+				return errors.New("invalid batch capture request")
+			}
+		}
 		last = id
 		select {
 		case slots <- struct{}{}:
@@ -135,7 +155,9 @@ func servePDSessionWithTone(conn net.Conn, operation pdSessionOperation, stop fu
 			callCtx, finish := context.WithTimeout(ctx, 8*time.Second)
 			defer finish()
 			var reply pdSessionReply
-			if isTone {
+			if isBatch {
+				reply = batchOperation(callCtx, op, batchValue)
+			} else if isTone {
 				reply = toneOperation(callCtx, spacing)
 			} else if isTest {
 				reply = testOperation(callCtx, op, testID, duration)

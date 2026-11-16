@@ -1,0 +1,80 @@
+panic: test timed out after 15s
+	running tests:
+		TestPDCaptureBatchSessionCancellation (15s)
+		TestPDCaptureBatchSessionCancellation/H (15s)
+
+goroutine 85 [running]:
+testing.(*M).startAlarm.func1()
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2959 +0x34a
+created by time.goFunc
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/time/sleep.go:182 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x2e56849d8d88, {0xf0065d?, 0x2e5684c5faa0?}, 0x1b01988)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2266 +0x4f2
+testing.runTests.func1(0x2e56849d8d88)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2742 +0x37
+testing.tRunner(0x2e56849d8d88, 0x2e5684c5fbc8)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2193 +0xea
+testing.runTests({0xf1b590, 0x36}, {0xf1b590, 0x36}, 0x2e5684aa79c8, {0x1bb0d90, 0x122, 0x122}, {0xc2b6f693c4644c8d, 0x37e357459, ...})
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2740 +0x510
+testing.(*M).Run(0x2e5684c741e0)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2600 +0x6af
+main.main()
+	_testmain.go:624 +0x9b
+
+goroutine 21 [chan receive]:
+testing.(*T).Run(0x2e56849d8fc8, {0x2e56847fe2c0?, 0x0?}, 0x2e56847fe2b0)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2266 +0x4f2
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.TestPDCaptureBatchSessionCancellation(0x2e56849d8fc8)
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:214 +0x7a
+testing.tRunner(0x2e56849d8fc8, 0x1b01988)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2193 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2258 +0x4d4
+
+goroutine 7 [chan receive]:
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.batchSessionPair.func2()
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:32 +0x31
+testing.(*common).Cleanup.func1()
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:1460 +0x109
+testing.(*common).runCleanup(0x2e5684cb2008, 0x0?)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:1820 +0xea
+testing.tRunner.func2()
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2187 +0x25
+runtime.Goexit()
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/runtime/panic.go:694 +0x54
+testing.(*common).FailNow(0x2e5684cb2008)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:1106 +0x4a
+testing.(*common).Fatal(0x2e5684cb2008, {0x2e56848d8f18?, 0x1511cb0?, 0x1b05b80?})
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:1364 +0x54
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.TestPDCaptureBatchSessionCancellation.func1(0x2e5684cb2008)
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:229 +0x26b
+testing.tRunner(0x2e5684cb2008, 0x2e56847fe2b0)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2193 +0xea
+created by testing.(*T).Run in goroutine 21
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/testing/testing.go:2258 +0x4d4
+
+goroutine 8 [sync.WaitGroup.Wait]:
+sync.runtime_SemacquireWaitGroup(0x1b93c30?, 0x80?)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/runtime/sema.go:114 +0x2e
+sync.(*WaitGroup).Wait(0x2e56847fe2f0)
+	/home/jeremy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/src/sync/waitgroup.go:206 +0x85
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.servePDSessionWithBatch.func1()
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_session_server.go:74 +0x65
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.servePDSessionWithBatch({0x1aff920, 0x2e5684c88100}, 0x1b02678, 0x1b02680, 0x0, 0x0, 0x2e56847fc060)
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_session_server.go:190 +0xc45
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.batchSessionPair.func1()
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:22 +0x66
+created by github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.batchSessionPair in goroutine 7
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:20 +0xd6
+
+goroutine 66 [chan receive]:
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.TestPDCaptureBatchSessionCancellation.func1.1({0x1afc930?, 0x2e56848200a0?}, 0x0?, 0xdcd6?)
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_capture_batch_test.go:218 +0x4b
+github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.servePDSessionWithBatch.func2()
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_session_server.go:159 +0x328
+created by github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim.servePDSessionWithBatch in goroutine 8
+	/home/jeremy/AetherSDR/build/aetherpd-source/tools/flex-tailnet-shim/aetherpd_session_server.go:152 +0x377
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	15.021s
+FAIL

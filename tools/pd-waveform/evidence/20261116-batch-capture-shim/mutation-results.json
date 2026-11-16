@@ -1,0 +1,22 @@
+[
+  {
+    "name": "frame_index",
+    "returncode": 1,
+    "behavioral_failure_detected": true
+  },
+  {
+    "name": "correction_identity",
+    "returncode": 1,
+    "behavioral_failure_detected": true
+  },
+  {
+    "name": "owner_fence",
+    "returncode": 1,
+    "behavioral_failure_detected": true
+  },
+  {
+    "name": "cancel_retention",
+    "returncode": 1,
+    "behavioral_failure_detected": true
+  }
+]

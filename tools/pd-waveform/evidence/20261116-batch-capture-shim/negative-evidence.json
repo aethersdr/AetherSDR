@@ -1,0 +1,5 @@
+{
+  "public-initial.log": "New owner-fence test used chan struct{} for pdStarting instead of *pdSessionStart; compile failed, fixture corrected.",
+  "public.log": "httptest default RemoteAddr was rejected by existing API LAN admission before fixture callback. Test waited for callback and timed out; corrected only fixture address to 192.168.50.20.",
+  "cancel-retention-fixture-cleanup-failure.log": "Removing cancellation retention triggered the expected assertion but fixture cleanup waited for an unreleased callback. Test now releases callback before assertion; final mutation fails promptly."
+}

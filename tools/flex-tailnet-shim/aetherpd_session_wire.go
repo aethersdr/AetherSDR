@@ -62,7 +62,9 @@ type pdSessionReply struct {
 }
 
 type pdSessionChannel struct {
-	// Immutable after publication: capture v2, tests v3, measurement v4, correction v5, sampled source v6, configured tones v7.
+	// Immutable after publication: capture v2, tests v3, measurement v4,
+	// correction v5, sampled source v6, configured tones v7, batch capture v8.
+	batchSupported         bool
 	toneSupported          bool
 	captureSourceSupported bool
 	correctionSupported    bool
@@ -129,8 +131,19 @@ func (s *pdSessionChannel) CallTone(ctx context.Context, spacing uint32) pdSessi
 	binary.BigEndian.PutUint16(extra[:], uint16(spacing))
 	return s.call(ctx, 'Q', extra[:])
 }
+func (s *pdSessionChannel) CallBatch(ctx context.Context, op byte, value uint16) pdSessionReply {
+	if !s.batchSupported || !pdCaptureBatchRequestValid(op, value) {
+		return pdSessionReply{err: errors.New("invalid or unsupported batch capture")}
+	}
+	var extra [2]byte
+	binary.BigEndian.PutUint16(extra[:], value)
+	return s.call(ctx, op, extra[:])
+}
 func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSessionReply {
-	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && !((s.testSupported && pdTestOpcode(op) && len(extra) == 18) || (s.toneSupported && op == 'Q' && len(extra) == 2 && pdToneSpacingValid(uint32(binary.BigEndian.Uint16(extra)))))) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == pdCaptureBeginWithSource && !s.captureSourceSupported) || (op == pdCaptureBeginWithTones && !s.toneSupported) || (op == 'M' && !s.measurementSupported) || (pdCorrectionOpcode(op) && !s.correctionSupported) {
+	validExtra := (s.testSupported && pdTestOpcode(op) && len(extra) == 18) ||
+		(s.toneSupported && op == 'Q' && len(extra) == 2 && pdToneSpacingValid(uint32(binary.BigEndian.Uint16(extra)))) ||
+		(s.batchSupported && len(extra) == 2 && pdCaptureBatchRequestValid(op, binary.BigEndian.Uint16(extra)))
+	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && !validExtra) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == pdCaptureBeginWithSource && !s.captureSourceSupported) || (op == pdCaptureBeginWithTones && !s.toneSupported) || (op == 'M' && !s.measurementSupported) || (pdCorrectionOpcode(op) && !s.correctionSupported) {
 		return pdSessionReply{err: errors.New("invalid session operation")}
 	}
 	if err := ctx.Err(); err != nil {
@@ -159,6 +172,9 @@ func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSe
 		if op == 'Q' {
 			copy(frame[:8], "PDCMD003")
 		}
+		if pdCaptureBatchOpcode(op) {
+			copy(frame[:8], "PDCMD004")
+		}
 		copy(frame[16:], extra)
 	}
 	binary.BigEndian.PutUint32(frame[8:12], id)
@@ -169,7 +185,7 @@ func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSe
 	// stop is already bound to its run ID; abandoning it must not close a
 	// successor's session before that ID is checked.
 	cancelClose := func() bool { return true }
-	if op != 'S' && !pdCaptureOpcode(op) && op != pdTestStatus && op != pdTestStop {
+	if op != 'S' && !pdCaptureOpcode(op) && !pdCaptureBatchOpcode(op) && op != pdTestStatus && op != pdTestStop {
 		cancelClose = context.AfterFunc(ctx, s.Close)
 	}
 	defer cancelClose()
@@ -186,7 +202,7 @@ func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSe
 	case reply := <-ch:
 		return reply
 	case <-ctx.Done():
-		if op != 'S' && !pdCaptureOpcode(op) && op != pdTestStatus && op != pdTestStop {
+		if op != 'S' && !pdCaptureOpcode(op) && !pdCaptureBatchOpcode(op) && op != pdTestStatus && op != pdTestStop {
 			s.Close()
 		}
 		return pdSessionReply{err: ctx.Err()}

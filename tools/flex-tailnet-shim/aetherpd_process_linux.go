@@ -24,6 +24,7 @@ import (
 // The guardian must be armed before this handoff and retain its API lease
 // independently until the DSP exits and the radio can safely return to USB.
 type aetherPDProcess struct {
+	captureBatches            pdCaptureBatchStore
 	testUnkeys                pdTestUnkeys
 	captures                  pdCaptureStore
 	calibrationIntents        pdCalibrationIntents
@@ -49,6 +50,7 @@ func (p *aetherPDProcess) Stop() {
 	if p != nil {
 		p.testUnkeys.close()
 		p.captures.close()
+		p.captureBatches.close()
 		p.calibrationIntents.close()
 		p.once.Do(func() { _ = p.owner.Close() })
 	}

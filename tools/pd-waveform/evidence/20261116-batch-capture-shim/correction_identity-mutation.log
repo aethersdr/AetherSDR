@@ -1,0 +1,6 @@
+--- FAIL: TestPDCaptureBatchRejectsMixedFrames (0.00s)
+    --- FAIL: TestPDCaptureBatchRejectsMixedFrames/field68_at16384 (0.00s)
+        aetherpd_capture_batch_linux_test.go:163: mixed or partial batch escaped 4 <nil>
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.011s
+FAIL
