@@ -17,6 +17,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/SquelchGate.h": {
+  "tag": "universal",
+  "note": "Family-neutral squelch gate state (SliceDelta::squelchGate) and its sample-counted publication hold, SquelchGateReporter. No wire text and no family header; the HL2 receive DSP fills it from WDSP fmsq, and RxApplet shows it on the SQL slider.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/WaveformEnvRequest.h": {
   "tag": "universal",
   "note": "Seam vocabulary for a radio-held waveform container environment: the typed clear/stage/recreate request with its validation, and the apply outcome. No wire text; FlexBackend encodes it (SmartSDR 4.3.16) and capabilities().waveformEnvControl gates it.",
