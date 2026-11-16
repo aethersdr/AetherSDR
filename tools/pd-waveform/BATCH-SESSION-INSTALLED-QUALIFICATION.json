@@ -1,0 +1,130 @@
+{
+  "updated_utc": "2026-11-16T20:58:44.440932+00:00",
+  "status": "fixed_session_upgrade_receive_IQ_and_four_frame_bypass_passed_corrected_readiness_failed",
+  "production_ready": false,
+  "runtime_source": "b515f34a4eddc2dde07a2b5fff2ab9dd64f3d80f",
+  "installed_release": "9430a096716fadded3604075347befaa8922262ff8d2b0b5692aeea9535ff60c",
+  "desktop_sha256": "2ac0bb8703a37cad5e6ff90ca39ec748db656b082f84f4ea025945e652c30649",
+  "installation_seconds": 49.976,
+  "receive_IQ_bytes": 131072,
+  "FDX": false,
+  "nominal_watts": 5,
+  "frequency_hz": 7150000,
+  "positive_GUI_key_actions": 2,
+  "bypass": {
+    "valid": true,
+    "frames": 4,
+    "batch_request_ms": 1387,
+    "batch_capture_elapsed_ms": 5835,
+    "IMD3_dBc_per_tone": [
+      -27.98099960719437,
+      -27.451895139375218
+    ],
+    "independent_verification": {
+      "native": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.974211563753,
+          1899.97068981824
+        ],
+        "tone_imbalance_db": 0.244817841660833,
+        "fundamental_pep_db_raw_iq": 91.4339162580558,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -27.9809996071944,
+            "dbc_fundamental_pep": -34.0007371751409,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -27.4518951393752,
+            "dbc_fundamental_pep": -33.4716327073217,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -41.5546331966014,
+            "dbc_fundamental_pep": -47.5743707645479,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -41.8014681391249,
+            "dbc_fundamental_pep": -47.8212057070714,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -53.0776807984854,
+            "dbc_fundamental_pep": -59.0974183664319,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -53.2125228310232,
+            "dbc_fundamental_pep": -59.2322603989697,
+            "noise_limited": false
+          }
+        ]
+      },
+      "numpy": {
+        "max_difference_db": 6.394884621840902e-14,
+        "iq_sha256": "3c40ffb98c257439a9e93a5b064c1a74c0abc56d874b5c5e3fe6d5f84276b101"
+      },
+      "gui_max_difference_db": 4.973799150320701e-14
+    }
+  },
+  "corrected": {
+    "valid": false,
+    "error": "Measurement source changed or ended before capture",
+    "source_end": "source_samples_complete",
+    "alignment_delay_samples": 1740.47,
+    "linear_fit_residual_dB": -28.6,
+    "fit_counter": 1,
+    "current_solution": false,
+    "measurement_tones_ready_observed": false,
+    "notes": "Native emitted tones after its noise preamble, but correction-ready publication remained false until source completion. Public tones flag denotes a validated capture window, not RF waveform presence. No batch acquisition began in this corrected attempt.",
+    "faults": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    }
+  },
+  "next": [
+    "Diagnose why WDSP fit counter advanced while generation-fenced current solution remained absent; inspect fit validation/publication and state 2 to 6.",
+    "Demonstrate sustained cold/warm corrected readiness before further matched four-frame RF comparison.",
+    "Retain all original P1-P10 delivery gates, actual 6300 hardware and independent release qualification."
+  ],
+  "evidence_sha256": {
+    "install-instance.json": "b265f21e712d3cd07bec4bd124b2696817c2b04e4985b0da3fed83777078cbad",
+    "install-install-result.json": "784f92141747c8b5dfabf8e11283dae3c248a97a4aada93bdc2a3a9321dd85da",
+    "install-prepared.json": "faa5c9160641d775faf31fdfb3920fa6e935a75474a79d6dd39d13868fd808c6",
+    "install-receive-iq-check.json": "bbb1ce353c2dfed62421858c8af43b0eb10df50d6e9493096b2f85555fe9ce2d",
+    "install-install.log": "6f9677d1e9448ab721827247a82d8132f844b7dfea13e9765db58f975c578c52",
+    "install-receive-iq.log": "560012f0222600b7dff266e09abbebecb97a05e0655fdda9521829068a9b7d44",
+    "bench-preflight.json": "71fa3ff74ebbbe55206c2e4e8397e32d5664c2ecc76cf13e418fb6f1e205314f",
+    "bench-off-01.log": "ee0c84d7e6c9b439cd92cb659c50c79c19efb9d9ed34f938efa79b578b03c51f",
+    "bench-on-01.log": "215f09843d5f2da513f9e39266512cd9133898339c832ae060311b8e2bd577f3",
+    "bench-reference-validation.json": "2032f6ca04be0705b5e1392e3c2ae7ae5ef24f8589f80e1e8051beb21cba6b15",
+    "bench-both-desktop-tail.log": "c5ff60f13e4f5e48c690ac134e539a4850183eda59f6587176dfa31e738fe405",
+    "bench-off-01.json": "27b3ec0ff933972c4804c7dd8a9f497011284e338f69a57befa54044e5e1f5c1",
+    "bench-off-01-events.json": "7ad72232c30f9b09f78f5b2ea63f3d3423181786828f9447d3ecbecacdcdb0ed",
+    "bench-on-01-failed.json": "ee701013fe78da7b6cf91ecb24738bd868db6a8167175d424e2e40d4741ec7c6",
+    "bench-on-01-events.json": "368392dae3ad7e66a201c1f19a0828392f932a6f7531b60009d9768106de9881",
+    "audit-batch-fixed-rf-log-result.json": "2b54a830d8b6cbe8308fb8fc04ba3e48eab65524d66e1bf72de9f87aefd50219"
+  }
+}

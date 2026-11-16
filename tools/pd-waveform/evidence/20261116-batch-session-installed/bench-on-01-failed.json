@@ -1,0 +1,139 @@
+{
+    "allocations": [
+        {
+            "high_hz": 137800,
+            "low_hz": 135700
+        },
+        {
+            "high_hz": 479000,
+            "low_hz": 472000
+        },
+        {
+            "high_hz": 2000000,
+            "low_hz": 1800000
+        },
+        {
+            "high_hz": 4000000,
+            "low_hz": 3500000
+        },
+        {
+            "high_hz": 5333300,
+            "low_hz": 5330500
+        },
+        {
+            "high_hz": 5349300,
+            "low_hz": 5346500
+        },
+        {
+            "high_hz": 5366500,
+            "low_hz": 5351500
+        },
+        {
+            "high_hz": 5374300,
+            "low_hz": 5371500
+        },
+        {
+            "high_hz": 5406300,
+            "low_hz": 5403500
+        },
+        {
+            "high_hz": 7300000,
+            "low_hz": 7000000
+        },
+        {
+            "high_hz": 10150000,
+            "low_hz": 10100000
+        },
+        {
+            "high_hz": 14350000,
+            "low_hz": 14000000
+        },
+        {
+            "high_hz": 18168000,
+            "low_hz": 18068000
+        },
+        {
+            "high_hz": 21450000,
+            "low_hz": 21000000
+        },
+        {
+            "high_hz": 24990000,
+            "low_hz": 24890000
+        },
+        {
+            "high_hz": 29510000,
+            "low_hz": 28000000
+        },
+        {
+            "high_hz": 29580000,
+            "low_hz": 29520000
+        },
+        {
+            "high_hz": 29601000,
+            "low_hz": 29600000
+        },
+        {
+            "high_hz": 29680000,
+            "low_hz": 29620000
+        },
+        {
+            "high_hz": 54000000,
+            "low_hz": 50000000
+        },
+        {
+            "high_hz": 146000000,
+            "low_hz": 144000000
+        },
+        {
+            "high_hz": 146370000,
+            "low_hz": 146010000
+        },
+        {
+            "high_hz": 146580000,
+            "low_hz": 146400000
+        },
+        {
+            "high_hz": 146970000,
+            "low_hz": 146610000
+        },
+        {
+            "high_hz": 147390000,
+            "low_hz": 147000000
+        },
+        {
+            "high_hz": 147570000,
+            "low_hz": 147420000
+        },
+        {
+            "high_hz": 147990000,
+            "low_hz": 147600000
+        },
+        {
+            "high_hz": 450000000,
+            "low_hz": 420000000
+        }
+    ],
+    "captures": [
+    ],
+    "center_hz": 7150000,
+    "completed_at_utc": "2026-11-16T20:56:50.650Z",
+    "correction_active": null,
+    "error": "Measurement source changed or ended before capture",
+    "forward_power_limit_w": 10,
+    "full_scale_known": false,
+    "limitations": "Raw IQ levels are not calibrated dBFS or watts. Spectral validity does not prove ADC headroom. Timestamps are radio process monotonic receipt times, not FPGA timestamps. Null numbers are unavailable.",
+    "mode": "PD",
+    "nominal_power_setting_w": 5,
+    "radio_serial": "2125-1213-8600-8895",
+    "raw_iq_format": "f32le-iq-v1",
+    "requested_averages": 4,
+    "requested_tone1_hz": 7150710,
+    "requested_tone2_hz": 7151900,
+    "sample_rate_hz": 48000,
+    "schema": "aetherpd-linearity-v1",
+    "source": "local-dax-iq",
+    "source_id": "0000000000000005",
+    "transmit_antenna": "ANT1",
+    "transmit_authorization_timeout_ms": 10000,
+    "window": "blackman-harris-7"
+}
