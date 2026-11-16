@@ -108,10 +108,11 @@ supported on its own (both below); FlexRadio remains the primary target:
   reference, an on-demand wideband bandscope, minimum-phase receive filtering
   outside CW, a declared board variant (bare HL2, AK4951 companion or
   SquareSDR 2), receive squelch, the CW audio peaking filter, RIT and XIT per
-  receiver, backend-side FFT averaging, the CL1 external 10 MHz reference and
-  a choice of ANT or RF1 (PA off) for transmit, per-radio state restore (AGC mode and threshold, TUNE power per band, FFT
-  averaging, FPS and dBm range, receivers B–D with their own setpoints, and
-  manual notches), and the N2ADR IO board's status registers.
+  receiver, backend-side FFT averaging, the CL1 external 10 MHz reference, a
+  choice of ANT or RF1 (PA off) for transmit, per-radio state restore (AGC
+  mode and threshold, TUNE power per band, FFT averaging, FPS and dBm range,
+  receivers B–D with their own setpoints, and manual notches), and the N2ADR
+  IO board's status registers.
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
