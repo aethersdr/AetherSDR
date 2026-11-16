@@ -146,6 +146,49 @@ func aetherPDStartHandler(n *Node) http.HandlerFunc {
 		writeJSON(w, 202, map[string]string{"state": "start_requested"})
 	}
 }
+
+// A terminal supervisor observation permits an explicit successor request.
+// It does not confirm cleanup, close the channel or start another session.
+func pdSessionTerminalStatus(reply pdSessionReply) bool {
+	if reply.err != nil || reply.code != http.StatusOK || len(reply.body) > pdSessionMaxBody {
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(reply.body))
+	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	var state string
+	for dec.More() {
+		token, err := dec.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || seen[key] {
+			return false
+		}
+		seen[key] = true
+		switch key {
+		case "available":
+			value, err := dec.Token()
+			if err != nil || value != false {
+				return false
+			}
+		case "state":
+			if err := dec.Decode(&state); err != nil {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	if token, err := dec.Token(); err != nil || token != json.Delim('}') || len(seen) != 2 {
+		return false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return false
+	}
+	return state == "stopped" || state == "cleanup_unconfirmed" || state == "stopped_receive_unconfirmed"
+}
+
 func aetherPDSessionHandler(n *Node, opcode byte, local http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)
@@ -180,10 +223,11 @@ func aetherPDSessionHandler(n *Node, opcode byte, local http.HandlerFunc) http.H
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
 		reply := channel.Call(ctx, opcode)
+		ended := opcode == 'S' && pdSessionTerminalStatus(reply)
 		n.mu.Lock()
 		authorized = n.checkTokenLocked(token)
 		current := n.pdSession == channel
-		if authorized && n.pdSession == channel && opcode == 'T' && reply.err == nil && reply.code == 202 {
+		if authorized && current && ((opcode == 'T' && reply.err == nil && reply.code == 202) || ended) {
 			n.pdSessionStopped = true
 		}
 		n.mu.Unlock()

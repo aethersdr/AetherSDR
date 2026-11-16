@@ -506,7 +506,12 @@ credential for the connected radio. Opening it reads status only.
   not transmit or arm calibration. A start receipt is followed by a status
   read; it is not confirmation that correction is running. Startup checks the
   idle state for your connected GUI and refuses to continue if its identity
-  or fresh radio status cannot be confirmed.
+  or fresh radio status cannot be confirmed. After status reports that a
+  session ended, Start can request a new session without an extra Stop click.
+  The old cleanup warning remains a warning; restarting does not prove that
+  cleanup succeeded. The service retires the old control channel and checks
+  ownership again before admitting the new session. It never restarts or
+  rearms a source automatically.
 - **Arm calibration** requires fresh, unkeyed status and radio APD off.
   **Cancel calibration** withdraws the calibration request.
 - **Stop AetherPD** can interrupt startup. Closing the window leaves the

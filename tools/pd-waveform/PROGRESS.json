@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T09:40:28.967955+00:00",
+  "updated_utc": "2026-11-16T09:55:40.103905+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Finish desktop pin build, inspect live unkeyed radio and exact GUI upgrade plan, then use authorized operator approval through ordinary installed-shim update. Preserve identity and confirm native correction-control readback before any separate RF test. Follow with matched OFF/ON retained-IQ recheck; preserve all other unfinished P1\u2013P10 work.",
+  "next_action": "Deploy a signed successor and repeat actual DSP crash to explicit Start, then private-controller, IQ and ARP-owner failure cases.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,5 +2502,13 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Signed correction-selection successor installed and rebooted on 8600; matched 5W/10W-setting raw-DAX-IQ OFF/ON evidence retained. Next: repeated/sustained and final-process-failure qualification, unresolved alignment/cold-start investigation; all original P1-P10 delivery gates retained."
+  "current_focus": "Signed correction-selection successor installed and rebooted on 8600; matched 5W/10W-setting raw-DAX-IQ OFF/ON evidence retained. Next: repeated/sustained and final-process-failure qualification, unresolved alignment/cold-start investigation; all original P1-P10 delivery gates retained.",
+  "latest_installed_failure": {
+    "status": "installed_DSP_death_cleanup_verified_restart_defect_reproduced_component_fix_passed_not_installed",
+    "report": "tools/pd-waveform/INSTALLED-FAILURE-QUALIFICATION.json",
+    "remaining": [
+      "Deploy a signed successor and repeat actual DSP crash to explicit Start, then private-controller, IQ and ARP-owner failure cases.",
+      "Keyed independent-unkey cases remain pending. All other P1-P10 obligations remain unchanged."
+    ]
+  }
 }
