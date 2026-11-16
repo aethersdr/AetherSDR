@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T13:01:49.774633+00:00",
+  "updated_utc": "2026-11-16T13:19:42.042741+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Implement configured-arm transport and confirmed tone/capture provenance. Prevent older capture clients from assuming710/1900Hz on a nondefault source. Then add desktop control and finish channel/pan ownership and full live production gates.",
+  "next_action": "Extend desktop status/capture decoding and transport to negotiated configured measurement/v3 capture, bind actual tones to source ID across analysis and exports, add operator spacing control with bandwidth/order validation. Refresh final packages and resume live gates only when the radio returns.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Native configured measurement tones200..10000Hz spacing component-qualified. Continue authenticated shim/capture/desktop integration; this feature is not publicly exposed or installed.",
+  "current_focus": "Configured measurement native/shim API and snapshot provenance completed offline; desktop configured-tone workflow next. Radio still unreachable.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2929,7 +2929,17 @@
     ],
     "lp100a": "Deferred by operator",
     "production_ready": false,
-    "unpackaged_native_change": "TONE-NATIVE-QUALIFICATION.json; public integration and complete runtime package rebuild remain"
+    "unpackaged_native_change": "TONE-NATIVE-QUALIFICATION.json; public integration and complete runtime package rebuild remain",
+    "tone_shim": {
+      "report": "TONE-SHIM-QUALIFICATION.json",
+      "status": "native_and_shim_component_qualified_not_installed",
+      "go_tests_passed": 260,
+      "go_tests_skipped": 10,
+      "native_tests_passed": 4,
+      "sanitizers_passed": 4,
+      "mutations_caught": 2,
+      "installed": false
+    }
   },
   "power_control": {
     "report": "POWER-CONTROL-QUALIFICATION.json",
@@ -2939,6 +2949,16 @@
   "tone_native": {
     "report": "TONE-NATIVE-QUALIFICATION.json",
     "status": "Native configured measurement-tone component qualified; public API and desktop integration incomplete",
+    "installed": false
+  },
+  "tone_shim_qualification": {
+    "report": "TONE-SHIM-QUALIFICATION.json",
+    "status": "native_and_shim_component_qualified_not_installed",
+    "go_tests_passed": 260,
+    "go_tests_skipped": 10,
+    "native_tests_passed": 4,
+    "sanitizers_passed": 4,
+    "mutations_caught": 2,
     "installed": false
   }
 }

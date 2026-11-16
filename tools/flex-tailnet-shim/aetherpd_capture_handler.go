@@ -19,7 +19,7 @@ func pdCaptureIDValid(id string) bool {
 }
 
 func aetherPDCaptureHandler(n *Node, mode byte) http.HandlerFunc {
-	begin := mode == pdCaptureBegin || mode == pdCaptureBeginWithSource
+	begin := pdCaptureBeginOpcode(mode)
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)
 		n.mu.Lock()
@@ -55,6 +55,10 @@ func aetherPDCaptureHandler(n *Node, mode byte) http.HandlerFunc {
 		}
 		if mode == pdCaptureBeginWithSource && channel != nil && !channel.captureSourceSupported {
 			writeJSON(w, http.StatusNotImplemented, apiError{"capture source identity is not supported by this session"})
+			return
+		}
+		if mode == pdCaptureBeginWithTones && channel != nil && !channel.toneSupported {
+			writeJSON(w, http.StatusNotImplemented, apiError{"capture tone configuration is not supported by this session"})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
@@ -93,7 +97,13 @@ func aetherPDCaptureHandler(n *Node, mode byte) http.HandlerFunc {
 			var manifest pdCaptureManifest
 			if json.Unmarshal(reply.body, &manifest) != nil || !pdCaptureIDValid(manifest.CaptureID) ||
 				manifest.Format != "f32le-iq-v1" || manifest.Samples != aetherPDCaptureSamples || manifest.ChunkSamples != pdCapturePublicChunk ||
-				(mode == pdCaptureBeginWithSource && !manifest.Source.valid()) || (mode == pdCaptureBegin && manifest.Source != nil) {
+				((mode == pdCaptureBeginWithSource || mode == pdCaptureBeginWithTones) && !manifest.Source.valid()) || (mode == pdCaptureBegin && manifest.Source != nil) {
+				unavailable()
+				return
+			}
+			if (mode != pdCaptureBeginWithTones && manifest.ToneConfig != nil) ||
+				(manifest.ToneConfig != nil && (!manifest.ToneConfig.valid() || manifest.ToneConfig.SourceID == "0000000000000000" || manifest.Measurement == nil || manifest.ToneConfig.SourceID != manifest.Measurement.SourceID)) ||
+				(mode == pdCaptureBeginWithTones && manifest.Measurement != nil && manifest.Measurement.SourceID != "0000000000000000" && manifest.ToneConfig == nil) {
 				unavailable()
 				return
 			}

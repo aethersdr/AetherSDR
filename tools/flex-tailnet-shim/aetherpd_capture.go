@@ -15,14 +15,17 @@ const (
 	aetherPDCaptureChunk          = 1024 // Native datagram samples.
 	aetherPDCaptureHeader         = 72   // Legacy v1; v2 appends the source ID.
 	aetherPDCaptureHeaderV2       = 80
+	aetherPDCaptureHeaderV3       = 84
 	pdCapturePublicChunk          = 512 // Fits the existing 8 KiB private control reply.
 	pdCaptureBegin           byte = 'I'
 	pdCaptureBeginWithSource byte = 'J'
+	pdCaptureBeginWithTones  byte = 'K'
 	pdCaptureReadFirst       byte = 0x80
 	pdCaptureReadEnd         byte = 0xa0
 )
 
 type aetherPDIQCapture struct {
+	ToneConfig                                              *pdMeasurementToneConfig
 	Measurement                                             *pdMeasurementSource
 	ID, CenterHz, Generation, FirstReceiveNS, LastReceiveNS uint64
 	Rate, Stream, Flags                                     uint32
@@ -31,18 +34,19 @@ type aetherPDIQCapture struct {
 }
 
 type pdCaptureManifest struct {
-	Source         *pdCaptureSource     `json:"source,omitempty"`
-	Measurement    *pdMeasurementSource `json:"measurement,omitempty"`
-	CaptureID      string               `json:"capture_id"`
-	Format         string               `json:"format"`
-	SampleRate     uint32               `json:"sample_rate_hz"`
-	CenterHz       uint64               `json:"center_hz"`
-	Samples        int                  `json:"sample_count"`
-	ChunkSamples   int                  `json:"chunk_samples"`
-	Keyed          bool                 `json:"keyed"`
-	Correcting     bool                 `json:"correcting"`
-	FirstReceiveNS string               `json:"first_receive_ns"`
-	LastReceiveNS  string               `json:"last_receive_ns"`
+	ToneConfig     *pdMeasurementToneConfig `json:"measurement_tone_config,omitempty"`
+	Source         *pdCaptureSource         `json:"source,omitempty"`
+	Measurement    *pdMeasurementSource     `json:"measurement,omitempty"`
+	CaptureID      string                   `json:"capture_id"`
+	Format         string                   `json:"format"`
+	SampleRate     uint32                   `json:"sample_rate_hz"`
+	CenterHz       uint64                   `json:"center_hz"`
+	Samples        int                      `json:"sample_count"`
+	ChunkSamples   int                      `json:"chunk_samples"`
+	Keyed          bool                     `json:"keyed"`
+	Correcting     bool                     `json:"correcting"`
+	FirstReceiveNS string                   `json:"first_receive_ns"`
+	LastReceiveNS  string                   `json:"last_receive_ns"`
 }
 
 // Identity of the immutable sampled stream, not permission to reconfigure it.
@@ -76,8 +80,12 @@ type pdCaptureStore struct {
 	expires      time.Time
 }
 
+func pdCaptureBeginOpcode(op byte) bool {
+	return op == pdCaptureBegin || op == pdCaptureBeginWithSource || op == pdCaptureBeginWithTones
+}
+
 func pdCaptureOpcode(op byte) bool {
-	return op == pdCaptureBegin || op == pdCaptureBeginWithSource || (op >= pdCaptureReadFirst && op < pdCaptureReadEnd)
+	return pdCaptureBeginOpcode(op) || (op >= pdCaptureReadFirst && op < pdCaptureReadEnd)
 }
 
 func pdCaptureJSON(code int, value any) pdSessionReply {
@@ -104,7 +112,7 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 		s.mu.Unlock()
 		return unavailable()
 	}
-	if op != pdCaptureBegin && op != pdCaptureBeginWithSource {
+	if !pdCaptureBeginOpcode(op) {
 		defer s.mu.Unlock()
 		if s.id == "" || !time.Now().Before(s.expires) {
 			s.id = ""
@@ -134,8 +142,24 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 	if err != nil || ctx.Err() != nil || s.closed || !alive() || len(frame.IQ) != 8*aetherPDCaptureSamples {
 		return unavailable()
 	}
+	// Legacy clients hard-code 710/1900 Hz. Never publish a nondefault source
+	// through those manifests, even if its current window is still preamble.
+	if frame.ToneConfig != nil && (!frame.ToneConfig.valid() || frame.ToneConfig.SourceID == "0000000000000000" || frame.Measurement == nil ||
+		frame.ToneConfig.SourceID != frame.Measurement.SourceID) {
+		return unavailable()
+	}
+	if op != pdCaptureBeginWithTones && frame.ToneConfig != nil && frame.ToneConfig.SpacingHz != pdToneDefaultSpacing {
+		return unavailable()
+	}
+	if op == pdCaptureBeginWithTones && frame.Measurement != nil && frame.Measurement.SourceID != "0000000000000000" && frame.ToneConfig == nil {
+		return unavailable()
+	}
+	var toneConfig *pdMeasurementToneConfig
+	if op == pdCaptureBeginWithTones {
+		toneConfig = frame.ToneConfig
+	}
 	var source *pdCaptureSource
-	if op == pdCaptureBeginWithSource {
+	if op == pdCaptureBeginWithSource || op == pdCaptureBeginWithTones {
 		source = &pdCaptureSource{Kind: "local_dax_iq", StreamID: frame.Stream, Generation: strconv.FormatUint(frame.Generation, 10)}
 		if !source.valid() {
 			return unavailable()
@@ -145,7 +169,7 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 	s.frame = frame
 	s.expires = time.Now().Add(10 * time.Second)
 	return pdCaptureJSON(200, pdCaptureManifest{
-		Source:      source,
+		Source: source, ToneConfig: toneConfig,
 		Measurement: frame.Measurement, CaptureID: s.id, Format: "f32le-iq-v1", SampleRate: frame.Rate, CenterHz: frame.CenterHz,
 		Samples: aetherPDCaptureSamples, ChunkSamples: pdCapturePublicChunk,
 		Keyed: frame.Flags&1 != 0, Correcting: frame.Flags&2 != 0,

@@ -60,7 +60,7 @@ func dialPDSession(ctx context.Context, id pdStartIdentity) (*pdSessionChannel, 
 	if _, err = io.ReadFull(conn, ready[:]); err != nil {
 		return nil, err
 	}
-	if string(ready[:]) != "PDTALK01" && string(ready[:]) != "PDTALK02" && string(ready[:]) != "PDTALK03" && string(ready[:]) != "PDTALK04" && string(ready[:]) != "PDTALK05" && string(ready[:]) != "PDTALK06" {
+	if string(ready[:]) != "PDTALK01" && string(ready[:]) != "PDTALK02" && string(ready[:]) != "PDTALK03" && string(ready[:]) != "PDTALK04" && string(ready[:]) != "PDTALK05" && string(ready[:]) != "PDTALK06" && string(ready[:]) != "PDTALK07" {
 		return nil, errors.New("invalid session readiness")
 	}
 	if err = conn.SetDeadline(time.Time{}); err != nil {
@@ -72,7 +72,8 @@ func dialPDSession(ctx context.Context, id pdStartIdentity) (*pdSessionChannel, 
 	ok = true
 	channel := newPDSessionChannel(conn)
 	channel.captureSupported = string(ready[:]) != "PDTALK01"
-	channel.captureSourceSupported = string(ready[:]) == "PDTALK06"
+	channel.toneSupported = string(ready[:]) == "PDTALK07"
+	channel.captureSourceSupported = string(ready[:]) == "PDTALK06" || channel.toneSupported
 	channel.correctionSupported = string(ready[:]) == "PDTALK05" || channel.captureSourceSupported
 	channel.measurementSupported = string(ready[:]) == "PDTALK04" || channel.correctionSupported
 	channel.testSupported = string(ready[:]) == "PDTALK03" || channel.measurementSupported
@@ -130,5 +131,6 @@ func runInheritedPDSession() error {
 			log.Printf("AetherPD cleanup: %v", err)
 		}
 	}()
-	return servePDSession(conn, pdSessionOperations(&Node{pdProcess: process}), process.Stop, process.testUnkeyOperation)
+	node := &Node{pdProcess: process}
+	return servePDSessionWithTone(conn, pdSessionOperations(node), process.Stop, process.testUnkeyOperation, pdSessionToneOperations(node))
 }

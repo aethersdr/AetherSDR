@@ -1,0 +1,12 @@
+--- FAIL: TestPDToneCaptureLegacyFence (0.00s)
+    --- FAIL: TestPDToneCaptureLegacyFence/200 (0.00s)
+        aetherpd_tones_test.go:65: legacy capture accepted nondefault source 200 {"measurement":{"source_id":"000000000000001f","tones":true},"capture_id":"76722607c10c474f7a6b018c403962e6","format":"f32le-iq-v1","sample_rate_hz":192000,"center_hz":7150000,"sample_count":16384,"chunk_samples":512,"keyed":true,"correcting":true,"first_receive_ns":"1000000000","last_receive_ns":"1085000000"}
+    --- FAIL: TestPDToneCaptureLegacyFence/1001 (0.00s)
+        aetherpd_tones_test.go:65: legacy capture accepted nondefault source 200 {"measurement":{"source_id":"000000000000001f","tones":true},"capture_id":"b5028be583f370fd2059eeb806ba33e9","format":"f32le-iq-v1","sample_rate_hz":192000,"center_hz":7150000,"sample_count":16384,"chunk_samples":512,"keyed":true,"correcting":true,"first_receive_ns":"1000000000","last_receive_ns":"1085000000"}
+    --- FAIL: TestPDToneCaptureLegacyFence/2610 (0.00s)
+        aetherpd_tones_test.go:65: legacy capture accepted nondefault source 200 {"measurement":{"source_id":"000000000000001f","tones":true},"capture_id":"c3e635cd5fa1e3e30408cd66063178f9","format":"f32le-iq-v1","sample_rate_hz":192000,"center_hz":7150000,"sample_count":16384,"chunk_samples":512,"keyed":true,"correcting":true,"first_receive_ns":"1000000000","last_receive_ns":"1085000000"}
+    --- FAIL: TestPDToneCaptureLegacyFence/10000 (0.00s)
+        aetherpd_tones_test.go:65: legacy capture accepted nondefault source 200 {"measurement":{"source_id":"000000000000001f","tones":true},"capture_id":"76c8687675a1abc473f46c5e3cc9043a","format":"f32le-iq-v1","sample_rate_hz":192000,"center_hz":7150000,"sample_count":16384,"chunk_samples":512,"keyed":true,"correcting":true,"first_receive_ns":"1000000000","last_receive_ns":"1085000000"}
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.007s
+FAIL

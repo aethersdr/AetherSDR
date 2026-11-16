@@ -29,7 +29,10 @@ func parseAetherPDCapture(data []byte, id uint64, offset uint32) (aetherPDIQCapt
 	if len(data) >= 8 && string(data[:8]) == "PDIQ0002" {
 		header = aetherPDCaptureHeaderV2
 	}
-	if len(data) < header || (string(data[:8]) != "PDIQ0001" && string(data[:8]) != "PDIQ0002") ||
+	if len(data) >= 8 && string(data[:8]) == "PDIQ0003" {
+		header = aetherPDCaptureHeaderV3
+	}
+	if len(data) < header || (string(data[:8]) != "PDIQ0001" && string(data[:8]) != "PDIQ0002" && string(data[:8]) != "PDIQ0003") ||
 		id == 0 || binary.BigEndian.Uint64(data[8:16]) != id ||
 		binary.BigEndian.Uint32(data[20:24]) != offset || offset >= aetherPDCaptureSamples || offset%aetherPDCaptureChunk != 0 {
 		return aetherPDIQCapture{}, 0, bad
@@ -51,13 +54,26 @@ func parseAetherPDCapture(data []byte, id uint64, offset uint32) (aetherPDIQCapt
 		LastReceiveNS: binary.BigEndian.Uint64(data[56:64]), Stream: binary.BigEndian.Uint32(data[64:68]),
 		Flags: binary.BigEndian.Uint32(data[68:72]), IQ: data[header:],
 	}
-	if header == aetherPDCaptureHeaderV2 {
+	if header >= aetherPDCaptureHeaderV2 {
 		sourceID := binary.BigEndian.Uint64(data[72:80])
 		tones := c.Flags&4 != 0
 		if c.Flags > 7 || (tones && (sourceID == 0 || c.Flags&1 == 0)) {
 			return aetherPDIQCapture{}, 0, bad
 		}
 		c.Measurement = &pdMeasurementSource{SourceID: fmt.Sprintf("%016x", sourceID), Tones: tones}
+		if header == aetherPDCaptureHeaderV3 {
+			spacing := binary.BigEndian.Uint32(data[80:84])
+			if sourceID == 0 {
+				if spacing != 0 {
+					return aetherPDIQCapture{}, 0, bad
+				}
+			} else {
+				c.ToneConfig = pdToneConfig(c.Measurement.SourceID, spacing)
+				if !c.ToneConfig.valid() {
+					return aetherPDIQCapture{}, 0, bad
+				}
+			}
+		}
 		c.Flags &= 3
 	}
 	if (c.Rate != 24000 && c.Rate != 48000 && c.Rate != 96000 && c.Rate != 192000) ||

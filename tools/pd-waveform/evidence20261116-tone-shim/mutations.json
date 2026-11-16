@@ -1,0 +1,14 @@
+[
+  {
+    "mutation": "legacy-capture-fence",
+    "caught": true,
+    "exit": 1,
+    "expected_assertion": "legacy capture accepted nondefault source"
+  },
+  {
+    "mutation": "immutable-spacing",
+    "caught": true,
+    "exit": -6,
+    "expected_assertion": "c.state==PD_CAPTURE_INVALID"
+  }
+]

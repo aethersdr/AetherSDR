@@ -1,4 +1,5 @@
 #include "pd_capture.h"
+#include "pd_calibration.h"
 #include <string.h>
 
 static const int64_t kLifetimeNs = 5000000000LL;
@@ -17,7 +18,8 @@ static int same_meta(const struct pd_capture_meta* a, const struct pd_capture_me
     return a->generation == b->generation && a->center_hz == b->center_hz &&
         a->stream == b->stream && a->rate == b->rate &&
         a->keyed == b->keyed && a->correcting == b->correcting &&
-        a->measurement_id == b->measurement_id && a->measurement_tones == b->measurement_tones;
+        a->measurement_id == b->measurement_id && a->measurement_tones == b->measurement_tones &&
+        a->measurement_spacing_hz == b->measurement_spacing_hz;
 }
 static void expire(struct pd_capture* c, int64_t now)
 {
@@ -37,6 +39,8 @@ void pd_capture_begin(struct pd_capture* c, uint64_t id, const struct pd_capture
     c->state = now > 0 && m->generation && m->center_hz && m->center_hz <= 1000000000 &&
         m->stream && (m->rate == 24000 || m->rate == 48000 || m->rate == 96000 || m->rate == 192000) &&
         m->measurement_tones <= 1 && (!m->measurement_tones || (m->measurement_id && m->keyed)) &&
+        (m->measurement_id ? (m->measurement_spacing_hz >= PD_TONE_MIN_SPACING_HZ &&
+                             m->measurement_spacing_hz <= PD_TONE_MAX_SPACING_HZ) : !m->measurement_spacing_hz) &&
         m->keyed <= 1 && m->correcting <= m->keyed ? PD_CAPTURE_PENDING : PD_CAPTURE_UNAVAILABLE;
 }
 void pd_capture_invalidate(struct pd_capture* c)
@@ -72,7 +76,7 @@ size_t pd_capture_read(struct pd_capture* c, uint64_t id, uint32_t offset, int64
     if (!out || capacity < PD_CAPTURE_REPLY) { return 0; }
     expire(c, now);
     memset(out, 0, PD_CAPTURE_HEADER);
-    memcpy(out, "PDIQ0002", 8); put64(out + 8, id);
+    memcpy(out, "PDIQ0003", 8); put64(out + 8, id);
     enum pd_capture_state state = id && id == c->id ? c->state : PD_CAPTURE_UNAVAILABLE;
     if (offset >= PD_CAPTURE_SAMPLES || offset % PD_CAPTURE_CHUNK) { state = PD_CAPTURE_UNAVAILABLE; }
     put32(out + 16, (uint32_t)state); put32(out + 20, offset);
@@ -82,6 +86,7 @@ size_t pd_capture_read(struct pd_capture* c, uint64_t id, uint32_t offset, int64
     put64(out + 56, (uint64_t)c->last_ns); put32(out + 64, c->meta.stream);
     put32(out + 68, c->meta.keyed | (c->meta.correcting << 1) | (c->meta.measurement_tones << 2));
     put64(out + 72, c->meta.measurement_id);
+    put32(out + 80, c->meta.measurement_spacing_hz);
     if (state != PD_CAPTURE_READY) { return PD_CAPTURE_HEADER; }
     put32(out + 24, PD_CAPTURE_CHUNK);
     memcpy(out + PD_CAPTURE_HEADER, c->samples + 8 * offset, PD_CAPTURE_CHUNK * 8);

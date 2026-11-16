@@ -390,7 +390,7 @@ still apply. This operation never keys the radio. It also supports an
 uncorrected baseline when correction is disabled. The shared calibration
 cancel endpoint withdraws either source.
 
-The installed private session must advertise `PDTALK04`, and its owned DSP
+The installed private session must advertise `PDTALK04` or a later compatible version, and its owned DSP
 must report `measurement_control=true`. Older session versions reject the
 request locally without sending an unknown opcode or retiring the session.
 Native and public status report `source_purpose` as `calibration` or
@@ -400,13 +400,22 @@ measurement reports `measurement_armed` when correction is enabled; a
 correction-disabled baseline retains `disabled` with the explicit source
 purpose. An acceptance receipt alone does not establish source readiness.
 
-The desktop protocol/model can request and cancel this source. The operator
-measurement panel remains unfinished. The capture path binds frames to the
-accepted source ID and waits for its guarded tone window, rejecting partial
-frames that cross a source or window boundary. See
-[`IQ-MEASUREMENT.md`](../pd-waveform/IQ-MEASUREMENT.md#measurement-source-fencing)
-for the timing assumptions. These components have not yet been installed or
-RF-qualified on a radio.
+The desktop requests and cancels the default source. Its development
+measurement panel uses captures bound to the accepted source ID and guarded
+tone window. The configured-tone extension is not yet exposed by the desktop:
+`POST /v2/aetherpd/measurement/arm` accepts only an integer `spacing_hz`
+from 200 through 10000. It requires `PDTALK07`, native
+`measurement_tone_control=true`, and `measurement_tone_capture_version=3`.
+The pair is centered at 1305 Hz relative to the carrier; fractional half-Hz,
+DC and negative lower offsets are retained. No RF frequency, gain, duration,
+keying or privileged-helper arguments are added.
+
+`POST /v3/aetherpd/capture` includes the immutable emitted source's tone
+configuration. Older capture endpoints refuse nondefault source profiles;
+unsupported arms never fall back to a different spacing. The configured
+native/shim extension has local tests and remains uninstalled and unqualified
+for RF. See [`IQ-MEASUREMENT.md`](../pd-waveform/IQ-MEASUREMENT.md) for its
+version, provenance and timing contracts.
 
 ### Bounded calibration control (development)
 

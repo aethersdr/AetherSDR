@@ -9,12 +9,23 @@ import (
 )
 
 // Source control is separate from status and PTT. No caller-supplied waveform,
-// frequency, gain, duration, PID or executable reaches the owned native child.
+// RF frequency, gain, duration, PID or executable reaches the owned native child.
 func aetherPDCalibrationHandler(n *Node, opcode byte) http.HandlerFunc {
 	return aetherPDCalibrationHandlerWithObserver(n, opcode, observePDReceiveWorld)
 }
 
 func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(context.Context, pdReceiveOriginal) (pdReceiveView, error)) http.HandlerFunc {
+	return aetherPDCalibrationHandlerWithTone(n, opcode, 0, observe)
+}
+
+func pdMeasurementOpcode(op byte) bool { return op == 'M' || op == 'Q' }
+func pdArmOpcode(op byte) bool         { return op == 'A' || pdMeasurementOpcode(op) }
+
+func aetherPDCalibrationHandlerWithTone(n *Node, opcode byte, spacing uint32, observe func(context.Context, pdReceiveOriginal) (pdReceiveView, error)) http.HandlerFunc {
+	return aetherPDCalibrationHandlerForProcess(n, opcode, spacing, observe, nil)
+}
+
+func aetherPDCalibrationHandlerForProcess(n *Node, opcode byte, spacing uint32, observe func(context.Context, pdReceiveOriginal) (pdReceiveView, error), expected *aetherPDProcess) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		correction := pdCorrectionOpcode(opcode)
 		token := bearer(r)
@@ -31,12 +42,16 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			writeJSON(w, http.StatusBadRequest, apiError{"this endpoint accepts no parameters or body"})
 			return
 		}
+		if expected != nil && process != expected {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
+			return
+		}
 		if process == nil {
 			writeJSON(w, http.StatusConflict, apiError{errAetherPDNotManaged.Error()})
 			return
 		}
 		operationContext := r.Context()
-		if opcode == 'A' || opcode == 'M' || correction {
+		if pdArmOpcode(opcode) || correction {
 			armContext, finish, err := process.calibrationIntents.beginArm(operationContext)
 			if errors.Is(err, errPDCalibrationStopped) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
@@ -51,9 +66,10 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 		} else if opcode == 'X' {
 			process.calibrationIntents.cancelPendingArm()
 		}
-		if opcode == 'M' {
+		if pdMeasurementOpcode(opcode) {
 			status, err := process.queryStatus(operationContext)
-			if err != nil || !status.Available || !status.Registered || !status.MeasurementControl {
+			if err != nil || !status.Available || !status.Registered || !status.MeasurementControl ||
+				(opcode == 'Q' && (!status.MeasurementToneControl || !pdToneSpacingValid(spacing))) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "measurement_unavailable"})
 				return
 			}
@@ -70,7 +86,7 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			}
 		}
 		var observed pdReceiveView
-		if (opcode == 'A' || opcode == 'M') && process.receiveJournal != nil {
+		if pdArmOpcode(opcode) && process.receiveJournal != nil {
 			var err error
 			observed, err = observe(operationContext, process.receiveJournal.original)
 			if err != nil {
@@ -83,22 +99,36 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
 			return
 		}
-		if !n.checkToken(token) {
+		n.mu.Lock()
+		authorized = n.checkTokenLocked(token)
+		current := n.pdProcess == process
+		n.mu.Unlock()
+		if !authorized {
 			writeJSON(w, http.StatusUnauthorized, apiError{errUnauthorized.Error()})
 			return
 		}
-		result, err := process.calibrate(operationContext, opcode)
+		if !current {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
+			return
+		}
+		var result int
+		var err error
+		if opcode == 'Q' {
+			result, err = process.calibrateTone(operationContext, spacing)
+		} else {
+			result, err = process.calibrate(operationContext, opcode)
+		}
 		if correction && (err != nil || operationContext.Err() != nil) {
 			process.Stop()
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "correction_unavailable"})
 			return
 		}
-		if (opcode == 'A' || opcode == 'M') && (err != nil || operationContext.Err() != nil) {
+		if pdArmOpcode(opcode) && (err != nil || operationContext.Err() != nil) {
 			cancelFailedAetherPDArm(process)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
 			return
 		}
-		if err == nil && result == 0 && (opcode == 'A' || opcode == 'M') && process.receiveJournal != nil {
+		if err == nil && result == 0 && pdArmOpcode(opcode) && process.receiveJournal != nil {
 			if journalErr := process.receiveJournal.recordPD(observed, time.Now()); journalErr != nil {
 				cancelFailedAetherPDArm(process)
 				log.Printf("AetherPD: calibration receive journal rejected: %v", journalErr)
@@ -107,14 +137,22 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			}
 			log.Print("AetherPD: recorded owned PD receiver in receive-recovery journal")
 		}
-		if !n.checkToken(token) {
+		n.mu.Lock()
+		authorized = n.checkTokenLocked(token)
+		current = n.pdProcess == process
+		n.mu.Unlock()
+		if !authorized || !current {
 			if correction {
 				process.Stop()
 			}
-			if (opcode == 'A' || opcode == 'M') && err == nil && result == 0 {
+			if pdArmOpcode(opcode) && err == nil && result == 0 {
 				cancelFailedAetherPDArm(process)
 			}
-			writeJSON(w, http.StatusUnauthorized, apiError{errUnauthorized.Error()})
+			if !authorized {
+				writeJSON(w, http.StatusUnauthorized, apiError{errUnauthorized.Error()})
+			} else {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"state": "calibration_unavailable"})
+			}
 			return
 		}
 		if err != nil || result >= 3 {
@@ -130,7 +168,7 @@ func aetherPDCalibrationHandlerWithObserver(n *Node, opcode byte, observe func(c
 			return
 		}
 		state := "calibration_arm_accepted"
-		if opcode == 'M' {
+		if pdMeasurementOpcode(opcode) {
 			state = "measurement_arm_accepted"
 		}
 		if opcode == 'X' {

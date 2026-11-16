@@ -21,7 +21,7 @@ repeated or delayed older requests cannot restart it.
 
 A partial snapshot is rejected after a continuity reset, nonfinite sample,
 change of stream/rate/center/acquisition generation/key/correction state,
-measurement source identity or guarded tone-window state,
+measurement source identity, spacing or guarded tone-window state,
 backward clock, or receipt gap exceeding 100 ms. Collection expires after
 one second. Complete snapshots remain immutable across subsequent unkey or
 reset for retrieval, and expire five seconds after the request. Metadata
@@ -51,7 +51,7 @@ the following fixed header, followed by zero or 1,024 raw complex samples:
 
 | Body offset | Type | Field |
 |---|---|---|
-| 0 | 8 bytes | `PDIQ0002` |
+| 0 | 8 bytes | `PDIQ0003` |
 | 8 | u64 | Requested capture ID |
 | 16 | u32 | State: 1 pending, 2 ready, 3 invalid, 4 expired, 5 unavailable |
 | 20 | u32 | Requested sample offset, a multiple of 1,024 below 16,384 |
@@ -64,10 +64,15 @@ the following fixed header, followed by zero or 1,024 raw complex samples:
 | 64 | u32 | DAX IQ stream ID |
 | 68 | u32 | Bit 0 keyed; bit 1 DSP correction active; bit 2 guarded measurement tones |
 | 72 | u64 | Accepted measurement source ID, or zero |
-| 80 | bytes | Unchanged little-endian float32 I,Q pairs |
+| 80 | u32 | Measurement spacing in Hz, or zero when no measurement source exists |
+| 84 | bytes | Unchanged little-endian float32 I,Q pairs |
 
 The Go reader also accepts the legacy `PDIQ0001` 72-byte header, which has
-no measurement provenance and cannot satisfy the composed measurement workflow.
+no measurement provenance and cannot satisfy the composed measurement workflow,
+and the `PDIQ0002` 80-byte header without confirmed spacing. A configured arm
+requires native status to advertise `measurement_tone_capture_version=3`;
+a source with configurable tones and an older capture protocol is refused.
+The DSP and its owner must be installed together from one authenticated release.
 All header integers are big-endian. Timestamps are local process consumption
 times, not FPGA timestamps or calibrated latency measurements. Flags describe
 DSP state during receipt; RF propagation and filter delay still require
@@ -86,7 +91,7 @@ It collects a new snapshot and returns a manifest containing `capture_id`,
 `chunk_samples` (512), `keyed`, `correcting`, and `first_receive_ns` /
 `last_receive_ns`. Nanosecond timestamps are decimal strings to avoid loss of
 integer precision in JSON clients. The v1 endpoint exposes no stream or process
-identifiers. Native `PDIQ0002` captures also carry
+identifiers. Native v2 and v3 captures also carry
 `measurement: {"source_id": "000000000000001f", "tones": true}`. The ID is a
 canonical 16-character lowercase hexadecimal string scoped to the original
 owned DSP; zero means no measurement source. The same optional object appears
@@ -103,6 +108,38 @@ antenna, current ownership after the capture, or a calibrated RF level.
 Generation is scoped to the original DSP lifetime and can change on a normal
 reset; it is not a persistent radio identity. Existing v1 responses remain
 unchanged, and v2 captures use the same v1 chunk retrieval endpoint.
+
+`POST /v3/aetherpd/capture` adds `measurement_tone_config` for a captured
+measurement source. The object contains `source_id`, `spacing_hz`,
+`center_hz` (1305), `min_spacing_hz` (200) and `max_spacing_hz` (10000).
+The emitted offsets from the RF carrier are `1305 - spacing_hz/2` and
+`1305 + spacing_hz/2`; odd spacing retains half-Hz precision, and the lower
+offset can be zero or negative. The source ID must match the immutable
+`measurement` object. The profile comes directly from every native snapshot
+chunk, not a subsequent status query or the requested settings. A spacing
+change during collection invalidates the frame. No measurement source means
+no tone-config object; an identified source without a confirmed profile is
+refused on v3. V1/v2 refuse a nondefault profile, including its preamble, so
+older clients cannot silently analyze it as 710/1900 Hz. Default profiles
+retain the existing v1/v2 response shape and chunk endpoint.
+
+V3 maps to private opcode `K` under `PDTALK07`; older sessions return 501
+without dispatch. `POST /v2/aetherpd/measurement/arm` accepts only
+`{"spacing_hz":1001}`, with one integer field in the inclusive 200–10000 range.
+It uses `PDCMD003` with opcode `Q` and a two-byte big-endian spacing, then the
+native `Q` + nonce + spacing datagram. Both boundaries reject malformed,
+unsupported or out-of-range requests. Cancellation, token revocation and
+original-session replacement retire a pending configured arm. This operation
+does not key, change gain, extend the eight-second source or four-second
+preamble, or invalidate a matching PA model. V1 arm continues to select
+710/1900 Hz. An acceptance receipt is not proof of emitted tones: clients
+must observe matching source/config status and use v3 capture provenance.
+
+The configured native/shim path is locally tested but not installed or
+RF-qualified. The desktop still arms and analyzes the default pair. Its
+pending integration must enforce the selected IMD products against the
+captured bandwidth; generator support for 10000 Hz spacing does not imply
+that every IMD order fits a 48 kHz IQ frame.
 
 The v2 request maps to fixed private opcode `J`, advertised by `PDTALK06`.
 The primary returns 501 for an older private session without sending the new

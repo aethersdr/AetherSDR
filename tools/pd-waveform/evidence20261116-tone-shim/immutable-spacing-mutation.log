@@ -1,0 +1,1 @@
+pd_capture_test: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/capture_test.c:120: main: Assertion `c.state==PD_CAPTURE_INVALID' failed.

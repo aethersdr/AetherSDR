@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
 
 static int64_t now_ns(void)
 {
@@ -13,11 +14,18 @@ static int64_t now_ns(void)
     if (clock_gettime(CLOCK_MONOTONIC,&t)) { return 0; }
     return (int64_t)t.tv_sec*1000000000+t.tv_nsec;
 }
-int main(void)
+int main(int argc, char** argv)
 {
     if (pd_status_open("3")!=3) { return 1; }
     struct pd_capture capture={0};
-    struct pd_capture_meta meta={7,7150000,0x40000001,192000,1,1,31,1};
+    struct pd_capture_meta meta={7,7150000,0x40000001,192000,1,1,31,1,1190};
+    if (argc>2) { return 6; }
+    if (argc==2) {
+        char* end=NULL;
+        unsigned long spacing=strtoul(argv[1],&end,10);
+        if (!end || *end || spacing<200 || spacing>10000) { return 7; }
+        meta.measurement_spacing_hz=(uint32_t)spacing;
+    }
     for (unsigned requests=0;requests<64;++requests) {
         struct pollfd fd={.fd=3,.events=POLLIN};
         if (poll(&fd,1,2000)!=1) { return 2; }

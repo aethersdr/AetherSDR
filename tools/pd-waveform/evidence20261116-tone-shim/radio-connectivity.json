@@ -1,0 +1,21 @@
+{
+  "utc": "2026-11-16T13:15:22.943257+00:00",
+  "checks": [
+    {
+      "port": 4992,
+      "connected": false,
+      "error": "timed out"
+    },
+    {
+      "port": 48992,
+      "connected": false,
+      "error": "timed out"
+    },
+    {
+      "port": 22222,
+      "connected": false,
+      "error": "timed out"
+    }
+  ],
+  "commands_sent": false
+}

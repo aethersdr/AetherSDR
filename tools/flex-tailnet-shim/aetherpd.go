@@ -21,22 +21,25 @@ var aetherPDReads = make(chan struct{}, 1)
 // client identifiers and packet metadata stay local to the waveform.
 // This report never authorizes capture provisioning or transmitter control.
 type aetherPDStatus struct {
-	Measurement            *pdMeasurementSource `json:"measurement,omitempty"`
-	InputLimitedSamples    uint64               `json:"input_limited_samples"`
-	CorrectionControl      bool                 `json:"correction_control,omitempty"`
-	MeasurementControl     bool                 `json:"measurement_control,omitempty"`
-	SourcePurpose          string               `json:"source_purpose,omitempty"`
-	CalibrationControl     bool                 `json:"calibration_control"`
-	CalibrationState       string               `json:"calibration_state,omitempty"`
-	CalibrationSamplesLeft uint32               `json:"calibration_samples_left,omitempty"`
-	Available              bool                 `json:"available"`
-	State                  string               `json:"state"`
-	Registered             bool                 `json:"registered"`
-	Keyed                  bool                 `json:"keyed"`
-	CorrectionEnabled      bool                 `json:"correction_enabled"`
-	Correcting             bool                 `json:"correcting"`
-	CalibrationRequired    bool                 `json:"calibration_required"`
-	Faults                 aetherPDFaults       `json:"faults"`
+	MeasurementToneCaptureVersion uint32                   `json:"measurement_tone_capture_version,omitempty"`
+	MeasurementToneControl        bool                     `json:"measurement_tone_control,omitempty"`
+	MeasurementToneConfig         *pdMeasurementToneConfig `json:"measurement_tone_config,omitempty"`
+	Measurement                   *pdMeasurementSource     `json:"measurement,omitempty"`
+	InputLimitedSamples           uint64                   `json:"input_limited_samples"`
+	CorrectionControl             bool                     `json:"correction_control,omitempty"`
+	MeasurementControl            bool                     `json:"measurement_control,omitempty"`
+	SourcePurpose                 string                   `json:"source_purpose,omitempty"`
+	CalibrationControl            bool                     `json:"calibration_control"`
+	CalibrationState              string                   `json:"calibration_state,omitempty"`
+	CalibrationSamplesLeft        uint32                   `json:"calibration_samples_left,omitempty"`
+	Available                     bool                     `json:"available"`
+	State                         string                   `json:"state"`
+	Registered                    bool                     `json:"registered"`
+	Keyed                         bool                     `json:"keyed"`
+	CorrectionEnabled             bool                     `json:"correction_enabled"`
+	Correcting                    bool                     `json:"correcting"`
+	CalibrationRequired           bool                     `json:"calibration_required"`
+	Faults                        aetherPDFaults           `json:"faults"`
 }
 
 type aetherPDFaults struct {
@@ -168,6 +171,24 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 		if result.Measurement.Tones && (!result.Keyed || result.CalibrationState != "running") {
 			return result, errors.New("measurement tones outside running source")
 		}
+	}
+	if raw, present := fields["measurement_tone_config"]; present {
+		result.MeasurementToneConfig, err = parsePDToneConfig(raw)
+		if err != nil {
+			return result, err
+		}
+		if err = read("measurement_tone_capture_version", &result.MeasurementToneCaptureVersion); err != nil || result.MeasurementToneCaptureVersion != 3 {
+			return result, errors.New("measurement tones require snapshot-bound configuration")
+		}
+		if err = read("measurement_tone_control", &result.MeasurementToneControl); err != nil ||
+			(result.MeasurementToneControl && !result.MeasurementControl) || result.Measurement == nil ||
+			result.Measurement.SourceID != result.MeasurementToneConfig.SourceID {
+			return result, errors.New("inconsistent measurement tone configuration")
+		}
+	} else if _, present := fields["measurement_tone_control"]; present {
+		return result, errors.New("partial measurement tone configuration")
+	} else if _, present := fields["measurement_tone_capture_version"]; present {
+		return result, errors.New("partial measurement tone capture capability")
 	}
 	if _, present := fields["limited_samples"]; present {
 		if err = read("limited_samples", &result.InputLimitedSamples); err != nil {

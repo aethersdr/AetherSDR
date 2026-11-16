@@ -1,0 +1,128 @@
+{
+  "updated_utc": "2026-11-16T13:19:42.042741+00:00",
+  "status": "native_and_shim_component_qualified_not_installed",
+  "production_ready": false,
+  "source_base": "d6f441d026cfc0fe016d5bf414b0547773973e7b",
+  "evidence": "evidence20261116-tone-shim",
+  "implemented": [
+    "Authenticated configured measurement arm with one integer spacing_hz field in200..10000; native Q carries exact spacing and nonce. No RF keying, gain, duration, or privileged-helper input added.",
+    "Private session v7 negotiates PDCMD003/Q and capture K. Older sessions refuse configured operations without retiring their session or substituting tones.",
+    "PDIQ0003 capture header84bytes includes immutable source spacing; any in-frame spacing change invalidates the snapshot. All chunks must carry identical metadata.",
+    "Public capture v3 publishes confirmed source/configuration; v1/v2 refuse nondefault profiles, including preamble, while default responses retain their schema.",
+    "Native status must advertise measurement_tone_capture_version3 before configured arms are accepted, preventing mixed development binaries with configurable generation but no captured spacing.",
+    "Pending configured arms retain cancellation, revocation, process/session identity and receive-recovery journal checks."
+  ],
+  "validation": {
+    "go_full_race": {
+      "top_level_tests": {
+        "pass": 260,
+        "skip": 10
+      },
+      "packages": [
+        {
+          "package": "github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/cmd/tailnet-probe",
+          "result": "skip",
+          "elapsed_s": 0
+        },
+        {
+          "package": "github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/native/unpack",
+          "result": "pass",
+          "elapsed_s": 1.021
+        },
+        {
+          "package": "github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim",
+          "result": "pass",
+          "elapsed_s": 24.972
+        }
+      ],
+      "skipped": [
+        "TestPDInstallNativeRejectsPersistentOrWritableCredentials",
+        "TestPDInstallNativeUploadAndCancellation",
+        "TestPDInstallNativeCredentialRolesAndBinding",
+        "TestPDInstallNativeCredentialRejectsBadDescriptors",
+        "TestPDInstallationReaderRejectsDisk",
+        "TestPDInstallationNativePublisher",
+        "TestAetherPDManagedBench",
+        "TestAetherPDLiveProcess",
+        "TestPDReceiveObserverRadio",
+        "TestAetherPDLiveStatus"
+      ]
+    },
+    "native_ctest_pass": 4,
+    "native_asan_ubsan_lsan_pass": 4,
+    "native_to_public_profiles_hz": [
+      200,
+      1001,
+      1190,
+      2610,
+      10000
+    ],
+    "native_to_public_exact_sample_bytes": true,
+    "mutations": [
+      {
+        "mutation": "legacy-capture-fence",
+        "caught": true,
+        "exit": 1,
+        "expected_assertion": "legacy capture accepted nondefault source"
+      },
+      {
+        "mutation": "immutable-spacing",
+        "caught": true,
+        "exit": -6,
+        "expected_assertion": "c.state==PD_CAPTURE_INVALID"
+      }
+    ],
+    "cross_builds": [
+      {
+        "file": "aether-pd-armv7",
+        "bytes": 265964,
+        "sha256": "b80a397d0e620cdb200eb4446fb99d79583705758a51102815a029763eaa1326"
+      },
+      {
+        "file": "aether-pd-arm64",
+        "bytes": 278024,
+        "sha256": "1b3cf540b09aeaec19e232cb46f64f812b3d6ebd80a9aa4f3849afa33574b492"
+      },
+      {
+        "file": "shim-armv7",
+        "bytes": 21889184,
+        "sha256": "09c46cde1f7a5495afc51a0cdf7a20b8491ad3625874f18aba9d3a426719c0ba"
+      },
+      {
+        "file": "shim-arm64",
+        "bytes": 21495968,
+        "sha256": "e6a52a3b50891a28da0d11bc6937af0bdebdebe20d390fb4d78ce81fccbf2d03"
+      }
+    ],
+    "docs_build": true,
+    "test_registration_strict": true
+  },
+  "radio": {
+    "utc": "2026-11-16T13:15:22.943257+00:00",
+    "checks": [
+      {
+        "port": 4992,
+        "connected": false,
+        "error": "timed out"
+      },
+      {
+        "port": 48992,
+        "connected": false,
+        "error": "timed out"
+      },
+      {
+        "port": 22222,
+        "connected": false,
+        "error": "timed out"
+      }
+    ],
+    "commands_sent": false
+  },
+  "limitations": [
+    "Offline component checks only. No installation, reboot, transmission or RF result from this checkpoint.",
+    "Desktop still requests and analyzes the default710/1900Hz pair. Next: strict configured status/capture parsing, explicit version negotiation, actual tone frequencies throughout analysis/export, operator setting and capability gating.",
+    "Desktop must reject requested IMD products outside captured bandwidth; generator support alone does not qualify every order/spacing combination.",
+    "Cross builds are individual binaries, not refreshed authenticated/reproducible complete packages or disk-peak qualification.",
+    "Current installed e056 candidate remains unreachable after earlier single reboot. Whole P1-P10 goal, live recovery/cold-start/slip work, repeatedRF/stockAPD, actual6300 and release gates remain."
+  ]
+}

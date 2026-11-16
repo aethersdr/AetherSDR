@@ -49,3 +49,7 @@ func (*aetherPDProcess) restoreReceive(context.Context, func() bool) error {
 }
 
 func runPDReceiveGuardianMode() bool { return false }
+
+func (*aetherPDProcess) calibrateTone(context.Context, uint32) (int, error) {
+	return 0, errors.New("on-radio AetherPD requires Linux")
+}

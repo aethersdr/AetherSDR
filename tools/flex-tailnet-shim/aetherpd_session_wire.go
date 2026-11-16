@@ -50,7 +50,8 @@ type pdSessionReply struct {
 }
 
 type pdSessionChannel struct {
-	// Immutable after publication: capture v2, tests v3, measurement v4, correction v5, sampled source identity v6.
+	// Immutable after publication: capture v2, tests v3, measurement v4, correction v5, sampled source v6, configured tones v7.
+	toneSupported          bool
 	captureSourceSupported bool
 	correctionSupported    bool
 	captureSupported       bool
@@ -108,8 +109,16 @@ func (s *pdSessionChannel) CallTest(ctx context.Context, op byte, id [16]byte, d
 	binary.BigEndian.PutUint16(extra[16:], duration)
 	return s.call(ctx, op, extra[:])
 }
+func (s *pdSessionChannel) CallTone(ctx context.Context, spacing uint32) pdSessionReply {
+	if !s.toneSupported || !pdToneSpacingValid(spacing) {
+		return pdSessionReply{err: errors.New("invalid or unsupported tone configuration")}
+	}
+	var extra [2]byte
+	binary.BigEndian.PutUint16(extra[:], uint16(spacing))
+	return s.call(ctx, 'Q', extra[:])
+}
 func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSessionReply {
-	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && (!s.testSupported || !pdTestOpcode(op))) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == pdCaptureBeginWithSource && !s.captureSourceSupported) || (op == 'M' && !s.measurementSupported) || (pdCorrectionOpcode(op) && !s.correctionSupported) {
+	if (extra == nil && !pdSessionOpcode(op)) || (extra != nil && !((s.testSupported && pdTestOpcode(op) && len(extra) == 18) || (s.toneSupported && op == 'Q' && len(extra) == 2 && pdToneSpacingValid(uint32(binary.BigEndian.Uint16(extra)))))) || (pdCaptureOpcode(op) && !s.captureSupported) || (op == pdCaptureBeginWithSource && !s.captureSourceSupported) || (op == pdCaptureBeginWithTones && !s.toneSupported) || (op == 'M' && !s.measurementSupported) || (pdCorrectionOpcode(op) && !s.correctionSupported) {
 		return pdSessionReply{err: errors.New("invalid session operation")}
 	}
 	if err := ctx.Err(); err != nil {
@@ -135,6 +144,9 @@ func (s *pdSessionChannel) call(ctx context.Context, op byte, extra []byte) pdSe
 	copy(frame[:8], "PDCMD001")
 	if extra != nil {
 		copy(frame[:8], "PDCMD002")
+		if op == 'Q' {
+			copy(frame[:8], "PDCMD003")
+		}
 		copy(frame[16:], extra)
 	}
 	binary.BigEndian.PutUint32(frame[8:12], id)

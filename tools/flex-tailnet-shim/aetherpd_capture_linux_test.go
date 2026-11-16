@@ -10,19 +10,27 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
 
 func TestPrivateAetherPDCaptureNativePublicFixture(t *testing.T) {
-	testPrivateAetherPDCapturePublic(t, false)
+	testPrivateAetherPDCapturePublic(t, pdCaptureBegin, 0)
 }
 
 func TestPrivateAetherPDCaptureNativePublicSourceFixture(t *testing.T) {
-	testPrivateAetherPDCapturePublic(t, true)
+	testPrivateAetherPDCapturePublic(t, pdCaptureBeginWithSource, 0)
 }
 
-func testPrivateAetherPDCapturePublic(t *testing.T, withSource bool) {
+func TestPrivateAetherPDCaptureNativePublicToneFixture(t *testing.T) {
+	for _, spacing := range []uint32{200, 1001, 1190, 2610, 10000} {
+		t.Run(strconv.Itoa(int(spacing)), func(t *testing.T) { testPrivateAetherPDCapturePublic(t, pdCaptureBeginWithTones, spacing) })
+	}
+}
+
+func testPrivateAetherPDCapturePublic(t *testing.T, mode byte, spacing uint32) {
+	withSource := mode != pdCaptureBegin
 	t.Helper()
 	path := os.Getenv("AETHER_PD_CAPTURE_FIXTURE")
 	if path == "" {
@@ -37,18 +45,29 @@ func testPrivateAetherPDCapturePublic(t *testing.T, withSource bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path)
+	if spacing != 0 {
+		cmd.Args = append(cmd.Args, strconv.Itoa(int(spacing)))
+	}
 	cmd.ExtraFiles = []*os.File{file}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	peer.Close()
 	n := newTestNode(t, "owner")
-	n.pdSession, _ = pdSessionTestPair(t, pdSessionOperations(&Node{pdProcess: p}))
+	if mode == pdCaptureBeginWithTones {
+		node := &Node{pdProcess: p}
+		n.pdSession = toneSessionPair(t, pdSessionOperations(node), pdSessionToneOperations(node))
+	} else {
+		n.pdSession, _ = pdSessionTestPair(t, pdSessionOperations(&Node{pdProcess: p}))
+	}
 	n.pdSession.captureSourceSupported = withSource
 	h := NewAPI(n)
 	endpoint := "/v1/aetherpd/capture"
 	if withSource {
 		endpoint = "/v2/aetherpd/capture"
+	}
+	if mode == pdCaptureBeginWithTones {
+		endpoint = "/v3/aetherpd/capture"
 	}
 	response := call(t, h, "POST", endpoint, "192.168.50.20:4000", "owner", "")
 	waitErr := cmd.Wait()
@@ -60,7 +79,17 @@ func testPrivateAetherPDCapturePublic(t *testing.T, withSource bool) {
 		manifest.Measurement == nil || manifest.Measurement.SourceID != "000000000000001f" || !manifest.Measurement.Tones {
 		t.Fatal("native metadata changed")
 	}
+	if mode == pdCaptureBeginWithTones {
+		if !manifest.ToneConfig.valid() || manifest.ToneConfig.SpacingHz != spacing || manifest.ToneConfig.SourceID != manifest.Measurement.SourceID {
+			t.Fatal("native emitted profile lost at public boundary", response.Body.String())
+		}
+	} else if manifest.ToneConfig != nil {
+		t.Fatal("legacy manifest changed")
+	}
 	directory := os.Getenv("AETHER_PD_CAPTURE_FIXTURE_DIR")
+	if mode == pdCaptureBeginWithTones && directory != "" {
+		directory = filepath.Join(directory, "tones-"+strconv.Itoa(int(spacing)))
+	}
 	if withSource {
 		if !manifest.Source.valid() {
 			t.Fatal("sample source identity missing")

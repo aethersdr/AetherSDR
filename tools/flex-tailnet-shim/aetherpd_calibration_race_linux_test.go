@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,13 +16,17 @@ import (
 )
 
 func TestAetherPDCalibrationCancelSupersedesPendingArmSnapshot(t *testing.T) {
-	for _, opcode := range []byte{'A', 'M'} {
+	for _, opcode := range []byte{'A', 'M', 'Q'} {
 		t.Run(string(opcode), func(t *testing.T) {
 			n := newTestNode(t, "secret")
 			p, peer := calibrationPair(t)
 			n.pdProcess = p
-			if opcode == 'M' {
-				measurementStatusFixture(t, p, pdMeasurementNativeStatus)
+			if pdMeasurementOpcode(opcode) {
+				body := pdMeasurementNativeStatus
+				if opcode == 'Q' {
+					body = toneNativeStatus()
+				}
+				measurementStatusFixture(t, p, body)
 			}
 			journal, view, _ := receiveJournalFixture()
 			p.receiveJournal = journal
@@ -35,7 +40,7 @@ func TestAetherPDCalibrationCancelSupersedesPendingArmSnapshot(t *testing.T) {
 					if err != nil {
 						return
 					}
-					if size != 9 {
+					if size != 9 && !(request[0] == 'Q' && size == 11) {
 						return
 					}
 					armed.Store(request[0] == opcode)
@@ -55,7 +60,7 @@ func TestAetherPDCalibrationCancelSupersedesPendingArmSnapshot(t *testing.T) {
 				return view, nil
 			}
 			api := http.NewServeMux()
-			api.HandleFunc("POST /arm", aetherPDCalibrationHandlerWithObserver(n, opcode, observe))
+			api.HandleFunc("POST /arm", aetherPDCalibrationHandlerWithTone(n, opcode, 1190, observe))
 			api.HandleFunc("POST /cancel", aetherPDCalibrationHandlerWithObserver(n, 'X', observe))
 			armDone := make(chan int, 1)
 			go func() { armDone <- call(t, api, "POST", "/arm", "192.168.50.20:4000", "secret", "").Code }()
@@ -116,13 +121,17 @@ func TestAetherPDCalibrationUnconfirmedSafetyCancelEndsOwnedLifetime(t *testing.
 }
 
 func TestAetherPDCalibrationCanceledReplyWaitCancelsNativeSource(t *testing.T) {
-	for _, opcode := range []byte{'A', 'M'} {
+	for _, opcode := range []byte{'A', 'M', 'Q'} {
 		t.Run(string(opcode), func(t *testing.T) {
 			n := newTestNode(t, "secret")
 			p, peer := calibrationPair(t)
 			n.pdProcess = p
-			if opcode == 'M' {
-				measurementStatusFixture(t, p, pdMeasurementNativeStatus)
+			if pdMeasurementOpcode(opcode) {
+				body := pdMeasurementNativeStatus
+				if opcode == 'Q' {
+					body = toneNativeStatus()
+				}
+				measurementStatusFixture(t, p, body)
 			}
 			var armed atomic.Bool
 			requestSeen := make(chan struct{})
@@ -131,7 +140,7 @@ func TestAetherPDCalibrationCanceledReplyWaitCancelsNativeSource(t *testing.T) {
 				defer close(peerDone)
 				request := make([]byte, 16)
 				size, err := peer.Read(request)
-				if err != nil || size != 9 || request[0] != opcode {
+				if err != nil || (size != 9 && !(opcode == 'Q' && size == 11)) || request[0] != opcode {
 					return
 				}
 				armed.Store(true)
@@ -152,7 +161,12 @@ func TestAetherPDCalibrationCanceledReplyWaitCancelsNativeSource(t *testing.T) {
 			if opcode == 'M' {
 				path = "/v1/aetherpd/measurement/arm"
 			}
-			req := httptest.NewRequest("POST", path, nil).WithContext(ctx)
+			var body io.Reader
+			if opcode == 'Q' {
+				path = "/v2/aetherpd/measurement/arm"
+				body = strings.NewReader(`{"spacing_hz":1001}`)
+			}
+			req := httptest.NewRequest("POST", path, body).WithContext(ctx)
 			req.RemoteAddr = "192.168.50.20:4000"
 			req.Header.Set("Authorization", "Bearer secret")
 			response := httptest.NewRecorder()

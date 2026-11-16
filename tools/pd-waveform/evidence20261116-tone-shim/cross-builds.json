@@ -1,0 +1,22 @@
+[
+  {
+    "file": "aether-pd-armv7",
+    "bytes": 265964,
+    "sha256": "b80a397d0e620cdb200eb4446fb99d79583705758a51102815a029763eaa1326"
+  },
+  {
+    "file": "aether-pd-arm64",
+    "bytes": 278024,
+    "sha256": "1b3cf540b09aeaec19e232cb46f64f812b3d6ebd80a9aa4f3849afa33574b492"
+  },
+  {
+    "file": "shim-armv7",
+    "bytes": 21889184,
+    "sha256": "09c46cde1f7a5495afc51a0cdf7a20b8491ad3625874f18aba9d3a426719c0ba"
+  },
+  {
+    "file": "shim-arm64",
+    "bytes": 21495968,
+    "sha256": "e6a52a3b50891a28da0d11bc6937af0bdebdebe20d390fb4d78ce81fccbf2d03"
+  }
+]

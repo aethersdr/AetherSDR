@@ -1,0 +1,35 @@
+{
+  "top_level_tests": {
+    "pass": 260,
+    "skip": 10
+  },
+  "packages": [
+    {
+      "package": "github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/cmd/tailnet-probe",
+      "result": "skip",
+      "elapsed_s": 0
+    },
+    {
+      "package": "github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/native/unpack",
+      "result": "pass",
+      "elapsed_s": 1.021
+    },
+    {
+      "package": "github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim",
+      "result": "pass",
+      "elapsed_s": 24.972
+    }
+  ],
+  "skipped": [
+    "TestPDInstallNativeRejectsPersistentOrWritableCredentials",
+    "TestPDInstallNativeUploadAndCancellation",
+    "TestPDInstallNativeCredentialRolesAndBinding",
+    "TestPDInstallNativeCredentialRejectsBadDescriptors",
+    "TestPDInstallationReaderRejectsDisk",
+    "TestPDInstallationNativePublisher",
+    "TestAetherPDManagedBench",
+    "TestAetherPDLiveProcess",
+    "TestPDReceiveObserverRadio",
+    "TestAetherPDLiveStatus"
+  ]
+}

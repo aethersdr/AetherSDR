@@ -1,0 +1,3 @@
+PASS: raw IQ snapshot, ownership, continuity, expiry and waveform tap
+1794835088.379 measurement window: event=test_cancel ready=0 now_ns=30048782788687 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=90000 tone1=0 tone2=2610 tone_sent_ns=10000000000 guard_ns=500000000 iq_valid_ns=10520000000 iq_age_ns=0 deadline_ns=18000000000 fits=-1 solution=-1
+1794835088.379 bounded source ended: reason=test_cancel source=000000000000001f phase=running keyed=1 tx_on=0 samples_left=0 generated=0 iq_frames=0 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0

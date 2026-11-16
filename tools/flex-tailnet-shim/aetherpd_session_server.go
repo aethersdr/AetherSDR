@@ -40,6 +40,8 @@ func (w *pdSessionResponse) Write(b []byte) (int, error) {
 }
 
 type pdSessionOperation func(context.Context, byte) pdSessionReply
+type pdSessionToneOperation func(context.Context, uint32) pdSessionReply
+
 type pdSessionTestOperation func(context.Context, byte, [16]byte, uint16) pdSessionReply
 
 func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), testOperations ...pdSessionTestOperation) error {
@@ -52,6 +54,10 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 	if len(testOperations) == 1 {
 		testOperation = testOperations[0]
 	}
+	return servePDSessionWithTone(conn, operation, stop, testOperation, nil)
+}
+
+func servePDSessionWithTone(conn net.Conn, operation pdSessionOperation, stop func(), testOperation pdSessionTestOperation, toneOperation pdSessionToneOperation) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer conn.Close()
@@ -67,6 +73,9 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 	hello := "PDTALK02"
 	if testOperation != nil {
 		hello = "PDTALK06"
+	}
+	if toneOperation != nil {
+		hello = "PDTALK07"
 	}
 	if err := pdWriteAll(conn, []byte(hello)); err != nil {
 		return err
@@ -84,8 +93,9 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 		id := binary.BigEndian.Uint32(frame[8:12])
 		op := frame[12]
 		isTest := string(frame[:8]) == "PDCMD002" && testOperation != nil && pdTestOpcode(op)
-		legacy := string(frame[:8]) == "PDCMD001" && pdSessionOpcode(op)
-		if (!isTest && !legacy) || id <= last || frame[13] != 0 || frame[14] != 0 || frame[15] != 0 {
+		isTone := string(frame[:8]) == "PDCMD003" && toneOperation != nil && op == 'Q'
+		legacy := string(frame[:8]) == "PDCMD001" && pdSessionOpcode(op) && (op != pdCaptureBeginWithTones || toneOperation != nil)
+		if (!isTest && !isTone && !legacy) || id <= last || frame[13] != 0 || frame[14] != 0 || frame[15] != 0 {
 			return errors.New("invalid session request")
 		}
 		var testID [16]byte
@@ -101,6 +111,17 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 				return errors.New("invalid test request")
 			}
 		}
+		var spacing uint32
+		if isTone {
+			var extra [2]byte
+			if _, err := io.ReadFull(conn, extra[:]); err != nil {
+				return err
+			}
+			spacing = uint32(binary.BigEndian.Uint16(extra[:]))
+			if !pdToneSpacingValid(spacing) {
+				return errors.New("invalid measurement spacing")
+			}
+		}
 		last = id
 		select {
 		case slots <- struct{}{}:
@@ -114,7 +135,9 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 			callCtx, finish := context.WithTimeout(ctx, 8*time.Second)
 			defer finish()
 			var reply pdSessionReply
-			if isTest {
+			if isTone {
+				reply = toneOperation(callCtx, spacing)
+			} else if isTest {
 				reply = testOperation(callCtx, op, testID, duration)
 			} else {
 				reply = operation(callCtx, op)
@@ -144,9 +167,10 @@ func servePDSession(conn net.Conn, operation pdSessionOperation, stop func(), te
 	}
 }
 
+const pdSessionPrivateToken = "private-inherited-session-channel"
+
 func pdSessionOperations(n *Node) pdSessionOperation {
-	const token = "private-inherited-session-channel"
-	n.cfg.TokenSHA256 = sha256Hex(token)
+	n.cfg.TokenSHA256 = sha256Hex(pdSessionPrivateToken)
 	handlers := map[byte]http.HandlerFunc{
 		'S': aetherPDStatusHandler(n, n.pdProcess.queryStatus),
 		'A': aetherPDCalibrationHandler(n, 'A'),
@@ -168,13 +192,23 @@ func pdSessionOperations(n *Node) pdSessionOperation {
 		if !ok {
 			return pdSessionReply{err: errors.New("unknown session operation")}
 		}
-		request, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://private/", strings.NewReader(""))
-		request.Header.Set("Authorization", "Bearer "+token)
-		response := &pdSessionResponse{header: make(http.Header)}
-		handler(response, request)
-		if response.overflow {
-			return pdSessionReply{err: errors.New("session response too large")}
-		}
-		return pdSessionReply{code: response.code, body: response.body}
+		return pdSessionHTTPReply(ctx, handler)
 	}
+}
+
+func pdSessionToneOperations(n *Node) pdSessionToneOperation {
+	return func(ctx context.Context, spacing uint32) pdSessionReply {
+		return pdSessionHTTPReply(ctx, aetherPDCalibrationHandlerWithTone(n, 'Q', spacing, observePDReceiveWorld))
+	}
+}
+
+func pdSessionHTTPReply(ctx context.Context, handler http.HandlerFunc) pdSessionReply {
+	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://private/", strings.NewReader(""))
+	request.Header.Set("Authorization", "Bearer "+pdSessionPrivateToken)
+	response := &pdSessionResponse{header: make(http.Header)}
+	handler(response, request)
+	if response.overflow {
+		return pdSessionReply{err: errors.New("session response too large")}
+	}
+	return pdSessionReply{code: response.code, body: response.body}
 }

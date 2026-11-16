@@ -4,7 +4,7 @@
 #undef NDEBUG
 #include <assert.h>
 
-static const struct pd_capture_meta kMeta = {7, 7150000, 0x40000001, 192000, 1, 1, 0, 0};
+static const struct pd_capture_meta kMeta = {7, 7150000, 0x40000001, 192000, 1, 1, 0, 0, 0};
 static const int64_t kNow = 10000000000LL;
 
 static void fill(struct pd_capture* c, const struct pd_capture_meta* meta)
@@ -28,7 +28,7 @@ int main(void)
     assert(c.state==PD_CAPTURE_READY && c.count==PD_CAPTURE_SAMPLES);
     for (unsigned offset=0;offset<PD_CAPTURE_SAMPLES;offset+=PD_CAPTURE_CHUNK) {
         assert(pd_capture_read(&c,1,offset,kNow+40000000,out,sizeof(out))==PD_CAPTURE_REPLY);
-        assert(!memcmp(out,"PDIQ0002",8) && pd_iq_get64(out+8)==1);
+        assert(!memcmp(out,"PDIQ0003",8) && pd_iq_get64(out+8)==1);
         assert(be32(out+16)==PD_CAPTURE_READY && be32(out+20)==offset && be32(out+24)==1024);
         assert(be32(out+28)==192000 && pd_iq_get64(out+32)==7150000);
         assert(pd_iq_get64(out+40)==7 && be32(out+64)==kMeta.stream && be32(out+68)==3);
@@ -107,17 +107,26 @@ int main(void)
     assert(w.capture.state==PD_CAPTURE_INVALID);
     // Source identity and steady-tone boundaries are immutable for a frame.
     struct pd_capture_meta measuring=kMeta;
-    measuring.measurement_id=31;measuring.measurement_tones=1;
+    measuring.measurement_id=31;measuring.measurement_tones=1;measuring.measurement_spacing_hz=1190;
     pd_capture_begin(&c,30,&measuring,kNow);fill(&c,&measuring);
     assert(pd_capture_read(&c,30,0,kNow+40000000,out,sizeof(out))==PD_CAPTURE_REPLY);
-    assert(pd_iq_get64(out+72)==31 && be32(out+68)==7);
+    assert(pd_iq_get64(out+72)==31 && be32(out+68)==7 && be32(out+80)==1190);
     pd_capture_begin(&c,31,&measuring,kNow);
     struct pd_capture_meta changed=measuring;changed.measurement_id=32;
     pd_capture_feed(&c,&changed,sample,sizeof(sample),kNow+1);assert(c.state==PD_CAPTURE_INVALID);
     pd_capture_begin(&c,32,&measuring,kNow);changed=measuring;changed.measurement_tones=0;
     pd_capture_feed(&c,&changed,sample,sizeof(sample),kNow+1);assert(c.state==PD_CAPTURE_INVALID);
+    pd_capture_begin(&c,33,&measuring,kNow);changed=measuring;changed.measurement_spacing_hz=1001;
+    pd_capture_feed(&c,&changed,sample,sizeof(sample),kNow+1);assert(c.state==PD_CAPTURE_INVALID);
+    measuring.measurement_spacing_hz=199;
+    pd_capture_begin(&c,34,&measuring,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
+    measuring.measurement_spacing_hz=10001;
+    pd_capture_begin(&c,35,&measuring,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
+    measuring.measurement_spacing_hz=10000;
+    pd_capture_begin(&c,36,&measuring,kNow);fill(&c,&measuring);
+    assert(pd_capture_read(&c,36,0,kNow+40000000,out,sizeof(out))==PD_CAPTURE_REPLY && be32(out+80)==10000);
     measuring.measurement_id=0;
-    pd_capture_begin(&c,33,&measuring,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
+    pd_capture_begin(&c,37,&measuring,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
 
     w.calibration.purpose=PD_SOURCE_MEASUREMENT;w.calibration.source_id=31;
     w.calibration.tone_spacing_hz=PD_TONE_DEFAULT_SPACING_HZ;

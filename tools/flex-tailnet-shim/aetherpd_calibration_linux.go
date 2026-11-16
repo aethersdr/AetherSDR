@@ -35,7 +35,21 @@ func newPDCalibrationChannel() (*net.UnixConn, *os.File, error) {
 	return unix, child, nil
 }
 func (p *aetherPDProcess) calibrate(ctx context.Context, opcode byte) (int, error) {
-	if opcode != 'A' && opcode != 'M' && opcode != 'X' && !pdCorrectionOpcode(opcode) {
+	return p.calibrateRequest(ctx, opcode, 0)
+}
+
+func (p *aetherPDProcess) calibrateTone(ctx context.Context, spacing uint32) (int, error) {
+	return p.calibrateRequest(ctx, 'Q', spacing)
+}
+
+func (p *aetherPDProcess) calibrateRequest(ctx context.Context, opcode byte, spacing uint32) (int, error) {
+	if opcode == 'Q' && !pdToneSpacingValid(spacing) {
+		return 0, errors.New("invalid measurement spacing")
+	}
+	if opcode != 'Q' && spacing != 0 {
+		return 0, errors.New("unexpected measurement spacing")
+	}
+	if opcode != 'Q' && opcode != 'A' && opcode != 'M' && opcode != 'X' && !pdCorrectionOpcode(opcode) {
 		return 0, errors.New("invalid calibration command")
 	}
 	if p == nil || p.calibration == nil || p.calibrationReads == nil {
@@ -72,9 +86,16 @@ func (p *aetherPDProcess) calibrate(ctx context.Context, opcode byte) (int, erro
 		return 0, errors.New("calibration counter exhausted")
 	}
 	p.calibrationNonce++
-	request := make([]byte, 9)
+	size := 9
+	if opcode == 'Q' {
+		size = 11
+	}
+	request := make([]byte, size)
 	request[0] = opcode
-	binary.BigEndian.PutUint64(request[1:], p.calibrationNonce)
+	binary.BigEndian.PutUint64(request[1:9], p.calibrationNonce)
+	if opcode == 'Q' {
+		binary.BigEndian.PutUint16(request[9:], uint16(spacing))
+	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -90,7 +111,7 @@ func (p *aetherPDProcess) calibrate(ctx context.Context, opcode byte) (int, erro
 		if size != 9 || flags&syscall.MSG_TRUNC != 0 {
 			return 0, errors.New("invalid calibration reply")
 		}
-		if bytes.Equal(reply[:8], request[1:]) {
+		if bytes.Equal(reply[:8], request[1:9]) {
 			if reply[8] > 4 {
 				return 0, errors.New("invalid calibration result")
 			}
