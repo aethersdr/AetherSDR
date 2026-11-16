@@ -179,20 +179,28 @@ private slots:
     void smartMtrStripUploadMatchesFullFrame_data()
     {
         QTest::addColumn<qreal>("dpr");
-        QTest::newRow("logical") << qreal(1.0);
-        QTest::newRow("fractional-125") << qreal(1.25);
-        QTest::newRow("fractional-150") << qreal(1.5);
+        QTest::addColumn<int>("flagX");
+        QTest::addColumn<int>("flagY");
+        QTest::newRow("logical-left") << qreal(1.0) << 210 << 65;
+        QTest::newRow("logical-right") << qreal(1.0) << 1740 << 66;
+        QTest::newRow("fractional-125-left") << qreal(1.25) << 210 << 65;
+        QTest::newRow("fractional-125-right") << qreal(1.25) << 1740 << 66;
+        QTest::newRow("fractional-150-left") << qreal(1.5) << 210 << 65;
+        QTest::newRow("fractional-150-right") << qreal(1.5) << 1740 << 66;
+        QTest::newRow("retina-right") << qreal(2.0) << 1740 << 66;
     }
 
     void smartMtrStripUploadMatchesFullFrame()
     {
         QFETCH(qreal, dpr);
+        QFETCH(int, flagX);
+        QFETCH(int, flagY);
         MeterViewController::instance().setShowValues(
             DisplaySettings::MeterValues::Signal);
         QWidget spectrum;
         spectrum.resize(1900, 1154);
         VfoWidget flag(&spectrum);
-        flag.move(210, 65);
+        flag.move(flagX, flagY);
         spectrum.show();
         flag.show();
         SmartMtrWidget* meter = flag.findChild<SmartMtrWidget*>();
