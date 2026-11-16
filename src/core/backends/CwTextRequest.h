@@ -60,7 +60,19 @@ struct CwTextControl {
     enum class Completion { LocalHandoff, RadioCharacterIndex };
     QList<CwTextRequest::Field> fields;
     Completion completion{Completion::LocalHandoff};
+    // Targeted exclusions are not a claim that every other character is safe.
+    QString rejectedCharacters;
     bool supports(CwTextRequest::Field field) const { return fields.contains(field); }
+    QString textValidationError(const QString& text) const
+    {
+        for (qsizetype i = 0; i < text.size(); ++i) {
+            if (rejectedCharacters.contains(text.at(i))) {
+                return QStringLiteral("CW text refused: character '%1' at position %2 may leave the radio in transmit.")
+                    .arg(text.at(i)).arg(i + 1);
+            }
+        }
+        return {};
+    }
 };
 
 struct CwTextReply {
