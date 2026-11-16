@@ -356,6 +356,16 @@ add_test(NAME shared_capture_policy_test COMMAND shared_capture_policy_test)
 # AetherPD fixed session policies: Linux-only, socket-free parser/profile
 # checks. These test entry points perform no privileged setup or radio I/O.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The real helper parser and run loop with injected syscalls; no sockets,
+    # radio peer, keying, privileged setup or wall-clock sleeps.
+    add_executable(pd_unkey_guard_parser_test tools/pd-waveform/guardian/unkey_guard_test.c)
+    add_executable(pd_unkey_guard_deadline_test tools/pd-waveform/guardian/unkey_guard_deadline_test.c)
+    add_test(NAME pd_unkey_guard_parser_test COMMAND pd_unkey_guard_parser_test)
+    add_test(NAME pd_unkey_guard_deadline_test COMMAND pd_unkey_guard_deadline_test)
+    set_target_properties(pd_unkey_guard_parser_test pd_unkey_guard_deadline_test PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    set_tests_properties(pd_unkey_guard_parser_test pd_unkey_guard_deadline_test PROPERTIES TIMEOUT 10)
+
     # Standalone on-radio DSP, with its own patched WDSP core. These tests
     # inject sample buffers; no radio peer, API socket or privileged setup.
     add_library(aether_pd_test_core STATIC

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T11:20:41.425155+00:00",
+  "updated_utc": "2026-11-16T11:31:03.321689+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Resolve analyzer10second RF deadline/cleanup semantics; source options implemented and component-tested. Radio return, exact reboot, refreshed native packages, remaining analyzer scope and full P1-P10 hardware/release gates remain open.",
+  "next_action": "Complete remaining analyzer source/timeout contract and final process gates. Startup deadline guard is component-qualified; current10second RF-release contract is explicitly unproven. Radio return, new guardian packaging, exact reboot/RF and actual6300 remain required.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2864,5 +2864,11 @@
       "Live boot/RF, exact first-install transient disk usage, actual6300 hardware and full production gates remain open.",
       "The10second RF/unkey deadline contract remains unresolved."
     ]
+  },
+  "guardian_deadline": {
+    "report": "GUARDIAN-DEADLINE-QUALIFICATION.json",
+    "status": "late-startup admission fixed and clock-injected cleanup timing characterized; component-qualified only",
+    "installed": false,
+    "full_10second_contract_resolved": false
   }
 }

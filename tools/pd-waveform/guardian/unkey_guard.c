@@ -16,7 +16,8 @@
 #include <time.h>
 #include <unistd.h>
 
-enum { kLineBytes = 4096, kBind = 910000, kSubscribe = 910001, kRefresh = 910002, kUnkey = 910003 };
+enum { kLineBytes = 4096, kBind = 910000, kSubscribe = 910001, kRefresh = 910002, kUnkey = 910003,
+       kCleanupNominalMs = 3000 };
 struct unkey_state {
     uint32_t client, owner, query;
     int acknowledged, rejected, binding_acknowledged, binding_rejected, valid, idle, software_owner, unkeying;
@@ -186,17 +187,19 @@ static void bounded_ready(int64_t due)
 }
 static int send_command(int fd, const char* text)
 {
-    size_t remaining = strlen(text); int64_t start = milliseconds();
-    if (start < 0) { return 0; }
-    while (remaining && before_deadline(start, 500)) {
+    size_t remaining = strlen(text);
+    struct bounded_deadline deadline;
+    if (!deadline_start(&deadline, 500, milliseconds())) { return 0; }
+    int wait;
+    while (remaining && (wait = deadline_wait(&deadline, milliseconds())) > 0) {
         ssize_t sent = send(fd, text, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (sent > 0) { text += sent; remaining -= (size_t)sent; }
         else if (sent < 0 && errno == EINTR) { continue; }
         else if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            struct pollfd output = {fd, POLLOUT, 0}; (void)poll(&output, 1, 10);
+            struct pollfd output = {fd, POLLOUT, 0}; (void)poll(&output, 1, wait < 10 ? wait : 10);
         } else { return 0; }
     }
-    return remaining == 0;
+    return remaining == 0 && deadline_wait(&deadline, milliseconds()) > 0;
 }
 static int receive_status(int fd, struct unkey_state* state, struct unkey_input* input)
 {
@@ -216,17 +219,23 @@ static int query(int fd, struct unkey_state* state, struct unkey_input* input, u
     if (sequence == kSubscribe) { state->valid = state->idle = state->software_owner = state->unkeying = 0; }
     const char* text = sequence == kSubscribe ? "C910001|sub tx all\n" : "C910002|sub tx all\n";
     if (!send_command(fd, text)) { return 0; }
-    int64_t start = milliseconds();
-    if (start < 0) { return 0; }
-    while (before_deadline(start, 2000)) {
-        struct pollfd socket = {fd, POLLIN, 0}; int ready = poll(&socket, 1, 50);
+    struct bounded_deadline deadline;
+    if (!deadline_start(&deadline, 2000, milliseconds())) { return 0; }
+    int wait;
+    while ((wait = deadline_wait(&deadline, milliseconds())) > 0) {
+        struct pollfd socket = {fd, POLLIN, 0}; int ready = poll(&socket, 1, wait < 50 ? wait : 50);
         if (ready < 0 && errno == EINTR) { continue; }
         if (ready < 0) { return 0; }
         int drained = ready ? receive_status(fd, state, input) : 1;
         if (!drained) { return 0; }
+        const int timely = deadline_wait(&deadline, milliseconds()) > 0;
+        // Startup readiness can permit positive keying. An overdue refresh
+        // may still authorize best-effort unkey after the ownership barrier.
+        if (!timely && sequence == kSubscribe) { return 0; }
         if (state->rejected || state->binding_rejected) { return 0; }
         if (state->acknowledged && state->binding_acknowledged && state->valid
             && drained == 1 && !input->used && !input->discard) { return 1; }
+        if (!timely) { return 0; }
     }
     return 0;
 }
@@ -238,7 +247,9 @@ static int run(int fd, int life, uint32_t client, uint32_t owner, int duration)
     if (!query(fd, &state, &input, kSubscribe)) { event("initial_status_unknown"); return 5; }
     if (!state.idle || state.owned_seen || state.observation_ended) { event("initial_radio_not_idle"); return 5; }
     if (duration) {
-        if (!deadline_start(&deadline, duration, milliseconds())) { event("deadline_invalid"); return 5; }
+        if (!deadline_start(&deadline, duration, milliseconds())) {
+            event("deadline_invalid"); return 5;
+        }
         bounded_ready(deadline.due);
     } else { event("ready"); }
     for (;;) {
@@ -252,6 +263,11 @@ static int run(int fd, int life, uint32_t client, uint32_t owner, int duration)
         if (state.observation_ended) { event("bounded_observation_ended"); return 0; }
         if (fds[0].revents & POLLHUP) { break; }
     }
+    // Cleanup remains best effort after scheduling delays. Expiry cannot
+    // suppress an ownership-validated unkey or certify RF release.
+    const int64_t cleanup_start = milliseconds();
+    if (cleanup_start <= 0) { event("cleanup_clock_invalid"); return 5; }
+    const int64_t cleanup_due = duration && deadline.due < cleanup_start ? deadline.due : cleanup_start;
     // The connection retains its initial snapshot and every subsequent update.
     // SmartSDR4.3.16 does not replay interlock state on repeated subscriptions.
     // Drain queued updates, then wait for the subscription acknowledgment barrier.
@@ -261,6 +277,8 @@ static int run(int fd, int life, uint32_t client, uint32_t owner, int duration)
     if (!state.software_owner) { event("unkey_ownership_mismatch"); return 4; }
     // FlexLib Radio.Mox encodes this command. No path encodes xmit1 or tune.
     if (!send_command(fd, "C910003|xmit 0\n")) { event("unkey_write_failed"); return 5; }
+    const int64_t dispatched = milliseconds();
+    if (dispatched >= cleanup_due && dispatched - cleanup_due >= kCleanupNominalMs) { event("cleanup_delayed"); }
     event("unkey_requested"); state.query = kUnkey; state.acknowledged = state.rejected = 0;
     int64_t start = milliseconds();
     if (start < 0) { return 5; }

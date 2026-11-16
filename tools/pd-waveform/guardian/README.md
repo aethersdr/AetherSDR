@@ -64,7 +64,14 @@ and loss of the diagnostics reader do not renew it.
 
 This timestamp is **cleanup initiation, not an RF-cessation deadline**. The
 refresh write, acknowledgment wait and unkey write have nominal budgets of
-500 ms, 2 seconds and 500 ms, plus scheduling delays. Missing/ambiguous ownership
+500 ms, 2 seconds and 500 ms. A startup reply received after its wait expires
+cannot publish readiness. Cleanup remains best effort after a scheduling
+delay: an acknowledged, fully drained ownership barrier can still authorize
+unkey. A completed dispatch three seconds or more after cleanup became due
+emits `cleanup_delayed`; it must not be counted as an on-time stop. Expiry never
+suppresses an otherwise ownership-validated unkey simply because it is late.
+The helper cannot ensure that a stopped process runs on time or that the
+radio releases RF. Missing/ambiguous ownership
 or API failure can prevent an unkey command altogether. The production adapter
 must account for those bounds, monitor helper loss, fence queued positive keying,
 and retain the existing qualified stop-evidence path. A successful unkey reply
@@ -80,8 +87,10 @@ ends, and independent TX admission must prevent another producer sharing the
 measurement operation. Both modes wait for complete, drained status input at
 the acknowledgment barrier, including any partial trailing ownership update.
 
-This bounded mode has development public/private session operations, but is not
-deployed on the radio. It is launched as a per-test helper and does not replace the
+This bounded mode has development public/private session operations and has
+been exercised on the FLEX-8600. Late-startup rejection and overdue-cleanup
+reporting are component-tested and still need installation and hardware qualification.
+It is launched as a per-test helper and does not replace the
 existing session-lifetime guardian. Reusing or restarting it cannot grant a new
 transmit intent. The prepared socket and process must retire after that test.
 Host tests cover its timer, lifetime and ownership rules; ARMv7/ARM64 compilation
@@ -115,11 +124,13 @@ The test run's context represents its original lifetime; a short-lived HTTP
 request context must not replace that lifetime after startup. Authenticated
 begin/status/stop operations now carry random per-test identities through the
 versioned private channel; see [the API contract](../IQ-MEASUREMENT.md#bounded-test-cleanup-api-development).
-The desktop TX lease still needs to compose this supervisor with original
-operator intent and qualified stop evidence. A helper's availability
+The desktop TX lease composes this supervisor with original operator intent
+and confirmed operation-release evidence. Its ten-second transmit deadline
+contract remains open; see [the Phase 1 scope audit](../PR4770-PHASE1-STATUS.json).
+A helper's availability
 check is not a remote keying permit or an RF release certificate. The supervisor
-is tested with injected bind input and local launcher fixtures; the new connection
-factory and complete production path have not run on a radio.
+is tested with injected bind input and local launcher fixtures; final-candidate
+failure and reboot qualification remain incomplete.
 
 Host checks:
 
@@ -127,6 +138,8 @@ Host checks:
 cc -O2 -std=c11 -Wall -Wextra -Werror unkey_guard.c -o /tmp/pd-unkey-guard
 cc -O2 -std=c11 -Wall -Wextra -Werror unkey_guard_test.c -o /tmp/unkey-guard-test
 /tmp/unkey-guard-test
+cc -O2 -std=c11 -Wall -Wextra -Werror unkey_guard_deadline_test.c -o /tmp/unkey-guard-deadline-test
+/tmp/unkey-guard-deadline-test
 python3 unkey_guard_protocol_test.py /tmp/pd-unkey-guard
 ```
 
@@ -134,6 +147,8 @@ Run from this directory. The protocol test reserves only local TCP4992 for a
 fake radio and never contacts real hardware. It clears capabilities in its own
 child to reproduce the launcher contract. Assertions remain enabled in the C
 test even with a compiler configuration that defines `NDEBUG`.
+The parser and injected-clock deadline tests are also registered with CTest on
+Linux. The deadline test injects every I/O operation and opens no sockets.
 
 Cross-build examples use Zig `-target aarch64-linux-musl` or
 `-target arm-linux-musleabihf -mcpu=cortex_a8`, plus `-static`. Compilation is

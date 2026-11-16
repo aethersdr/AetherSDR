@@ -1,0 +1,58 @@
+{
+  "updated_utc": "2026-11-16T11:31:03.321689+00:00",
+  "base_commit": "ead2352d1afbe1fe7f0ec5fdbb3be26dbfe36fa3",
+  "status": "late-startup admission fixed and clock-injected cleanup timing characterized; component-qualified only",
+  "installed": false,
+  "production_ready": false,
+  "radio_used": false,
+  "changes": [
+    "Initial subscription readiness is rejected if its reply is processed after the2second wait; a delayed callback cannot publish fresh readiness.",
+    "Write/query waits use remaining monotonic budgets and detect backward clocks.",
+    "Best-effort unkey remains possible after delays only with acknowledged, complete, drained ownership evidence; no cutoff intentionally abandons a validated unkey.",
+    "Native cleanup_delayed event follows successful unkey dispatch at least3seconds after cleanup was due. Go currently drains these diagnostic events; this is not a desktop-visible guarantee."
+  ],
+  "evidence": {
+    "before_fix": "Late-startup regression fails on original helper; assertion failure preserved.",
+    "mutation": "Removing only the late-initial-subscription guard reproduces the assertion failure.",
+    "ctest": "2/2 parser and injected-clock run-loop tests passed; no sockets or radio peer.",
+    "scenarios": 11,
+    "sanitizers": "Both fixtures pass ASan/UBSan/LeakSanitizer.",
+    "cross_builds": {
+      "armv7": {
+        "bytes": 35280,
+        "sha256": "0e50d33198d0194ce99d7a2ded98922e58361d9964a41a6a20da2287597be6cc"
+      },
+      "arm64": {
+        "bytes": 41600,
+        "sha256": "9e16848c15ef86b4bcbe6a1eabf3229fbd368fd32bcd3f406211ff3d954642fd"
+      }
+    },
+    "docs_build": "passed",
+    "fixture_compile_note": "A GCC -Werror build caught inherited glibc poll write_only attributes in the initial macro-based fixture. Including system declarations before defining syscall substitution macros corrected the fixture; final strict compile and sanitizers passed."
+  },
+  "observed_limits": [
+    "With cleanup_due9500ms after readiness, a1900ms valid refresh delay produces an unkey request at11400ms.",
+    "An injected3500ms scheduling stall produces an ownership-validated unkey request at13000ms and cleanup_delayed. Neither is RF-release evidence.",
+    "The model still uses a14000ms operation budget. This change does not fulfill the analyzer10second transmit-release contract.",
+    "Installed radio still has the earlier guardian. New guardian has not been packaged or tested live; latest previously qualified runtime package predates this change."
+  ],
+  "next_required": [
+    "Separate operator admission, source sample expiry, unkey-request scheduling and confirmed radio release in the contract and recorded evidence.",
+    "Preserve best-effort negative edges after expiry; never make a hard time claim by suppressing late unkey.",
+    "Establish a capture/source schedule that fits the desired10second bound without weakening ownership validation or reporting incomplete averages as complete. Cold qualified capture previously needed about7.6seconds, so simply subtracting the current4.5second helper reserves does not prove a usable solution.",
+    "On radio return, correlate source expiry, helper events, GUI command dispatch and authoritative TX release under exact-candidate delay/failure scenarios. RF remains bounded by the approved bench limits."
+  ],
+  "evidence_directory": "evidence/20261116-guardian-deadline",
+  "evidence_sha256": {
+    "after.log": "1f65e1c4d10281e435525d2bb8765bf19901c4fd558dfa75f110bb277b131125",
+    "arm-builds.json": "5afc66edbbd59b8128278aaece6f2f43173328314b6948af8529f42e9f1e1acd",
+    "before.log": "bc6fc996d308d4598a90cbd2b399bc0e8bdb13bc6842c3e3744f808d8572565e",
+    "build-final.log": "5607e6b5e339d64e82c7fd8c209af57ac6b91791e1c9f2ee6230bdd0a4acb0d6",
+    "deadline-sanitizers.log": "1f65e1c4d10281e435525d2bb8765bf19901c4fd558dfa75f110bb277b131125",
+    "docs.log": "b26f795768f297fa23c484e6642c1422d34d666f65f500a119323c5bc4854a54",
+    "mutation.json": "02c96fa32c90289afadb4426dc85631b97eb222a03bd3a79437cdfa2a245a9ce",
+    "mutation.log": "e3b4fb9eea157de540f2c68a2ba15bd5da147424b180645f937220c28e8a38e5",
+    "parser-sanitizers.log": "0c78c57a7a5f536030793964beec9c97404be027f096f28fdab8081447a62721",
+    "tests-final.log": "907bc14e7c1f9fed9f7eed6e13417f4a3d77c7824ed49dd2fada77bd3eaf8bd2"
+  }
+}

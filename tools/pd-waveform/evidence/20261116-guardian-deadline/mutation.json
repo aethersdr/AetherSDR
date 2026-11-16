@@ -1,0 +1,5 @@
+{
+  "removed_guard": "late initial subscription readiness refusal",
+  "exit_code": -6,
+  "expected_failure": true
+}

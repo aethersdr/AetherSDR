@@ -568,7 +568,10 @@ ADC headroom or calibrated output power.
    Capture waits for the guarded tone interval and collects the selected frames. A cold
    correction fit can use most of the source window; capture waits within that
    eight-second window and reports a failure if enough qualified frames do not
-   arrive. The independent transmit cutoff remains in force. Routine status
+   arrive. The independent helper initiates cleanup on its fixed timer;
+   ownership verification and the radio's response can delay actual unkeying.
+   A delayed startup reply cannot make the helper ready. The development
+   workflow does not yet qualify a ten-second RF-release guarantee. Routine status
    polling keeps **Prepare receive check** available while the last status is
    fresh; a failed status request or pending source change disables it.
 5. **Stop measurement** requests release of that measurement. Closing the
