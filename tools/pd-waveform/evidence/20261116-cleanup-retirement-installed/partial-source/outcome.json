@@ -1,0 +1,478 @@
+{
+  "passed": true,
+  "RF_commands": [],
+  "Start_actions": 1,
+  "probe": {
+    "case": "partial-start",
+    "probe_complete": true,
+    "signals": [
+      {
+        "pid": 4251,
+        "start_ticks": 480611,
+        "signal": "SIGSTOP",
+        "monotonic_ns": 4806160136272
+      },
+      {
+        "pid": 4251,
+        "start_ticks": 480611,
+        "signal": "SIGCONT",
+        "monotonic_ns": 4814176862046
+      }
+    ],
+    "rf_commands": [],
+    "runtime_restart_requested": false,
+    "before": [
+      {
+        "pid": 3857,
+        "ppid": 1,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "start_ticks": 469392,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      }
+    ],
+    "idle_before": {
+      "tx_client_handle": "0x00000000",
+      "state": "READY",
+      "reason": "",
+      "source": "",
+      "tx_allowed": "1",
+      "amplifier": ""
+    },
+    "journal_before": {
+      "exists": true,
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "at_fault": [
+      {
+        "pid": 3857,
+        "ppid": 1,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "start_ticks": 469392,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 4247,
+        "ppid": 1,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480607,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 4248,
+        "ppid": 4247,
+        "exe": "/run/aetherpd/bin/pd-radio-launch",
+        "uid": "0\t0\t0\t0",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480611,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "000001ffffffffff",
+          "CapEff": "000001ffffffffff",
+          "CapBnd": "000001ffffffffff",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 4249,
+        "ppid": 4248,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480611,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 4250,
+        "ppid": 4249,
+        "exe": "/run/aetherpd/bin/pd-fixed-arp",
+        "uid": "65534\t65534\t65534\t65534",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480611,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000001000",
+          "CapEff": "0000000000001000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "0"
+      },
+      {
+        "pid": 4251,
+        "ppid": 4248,
+        "exe": "/run/aetherpd/bin/pd-iq-source",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480611,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      }
+    ],
+    "target": {
+      "pid": 4251,
+      "ppid": 4248,
+      "exe": "/run/aetherpd/bin/pd-iq-source",
+      "uid": "78666\t78666\t78666\t78666",
+      "state": "S (sleeping)",
+      "cgroup": [
+        "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+      ],
+      "start_ticks": 480611,
+      "caps": {
+        "CapInh": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapBnd": "0000000000000000",
+        "CapAmb": "0000000000000000"
+      },
+      "nnp": "1"
+    },
+    "stopped_state": "T",
+    "stop_observed_ns": 4806162064349,
+    "during_pause": [
+      {
+        "pid": 3857,
+        "ppid": 1,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "start_ticks": 469392,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 4247,
+        "ppid": 1,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480607,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 4248,
+        "ppid": 4247,
+        "exe": "/run/aetherpd/bin/pd-radio-launch",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480611,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      },
+      {
+        "pid": 4251,
+        "ppid": 4248,
+        "exe": "/run/aetherpd/bin/pd-iq-source",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "T (stopped)",
+        "cgroup": [
+          "0::/../../../system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@9-3857-78666.service"
+        ],
+        "start_ticks": 480611,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      }
+    ],
+    "cleanup_parent_unprivileged": true,
+    "hold_ms": 8014.797697,
+    "resume_watchdog_exit": 0,
+    "workers_gone_ms": 8027.724666,
+    "after": [
+      {
+        "pid": 3857,
+        "ppid": 1,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "state": "S (sleeping)",
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "start_ticks": 469392,
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1"
+      }
+    ],
+    "original_source_PID_including_zombie_gone": true,
+    "arp_after": [],
+    "journal_after": {
+      "exists": true,
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "idle_after": {
+      "tx_client_handle": "0x00000000",
+      "state": "READY",
+      "reason": "",
+      "source": "",
+      "tx_allowed": "1",
+      "amplifier": ""
+    },
+    "accept_local": "0",
+    "total_s": 8.483
+  },
+  "registered_was_observed": false,
+  "status_after": {
+    "body": {
+      "available": false,
+      "state": "unavailable"
+    },
+    "http_status": 503
+  },
+  "controls_after": {
+    "pdState": {
+      "value": "Status unknown",
+      "enabled": true
+    },
+    "pdDetail": {
+      "enabled": true
+    },
+    "pdReceipt": {
+      "enabled": true
+    },
+    "pdMessage": {
+      "value": "No current status is available. The request may have failed or its reply may have been lost; controls are not retried automatically.",
+      "enabled": true
+    },
+    "pdIqSelection": {
+      "value": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+      "enabled": true,
+      "accessibleDescription": "Choose an owned feedback pan. Assign its IQ channel in the pan's DAX panel first. This choice sends no radio commands."
+    },
+    "pdIqObserved": {
+      "value": "No confirmed native IQ binding. Choose a pan, then start AetherPD.",
+      "enabled": true
+    },
+    "pdStart": {
+      "value": "Start AetherPD",
+      "enabled": true
+    },
+    "pdStop": {
+      "value": "Stop AetherPD",
+      "enabled": true
+    },
+    "pdArm": {
+      "value": "Arm calibration",
+      "enabled": false,
+      "toolTip": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+      "accessibleDescription": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off."
+    },
+    "pdCancel": {
+      "value": "Cancel calibration",
+      "enabled": true
+    },
+    "pdRestore": {
+      "value": "Restore receive",
+      "enabled": true
+    },
+    "pdRefresh": {
+      "value": "Refresh",
+      "enabled": true
+    },
+    "pdMeasurement": {
+      "value": "Measure linearity\u2026",
+      "enabled": true
+    },
+    "pdEnableCorrection": {
+      "value": "Enable correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdBypassCorrection": {
+      "value": "Bypass correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdInstallState": {
+      "value": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "Development build \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nChanges on approval:\n\u2022 Verify and replace the AetherPD payload and service.\n\u2022 Install fixed boot and local-session helpers for reboot and IQ setup.\n\u2022 Restart the shim while retaining its Remote Access identity.\n\u2022 Retire temporary delivery and upgrade workers. Fixed boot/session helpers remain installed.\nThe update does not transmit or arm calibration.\n\nTemporary executables: pd-accept, pd-carrier, pd-send, pd-deliver, signed upgrade worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nPrevious release (BLAKE2b-256): 9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce\nNew release (BLAKE2b-256): bf6df6a8a9f1d70ca26218e105bb949166b22d3ed911686e72877789ab040dab\nPublisher key (Ed25519): 9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce\nAttempt (BLAKE2b-256): 56a1b78e03441fd6ff9eac942e7b8aa9831c46381a4511666cfefebf33602956\nTemporary carrier: aetherpd-carrier-3d29af934f97dfb4e2ed68813b15365f\nCarrier archive (SHA-256): 79fd325b6c3f09b2a929da91c212b3f5ff0476f4b891e989414889258aa2390c",
+      "enabled": true,
+      "accessibleDescription": "Read-only target, changes and authenticated package identifiers to review before approving."
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": false,
+      "toolTip": "No pending update can be canceled in this connection.",
+      "accessibleDescription": "No pending update can be canceled in this connection."
+    },
+    "pdInstallApprove": {
+      "value": "Approve update",
+      "enabled": false,
+      "toolTip": "A verified plan for this connection and an idle transmitter are required.",
+      "accessibleDescription": "A verified plan for this connection and an idle transmitter are required."
+    },
+    "pdDone": {
+      "value": "Done",
+      "enabled": true
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": true
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false,
+      "toolTip": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first.",
+      "accessibleDescription": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first."
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": true
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false,
+      "toolTip": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first.",
+      "accessibleDescription": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first."
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false,
+      "toolTip": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required.",
+      "accessibleDescription": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."
+    }
+  },
+  "radio_after": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.84375,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  }
+}

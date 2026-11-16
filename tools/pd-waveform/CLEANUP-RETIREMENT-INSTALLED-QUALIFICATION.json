@@ -1,0 +1,169 @@
+{
+  "updated_utc": "2026-11-16T23:15:42.728835+00:00",
+  "status": "hardened_release_reproduced_ordinary_upgrade_installed_partial_start_privilege_retirement_reboot_and_IQ_passed",
+  "production_ready": false,
+  "source_commit": "a87c915908e73588142e1148303d2c3c83d57a45",
+  "installed_release_blake2b_256": "bf6df6a8a9f1d70ca26218e105bb949166b22d3ed911686e72877789ab040dab",
+  "installed_upgrade_plan_blake2b_256": "56a1b78e03441fd6ff9eac942e7b8aa9831c46381a4511666cfefebf33602956",
+  "desktop": {
+    "pid": 2177039,
+    "socket": "/tmp/aetherpd-cleanup-retirement",
+    "binary_sha256": "ecb81dbce5a6148fb4379d0ba4ea4385e5b8ab51e0ecc46b503355834ffd4433",
+    "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+    "runtime_source_before_update": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+    "desktop_source": "a87c915908e73588142e1148303d2c3c83d57a45",
+    "keying_requires_explicit_bridge_action": true
+  },
+  "source_manifest_sha256": "1a76ad9368fa8921c157113921cf46d89f116699698a67e64bea2af538d9e168",
+  "reproducibility": {
+    "complete_ARM64_and_ARMv7_releases_two_paths": true,
+    "eight_file_ARM64_upgrade_distribution_two_paths": true,
+    "separate_caches_same_host_toolchains": true,
+    "native_signature_verifiers_passed": true,
+    "development_publisher_seed_in_files": false
+  },
+  "payload_comparison": {
+    "armv7": {
+      "changed_payload_files": [
+        "pd-radio-launch"
+      ],
+      "other_payload_files_identical": 10,
+      "expanded_growth_bytes": 64,
+      "release_growth_bytes": 46
+    },
+    "arm64": {
+      "changed_payload_files": [
+        "pd-radio-launch"
+      ],
+      "other_payload_files_identical": 10,
+      "expanded_growth_bytes": 56,
+      "release_growth_bytes": 32
+    }
+  },
+  "installed_source_stage_failure": {
+    "hold_ms": 8014.797697,
+    "workers_gone_from_hold_start_ms": 8027.724666,
+    "cleanup_parent_UID": "78666\t78666\t78666\t78666",
+    "cleanup_parent_caps": {
+      "CapInh": "0000000000000000",
+      "CapPrm": "0000000000000000",
+      "CapEff": "0000000000000000",
+      "CapBnd": "0000000000000000",
+      "CapAmb": "0000000000000000"
+    },
+    "cleanup_parent_NoNewPrivs": "1",
+    "cleanup_parent_hash_verified": true,
+    "no_DSP_or_capture_start": true,
+    "original_source_PID_including_zombie_gone": true,
+    "ARP_absent": true,
+    "ARP_journal_bytes": 0,
+    "resume_watchdog_used": false,
+    "RF_transmissions": 0
+  },
+  "ordinary_install": {
+    "elapsed_s": 48.453,
+    "root_diagnostics_delivery": false,
+    "identity_preserved": true,
+    "temporary_installer_cleanup_confirmed": true
+  },
+  "ordinary_recovery": {
+    "passed": true,
+    "IQ_bytes": 131072,
+    "FDX": false,
+    "root_repair_used": false
+  },
+  "reboot": {
+    "commands_sent": 1,
+    "probe_elapsed_to_exact_release_ready_s": 62.875,
+    "boot_id_before": "7da9ea7f-6fff-42ed-815f-42d182e549a7",
+    "boot_id_after": "839d29c7-c56e-4c61-a87e-05fdf1c6b6b6",
+    "installation_record_before_after_equal": true,
+    "identity_file_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "runtime_payload_hashes_before_after_equal": true,
+    "post_boot_receive_only_IQ_bytes": 131072,
+    "FDX": false
+  },
+  "final_cleanup": {
+    "state": "stopped",
+    "remaining_processes": 3,
+    "all_UID78666_caps_zero_NNP1": true,
+    "ARP_absent": true,
+    "accept_local": "0",
+    "temporary_installer_paths_absent": true,
+    "owned_upgrade_carrier_artifacts_absent": true,
+    "all_probe_containers_and_host_scratch_removed": true
+  },
+  "modeled_ARMv7_disk": {
+    "worst_upgrade_peak_bytes": 39559168,
+    "headroom_against_41_decimal_MB": 1440832,
+    "native_admission_byte_inode_boundaries_verified": true,
+    "actual6300": false
+  },
+  "diagnostics_scope": "Existing temporary host-root diagnostics used only for bounded fault injection and read-only audits; ordinary authenticated desktop performed upgrade and Start/Stop. Diagnostics bridge is not a shipping dependency.",
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/run.py": "1dcdf2536e3066e47854aa562b31980e303a395779a968554d822be1c49752a7",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/report.json": "45330fb37b7637e6d02a39cc7f8234f54c6ac1aea9e8c636bd79a9723d55de0c",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/payload-comparison.json": "a744723cb13b90b33939251dc84144ed2251ea6ae7cd429c08b7713000dabbbf",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/build-budget.py": "d64c3ce136a7e958cc24008104b0fe6d65832c66cc6faddb9a56a19667c02d06",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/measure-budget.py": "ac542708248aec8de26ac73e8277a693bfc4591c93859f524733cf8cddf8e6b6",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/budget_probe.c": "f5d72290ab6e38954c8208eec6990e9d26a75a89bf7ac79f7888c8cd1d04e042",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/budget-command.json": "beaab5cc8dd8c23aaf44b3afa65577e72cbddad8be142b8a0a171c53c46c194f",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/budget-report.json": "afecc99444abc600d209bad2d5a6807b14f1f8746b9fe88cfbce0fadb7ca17eb",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/build.log": "f7ae640d40e4abbe2a0c910ad28c4adaffe0d6e83fbf99d527f41a4ed054ae7a",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/budget-build.log": "3f505344c141c01bf41c1e5b21491fc140324a06e83e709cc4a2d9768ce13289",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/budget-measure.log": "52172febbb3ce9bf339821eb59a38a00d3a206e3049294932c7346c748e19b27",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/upgrade/build.py": "c44d91e49559a9d9c90a540365cd0d8951a0cdd5978f698e5e5126b35eae933f",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/upgrade/report.json": "04a224dccc6723ca0cf40d09e098abdad368994c5e186008f6f53cd7e9b3fea4",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/upgrade/desktop-provenance.json": "15eb352cdffe461678d6f48225dc1b2287465c8398548dced943d94af3abc4d9",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/upgrade/cmake.log": "da4110e12f7d4860c04e4b122fd0d21f124f0cf0f9c2cbcbaacbc753a628df2d",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/upgrade/desktop-build.log": "0d67c860056a36e9a2c6cfa6060461efd43c11d0d73138cbc53431ec2e547ca8",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/relaunch.py": "deb264b6441b6c66b5deeac7aa122a7afa61bf1d2c9caea29d2acdbf3209fbde",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/prepare.py": "0f3045a21c8eadd9ccf0141371ac858d947decb38c88fd33497b43cb33cee1d4",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/install.py": "4012bac285fb41faa0a771ea50daa92975b45251042ae9706cf70897eae0f21d",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/instance.json": "abbdcc985b02f2536c858cbda6e8831b09c8090e07f7b50a6468cf6e07049e2c",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/desktop-provenance.json": "15eb352cdffe461678d6f48225dc1b2287465c8398548dced943d94af3abc4d9",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/prepared.json": "5637abe929e273bc7bc4fcf1ba168b6e7a9c94688e9330c7aababa203e995522",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/install-result.json": "aa4771f9decc927d52e0c0b9eab556f1cc513d743c0c011f4b5f94c594c9dd2e",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/post-upgrade.json": "73842bd71595f77115e95c4079f6a73b2c3ba347ad729355c633f4c08aba0c7c",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/install/install.log": "f1c6280e63038d9486e172358edcf5a3bffa0986cc478a211e2208ed5cb307cc",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/partial-source/fault-template.py": "92be382e1aed1a0dbc462de1c9a43a71f79c8c891409945ce010df60d3f6e35b",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/partial-source/run-once.py": "433b6586a3440c35bc22cf916e17b9d6837ac7b59c36018000476969df871870",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/partial-source/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/partial-source/events.json": "c906586d3809d305e4f50fac6fe0c1150b142c851b8a427056511ae4cfd4850f",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/partial-source/outcome.json": "9dbeae5113fa43c0de3bd2cde72f805d3a7721ef640709e65b791eb16b032cba",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/partial-source/pause-result.json": "abf68abf130c7b6b7cf48760c3a407a96728100c3eb83c62959e83f6c2eab3fb",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/partial-source/probe.log": "116887a4517880e5db11e283ad9d18e280b41370d13afeeeaf2ca6f37477859d",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/recovery/receive-iq-check.py": "44bdbf624a1e8d88af32f40e5e45be9e497e6dd35ddb53de71107d3b184c0063",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/recovery/instance.json": "abbdcc985b02f2536c858cbda6e8831b09c8090e07f7b50a6468cf6e07049e2c",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/recovery/usb-receive-iq-check.json": "4659d8499aeb7a30fe311a006ee6ca3eb6f2cf15791ea2bad5807afda0a920be",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/recovery/usb-receive-iq.f32le": "8cc55b623da3f4f9928b81fcb5da05d8918c7ddacdec4f38d6bd9cf8d1d4e95a",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/recovery/final-audit-job.py": "f693857ddea70855e903a2dfeecf0e8c4ff00eef1abb71dc1a364726c240cc73",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/recovery/final-audit-result.json": "bae06683a3f61baf96be3ebc0ae779fb4e565a01694e347ed7765d3872c60ab1",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/reboot-check.py": "b1653dc2fe847814f0d766a085484eba2a8830bcb53aa6d95d247b5be9f93071",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/reboot-intent.json": "e6141f24f5eecde39683ed9cfcc90481bed17feed44b647f39490217416a446d",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/reboot-check.json": "c754070fa9fa75f3e5f8006028e2f807d5c5f99732dc8f625066d50c2d90798c",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/post-boot-reopen.json": "78d5fd10a352f08abae1aae3966f9adc19eb378f5839283b42f6b179e0c5b7cf",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/receive-iq-check.py": "44bdbf624a1e8d88af32f40e5e45be9e497e6dd35ddb53de71107d3b184c0063",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/instance.json": "abbdcc985b02f2536c858cbda6e8831b09c8090e07f7b50a6468cf6e07049e2c",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/usb-receive-iq-check.json": "aa2baed9427fefe11e8c3a8da0173cc005792f1ab263375811f81f26fc69b156",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/usb-receive-iq.f32le": "440911d85eee808daa673b5145c50ded4fb41d005a9a34adf722098c94aae080",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/final-audit-job.py": "f693857ddea70855e903a2dfeecf0e8c4ff00eef1abb71dc1a364726c240cc73",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/final-audit-result.json": "213aaa661661e650a57dd8aafda685dea12875fd164ec8354cc8e03e09ec2219",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/reboot/reboot.log": "69fc737554b3284ec48510ba70266afe9ecfc05970120ceae69fbdae89ba3927",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/manifest-armv7.json": "3f836cfcd74636bc8ef192bc1468a11e119568dfc4942cceed66956874890401",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/manifest-arm64.json": "990fee65846d5d1a549f32ab48f2450f7da379194dae1f1bef450aa55c2a6d85",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/upgrade/manifest.json": "6acfd45bf10809f5078693a7722a977b609c0d897149540598126e2dca424d27",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/upgrade/selection.json": "97c748e3d610df3d093e8ff4959ed18d4538963b53062186512bf91ad7792f37",
+    "tools/pd-waveform/evidence/20261116-cleanup-retirement-installed/runtime/source-sha256.json.gz": "2bb27fa61b8e0107dcc5c2285fd1bbf70a359adc1272ec7c1547d082a947ed26"
+  },
+  "local_generated_probe_sha256": "6bb5635a90958234ec89882f6dee926287c331504ba996be78733e928aa178a9",
+  "limitations": [
+    "Receive-only verification. Earlier RF measurements use the identical DSP binary but are not new full-candidate RF qualification.",
+    "One resumed8second IQ-source startup stall; other partial stages and API/credential failures remain.",
+    "One commanded software reboot; not physical power-loss or interrupted-update/rollback qualification of this exact release.",
+    "Modeled storage allowances are not enforced6300state/log budgets or measured6300usage. No6300first-install adapter is qualified.",
+    "Development signer/catalogue; production release keys, cross-platform release gates and independent review remain.",
+    "ReportedSWR discrepancy keeps newRF tests idle pending independentSWR path or reviewed bench policy. LP100A remains deferred pending user preference.",
+    "Full P1-P10 includes natural128sample attribution, sustained/matchedRF and stockAPD comparison, actualFLEX6300 teammate hardware and release gates."
+  ]
+}

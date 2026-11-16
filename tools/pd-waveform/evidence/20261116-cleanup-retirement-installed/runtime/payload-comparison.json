@@ -1,0 +1,18 @@
+{
+  "armv7": {
+    "changed_payload_files": [
+      "pd-radio-launch"
+    ],
+    "other_payload_files_identical": 10,
+    "expanded_growth_bytes": 64,
+    "release_growth_bytes": 46
+  },
+  "arm64": {
+    "changed_payload_files": [
+      "pd-radio-launch"
+    ],
+    "other_payload_files_identical": 10,
+    "expanded_growth_bytes": 56,
+    "release_growth_bytes": 32
+  }
+}

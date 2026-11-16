@@ -1,0 +1,209 @@
+{
+  "whoami": {
+    "agentName": "Codex AetherPD",
+    "automationIdentity": "aetherpd-shim-integration",
+    "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+    "guiClientIdTransient": true,
+    "label": "",
+    "name": "aetherpd-cleanup-retirement",
+    "ok": true,
+    "pid": 2177039,
+    "readOnly": false,
+    "socket": "/tmp/aetherpd-cleanup-retirement",
+    "station": "Codex AetherPD",
+    "txAllowed": true,
+    "version": "26.11.2"
+  },
+  "radio_before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 23.84375,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "plan_before": {
+    "pdInstallState": {
+      "value": "Review the plan, then choose Approve update. Nothing is installed before approval.",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "Development build \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nChanges on approval:\n\u2022 Verify and replace the AetherPD payload and service.\n\u2022 Install fixed boot and local-session helpers for reboot and IQ setup.\n\u2022 Restart the shim while retaining its Remote Access identity.\n\u2022 Retire temporary delivery and upgrade workers. Fixed boot/session helpers remain installed.\nThe update does not transmit or arm calibration.\n\nTemporary executables: pd-accept, pd-carrier, pd-send, pd-deliver, signed upgrade worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nPrevious release (BLAKE2b-256): 9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce\nNew release (BLAKE2b-256): bf6df6a8a9f1d70ca26218e105bb949166b22d3ed911686e72877789ab040dab\nPublisher key (Ed25519): 9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce\nAttempt (BLAKE2b-256): 56a1b78e03441fd6ff9eac942e7b8aa9831c46381a4511666cfefebf33602956\nTemporary carrier: aetherpd-carrier-3d29af934f97dfb4e2ed68813b15365f\nCarrier archive (SHA-256): 79fd325b6c3f09b2a929da91c212b3f5ff0476f4b891e989414889258aa2390c",
+      "enabled": true
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": true
+    },
+    "pdInstallApprove": {
+      "value": "Approve update",
+      "enabled": true
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": false
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": false
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false
+    }
+  },
+  "rf_commands": [],
+  "old_store_absent": false,
+  "predecessor_credential_used_for_delivery": true,
+  "candidate_source": "a87c915908e73588142e1148303d2c3c83d57a45",
+  "diagnostics_used_for_delivery": false,
+  "states": [
+    {
+      "elapsed_s": 0.071,
+      "state": "Requesting the temporary installer\u2026"
+    },
+    {
+      "elapsed_s": 0.641,
+      "state": "Waiting for the radio to publish the installer\u2026"
+    },
+    {
+      "elapsed_s": 2.332,
+      "state": "Transferring authenticated package files\u2026"
+    },
+    {
+      "elapsed_s": 25.327,
+      "state": "Waiting for the radio to confirm the update\u2026"
+    },
+    {
+      "elapsed_s": 47.326,
+      "state": "Removing temporary installer components\u2026"
+    },
+    {
+      "elapsed_s": 48.453,
+      "state": "Radio confirmed the update. Temporary installer cleanup confirmed."
+    }
+  ],
+  "committed": true,
+  "approval": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdInstallApprove"
+  },
+  "latest": {
+    "pdInstallState": {
+      "value": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "Development build \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nChanges on approval:\n\u2022 Verify and replace the AetherPD payload and service.\n\u2022 Install fixed boot and local-session helpers for reboot and IQ setup.\n\u2022 Restart the shim while retaining its Remote Access identity.\n\u2022 Retire temporary delivery and upgrade workers. Fixed boot/session helpers remain installed.\nThe update does not transmit or arm calibration.\n\nTemporary executables: pd-accept, pd-carrier, pd-send, pd-deliver, signed upgrade worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nPrevious release (BLAKE2b-256): 9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce\nNew release (BLAKE2b-256): bf6df6a8a9f1d70ca26218e105bb949166b22d3ed911686e72877789ab040dab\nPublisher key (Ed25519): 9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce\nAttempt (BLAKE2b-256): 56a1b78e03441fd6ff9eac942e7b8aa9831c46381a4511666cfefebf33602956\nTemporary carrier: aetherpd-carrier-3d29af934f97dfb4e2ed68813b15365f\nCarrier archive (SHA-256): 79fd325b6c3f09b2a929da91c212b3f5ff0476f4b891e989414889258aa2390c",
+      "enabled": true
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": false
+    },
+    "pdInstallApprove": {
+      "value": "Approve update",
+      "enabled": false
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": true
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": true
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false
+    }
+  },
+  "elapsed_s": 48.453,
+  "radio_after": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.84375,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  }
+}

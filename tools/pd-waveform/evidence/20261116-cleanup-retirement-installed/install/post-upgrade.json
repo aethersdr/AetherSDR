@@ -1,0 +1,47 @@
+{
+  "installation": {
+    "body": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "bf6df6a8a9f1d70ca26218e105bb949166b22d3ed911686e72877789ab040dab",
+      "selected_release_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "56a1b78e03441fd6ff9eac942e7b8aa9831c46381a4511666cfefebf33602956"
+    },
+    "http_status": 200
+  },
+  "identity": {
+    "body": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [],
+      "hostname": "flx8600",
+      "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+      "key_expiry": "",
+      "last_error": "",
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "local",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "http_status": 200
+  },
+  "runtime": {
+    "body": {
+      "available": false,
+      "state": "unavailable"
+    },
+    "http_status": 503
+  }
+}

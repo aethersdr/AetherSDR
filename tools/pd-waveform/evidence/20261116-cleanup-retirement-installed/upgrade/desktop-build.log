@@ -1,0 +1,40 @@
+[0/2] Re-checking globbed directories...
+[1/65] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/65] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-base_autogen/mocs_compilation.cpp.o
+[3/65] Building C object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[4/65] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
+[5/65] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.o
+[6/65] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o
+[7/65] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[8/65] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o
+[9/65] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/Debug/vulkan-shaders-gen
+[10/65] Completed 'vulkan-shaders-gen'
+[11/65] Automatic MOC and UIC for target aether_data2g_core
+[12/63] Building CXX object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
+[13/63] Automatic MOC and UIC for target aether_esp_flasher
+[14/61] Building C object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
+[15/61] Automatic MOC and UIC for target aether_monocypher
+[16/59] Automatic MOC and UIC for target aether_zstd
+[17/57] Automatic MOC and UIC for target aether_ctr2max_reg
+[18/55] Automatic MOC and UIC for target aether_libmodem_core
+[19/53] Automatic MOC and UIC for target aether_afskdemod
+[20/51] Automatic MOC and UIC for target aether_hfdata
+[21/49] Capturing build identity (git describe)
+[22/49] Automatic MOC and UIC for target aether_sqlite3
+[23/47] Automatic MOC and UIC for target aether_qrcodegen
+[24/45] Automatic MOC and UIC for target aether-dv-waveform
+[25/43] Building C object third_party/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o
+[26/43] Automatic MOC and UIC for target aethercore
+[27/42] Linking CXX static library third_party/whisper.cpp/ggml/src/libggml-base.a
+[28/42] Automatic MOC and UIC for target aetherasr
+[29/40] Building CXX object CMakeFiles/aethercore.dir/src/models/AetherPDInstallationModel.cpp.o
+[30/40] Linking CXX static library libaethercore.a
+[31/40] Automatic MOC and UIC for target aetherdesktop_support
+[32/39] Building CXX object CMakeFiles/aetherdesktop_support.dir/src/core/AutomationServer.cpp.o
+[33/39] Linking CXX static library libaetherdesktop_support.a
+[34/39] Automatic MOC and UIC for target AetherSDR
+[35/38] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/CopyAssistController.cpp.o
+[36/38] Building CXX object CMakeFiles/AetherSDR.dir/src/gui/MainWindow_Menus.cpp.o
+[37/38] Linking CXX executable AetherSDR; Copying DeepFilterNet3 model to build directory

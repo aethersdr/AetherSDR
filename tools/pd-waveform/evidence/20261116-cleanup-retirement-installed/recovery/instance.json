@@ -1,0 +1,9 @@
+{
+  "pid": 2177039,
+  "socket": "/tmp/aetherpd-cleanup-retirement",
+  "binary_sha256": "ecb81dbce5a6148fb4379d0ba4ea4385e5b8ab51e0ecc46b503355834ffd4433",
+  "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+  "runtime_source_before_update": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "desktop_source": "a87c915908e73588142e1148303d2c3c83d57a45",
+  "keying_requires_explicit_bridge_action": true
+}
