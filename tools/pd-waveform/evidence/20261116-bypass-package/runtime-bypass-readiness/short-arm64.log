@@ -1,0 +1,3 @@
+Building arm64 shim from /home/jeremy/AetherSDR/build/aetherpd-shim-integration/runtime-bypass-readiness/short/source
+Building arm64 session helpers and DSP
+Finished arm64: release=9031004 expanded=22443762

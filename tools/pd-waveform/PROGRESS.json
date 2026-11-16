@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T19:24:19.645650+00:00",
+  "updated_utc": "2026-11-16T19:28:29.760311+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Package and install the baseline-readiness fix through the ordinary desktop workflow; qualify cold5W bypass/corrected captures and retained freshness guards. Continue historical alignment/startup, sustained/fault/recovery, final comparison and actual6300 gates.",
+  "next_action": "Build complete eight-file upgrade distribution using upgrade-bypass-readiness/build.py. Build/relaunch desktop with that selection, inspect concrete plan, then install through approved ordinary workflow. Receive IQ check and cold5W bypass/corrected RF tests; stop/audit and preserve outcomes.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -3241,5 +3241,12 @@
     "ordinary_upgrade_passed": true,
     "finite_5w_pair_passed": true,
     "session_stopped_and_audited": true
+  },
+  "baseline_package": {
+    "report": "BYPASS-PACKAGE-QUALIFICATION.json",
+    "runtime_source": "dd33027f5b53430c60fe2a9db4e7a64ee027a458",
+    "two_path_reproducible": true,
+    "installed": false,
+    "durable_artifacts": "/home/jeremy/AetherSDR/aetherpd-checkpoints/20261116-bypass-readiness"
   }
 }
