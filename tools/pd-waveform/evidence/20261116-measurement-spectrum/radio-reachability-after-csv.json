@@ -1,0 +1,21 @@
+{
+  "utc": "2026-11-16T10:43:51.116591+00:00",
+  "host": "192.168.50.100",
+  "results": [
+    {
+      "port": 4992,
+      "reachable": false,
+      "error": "[Errno 113] No route to host"
+    },
+    {
+      "port": 48992,
+      "reachable": false,
+      "error": "[Errno 113] No route to host"
+    },
+    {
+      "port": 22222,
+      "reachable": false,
+      "error": "[Errno 113] No route to host"
+    }
+  ]
+}

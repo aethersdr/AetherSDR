@@ -1,4 +1,5 @@
 #include "AetherPDMeasurementDialog.h"
+#include "AetherPDMeasurementSpectrum.h"
 #include "CanonIndicators.h"
 #include "core/TxKeyingMarker.h"
 #include "models/AetherPDMeasurementModel.h"
@@ -82,6 +83,8 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     m_state->setTextFormat(Qt::PlainText);
     m_state->setWordWrap(true);
     layout->addWidget(m_state);
+    m_spectrum = new AetherPDMeasurementSpectrum(bodyWidget());
+    layout->addWidget(m_spectrum, 2);
     m_result = new QPlainTextEdit(bodyWidget());
     m_result->setObjectName(QStringLiteral("pdMeasureResult"));
     m_result->setAccessibleName(tr("Linearity measurement result"));
@@ -270,25 +273,42 @@ void AetherPDMeasurementDialog::render()
         if (!alive) { return; }
     }
     const QString summary = model ? model->resultSummary() : tr("No result for this connection.");
-    if (m_result->toPlainText() != summary) { m_result->setPlainText(summary); }
+    if (m_result->toPlainText() != summary) {
+        m_result->setPlainText(summary);
+        if (!alive) { return; }
+    }
+    const AetherPDMeasurementModel::Result* result = model && model->result() ? &*model->result() : nullptr;
+    const QDateTime completed = result ? result->completedAtUtc : QDateTime{};
+    const quint64 sourceId = result ? result->sourceId : 0;
+    if (completed != m_spectrumCompletedAt || sourceId != m_spectrumSourceId) {
+        m_spectrumCompletedAt = completed;
+        m_spectrumSourceId = sourceId;
+        m_spectrum->setResult(result);
+    }
 }
 void AetherPDMeasurementDialog::exportResult()
 {
     if (!current()) { return; }
     const QByteArray data = m_radio->aetherPDMeasurementModel().exportResult();
     const QByteArray csv = m_radio->aetherPDMeasurementModel().exportResultCsv();
+    const QByteArray png = m_spectrum->exportPng();
     if (data.isEmpty()) { return; }
     auto* dialog = new QFileDialog(this, tr("Export AetherPD measurement"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setAcceptMode(QFileDialog::AcceptSave);
     const QString csvFilter = tr("CSV measurement (*.csv)");
-    dialog->setNameFilters({tr("JSON measurement (*.json)"), csvFilter});
+    const QString pngFilter = tr("PNG spectrum (*.png)");
+    QStringList filters{tr("JSON measurement (*.json)"), csvFilter};
+    if (!png.isEmpty()) { filters.append(pngFilter); }
+    dialog->setNameFilters(filters);
     dialog->setDefaultSuffix(QStringLiteral("json"));
-    connect(dialog, &QFileDialog::filterSelected, dialog, [dialog, csvFilter](const QString& filter) {
-        dialog->setDefaultSuffix(filter == csvFilter ? QStringLiteral("csv") : QStringLiteral("json"));
+    connect(dialog, &QFileDialog::filterSelected, dialog, [dialog, csvFilter, pngFilter](const QString& filter) {
+        dialog->setDefaultSuffix(filter == pngFilter ? QStringLiteral("png")
+            : filter == csvFilter ? QStringLiteral("csv") : QStringLiteral("json"));
     });
-    connect(dialog, &QFileDialog::fileSelected, this, [this, dialog, data, csv, csvFilter](const QString& path) {
-        const QByteArray& selected = dialog->selectedNameFilter() == csvFilter ? csv : data;
+    connect(dialog, &QFileDialog::fileSelected, this, [this, dialog, data, csv, png, csvFilter, pngFilter](const QString& path) {
+        const QByteArray& selected = dialog->selectedNameFilter() == pngFilter ? png
+            : dialog->selectedNameFilter() == csvFilter ? csv : data;
         QSaveFile file(path);
         m_notice = file.open(QIODevice::WriteOnly) && file.write(selected) == selected.size() && file.commit()
             ? tr("Measurement exported.") : tr("Export failed; the destination was not replaced.");

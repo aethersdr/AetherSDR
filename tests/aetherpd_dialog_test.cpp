@@ -2,8 +2,13 @@
 #include "AetherPDTestRadio.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 #include "gui/AetherPDDialog.h"
 #include "gui/AetherPDMeasurementDialog.h"
+#include "gui/AetherPDMeasurementSpectrum.h"
+#include <QAccessible>
+#include <QImage>
+#include <limits>
 #include "models/SliceModel.h"
 #include "core/TxKeyingMarker.h"
 
@@ -27,6 +32,66 @@ int main(int argc, char** argv)
     using namespace AetherSDR::aetherpd;
     using Access = SessionControlTestAccess;
     AppSettings::instance().load();
+    {
+        AetherPDMeasurementSpectrum spectrum;
+        spectrum.resize(900, 360);
+        if (!check(spectrum.exportPng().isEmpty(), "no spectrum PNG exists before a valid released result")) { return 1; }
+        AetherPDMeasurementModel::Result capture;
+        capture.sourceId = 42;
+        capture.powerSetting = 5;
+        capture.completedAtUtc = QDateTime::fromString(QStringLiteral("2026-11-16T10:00:00Z"), Qt::ISODate);
+        capture.config.capture.centerFreqHz = 7150000;
+        capture.measurement.correctionActive = false;
+        txlin::LinearityResult value;
+        value.valid = true; value.clippingKnown = false;
+        value.sampleRateHz = 48000; value.fftSize = 16384; value.binHz = 48000.0 / 16384;
+        value.tone1 = {true, -1000, -10}; value.tone2 = {true, 1000, -10};
+        value.toneSpacingHz = 2000; value.noiseFloorDb = -90;
+        value.spectrumDb.assign(16384, -90);
+        value.spectrumDb[7851] = -10; value.spectrumDb[8533] = -10;
+        value.spectrumDb[7168] = -50;
+        value.products.push_back({3, false, -3000, -50, -40, -46.0206, {}, false});
+        value.products.push_back({3, true, 3000, -90, -80, -86.0206, {}, true});
+        value.acprLow = txlin::BandPower{-6000, -4000, -70, -60, -66.0206, {}};
+        value.acprHigh = txlin::BandPower{4000, 6000, -70, -60, -66.0206, {}};
+        capture.measurement.measurement = value;
+        spectrum.setResult(&capture);
+        QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(&spectrum);
+        const QImage image = QImage::fromData(spectrum.exportPng(), "PNG");
+        if (!check(!image.isNull() && image.size() == spectrum.size()
+            && image.text(QStringLiteral("Description")).contains("-40.0 dBc per tone")
+            && image.text(QStringLiteral("Description")).contains("noise limited")
+            && image.text(QStringLiteral("Description")).contains("5 W setting")
+            && !image.text(QStringLiteral("Description")).contains("dBFS")
+            && accessible && accessible->role() == QAccessible::Graphic
+            && accessible->text(QAccessible::Value).contains("ADC headroom unknown"),
+            "PNG and accessible graphic preserve per-tone references, power-setting and calibration limits")) { return 1; }
+        int peakPixels = 0;
+        const QColor cyan = ThemeManager::instance().color(&spectrum, QStringLiteral("color.canon.cyan"));
+        for (int y = image.height() / 3; y < image.height() * 2 / 3; ++y) {
+            for (int x = image.width() / 5; x < image.width() / 3; ++x) {
+                const QColor pixel = image.pixelColor(x, y);
+                if (std::abs(pixel.red() - cyan.red()) < 15 && std::abs(pixel.green() - cyan.green()) < 15
+                    && std::abs(pixel.blue() - cyan.blue()) < 15) { ++peakPixels; }
+            }
+        }
+        if (!check(peakPixels > 15 && accessible->text(QAccessible::Value).contains("-6000.0 to -4000.0 Hz"),
+            "single-bin IMD peak survives display reduction and integration-band bounds remain accessible")) { return 1; }
+        const QString path = qEnvironmentVariable("AETHERPD_SPECTRUM_SCREENSHOT");
+        if (!path.isEmpty() && !check(image.save(path), "spectrum preview saved")) { return 1; }
+        capture.measurement.measurement->valid = false;
+        capture.measurement.measurement->invalidReason = "Capture no longer valid";
+        spectrum.setResult(&capture);
+        if (!check(spectrum.exportPng().isEmpty()
+            && accessible->text(QAccessible::Value).contains("Capture no longer valid"),
+            "invalid capture clears cached trace and PNG instead of exporting a stale measurement")) { return 1; }
+        capture.measurement.measurement->valid = true;
+        capture.measurement.measurement->spectrumDb[5] = std::numeric_limits<float>::quiet_NaN();
+        spectrum.setResult(&capture);
+        if (!check(spectrum.exportPng().isEmpty(), "nonfinite spectrum cannot enter raster output")) { return 1; }
+        spectrum.setResult(nullptr);
+        if (!check(!spectrum.hasResult() && spectrum.exportPng().isEmpty(), "connection clear withdraws spectrum export")) { return 1; }
+    }
     Network network, captureNetwork;
     RadioModel radio;
     Access::install(radio, network);

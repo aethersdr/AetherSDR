@@ -1457,6 +1457,7 @@ set(GUI_SOURCES
     src/gui/WaveformsDialog.cpp
     src/gui/AetherPDDialog.cpp
     src/gui/AetherPDMeasurementDialog.cpp
+    src/gui/AetherPDMeasurementSpectrum.cpp
     src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
     src/gui/WsprConfigureWindow.cpp

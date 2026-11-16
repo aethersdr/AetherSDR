@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T10:39:30.014570+00:00",
+  "updated_utc": "2026-11-16T10:46:52.898073+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Continue remaining PR4770 spectrum/PNG scope offline. Resolve radio reachability and qualify exact installed reboot before any further RF; full P1-P10 remains active.",
+  "next_action": "Complete remaining PR4770 original Phase1 scope and export dialog qualification offline. Resolve radio reachability and qualify exact installed reboot before RF. Full P1-P10 goal remains active and incomplete.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2620,6 +2620,77 @@
       {
         "path": "evidence/20261116-measurement-csv/csv-test-symbolized-backtrace.log",
         "sha256": "3f71edb382d418fd54d7323494cb42780542c6dbf3c59f84d8c4a79352f61784"
+      }
+    ]
+  },
+  "measurement_display": {
+    "status": "offline_widget_and_render_qualification_passed_not_live_radio_qualified",
+    "updated_utc": "2026-11-16T10:46:52.898073+00:00",
+    "base_commit": "9b1e15401022e048862569a123b905924ce89e22",
+    "changes": [
+      "Static PR4770 spectrum display consumes completed AetherPD model results only",
+      "Marks tones, IMD, noise floor, shoulder and ACPR integration bands; explicit uncalibrated IQ and per-tone references",
+      "Peak-preserving display reduction, invalid/nonfinite capture refusal, stale-result clearing",
+      "PNG through existing atomic Export result workflow; image Description includes measurement context and accessible numeric summary",
+      "No source, capture, helper or RF behavior changed"
+    ],
+    "validation": {
+      "desktop_and_two_widget_targets": "passed, pinned Linux Qt6.12",
+      "widget_tests": "2/2 passed, 3.39 seconds",
+      "render_checks": [
+        "Synthetic single-bin IMD survives raster reduction",
+        "Valid PNG decodes with expected dimensions and reference metadata",
+        "Noise-limited result does not show a confident numeric product label",
+        "Invalid/malformed capture and clear withdraw PNG",
+        "QAccessible graphic returns numeric summary and integration bounds",
+        "Synthetic plot and full measurement dialog screenshots visually inspected; TX/Stop visible"
+      ],
+      "engine_boundary": "0 findings",
+      "accessibility_lint": "0 findings",
+      "test_registration": "passed",
+      "documentation_build": "passed using existing matching lockfile dependencies; temporary link removed"
+    },
+    "limitations": [
+      "Synthetic widget evidence, not an additional RF measurement",
+      "Native file-dialog format selection and actual destination write still need GUI automation qualification",
+      "Current running radio GUI has not been relaunched with this desktop build",
+      "PR4770 remaining original Phase1 settings/configuration scope needs completion audit",
+      "Windows/macOS build and accessibility not exercised here",
+      "Radio API, shim and SSH still unreachable; latest probe returned No route to host",
+      "Exact installed successor reboot, keyed failure tests, repeatability, stock APD, actual6300 qualification and full production gates remain open"
+    ],
+    "evidence": [
+      {
+        "path": "evidence/20261116-measurement-spectrum/spectrum-build-final.log",
+        "sha256": "8ff8c36a3848bb0a51f4a4c1b65d42e2b1abeb64566715eec237f8ffcd004cb9"
+      },
+      {
+        "path": "evidence/20261116-measurement-spectrum/spectrum-tests-final.log",
+        "sha256": "581befaabec2a8dc84567adca4d11765536a447f38b56bd143d50e414aa38638"
+      },
+      {
+        "path": "evidence/20261116-measurement-spectrum/spectrum-static-checks.log",
+        "sha256": "762270e02ac9261aea2489b02afdd91b8d24695c5d23ed15ce9534641c45fcab"
+      },
+      {
+        "path": "evidence/20261116-measurement-spectrum/spectrum-docs-build.log",
+        "sha256": "51f8f79b2ffaec96a192bd21aa469dbd864443c53a1cf97f9c0bff402538a6b3"
+      },
+      {
+        "path": "evidence/20261116-measurement-spectrum/spectrum-preview-final.png",
+        "sha256": "c2e0dd3b2d40395bb30d12ad56d2213e7440ce4914892dcef3017599dcdff707"
+      },
+      {
+        "path": "evidence/20261116-measurement-spectrum/spectrum-dialog-preview.png",
+        "sha256": "22b668e5ac17fa3d6302b9d3c5f87472980ce3d7af79188ca456d218a74502ae"
+      },
+      {
+        "path": "evidence/20261116-measurement-spectrum/spectrum-dialog-preview.log",
+        "sha256": "1916e5919e53d576194bb5379cd5ad5567b58cc4e341a02cc4c6a242ecc9b826"
+      },
+      {
+        "path": "evidence/20261116-measurement-spectrum/radio-reachability-after-csv.json",
+        "sha256": "ca1a564afd86d30ceb86453e5efcf928c1d7ca8c50290e3cc152e700465b7d36"
       }
     ]
   }

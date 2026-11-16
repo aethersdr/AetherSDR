@@ -5,6 +5,7 @@
 #include "models/TxController.h"
 
 #include <QPointer>
+#include <QDateTime>
 #include <memory>
 
 class QCheckBox;
@@ -14,6 +15,7 @@ class QPlainTextEdit;
 class QPushButton;
 
 namespace AetherSDR {
+class AetherPDMeasurementSpectrum;
 class AetherPDMeasurementDialog final : public CanonWindow {
     Q_OBJECT
 public:
@@ -37,6 +39,9 @@ private:
     QDoubleSpinBox* m_limit{nullptr};
     QLabel* m_state{nullptr};
     QPlainTextEdit* m_result{nullptr};
+    AetherPDMeasurementSpectrum* m_spectrum{nullptr};
+    QDateTime m_spectrumCompletedAt;
+    quint64 m_spectrumSourceId{0};
     QPushButton* m_arm{nullptr};
     QPushButton* m_cancelSource{nullptr};
     QPushButton* m_prepare{nullptr};
