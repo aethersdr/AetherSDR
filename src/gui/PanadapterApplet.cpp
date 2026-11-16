@@ -238,7 +238,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 #endif
             m_cwCostThreshold = cwSensCostThreshold(v);
         },
-        [this](int v) { saveCwSens(v); });
+        // A change already flushed when the decoder moved is not saved again.
+        [this](int) { flushCwSens(); });
     cwBar->addWidget(m_cwSensSlider);
 
 #ifdef HAVE_CW_RX_BACKENDS
@@ -877,6 +878,29 @@ QString PanadapterApplet::cwCostColor(float cost)
     return QStringLiteral("#ff4040");
 }
 
+void PanadapterApplet::restoreCwSens()
+{
+    if (m_cwSensUnsaved) { return; }
+    const bool ggmorse = m_cwSensBackend == QLatin1String("ggmorse");
+    // ggmorse's threshold also serves the TX decode, the controller feed and
+    // MQTT, so it follows the saved ggmorse value whichever decoder is selected.
+    // Clamped to the slider's span: a hand-edited key can be out of it.
+    const int ggmorseSens = std::clamp(
+        AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt(),
+        m_cwSensSlider->minimum(), m_cwSensSlider->maximum());
+    m_cwCostThreshold = cwSensCostThreshold(ggmorseSens);
+    const QSignalBlocker blocker(m_cwSensSlider);
+    m_cwSensSlider->setValue(ggmorse ? ggmorseSens : CwDecodeSettings::sensitivity(m_cwSensBackend));
+#ifdef HAVE_CW_RX_BACKENDS
+    if (!ggmorse) { m_cwNeuralCostThreshold = cwSensCostThreshold(m_cwSensSlider->value()); }
+#endif
+}
+
+void PanadapterApplet::flushCwSens()
+{
+    if (m_cwSensUnsaved) { saveCwSens(m_cwSensSlider->value()); }
+}
+
 void PanadapterApplet::saveCwSens(int value)
 {
     m_cwSensUnsaved = false;
@@ -965,18 +989,9 @@ void PanadapterApplet::showCwSensFor(const QString& backend)
     // An unsaved slider change belongs to the decoder being left.  Its
     // debounced save reads the slider when it fires, which by then holds the
     // incoming decoder's value.
-    if (m_cwSensUnsaved) { saveCwSens(m_cwSensSlider->value()); }
+    flushCwSens();
     m_cwSensBackend = backend;
-    const bool ggmorse = backend == QLatin1String("ggmorse");
-    const int sens = ggmorse
-        ? AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt()
-        : CwDecodeSettings::sensitivity(backend);
-    const QSignalBlocker blocker(m_cwSensSlider);
-    m_cwSensSlider->setValue(sens);
-    // Read back the clamped value: a hand-edited ggmorse key can be out of span.
-    const float threshold = cwSensCostThreshold(m_cwSensSlider->value());
-    if (ggmorse) { m_cwCostThreshold = threshold; }
-    else { m_cwNeuralCostThreshold = threshold; }
+    restoreCwSens();
 }
 void PanadapterApplet::appendUnscoredCwText(const QString& text)
 {
