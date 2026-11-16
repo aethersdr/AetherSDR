@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QDialog>
+#include <QEvent>
 #include <QLabel>
 #include <QList>
 #include <QLineEdit>
@@ -19,6 +20,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QString>
+#include <QStringList>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTest>
@@ -508,6 +510,46 @@ void profileGeometryCarriesOver()
     check(restored.size() == chosen, "geometry saved by the old dialog restores under its key");
     restored.hide();
 }
+// A visible widget with no parent is a top-level window (#6277). The CW tab
+// shows its unsaved-changes label at construction when the radio reports
+// unsaved edits, so it must already have its page as parent.
+class TopLevelShowRecorder final : public QObject {
+public:
+    TopLevelShowRecorder() { qApp->installEventFilter(this); }
+    ~TopLevelShowRecorder() override { qApp->removeEventFilter(this); }
+    QStringList seen;
+    bool eventFilter(QObject* obj, QEvent* e) override
+    {
+        if (e->type() == QEvent::Show) {
+            auto* w = qobject_cast<QWidget*>(obj);
+            // Same rule as radio_setup_no_transient_window_test: tooltips and
+            // popups are legitimate top-levels. The dialog itself is never
+            // shown here, so nothing else is exempt.
+            const bool transient = w && w->isWindow() && w->windowType() != Qt::ToolTip
+                && w->windowType() != Qt::Popup;
+            if (transient)
+                seen << QStringLiteral("%1 '%2'").arg(w->metaObject()->className(), w->objectName());
+        }
+        return false;
+    }
+};
+void profileUnsavedLabelOwned()
+{
+    for (const bool unsaved : {false, true}) {
+        RadioModel model;
+        installRadioSetupBackend(model);
+        model.transmitModel().setCwProfileUnsaved(unsaved);
+        TopLevelShowRecorder recorder;
+        ProfileManagerDialog dialog(&model);
+        QLabel* label = dialog.findChild<QLabel*>("profileUnsaved_cw");
+        check(label && !label->isWindow(), "CW unsaved label is owned by its page");
+        check(label && label->isHidden() != unsaved, "CW unsaved label follows the radio's flag");
+        if (!recorder.seen.isEmpty())
+            std::fprintf(stderr, "transient windows (unsaved=%d): %s\n", int(unsaved),
+                         qPrintable(recorder.seen.join(QStringLiteral("; "))));
+        check(recorder.seen.isEmpty(), "constructing Profile Manager shows no transient window");
+    }
+}
 }
 
 int main(int argc, char** argv)
@@ -520,5 +562,6 @@ int main(int argc, char** argv)
     profileDialog(); memoryDialog(); stoppedImport(); memoryCanonWindow(); memoryRemoveConfirm();
     profileCanonWindow(); profileLegibleAtMinimum(); profileClosePaths(); profileDestructiveConfirm("global", "profileDeleteBtn_global", "Delete", "Delete Profile", "delete");
     profileDestructiveConfirm("cw", "profileResetBtn_cw", "Reset", "Reset CW Profile", "reset"); profileGeometryCarriesOver();
+    profileUnsavedLabelOwned();
     return failures == 0 ? 0 : 1;
 }

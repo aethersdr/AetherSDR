@@ -243,6 +243,25 @@ shared receiver map, but neither a listening TCI server nor an attached TCI
 client. Builds without it retain their existing Flex bridge and do not offer
 native DAX. See [native DAX receive routing](../native-dax-receive.md).
 
+### Receive audio playout
+
+`receiveAudioPlayout` gives the host playback prefill and queue cap the
+backend wants for the primary receive PCM queue. `MainWindow` hands it to
+`AudioEngine::setReceiveJitterBuffer()` on each capability change and clears it
+on disconnect. Icom sets 200 ms prefill and a 400 ms cap when the session
+negotiated stereo LAN receive (MAIN/SUB radios); every other backend, and Icom
+with mono receive, explicitly leaves it absent, so no extra prefill or cap applies.
+It is serialized in the daemon catalogue as timing metadata only.
+
+| Backend | Value |
+|---|---|
+| Flex | absent |
+| HL2 | absent |
+| ANAN | absent |
+| RTL | absent |
+| Icom | 200/400 ms with stereo LAN receive; absent otherwise |
+| Demo | absent |
+
 ### Native squelch
 
 `squelchLevelScale` adds `automaticInEngine` for backend-owned Auto SQL, dispatched
@@ -297,6 +316,29 @@ consumer never names a family.
 | Flex | — | Structural: the radio computes the panadapter and sends the result, so there is no raw converter stream on the host to build a wideband view from |
 | Icom / RTL / Sim | — | No such stream |
 
+Read by `BandscopeDialog` (the Tools ▸ Wideband Bandscope window) and by nothing
+else. **The record is what gates the menu entry** — not `family == "hl2"`, which
+is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam
+and whose sanctioned alternative is exactly this.
+
+**The levels the window draws are on the same scale as the `ADC peak
+(uncalibrated pre-DDC dBFS)` health row**, which is a true time-domain peak of
+the same block. `BandscopeDialog` adds `ClientEqFftAnalyzer::
+coherentGainCorrectionDb()` to every bin before drawing, because the analyzer's
+own normalisation is the unwindowed one and leaves its bins 6.02 dB low — a
+detail the EQ editor never had to care about and this window cannot avoid, since
+comparing against the converter's clip threshold is the whole point of it. The
+two readouts agree for a single carrier; a broadband signal spreads its energy
+over bins, so the peak *bin* sits below the peak *sample* by however wide the
+signal is. Both are uncalibrated, and neither has been checked against a
+converter driven to a known level.
+
+`wideband_converter_view_test` pins the record's contents, its absence while
+disconnected, and that it names a verb the backend answers. Connected publication
+remains a hardware-verification gap. `bandscope_analyzer_test` pins the analyzer's
+dB scale and correction; `bandscope_trace_render_test` feeds known records through
+the production dialog and checks its displayed peak level and frequency.
+
 ### Firmware update source
 
 `firmwareUpdateSource` is the optional record for *"this radio's firmware version
@@ -340,28 +382,19 @@ Absence means **nobody has said**: it is not a claim that the radio's firmware i
 current, nor that it cannot be checked. A radio whose backend declares nothing
 draws its version row exactly as it always has.
 
-Read by `BandscopeDialog` (the Tools ▸ Wideband Bandscope window) and by nothing
-else. **The record is what gates the menu entry** — not `family == "hl2"`, which
-is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam
-and whose sanctioned alternative is exactly this.
+### Board identity
 
-**The levels the window draws are on the same scale as the `ADC peak
-(uncalibrated pre-DDC dBFS)` health row**, which is a true time-domain peak of
-the same block. `BandscopeDialog` adds `ClientEqFftAnalyzer::
-coherentGainCorrectionDb()` to every bin before drawing, because the analyzer's
-own normalisation is the unwindowed one and leaves its bins 6.02 dB low — a
-detail the EQ editor never had to care about and this window cannot avoid, since
-comparing against the converter's clip threshold is the whole point of it. The
-two readouts agree for a single carrier; a broadband signal spreads its energy
-over bins, so the peak *bin* sits below the peak *sample* by however wide the
-signal is. Both are uncalibrated, and neither has been checked against a
-converter driven to a known level.
+`boardIdentity` is the optional record for *"the backend knows which board this
+is"*: a stable lowercase `board` id and the `gatewareMajor` it runs, both derived
+below the seam (#7311). The support tier reads it
+(`ExperimentalRadioSupport.h`, `isSupportedHl2Identity`), never
+`RadioInfo::versionLabel`, which is display text and may be reworded or
+translated without changing any tier.
 
-`wideband_converter_view_test` pins the record's contents, its absence while
-disconnected, and that it names a verb the backend answers. Connected publication
-remains a hardware-verification gap. `bandscope_analyzer_test` pins the analyzer's
-dB scale and correction; `bandscope_trace_render_test` feeds known records through
-the production dialog and checks its displayed peak level and frequency.
+| Backend | Declares | Why |
+|---|---|---|
+| HL2 | ✅ **while connected**: `board` from `hl2::boardIdFor(boardForGatewareMinor(minor))` (`"hl2"`, `"square-sdr-2"`, `"square-3"`), `gatewareMajor` from the discovery version (`"74.3"` → 74; absent when not reported) | Supported means `board == "hl2"` and `gatewareMajor == 74`; anything else, or no record, stays experimental |
+| Flex / Icom / ANAN / RTL / Sim | — | No tier reads a board identity; Icom's tier reads the CI-V-derived `model` |
 
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
@@ -377,7 +410,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hostModulates` | — (❌) | ✅ | — (❌) | `TciServer`, `MainWindow_Session` | Mic source collapses to PC; PC-audio lock. **Not the same question as `takesTxAudioOverSeam`** — see below |
 | `takesTxAudioOverSeam` | ❌ | ✅ | ❌ | `MainWindow_Session` (capture, TX stream, PC-audio lock), `AudioEngine::setHostModulation`, `RadioModel::ensureDaxTxStream` | Whether transmit audio leaves through `submitTxAudio` rather than a DAX/VITA-49 stream. Icom: ✅ |
 | `hasRadioPttReadback` | ❌ | ❌ | ❌ | `RadioModel::publishCommandedBackendTransmitEdge`, `Ax25HfPacketDecodeDialog::beginTransmitWhenReady` | The backend's `transmitChanged` / `keyingStateConfirmed` carry the **radio's own** PTT readback and `setKeying()` is intent only. True suppresses RadioModel's command-edge fallback, and makes AetherModem wait for `radioTransmittingChanged` / `radioTransmitConfirmed` (or an already-keyed radio) before releasing sample zero. Flex: ❌ because its interlock edge is decoded inside RadioModel, not through the seam. Icom: ✅ (decoded CI-V `1C 00`, #5311) |
-| `radioPttObservation` | absent | ✅ | absent | `RadioModel::applyBackendTransmitDelta`, `RadioModel::publishCommandedBackendTransmitEdge` | Optional record (#5998): `transmitChanged` also carries keying the radio did by itself, which `setKeying()` never commanded. Observed state only: it reaches `radioTransmittingChanged` and nothing that keys. RadioModel keeps the command-edge fallback and ORs the two, so a host unkey does not clear a PTT the radio still reports. HL2: EP6 `ptt_resp` (`cw_on \| ext_ptt`), which host MOX never raises, so `hasRadioPttReadback` stays false. Icom, ANAN, RTL: absent |
+| `radioPttObservation` | absent | ✅ | absent | `RadioModel::applyBackendTransmitDelta`, `RadioModel::publishCommandedBackendTransmitEdge` | Optional record (#5998): `transmitChanged` also carries keying the radio did by itself, which `setKeying()` never commanded. The backend keys nothing from it. It is ORed into `mox` and also published on its own as `TransmitDelta::radioPtt`. RadioModel keeps the command-edge fallback and ORs the two, so a host unkey does not clear a PTT the radio still reports. Because a host-modulated radio sends silence unless the host keys too, `RadioModel::followRadioPtt` answers a `radioPtt` edge outside CW with a host key through the gated producer path (`PttSource::Footswitch`), and releases only the key it took. HL2: EP6 `ptt_resp` (`cw_on \| ext_ptt`), which host MOX never raises, so `hasRadioPttReadback` stays false. Icom, ANAN, RTL: absent |
 | `hasSelectableMicInputs` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneCwApplet::setSelectableMicInputs` | The MIC/BAL/LINE/ACC/PC list. False collapses it to PC and adopts that into TransmitModel. Icom: ❌ (the radio picks its own input) |
 | `hasDownwardExpander` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneApplet::setDexpVisible`; `AutomationServer` transmit snapshot | The radio has an authoritative DEXP/downward-expander command and read-back path. False hides the complete row and omits `dexp`/`dexpLevel` from automation state. Icom: ❌ until a model profile evidences and implements that full path; the IC-9700 does not borrow Flex's compander surface |
 | `rxFilterWidthsHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `RxApplet::setRadioFilterWidths` **and** `VfoWidget::setRadioFilterWidths` | The RX filter widths a radio can actually reach, **narrowest first**. **Empty = continuous or unknown**, and the operator's configurable list stays in force. Icom publishes the selected slot's actual 1A 03 width plus factory defaults for the two unselected slots that CI-V cannot read, and republishes on mode, slot, or width changes. Both filter surfaces read it — the VFO grid did not, which is how the two disagreed about what the radio could do |

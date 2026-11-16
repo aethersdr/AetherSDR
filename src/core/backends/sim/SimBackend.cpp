@@ -291,6 +291,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
     caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    caps.receiveAudioPlayout = std::nullopt; // host primary-queue timing defaults apply
     caps.dspParameterReset = std::nullopt;
     caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
@@ -319,6 +320,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.radioGraphicEqControl = std::nullopt;
     // The demo cannot key at all (Principle VI), let alone synthesise tones.
     caps.twoToneGenerator = std::nullopt;
+    caps.boardIdentity = std::nullopt;  // no hardware board
     caps.firmwareUpdateSource = std::nullopt;  // synthetic radio; nothing to compare.
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();

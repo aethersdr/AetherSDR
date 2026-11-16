@@ -36,6 +36,7 @@ bool sameDigest(const QByteArray& a, const QByteArray& b)
 struct ControlCredentials::State {
     QString id;
     Role role;
+    QString name;
     QByteArray digest;
     std::atomic<bool> retired{false};
 };
@@ -154,6 +155,7 @@ bool ControlCredentials::replace(const QList<Record>& records)
             auto state = std::make_shared<State>();
             state->id = record.id;
             state->role = record.role;
+            state->name = record.name;
             state->digest = recordDigest(record);
             next.append(std::move(state));
         }
@@ -181,6 +183,7 @@ bool ControlCredentials::add(const Record& record)
     auto state = std::make_shared<State>();
     state->id = record.id;
     state->role = record.role;
+    state->name = record.name;
     state->digest = digest;
     m_records.append(std::move(state));
     m_changing = true;
@@ -204,6 +207,18 @@ bool ControlCredentials::revoke(const QString& id)
         return true;
     }
     return false;
+}
+
+QList<ControlCredentials::RemoteListing> ControlCredentials::remoteRecords() const
+{
+    QList<RemoteListing> out;
+    if (!onThread()) { return out; }
+    for (const auto& record : m_records) {
+        if (isRemote(record->role) && !record->retired.load(std::memory_order_acquire)) {
+            out.append({record->id, record->role, record->name});
+        }
+    }
+    return out;
 }
 
 void ControlCredentials::clear()
