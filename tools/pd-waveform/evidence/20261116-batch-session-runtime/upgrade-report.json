@@ -1,0 +1,232 @@
+{
+  "source_commit": "b515f34a4eddc2dde07a2b5fff2ab9dd64f3d80f",
+  "runtime_source_manifest_sha256": "4381ce3a9d939f27f4dba568e04b00fc6a019eb11c39fcd96718062e76049a7a",
+  "script_sha256": "1fb72043eb98f4dd0733f5b7f160ab64023aca4aea4eb2c4371280ed67d61c22",
+  "complete_eight_file_distribution_identical": true,
+  "separate_source_output_and_compiler_caches": true,
+  "same_host_and_toolchains": true,
+  "payloads_reused_from_verified_two_path_runtime_build": true,
+  "private_seed_in_files": false,
+  "development_signer": "QtKeychain AetherPD development publisher / flex8600-bench-20261116",
+  "installed": false,
+  "production_ready": false,
+  "elapsed_seconds": 61.392441994001274,
+  "first": {
+    "selection": {
+      "version": "0.0.0-batch.b515f34a4",
+      "firmware": "4.3.16.42034",
+      "profile": 1,
+      "candidate_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "previous_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "files": {
+        "LICENSES": {
+          "size": 215346,
+          "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+        },
+        "candidate.release": {
+          "size": 9042843,
+          "sha256": "e8222480c9190ff9d08b40fe6c9edb433c35b07d7b43b9c5245639c9038cfef2"
+        },
+        "pd-accept": {
+          "size": 29984,
+          "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+        },
+        "pd-carrier": {
+          "size": 6291616,
+          "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+        },
+        "pd-deliver": {
+          "size": 109008,
+          "sha256": "b5272d91f8df7a7f6a92f84f5d81169c7ab8672ae71d03dbfbe088b333f6365b"
+        },
+        "pd-send": {
+          "size": 42344,
+          "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+        },
+        "previous.release": {
+          "size": 9042809,
+          "sha256": "6470e37d81ad65bb6755942c771e7fa63a49f2fd9aa801b2dc58d78838f72f71"
+        },
+        "worker.envelope": {
+          "size": 467448,
+          "sha256": "40d2141138c9d6550f34b5c6e53ba3478cee5202215a1108d2241a325aa0d109"
+        }
+      }
+    },
+    "release": {
+      "format": "AEPDR005",
+      "paired_boot": true,
+      "managed_startup": true,
+      "origin_recovery": true,
+      "generation_selection": true,
+      "profile": "flex8600",
+      "architecture": "arm64",
+      "firmware": "4.3.16.42034",
+      "source_sha256": "4381ce3a9d939f27f4dba568e04b00fc6a019eb11c39fcd96718062e76049a7a",
+      "bytes": 9042843,
+      "sha256": "e8222480c9190ff9d08b40fe6c9edb433c35b07d7b43b9c5245639c9038cfef2",
+      "blake2b_256": "9430a096716fadded3604075347befaa8922262ff8d2b0b5692aeea9535ff60c",
+      "public_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce",
+      "files": [
+        {
+          "name": "pd-boot",
+          "bytes": 189624,
+          "sha256": "5cfb04a15c2ca9436b5ce802231ebcd6588435dd6e9f1b47476fea5d245af11e",
+          "mode": "0755"
+        },
+        {
+          "name": "pd-update",
+          "bytes": 79512,
+          "sha256": "7b31e18e1b28eb7d9a4dcd9f58fc5f0ed40d6a298c0860314da8b78fbdf370b7",
+          "mode": "0755"
+        },
+        {
+          "name": "payload.bundle",
+          "bytes": 8734496,
+          "sha256": "b80439f7bf2ecc672fc4f4e8e00da42b282920f8a40fae9722996f7b43330012",
+          "mode": "0644"
+        },
+        {
+          "name": "BOOT-LICENSES.txt",
+          "bytes": 37513,
+          "sha256": "5d8bba006bb4efb4894defe2784831bf4d48e6d98b3d4680e8d01c1493e12f86",
+          "mode": "0644"
+        },
+        {
+          "name": "aetherpd-boot.service",
+          "bytes": 245,
+          "sha256": "08f24faab3500778cfbf343cf62d00970789a44f63c5915cddd311fc6283a504",
+          "mode": "0644"
+        },
+        {
+          "name": "aetherpd-start.socket",
+          "bytes": 354,
+          "sha256": "1d77b02319b737ba07d8fd27cca0ae01479bfde05aca1b5a8270ba4d7b981d21",
+          "mode": "0644"
+        },
+        {
+          "name": "aetherpd-start@.service",
+          "bytes": 307,
+          "sha256": "ebd544bc6d39e9f5ca505884ae356385ae504ad0c19a39abc7d4570ac7f7b085",
+          "mode": "0644"
+        },
+        {
+          "name": "aetherpd-shim.service",
+          "bytes": 360,
+          "sha256": "ec48d75a6346751d1440cc166889a75484e3a399935ebdd0877553331355081b",
+          "mode": "0644"
+        }
+      ],
+      "persistent_store": "/var/lib/smartsdr/aetherpd",
+      "runtime": "/run/aetherpd",
+      "fixed_units": [
+        "aetherpd-boot.service",
+        "aetherpd-start.socket",
+        "aetherpd-start@.service",
+        "aetherpd-shim.service"
+      ],
+      "privileged_actions": [
+        "verify approved release digest and trusted signature",
+        "stage fixed authenticated files in private RAM",
+        "retire the owned runtime before updating",
+        "publish protected payload and boot files",
+        "install fixed boot and local socket units",
+        "start the ordinary-user primary shim after retiring any recognized predecessor"
+      ],
+      "temporary_components": [
+        "pd-update",
+        "installer/bootstrap staging and authority"
+      ],
+      "rf_actions": [],
+      "automatic_calibration": false,
+      "integration_status": "release artifact only; this builder does not install, migrate, enable or start anything"
+    },
+    "payload": {
+      "format": "AEPDB001",
+      "arch": 64,
+      "files": [
+        {
+          "name": "flex-tailnet-shim",
+          "bytes": 21495968,
+          "gzip_bytes": 8271719,
+          "sha256": "4b0025a6569a283fe116560f63f6db47934fb98b47f46b6abe2295cd0d5a63cf"
+        },
+        {
+          "name": "aether-pd",
+          "bytes": 282696,
+          "gzip_bytes": 161732,
+          "sha256": "caf9879b3936e2fd5aeb336746771229ab19729d915be5de8a757b64b2dfa07e"
+        },
+        {
+          "name": "pd-primary-launch",
+          "bytes": 74520,
+          "gzip_bytes": 41714,
+          "sha256": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc"
+        },
+        {
+          "name": "pd-start-session",
+          "bytes": 57712,
+          "gzip_bytes": 32426,
+          "sha256": "7772765fd596722dc342f2579c83f3a3186614979c9defbc141223f7ae18c525"
+        },
+        {
+          "name": "pd-radio-launch",
+          "bytes": 105080,
+          "gzip_bytes": 56990,
+          "sha256": "4ca6468b3eb9f023937170fdd0bac1c4c38bf017d29e8f3310b94010596cc1d5"
+        },
+        {
+          "name": "pd-fixed-arp",
+          "bytes": 52424,
+          "gzip_bytes": 29609,
+          "sha256": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49"
+        },
+        {
+          "name": "pd-iq-source",
+          "bytes": 54256,
+          "gzip_bytes": 30888,
+          "sha256": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0"
+        },
+        {
+          "name": "pd-capture-bootstrap",
+          "bytes": 61264,
+          "gzip_bytes": 34870,
+          "sha256": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc"
+        },
+        {
+          "name": "pd-unkey-guard",
+          "bytes": 41704,
+          "gzip_bytes": 24336,
+          "sha256": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662"
+        },
+        {
+          "name": "pd-lease-guard",
+          "bytes": 43608,
+          "gzip_bytes": 25530,
+          "sha256": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+        },
+        {
+          "name": "LICENSES",
+          "bytes": 176378,
+          "gzip_bytes": 23778,
+          "sha256": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+        }
+      ],
+      "source_sha256": "4381ce3a9d939f27f4dba568e04b00fc6a019eb11c39fcd96718062e76049a7a",
+      "expanded_bytes": 22445610,
+      "bytes": 8734496,
+      "sha256": "b80439f7bf2ecc672fc4f4e8e00da42b282920f8a40fae9722996f7b43330012",
+      "blake2b_256": "e176c8d617e80449ba8ef088ecae4c607f8cf0bb737d7936716e99370bab2eb6",
+      "public_key": "9a4286d5d3e006c5237a2fa3cf282ec3b9710a4e1b92b18d80f0122177e5a7ce"
+    },
+    "previous_release_sha256": "6470e37d81ad65bb6755942c771e7fa63a49f2fd9aa801b2dc58d78838f72f71",
+    "worker_bytes": 467264,
+    "native_release_verified": true,
+    "native_worker_verified": true
+  },
+  "limitations": [
+    "ARM64 FLEX-8600 upgrade distribution only; no FLEX-6000 first-install adapter.",
+    "Development publisher key; not a shipping catalogue or deployed-key rotation authorization.",
+    "Desktop preparation, installed recovery and RF qualification are separate gates."
+  ]
+}
