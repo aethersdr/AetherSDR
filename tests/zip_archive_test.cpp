@@ -34,6 +34,13 @@ void writeLe32(QByteArray& bytes, qsizetype offset, quint32 value)
 int main()
 {
     bool ok = true;
+    const QByteArray executable = AetherSDR::writeDeflatedZip({{"start.sh", "exit 0\n", 0755, 0x5c21}});
+    const qsizetype central = executable.indexOf(QByteArray::fromHex("504b0102"));
+    ok &= expect(central >= 0 && readLe16(executable, central + 4) == 0x0314
+        && readLe16(executable, central + 14) == 0x5c21
+        && readLe16(executable, central + 40) == 0100755, "ZIP preserves fixed UNIX executable mode and date");
+    ok &= expect(AetherSDR::writeDeflatedZip({{"bad", "x", 04755}}).isEmpty(), "ZIP writer refuses special permission bits");
+
 
     const QList<AetherSDR::ZipEntryData> entries = {
         {QStringLiteral("aethersdr.log"), QByteArray("log line\n")},

@@ -281,6 +281,7 @@ QByteArray writeZipImpl(const QList<ZipEntryData>& entries, bool compress)
     QByteArray out;
     QByteArray centralDir;
     for (const ZipEntryData& entry : entries) {
+        if ((entry.unixMode & ~0777U) != 0U) { return {}; }
         const QByteArray name = entry.name.toUtf8();
         const QByteArray& raw = entry.data;
 
@@ -306,7 +307,7 @@ QByteArray writeZipImpl(const QList<ZipEntryData>& entries, bool compress)
         appendLe16(out, 0);
         appendLe16(out, method);
         appendLe16(out, 0);
-        appendLe16(out, 0);
+        appendLe16(out, entry.dosDate);
         appendLe32(out, checksum);
         appendLe32(out, static_cast<quint32>(payload.size()));
         appendLe32(out, static_cast<quint32>(raw.size()));
@@ -316,12 +317,12 @@ QByteArray writeZipImpl(const QList<ZipEntryData>& entries, bool compress)
         out += payload;
 
         appendLe32(centralDir, 0x02014b50);
-        appendLe16(centralDir, 20);
+        appendLe16(centralDir, entry.unixMode ? quint16(3 * 256 + 20) : quint16(20));
         appendLe16(centralDir, 20);
         appendLe16(centralDir, 0);
         appendLe16(centralDir, method);
         appendLe16(centralDir, 0);
-        appendLe16(centralDir, 0);
+        appendLe16(centralDir, entry.dosDate);
         appendLe32(centralDir, checksum);
         appendLe32(centralDir, static_cast<quint32>(payload.size()));
         appendLe32(centralDir, static_cast<quint32>(raw.size()));
@@ -330,7 +331,7 @@ QByteArray writeZipImpl(const QList<ZipEntryData>& entries, bool compress)
         appendLe16(centralDir, 0);
         appendLe16(centralDir, 0);
         appendLe16(centralDir, 0);
-        appendLe32(centralDir, 0);
+        appendLe32(centralDir, entry.unixMode ? (0100000U | entry.unixMode) << 16 : 0U);
         appendLe32(centralDir, localOffset);
         centralDir += name;
     }

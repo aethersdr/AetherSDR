@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T05:17:14.616736+00:00",
+  "updated_utc": "2026-11-16T05:25:10.288440+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Integrate authenticated first-install package preparation and public native/container uploads into desktop coordinator; save the new token in the credential vault before upload and retain exact-plan approval/session ownership. Preserve all remaining P1-P10 gates.",
+  "next_action": "Connect verified desktop first-install package preparation to a native/carrier upload coordinator, exact-plan operator approval and credential-vault write before upload. Monitor commitment with the independently pinned key. Preserve all remaining P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1131,5 +1131,25 @@
     ],
     "evidence": "first-install-desktop-monitor/validation.json under evidence_root",
     "live": "Production Qt monitor confirmed exact new plan and independently pinned release key using GET only, no RF."
+  },
+  "desktop_first_install_package": {
+    "status": "verified_desktop_first_package_preparation_not_uploaded",
+    "component_test_executables_passed": 3,
+    "registered_project_test_executables_passed": 2,
+    "scoped_address_undefined_leak_sanitizer_executables_passed": 3,
+    "actual_preparation_reproducible": true,
+    "mutation": {
+      "removed": "worker purpose binding",
+      "detected": true,
+      "exit": 1
+    },
+    "remaining": [
+      "First-install native/carrier upload lifecycle and commit monitor coordinator",
+      "Store the new identity token before upload and obtain exact-plan operator consent",
+      "Authenticated production catalogue and platform workflow",
+      "Final-process faults/interruption, actual FLEX-6000 hardware and all remaining P1-P10 gates"
+    ],
+    "evidence": "first-install-desktop-package/validation.json under evidence_root",
+    "actual_native": "Byte-identical to previously installed 9085612-byte native archive; carrier payload/modes/execution/rootfs equal, provenance differs. No C++ archive upload."
   }
 }

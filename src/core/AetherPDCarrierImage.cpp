@@ -83,10 +83,11 @@ bool elf(const QByteArray& bytes)
 std::optional<CarrierImage> buildCarrierImage(const CarrierExecutables& executables,
                                              const QByteArray& publicRecord, const QByteArray& licenses)
 {
-    if (publicRecord.size() != 120 || !publicRecord.startsWith("PDPUB001")
+    const bool first = publicRecord.startsWith("PDFPUB01");
+    if (publicRecord.size() != 120 || (!first && !publicRecord.startsWith("PDPUB001"))
         || publicRecord.mid(8, 8) != "PDDELIV1"
         || qFromBigEndian<quint32>(publicRecord.constData() + 16) != 64
-        || qFromBigEndian<quint32>(publicRecord.constData() + 20) != 2
+        || qFromBigEndian<quint32>(publicRecord.constData() + 20) != (first ? 1u : 2u)
         || licenses.isEmpty() || licenses.size() > 512 * 1024) { return std::nullopt; }
     for (const qsizetype offset : {qsizetype(24), qsizetype(56), qsizetype(88)}) {
         if (publicRecord.mid(offset, 32) == QByteArray(32, '\0')) { return std::nullopt; }
@@ -101,7 +102,9 @@ std::optional<CarrierImage> buildCarrierImage(const CarrierExecutables& executab
     }
     if (total > kMaxExecutables) { return std::nullopt; }
     CarrierImage result;
-    result.containerName = QStringLiteral("aetherpd-carrier-") + QString::fromLatin1(publicRecord.last(32).toHex().first(32));
+    result.containerName = first
+        ? QStringLiteral("aetherpd-first-") + QString::fromLatin1(publicRecord.mid(88, 8).toHex())
+        : QStringLiteral("aetherpd-carrier-") + QString::fromLatin1(publicRecord.last(32).toHex().first(32));
     QByteArray layerTar;
     entry(layerTar, "pd", {}, 0700, true);
     for (const auto& [name, data] : files) { entry(layerTar, "pd/" + name, *data, 0500); }

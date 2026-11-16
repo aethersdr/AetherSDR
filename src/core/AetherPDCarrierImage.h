@@ -18,7 +18,7 @@ struct CarrierImage {
     QString archiveSha256;
     qsizetype layerBytes{0};
 };
-// Packages caller-authenticated ARM64 code and a public PDPUB001 receipt.
+// Packages caller-authenticated ARM64 code and a public PDPUB001 or PDFPUB01 receipt.
 // Never accepts a private PDXFER01 record, executable names or shell commands.
 // Call off the UI thread when packaging large inputs; no radio I/O occurs here.
 std::optional<CarrierImage> buildCarrierImage(const CarrierExecutables& executables,

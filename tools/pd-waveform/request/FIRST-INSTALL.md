@@ -174,6 +174,34 @@ Qt test passes, scoped address/undefined/leak sanitizer checks, and a read-only
 live match against the installed 8600. This component is not yet connected to
 first-install package preparation, operator consent or credential-vault storage.
 
+## Desktop package preparation
+
+`AetherPDFirstPackage` authenticates a fixed eight-file snapshot: installation
+worker envelope, candidate release, standalone requester, four carrier programs
+and licenses. It uses independent size/SHA256 pins and a publisher key from the
+application catalogue. The signed worker must have the installation role and
+match the candidate release/source; it cannot be an upgrade worker. No
+predecessor release or predecessor key is accepted. This path currently accepts
+ARM64/profile 1 only.
+
+Preparation takes the connected serial, new token hash, hostname and fresh
+installation ID. It returns a public plan, the fixed native ZIP and the bounded
+carrier image for review before operator approval. It receives no bearer token,
+creates no transport secret, performs no network access and grants no consent.
+The native archive has eight fixed files, an empty setup section, and an entry
+script that only execs the authenticated requester. File modes and dates are
+reproducible; no caller-controlled executable path or command is accepted.
+
+`first-install-desktop-package/actual-validation.json` records local preparation
+from the signed artifacts previously installed on the 8600. The native ZIP is
+byte-identical to that installed artifact (9,085,612 bytes). Independent tar/OCI
+inspection confirms identical carrier payload, modes, execution configuration
+and rootfs digest. C++ builder provenance changes its config/image digest.
+Three component test executables and scoped sanitizer checks pass; the ZIP and
+carrier tests also pass in the full project's registered graph. These prepared
+C++ archives have not been uploaded, and the preparation component is not yet
+connected to the installation coordinator or credential vault.
+
 ## Remaining gates
 
 Production desktop consent and credential-vault integration, publisher catalogue,

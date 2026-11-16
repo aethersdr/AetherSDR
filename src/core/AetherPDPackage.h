@@ -36,4 +36,35 @@ private:
     quint32 m_profile{0};
     QString m_firmware;
 };
+// Fresh installation has no predecessor release/key. All pins and the publisher
+// key must come from the authenticated application catalogue, outside the inputs.
+class AetherPDFirstPackage {
+public:
+    struct Trust {
+        std::array<AetherPDPackage::Pin, 8> files;
+        QByteArray publisherKey;
+    };
+    using Files = std::array<QByteArray, 8>;
+    struct Uploads {
+        QByteArray plan;
+        QByteArray publisherKey;
+        QString nativeName;
+        QByteArray nativeArchive;
+        aetherpd::CarrierImage carrier;
+    };
+    static std::array<QString, 8> fileNames();
+    static std::array<qint64, 8> fileSizeLimits();
+    static bool validTrust(const Trust& trust);
+    static std::optional<AetherPDFirstPackage> verify(const Files& files, const Trust& trust);
+    static std::optional<AetherPDFirstPackage> load(const QString& directory, const Trust& trust);
+    // Local preparation only, before exact-plan consent. Call off the UI thread.
+    // Secret generation/storage belongs to the caller; only its hash enters ZIP.
+    std::optional<Uploads> prepare(const QString& serial, const QByteArray& tokenHash,
+                                  const QString& hostname, const QByteArray& installationId) const;
+private:
+    AetherPDFirstPackage() = default;
+    Files m_files;
+    QByteArray m_key;
+    QString m_firmware;
+};
 } // namespace AetherSDR

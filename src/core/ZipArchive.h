@@ -11,6 +11,8 @@ namespace AetherSDR {
 struct ZipEntryData {
     QString name;
     QByteArray data;
+    quint16 unixMode{0}; // Optional regular-file permission bits, no special bits.
+    quint16 dosDate{0}; // Fixed packed date when reproducible metadata is needed.
 };
 
 struct ZipReadLimits {

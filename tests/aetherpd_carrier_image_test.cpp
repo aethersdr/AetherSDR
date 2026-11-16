@@ -117,6 +117,19 @@ int main(int argc,char** argv)
     QByteArray other=publicRecord;other[88]^=1;
     const std::optional<CarrierImage> unique=buildCarrierImage(code,other,licenses);
     ok &= check(unique&&unique->containerName!=image->containerName&&unique->imageId!=image->imageId,"different requests have distinct image and cleanup names");
+    QByteArray first = publicRecord;
+    first.replace(0, 8, "PDFPUB01"); qToBigEndian<quint32>(1, first.data() + 20);
+    const auto fresh = buildCarrierImage(code, first, licenses);
+    ok &= check(fresh && fresh->containerName == "aetherpd-first-6363636363636363", "fresh public record uses fixed independent name");
+    if (fresh) {
+        const auto outerFresh = untar(gunzip(fresh->archive), ok);
+        const auto indexFresh = QJsonDocument::fromJson(outerFresh.value("index.json").data).object();
+        const auto manifestFresh = QJsonDocument::fromJson(blob(outerFresh, indexFresh.value("manifests").toArray().first().toObject(), ok)).object();
+        const auto layerFresh = untar(gunzip(blob(outerFresh, manifestFresh.value("layers").toArray().first().toObject(), ok)), ok);
+        ok &= check(layerFresh.value("pd/request").data == first, "fresh nonce and plan binding preserved in carrier");
+    }
+    qToBigEndian<quint32>(2, first.data() + 20);
+    ok &= check(!buildCarrierImage(code, first, licenses), "fresh record cannot invoke upgrade role");
     if(argc==2){QFile output(QString::fromLocal8Bit(argv[1]));if(!output.open(QIODevice::WriteOnly)||output.write(image->archive)!=image->archive.size()){return 2;}}
     return ok?0:1;
 }

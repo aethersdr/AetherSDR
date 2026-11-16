@@ -1,5 +1,6 @@
 #include "AetherPDPackageFixture.h"
 #include "core/AetherPDProtocol.h"
+#include "core/ZipArchive.h"
 #include <QtTest>
 #ifdef Q_OS_UNIX
 #include <sys/stat.h>
@@ -9,6 +10,65 @@ using namespace AetherSDR;
 class PackageTest : public QObject {
     Q_OBJECT
 private slots:
+    void freshPackageHasNoPredecessor()
+    {
+        AetherPDTest::PackageFixture fixture; QVERIFY(fixture.valid);
+        AetherPDFirstPackage::Files files;
+        for (std::size_t i = 0; i < files.size(); ++i) { files[i] = fixture.bytes(i); }
+        files[0] = AetherPDTest::PackageFixture::decode(fixture.fixture.value("first_worker"));
+        files[2] = fixture.bytes(3);
+        AetherPDFirstPackage::Trust trust;
+        trust.publisherKey = fixture.trust.candidateKey;
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            trust.files[i] = {files[i].size(), QCryptographicHash::hash(files[i], QCryptographicHash::Sha256)};
+        }
+        const auto package = AetherPDFirstPackage::verify(files, trust); QVERIFY(package);
+        const auto uploads = package->prepare("fixture-8600", QByteArray(32, 't'), "fixture-radio", QByteArray(32, 'n'));
+        QVERIFY(uploads);
+        QCOMPARE(uploads->plan, AetherPDTest::PackageFixture::decode(fixture.fixture.value("first_plan")));
+        QCOMPARE(QCryptographicHash::hash(uploads->nativeArchive, QCryptographicHash::Sha256).toHex(),
+                 fixture.fixture.value("first_native_sha256").toString().toLatin1());
+        QCOMPARE(uploads->nativeName, QStringLiteral("AetherPDFirst6e6e6e6e6e6e6e6e"));
+        QCOMPARE(uploads->carrier.containerName, QStringLiteral("aetherpd-first-6e6e6e6e6e6e6e6e"));
+        QCOMPARE(uploads->publisherKey, trust.publisherKey);
+        QString error;
+        const auto entries = readZipEntries(uploads->nativeArchive, &error);
+        QVERIFY(error.isEmpty()); QCOMPARE(entries.size(), 8);
+        QCOMPARE(entries.value(uploads->nativeName + QStringLiteral("/plan")), uploads->plan);
+        const auto repeat = package->prepare("fixture-8600", QByteArray(32, 't'), "fixture-radio", QByteArray(32, 'n'));
+        QVERIFY(repeat); QCOMPARE(repeat->nativeArchive, uploads->nativeArchive); QCOMPARE(repeat->carrier.archive, uploads->carrier.archive);
+        for (const QString& hostname : {QString(), QStringLiteral("-bad"), QStringLiteral("bad-"), QStringLiteral("bad/name"), QString(64, u'a')}) {
+            QVERIFY(!package->prepare("fixture-8600", QByteArray(32, 't'), hostname, QByteArray(32, 'n')));
+        }
+        QVERIFY(!package->prepare("fixture-8600", QByteArray(32, '\0'), "fixture-radio", QByteArray(32, 'n')));
+        QVERIFY(!package->prepare("fixture-8600", QByteArray(32, 't'), "fixture-radio", QByteArray(32, '\0')));
+        QVERIFY(!package->prepare("bad\nserial", QByteArray(32, 't'), "fixture-radio", QByteArray(32, 'n')));
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            auto wrong = trust; wrong.files[i].sha256[0] ^= 1;
+            QVERIFY(!AetherPDFirstPackage::verify(files, wrong));
+        }
+        auto wrongKey = trust; wrongKey.publisherKey[0] ^= 1;
+        QVERIFY(!AetherPDFirstPackage::verify(files, wrongKey));
+        for (const std::size_t i : {0u, 1u, 2u}) {
+            auto damaged = files; damaged[i][i == 0 ? 120 : i == 1 ? 368 : 0] ^= 1;
+            auto repinned = trust;
+            repinned.files[i].sha256 = QCryptographicHash::hash(damaged[i], QCryptographicHash::Sha256);
+            QVERIFY(!AetherPDFirstPackage::verify(damaged, repinned));
+        }
+        auto upgrade = files; upgrade[0] = fixture.bytes(0);
+        auto upgradeTrust = trust; upgradeTrust.files[0] = {upgrade[0].size(), QCryptographicHash::hash(upgrade[0], QCryptographicHash::Sha256)};
+        QVERIFY(!AetherPDFirstPackage::verify(upgrade, upgradeTrust));
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto names = AetherPDFirstPackage::fileNames();
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            QFile file(QDir(directory.path()).filePath(names[i])); QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(files[i]), files[i].size());
+        }
+        QVERIFY(AetherPDFirstPackage::load(directory.path(), trust));
+        QVERIFY(QFile::remove(QDir(directory.path()).filePath(names[2])));
+        QVERIFY(!AetherPDFirstPackage::load(directory.path(), trust));
+        QVERIFY(package->prepare("fixture-8600", QByteArray(32, 't'), "fixture-radio", QByteArray(32, 'n')));
+    }
     void nativePackagesAndImmutableSnapshot_data()
     {
         QTest::addColumn<int>("arch");
