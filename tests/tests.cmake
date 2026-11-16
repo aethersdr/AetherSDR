@@ -468,6 +468,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME pd_iq_stream_policy_test COMMAND pd_iq_stream_policy_test)
     add_executable(pd_shim_launch_policy_test tools/pd-waveform/session/shim_launch_test.c)
     add_test(NAME pd_shim_launch_policy_test COMMAND pd_shim_launch_policy_test)
+    add_executable(pd_radio_launch_policy_test tools/pd-waveform/session/radio_launch_test.c)
+    add_test(NAME pd_radio_launch_policy_test COMMAND pd_radio_launch_policy_test)
     add_executable(pd_fixed_arp_test
         tools/pd-waveform/session/fixed_arp_test.c)
     add_test(NAME pd_fixed_arp_test COMMAND pd_fixed_arp_test)
@@ -480,9 +482,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         tools/pd-waveform/pd_stream_guard.c)
     target_include_directories(pd_capture_policy_test PRIVATE tools/pd-waveform)
     add_test(NAME pd_capture_policy_test COMMAND pd_capture_policy_test)
-    set_target_properties(pd_session_lease_guard_test pd_shim_launch_policy_test pd_iq_stream_policy_test pd_start_gate_test pd_startup_iq_test pd_fixed_arp_test pd_kernel_probe_json_test pd_capture_policy_test
+    set_target_properties(pd_session_lease_guard_test pd_radio_launch_policy_test pd_shim_launch_policy_test pd_iq_stream_policy_test pd_start_gate_test pd_startup_iq_test pd_fixed_arp_test pd_kernel_probe_json_test pd_capture_policy_test
         PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF C_STANDARD 11 C_STANDARD_REQUIRED ON)
-    set_tests_properties(pd_session_lease_guard_test pd_shim_launch_policy_test pd_iq_stream_policy_test pd_start_gate_test pd_startup_iq_test pd_fixed_arp_test pd_kernel_probe_json_test pd_capture_policy_test
+    set_tests_properties(pd_session_lease_guard_test pd_radio_launch_policy_test pd_shim_launch_policy_test pd_iq_stream_policy_test pd_start_gate_test pd_startup_iq_test pd_fixed_arp_test pd_kernel_probe_json_test pd_capture_policy_test
         PROPERTIES TIMEOUT 10)
 endif()
 

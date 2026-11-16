@@ -5,6 +5,37 @@
 #undef NDEBUG
 #endif
 #include <assert.h>
+static int cleanup_privileged, cleanup_drop_ok, cleanup_reap_ok;
+static unsigned cleanup_drop_calls, cleanup_reap_calls;
+static struct radio_child* cleanup_expected;
+static int retire_test_privileges(void)
+{
+    ++cleanup_drop_calls;
+    if(!cleanup_drop_ok){return 0;}
+    cleanup_privileged=0;return 1;
+}
+static int collect_test_children(struct radio_child children[3])
+{
+    assert(!cleanup_privileged && children==cleanup_expected);
+    ++cleanup_reap_calls;return cleanup_reap_ok;
+}
+static void check_retirement_order(void)
+{
+    struct radio_child children[3]={{.pid=-1,.log=-1},{.pid=-1,.log=-1},{.pid=-1,.log=-1}};
+    cleanup_expected=children;cleanup_privileged=1;cleanup_drop_ok=cleanup_reap_ok=1;
+    cleanup_drop_calls=cleanup_reap_calls=0;
+    assert(radio_retire(children,0,retire_test_privileges,collect_test_children));
+    assert(cleanup_drop_calls==1 && cleanup_reap_calls==1 && !cleanup_privileged);
+    cleanup_privileged=1;cleanup_drop_ok=0;cleanup_drop_calls=cleanup_reap_calls=0;
+    assert(!radio_retire(children,0,retire_test_privileges,collect_test_children));
+    assert(cleanup_drop_calls==1 && !cleanup_reap_calls && cleanup_privileged);
+    cleanup_privileged=0;cleanup_drop_calls=cleanup_reap_calls=0;
+    assert(radio_retire(children,78666,retire_test_privileges,collect_test_children));
+    assert(!cleanup_drop_calls && cleanup_reap_calls==1);
+    cleanup_privileged=1;cleanup_drop_ok=1;cleanup_reap_ok=0;cleanup_drop_calls=cleanup_reap_calls=0;
+    assert(!radio_retire(children,0,retire_test_privileges,collect_test_children));
+    assert(cleanup_drop_calls==1 && cleanup_reap_calls==1 && !cleanup_privileged);
+}
 int main(void)
 {
     const char arp[]="{\"event\":\"ready\",\"uid\":65534,\"owned\":true,\"success\":true,\"rf_commands\":[]}\n";
@@ -44,6 +75,7 @@ int main(void)
     assert(radio_reap(children));
     children[0]=(struct radio_child){.pid=fork(),.log=-1};assert(children[0].pid>=0);if(!children[0].pid){_exit(7);}
     assert(!radio_reap(children));
-    puts("PASS: fixed constructor readiness grammar, bounded complete-line reads and owned-child cleanup exit classification; no radio or privileges");
+    check_retirement_order();
+    puts("PASS: retire privileges before bounded cleanup; fixed constructor readiness grammar, bounded complete-line reads and owned-child cleanup exit classification; no radio or privileges");
     return 0;
 }

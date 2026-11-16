@@ -536,6 +536,13 @@ update/rollback and actual 6300 boot qualification remain separate gates.
 
 ## Installed-session failure lifetime
 
+The fixed resource launcher closes setup descriptors and drops root before
+waiting for owned children during startup-failure cleanup. Failure to drop
+privileges refuses the wait and reports cleanup failure; an already ordinary
+parent keeps its existing identity. The child-exit result still determines
+whether cleanup is confirmed. This also covers an early prepared-session
+refusal that returns before the usual privilege retirement.
+
 On the installed ARM64 candidate, loss of the IQ-source process retires DSP,
 capture, ARP and guardians. Its unprivileged private control owner and launcher
 can remain to serve explicit receive restoration. Status requests refresh the

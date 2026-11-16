@@ -1,0 +1,80 @@
+{
+  "updated_utc": "2026-11-16T22:48:36.544389+00:00",
+  "status": "privilege_retirement_before_failed_start_cleanup_component_qualified_not_installed",
+  "production_ready": false,
+  "installed": false,
+  "problem_live_report": "PARTIAL-SOURCE-START-QUALIFICATION.json",
+  "change": "After closing setup descriptors, both resource-launcher exit paths drop root before bounded child reaping. Drop failure returns cleanup failure without entering wait; ordinary callers and child-exit classification retain their behavior.",
+  "unchanged_privilege_drop_implementation": "pd_shim_launch.c drop_root removes groups, bounding/effective/permitted/inheritable capabilities, UID/GID authority and sets no_new_privs with existingLinux2.6EINVAL handling.",
+  "validation": {
+    "production_installed": false,
+    "builds": {
+      "host": {
+        "bytes": 883912,
+        "sha256": "cb4289b939df09ab7832a1093375b1e4dbeed2a65bb65046916641924ffa2380"
+      },
+      "arm64": {
+        "bytes": 105136,
+        "sha256": "8915359c85b7cd552e2a9586319dafed650e58390fb6b630f83dd7dddc4b967f"
+      },
+      "armv7": {
+        "bytes": 91856,
+        "sha256": "96e892137ae99345419a808c42db48edb1c518441157d01179e746c919183c7f"
+      }
+    },
+    "mutations": {
+      "no-drop": {
+        "exit": -6,
+        "assertion": "test-no-drop: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/no-drop/radio_launch_test.c:19: collect_test_children: Assertion `!cleanup_privileged && children==cleanup_expected' failed."
+      },
+      "ignore-drop-failure": {
+        "exit": -6,
+        "assertion": "test-ignore-drop-failure: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/ignore-drop-failure/radio_launch_test.c:19: collect_test_children: Assertion `!cleanup_privileged && children==cleanup_expected' failed."
+      },
+      "ignore-reap-failure": {
+        "exit": -6,
+        "assertion": "test-ignore-reap-failure: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/ignore-reap-failure/radio_launch_test.c:36: check_retirement_order: Assertion `!radio_retire(children,0,retire_test_privileges,collect_test_children)' failed."
+      }
+    },
+    "ASan_UBSan_LSan": {
+      "exit": 0,
+      "access": "normal host process access via exec tool",
+      "initial_sandbox_failure_log": "sanitizer-run.log"
+    },
+    "registered_CTest": {
+      "name": "pd_radio_launch_policy_test",
+      "passed": 1,
+      "total": 1,
+      "time_s": 0.04
+    },
+    "strict_registration_check": "passed",
+    "mutation_receipt_note": "Only mutant executables rerun to retain their exact exit codes after the original verification script stopped at sandbox-restrictedLeakSanitizer. Successful cross-builds and hostCTest were not repeated."
+  },
+  "compiler": "0.17.1",
+  "ARM64_helper_growth_bytes": 56,
+  "source_sha256": {
+    "tools/pd-waveform/session/pd_radio_launch.c": "59040e7231cb2cc455c9b35fcd1798bea483612910c4da55160647b7374cf62d",
+    "tools/pd-waveform/session/radio_launch_test.c": "e73a33d37af1691b42c6a3891c62e3f7de607ca9237a5f477cdcc55d49f439f8",
+    "tests/tests.cmake": "ea24b69358f1871c3d50b7d492eda877d92c8e95209b5cb071590205b7795a58",
+    "tools/pd-waveform/session/README.md": "7339ee51546a2a452db7d32b7587e26292523993176c340ae60f7e98b011e57a"
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/verify.py": "79adbb31471b9ea0787311399fdd1edd2691c6f7d6421953f526eefd9041922a",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/finish-verification.py": "bf9b78d59288115f392d61c0631ce6837d665eff315fb93435556875da4bcb2c",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/verification.json": "bbf611445e2aae040fb2efeb12e090904d2c5be2b06732c474cb428fa15f58e9",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/build-host.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/build-arm64.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/build-armv7.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/sanitizer-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/sanitizer-run.log": "0c624ca5b2c61037298764d3d581c5081b3abedc19bfd39cdbe43516d7372a0d",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/mutation-final-no-drop.log": "523c29581784dbd27df1be66e24fdf53d17e480767d3b95dd9d5bcb5e3bcc1a9",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/mutation-final-ignore-drop-failure.log": "e104a2a1b6e60b4a85c3a86392ced1938b8132db34542aaadb7aa1502203dc33",
+    "tools/pd-waveform/evidence/20261116-cleanup-privilege/mutation-final-ignore-reap-failure.log": "1779a73257a4ac7c687982e8528db7934dbf195763d2436057942f9100e61a25"
+  },
+  "limitations": [
+    "Policy regression injects credential-retirement and child-collection callbacks; it proves ordering/failure handling, not a real UID change. Existing drop_root implementation is unchanged.",
+    "Current installed helper retains the observed root-wait issue. Rebuild authenticated paired bundles, perform ordinary upgrade, then repeat the live partial-start probe and verify parentUID/caps during the cleanup wait.",
+    "ARMv7 build is not actualFLEX6300/Linux2.6 hardware qualification.",
+    "Full source/package reproducibility and final disk-budget checks remain for the new candidate. No new RF from this fix."
+  ]
+}

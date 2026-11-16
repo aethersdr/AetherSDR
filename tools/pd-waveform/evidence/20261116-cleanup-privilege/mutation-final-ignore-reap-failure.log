@@ -1,0 +1,1 @@
+test-ignore-reap-failure: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/ignore-reap-failure/radio_launch_test.c:36: check_retirement_order: Assertion `!radio_retire(children,0,retire_test_privileges,collect_test_children)' failed.

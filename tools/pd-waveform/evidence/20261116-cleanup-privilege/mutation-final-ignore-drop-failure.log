@@ -1,0 +1,1 @@
+test-ignore-drop-failure: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/ignore-drop-failure/radio_launch_test.c:19: collect_test_children: Assertion `!cleanup_privileged && children==cleanup_expected' failed.

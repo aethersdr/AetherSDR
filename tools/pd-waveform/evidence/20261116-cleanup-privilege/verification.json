@@ -1,0 +1,44 @@
+{
+  "production_installed": false,
+  "builds": {
+    "host": {
+      "bytes": 883912,
+      "sha256": "cb4289b939df09ab7832a1093375b1e4dbeed2a65bb65046916641924ffa2380"
+    },
+    "arm64": {
+      "bytes": 105136,
+      "sha256": "8915359c85b7cd552e2a9586319dafed650e58390fb6b630f83dd7dddc4b967f"
+    },
+    "armv7": {
+      "bytes": 91856,
+      "sha256": "96e892137ae99345419a808c42db48edb1c518441157d01179e746c919183c7f"
+    }
+  },
+  "mutations": {
+    "no-drop": {
+      "exit": -6,
+      "assertion": "test-no-drop: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/no-drop/radio_launch_test.c:19: collect_test_children: Assertion `!cleanup_privileged && children==cleanup_expected' failed."
+    },
+    "ignore-drop-failure": {
+      "exit": -6,
+      "assertion": "test-ignore-drop-failure: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/ignore-drop-failure/radio_launch_test.c:19: collect_test_children: Assertion `!cleanup_privileged && children==cleanup_expected' failed."
+    },
+    "ignore-reap-failure": {
+      "exit": -6,
+      "assertion": "test-ignore-reap-failure: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/cleanup-privilege-retirement/ignore-reap-failure/radio_launch_test.c:36: check_retirement_order: Assertion `!radio_retire(children,0,retire_test_privileges,collect_test_children)' failed."
+    }
+  },
+  "ASan_UBSan_LSan": {
+    "exit": 0,
+    "access": "normal host process access via exec tool",
+    "initial_sandbox_failure_log": "sanitizer-run.log"
+  },
+  "registered_CTest": {
+    "name": "pd_radio_launch_policy_test",
+    "passed": 1,
+    "total": 1,
+    "time_s": 0.04
+  },
+  "strict_registration_check": "passed",
+  "mutation_receipt_note": "Only mutant executables rerun to retain their exact exit codes after the original verification script stopped at sandbox-restrictedLeakSanitizer. Successful cross-builds and hostCTest were not repeated."
+}

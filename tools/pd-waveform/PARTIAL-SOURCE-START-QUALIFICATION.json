@@ -1,0 +1,81 @@
+{
+  "updated_utc": "2026-11-16T22:48:36.544389+00:00",
+  "status": "installed_partial_source_start_timeout_functional_cleanup_and_ordinary_recovery_passed_root_wait_hardening_pending",
+  "production_ready": false,
+  "installed_runtime_source": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "installed_release_blake2b_256": "9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce",
+  "RF_transmissions": 0,
+  "Start_actions_for_fault": 1,
+  "source_hold_ms": 8012.105831,
+  "all_workers_gone_from_hold_start_ms": 8026.110217,
+  "target_source_PID_including_zombie_gone": true,
+  "resume_watchdog_used": false,
+  "no_capture_or_DSP_during_hold": true,
+  "registered_was_observed": false,
+  "after_failure_status": {
+    "body": {
+      "available": false,
+      "state": "unavailable"
+    },
+    "http_status": 503
+  },
+  "after_failure_Start_enabled": true,
+  "explicit_ordinary_recovery": {
+    "passed": true,
+    "root_repair_used": false,
+    "FDX": false,
+    "IQ_bytes": 131072,
+    "IQ_sha256": "7d1db5f3c890e4ca5e3d390507e876492d375819fd788d3867e0ec42b997d9ce",
+    "stopped_status": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    }
+  },
+  "root_wait_finding": {
+    "exe": "/run/aetherpd/bin/pd-radio-launch",
+    "uid": "0\t0\t0\t0",
+    "caps": {
+      "CapInh": "0000000000000000",
+      "CapPrm": "000001ffffffffff",
+      "CapEff": "000001ffffffffff",
+      "CapBnd": "000001ffffffffff",
+      "CapAmb": "0000000000000000"
+    },
+    "NoNewPrivs": "0",
+    "finding": "After4secondIQhandoff timeout, the resource launcher still held root while reaping a stopped ordinary child. This wait does not require privilege. Captured atabout8seconds before source resume.",
+    "fix_source": "pd_radio_launch.c radio_retire routes both completion paths through privilege retirement before radio_reap",
+    "fixed_installed": false
+  },
+  "final_cleanup": {
+    "process_count": 3,
+    "all_UID78666_caps_zero_NNP1": true,
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "temporary_installer_paths_absent": true,
+    "diagnostic_job_and_host_scratch_removed": true
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-partial-source-start/installed-before-fix/fault-template.py": "d2aadc27e8abc604be87865d103bdf62a3af9643b6ca8bebe107c615168d6baa",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/installed-before-fix/run-once.py": "d0d0711f7a9d3d6bb2f9b8db60713a15983135134a1d66040ca6b890b150b72f",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/installed-before-fix/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/installed-before-fix/events.json": "f04f95c925969a13ba81279ae54e9065c2c8ae26e4d00f0c6e7808bdd81e55c3",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/installed-before-fix/outcome.json": "a1bdf466436c74e2402e1ab503dba7d22d799ad8d00051221ec5019b9308cd7d",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/installed-before-fix/pause-result.json": "3272f35d4d81ff0718c610c7993d2e5505faaef9c49e9b2f42025d8de9349ba0",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/ordinary-recovery/receive-iq-check.py": "d3ad0d4ced430973e86a69e9be51488f5ea2062b1345e9a5185e7b811ec7ba08",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/ordinary-recovery/instance.json": "82e429dd72f8ab8def413ee9c3a90938697580a732ed803e0204eee20c0efafa",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/ordinary-recovery/usb-receive-iq-check.json": "4ddf84c7d44524d61ba889bc6e81da502320b3a2af262a7e07994a2338239ca9",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/ordinary-recovery/usb-receive-iq.f32le": "7d1db5f3c890e4ca5e3d390507e876492d375819fd788d3867e0ec42b997d9ce",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/ordinary-recovery/final-audit-job.py": "9e79e24534f4189c21ce5bae3f65e451579dfabfe44d886c4c69ea95cbdc7a21",
+    "tools/pd-waveform/evidence/20261116-partial-source-start/ordinary-recovery/final-audit-result.json": "f46545cd09c887355ef9d13ef3dfb01a268130f26081b709f3f80c8089c16855"
+  },
+  "local_generated_probe_sha256": "4ad1bf066dd417c138648b808df6aed130a6a7ce585818d5de60448dd2ddae93",
+  "limitations": [
+    "One receive-only partial source-stage stall; no RF or calibration source.",
+    "Paused source was explicitly resumed after8seconds; no claim for indefinite or uninterruptible kernel stalls.",
+    "Functional cleanup passed on installed old helper, but unnecessary privileged waiting is an open installed finding until hardened candidate qualification.",
+    "Other partial stages, API/credential failures, full P1-P10, actual6300 and release gates remain."
+  ]
+}

@@ -108,6 +108,15 @@ static int radio_reap(struct radio_child children[3])
         struct timespec pause={0,10000000};nanosleep(&pause,NULL);
     }
 }
+static int radio_retire(struct radio_child children[3], uid_t effective_uid,
+                        int (*retire_privileges)(void), int (*reap)(struct radio_child[3]))
+{
+    // Setup descriptors are closed before this path. Reaping owned children
+    // needs no privileges, including when a child stalls during startup.
+    if(effective_uid==0 && !retire_privileges()){return 0;}
+    return reap(children);
+}
+
 #ifndef PD_RADIO_MAIN
 #define PD_RADIO_MAIN main
 #endif
@@ -166,9 +175,9 @@ int PD_RADIO_MAIN(int argc,char** argv)
         char event[320];int length=snprintf(event,sizeof(event),"{\"event\":\"native_resources_prepared\",\"source_pid\":%ld,\"capture_pid\":%ld,\"arp_pid\":%ld,\"stream\":\"0x%08x\",\"port\":%u,\"rf_commands\":[]}\n",(long)children[0].pid,(long)children[1].pid,(long)children[2].pid,sid,port);
         if(length>0 && length<(int)sizeof(event) && write(1,event,(size_t)length)==length){
             char iq_text[16],life_text[16];snprintf(iq_text,sizeof(iq_text),"%d",iq[1]);snprintf(life_text,sizeof(life_text),"%d",life[1]);char* arguments[]={"pd-session-launch",iq_text,life_text,NULL};
-            int result=native_session_main(3,arguments);close(iq[1]);close(life[1]);int cleaned=radio_reap(children);return result?result:cleaned?0:9;
+            int result=native_session_main(3,arguments);close(iq[1]);close(life[1]);int cleaned=radio_retire(children,geteuid(),drop_root,radio_reap);return result?result:cleaned?0:9;
         }
     }
-    close(iq[1]);close(life[1]);int cleaned=radio_reap(children);
+    close(iq[1]);close(life[1]);int cleaned=radio_retire(children,geteuid(),drop_root,radio_reap);
     (void)write(2,"AetherPD native resource startup failed\n",39);return cleaned?8:9;
 }
