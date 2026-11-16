@@ -1,0 +1,450 @@
+{
+  "stock_cases": {
+    "stock-off-01": {
+      "analysis": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.973446169288,
+          1899.97083554897
+        ],
+        "tone_imbalance_db": 0.75295854632796,
+        "fundamental_pep_db_raw_iq": 87.5687434147255,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -30.0673724164294,
+            "dbc_fundamental_pep": -36.0798311559949,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -28.8795330078617,
+            "dbc_fundamental_pep": -34.8919917474273,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -46.926789814149,
+            "dbc_fundamental_pep": -52.9392485537145,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -46.8420461374304,
+            "dbc_fundamental_pep": -52.8545048769959,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -67.1896597467723,
+            "dbc_fundamental_pep": -73.2021184863378,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -70.221557616538,
+            "dbc_fundamental_pep": -76.2340163561035,
+            "noise_limited": false
+          }
+        ]
+      },
+      "independent_recheck": {
+        "max_difference_db": 5.684341886080802e-14,
+        "iq_sha256": "4c4bc5eaf610de41022ff142fe50ecdcc56aa2b42580bed1c81bb298af945ce1"
+      },
+      "source": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "seconds": 8,
+        "tone_hz": [
+          710,
+          1900
+        ],
+        "each_peak": 0.415,
+        "PC_gain": 35,
+        "sha256": "46b7295d6fc4243491067ed1d1cb5d9e735d260d94e3197d31315d6045ff7543"
+      },
+      "max_radio_sampled_forward_watts": 1.4642832279205322,
+      "GUI_stop_s": 7.079306588006148,
+      "equalizer_states_at_capture_completion": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "APD_states_at_capture_completion": [
+        "OFF",
+        "OFF",
+        "OFF",
+        "OFF"
+      ]
+    },
+    "stock-off-02": {
+      "analysis": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.973703352924,
+          1899.97068486232
+        ],
+        "tone_imbalance_db": -0.0261124341230357,
+        "fundamental_pep_db_raw_iq": 95.0756394077762,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -27.1692594168689,
+            "dbc_fundamental_pep": -33.1898495174314,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -27.1749732807457,
+            "dbc_fundamental_pep": -33.1955633813083,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -38.8489437135938,
+            "dbc_fundamental_pep": -44.8695338141563,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -39.6535402455478,
+            "dbc_fundamental_pep": -45.6741303461104,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -47.968293119828,
+            "dbc_fundamental_pep": -53.9888832203906,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -48.6230225125059,
+            "dbc_fundamental_pep": -54.6436126130684,
+            "noise_limited": false
+          }
+        ]
+      },
+      "independent_recheck": {
+        "max_difference_db": 6.039613253960852e-14,
+        "iq_sha256": "dba4dcee5b361c587fc493c984ac24d9dcebedefb82a1b1f64a90e2b1dc2c8b2"
+      },
+      "source": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "seconds": 8,
+        "tone_hz": [
+          710,
+          1900
+        ],
+        "each_peak": 0.415,
+        "PC_gain": 80,
+        "sha256": "46b7295d6fc4243491067ed1d1cb5d9e735d260d94e3197d31315d6045ff7543"
+      },
+      "max_radio_sampled_forward_watts": 8.278825759887695,
+      "GUI_stop_s": 7.085975660003896,
+      "equalizer_states_at_capture_completion": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "APD_states_at_capture_completion": [
+        "OFF",
+        "OFF",
+        "OFF",
+        "OFF"
+      ]
+    },
+    "stock-off-03": {
+      "analysis": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.97464258202,
+          1899.97074148367
+        ],
+        "tone_imbalance_db": 0.0326139542012811,
+        "fundamental_pep_db_raw_iq": 95.0754362570318,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -27.240998718379,
+            "dbc_fundamental_pep": -33.2615833242797,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -27.1177237902609,
+            "dbc_fundamental_pep": -33.1383083961616,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -38.9292124281908,
+            "dbc_fundamental_pep": -44.9497970340914,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -39.601541659361,
+            "dbc_fundamental_pep": -45.6221262652616,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -48.0850248731843,
+            "dbc_fundamental_pep": -54.105609479085,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -48.5868695959456,
+            "dbc_fundamental_pep": -54.6074542018463,
+            "noise_limited": false
+          }
+        ]
+      },
+      "independent_recheck": {
+        "max_difference_db": 4.263256414560601e-14,
+        "iq_sha256": "ecc075ab672e0aea16cba1868fef383d94dfef916191c9aaa5c09185c1f2a812"
+      },
+      "source": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "seconds": 8,
+        "tone_hz": [
+          710,
+          1900
+        ],
+        "each_peak": 0.415,
+        "PC_gain": 80,
+        "sha256": "3b6b73907378eabff3b740da37df7b4a9fd355b319067ac60355a185bd9a9c43"
+      },
+      "max_radio_sampled_forward_watts": 8.234269142150879,
+      "GUI_stop_s": 7.036074861003726,
+      "equalizer_states_at_capture_completion": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "APD_states_at_capture_completion": [
+        "OFF",
+        "OFF",
+        "OFF",
+        "OFF"
+      ]
+    },
+    "stock-on-03": {
+      "analysis": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.974209003894,
+          1899.97090605344
+        ],
+        "tone_imbalance_db": 0.00145954186730535,
+        "fundamental_pep_db_raw_iq": 95.3675769868442,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -45.8297659852669,
+            "dbc_fundamental_pep": -51.8503658678896,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -45.2466291530352,
+            "dbc_fundamental_pep": -51.2672290356579,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -52.1992032218013,
+            "dbc_fundamental_pep": -58.219803104424,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -52.148736953419,
+            "dbc_fundamental_pep": -58.1693368360417,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -49.0509214387065,
+            "dbc_fundamental_pep": -55.0715213213292,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -49.6874928820173,
+            "dbc_fundamental_pep": -55.70809276464,
+            "noise_limited": false
+          }
+        ]
+      },
+      "independent_recheck": {
+        "max_difference_db": 4.973799150320701e-14,
+        "iq_sha256": "0695cc07ecacc1d09b4df2e5e52b8907f563436390576f03a29de97783dafcf5"
+      },
+      "source": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "seconds": 8,
+        "tone_hz": [
+          710,
+          1900
+        ],
+        "each_peak": 0.415,
+        "PC_gain": 80,
+        "sha256": "3b6b73907378eabff3b740da37df7b4a9fd355b319067ac60355a185bd9a9c43"
+      },
+      "max_radio_sampled_forward_watts": 8.234269142150879,
+      "GUI_stop_s": 7.035735356999794,
+      "equalizer_states_at_capture_completion": [
+        "1",
+        "1",
+        "1",
+        "1"
+      ],
+      "APD_states_at_capture_completion": [
+        "ACTIVE",
+        "ACTIVE",
+        "ACTIVE",
+        "ACTIVE"
+      ]
+    }
+  },
+  "stock_on_minus_off_power_db": 0.29214072981240236,
+  "stock_on_minus_aether_on_power_db": 0.4752192916121345,
+  "stock_pair_power_match_within_0_5db": true,
+  "corrected_comparison_power_match_within_0_5db": true,
+  "stock_improvement_db": [
+    {
+      "order": 3,
+      "upper": false,
+      "improvement_db": 18.588767266887903
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "improvement_db": 18.1289053627743
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "improvement_db": 13.269990793610496
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "improvement_db": 12.547195294058
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "improvement_db": 0.9658965655222005
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "improvement_db": 1.100623286071702
+    }
+  ],
+  "aether_vs_stock_db": [
+    {
+      "order": 3,
+      "upper": false,
+      "aether_dbc_per_tone": -44.363769325856104,
+      "stock_dbc_per_tone": -45.8297659852669,
+      "positive_means_aether_lower_db": -1.4659966594107985
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "aether_dbc_per_tone": -51.35784567295741,
+      "stock_dbc_per_tone": -45.2466291530352,
+      "positive_means_aether_lower_db": 6.111216519922209
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "aether_dbc_per_tone": -54.22057005166437,
+      "stock_dbc_per_tone": -52.1992032218013,
+      "positive_means_aether_lower_db": 2.0213668298630694
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "aether_dbc_per_tone": -60.698797282016415,
+      "stock_dbc_per_tone": -52.148736953419,
+      "positive_means_aether_lower_db": 8.550060328597418
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "aether_dbc_per_tone": -65.51877002545623,
+      "stock_dbc_per_tone": -49.0509214387065,
+      "positive_means_aether_lower_db": 16.46784858674973
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "aether_dbc_per_tone": -63.005242312579924,
+      "stock_dbc_per_tone": -49.6874928820173,
+      "positive_means_aether_lower_db": 13.317749430562621
+    }
+  ],
+  "ADC_headroom_known": false,
+  "absolute_power_calibrated": false
+}

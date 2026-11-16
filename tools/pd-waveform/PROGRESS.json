@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T17:58:56.659457+00:00",
+  "updated_utc": "2026-11-16T18:12:19.694471+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -36,7 +36,7 @@
     "Complete RAM-only request authorization for upgrades without any credential in upload archives.",
     "Complete ordinary-user operator approval, credential, UI and PR4770 integration.",
     "Resolve alignment slip and cold-start bypass; qualify final process graph, failure/unkey/restart behavior.",
-    "Repeat matched8600 RF measurements and compare final candidate with stock APD.",
+    "Complete sustained/repeated 8600 RF and speech qualification; finite current-candidate stock APD comparison passed with limits.",
     "Complete actual6300 teammate hardware qualification, disk/resource budgets, docs and release gates."
   ],
   "constraints": [
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Prepare finite PC-audio stock tone source, installed bounded unkey control and read-only APD telemetry; then bounded stock OFF/ON RF captures with matched output and the same analyzer. Preserve all remaining P1-P10 gates.",
+  "next_action": "Continue sustained/speech and final-process failure qualification, investigate historical alignment and cold-start failures, then finish installation/ARMv7/actual6300 and independent release gates. Finite stock comparison is documented with limits; do not treat it as sustained or universal superiority.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Stock-comparison prerequisite passed: installed local DAX IQ captures in USB with stock APD selected and AetherPD bypassed. The same production analyzer reproduces all four current RF exports. No stock RF comparison yet.",
+  "current_focus": "Finite current-candidate stock APD comparison completed at 10 W setting, local IQ4, FDX off, approximately matched output. Warm stock model; negative inactive/under-driven attempts retained. Radio idle, temporary sessions/routes removed.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2906,7 +2906,7 @@
       "POWER-CONTROL-QUALIFICATION.json"
     ],
     "installed_runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "installed_state": "Runtime e8d68ad4b with desktop b1256a165; finite matched 5/10 W pairs passed, radio idle and native session stopped, cleanup audited.",
+    "installed_state": "Runtime e8d68ad4b with desktop b1256a165; finite 5/10 W pairs and stock APD comparison passed with stated limits. Native session stopped and cleanup audited.",
     "latest_read_only_network_probe": {
       "utc": "2026-11-16T17:19:41.305947+00:00",
       "address": "192.168.50.100",
@@ -2919,7 +2919,7 @@
       "Historical cold-start cancellation and natural alignment failure reproduction/attribution",
       "PR4770 selected IQ channels 1\u20134 and GUI-session lifecycle exercised live; remaining operator measurement controls and RF workflow qualification are open",
       "Final process-graph faults and actual RF release timing",
-      "Repeated exact-candidate 5/10 W tone/speech and matched stock APD comparison",
+      "Repeated/sustained exact-candidate tone and speech qualification; finite 5/10 W pairs and current stock comparison are documented",
       "Actual FLEX-6300 teammate qualification",
       "Cross-platform CI, documentation/security/licenses, independent review and maintainer release"
     ],
@@ -2959,7 +2959,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "Latest matched pairs are attributed to runtime e8d68ad4b and desktop b1256a165. Older reports retain their own source attribution; stock APD comparison is not yet repeated on this candidate.",
+    "source_provenance_note": "Current RF reports attribute runtime e8d68ad4b and desktop b1256a165. Stock comparison uses the same installed local IQ capture path and current production analyzer; old reports remain historical evidence.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "CANDIDATE-RF-QUALIFICATION.json",
+    "latest_live_report": "STOCK-CANDIDATE-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3205,5 +3205,11 @@
     "report": "STOCK-RECEIVE-QUALIFICATION.json",
     "receive_only_passed": true,
     "RF_comparison_complete": false
+  },
+  "stock_candidate": {
+    "report": "STOCK-CANDIDATE-QUALIFICATION.json",
+    "finite_RF_comparison_complete": true,
+    "sustained_qualification_complete": false,
+    "production_ready": false
   }
 }

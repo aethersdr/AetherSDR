@@ -1,0 +1,825 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T18:12:19.694471+00:00",
+  "production_ready": false,
+  "status": "Finite current-candidate stock APD comparison passed at approximately matched output, with limits",
+  "runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "desktop_source": "b1256a1657319360279029cabfcbcb647728b86a",
+  "radio": {
+    "model": "FLEX-8600",
+    "firmware": "4.3.16.42034",
+    "frequency_mhz": 7.15,
+    "nominal_watts": 10,
+    "configured_max_watts": 10,
+    "FDX": false,
+    "tx_antenna": "ANT1",
+    "feedback": "RX_A",
+    "preamp_db": 0,
+    "feedback_transport": "local_dax_iq",
+    "IQ_channel": 4
+  },
+  "cases": {
+    "stock-off-01": {
+      "accepted": true,
+      "error": null,
+      "PC_gain": 35,
+      "speech_prelude_seconds": 0,
+      "GUI_stop_s": 7.079306588006148,
+      "source_seconds": 8,
+      "native_cleanup_after_ms": 9000,
+      "stock_state_before_key": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "10",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x7EBA7024",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "equalizer_active_at_frame_completion": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "idle_verified": true,
+      "finite_audio_route_removed": true,
+      "native_faults_at_completion": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      }
+    },
+    "stock-off-02": {
+      "accepted": true,
+      "error": null,
+      "PC_gain": 80,
+      "speech_prelude_seconds": 0,
+      "GUI_stop_s": 7.085975660003896,
+      "source_seconds": 8,
+      "native_cleanup_after_ms": 9000,
+      "stock_state_before_key": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "10",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x7EBA7024",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "equalizer_active_at_frame_completion": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "idle_verified": true,
+      "finite_audio_route_removed": true,
+      "native_faults_at_completion": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      }
+    },
+    "stock-on-02": {
+      "accepted": false,
+      "error": "AssertionError('Stock equalizer activity not confirmed for all frames')",
+      "PC_gain": 80,
+      "speech_prelude_seconds": 0,
+      "GUI_stop_s": 7.067445448999933,
+      "source_seconds": 8,
+      "native_cleanup_after_ms": 9000,
+      "stock_state_before_key": {
+        "enable": "1",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "10",
+        "state": "IDLE",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x7EBA7024",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "equalizer_active_at_frame_completion": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "idle_verified": true,
+      "finite_audio_route_removed": true,
+      "native_faults_at_completion": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      }
+    },
+    "stock-on-03": {
+      "accepted": true,
+      "error": null,
+      "PC_gain": 80,
+      "speech_prelude_seconds": 3,
+      "GUI_stop_s": 7.035735356999794,
+      "source_seconds": 8,
+      "native_cleanup_after_ms": 9000,
+      "stock_state_before_key": {
+        "enable": "1",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "10",
+        "state": "ACTIVE",
+        "deployed": "1",
+        "quality_db": "-33.00",
+        "backend": "polynomial",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x7EBA7024",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "1"
+      },
+      "equalizer_active_at_frame_completion": [
+        "1",
+        "1",
+        "1",
+        "1"
+      ],
+      "idle_verified": true,
+      "finite_audio_route_removed": true,
+      "native_faults_at_completion": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      }
+    },
+    "stock-off-03": {
+      "accepted": true,
+      "error": null,
+      "PC_gain": 80,
+      "speech_prelude_seconds": 3,
+      "GUI_stop_s": 7.036074861003726,
+      "source_seconds": 8,
+      "native_cleanup_after_ms": 9000,
+      "stock_state_before_key": {
+        "enable": "0",
+        "configurable": "1",
+        "ant": "ANT1",
+        "freq": "7.150000",
+        "rfpower": "10",
+        "state": "OFF",
+        "deployed": "0",
+        "slice": "0",
+        "mmx": "0",
+        "client_handle": "0x7EBA7024",
+        "rx_error_mHz": "3.814694",
+        "equalizer_active": "0"
+      },
+      "equalizer_active_at_frame_completion": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "idle_verified": true,
+      "finite_audio_route_removed": true,
+      "native_faults_at_completion": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      }
+    }
+  },
+  "comparison": {
+    "stock_cases": {
+      "stock-off-01": {
+        "analysis": {
+          "valid": true,
+          "clipping_known": false,
+          "absolute_power_calibrated": false,
+          "frames": 4,
+          "sample_rate_hz": 48000,
+          "fft_size": 16384,
+          "window": "blackman-harris-7",
+          "tones_hz": [
+            709.973446169288,
+            1899.97083554897
+          ],
+          "tone_imbalance_db": 0.75295854632796,
+          "fundamental_pep_db_raw_iq": 87.5687434147255,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -30.0673724164294,
+              "dbc_fundamental_pep": -36.0798311559949,
+              "noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -28.8795330078617,
+              "dbc_fundamental_pep": -34.8919917474273,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -46.926789814149,
+              "dbc_fundamental_pep": -52.9392485537145,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -46.8420461374304,
+              "dbc_fundamental_pep": -52.8545048769959,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -67.1896597467723,
+              "dbc_fundamental_pep": -73.2021184863378,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -70.221557616538,
+              "dbc_fundamental_pep": -76.2340163561035,
+              "noise_limited": false
+            }
+          ]
+        },
+        "independent_recheck": {
+          "max_difference_db": 5.684341886080802e-14,
+          "iq_sha256": "4c4bc5eaf610de41022ff142fe50ecdcc56aa2b42580bed1c81bb298af945ce1"
+        },
+        "source": {
+          "sample_rate": 48000,
+          "channels": 2,
+          "seconds": 8,
+          "tone_hz": [
+            710,
+            1900
+          ],
+          "each_peak": 0.415,
+          "PC_gain": 35,
+          "sha256": "46b7295d6fc4243491067ed1d1cb5d9e735d260d94e3197d31315d6045ff7543"
+        },
+        "max_radio_sampled_forward_watts": 1.4642832279205322,
+        "GUI_stop_s": 7.079306588006148,
+        "equalizer_states_at_capture_completion": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "APD_states_at_capture_completion": [
+          "OFF",
+          "OFF",
+          "OFF",
+          "OFF"
+        ]
+      },
+      "stock-off-02": {
+        "analysis": {
+          "valid": true,
+          "clipping_known": false,
+          "absolute_power_calibrated": false,
+          "frames": 4,
+          "sample_rate_hz": 48000,
+          "fft_size": 16384,
+          "window": "blackman-harris-7",
+          "tones_hz": [
+            709.973703352924,
+            1899.97068486232
+          ],
+          "tone_imbalance_db": -0.0261124341230357,
+          "fundamental_pep_db_raw_iq": 95.0756394077762,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -27.1692594168689,
+              "dbc_fundamental_pep": -33.1898495174314,
+              "noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -27.1749732807457,
+              "dbc_fundamental_pep": -33.1955633813083,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -38.8489437135938,
+              "dbc_fundamental_pep": -44.8695338141563,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -39.6535402455478,
+              "dbc_fundamental_pep": -45.6741303461104,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -47.968293119828,
+              "dbc_fundamental_pep": -53.9888832203906,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -48.6230225125059,
+              "dbc_fundamental_pep": -54.6436126130684,
+              "noise_limited": false
+            }
+          ]
+        },
+        "independent_recheck": {
+          "max_difference_db": 6.039613253960852e-14,
+          "iq_sha256": "dba4dcee5b361c587fc493c984ac24d9dcebedefb82a1b1f64a90e2b1dc2c8b2"
+        },
+        "source": {
+          "sample_rate": 48000,
+          "channels": 2,
+          "seconds": 8,
+          "tone_hz": [
+            710,
+            1900
+          ],
+          "each_peak": 0.415,
+          "PC_gain": 80,
+          "sha256": "46b7295d6fc4243491067ed1d1cb5d9e735d260d94e3197d31315d6045ff7543"
+        },
+        "max_radio_sampled_forward_watts": 8.278825759887695,
+        "GUI_stop_s": 7.085975660003896,
+        "equalizer_states_at_capture_completion": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "APD_states_at_capture_completion": [
+          "OFF",
+          "OFF",
+          "OFF",
+          "OFF"
+        ]
+      },
+      "stock-off-03": {
+        "analysis": {
+          "valid": true,
+          "clipping_known": false,
+          "absolute_power_calibrated": false,
+          "frames": 4,
+          "sample_rate_hz": 48000,
+          "fft_size": 16384,
+          "window": "blackman-harris-7",
+          "tones_hz": [
+            709.97464258202,
+            1899.97074148367
+          ],
+          "tone_imbalance_db": 0.0326139542012811,
+          "fundamental_pep_db_raw_iq": 95.0754362570318,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -27.240998718379,
+              "dbc_fundamental_pep": -33.2615833242797,
+              "noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -27.1177237902609,
+              "dbc_fundamental_pep": -33.1383083961616,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -38.9292124281908,
+              "dbc_fundamental_pep": -44.9497970340914,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -39.601541659361,
+              "dbc_fundamental_pep": -45.6221262652616,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -48.0850248731843,
+              "dbc_fundamental_pep": -54.105609479085,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -48.5868695959456,
+              "dbc_fundamental_pep": -54.6074542018463,
+              "noise_limited": false
+            }
+          ]
+        },
+        "independent_recheck": {
+          "max_difference_db": 4.263256414560601e-14,
+          "iq_sha256": "ecc075ab672e0aea16cba1868fef383d94dfef916191c9aaa5c09185c1f2a812"
+        },
+        "source": {
+          "sample_rate": 48000,
+          "channels": 2,
+          "seconds": 8,
+          "tone_hz": [
+            710,
+            1900
+          ],
+          "each_peak": 0.415,
+          "PC_gain": 80,
+          "sha256": "3b6b73907378eabff3b740da37df7b4a9fd355b319067ac60355a185bd9a9c43"
+        },
+        "max_radio_sampled_forward_watts": 8.234269142150879,
+        "GUI_stop_s": 7.036074861003726,
+        "equalizer_states_at_capture_completion": [
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "APD_states_at_capture_completion": [
+          "OFF",
+          "OFF",
+          "OFF",
+          "OFF"
+        ]
+      },
+      "stock-on-03": {
+        "analysis": {
+          "valid": true,
+          "clipping_known": false,
+          "absolute_power_calibrated": false,
+          "frames": 4,
+          "sample_rate_hz": 48000,
+          "fft_size": 16384,
+          "window": "blackman-harris-7",
+          "tones_hz": [
+            709.974209003894,
+            1899.97090605344
+          ],
+          "tone_imbalance_db": 0.00145954186730535,
+          "fundamental_pep_db_raw_iq": 95.3675769868442,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -45.8297659852669,
+              "dbc_fundamental_pep": -51.8503658678896,
+              "noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -45.2466291530352,
+              "dbc_fundamental_pep": -51.2672290356579,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -52.1992032218013,
+              "dbc_fundamental_pep": -58.219803104424,
+              "noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -52.148736953419,
+              "dbc_fundamental_pep": -58.1693368360417,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -49.0509214387065,
+              "dbc_fundamental_pep": -55.0715213213292,
+              "noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -49.6874928820173,
+              "dbc_fundamental_pep": -55.70809276464,
+              "noise_limited": false
+            }
+          ]
+        },
+        "independent_recheck": {
+          "max_difference_db": 4.973799150320701e-14,
+          "iq_sha256": "0695cc07ecacc1d09b4df2e5e52b8907f563436390576f03a29de97783dafcf5"
+        },
+        "source": {
+          "sample_rate": 48000,
+          "channels": 2,
+          "seconds": 8,
+          "tone_hz": [
+            710,
+            1900
+          ],
+          "each_peak": 0.415,
+          "PC_gain": 80,
+          "sha256": "3b6b73907378eabff3b740da37df7b4a9fd355b319067ac60355a185bd9a9c43"
+        },
+        "max_radio_sampled_forward_watts": 8.234269142150879,
+        "GUI_stop_s": 7.035735356999794,
+        "equalizer_states_at_capture_completion": [
+          "1",
+          "1",
+          "1",
+          "1"
+        ],
+        "APD_states_at_capture_completion": [
+          "ACTIVE",
+          "ACTIVE",
+          "ACTIVE",
+          "ACTIVE"
+        ]
+      }
+    },
+    "stock_on_minus_off_power_db": 0.29214072981240236,
+    "stock_on_minus_aether_on_power_db": 0.4752192916121345,
+    "stock_pair_power_match_within_0_5db": true,
+    "corrected_comparison_power_match_within_0_5db": true,
+    "stock_improvement_db": [
+      {
+        "order": 3,
+        "upper": false,
+        "improvement_db": 18.588767266887903
+      },
+      {
+        "order": 3,
+        "upper": true,
+        "improvement_db": 18.1289053627743
+      },
+      {
+        "order": 5,
+        "upper": false,
+        "improvement_db": 13.269990793610496
+      },
+      {
+        "order": 5,
+        "upper": true,
+        "improvement_db": 12.547195294058
+      },
+      {
+        "order": 7,
+        "upper": false,
+        "improvement_db": 0.9658965655222005
+      },
+      {
+        "order": 7,
+        "upper": true,
+        "improvement_db": 1.100623286071702
+      }
+    ],
+    "aether_vs_stock_db": [
+      {
+        "order": 3,
+        "upper": false,
+        "aether_dbc_per_tone": -44.363769325856104,
+        "stock_dbc_per_tone": -45.8297659852669,
+        "positive_means_aether_lower_db": -1.4659966594107985
+      },
+      {
+        "order": 3,
+        "upper": true,
+        "aether_dbc_per_tone": -51.35784567295741,
+        "stock_dbc_per_tone": -45.2466291530352,
+        "positive_means_aether_lower_db": 6.111216519922209
+      },
+      {
+        "order": 5,
+        "upper": false,
+        "aether_dbc_per_tone": -54.22057005166437,
+        "stock_dbc_per_tone": -52.1992032218013,
+        "positive_means_aether_lower_db": 2.0213668298630694
+      },
+      {
+        "order": 5,
+        "upper": true,
+        "aether_dbc_per_tone": -60.698797282016415,
+        "stock_dbc_per_tone": -52.148736953419,
+        "positive_means_aether_lower_db": 8.550060328597418
+      },
+      {
+        "order": 7,
+        "upper": false,
+        "aether_dbc_per_tone": -65.51877002545623,
+        "stock_dbc_per_tone": -49.0509214387065,
+        "positive_means_aether_lower_db": 16.46784858674973
+      },
+      {
+        "order": 7,
+        "upper": true,
+        "aether_dbc_per_tone": -63.005242312579924,
+        "stock_dbc_per_tone": -49.6874928820173,
+        "positive_means_aether_lower_db": 13.317749430562621
+      }
+    ],
+    "ADC_headroom_known": false,
+    "absolute_power_calibrated": false
+  },
+  "matched_pair": {
+    "stock_on": "stock-on-03",
+    "stock_off": "stock-off-03",
+    "capture_order": "ON then OFF",
+    "stock_source": "same three-second speech prelude then 710/1900 Hz tones; PC gain 80",
+    "aether_source": "on-radio native bounded measurement/calibration source; four late tone frames",
+    "stock_model": "warm: equalizer_active=1 and ACTIVE already observed before key; no reset",
+    "analyzer": "same production C++ BH7, 16384 samples/frame, four frames, 48 kHz; NumPy independently recomputed"
+  },
+  "interpretation": {
+    "imd3_lower": "Stock was 1.47 dB lower in this pair",
+    "imd3_upper": "AetherPD was 6.11 dB lower in this pair",
+    "imd5": "AetherPD was 2.02/8.55 dB lower",
+    "imd7": "AetherPD was 16.47/13.32 dB lower",
+    "overall": "No universal winner: one finite warm comparison at different excitation histories and a 0.475 dB corrected fundamental-power difference."
+  },
+  "negative_evidence": [
+    "stock-off-01 drive check was about 7 dB below target and is not used as the matched baseline.",
+    "stock-on-02 remained IDLE/equalizer_active=0 during all retained tone frames; never counted as corrected.",
+    "Stock was already ACTIVE before stock-on-03. The speech prelude did not demonstrate the cause or timing of activation; no cold-start success claim."
+  ],
+  "cleanup": {
+    "radio_idle": true,
+    "stock_APD_off": true,
+    "native_session_stopped": true,
+    "ARP_absent": true,
+    "accept_local": "0",
+    "runtime_hashes_verified": true,
+    "remaining_processes": [
+      {
+        "pid": 911,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690"
+      },
+      {
+        "pid": 2314,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "5cfb04a15c2ca9436b5ce802231ebcd6588435dd6e9f1b47476fea5d245af11e"
+      },
+      {
+        "pid": 2316,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "e9506fc8f7d0d42609cd3627e69bafad44c719f9bb8638eb26df828841e66690"
+      }
+    ],
+    "temporary_audit_removed": true,
+    "temporary_audio_routes_removed": true,
+    "processing_settings_restored": false
+  },
+  "limits": [
+    "One finite pair, not sustained speech, repeatability, all-band performance or actual6300 qualification.",
+    "Stock corrected fundamental level was 0.475 dB higher than AetherPD, within the declared 0.5 dB matching criterion but not identical power.",
+    "Raw-IQ ratios do not calibrate RF watts or ADC headroom. LP-100A remains deferred.",
+    "Native source/PC-audio paths and calibration history differ; this comparison measures the complete tested systems.",
+    "Observed GUI stop durations are not independently measured physical RF cessation times.",
+    "All remaining P1-P10 release, historical alignment/cold-start, process-failure, sustained, installation/ARMv7/6300 and independent-review gates remain."
+  ],
+  "evidence_directory": "evidence/20261116-stock-rf",
+  "evidence_sha256": {
+    "VOICE-LICENSE.txt": "7179683e8000e6bdc9bbc60d85edf0a4ac8e76f951857f54fcb775d5886f1309",
+    "analyze-raw.cpp": "e0e48e5fb48bb183e2ebee248cde9a0df62d22f9bb058d4dd9dc3f52cc20e6a7",
+    "analyzer-check.json": "18b94bc3f324c3fdfb471ca2e4618696dc79f5f2e6ba65618d4635b39f314889",
+    "api-build-command.json": "75253221e62584610cce01e7fb83894ef69fd8cde9f3e37b8b4fc246f9c68113",
+    "batch-receive.f32le": "19cedfd9010b5d8fec352ece763c132322d25c64c54d72fa604ec4149abb877c",
+    "bench-api.cpp": "ee7797cf289edd923affdd184848fda6861cba0a0494f0e908feec87f150d885",
+    "bench-common.py": "473c2e5476a50aafcd3b3f48d194a484f518dd9857cf168652707a30f0113e33",
+    "bench_audio_route.py": "87a73de5b0dc569c624b97e113c5c66339702ede0cd4868fbef0143551c3bea0",
+    "bench_audio_route_native.py": "38091b8089b8e383ff6c87a3e03c3f28f397da09e28acc5ccfd25a5db11d0dbd",
+    "check-analyzer.py": "d60670aea759a06be5d2c22b469969811ad7e79ecb1add95d047c7d28f0b83ac",
+    "compare-stock.py": "33680c1ad8c109db5a940ea4986c5e2a152ef87b90509b782b69eef0c652b428",
+    "comparison.json": "449fa4a242fcb56b3ff5e61ea384290972ce8a260bab9a67f4f2ca611c86c0b8",
+    "prepare-rf.py": "ddee22ecc1b52f047268eb1acdf3d7b4a047f74279ee3fdfdf8edeaf4af8cc7e",
+    "rf-prepared.json": "ea4f32a05bd269b25eda8007e78744e4132da36ff9c58cdd853170ad0230e590",
+    "route-preflight.json": "719b304406172c13f5f6c706f25b9b49a90cc5fa3ad6a1e2191d53abaabf06d6",
+    "route-preflight.state.json": "6a5946e34cff9e6d0a5f1121fa5d6227a78c34627d8f8da1e2da5b9d5da10161",
+    "route-preflight.watchdog.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "run-stock.py": "4991b6aaf2d7b54e4f8730ddb51db018c1a5030f9e7aa85196f77a9321cf639a",
+    "save-rf-evidence.py": "a5c6b727c118fbbf8ece2d7ec6443c2c7416cb132c2594eef557b7150bc85f47",
+    "speech-first-three-seconds.f32le": "e5d8cbbf4b2de16c7241cccb6b08bab977404f0827b1cbf4c2fca83bcc387c8d",
+    "speech-pcm-manifest.json": "d7abf8a8646d1afb5dbc07a7c2dbf5656a0adce0bd20ddfbaed85d5239af449c",
+    "speech-source-manifest.json": "cff34f1b264fca6b93ef633743f03ba28d9f8c076377043977b8b61432ba7705",
+    "stock-off-01/capture-0.json": "0103a58a22cf2696ea098e1974fef6275f85840a53e459abe837587e20782030",
+    "stock-off-01/capture-1.json": "af4ed612f85e3e3f19fe2b65514263d9ad6297198f6e95c34c637e999cc2b39b",
+    "stock-off-01/capture-2.json": "560885aa7c6fcf913eac6b7666b631020a75ee7d986f71b90dc5ce3ff65566a3",
+    "stock-off-01/capture-3.json": "497dfd1ccb7023c78667ca951497531468f1c552cfeb96ed04c461db905a5263",
+    "stock-off-01/four-frames.f32le": "4c4bc5eaf610de41022ff142fe50ecdcc56aa2b42580bed1c81bb298af945ce1",
+    "stock-off-01/player.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-off-01/result.json": "8074938f5e5a077922cabab85394770c6927c1ec2ef62ae8ea30d1ef105e6d3e",
+    "stock-off-01/route-cleanup.json": "719b304406172c13f5f6c706f25b9b49a90cc5fa3ad6a1e2191d53abaabf06d6",
+    "stock-off-01/route-cleanup.state.json": "98e0d8f897973c7781e8345e837aeb1be2af81052ad8d8cb7a150496d9b92fc0",
+    "stock-off-01/route-cleanup.watchdog.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-off-01/run-stock.py": "671b1ecf31694de4018b00da4bcea3846514d464b3eb757fe80d6019bd95d626",
+    "stock-off-02/capture-0.json": "cf7631e07bd7bacdcfde2aedf508b207b89fa30507f54dc8a053e92170d6348d",
+    "stock-off-02/capture-1.json": "c31e748e360c3d3711308173c824acd4e9b5c45500598db2eaa260a56a023d07",
+    "stock-off-02/capture-2.json": "cd023ffe54e1fc7f4d3d0ce343dc3aca89bb5c56f1bc0738426c9e4774b5a45a",
+    "stock-off-02/capture-3.json": "1e663e7422c7a0a9de4b117a7ebdcb2fef6c95c05cef118d92728eb64cfb1448",
+    "stock-off-02/four-frames.f32le": "dba4dcee5b361c587fc493c984ac24d9dcebedefb82a1b1f64a90e2b1dc2c8b2",
+    "stock-off-02/player.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-off-02/result.json": "b99427e79c4a636bcdfdf35da601ed65f8aa50dd2b2db1fe5cf007951546ff06",
+    "stock-off-02/route-cleanup.json": "719b304406172c13f5f6c706f25b9b49a90cc5fa3ad6a1e2191d53abaabf06d6",
+    "stock-off-02/route-cleanup.state.json": "1c8aff8b6373f145be8d57c48f08452f0b83ed027b6ee541e06d5af985766435",
+    "stock-off-02/route-cleanup.watchdog.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-off-02/run-stock.py": "3ba290bb4829482a2370c621505a91ba7f6ef6878b62ff32710b99a96291abcb",
+    "stock-off-03/capture-0.json": "f4536a5d2b2da4d3ca2e7f08bb466253a5dffbcf951a63a2c79ae55f77eeab2b",
+    "stock-off-03/capture-1.json": "313e1ab8e47c8a98d0d2718de3a69849bca545cd298b673e5e98840274d163ac",
+    "stock-off-03/capture-2.json": "50709bf950c4480f73c12fe242a6de41d86f89bf89bf85f2d5ce80db6ee1b4f2",
+    "stock-off-03/capture-3.json": "598e2d48e648df55d9a7b73380682b78725e6b747deadbbd2b0296d97b3c5e81",
+    "stock-off-03/four-frames.f32le": "ecc075ab672e0aea16cba1868fef383d94dfef916191c9aaa5c09185c1f2a812",
+    "stock-off-03/player.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-off-03/result.json": "0f67fdf8bf5f00587efad5c97febb0cac9aa1066b7e710957bf498e4b9f80647",
+    "stock-off-03/route-cleanup.json": "719b304406172c13f5f6c706f25b9b49a90cc5fa3ad6a1e2191d53abaabf06d6",
+    "stock-off-03/route-cleanup.state.json": "8c7acdccd86c3908920b4ffab54cbbfd7010e74524ffda11a89d844f9b68c6ac",
+    "stock-off-03/route-cleanup.watchdog.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-on-02/capture-0.json": "fb7a3d46fe141a22dbe4eec98bcc2a5897265bded29e0f319a577b02ea3d394d",
+    "stock-on-02/capture-1.json": "e3a5d43387731b5da4f441498e9f5e30d4b0a008ca3f43317a2e6bcc822fb923",
+    "stock-on-02/capture-2.json": "13d75c41d9b4767283ab3117a2a97d541402710a959e6981281cb1f8730d3fba",
+    "stock-on-02/capture-3.json": "86385d1dac7b4f6d6c54ea2daed71e96862874f5a3c7f8ffc97fd05697862450",
+    "stock-on-02/player.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-on-02/result.json": "381504c426ff199dc4a77b8601d5e822832f68ad0a1b7bacf69ed42fc68c00e1",
+    "stock-on-02/route-cleanup.json": "719b304406172c13f5f6c706f25b9b49a90cc5fa3ad6a1e2191d53abaabf06d6",
+    "stock-on-02/route-cleanup.state.json": "c80075559cfa3648204a2fcb33c47ffc84637fdc6c63480a4392aff366e39099",
+    "stock-on-02/route-cleanup.watchdog.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-on-02/run-stock.py": "3ba290bb4829482a2370c621505a91ba7f6ef6878b62ff32710b99a96291abcb",
+    "stock-on-03/capture-0.json": "a1b8eb87af74fa9cbfb6337e2f1f6a41422c4d1c999e6e891f0e35553aecaa72",
+    "stock-on-03/capture-1.json": "1b868cbe7549a65fdb943f0a2d0d8b19acb69e53275e0c8f42d8d4f5ed71fa64",
+    "stock-on-03/capture-2.json": "e308544378d6d46d3825597cdf6b06c6338791df6c61db5a142917df2ccc3fa1",
+    "stock-on-03/capture-3.json": "1fc4aa900b31187cb9edffb47290aed3cf599a2b282c9bf993d5b9d59c829a1c",
+    "stock-on-03/four-frames.f32le": "0695cc07ecacc1d09b4df2e5e52b8907f563436390576f03a29de97783dafcf5",
+    "stock-on-03/player.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-on-03/result.json": "27e9cb39b1b784f62a3ad277f04d4f04d42c655ac5ecf78b46addc8a500da023",
+    "stock-on-03/route-cleanup.json": "719b304406172c13f5f6c706f25b9b49a90cc5fa3ad6a1e2191d53abaabf06d6",
+    "stock-on-03/route-cleanup.state.json": "995b8a08c82d85428ebff68b909c94df1ac7bab8f58c1da08a04c41fb47c5800",
+    "stock-on-03/route-cleanup.watchdog.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stock-reference-notes.json": "12682fdee1f4a884d46a8372809cc72c51b4c8a2b3f110d23216eadb53f9ba8d",
+    "stock-rf-idle-job.py": "995f34fd0c7d19fae6fc357767d45c6f43bd5d51cd9307ec4f73f0f95739ad26",
+    "stock-rf-idle-result.json": "eac987bd8b6bc03cc4a4fb8f33c283980bfbcee87c1cc9df42d46e1cdaacc86c",
+    "stopped-after-rf.json": "52c701dce27c8fff9418a873310959d89308bef91a15621c7e4e91a23b57713c"
+  }
+}

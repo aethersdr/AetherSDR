@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/rhasspy/dataset-voice-kathleen",
+  "license": "CC0-1.0",
+  "source_files": [
+    {
+      "name": "arctic_a0001_1592748574.wav",
+      "sha256": "83696268aa8216f7207e6ccaca4b0d62af86d01050284f1c8dbc0bfd46f59a04",
+      "seconds": 3.2964583333333333
+    },
+    {
+      "name": "arctic_a0002_1592748530.wav",
+      "sha256": "3941b8d86c4fedfc8ff5eb3ea933e0374c536a633b4e5dd9b5e51380486b6a18",
+      "seconds": 3.346791666666667
+    },
+    {
+      "name": "arctic_a0003_1592748500.wav",
+      "sha256": "aecce7a480807924a011b8d3b51e288282312222fa6980b120d5c6ca5cf3022a",
+      "seconds": 3.0795
+    }
+  ],
+  "rate": 48000,
+  "channels": 2,
+  "format": "float32le",
+  "peak": 0.6,
+  "rms": 0.09264342341017474,
+  "seconds": 33.06825,
+  "bytes": 12698208,
+  "sha256": "b27f8c72403679e1c15c864dae1d8e324b518faa371baf49ae20b95ed9861075",
+  "processing": "mean stereo to mono, remove DC, per-utterance peak normalize0.6,5ms edge fades,.3s gaps, repeat3times"
+}

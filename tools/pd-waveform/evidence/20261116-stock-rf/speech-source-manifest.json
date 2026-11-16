@@ -1,0 +1,43 @@
+{
+  "repository": "https://github.com/rhasspy/dataset-voice-kathleen",
+  "license": "CC0-1.0",
+  "license_file": "VOICE-LICENSE.txt",
+  "files": [
+    {
+      "name": "arctic_a0001_1592748574.wav",
+      "sha": "4ede5fed365096a76965f88920fdbb8c6012e0f5",
+      "size": 632964,
+      "url": "https://raw.githubusercontent.com/rhasspy/dataset-voice-kathleen/master/data/arctic_a0001_1592748574.wav",
+      "rate": 48000,
+      "channels": 2,
+      "sample_width": 2,
+      "frames": 158230,
+      "seconds": 3.2964583333333333,
+      "sha256": "83696268aa8216f7207e6ccaca4b0d62af86d01050284f1c8dbc0bfd46f59a04"
+    },
+    {
+      "name": "arctic_a0002_1592748530.wav",
+      "sha": "3f17cee29b9942d64932003cfbcf172a7d4fa4e9",
+      "size": 642628,
+      "url": "https://raw.githubusercontent.com/rhasspy/dataset-voice-kathleen/master/data/arctic_a0002_1592748530.wav",
+      "rate": 48000,
+      "channels": 2,
+      "sample_width": 2,
+      "frames": 160646,
+      "seconds": 3.346791666666667,
+      "sha256": "3941b8d86c4fedfc8ff5eb3ea933e0374c536a633b4e5dd9b5e51380486b6a18"
+    },
+    {
+      "name": "arctic_a0003_1592748500.wav",
+      "sha": "a13e719364cd6b62cd6826f205bd7d5aeb654d60",
+      "size": 591308,
+      "url": "https://raw.githubusercontent.com/rhasspy/dataset-voice-kathleen/master/data/arctic_a0003_1592748500.wav",
+      "rate": 48000,
+      "channels": 2,
+      "sample_width": 2,
+      "frames": 147816,
+      "seconds": 3.0795,
+      "sha256": "aecce7a480807924a011b8d3b51e288282312222fa6980b120d5c6ca5cf3022a"
+    }
+  ]
+}

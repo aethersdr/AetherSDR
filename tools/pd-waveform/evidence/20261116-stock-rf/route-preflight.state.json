@@ -1,0 +1,27 @@
+{
+  "input_index": 2122,
+  "client_pid": "1365774",
+  "node_id": 89,
+  "node_serial": 2122,
+  "original_edges": [
+    {
+      "output_serial": 68,
+      "input_serial": 2123
+    },
+    {
+      "output_serial": 69,
+      "input_serial": 2124
+    }
+  ],
+  "module": 536870916,
+  "temporary_edges": [
+    {
+      "output_serial": 2146,
+      "input_serial": 2123
+    },
+    {
+      "output_serial": 2147,
+      "input_serial": 2124
+    }
+  ]
+}

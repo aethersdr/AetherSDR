@@ -1,0 +1,564 @@
+{
+  "RF": false,
+  "models": {
+    "radio": {
+      "model": "radio",
+      "ok": true,
+      "radio": {
+        "callsign": "KK7GWY",
+        "connectState": "connected",
+        "connected": true,
+        "fullDuplex": false,
+        "iaruRegion": 2,
+        "maxSlices": 4,
+        "model": "FLEX-8600",
+        "name": "",
+        "nickname": "FLX8600",
+        "paTemp": null,
+        "panCount": 1,
+        "serial": "2125-1213-8600-8895",
+        "sliceCount": 1,
+        "slots": [
+          {
+            "id": 0,
+            "state": "ours"
+          },
+          {
+            "id": 1,
+            "state": "empty"
+          },
+          {
+            "id": 2,
+            "state": "empty"
+          },
+          {
+            "id": 3,
+            "state": "empty"
+          }
+        ],
+        "transmitting": false,
+        "txPower": 0,
+        "version": "4.3.16.42034"
+      }
+    },
+    "transmit": {
+      "model": "transmit",
+      "ok": true,
+      "transmit": {
+        "accTxDelay": 0,
+        "activeMicProfile": "Default",
+        "activeProfile": "Default",
+        "amCarrierLevel": 34,
+        "apdEnabled": false,
+        "atuEnabled": true,
+        "atuMemories": false,
+        "atuStatus": "manual_bypass",
+        "cwBreakIn": true,
+        "cwDelay": 41,
+        "cwIambic": true,
+        "cwIambicMode": 1,
+        "cwPitch": 600,
+        "cwSidetone": true,
+        "cwSpeed": 30,
+        "cwSwapPaddles": false,
+        "cwlEnabled": false,
+        "dax": false,
+        "dexp": false,
+        "dexpLevel": 50,
+        "maxPowerLevel": 10,
+        "micAcc": false,
+        "micBias": false,
+        "micBoost": false,
+        "micLevel": 35,
+        "micSelection": "PC",
+        "monGainCw": 80,
+        "monGainSb": 10,
+        "monPanCw": 50,
+        "monitor": false,
+        "mox": false,
+        "pttMicOverride": false,
+        "rfPower": 10,
+        "showTxInWaterfall": false,
+        "speechProc": false,
+        "speechProcLevel": 1,
+        "speechProcLevelMaximum": 2,
+        "transmitting": false,
+        "tunePower": 5,
+        "tuning": false,
+        "tx1Delay": 0,
+        "tx2Delay": 0,
+        "tx3Delay": 0,
+        "txDelay": 0,
+        "txFilterHigh": 4000,
+        "txFilterLow": 50,
+        "voxDelay": 5,
+        "voxEnable": false,
+        "voxLevel": 0
+      }
+    },
+    "slices": {
+      "ok": true,
+      "slices": [
+        {
+          "active": true,
+          "adaptiveActive": false,
+          "adaptiveFilterEnabled": false,
+          "adaptiveHetReject": false,
+          "adaptiveMaxHighCut": 4000,
+          "adaptiveMinLowCut": 0,
+          "adaptiveMinSnr": 1,
+          "adaptiveResponse": 1,
+          "adaptiveSplatter": 1,
+          "agcMode": "med",
+          "agcThreshold": 50,
+          "agcThresholdMode": "manual",
+          "anf": false,
+          "apf": false,
+          "apfLevel": 30,
+          "audioGain": 50,
+          "audioMute": false,
+          "audioPan": 50,
+          "automaticAgcThresholdActiveOrPending": false,
+          "automaticSquelch": false,
+          "automaticSquelchMarginDb": 10,
+          "chainMode": "USB",
+          "daxChannel": 1,
+          "diversity": false,
+          "diversityChild": false,
+          "diversityIndex": 1342177293,
+          "diversityParent": false,
+          "externalReceiveReplacement": false,
+          "filterHigh": 2800,
+          "filterLow": 100,
+          "filterPreset": "",
+          "filterPresetId": 0,
+          "flexAgcMode": "med",
+          "flexAgcOffLevel": 50,
+          "flexAgcThreshold": 50,
+          "flexAudioGain": 50,
+          "flexAudioMute": false,
+          "flexAudioPan": 50,
+          "flexSquelch": false,
+          "flexSquelchLevel": 20,
+          "fmRepeaterOffsetFreq": 0,
+          "fmToneMode": "off",
+          "fmToneValue": "67.0",
+          "frequency": 7.15,
+          "inCapture": true,
+          "letter": "A",
+          "linkedTo": -1,
+          "locked": false,
+          "manualSquelchLevel": 20,
+          "mode": "USB",
+          "nb": false,
+          "nbFill": 0,
+          "nbKind": 0,
+          "nbLevel": 0,
+          "nr": false,
+          "nrLevel": 50,
+          "panId": "0x40000000",
+          "receiveAgcMode": "med",
+          "receiveAgcOffLevel": 50,
+          "receiveAgcThreshold": 50,
+          "receiveSquelch": false,
+          "receiveSquelchLevel": 20,
+          "repeaterOffsetDir": "simplex",
+          "rfGain": 0,
+          "ritFreq": 0,
+          "ritOn": false,
+          "rxAntenna": "RX_A",
+          "sliceId": 0,
+          "squelch": false,
+          "squelchLevel": 20,
+          "stepHz": 100,
+          "txAntenna": "ANT1",
+          "txOffsetFreq": 0,
+          "txSlice": true,
+          "xitFreq": 0,
+          "xitOn": false
+        }
+      ]
+    },
+    "pans": {
+      "ok": true,
+      "pans": [
+        {
+          "antennas": [
+            "ANT1",
+            "ANT2",
+            "RX_A",
+            "RX_B",
+            "XVTA",
+            "XVTB"
+          ],
+          "average": 50,
+          "averageIsRequest": false,
+          "bandwidthMhz": 0.2,
+          "centerKnown": true,
+          "centerMhz": 7.15,
+          "clientHandle": "0x7eba7024",
+          "fps": 25,
+          "fpsIsRequest": false,
+          "maxDbm": 0,
+          "minDbm": -180,
+          "ownedByUs": true,
+          "panId": "0x40000000",
+          "radioReportedAverage": 50,
+          "radioReportedFps": 25,
+          "rfGain": 0,
+          "rxAntenna": "RX_A",
+          "transmitInhibitReason": "",
+          "transmitInhibited": false,
+          "waterfallLineDuration": 80,
+          "weightedAverage": false,
+          "weightedAverageKnown": true,
+          "wide": false,
+          "wnb": false,
+          "wnbLevel": 90
+        }
+      ]
+    },
+    "audio": {
+      "audio": {
+        "endpoints": [
+          {
+            "backend": "QAudioSink",
+            "buffer_bytes": 1024,
+            "buffer_capacity_bytes": 48000,
+            "buffer_ms": 5.333333333333333,
+            "buffer_peak_bytes": 19312,
+            "buffer_peak_ms": 100.58333333333333,
+            "channel_count": 2,
+            "device": "Built-in Audio Analog Stereo",
+            "device_open": true,
+            "direction": "rx",
+            "error": "NoError",
+            "kind": "sink",
+            "name": "RX output",
+            "operational": true,
+            "producer_sample_rate": 24000,
+            "receive_presentation": {
+              "external_kiwi_output_buffer_ms": 0,
+              "external_kiwi_raw_buffer_ms": 0,
+              "flex_delay_ms": 0,
+              "flex_output_buffer_ms": 0,
+              "flex_prebuffering": false,
+              "flex_raw_buffer_ms": 5,
+              "kiwi_sdr_delay_ms": 0,
+              "kiwi_sdr_output_buffer_ms": 0,
+              "kiwi_sdr_prebuffering": false,
+              "kiwi_sdr_raw_buffer_ms": 0,
+              "playback_queued_ms": 71
+            },
+            "resampling_active": false,
+            "running": true,
+            "sample_format": "Float",
+            "sample_rate_hz": 24000,
+            "state": "Active",
+            "underrun_count": 1490
+          },
+          {
+            "backend": "QAudioSource",
+            "buffer_bytes_available": 0,
+            "buffer_capacity_bytes": 96000,
+            "capture_backlog_discarded_bytes": 0,
+            "capture_backlog_discards": 0,
+            "channel_count": 2,
+            "device": "Built-in Audio Analog Stereo",
+            "device_open": true,
+            "direction": "tx",
+            "error": "NoError",
+            "full_buffer_during_tci_observations": 0,
+            "idle_during_tci_transitions": 0,
+            "kind": "source",
+            "last_mic_read_age_ms": 18,
+            "name": "TX input",
+            "note": "",
+            "operational": true,
+            "post_tci_local_tx_while_saturated": 0,
+            "rade_resampling_to_24k": false,
+            "resampling_active": true,
+            "running": true,
+            "sample_format": "Float",
+            "sample_rate_hz": 48000,
+            "saturation_observed": false,
+            "source_was_active": true,
+            "state": "Active",
+            "tci_suppressed_callbacks": 0,
+            "voice_egress_resampling_to_24k": true,
+            "voice_input_normalizing_to_48k": false
+          },
+          {
+            "backend": "PortAudio",
+            "channel_count": 2,
+            "device": "default",
+            "device_open": true,
+            "direction": "tx",
+            "error": "NoError",
+            "kind": "sink",
+            "name": "CW sidetone",
+            "note": "",
+            "operational": true,
+            "resampling_active": null,
+            "running": true,
+            "sample_format": "",
+            "sample_rate_hz": 48000,
+            "state": "Active"
+          },
+          {
+            "backend": "QAudioSink",
+            "channel_count": 2,
+            "device": "Built-in Audio Analog Stereo",
+            "device_open": true,
+            "direction": "tx",
+            "error": "NoError",
+            "kind": "sink",
+            "name": "Quindar local monitor",
+            "operational": true,
+            "resampling_active": true,
+            "running": true,
+            "sample_format": "Float",
+            "sample_rate_hz": 24000,
+            "state": "Active"
+          }
+        ],
+        "kiwiSdrTransmitMuted": false,
+        "muted": false,
+        "opusTxPacing": {
+          "catchUpPackets": 1318,
+          "droppedPackets": 9,
+          "maxQueueDepth": 4,
+          "packetsSent": 139251,
+          "queueDepth": 0
+        },
+        "receivePresentationOutputSignalEmitCount": 0,
+        "receivePresentationOutputSignalSuppressedCount": 141374,
+        "rxBufferBytes": 1024,
+        "rxBufferPeakBytes": 19312,
+        "rxBufferSampleRate": 24000,
+        "rxBufferUnderrunCount": 1490,
+        "rxStreaming": true,
+        "txStreaming": true
+      },
+      "model": "audio",
+      "ok": true
+    },
+    "dsp": {
+      "dsp": {
+        "active": "none",
+        "methods": {
+          "BNR": {
+            "available": true,
+            "enabled": false
+          },
+          "DFNR": {
+            "available": true,
+            "enabled": false
+          },
+          "MNR": {
+            "available": false,
+            "enabled": false
+          },
+          "NNR": {
+            "available": true,
+            "enabled": false
+          },
+          "NR2": {
+            "available": true,
+            "enabled": false
+          },
+          "NR4": {
+            "available": true,
+            "enabled": false
+          },
+          "RN2": {
+            "available": true,
+            "enabled": false
+          }
+        },
+        "tuning": {
+          "bnr": {
+            "intensity": 1
+          },
+          "dfnr": {
+            "attenLimitDb": 100,
+            "postFilterBeta": 0
+          },
+          "mnr": {
+            "strength": 1
+          },
+          "nnr": {
+            "alpha": 1,
+            "alphaKneeDb": 10,
+            "maxGainDb": 12,
+            "model": 0,
+            "smoothAttackMs": 0,
+            "smoothReleaseMs": 0,
+            "strength": 38,
+            "tauSeconds": 2
+          },
+          "nr2": {
+            "aeFilter": true,
+            "gainFloor": 0,
+            "gainMax": 1,
+            "gainMethod": 2,
+            "gainSmooth": 0.8500000238418579,
+            "npeMethod": 0,
+            "qspp": 0.20000000298023224
+          },
+          "nr2Runtime": {
+            "externalKiwi": [],
+            "legacyKiwi": {
+              "present": false
+            },
+            "main": {
+              "present": false
+            }
+          },
+          "nr4": {
+            "adaptiveNoise": true,
+            "maskingDepth": 50,
+            "noiseMethod": 0,
+            "reductionDb": 100,
+            "smoothing": 0,
+            "suppression": 50,
+            "whitening": 0
+          }
+        }
+      },
+      "model": "dsp",
+      "ok": true
+    }
+  },
+  "observer": {
+    "apd": {
+      "enable": "0",
+      "configurable": "1",
+      "ant": "ANT1",
+      "freq": "7.150000",
+      "rfpower": "10",
+      "state": "OFF",
+      "deployed": "0",
+      "slice": "0",
+      "mmx": "0",
+      "client_handle": "0x7EBA7024",
+      "rx_error_mHz": "3.814694",
+      "equalizer_active": "0"
+    },
+    "sampler": {
+      "tx_ant": "ANT1",
+      "valid_samplers": "RX_A,XVTA",
+      "selected_sampler": "RX_A"
+    },
+    "interlock": {
+      "tx_client_handle": "0x00000000",
+      "state": "READY",
+      "reason": "",
+      "source": "",
+      "tx_allowed": "1",
+      "amplifier": ""
+    }
+  },
+  "capture_seconds": 0.47434413600421976,
+  "capture": {
+    "body": {
+      "capture_id": "3ac858acda09e627f59cf355c62fb185",
+      "center_hz": 7150000,
+      "chunk_samples": 512,
+      "correcting": false,
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 2126147620,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "first_receive_ns": "3541187491625",
+      "format": "f32le-iq-v1",
+      "keyed": false,
+      "last_receive_ns": "3541529281088",
+      "measurement": {
+        "source_id": "0000000000000000",
+        "tones": false
+      },
+      "sample_count": 16384,
+      "sample_rate_hz": 48000,
+      "source": {
+        "generation": "10",
+        "kind": "local_dax_iq",
+        "stream_id": 536870912
+      }
+    },
+    "complete": true,
+    "http_status": 200,
+    "iq_sha256": "19cedfd9010b5d8fec352ece763c132322d25c64c54d72fa604ec4149abb877c"
+  },
+  "guard_begin": {
+    "cleanup_due_ms": "3550781",
+    "remaining_ms": 9000,
+    "state": "observing",
+    "test_id": "32e75eba62a6b7f66c120633a8627411"
+  },
+  "guard_status": {
+    "cleanup_due_ms": "3550781",
+    "remaining_ms": 8973,
+    "state": "observing",
+    "test_id": "32e75eba62a6b7f66c120633a8627411"
+  },
+  "guard_stop": {
+    "cleanup_due_ms": "3550781",
+    "remaining_ms": 0,
+    "state": "retiring",
+    "test_id": "32e75eba62a6b7f66c120633a8627411"
+  },
+  "guard_ended": {
+    "cleanup_due_ms": "3550781",
+    "remaining_ms": 0,
+    "state": "ended",
+    "test_id": "32e75eba62a6b7f66c120633a8627411"
+  },
+  "status": {
+    "available": true,
+    "calibration_control": true,
+    "calibration_required": false,
+    "calibration_state": "idle",
+    "correcting": false,
+    "correction_control": true,
+    "correction_enabled": false,
+    "faults": {
+      "dispatch_deadlines": 0,
+      "rejected_input": 0,
+      "send_errors": 0,
+      "stale_iq": 0
+    },
+    "feedback_binding": {
+      "channel": 4,
+      "failed": false,
+      "gui_handle": 2126147620,
+      "pan": 1073741824,
+      "transport": "local_dax_iq",
+      "valid": true
+    },
+    "input_limited_samples": 0,
+    "keyed": false,
+    "measurement": {
+      "source_id": "0000000000000000",
+      "tones": false
+    },
+    "measurement_control": true,
+    "measurement_tone_capture_version": 3,
+    "measurement_tone_config": {
+      "center_hz": 1305,
+      "max_spacing_hz": 10000,
+      "min_spacing_hz": 200,
+      "source_id": "0000000000000000",
+      "spacing_hz": 1190
+    },
+    "measurement_tone_control": true,
+    "registered": true,
+    "source_purpose": "calibration",
+    "state": "disabled"
+  },
+  "passed": true
+}

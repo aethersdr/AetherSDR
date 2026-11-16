@@ -1,0 +1,16 @@
+{
+  "sources": [
+    {
+      "title": "SmartSDR Software User Guide, APD operating considerations",
+      "url": "https://edge.flexradio.com/www/offload/20260423063240/SmartSDR-Software-User-Guide.pdf",
+      "section": "20.1.1",
+      "relevance": "Flex states voice gives the highest APD success rate. The document does not establish FDX as the cause of this bench IDLE result."
+    },
+    {
+      "title": "SmartSignal FAQ",
+      "url": "https://helpdesk.flexradio.com/hc/en-us/articles/37416482166171-SmartSignal-automatic-adaptive-pre-distortion-FAQ",
+      "relevance": "An active indication is evidence of applying correction; enable alone is insufficient."
+    }
+  ],
+  "inference": "Use the previously qualified speech source as a bounded training prelude; treat RF result as inconclusive until equalizer activity is observed."
+}
