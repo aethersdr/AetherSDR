@@ -3,6 +3,7 @@
 **Status:** Proposed, not approved or implemented by this document.
 **Scope:** One TS-890S receive session over KNS Ethernet; no transmit, memories,
 remote power control, or new native setup pages in the first landing.
+**Family RFC:** [#7377](https://github.com/aethersdr/AetherSDR/issues/7377), approval pending.
 **Architecture:** An out-of-process backend, dependent on RFC #7277's shared
 protocol and host. No exception to the #5554 backend freeze is requested.
 
