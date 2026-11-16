@@ -569,6 +569,13 @@ target_link_libraries(local_control_server_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME local_control_server_test COMMAND local_control_server_test)
 
+# The app serving aetherd's local control endpoint (--control-socket,
+# docs/aetherd-app-control-socket.md), over a real current-user socket.
+add_executable(app_control_host_test tests/app_control_host_test.cpp)
+target_include_directories(app_control_host_test PRIVATE src tests)
+target_link_libraries(app_control_host_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME app_control_host_test COMMAND app_control_host_test)
+
 # Opaque byte relay pump/state machine (CTR2 TCP proxy prototype) with
 # injected scripted transports; binds no sockets.
 add_executable(byte_relay_test tests/byte_relay_test.cpp)
@@ -11665,6 +11672,7 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_display_observation_test
     control_slice_frequency_test
     control_receive_test
+    app_control_host_test
     control_telemetry_test
     control_front_end_overload_test
     aetherd_discovery_startup_test

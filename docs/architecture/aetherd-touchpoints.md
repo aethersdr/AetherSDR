@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 288 touchpoint headers (233 core, 55 models) — 288/288 tagged, 0/288 converted.
+**Totals:** 289 touchpoint headers (234 core, 55 models) — 289/289 tagged, 0/289 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -231,6 +231,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/icom/IcomSettings.h` | 1 | ui-support — Client-side connection configuration for the Icom backend (host, username, ports and CI-V selection), with credentials explicitly excluded. Connection plumbing, not live radio state. | unconverted |
 | `core/backends/sim/NoiseMixer.h` | 1 | vendor(sim) — Demo-mode synthetic AUDIO engine (RFC #4288 Phase 2b) — additive HF-noise and signal channels feeding SimBackend's audioFrameReady. Backend-internal generator reached from DemoApplet.cpp; family-specific below-seam code, frozen into the EB3 baseline. Demo-mode controls should reach it through an extension namespace, not the concrete type. | unconverted |
 | `core/backends/sim/SimBackend.h` | 3 | vendor(sim) — The synthetic demo backend (#4473) — a concrete IRadioBackend implementor that generates its own audio and spectrum, RX-only by construction (Principle VI). Reached today from ConnectionPanel.cpp, MainWindow.cpp and MainWindow_Session.cpp; pre-existing coupling, frozen into the EB3 baseline. The UI should select it through RadioModel::makeBackend()'s family string, never the concrete type. | unconverted |
+| `core/control/AppControlHost.h` | 1 | universal — The desktop app serving aetherd's local v1 control endpoint (--control-socket) for its own radio: the receive targets aetherd binds, over a connection target that only observes the app's connection, with no radio.connect/disconnect, no transmit verbs and no catalogue. Family-neutral; included only by src/main.cpp. | unconverted |
 | `core/dsp/SpectralEnvelope.h` | 1 | ui-support — Cepstral true envelope of a dB trace for the panadapter's FFT De-comb display option; pure DSP on the drawn trace, no radio state. | unconverted |
 | `core/pms/PmsMailbox.h` | 1 | universal — Packet personal-message-system mailbox store/logic; radio-agnostic operating feature. | unconverted |
 | `core/tnc/Ax25.h` | 1 | universal — AX.25 frame data types/constants; radio-agnostic protocol layer. | unconverted |

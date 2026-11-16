@@ -901,6 +901,7 @@ set(CORE_SOURCES
     src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
     src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/AppControlHost.cpp # the app serving the local endpoint (--control-socket)
     src/core/control/RadioTelemetryAdapter.cpp # bounded read-only telemetry
     src/core/control/ModelSliceFrequencyTarget.cpp # validated non-keying intents
     src/core/control/ModelReceiveControlTarget.cpp # typed receive operations
