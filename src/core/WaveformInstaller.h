@@ -57,6 +57,9 @@ public:
     void installReservedDockerWaveform(const QString& filePath, const RadioControlSession& session,
                                       const FileTransferHandle& reservation);
 
+    void installReservedLegacyWaveform(const QString& filePath, const RadioControlSession& session,
+                                      const FileTransferHandle& reservation);
+
     // Abort an in-progress install.
     void cancel();
 

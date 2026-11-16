@@ -12,6 +12,8 @@ public:
     }
     void begin(const QString& path, const RadioControlSession& session, const FileTransferHandle& reservation) override
     { m_upload.installReservedDockerWaveform(path, session, reservation); }
+    void beginNative(const QString& path, const RadioControlSession& session, const FileTransferHandle& reservation) override
+    { m_upload.installReservedLegacyWaveform(path, session, reservation); }
     void cancel() override { m_upload.cancel(); }
 private:
     WaveformInstaller m_upload;

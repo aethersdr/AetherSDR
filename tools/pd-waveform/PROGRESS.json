@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T05:25:10.288440+00:00",
+  "updated_utc": "2026-11-16T05:39:52.965814+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Connect verified desktop first-install package preparation to a native/carrier upload coordinator, exact-plan operator approval and credential-vault write before upload. Monitor commitment with the independently pinned key. Preserve all remaining P1-P10 gates.",
+  "next_action": "Wire first-install credential creation/storage and exact-plan operator approval into the desktop model and UI; then qualify that C++ path live. Preserve prior evidence and all remaining P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1151,5 +1151,47 @@
     ],
     "evidence": "first-install-desktop-package/validation.json under evidence_root",
     "actual_native": "Byte-identical to previously installed 9085612-byte native archive; carrier payload/modes/execution/rootfs equal, provenance differs. No C++ archive upload."
+  },
+  "desktop_first_install_coordinator": {
+    "status": "offline_coordinator_validated_not_live_qualified",
+    "production_ready": false,
+    "registered_suites_passed": 3,
+    "scoped_sanitizers": {
+      "coordinator_cases": 26,
+      "transfer_cases": 20,
+      "scope": "Changed coordinator, transfer control, waveform installer and test translation units instrumented; rest of linked engine not instrumented."
+    },
+    "mutation": {
+      "removed": "exact two-stage request binding",
+      "detected": true,
+      "failure": "changed upload size admitted; expected Unsupported"
+    },
+    "checks": [
+      "Full aethercore and selected test targets built",
+      "Engine boundary: zero new blockers",
+      "Command-plane/capability/touchpoint checks passed",
+      "git diff --check passed"
+    ],
+    "remaining": [
+      "Credential storage before first upload, exact-plan UI approval and authenticated first-package selection",
+      "Live C++ coordinator qualification",
+      "Final-process interruption and cleanup qualification",
+      "Actual FLEX-6000 hardware and remaining P1-P10 gates"
+    ],
+    "radio_changes": false,
+    "logs": {
+      "build.log": "0eb339e8fa499c44a49df29ced895b9cf3d0be1843fba26fdc71262e26121a83",
+      "integrated-build.log": "3af1ce311fc73cbb9bb396e8c3ba80de212ecb057c004ad22e0dba3250240c43",
+      "final-build.log": "2db8e92aa85d7d58afba25cde5b083bf18167d6fc6ea41dea228557a2d14afe1",
+      "sanitizer-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "engine-boundary.log": "2bfcc53a98fe54218c68911c8d3d32ac95690c6cefe49a6e23412cd160569192",
+      "mutation-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sanitizer-build-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "registered-final.log": "8c5ff0300ddbf745cf2050fd65992e46125b68475c6a72c636466ff59c0a0314",
+      "mutation.log": "5b23517186a6748484f10172b6f6a6a2d24765d4ca4e39685432ed98fb62a45b",
+      "coordinator-asan.log": "910c7c67faa2ae26cc5a0c46c35e7ee55bf07ff462aff8780a82bdb359801a9b",
+      "transfers-asan.log": "b97e2aab897e3d9a2f452afc0f31cef448d1e55f9e4215ed0c4ebd17d2861296"
+    },
+    "evidence": "first-install-upload-lifecycle/validation.json under evidence_root"
   }
 }

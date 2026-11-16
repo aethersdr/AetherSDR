@@ -202,6 +202,38 @@ carrier tests also pass in the full project's registered graph. These prepared
 C++ archives have not been uploaded, and the preparation component is not yet
 connected to the installation coordinator or credential vault.
 
+## Desktop upload coordinator
+
+`AetherPDInstallationCoordinator::prepareFirst` freezes a verified first package
+with a fresh installation nonce. The caller must store the new credential and
+obtain approval of these exact bytes before `begin`. Admission checks the new
+token hash, current radio serial/firmware, original control session, receive
+state and one-use preparation. It never obtains authorization from the old shim.
+
+The coordinator reserves the radio's upload service for the exact native and
+container filenames/sizes. The native transfer must receive its upload-port
+acceptance and finish before a three-second startup wait and the one allowed
+transition to the container transfer. The original reservation, session and
+deadline remain unchanged. Other filenames, sizes, purposes, duplicates and
+replacement sessions are refused. Temporary local files retain the approved
+basenames under a private directory.
+
+After carrier publication the coordinator uses only the authenticated read-only
+first-install monitor. Upload completion is not commitment. Deadline expiry
+enters cleanup before another stage can start. Cleanup requests removal of the
+exact carrier and native helper, holding the reservation until container absence
+and native uninstall acknowledgement are observed, or the cleanup deadline ends.
+Cancellation does not assert that an independent on-radio worker cannot finish;
+no automatic rollback or installation retry is issued. Destruction abandons
+observation and retains the bounded upload settling window.
+
+`first-install-upload-lifecycle` contains registered project tests for admission,
+ordering, cancellation, destruction, deadline and session loss. These are
+injected-transport component proofs. Public cleanup confirmation means the
+removal observations above; it does not prove cached firmware files or private
+host processes were removed. The C++ coordinator still needs a live first-install
+qualification and connection to the new-credential/consent UI.
+
 ## Remaining gates
 
 Production desktop consent and credential-vault integration, publisher catalogue,

@@ -48,6 +48,31 @@ FileTransferHandle RadioModel::beginFileTransfer(FileTransferPurpose purpose, QO
     return operation;
 }
 
+FileTransferHandle RadioModel::beginWaveformInstallTransfer(const FileTransferRequest& native,
+    const FileTransferRequest& container, QObject* owner, const RadioControlSession& expectedSession, int timeoutMs)
+{
+    if (QThread::currentThread() != thread() || !native.valid() || !container.valid()
+        || native.purpose != FileTransferPurpose::LegacyWaveform || container.purpose != FileTransferPurpose::DockerWaveform) { return {}; }
+    const auto control = backendCapabilities().fileTransferControl;
+    if (!control || !control->supports(container.purpose) || !fileTransferEligible(container.purpose, false)) { return {}; }
+    FileTransferHandle operation = beginFileTransfer(native.purpose, owner, expectedSession, timeoutMs);
+    if (operation) { operation->m_waveformSequence = std::array{native, container}; }
+    return operation;
+}
+
+bool RadioModel::advanceWaveformInstallTransfer(const FileTransferHandle& operation)
+{
+    if (QThread::currentThread() != thread() || !fileTransferCurrent(operation)
+        || !operation->m_waveformSequence || operation->m_sequenceIndex != 0
+        || !operation->m_requested || !operation->m_setupAccepted
+        || !fileTransferEligible(FileTransferPurpose::DockerWaveform, true)) { return false; }
+    operation->m_sequenceIndex = 1;
+    operation->m_purpose = FileTransferPurpose::DockerWaveform;
+    operation->m_requested = false;
+    operation->m_setupAccepted = false;
+    return true;
+}
+
 bool RadioModel::fileTransferCurrent(const FileTransferHandle& operation) const
 {
     return operation && operation->current() && operation->m_owner
@@ -107,6 +132,8 @@ ReceiveDispatch RadioModel::requestFileTransfer(const FileTransferHandle& operat
     const auto control = backendCapabilities().fileTransferControl;
     if (!control || !control->supports(request.purpose)
         || !fileTransferEligible(request.purpose, true)) { return refuse(); }
+    if (operation->m_waveformSequence
+        && request != (*operation->m_waveformSequence)[operation->m_sequenceIndex]) { return refuse(); }
     const bool followup = operation->m_purpose == FileTransferPurpose::ProfileMetadata
         && request.purpose == FileTransferPurpose::ProfileExport && operation->m_metadataAccepted;
     if (!followup && (operation->m_requested || operation->m_purpose != request.purpose)) { return refuse(); }
@@ -125,12 +152,13 @@ ReceiveDispatch RadioModel::requestFileTransfer(const FileTransferHandle& operat
                 QStringLiteral("Original transfer ended.")}, 0}); }
             return;
         }
+        operation->m_setupAccepted = result.result.kind == RadioControlReply::Kind::Accepted;
         operation->m_metadataAccepted = purpose == FileTransferPurpose::ProfileMetadata
             && result.result.kind == RadioControlReply::Kind::Accepted;
         if (completion) { completion(result); }
     };
-    const RadioControlFence current = [model, operation, purpose = request.purpose] {
-        return model && model->fileTransferCurrent(operation)
+    const RadioControlFence current = [model, operation, step = operation->m_sequenceIndex, purpose = request.purpose] {
+        return model && model->fileTransferCurrent(operation) && operation->m_sequenceIndex == step
             && model->fileTransferEligible(purpose, true);
     };
     QTimer::singleShot(30000, owner, [reply] {

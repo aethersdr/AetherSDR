@@ -2,6 +2,9 @@
 
 #include "FileTransferRequest.h"
 
+#include <array>
+#include <optional>
+
 #include <QDeadlineTimer>
 #include <QHostAddress>
 #include <QObject>
@@ -28,6 +31,9 @@ private:
     FileTransferPurpose m_purpose{FileTransferPurpose::Firmware};
     bool m_requested{false};
     bool m_metadataAccepted{false};
+    std::optional<std::array<FileTransferRequest, 2>> m_waveformSequence;
+    unsigned m_sequenceIndex{0};
+    bool m_setupAccepted{false};
 };
 
 inline bool transferPeerMatches(const QHostAddress& peer, const QHostAddress& expected)

@@ -62,6 +62,12 @@ void WaveformInstaller::installDockerWaveform(const QString& filePath, std::opti
     beginInstall(filePath, PackageKind::Docker, session);
 }
 
+void WaveformInstaller::installReservedLegacyWaveform(const QString& filePath, const RadioControlSession& session,
+                                                      const FileTransferHandle& reservation)
+{
+    beginInstall(filePath, PackageKind::Legacy, session, reservation);
+}
+
 void WaveformInstaller::installReservedDockerWaveform(const QString& filePath, const RadioControlSession& session,
                                                       const FileTransferHandle& reservation)
 {
@@ -144,7 +150,8 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, 
 
     m_session = session.value_or(m_model->controlSession());
     if (reservation && (!*reservation || !m_model->fileTransferCurrent(*reservation)
-        || !(*reservation)->reservedFor(FileTransferPurpose::DockerWaveform, m_session))) {
+        || !(*reservation)->reservedFor(kind == PackageKind::Legacy ? FileTransferPurpose::LegacyWaveform
+                                                                : FileTransferPurpose::DockerWaveform, m_session))) {
         emit finished(false, tr("Original installation reservation is unavailable."));
         return;
     }

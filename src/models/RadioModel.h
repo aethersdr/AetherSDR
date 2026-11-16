@@ -1164,6 +1164,11 @@ public:
                                       std::optional<RadioControlSession> expectedSession = {});
     FileTransferHandle beginFileTransfer(FileTransferPurpose purpose, QObject* owner,
         const RadioControlSession& expectedSession, int timeoutMs);
+    // One immutable native-then-container upload sequence. The owner retains
+    // the reservation through cleanup and advances only after native upload ends.
+    FileTransferHandle beginWaveformInstallTransfer(const FileTransferRequest& native,
+        const FileTransferRequest& container, QObject* owner, const RadioControlSession& expectedSession, int timeoutMs);
+    bool advanceWaveformInstallTransfer(const FileTransferHandle& operation);
     bool fileTransferCurrent(const FileTransferHandle& operation) const;
     void finishFileTransfer(const FileTransferHandle& operation, int settleMs = 0);
     ReceiveDispatch requestFileTransfer(const FileTransferHandle& operation,

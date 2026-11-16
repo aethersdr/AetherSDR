@@ -10,6 +10,7 @@
 #include "core/backends/AetherPDCarrierUpload.h"
 #include "models/AetherPDInstallationModel.h"
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -22,8 +23,15 @@ using Coordinator = AetherPDInstallationCoordinator;
 namespace {
 class Carrier final : public AetherPDCarrierUpload {
 public:
-    int starts{0};
+    int starts{0}, nativeStarts{0};
+    RadioModel* model{nullptr};
     void begin(const QString&, const RadioControlSession&, const FileTransferHandle&) override { ++starts; }
+    void beginNative(const QString& path, const RadioControlSession&, const FileTransferHandle& reservation) override
+    {
+        ++nativeStarts;
+        if (model) { model->requestFileTransfer(reservation, {FileTransferPurpose::LegacyWaveform,
+            QFileInfo(path).size(), QFileInfo(path).fileName(), 0}, {}); }
+    }
     void cancel() override {}
     void complete() { emit finished(true); }
 };
@@ -44,6 +52,23 @@ std::optional<Coordinator::Prepared> prepare()
     const auto package = fixture.load();
     return package ? Coordinator::prepare(*package, "fixture-8600") : std::nullopt;
 }
+std::optional<Coordinator::Prepared> prepareFirst()
+{
+    AetherPDTest::PackageFixture fixture;
+    if (!fixture.valid) { return std::nullopt; }
+    AetherPDFirstPackage::Files files;
+    for (std::size_t i = 0; i < files.size(); ++i) { files[i] = fixture.bytes(i); }
+    files[0] = AetherPDTest::PackageFixture::decode(fixture.fixture.value("first_worker"));
+    files[2] = fixture.bytes(3);
+    AetherPDFirstPackage::Trust trust;
+    trust.publisherKey = fixture.trust.candidateKey;
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        trust.files[i] = {files[i].size(), QCryptographicHash::hash(files[i], QCryptographicHash::Sha256)};
+    }
+    const auto package = AetherPDFirstPackage::verify(files, trust);
+    return package ? Coordinator::prepareFirst(*package, "fixture-8600",
+        QCryptographicHash::hash(QByteArray(64, 'a'), QCryptographicHash::Sha256), "fixture-radio") : std::nullopt;
+}
 struct Fixture {
     RadioModel model;
     RadioSetupTestBackend* backend{installRadioSetupBackend(model)};
@@ -53,14 +78,16 @@ struct Fixture {
     qint64 clock{0};
     Coordinator coordinator{model, network, channel, archive, [this] { return clock; }};
     QStringList transfers;
+    QList<std::function<void(int, const QString&)>> transferReplies;
     Fixture()
     {
+        archive.model = &model;
         RadioSetupControlTestAccess::peer(model, QHostAddress(QStringLiteral("192.168.50.100")));
         RadioSetupControlTestAccess::identity(model, "fixture-8600", "4.3.16.42034");
         backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
         model.handleLineForTest("S0|waveform wfp_status power=on ready=true");
         backend->setTransferCommandSink(RadioSetupControlTestAccess::productionTransferSink(model,
-            [this](const QString& command, const FileTransferGuard&, const auto&) { transfers << command; return true; }));
+            [this](const QString& command, const FileTransferGuard&, const auto& reply) { transfers << command; transferReplies << reply; return true; }));
     }
     bool begin(const Coordinator::Prepared& prepared)
     { return coordinator.begin(prepared, model.controlSession(), QString(43, u'a')); }
@@ -89,6 +116,89 @@ struct Fixture {
 class CoordinatorTest : public QObject {
     Q_OBJECT
 private slots:
+    void freshInstallUsesPublicUploadsAndNewIdentityOnly()
+    {
+        Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+        QSignalSpy done(&f.coordinator, &Coordinator::finished);
+        QVERIFY(!f.coordinator.begin(*prepared, f.model.controlSession(), QString(64, u'b')));
+        QVERIFY(f.transfers.isEmpty()); QVERIFY(f.network.sent.empty());
+        QVERIFY(f.coordinator.begin(*prepared, f.model.controlSession(), QString(64, u'a')));
+        QCOMPARE(f.archive.nativeStarts, 1); QCOMPARE(f.archive.starts, 0); QVERIFY(f.reserved());
+        QVERIFY(f.network.sent.empty()); QVERIFY(!f.channel.connected);
+        { const auto reply = f.transferReplies.last(); reply(0, {}); }
+        { const auto reply = f.transferReplies.last(); reply(0, "42607"); }
+        f.archive.complete(); QCOMPARE(f.coordinator.state(), Coordinator::State::WaitingForNative);
+        f.clock = 2999; f.coordinator.poll(); QCOMPARE(f.archive.starts, 0);
+        f.clock = 3000; f.coordinator.poll(); QCOMPARE(f.archive.starts, 1);
+        f.archive.complete(); f.carrier(true);
+        QCOMPARE(f.coordinator.state(), Coordinator::State::WaitingForCommit);
+        QCOMPARE(f.network.sent.size(), std::size_t(1)); QVERIFY(!f.channel.connected);
+        QCOMPARE(f.network.sent.back().method, QNetworkAccessManager::GetOperation);
+        auto* observation = f.pending("/installation"); QVERIFY(observation);
+        AetherPDTest::PackageFixture fixture;
+        const auto plan = aetherpd::parseFirstInstallationPlan(prepared->approvedPlan(), fixture.trust.candidateKey); QVERIFY(plan);
+        observation->complete(200, QJsonDocument(QJsonObject{{"state", "committed"}, {"installation_committed", true},
+            {"first_install_plan_blake2b_256", plan->planDigest}, {"selected_release_blake2b_256", plan->candidateDigest},
+            {"selected_release_key", plan->candidateKey}, {"profile", 1}, {"firmware", plan->firmware}, {"serial", plan->serial}}).toJson());
+        f.coordinator.poll(); QVERIFY(f.reserved()); QVERIFY(done.isEmpty());
+        QVERIFY(f.transfers.contains("waveform remove_container " + prepared->carrierName()));
+        QCOMPARE(f.transfers.last(), "waveform uninstall " + prepared->nativeName());
+        { const auto reply = f.transferReplies.last(); reply(0, {}); }
+        f.carrier(false);
+        QCOMPARE(done.size(), 1); QCOMPARE(done.first()[0].value<Coordinator::Outcome>(), Coordinator::Outcome::Committed);
+        QVERIFY(done.first()[1].toBool()); QVERIFY(!f.reserved());
+        for (const auto& sent : f.network.sent) { QCOMPARE(sent.method, QNetworkAccessManager::GetOperation); }
+    }
+
+    void freshCancelRemovesOnlyNativeAndWaitsForAcknowledgment()
+    {
+        Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+        QSignalSpy done(&f.coordinator, &Coordinator::finished);
+        QVERIFY(f.coordinator.begin(*prepared, f.model.controlSession(), QString(64, u'a')));
+        f.coordinator.cancel(); f.coordinator.poll();
+        QCOMPARE(f.transfers.last(), "waveform uninstall " + prepared->nativeName());
+        QVERIFY(done.isEmpty()); QVERIFY(f.reserved());
+        { const auto reply = f.transferReplies.last(); reply(0, {}); }
+        f.coordinator.poll();
+        QCOMPARE(done.size(), 1); QCOMPARE(done.first()[0].value<Coordinator::Outcome>(), Coordinator::Outcome::Canceled);
+        QCOMPARE(f.archive.starts, 0); QVERIFY(f.network.sent.empty()); QVERIFY(!f.channel.connected);
+        QVERIFY(prepared->used());
+    }
+
+    void freshDestructorKeepsUploadSettleWindow()
+    {
+        Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+        auto owner = std::make_unique<Coordinator>(f.model, f.network, f.channel, f.archive, [&f] { return f.clock; });
+        QVERIFY(owner->begin(*prepared, f.model.controlSession(), QString(64, u'a')));
+        owner.reset();
+        QVERIFY(f.reserved());
+        QCOMPARE(f.archive.starts, 0); QVERIFY(f.network.sent.empty());
+    }
+
+    void freshDeadlineCannotStartLateCarrier()
+    {
+        Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+        QVERIFY(f.coordinator.begin(*prepared, f.model.controlSession(), QString(64, u'a')));
+        { const auto reply = f.transferReplies.last(); reply(0, {}); }
+        { const auto reply = f.transferReplies.last(); reply(0, "42607"); }
+        f.archive.complete();
+        f.clock = 500000; f.coordinator.poll();
+        QCOMPARE(f.coordinator.state(), Coordinator::State::Cleaning);
+        QCOMPARE(f.archive.starts, 0); QVERIFY(f.network.sent.empty());
+    }
+
+    void freshSessionLossNeverUsesReplacementForCleanup()
+    {
+        Fixture f; const auto prepared = prepareFirst(); QVERIFY(prepared);
+        QSignalSpy done(&f.coordinator, &Coordinator::finished);
+        QVERIFY(f.coordinator.begin(*prepared, f.model.controlSession(), QString(64, u'a')));
+        const auto before = f.transfers;
+        RadioSetupControlTestAccess::replaceConnectionGeneration(f.model);
+        f.coordinator.poll();
+        QCOMPARE(done.size(), 1); QVERIFY(!done.first()[1].toBool()); QCOMPARE(f.transfers, before);
+        QVERIFY(f.network.sent.empty()); QCOMPARE(f.archive.starts, 0);
+    }
+
     void compiledDevelopmentSelectionRequiresExplicitPreparation()
     {
         Fixture f;

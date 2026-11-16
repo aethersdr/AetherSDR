@@ -3,6 +3,7 @@
 #include "RadioSetupControlFixture.h"
 #include "core/FirmwareUploader.h"
 #include "core/WaveformInstaller.h"
+#include "core/ZipArchive.h"
 #include "core/backends/FileTransferOperation.h"
 #include <QCoreApplication>
 #include <QFile>
@@ -63,6 +64,92 @@ struct Fixture {
 class FileTransferControlTest final : public QObject {
     Q_OBJECT
 private slots:
+    void nativeThenContainerKeepsOneExactReservation()
+    {
+        Fixture f;
+        f.backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
+        f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
+        const FileTransferRequest native{FileTransferPurpose::LegacyWaveform, 21, "first.ssdr_waveform", 0};
+        const FileTransferRequest container{FileTransferPurpose::DockerWaveform, 22, "carrier.tar.gz", 0};
+        const auto operation = f.model.beginWaveformInstallTransfer(native, container, &f.owner, f.model.controlSession(), 30000);
+        QVERIFY(operation);
+        QVERIFY(!f.begin(FileTransferPurpose::DockerWaveform));
+        QVERIFY(!f.model.advanceWaveformInstallTransfer(operation));
+        FileTransferRequest wrong = native; ++wrong.size;
+        QCOMPARE(f.model.requestFileTransfer(operation, wrong, {}), ReceiveDispatch::Unsupported);
+        QCOMPARE(f.model.requestFileTransfer(operation, container, {}), ReceiveDispatch::Unsupported);
+        QVERIFY(f.commands.isEmpty());
+        f.model.requestFileTransfer(operation, native, {});
+        QCOMPARE(f.commands, QStringList{"file filename first.ssdr_waveform"});
+        QVERIFY(!f.model.advanceWaveformInstallTransfer(operation));
+        f.reply(); // Filename acceptance is not upload-port acceptance.
+        QCOMPARE(f.commands.last(), QStringLiteral("file upload 21 new_waveform"));
+        QVERIFY(!f.model.advanceWaveformInstallTransfer(operation));
+        f.reply(0, "42607");
+        QVERIFY(f.model.advanceWaveformInstallTransfer(operation));
+        QVERIFY(operation->reservedFor(FileTransferPurpose::DockerWaveform, f.model.controlSession()));
+        QVERIFY(!f.begin(FileTransferPurpose::LegacyWaveform));
+        QVERIFY(!f.model.advanceWaveformInstallTransfer(operation));
+        QCOMPARE(f.model.requestFileTransfer(operation, native, {}), ReceiveDispatch::Unsupported);
+        wrong = container; wrong.fileName = "other.tar.gz";
+        QCOMPARE(f.model.requestFileTransfer(operation, wrong, {}), ReceiveDispatch::Unsupported);
+        QCOMPARE(f.commands.size(), 2);
+        f.model.requestFileTransfer(operation, container, {});
+        QCOMPARE(f.commands.last(), QStringLiteral("file upload 22 waveform_docker_image carrier.tar.gz"));
+        f.reply(0, "42607");
+        QCOMPARE(f.model.requestFileTransfer(operation, container, {}), ReceiveDispatch::Unsupported);
+        QVERIFY(!f.model.advanceWaveformInstallTransfer(operation));
+        QVERIFY(!f.begin(FileTransferPurpose::LegacyWaveform));
+        f.model.finishFileTransfer(operation);
+        QVERIFY(f.begin(FileTransferPurpose::LegacyWaveform));
+    }
+
+    void waveformSequenceCannotSurviveRefusalOrSessionChange()
+    {
+        for (const bool rejected : {false, true}) {
+            Fixture f;
+            f.backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
+            f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
+            const FileTransferRequest native{FileTransferPurpose::LegacyWaveform, 21, "first.ssdr_waveform", 0};
+            const FileTransferRequest container{FileTransferPurpose::DockerWaveform, 22, "carrier.tar.gz", 0};
+            QVERIFY(!f.model.beginWaveformInstallTransfer(container, native, &f.owner, f.model.controlSession(), 30000));
+            const auto operation = f.model.beginWaveformInstallTransfer(native, container, &f.owner, f.model.controlSession(), 30000);
+            QVERIFY(operation);
+            f.model.requestFileTransfer(operation, native, {}); f.reply(); f.reply(rejected ? 1 : 0, "42607");
+            if (!rejected) { RadioSetupControlTestAccess::replaceConnectionGeneration(f.model); }
+            QVERIFY(!f.model.advanceWaveformInstallTransfer(operation));
+            QCOMPARE(f.model.requestFileTransfer(operation, container, {}), ReceiveDispatch::Unsupported);
+            QCOMPARE(f.commands.size(), 2);
+        }
+    }
+
+    void reservedNativeUploadUsesTheEnclosingReservation()
+    {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("First.ssdr_waveform"));
+        QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray archive = writeDeflatedZip({
+            {"First/First.cfg", "[header]\nName: First\nVersion: 0.1.0\nExecutable: start.sh\n\n[setup]\n\n[end]\n"},
+            {"First/start.sh", "#!/bin/sh\nexit 0\n"}});
+        QCOMPARE(file.write(archive), archive.size()); file.close();
+        Fixture f;
+        f.backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
+        f.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
+        const auto operation = f.model.beginWaveformInstallTransfer(
+            {FileTransferPurpose::LegacyWaveform, archive.size(), "First.ssdr_waveform", 0},
+            {FileTransferPurpose::DockerWaveform, 22, "carrier.tar.gz", 0}, &f.owner, f.model.controlSession(), 30000);
+        QVERIFY(operation);
+        WaveformInstaller uploader(&f.model);
+        uploader.installReservedLegacyWaveform(path, f.model.controlSession(), operation);
+        QTRY_COMPARE(f.commands.size(), 1);
+        QCOMPARE(f.commands.first(), QStringLiteral("file filename First.ssdr_waveform"));
+        // Do not answer the port request: no socket opens in this test.
+        uploader.cancel();
+        QVERIFY(f.model.fileTransferCurrent(operation));
+        QVERIFY(!f.begin(FileTransferPurpose::LegacyWaveform));
+        f.model.finishFileTransfer(operation);
+    }
+
     void reservedWaveformUploadKeepsTransactionOwnership()
     {
         QTemporaryDir directory;

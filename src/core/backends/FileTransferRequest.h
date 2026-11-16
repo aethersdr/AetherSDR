@@ -39,6 +39,8 @@ struct FileTransferRequest {
     QString fileName;
     int slot{0};
 
+    bool operator==(const FileTransferRequest&) const = default;
+
     bool valid() const
     {
         using Purpose = FileTransferPurpose;

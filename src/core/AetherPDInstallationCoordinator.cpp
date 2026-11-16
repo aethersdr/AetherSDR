@@ -8,6 +8,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QRandomGenerator>
 #include <QThread>
 #include <QtEndian>
@@ -54,6 +55,20 @@ std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoo
     const auto image = publicBytes ? aetherpd::buildCarrierImage(package.m_code, *publicBytes, package.m_licenses) : std::nullopt;
     if (!image) { return std::nullopt; }
     prepared.m_image = *image;
+    return prepared;
+}
+std::optional<AetherPDInstallationCoordinator::Prepared> AetherPDInstallationCoordinator::prepareFirst(
+    const AetherPDFirstPackage& package, const QString& serial, const QByteArray& newTokenHash, const QString& hostname)
+{
+    const auto uploads = package.prepare(serial, newTokenHash, hostname, randomBytes());
+    if (!uploads) { return std::nullopt; }
+    Prepared prepared;
+    prepared.m_started = std::make_shared<std::atomic_bool>(false);
+    prepared.m_inputs[1] = uploads->plan;
+    prepared.m_publisherKey = uploads->publisherKey;
+    prepared.m_nativeName = uploads->nativeName;
+    prepared.m_nativeArchive = uploads->nativeArchive;
+    prepared.m_image = uploads->carrier;
     return prepared;
 }
 AetherPDInstallationCoordinator::AetherPDInstallationCoordinator(RadioModel& model, QObject* parent)
@@ -108,7 +123,7 @@ void AetherPDInstallationCoordinator::initialize()
 AetherPDInstallationCoordinator::~AetherPDInstallationCoordinator()
 {
     stopLocal();
-    if (m_model) { m_model->finishFileTransfer(m_reservation, m_carrierStarted ? 5000 : 0); }
+    if (m_model) { m_model->finishFileTransfer(m_reservation, (m_carrierStarted || m_nativeStarted) ? 5000 : 0); }
 }
 QString AetherPDInstallationCoordinator::requestId() const { return m_request->requestId(); }
 bool AetherPDInstallationCoordinator::current() const
@@ -136,14 +151,21 @@ bool AetherPDInstallationCoordinator::begin(const Prepared& approved, const Radi
         || m_model->isRadioTransmitting() || !m_carrier || m_model->thread() != thread() || m_carrier->thread() != thread()
         || !m_model->controlSessionCurrent(session) || !aetherpd::validAdminToken(token)
         || !aetherpd::lanAddress(m_model->radioAddress())) { return false; }
-    const auto plan = aetherpd::parseInstallationPlan(approved.m_inputs[1]);
-    if (!plan || !approved.m_started || approved.used() || !approved.m_inputs[1].startsWith("PDUPGR02") || plan->serial != m_model->serial()
+    const bool first = !approved.m_nativeName.isEmpty();
+    const auto plan = first ? aetherpd::parseFirstInstallationPlan(approved.m_inputs[1], approved.m_publisherKey)
+                            : aetherpd::parseInstallationPlan(approved.m_inputs[1]);
+    if (first && (approved.m_nativeArchive.isEmpty()
+        || QCryptographicHash::hash(token.toLatin1(), QCryptographicHash::Sha256) != approved.m_inputs[1].mid(148, 32))) { return false; }
+    if (!plan || !approved.m_started || approved.used() || (!first && !approved.m_inputs[1].startsWith("PDUPGR02")) || plan->serial != m_model->serial()
         || plan->firmware != m_model->version() || approved.m_image.archive.isEmpty()) { return false; }
     const qint64 now = m_now();
     if (now < 0 || now > std::numeric_limits<qint64>::max() - kLifetimeMs - kCleanupMs) { return false; }
     m_prepared = approved;
     if (carrierPresent()) { m_prepared = {}; return false; }
-    m_reservation = m_model->beginFileTransfer(FileTransferPurpose::DockerWaveform, this, session, 600'000);
+    m_reservation = first ? m_model->beginWaveformInstallTransfer(
+        {FileTransferPurpose::LegacyWaveform, approved.m_nativeArchive.size(), approved.m_nativeName + QStringLiteral(".ssdr_waveform"), 0},
+        {FileTransferPurpose::DockerWaveform, approved.m_image.archive.size(), approved.m_image.containerName + QStringLiteral(".tar.gz"), 0},
+        this, session, 600'000) : m_model->beginFileTransfer(FileTransferPurpose::DockerWaveform, this, session, 600'000);
     if (!m_reservation) { m_prepared = {}; return false; }
     if (approved.m_started->exchange(true)) {
         m_model->finishFileTransfer(m_reservation); m_reservation.reset(); m_prepared = {}; return false;
@@ -153,11 +175,30 @@ bool AetherPDInstallationCoordinator::begin(const Prepared& approved, const Radi
     m_token = token;
     m_lastNow = now;
     m_deadline = now + kLifetimeMs;
-    m_file.setFileTemplate(QDir::tempPath() + QStringLiteral("/aetherpd-public-XXXXXX.tar.gz"));
-    if (!m_file.open() || m_file.write(approved.m_image.archive) != approved.m_image.archive.size() || !m_file.flush()) {
+    if (first) {
+        if (!m_nativeDirectory.isValid()) { end(false); return false; }
+        m_nativePath = m_nativeDirectory.filePath(approved.m_nativeName + QStringLiteral(".ssdr_waveform"));
+        QFile native(m_nativePath);
+        if (!native.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+            || native.write(approved.m_nativeArchive) != approved.m_nativeArchive.size() || !native.flush()) { end(false); return false; }
+        // Keep both approved basenames under a private temporary directory;
+        // the reservation binds them and native firmware derives its directory from one.
+        m_carrierPath = m_nativeDirectory.filePath(approved.m_image.containerName + QStringLiteral(".tar.gz"));
+        QFile carrier(m_carrierPath);
+        if (!carrier.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+            || carrier.write(approved.m_image.archive) != approved.m_image.archive.size() || !carrier.flush()) { end(false); return false; }
+    } else { m_file.setFileTemplate(QDir::tempPath() + QStringLiteral("/aetherpd-public-XXXXXX.tar.gz")); }
+    if (!first && (!m_file.open() || m_file.write(approved.m_image.archive) != approved.m_image.archive.size() || !m_file.flush())) {
         end(false); return false;
     }
     m_file.close();
+    if (first) {
+        setState(State::UploadingNative);
+        m_timer.start();
+        m_nativeStarted = true;
+        m_carrier->beginNative(m_nativePath, m_session, m_reservation);
+        return true;
+    }
     setState(State::Requesting);
     m_timer.start();
     m_requestStarted = true;
@@ -168,14 +209,21 @@ bool AetherPDInstallationCoordinator::begin(const Prepared& approved, const Radi
 }
 void AetherPDInstallationCoordinator::startCarrier()
 {
-    if (m_state != State::Requesting || !current()) { return; }
+    if ((m_state != State::Requesting && m_state != State::WaitingForNative) || !current()) { return; }
+    if (m_nativeStarted && !m_model->advanceWaveformInstallTransfer(m_reservation)) { clean(Outcome::Unconfirmed); return; }
     if (carrierPresent()) { clean(Outcome::Unconfirmed); return; }
     m_carrierStarted = true;
     setState(State::UploadingCarrier);
-    m_carrier->begin(m_file.fileName(), m_session, m_reservation);
+    m_carrier->begin(m_nativeStarted ? m_carrierPath : m_file.fileName(), m_session, m_reservation);
 }
 void AetherPDInstallationCoordinator::carrierFinished(bool success)
 {
+    if (m_state == State::UploadingNative) {
+        if (!success) { clean(Outcome::Unconfirmed); return; }
+        m_nativeReadyAt = m_lastNow + 3000;
+        setState(State::WaitingForNative);
+        return;
+    }
     if (m_state != State::UploadingCarrier) { return; }
     if (!success) { clean(Outcome::Unconfirmed); return; }
     setState(State::WaitingForCarrier);
@@ -184,6 +232,12 @@ void AetherPDInstallationCoordinator::carrierFinished(bool success)
 void AetherPDInstallationCoordinator::startInputs()
 {
     if (!current()) { end(false); return; }
+    if (m_nativeStarted) {
+        setState(State::WaitingForCommit);
+        if (!m_monitor->beginFirstInstallation(m_model->radioAddress(), m_token, m_prepared.m_inputs[1],
+                                               m_prepared.m_publisherKey, 300'000)) { clean(Outcome::Unconfirmed); }
+        return;
+    }
     setState(State::UploadingInputs);
     if (!m_monitor->begin(m_model->radioAddress(), m_token, m_prepared.m_inputs[1], 300'000)) {
         clean(Outcome::Unconfirmed); return;
@@ -214,8 +268,14 @@ void AetherPDInstallationCoordinator::poll()
         m_outcome = Outcome::Unconfirmed; end(false); return;
     }
     m_lastNow = now;
+    if (now >= m_deadline) {
+        if (m_state == State::Cleaning) { end(false); }
+        else { clean(Outcome::Unconfirmed); }
+        return;
+    }
     const bool present = carrierPresent(true);
     if (m_carrierStarted && present) { m_carrierSeen = true; }
+    if (m_state == State::WaitingForNative && now >= m_nativeReadyAt) { startCarrier(); return; }
     if (m_state == State::WaitingForCarrier && present) { startInputs(); return; }
     if (m_state == State::Cleaning) {
         if (!m_requestStarted) { m_receiverRetired = true; }
@@ -229,9 +289,19 @@ void AetherPDInstallationCoordinator::poll()
             if (!alive || m_state == State::Finished) { return; }
         }
         const bool absent = !m_carrierStarted || (m_carrierSeen && m_removeSent && !present);
-        if (absent && m_receiverRetired) { end(true); return; }
-        if (now >= m_deadline) { end(false); return; }
-    } else if (now >= m_deadline) { clean(Outcome::Unconfirmed); return; }
+        if (m_nativeStarted && !m_nativeRemoveSent) {
+            m_nativeRemoveSent = true;
+            const QPointer<AetherPDInstallationCoordinator> alive(this);
+            m_model->requestWaveform({WaveformAction::Uninstall, m_prepared.m_nativeName}, this,
+                [alive](const RadioControlReply& reply) {
+                    if (alive && alive->current() && alive->m_state == State::Cleaning) {
+                        alive->m_nativeRemoved = reply.kind == RadioControlReply::Kind::Accepted;
+                    }
+                });
+            if (!alive || m_state == State::Finished) { return; }
+        }
+        if (absent && m_receiverRetired && (!m_nativeStarted || m_nativeRemoved)) { end(true); return; }
+    }
     if (m_requestStarted && !m_receiverRetired && !m_request->busy() && now >= m_nextInspect) {
         m_nextInspect = now + 500;
         m_request->inspect();
@@ -253,6 +323,8 @@ void AetherPDInstallationCoordinator::stopLocal()
     m_prepared.m_privateConfig.clear();
     m_prepared.m_inputs = {};
     m_prepared.m_image.archive.clear();
+    m_prepared.m_nativeArchive.clear();
+    m_nativeDirectory.remove();
     if (!m_file.fileName().isEmpty()) { m_file.remove(); }
 }
 void AetherPDInstallationCoordinator::end(bool cleaned)
