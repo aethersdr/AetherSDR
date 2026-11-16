@@ -4,6 +4,7 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
+#include "core/ThemeManager.h"
 #include "ControlAvailabilityRegistry.h"
 #include "HGauge.h"
 #include "StatusIndicator.h"
@@ -7876,17 +7877,19 @@ void MainWindow::wireMeters()
 
     connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
-    // TGXL indicator: two-line rich text — label on top, state smaller below.
-    // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)
-    auto setIndicatorHtml = [](QLabel* nameLbl, QLabel* stateLbl,
-                               const QString& state, const QString& color) {
-        nameLbl->setStyleSheet(
-            QString("QLabel { color: %1; font-size:18px; font-weight:bold; }").arg(color));
-        stateLbl->setStyleSheet(
-            QString("QLabel { color: %1; font-size:11px; }").arg(color));
+    // TGXL/PGXL indicator: two-line — label on top, state smaller below.
+    // OPERATE green, BYPASS amber, STANDBY the standby key's amber (RFC #6816),
+    // each from its own token so a theme can separate them.
+    auto setIndicatorStyle = [](QLabel* nameLbl, QLabel* stateLbl,
+                                const QString& state, const QString& colorToken) {
+        ThemeManager::instance().applyStyleSheet(nameLbl,
+            QStringLiteral("QLabel { color: {{%1}}; font-size:18px; font-weight:bold; }")
+                .arg(colorToken));
+        ThemeManager::instance().applyStyleSheet(stateLbl,
+            QStringLiteral("QLabel { color: {{%1}}; font-size:11px; }").arg(colorToken));
         stateLbl->setText(state);
         // The TUN/AMP container is the keyboard target; its description leads
-        // with the state, which the colour alone otherwise carries.
+        // with the state, which the color alone otherwise carries.
         if (QWidget* container = stateLbl->parentWidget()) {
             const QString cycle = container->property("aetherStateCycle").toString();
             const QString described = cycle.isEmpty() ? state
@@ -7897,23 +7900,28 @@ void MainWindow::wireMeters()
         }
     };
 
-    auto updateTgxlStyle = [this, setIndicatorHtml]() {
+    auto updateTgxlStyle = [this, setIndicatorStyle]() {
         auto& t = m_radioModel.tunerModel();
         if (t.isOperate() && !t.isBypass())
-            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE", "#00e060");
+            setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE",
+                              QStringLiteral("color.accessory.indicator.operate.foreground"));
         else if (t.isOperate() && t.isBypass())
-            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "BYPASS", "#e0a000");
+            setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "BYPASS",
+                              QStringLiteral("color.accessory.indicator.bypass.foreground"));
         else
-            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "STANDBY", "#404858");
+            setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "STANDBY",
+                              QStringLiteral("color.accessory.key.standby.foreground"));
     };
     connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, updateTgxlStyle);
 
-    // PGXL indicator: OPERATE (green) or STANDBY (grey) — no bypass for PGXL
-    auto updatePgxlStyle = [this, setIndicatorHtml]() {
+    // PGXL indicator: OPERATE (green) or STANDBY (amber) — no bypass for PGXL
+    auto updatePgxlStyle = [this, setIndicatorStyle]() {
         if (m_radioModel.amplifier().operate())
-            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE", "#00e060");
+            setIndicatorStyle(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE",
+                              QStringLiteral("color.accessory.indicator.operate.foreground"));
         else
-            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY", "#404858");
+            setIndicatorStyle(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY",
+                              QStringLiteral("color.accessory.key.standby.foreground"));
     };
     // The applet is NOT seeded from operate() here. That flag is derived from
     // the state word and cannot say TRANSMIT_A or FAULT, so writing it back
