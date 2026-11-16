@@ -18,6 +18,8 @@ class MemorySocket final : public QTcpSocket {
 public:
     explicit MemorySocket(QObject* parent) : QTcpSocket(parent) { open(ReadWrite); }
     QByteArray input;
+    QByteArray output;
+    qint64 writeLimit{-2};
     int connectAttempts{0};
     qintptr reportedDescriptor{-1};
     // Report retained-engine state without creating or adopting an OS socket.
@@ -32,6 +34,12 @@ public:
     }
     qint64 bytesAvailable() const override { return input.size() + QTcpSocket::bytesAvailable(); }
 protected:
+    qint64 writeData(const char* data, qint64 size) override
+    {
+        const qint64 count = writeLimit == -2 ? size : std::min(size, writeLimit);
+        if (count > 0) { output.append(data, count); }
+        return count;
+    }
     qint64 readData(char* data, qint64 size) override
     {
         const qint64 count = std::min(size, qint64(input.size()));
@@ -70,6 +78,8 @@ public:
     {
         connection.m_state.store(ConnectionState::Disconnected);
     }
+    static void connectedState(RadioConnection& connection)
+    { connection.m_state.store(ConnectionState::Connected); }
     static void beginDemo(RadioConnection& connection) { connection.startSyntheticDemoConnect(); }
     static quint64 sessionGeneration(const RadioConnection& connection)
     {
@@ -103,6 +113,26 @@ static int statusLines(const QSignalSpy& spy)
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    void commandWriteReportsActualByteOutcome()
+    {
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        RadioConnectionSessionTestAccess::connectedState(connection);
+        using Result = FlexCommandSession::WriteResult;
+        socket->writeLimit = -1;
+        QCOMPARE(connection.dispatchCommand(1, QStringLiteral("info")), Result::NotWritten);
+        socket->writeLimit = 0;
+        QCOMPARE(connection.dispatchCommand(2, QStringLiteral("info")), Result::NotWritten);
+        socket->writeLimit = 3;
+        QCOMPARE(connection.dispatchCommand(3, QStringLiteral("info")), Result::Unknown);
+        QCOMPARE(socket->output, QByteArray("C3|"));
+        socket->output.clear();
+        socket->writeLimit = -2;
+        QCOMPARE(connection.dispatchCommand(4, QStringLiteral("info")), Result::Written);
+        QCOMPARE(socket->output, QByteArray("C4|info\n"));
+        QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+    }
+
     void wrongFamilyExplicitSourceFailsBeforeDial()
     {
         RadioConnection connection;

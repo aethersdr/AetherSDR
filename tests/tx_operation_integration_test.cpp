@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 #include "FlexSliceStatusTestSupport.h"
 #include "FlexRadioStatusTestSupport.h"
 // Socket-free production-path tests. Only an injected transport recorder is
@@ -109,12 +110,13 @@ public:
     }
     static void bindAudioEncoder(RadioModel& radio, FlexBackend& encoder)
     {
-        encoder.setAudioCommandSink(radio.audioCommandSink());
+        FlexCommandTestAccess::bind(radio, encoder);
     }
     static std::function<void(int, const QString&)> takeDaxCreateReply(RadioModel& radio)
     {
-        if (radio.m_pendingCallbacks.isEmpty()) { return {}; }
-        return radio.m_pendingCallbacks.take(radio.m_pendingCallbacks.cbegin().key());
+        QCoreApplication::sendPostedEvents(radio.m_connection, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(&FlexCommandTestAccess::session(radio), QEvent::MetaCall);
+        return FlexCommandTestAccess::takeFirstReply(radio);
     }
     static bool tciPromotion(TciServer& server, int sliceId)
     {
@@ -240,7 +242,7 @@ public:
     }
     static bool cwxDrainArmed(const RadioModel& radio) { return radio.m_cwxDrainArmed; }
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
-    static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
+    static qsizetype pendingReplies(const RadioModel& radio) { return FlexCommandTestAccess::pending(const_cast<RadioModel&>(radio)); }
     static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
     static void stopEvidence(RadioModel& radio, const TxStopEvidence& evidence)
     {
@@ -261,39 +263,31 @@ public:
     }
     static void bindTxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
-        encoder.setTxCommandSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-            return radio.sendTxKeyingCommand(command, fence);
-        });
+        FlexCommandTestAccess::bind(radio, encoder);
     }
     static void bindCwxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
-        encoder.setCwxConfigurationSink([&radio](const QString& wire, const RadioControlFence& current) {
-            return radio.sendCwxConfigurationCommand(wire, current);
-        });
-        encoder.setCwxCommandSink([&radio](const QString& wire, const TxCoordinator::Command& command,
-                                          const RadioControlFence& current, FlexBackend::CommandReply reply) {
-            return radio.sendTxTcpCommand(wire, command.operation, command.keying,
-                [completion = command.completion] { completion.finish(); }, std::move(reply), current);
-        });
+        FlexCommandTestAccess::bind(radio, encoder);
     }
     static void injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands);
-    static void teardownWithPendingReply(RadioModel& radio, RadioModel::ResponseCallback callback)
+    static void teardownWithPendingReply(RadioModel& radio, FlexCommandTestAccess::Reply callback)
     {
-        radio.m_pendingCallbacks.insert(1234, std::move(callback));
+        FlexCommandTestAccess::insertReply(FlexCommandTestAccess::session(radio), 1234, std::move(callback));
         radio.teardownBackend();
     }
     static void insertPendingReply(RadioModel& radio, quint32 sequence,
-                                   RadioModel::ResponseCallback callback)
+                                   FlexCommandTestAccess::Reply callback)
     {
-        radio.m_pendingCallbacks.insert(sequence, std::move(callback));
+        FlexCommandTestAccess::insertReply(FlexCommandTestAccess::session(radio), sequence, std::move(callback));
     }
     static qsizetype pendingReplyCount(const RadioModel& radio)
     {
-        return radio.m_pendingCallbacks.size();
+        return FlexCommandTestAccess::pending(const_cast<RadioModel&>(radio));
     }
     static void disconnect(RadioModel& radio)
     {
         radio.onDisconnected();
+        FlexCommandTestAccess::session(radio).retire(QStringLiteral("Disconnected."));
     }
     static RadioConnection* connection(RadioModel& radio)
     {
@@ -301,15 +295,21 @@ public:
     }
     static quint32 firstPendingReplySequence(const RadioModel& radio)
     {
-        return radio.m_pendingCallbacks.isEmpty() ? 0 : radio.m_pendingCallbacks.cbegin().key();
+        return FlexCommandTestAccess::firstSequence(const_cast<RadioModel&>(radio));
     }
     static void primeInertSession(RadioModel& radio)
     {
+        QMetaObject::invokeMethod(radio.m_connection, [connection = radio.m_connection] {
+            if (!connection->m_commandSinkForTest) {
+                connection->m_commandSinkForTest = [](quint32, const QString&) {};
+            }
+        }, Qt::BlockingQueuedConnection);
         radio.m_connection->m_state.store(ConnectionState::Connected);
         radio.m_txSessionClosing = false;
         radio.m_sessionCommands = SessionCommandGuard::create();
         radio.m_sessionWire = radio.m_connection;
         radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+        FlexCommandTestAccess::session(radio);
     }
     static void beginMultiFlexProbe(RadioModel& radio)
     {
@@ -348,6 +348,7 @@ public:
         radio.m_connection->m_commandSinkForTest =
             [&commands](quint32, const QString& c) { commands << c; };
         radio.m_connection->m_state.store(ConnectionState::Connected);
+        FlexCommandTestAccess::session(radio);
         radio.m_connection->m_handle.store(0x71);
         AudioStreamDelta audio;
         audio.streamId = 0x12345678;
@@ -515,13 +516,14 @@ public:
 namespace AetherSDR {
 void TxOperationIntegrationTestAccess::injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands)
 {
+    connection.m_state.store(ConnectionState::Connected);
     connection.m_commandSinkForTest = [&commands](quint32, const QString& command) { commands << command; };
     radio.m_family = QStringLiteral("flex");
     radio.m_connection = &connection;
     auto* backend = static_cast<RecordingBackend*>(radio.m_backend.get());
     if (!backend->cwControls) { backend->cwControls = std::make_unique<FlexCwControls>(nullptr); }
     backend->cwControls->setTxSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-        return radio.sendTxKeyingCommand(command, fence);
+        return FlexCommandTestAccess::tx(radio, command, fence);
     });
 }
 void TxOperationIntegrationTestAccess::captureCwLifecycle(RadioModel& radio, QStringList& commands)
@@ -557,7 +559,7 @@ void TxOperationIntegrationTestAccess::injectNetCwTransport(RadioModel& radio, P
     backend->cwControls->m_stream = &stream;
     backend->cwControls->m_streamId = 0x12345678;
     backend->cwControls->setTxSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-        return radio.sendTxKeyingCommand(command, fence);
+        return FlexCommandTestAccess::tx(radio, command, fence);
     });
 }
 } // namespace AetherSDR
@@ -775,7 +777,7 @@ void flexSharedProtocolEligibility()
 {
     FlexBackend backend;
     quint32 sequence = 100;
-    backend.setIndependentTxSequenceProvider([&sequence] { return ++sequence; });
+    backend.setIndependentTxSequenceProviderForTest([&sequence] { return ++sequence; });
     for (QStringView model : {u"FLEX-6300", u"FLEX-6400", u"FLEX-6400M", u"FLEX-6500",
              u"FLEX-6600", u"FLEX-6600M", u"FLEX-6700", u"FLEX-8400", u"FLEX-8400M",
              u"FLEX-8600", u"FLEX-8600M"}) {
@@ -791,7 +793,7 @@ void flexSharedProtocolEligibility()
     TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("2.0.0.0"));
     check(backend.independentTxControl().activities == 0, "unknown TCP API has no independent backend TX activity");
     TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("1.4.0.0"));
-    backend.setIndependentTxSequenceProvider({});
+    backend.setIndependentTxSequenceProviderForTest({});
     check(backend.independentTxControl().activities == 0, "shared command sequence provider is still required");
 }
 
@@ -1260,13 +1262,13 @@ void flexEncoding()
     TxTestAuthority authority;
     QStringList commands;
     FlexBackend backend;
-    backend.setCommandSink([&](const QString& command) { commands << command; });
+    backend.setCommandSinkForTest([&](const QString& command) { commands << command; });
     backend.setKeying(true, authority.operation);
     backend.setTune(true, 10, authority.operation);
     backend.setAtu(true, authority.operation);
     check(commands.isEmpty(), "primary Flex keying never falls back to an unfenced generic sink");
     std::vector<bool> keying;
-    backend.setTxCommandSink([&](const QString& command, const TxCoordinator::Command& fence) {
+    backend.setTxCommandSinkForTest([&](const QString& command, const TxCoordinator::Command& fence) {
         commands << command;
         keying.push_back(fence.keying);
         return true;
@@ -1489,7 +1491,7 @@ void pendingCallbackDisconnectExpiry()
         const bool invoked = QMetaObject::invokeMethod(
             connection, "commandResponse", Qt::BlockingQueuedConnection,
             Q_ARG(quint32, sequence), Q_ARG(int, code), Q_ARG(QString, body));
-        QCoreApplication::sendPostedEvents(&radio, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(&FlexCommandTestAccess::session(radio), QEvent::MetaCall);
         return invoked;
     };
 
@@ -3025,11 +3027,11 @@ struct DaxTciFixture {
         f.backend->caps.hasDaxStreams = true;
         f.backend->caps.hasMultiClientSessions = true;
         f.backend->caps.audioStreamControl = audioEncoder.capabilities().audioStreamControl;
-        TxOperationIntegrationTestAccess::bindAudioEncoder(f.radio, audioEncoder);
         f.backend->audioWriter = [this](const AudioStreamRequest& request, const AudioStreamCompletion& completion) {
             return audioEncoder.requestAudioStream(request, completion);
         };
         TxOperationIntegrationTestAccess::injectTcp(f.radio, identity, wire);
+        TxOperationIntegrationTestAccess::bindAudioEncoder(f.radio, audioEncoder);
         TxOperationIntegrationTestAccess::bindTciOwnershipIdentity(f.radio, &identity);
         applyFlexSliceStatus(f.radio, 0, {
             {QStringLiteral("in_use"), QStringLiteral("1")},

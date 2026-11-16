@@ -145,6 +145,34 @@ the previous session. Demo uses the same lifecycle coordinator for its selected
 synthetic transport, while its native engine API remains socket-free. Neither
 worker topology nor TX authority changes.
 
+## Flex command and reply ownership
+
+`FlexCommandSession` owns each transport session's sequence allocator, pending
+replies and expiry timer. `FlexBackend` installs its own typed-control routes;
+`RadioModel` supplies policy and receives results, without a raw command writer
+or reply map. The `ForTest` sink setters are encoding and transport injections
+only. LAN queues immutable writes to its existing worker. SmartLink retains its
+transport owner and uses the same ledger for controls and heartbeat sequencing.
+
+Register a pending reply before invoking the writer: Demo can answer immediately.
+LAN replies capture their original epoch on the producer and cross one queued
+hop, preserving status-before-reply order. A write receipt means only that the
+local transport accepted the bytes; it does not confirm execution or radio idle.
+Cancellation before dispatch is distinct from an unknown result after a partial
+or completed write. Nothing is replayed on reconnect.
+
+Entries expire after 30 seconds by default. Ordinary admission is capped at
+4096 pending entries, with 64 reserved for classified cleanup. Closing admission
+revokes ordinary writes immediately; already-queued cleanup may drain through
+the original transport before retirement cancels it too. TX requests retain
+their original `TxCoordinator` operation and deadlines at the final writer.
+Sequence exhaustion refuses further admission until a new transport epoch.
+
+Profile-load timing, deferred pan intent, local memory storage, registration and
+administrative intent remain model policy. The backend enforces the profile
+write hold after encoding. Full SmartLink ownership, DSP relocation and process
+isolation remain separate work.
+
 ## Display status observations
 
 `FlexStatusIngress` decodes Flex panadapter/waterfall reports, LAN and WAN

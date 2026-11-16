@@ -116,6 +116,7 @@ FlexBackend::FlexBackend(QObject* parent)
             [this](quint32 streamId) { if (m_cwControls) { m_cwControls->observeStreamRemoved(streamId); } });
 
     m_lanSession = std::make_unique<FlexLanSession>(m_connection, m_panStream, &m_statusIngress);
+    initializeCommands();
     connect(m_lanSession.get(), &FlexLanSession::starting, this, &IRadioBackend::connectionSessionStarting);
     connect(m_lanSession.get(), &FlexLanSession::connected, this, &IRadioBackend::connected);
     connect(m_lanSession.get(), &FlexLanSession::disconnected, this, [this] {
@@ -183,7 +184,7 @@ FlexBackend::~FlexBackend()
     m_panStream = nullptr;
 }
 
-void FlexBackend::setCwControlSink(FlexCwControls::ControlSink sink)
+void FlexBackend::setCwControlSinkForTest(FlexCwControls::ControlSink sink)
 {
     m_cwControls->setControlSink(std::move(sink));
 }
@@ -203,7 +204,7 @@ ReceiveDispatch FlexBackend::requestLocalPtt(const RadioControlCompletion& compl
     return m_cwControls->requestLocalPtt(completion, current);
 }
 
-void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
+void FlexBackend::setCommandSinkForTest(std::function<void(const QString&)> sink)
 {
     if (!sink) {
         m_sink = {};
@@ -218,17 +219,17 @@ void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
     };
 }
 
-void FlexBackend::setCommandSink(std::function<bool(const QString&, CommandReply)> sink)
+void FlexBackend::setCommandSinkForTest(std::function<bool(const QString&, CommandReply)> sink)
 {
     m_sink = std::move(sink);
 }
 
-void FlexBackend::setDaxTxClientHandleProvider(std::function<quint32()> provider)
+void FlexBackend::setDaxTxClientHandleProviderForTest(std::function<quint32()> provider)
 {
     m_daxTxClientHandleProvider = std::move(provider);
 }
 
-void FlexBackend::setDaxTxCommandSink(
+void FlexBackend::setDaxTxCommandSinkForTest(
     std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> sink)
 {
     m_daxTxSink = std::move(sink);
@@ -466,19 +467,20 @@ ReceiveDispatch FlexBackend::requestRadioNickname(const QString& nickname,
     return dispatched ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 
-void FlexBackend::setSetupCommandSink(
+void FlexBackend::setSetupCommandSinkForTest(
     std::function<bool(const QString&, const RadioSetupCompletion&)> sink)
 {
     m_setupSink = std::move(sink);
+    m_setupEntitySink = {}; // Encoding fixtures use the setup fallback.
 }
 
-void FlexBackend::setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink)
+void FlexBackend::setTxCommandSinkForTest(std::function<bool(const QString&, const TxCoordinator::Command&)> sink)
 {
     m_txSink = std::move(sink);
     m_cwControls->setTxSink(m_txSink);
 }
 
-void FlexBackend::setSliceCommandSink(std::function<void(const QString&)> sink)
+void FlexBackend::setSliceCommandSinkForTest(std::function<void(const QString&)> sink)
 {
     m_sliceSink = std::move(sink);
 }
@@ -488,7 +490,7 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
     m_modelProvider = std::move(provider);
 }
 
-void FlexBackend::setIndependentTxSequenceProvider(std::function<quint32()> sequence)
+void FlexBackend::setIndependentTxSequenceProviderForTest(std::function<quint32()> sequence)
 {
     m_sequenceProvider = std::move(sequence);
 }
@@ -852,7 +854,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasRemoteOnControl = true;
     caps.canUpgradeFirmware = true;
     caps.waveformControl = WaveformControl{{WaveformAction::Uninstall,
-        WaveformAction::RemoveContainer, WaveformAction::Restart}};
+        WaveformAction::RemoveContainer, WaveformAction::Restart, WaveformAction::Unregister}};
     caps.fileTransferControl = FileTransferControl{{FileTransferPurpose::Firmware,
         FileTransferPurpose::LegacyWaveform, FileTransferPurpose::ProfileMetadata,
         FileTransferPurpose::ProfileImport, FileTransferPurpose::ProfileExport,
@@ -1047,6 +1049,8 @@ RadioCapabilities FlexBackend::capabilities() const
 
 void FlexBackend::connectRadio(const RadioConnectRequest& request)
 {
+    m_commandWan = nullptr;
+    m_profileWriteHoldUtcMs = 0;
     m_lanSession->connectRadio(request);
 }
 
@@ -1073,7 +1077,7 @@ ReceiveTransportResult FlexBackend::startReceiveTransport(bool rebind)
 
 bool FlexBackend::isConnected() const
 {
-    return m_connection && m_connection->isConnected();
+    return m_commandWan ? m_commandWan->isConnected() : m_connection && m_connection->isConnected();
 }
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)

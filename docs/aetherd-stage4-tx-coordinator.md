@@ -248,11 +248,11 @@ monitoring is not RF authority.
 
 ### Primary Flex and CWX command queues
 
-Flex `setKeying`, `setTune`, `setAtu` and `abortCwText` use a dedicated TX
-command sink, with no fallback to the generic command sink. Encoding remains
-behind the backend seam; the sink's keying/cleanup flag is a classification,
-not authority. RadioModel captures its original operation and transport and
-checks them at the LAN writer or synchronous WAN dispatch.
+Flex `setKeying`, `setTune`, `setAtu` and `abortCwText` use the backend's TX
+route into `FlexCommandSession`, with no fallback to an unguarded writer.
+Encoding and reply ownership remain behind the backend seam; the keying/cleanup
+flag is a classification, not authority. The model supplies the original
+operation, which is checked at the LAN writer or synchronous WAN dispatch.
 
 Normal primary key-up retains local operation lifetime until the TCP queue
 consumes it. This preserves both edges of a short key-down/key-up sequence;

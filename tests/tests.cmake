@@ -7954,6 +7954,12 @@ add_test(NAME flex_lan_bind_address_test COMMAND flex_lan_bind_address_test)
 
 # Socket-free production LAN lifecycle, cancellation and Demo integration.
 add_executable(flex_lan_session_test tests/flex_lan_session_test.cpp)
+add_executable(flex_command_session_test tests/flex_command_session_test.cpp)
+target_include_directories(flex_command_session_test PRIVATE src)
+target_link_libraries(flex_command_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_command_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_command_session_test COMMAND flex_command_session_test)
+set_tests_properties(flex_command_session_test PROPERTIES TIMEOUT 30)
 target_include_directories(flex_lan_session_test PRIVATE src tests)
 target_link_libraries(flex_lan_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(flex_lan_session_test PROPERTIES AUTOMOC ON)
@@ -11486,6 +11492,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_command_session_test
     flex_lan_session_test
     flex_receive_path_test
     flex_setup_observation_test

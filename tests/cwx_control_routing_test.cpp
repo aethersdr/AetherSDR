@@ -77,7 +77,7 @@ void backendAdmissionAndReplies()
           "a missing production sink cannot report successful dispatch");
     int writes = 0;
     std::vector<FlexBackend::CommandReply> replies;
-    backend.setCwxCommandSink([&](const QString&, const TxCoordinator::Command& command,
+    backend.setCwxCommandSinkForTest([&](const QString&, const TxCoordinator::Command& command,
                                   const RadioControlFence&, FlexBackend::CommandReply reply) {
         ++writes;
         command.completion.finish();
@@ -106,7 +106,7 @@ void backendAdmissionAndReplies()
 
     for (const bool accept : {false, true}) {
         int delivered = 0;
-        backend.setCwxCommandSink([&](const QString&, const TxCoordinator::Command&,
+        backend.setCwxCommandSinkForTest([&](const QString&, const TxCoordinator::Command&,
                                       const RadioControlFence&, FlexBackend::CommandReply reply) {
             reply(0, "4,1");
             reply(0, "5,1");
@@ -120,13 +120,13 @@ void backendAdmissionAndReplies()
     }
     TxCoordinator idle([](const auto&, auto) {});
     writes = 0;
-    backend.setCwxCommandSink([&](const QString&, const TxCoordinator::Command&,
+    backend.setCwxCommandSinkForTest([&](const QString&, const TxCoordinator::Command&,
                                   const RadioControlFence&, FlexBackend::CommandReply) { ++writes; return true; });
     const TxCoordinator::Command setting{idle.cleanupFence(), false};
     check(backend.requestCwTextControl({CwTextRequest::Field::Speed, 30}, setting, [] { return true; })
               == ReceiveDispatch::Unsupported,
           "configuration cannot fall back to an operation-fenced TX writer");
-    backend.setCwxConfigurationSink([&](const QString&, const RadioControlFence& current) {
+    backend.setCwxConfigurationSinkForTest([&](const QString&, const RadioControlFence& current) {
         if (current && !current()) { return false; }
         ++writes;
         return true;
@@ -380,7 +380,7 @@ void receiverDestruction()
     TxTestAuthority authority;
     auto backend = std::make_unique<FlexBackend>();
     int replies = 0;
-    backend->setCwxCommandSink([&](const QString&, const TxCoordinator::Command&,
+    backend->setCwxCommandSinkForTest([&](const QString&, const TxCoordinator::Command&,
                                    const RadioControlFence&, FlexBackend::CommandReply reply) {
         backend.reset();
         reply(0, "1,1");

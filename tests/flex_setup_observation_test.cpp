@@ -299,6 +299,7 @@ void finalWriteFence()
     RadioModel radio;
     RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
     SessionControlTestAccess::begin(radio, *backend);
+    FlexCommandTestAccess::bind(radio, *backend);
     RadioConnection* connection = backend->connection();
     std::atomic_int writes{0};
     SessionControlTestAccess::installWriter(*connection, [&](quint32, const QString&) { ++writes; });
@@ -306,7 +307,8 @@ void finalWriteFence()
         QSemaphore entered, release;
         QMetaObject::invokeMethod(connection, [&] { entered.release(); release.tryAcquire(1, 5000); });
         check(entered.tryAcquire(1, 5000), "worker barrier entered");
-        check(FlexSetupStatusTestPeer::send(radio, identity), "configuration command admitted to the worker queue");
+        check(backend->requestTransverter({2, TransverterRequest::Field::RxOnly, true, 0.0, identity})
+            == ReceiveDispatch::Dispatched, "configuration command admitted to the worker queue");
         if (retire) { identity->retire(); }
         release.release();
         QMetaObject::invokeMethod(connection, [] {}, Qt::BlockingQueuedConnection);

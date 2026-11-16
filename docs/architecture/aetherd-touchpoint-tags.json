@@ -1127,9 +1127,9 @@
   "split": "Core: center/bandwidth, dBm range, antenna list, RF gain, WNB, fps/waterfall cadence. Flex ext: daxiqChannel, clientHandle, VITA-49 stream IDs, loopA/B, preamp string, applyPanStatus/applyWaterfallStatus kv parsing of SmartSDR status.",
   "confidence": "high"
  },
- "models/ProfileLoadCommand.h": {
-  "tag": "vendor(flex)",
-  "note": "Parses SmartSDR 'profile global/tx/mic load' wire command + recall-hold timing/suppression sentinels; Flex-only",
+ "models/ProfileLoadPolicy.h": {
+  "tag": "universal",
+  "note": "Profile recall timing and topology classification shared by engine policy and presentation; wire classification is private to the Flex backend",
   "split": "",
   "confidence": "high"
  },

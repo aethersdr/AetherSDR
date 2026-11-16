@@ -134,7 +134,7 @@ private slots:
         QList<quint32> sequences;
         FlexBackend backend;
         quint32 nextSequence = 700;
-        backend.setIndependentTxSequenceProvider([&] { return nextSequence++; });
+        backend.setIndependentTxSequenceProviderForTest([&] { return nextSequence++; });
         backend.connectRadio(demoRequest());
         QTRY_VERIFY(backend.connectionSession().has_value());
         RadioConnection* wire = backend.connection();

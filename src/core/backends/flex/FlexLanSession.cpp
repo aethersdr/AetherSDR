@@ -13,6 +13,7 @@ FlexLanSession::FlexLanSession(RadioConnection* connection, PanadapterStream* st
     : QObject(parent), m_connection(connection), m_stream(stream), m_ingress(ingress),
       m_epoch(std::make_shared<std::atomic<quint64>>(0))
 {
+    m_commands.bindLan(connection);
     // Capture on the producer thread, then deliver over exactly one queued hop,
     // just like status ingress. Reading the epoch at delivery would relabel an
     // old event with a replacement session's identity.
@@ -55,6 +56,7 @@ FlexLanSession::~FlexLanSession()
 {
     m_epoch->store(0);
     QObject::disconnect(m_connection, nullptr, this, nullptr);
+    QObject::disconnect(m_connection, nullptr, &m_commands, nullptr);
     // Drain producers before destroying the receiver of their direct capture
     // callbacks. The backend owns worker shutdown and object destruction.
     QMetaObject::invokeMethod(m_connection, [] {}, Qt::BlockingQueuedConnection);
@@ -75,6 +77,8 @@ void FlexLanSession::connectRadio(const RadioConnectRequest& request)
     const quint64 epoch = m_ingress->beginSession();
     m_epoch->store(epoch);
     const QPointer<FlexLanSession> alive(this);
+    m_commands.begin(epoch);
+    if (!alive || !current(epoch)) { return; }
     emit starting(epoch);
     if (!alive || !current(epoch)) { return; }
     RadioInfo info;
@@ -104,6 +108,7 @@ void FlexLanSession::disconnectRadio(const RadioDisconnectRequest& request, quin
 {
     if (!m_active) { return; }
     const quint64 epoch = m_epoch->exchange(0);
+    m_commands.invalidate();
     const quint32 handle = m_snapshot ? m_snapshot->clientHandle : 0;
     m_ingress->retire(epoch);
     // Revoke queued starts immediately, while retaining the old transport's
@@ -121,19 +126,24 @@ void FlexLanSession::disconnectRadio(const RadioDisconnectRequest& request, quin
     m_active = false;
     m_connected = false;
     m_snapshot.reset();
+    const QPointer<FlexLanSession> alive(this);
     emit disconnected();
+    if (alive && m_commands.epoch() == epoch) { m_commands.retire(QStringLiteral("Connection closed.")); }
 }
 
 void FlexLanSession::finish(quint64 epoch)
 {
     if (!current(epoch)) { return; }
     m_epoch->store(0);
+    m_commands.invalidate();
     m_ingress->retire(epoch);
     stopReceiveTransport();
     m_active = false;
     m_connected = false;
     m_snapshot.reset();
+    const QPointer<FlexLanSession> alive(this);
     emit disconnected();
+    if (alive && m_commands.epoch() == epoch) { m_commands.retire(QStringLiteral("Connection closed.")); }
 }
 
 ReceiveTransportResult FlexLanSession::startReceiveTransport(bool rebind)

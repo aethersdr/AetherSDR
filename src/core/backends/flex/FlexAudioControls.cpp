@@ -11,7 +11,7 @@
 namespace AetherSDR {
 
 
-void FlexBackend::setAudioCommandSink(AudioCommandSink sink)
+void FlexBackend::setAudioCommandSinkForTest(AudioCommandSink sink)
 {
     m_audioSink = std::move(sink);
 }

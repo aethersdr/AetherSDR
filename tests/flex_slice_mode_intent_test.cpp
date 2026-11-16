@@ -38,7 +38,7 @@ int main(int argc, char** argv)
     if (!flex) { return 1; }
     RadioConnectionSessionTestAccess::setConnected(*flex->connection(), true);
     QStringList commands;
-    flex->setSliceCommandSink([&](const QString& command) { commands << command; });
+    flex->setSliceCommandSinkForTest([&](const QString& command) { commands << command; });
     const QMap<QString, QString> status{{"in_use", "1"}, {"RF_frequency", "14.200000"},
         {"mode", "USB"}, {"active", "1"}};
     applyFlexSliceStatus(model, 0, status, false);

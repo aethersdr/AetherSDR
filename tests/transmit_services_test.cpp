@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Production encoding and model-to-terminal dispatch, with no socket peer or RF.
 #include "FlexTransmitServiceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
@@ -19,7 +20,7 @@ public:
     {
         connection.m_commandSinkForTest = [&wire](quint32, const QString& command) { wire << command; };
         radio.m_connection = &connection;
-        radio.wireFlexTransmitServices(&backend);
+        FlexCommandTestAccess::bind(radio, backend);
     }
     // A connected session: service writes take its command guard.
     static void openSession(RadioModel& radio, RadioConnection& connection)
@@ -32,7 +33,7 @@ public:
     static void retire(RadioModel& radio) { radio.resetTxOperations(); }
     static void reply(RadioModel& radio, int code, const QString& body = {})
     {
-        const auto pending = std::exchange(radio.m_pendingCallbacks, {});
+        const auto pending = FlexCommandTestAccess::replies(radio, true);
         for (const auto& callback : pending) { callback(code, body); }
     }
     static bool beginMox(RadioModel& radio)
@@ -102,11 +103,11 @@ void encoding()
 {
     FlexBackend backend;
     QStringList wire;
-    backend.setServiceCommandSink([&](const QString& command, const RadioControlFence&, FlexBackend::CommandReply) {
+    backend.setServiceCommandSinkForTest([&](const QString& command, const RadioControlFence&, FlexBackend::CommandReply) {
         wire << command;
         return true;
     });
-    backend.setRepliedTxSink([&](const QString& command, const TxCoordinator::Command&, FlexBackend::CommandReply) {
+    backend.setRepliedTxSinkForTest([&](const QString& command, const TxCoordinator::Command&, FlexBackend::CommandReply) {
         wire << command;
         return true;
     });
@@ -131,8 +132,8 @@ void encoding()
     backend.requestDvk({Operation::RecordStart, 0, {}}, {});
     backend.requestNavtex({'A', 'B', "bad\r\nxmit 1", {}}, {}, {});
     check(wire.isEmpty(), "backend revalidates hostile fields even without model validation");
-    backend.setRepliedTxSink({});
-    backend.setCommandSink([&](const QString& command) { wire << command; });
+    backend.setRepliedTxSinkForTest({});
+    backend.setCommandSinkForTest([&](const QString& command) { wire << command; });
     check(backend.requestDvk({Operation::PlaybackStart, 1, {}}, {}) == ReceiveDispatch::Unsupported
         && backend.requestNavtex({'A', 'B', "test", {}}, {}, {}) == ReceiveDispatch::Unsupported
         && wire.isEmpty(), "keying operations cannot fall back to an unfenced generic writer");

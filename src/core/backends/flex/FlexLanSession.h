@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/IRadioBackend.h"
+#include "FlexCommandSession.h"
 
 #include <QObject>
 #include <QString>
@@ -29,6 +30,7 @@ public:
     bool active() const { return m_active; }
     std::optional<ConnectionSession> snapshot() const { return m_snapshot; }
     ReceiveTransportResult startReceiveTransport(bool rebind);
+    FlexCommandSession& commands() { return m_commands; }
 
 signals:
     void starting(quint64 epoch);
@@ -50,6 +52,7 @@ private:
     bool m_synthetic{false};
     std::optional<ConnectionSession> m_snapshot;
     RadioConnectRequest m_request;
+    FlexCommandSession m_commands;
 };
 
 } // namespace AetherSDR

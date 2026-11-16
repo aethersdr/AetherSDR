@@ -97,7 +97,7 @@ void wireAndParser()
     QStringList commands;
     flex.setFirmwareVersionProvider([&] { return firmware; });
     flex.setAutoAgcThresholdLicenseProvider([&] { return licensed; });
-    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    flex.setSliceCommandSinkForTest([&](const QString& command) { commands.append(command); });
     for (const QString& version : {QString(), QStringLiteral("4.2.20"), QStringLiteral("4.3.15"),
                                   QStringLiteral("4.3.16beta"), QStringLiteral("4.3.16.42034junk")}) {
         firmware = version;

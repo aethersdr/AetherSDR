@@ -63,7 +63,7 @@ int main(int argc, char** argv)
     {
         FlexBackend b;
         QStringList sent;
-        b.setCommandSink([&](const QString& c) { sent << c; });
+        b.setCommandSinkForTest([&](const QString& c) { sent << c; });
         seedAmp(b, "0x1000");     // handle now lives in the backend, not the arg
         seedTuner(b, "0x2000");
 
@@ -88,7 +88,7 @@ int main(int argc, char** argv)
     {
         FlexBackend b;
         QStringList sent;
-        b.setCommandSink([&](const QString& c) { sent << c; });
+        b.setCommandSinkForTest([&](const QString& c) { sent << c; });
         QSignalSpy errSpy(&b, &FlexBackend::extensionError);
 
         // no decode yet → no cached handle → error, no wire
@@ -146,7 +146,7 @@ int main(int argc, char** argv)
     {
         FlexBackend b;
         QStringList sent;
-        b.setCommandSink([&](const QString& c) { sent << c; });
+        b.setCommandSinkForTest([&](const QString& c) { sent << c; });
         seedAmp(b, "0x1000");
         QSignalSpy okSpy(&b, &FlexBackend::extensionResult);
         QSignalSpy errSpy(&b, &FlexBackend::extensionError);
@@ -169,7 +169,7 @@ int main(int argc, char** argv)
     {
         FlexBackend b;
         QStringList sent;
-        b.setCommandSink([&](const QString& c) { sent << c; });
+        b.setCommandSinkForTest([&](const QString& c) { sent << c; });
         QSignalSpy errSpy(&b, &FlexBackend::extensionError);
         seedAmp(b, "0x1000");   // amp has a handle, so ns/verb errors aren't masked
 

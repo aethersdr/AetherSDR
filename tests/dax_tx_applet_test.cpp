@@ -1,3 +1,4 @@
+#include "FlexCommandTestSupport.h"
 // Socket-free UI/bridge checks: production models and dispatcher, no radio,
 // listener, audio device or peer. Model ownership/ACK lifecycle tests are separate.
 #include "FlexSliceStatusTestSupport.h"
@@ -44,6 +45,7 @@ public:
     static void identity(RadioConnection& connection)
     {
         connection.m_handle.store(0x12345678);
+        connection.m_commandSinkForTest = [](quint32, const QString&) {};
         connection.m_state.store(ConnectionState::Connected);
     }
 };
@@ -62,10 +64,9 @@ public:
         model.m_daxTxAudioPermit.revoke();
         emit model.daxTxOwnershipChanged();
     }
-    static RadioModel::ResponseCallback takeCreateReply(RadioModel& model)
+    static FlexCommandTestAccess::Reply takeCreateReply(RadioModel& model)
     {
-        if (model.m_pendingCallbacks.isEmpty()) { return {}; }
-        return model.m_pendingCallbacks.take(model.m_pendingCallbacks.cbegin().key());
+        return FlexCommandTestAccess::takeFirstReply(model);
     }
 };
 } // namespace AetherSDR
@@ -193,7 +194,8 @@ struct SelectionFixture {
         QMetaObject::invokeMethod(connection, [connection] {
             TxOperationIntegrationTestAccess::identity(*connection);
         }, Qt::BlockingQueuedConnection);
-        backend->setDaxTxCommandSink([this](const QString& command, FlexBackend::CommandReply reply,
+        FlexCommandTestAccess::bind(model, *backend);
+        backend->setDaxTxCommandSinkForTest([this](const QString& command, FlexBackend::CommandReply reply,
                                            const DaxTxRequestGuard&) {
             writes.push_back({command, std::move(reply)});
             return true;

@@ -26,6 +26,7 @@ public:
     static void line(RadioModel& model, const QString& text) { model.handleLineForTest(text); }
     static void capabilitiesChanged(RadioModel& model) { model.refreshCwProfilesOnCapabilityChange(); }
     static bool flush(RadioModel& model) { return model.m_localMemories.flush(); }
+    static bool profileHold(const RadioModel& model) { return model.profileLoadRadioStateWritesHeld(); }
 };
 }
 
@@ -51,6 +52,33 @@ void seed()
 {
     const QJsonObject document = QJsonDocument::fromJson(LocalMemoryStore::serialize({})).object();
     check(AppSettings::instance().setRadioFeature("local", "", "MemoryBank", 1, document), "isolated bank seeded");
+}
+void profilePolicyUsesBackendDispatch()
+{
+    RadioModel model;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+    QStringList commands;
+    QList<FlexCommandTestAccess::Reply> replies;
+    FlexCommandTestAccess::record(*backend, [&](const QString& text, FlexCommandTestAccess::Reply reply) {
+        commands.append(text);
+        replies.append(std::move(reply));
+    });
+    int started = 0;
+    int completed = 0;
+    QObject::connect(&model, &RadioModel::profileLoadStarted, &model, [&] { ++started; });
+    QObject::connect(&model, &RadioModel::profileLoadCompleted, &model, [&] { ++completed; });
+    check(model.requestProfile({ProfileRequest::Kind::Global, ProfileRequest::Action::Load, "RX layout"})
+        == ReceiveDispatch::Dispatched, "global recall uses the production backend dispatcher");
+    check(started == 1 && completed == 0 && StoredControlTestAccess::profileHold(model),
+        "global recall holds model radio-state writes before its reply");
+    check(backend->requestPanDisplay("0x40000000", "0x40000001",
+        {PanDisplayField::WaterfallColorGain, 50}) == ReceiveDispatch::Unsupported
+        && commands.size() == 1, "backend also suppresses a bypassed profile-owned write");
+    const auto answer = replies.first();
+    answer(0, {});
+    answer(0, {});
+    check(completed == 1 && StoredControlTestAccess::profileHold(model),
+        "one accepted reply completes recall once and extends its hold");
 }
 void encoders()
 {
@@ -497,6 +525,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
+    profilePolicyUsesBackendDispatch();
     encoders(); cwProfileState(); cwProfileRawStatus(); cwProfileLateCapability(); localBank(); unreadableBank(); earlySlotReuse(); reentrantPublication(); asynchronous();
     return failures == 0 ? 0 : 1;
 }

@@ -431,6 +431,19 @@ bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& com
         && writeSocketCommand(seq, command);
 }
 
+FlexCommandSession::WriteResult RadioConnection::dispatchCommand(quint32 seq, const QString& command)
+{
+    if (!isConnected()) { return FlexCommandSession::WriteResult::NotWritten; }
+    if (m_commandSinkForTest || m_syntheticDemo) {
+        writeCommand(seq, command);
+        return FlexCommandSession::WriteResult::Written;
+    }
+    if (m_independentPtt) {
+        m_independentPtt->otherCommand(command, TxCoordinator::monotonicMs());
+    }
+    return writeSocketCommandResult(seq, command);
+}
+
 void RadioConnection::writeCommand(quint32 seq, const QString& command)
 {
     if (m_commandSinkForTest) {
@@ -615,8 +628,13 @@ void RadioConnection::updateIndependentPttTimer()
 
 bool RadioConnection::writeSocketCommand(quint32 seq, const QString& command)
 {
+    return writeSocketCommandResult(seq, command) == FlexCommandSession::WriteResult::Written;
+}
+
+FlexCommandSession::WriteResult RadioConnection::writeSocketCommandResult(quint32 seq, const QString& command)
+{
     if (!isConnected() || !m_socket || isSyntheticDemo()) {
-        return false;
+        return FlexCommandSession::WriteResult::NotWritten;
     }
 
     const QByteArray data = CommandParser::buildCommand(seq, command);
@@ -626,9 +644,10 @@ bool RadioConnection::writeSocketCommand(quint32 seq, const QString& command)
     } else {
         qCDebug(lcConnection) << "TX:" << data.trimmed();
     }
-    const bool written = m_socket->write(data) == data.size();
+    const qint64 written = m_socket->write(data);
     m_socket->flush();   // force immediate kernel send for keepalive reliability
-    return written;
+    return written == data.size() ? FlexCommandSession::WriteResult::Written
+        : written <= 0 ? FlexCommandSession::WriteResult::NotWritten : FlexCommandSession::WriteResult::Unknown;
 }
 
 void RadioConnection::onSocketConnected()

@@ -41,7 +41,9 @@ ReceiveDispatch FlexBackend::requestDvk(const DvkRequest& request,
             ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
     }
     const auto sink = m_serviceCommandSink;
-    return sink && sink(command, current, serviceReply(completion))
+    const bool stopping = request.operation == Operation::RecordStop
+        || request.operation == Operation::PreviewStop || request.operation == Operation::PlaybackStop;
+    return sink && sink(command, stopping ? current.forCleanup() : current, serviceReply(completion))
         ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 

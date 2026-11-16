@@ -2,6 +2,7 @@
 #include "core/backends/SessionCommandGuard.h"
 
 #include "CommandParser.h"
+#include "FlexCommandSession.h"
 
 #include <QObject>
 #include <QSslSocket>
@@ -60,11 +61,12 @@ public:
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
     quint64 commandSessionGeneration() const { return m_sessionGeneration; }
+    FlexCommandSession& commands() { return m_commands; }
     // The status epoch lines are tagged with (FlexStatusIngress::bindLive()).
     void setLineEpoch(quint64 epoch) { m_lineEpoch = epoch; }
     quint64 lineEpoch() const { return m_lineEpoch; }
     void forgetSessionReply(quint32 sequence, quint64 generation)
-    { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
+    { m_commands.forget(generation, sequence); }
     // The one admission rule for session and administration writes: the
     // caller's session is current and this transport is the one it opened.
     bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
@@ -115,6 +117,7 @@ private slots:
 
 private:
     friend class WanConnectionTestAccess;
+    friend class FlexCommandTestAccess;
     friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
 
@@ -132,7 +135,6 @@ private:
     quint64 m_lineEpoch{0};
     bool    m_validated{false};  // wan validate sent
     quint32 m_handle{0};
-    std::atomic<quint32> m_seqCounter{1};
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;
 
@@ -149,7 +151,7 @@ private:
     // the no-prompt paths use.
     void sendWanValidate();
 
-    QMap<quint32, ResponseCallback> m_pendingCallbacks;
+    FlexCommandSession m_commands;
 };
 
 } // namespace AetherSDR

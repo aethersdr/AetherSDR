@@ -22,9 +22,6 @@ public:
         observation->statusEpoch = model.m_observationEpoch;
         model.applySetupObservation(*observation);
     }
-    template<typename Model>
-    static bool send(Model& model, const std::shared_ptr<SetupStatusLifetime>& identity)
-    { return model.sendSetupEntityCommand(QStringLiteral("xvtr set 2 rx_only=1"), {}, identity); }
     template<typename Model> static void reset(Model& model) { model.resetSetupObservations(); }
     template<typename Model> static void refreshLicense(Model& model, const QDateTime& now)
     { model.refreshLicenseSubscription(now); }

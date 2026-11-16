@@ -46,8 +46,8 @@ public:
     Backend()
     {
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });
-        setSliceCommandSink([this](const QString& command) { record(command); });
-        setSetupCommandSink([this](const QString& command, const RadioSetupCompletion&) {
+        setSliceCommandSinkForTest([this](const QString& command) { record(command); });
+        setSetupCommandSinkForTest([this](const QString& command, const RadioSetupCompletion&) {
             record(command);
             return true;
         });

@@ -1054,7 +1054,7 @@ int main(int argc, char** argv)
     {
         FlexBackend flex;
         QStringList commands;
-        flex.setSliceCommandSink([&](const QString& command) { commands << command; });
+        flex.setSliceCommandSinkForTest([&](const QString& command) { commands << command; });
         flex.setPanCenter("0x40000000", 14'200'000, IRadioBackend::PanCenterIntent::Range);
         check(commands == QStringList{"display pan set 0x40000000 center=14.200000"},
               "Flex Range centering dispatch retains its independent pan command");
