@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "pd_status.h"
+#include "pd_capture.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -46,7 +47,7 @@ int pd_status_query(int fd,struct pd_status_query* query)
     ssize_t size=recv(fd,request,sizeof(request),MSG_DONTWAIT);
     if (size<0) { return 0; }
     if (!((size==9 && request[0]=='?') || (size==17 && request[0]=='B') ||
-          (size==21 && request[0]=='R'))) { return -1; }
+          (size==21 && (request[0]=='R' || request[0]=='G' || request[0]=='H')))) { return -1; }
     memset(query,0,sizeof(*query));
     query->operation=request[0];memcpy(query->nonce,request+1,8);
     if (size>=17) {
@@ -56,6 +57,9 @@ int pd_status_query(int fd,struct pd_status_query* query)
     if (size==21) {
         for (unsigned i=17;i<21;++i) { query->capture_offset=(query->capture_offset<<8)|request[i]; }
     }
+    if (query->operation=='G' && (query->capture_offset<1 || query->capture_offset>PD_CAPTURE_BATCH_MAX)) { return -1; }
+    if (query->operation=='H' && (query->capture_offset>=PD_CAPTURE_BATCH_MAX*PD_CAPTURE_SAMPLES ||
+        query->capture_offset%PD_CAPTURE_CHUNK)) { return -1; }
     return 1;
 }
 

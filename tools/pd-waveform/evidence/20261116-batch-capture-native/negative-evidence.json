@@ -1,0 +1,7 @@
+{
+  "existing_fixture_failure": "pd_capture_test failed measurement_tones_ready because the existing healthy-transport fixture did not set tx_guard.seen; fixture updated, production guard retained.",
+  "status_sandbox_failure": "pd_status_open(number)==pair[0] failed under sandbox unnamed-socket inspection. Outside sandbox that boundary passed.",
+  "status_query_fixture_failure": "Initial H fixture encoded49152 in wrong byte position; correct BE32 fixture passed. Production boundary rejected malformed offset.",
+  "capture_query_fixture_failure": "Second G test reused the previous H offset as count. Explicit count4 restored the intended pending batch. Production rejected oversized count.",
+  "build_target_discovery": "pd_status_test is not a CMake target. Existing status_test.c was built and run directly; no default CTest coverage is claimed for it."
+}

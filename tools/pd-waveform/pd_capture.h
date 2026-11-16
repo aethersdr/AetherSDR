@@ -31,3 +31,23 @@ void pd_capture_feed(struct pd_capture*, const struct pd_capture_meta*,
  * Completed snapshots remain readable after unkey, until the five-second TTL. */
 size_t pd_capture_read(struct pd_capture*, uint64_t id, uint32_t offset, int64_t now,
                        unsigned char* output, size_t capacity);
+
+enum { PD_CAPTURE_BATCH_MAX = 4, PD_CAPTURE_BATCH_HEADER = 104,
+       PD_CAPTURE_BATCH_REPLY = PD_CAPTURE_BATCH_HEADER + 8 * PD_CAPTURE_CHUNK };
+/* Fixed storage on the existing DSP loop. No acquisition waits for a reader.
+ * One source, correction state and binding must survive the whole batch. */
+struct pd_capture_batch {
+    struct pd_capture frames[PD_CAPTURE_BATCH_MAX];
+    uint64_t id;
+    int64_t started_ns, last_ns;
+    unsigned requested, completed;
+    enum pd_capture_state state;
+};
+void pd_capture_batch_begin(struct pd_capture_batch*, uint64_t id, unsigned count,
+                            const struct pd_capture_meta*, int64_t now);
+void pd_capture_batch_invalidate(struct pd_capture_batch*);
+void pd_capture_batch_feed(struct pd_capture_batch*, const struct pd_capture_meta*,
+                           const unsigned char* samples, size_t bytes, int64_t now);
+/* Offset is linear across frames. Header v5 appends frame index and count. */
+size_t pd_capture_batch_read(struct pd_capture_batch*, uint64_t id, uint32_t offset,
+                             int64_t now, unsigned char* output, size_t capacity);

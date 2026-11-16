@@ -19,8 +19,110 @@ static void fill(struct pd_capture* c, const struct pd_capture_meta* meta)
     }
 }
 
+static struct pd_capture_meta batch_meta(void)
+{
+    struct pd_capture_meta m=kMeta;
+    m.rate=48000;m.measurement_id=31;m.measurement_tones=1;m.measurement_spacing_hz=1190;
+    m.iq_channel=4;m.feedback_pan=0x40000000;m.gui_handle=7;m.binding_valid=1;
+    return m;
+}
+
+static void batch_samples(unsigned char* out, unsigned first, unsigned count)
+{
+    for(unsigned i=0;i<count;++i){
+        uint32_t value=0x3f000000+first+i;
+        for(unsigned j=0;j<4;++j){out[i*8+j]=(unsigned char)(value>>(j*8));out[i*8+4+j]=0;}
+    }
+}
+
+static void batch_fill(struct pd_capture_batch* b, const struct pd_capture_meta* m, unsigned count)
+{
+    unsigned char samples[4096];
+    for(unsigned first=0;first<count;){
+        unsigned n=count-first;if(n>375){n=375;}
+        batch_samples(samples,first,n);
+        pd_capture_batch_feed(b,m,samples,8*n,kNow+(int64_t)(first+n)*1000000000/48000);
+        first+=n;
+    }
+}
+
+static void check_batch_capture(void)
+{
+    struct pd_capture_batch* b=calloc(1,sizeof(*b));assert(b);
+    struct pd_capture_meta m=batch_meta();unsigned char out[PD_CAPTURE_BATCH_REPLY];
+    pd_capture_batch_begin(b,1,4,&m,kNow);
+    assert(b->state==PD_CAPTURE_PENDING && b->requested==4);
+    assert(pd_capture_batch_read(b,1,3*PD_CAPTURE_SAMPLES,kNow+1,out,sizeof(out))==PD_CAPTURE_BATCH_HEADER);
+    assert(be32(out+16)==PD_CAPTURE_PENDING && be32(out+24)==0);
+    assert(be32(out+96)==3 && be32(out+100)==4);
+    // Collection completes without any reads, including non-packet-aligned boundaries.
+    batch_fill(b,&m,4*PD_CAPTURE_SAMPLES);
+    assert(b->state==PD_CAPTURE_READY && b->completed==4);
+    for(unsigned offset=0;offset<4*PD_CAPTURE_SAMPLES;offset+=PD_CAPTURE_CHUNK){
+        assert(pd_capture_batch_read(b,1,offset,kNow+3000000000LL,out,sizeof(out))==PD_CAPTURE_BATCH_REPLY);
+        assert(!memcmp(out,"PDIQ0005",8) && pd_iq_get64(out+8)==1);
+        assert(be32(out+16)==PD_CAPTURE_READY && be32(out+20)==offset && be32(out+24)==PD_CAPTURE_CHUNK);
+        assert(be32(out+96)==offset/PD_CAPTURE_SAMPLES && be32(out+100)==4);
+        assert(pd_iq_get64(out+72)==m.measurement_id && be32(out+68)==7);
+        unsigned char expected[8*PD_CAPTURE_CHUNK];batch_samples(expected,offset,PD_CAPTURE_CHUNK);
+        assert(!memcmp(out+PD_CAPTURE_BATCH_HEADER,expected,sizeof(expected)));
+    }
+    pd_capture_batch_invalidate(b);assert(b->state==PD_CAPTURE_READY);
+    pd_capture_batch_begin(b,1,1,&m,kNow+4000000000LL);
+    assert(b->requested==4 && b->started_ns==kNow);
+    assert(pd_capture_batch_read(b,1,0,kNow+5000000001LL,out,sizeof(out))==PD_CAPTURE_BATCH_HEADER);
+    assert(be32(out+16)==PD_CAPTURE_EXPIRED && be32(out+24)==0);
+    assert(pd_capture_batch_read(b,2,0,kNow,out,sizeof(out))==PD_CAPTURE_BATCH_HEADER && be32(out+16)==PD_CAPTURE_UNAVAILABLE);
+    assert(pd_capture_batch_read(b,1,1,kNow,out,sizeof(out))==PD_CAPTURE_BATCH_HEADER && be32(out+16)==PD_CAPTURE_UNAVAILABLE);
+    assert(pd_capture_batch_read(b,1,4*PD_CAPTURE_SAMPLES,kNow,out,sizeof(out))==PD_CAPTURE_BATCH_HEADER && be32(out+16)==PD_CAPTURE_UNAVAILABLE);
+    assert(!pd_capture_batch_read(b,1,0,kNow,out,PD_CAPTURE_BATCH_REPLY-1));
+
+    uint64_t id=2;unsigned char sample[8]={0};
+    // An identity or state change between frames invalidates the unfinished batch.
+    for(unsigned field=0;field<13;++field){
+        pd_capture_batch_begin(b,id++,4,&m,kNow);batch_fill(b,&m,PD_CAPTURE_SAMPLES);
+        assert(b->completed==1);
+        struct pd_capture_meta changed=m;
+        if(field==0){++changed.generation;}if(field==1){++changed.center_hz;}
+        if(field==2){++changed.stream;}if(field==3){changed.rate=96000;}
+        if(field==4){changed.keyed=0;}if(field==5){changed.correcting=0;}
+        if(field==6){++changed.measurement_id;}if(field==7){changed.measurement_tones=0;}
+        if(field==8){++changed.measurement_spacing_hz;}if(field==9){changed.iq_channel=3;}
+        if(field==10){++changed.feedback_pan;}if(field==11){++changed.gui_handle;}
+        if(field==12){changed.binding_valid=0;}
+        pd_capture_batch_feed(b,&changed,sample,sizeof(sample),b->last_ns+1);
+        assert(b->state==PD_CAPTURE_INVALID);
+        assert(pd_capture_batch_read(b,b->id,0,b->last_ns+1,out,sizeof(out))==PD_CAPTURE_BATCH_HEADER);
+        assert(be32(out+16)==PD_CAPTURE_INVALID && be32(out+24)==0);
+    }
+    pd_capture_batch_begin(b,id++,4,&m,kNow);batch_fill(b,&m,PD_CAPTURE_SAMPLES);
+    pd_capture_batch_feed(b,&m,sample,sizeof(sample),b->last_ns+100000001);
+    assert(b->state==PD_CAPTURE_INVALID);
+    pd_capture_batch_begin(b,id++,4,&m,kNow);pd_capture_batch_feed(b,&m,sample,sizeof(sample),kNow-1);
+    assert(b->state==PD_CAPTURE_INVALID);
+    pd_capture_batch_begin(b,id++,4,&m,kNow);pd_capture_batch_feed(b,&m,sample,sizeof(sample),kNow+1000000001);
+    assert(b->state==PD_CAPTURE_EXPIRED);
+    pd_capture_batch_begin(b,id++,4,&m,kNow);pd_capture_batch_invalidate(b);batch_fill(b,&m,4*PD_CAPTURE_SAMPLES);
+    assert(b->state==PD_CAPTURE_INVALID && !b->completed);
+    pd_capture_batch_begin(b,id++,1,&m,kNow);batch_fill(b,&m,PD_CAPTURE_SAMPLES-1);
+    unsigned char bad[16]={0};bad[14]=0x80;bad[15]=0x7f;
+    pd_capture_batch_feed(b,&m,bad,sizeof(bad),b->last_ns+1);
+    assert(b->state==PD_CAPTURE_INVALID && !b->completed);
+    pd_capture_batch_begin(b,id++,1,&m,kNow);batch_fill(b,&m,PD_CAPTURE_SAMPLES);
+    assert(b->state==PD_CAPTURE_READY && b->completed==1);
+    for(unsigned n=0;n<=5;n+=5){pd_capture_batch_begin(b,id++,n,&m,kNow);assert(b->state==PD_CAPTURE_UNAVAILABLE);}
+    for(unsigned field=0;field<4;++field){
+        struct pd_capture_meta invalid=m;
+        if(field==0){invalid.keyed=0;}if(field==1){invalid.measurement_tones=0;}
+        if(field==2){invalid.measurement_id=0;}if(field==3){invalid.binding_valid=0;}
+        pd_capture_batch_begin(b,id++,4,&invalid,kNow);assert(b->state==PD_CAPTURE_UNAVAILABLE);
+    }
+    free(b);
+}
+
 int main(void)
 {
+    check_batch_capture();
     struct pd_capture c={0};unsigned char out[PD_CAPTURE_REPLY];
     assert(pd_capture_read(&c,1,0,kNow,out,sizeof(out))==PD_CAPTURE_HEADER);
     assert(be32(out+16)==PD_CAPTURE_UNAVAILABLE);
@@ -155,6 +257,7 @@ int main(void)
     w.calibration.tone_spacing_hz=PD_TONE_DEFAULT_SPACING_HZ;
     w.calibration.phase=PD_CAL_RUNNING;w.calibration.deadline_ns=kNow+8000000000LL;
     w.keyed=w.aligned=w.feedback_ok=1;w.test_f1=710;w.test_f2=1900;w.test_left=90000;
+    w.tx_guard.seen=1;
     w.measurement_tone_sent_ns=kNow;w.measurement_guard_ns=500000000;
     w.local_iq.last_valid_ns=kNow+510000000;w.local_iq.last_age_ns=20000000;
     assert(!measurement_tones_ready(&w,kNow+510000000)); // queued preamble side
@@ -173,6 +276,37 @@ int main(void)
     assert(!measurement_tones_ready(&w,kNow-1)); // clock reversal
     assert(!measurement_tones_ready(&w,w.calibration.deadline_ns));
     disarm_bounded_test(&w, "test_cancel");assert(!measurement_tones_ready(&w,kNow+520000000));
+    // Exercise the real private query dispatcher and raw-IQ packet tap together.
+    int64_t now=pd_iq_monotonic_ns();
+    w.active_slice=-1;w.feedback_binding_failed=0;w.correct=0;
+    w.calibration.phase=PD_CAL_RUNNING;w.calibration.deadline_ns=now+8000000000LL;
+    w.calibration.tone_spacing_hz=1190;w.test_f1=710;w.test_f2=1900;
+    w.test_left=RATE*4;w.measurement_tone_sent_ns=now-600000000;
+    w.local_iq.last_valid_ns=now;w.local_iq.last_age_ns=0;
+    unsigned char batch_reply[PD_CAPTURE_BATCH_REPLY];
+    struct pd_status_query query={.operation='G',.capture_id=77,.capture_offset=4};
+    assert(capture_query(&w,&query,now,batch_reply,sizeof(batch_reply))==PD_CAPTURE_BATCH_HEADER);
+    assert(be32(batch_reply+16)==PD_CAPTURE_PENDING && be32(batch_reply+20)==0);
+    for(unsigned i=0;i<512;++i){
+        w.local_iq.last_valid_ns=pd_iq_monotonic_ns();
+        on_packet(&w,packet,sizeof(packet));
+    }
+    assert(w.capture_batch.completed==4 && w.capture_batch.state==PD_CAPTURE_READY);
+    query.operation='H';query.capture_offset=3*PD_CAPTURE_SAMPLES;
+    assert(capture_query(&w,&query,pd_iq_monotonic_ns(),batch_reply,sizeof(batch_reply))==PD_CAPTURE_BATCH_REPLY);
+    assert(be32(batch_reply+96)==3 && !memcmp(batch_reply+PD_CAPTURE_BATCH_HEADER,packet+28,sizeof(packet)-28));
+    assert(!w.n_tx_pkts && !w.ref.n && !w.fbk.n);
+    query.operation='G';query.capture_id=78;query.capture_offset=4;
+    assert(capture_query(&w,&query,pd_iq_monotonic_ns(),batch_reply,sizeof(batch_reply))==PD_CAPTURE_BATCH_HEADER);
+    assert(w.capture_batch.state==PD_CAPTURE_PENDING);
+    // A stopped source cannot be silently resumed by incoming IQ or a read.
+    disarm_bounded_test(&w,"batch_test_cancel");
+    assert(w.capture_batch.state==PD_CAPTURE_INVALID);
+    on_packet(&w,packet,sizeof(packet));
+    assert(w.capture_batch.state==PD_CAPTURE_INVALID);
+    query.operation='H';query.capture_offset=0;
+    assert(capture_query(&w,&query,pd_iq_monotonic_ns(),batch_reply,sizeof(batch_reply))==PD_CAPTURE_BATCH_HEADER);
+    assert(be32(batch_reply+16)==PD_CAPTURE_INVALID);
     puts("PASS: raw IQ snapshot, ownership, continuity, expiry and waveform tap");
     return 0;
 }

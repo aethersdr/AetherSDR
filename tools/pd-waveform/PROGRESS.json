@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T19:39:12.003570+00:00",
+  "updated_utc": "2026-11-16T19:50:08.717108+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Implement bounded on-radio multi-frame capture to remove per-frame desktop-transfer delays; preserve RF cutoffs, source identity, cancellation and memory limits. Qualify exact package through native/shim/desktop and cold/warm RF, then continue full P1-P10 gates.",
+  "next_action": "Integrate the tested native batch collector through strict shim native-v5 parsing, bounded authenticated batch transport and desktop average-count acquisition; test cancellation/source/TTL boundaries, then package and qualify cold/warm RF without extending cutoffs.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -3254,5 +3254,11 @@
     "baseline_passed": true,
     "corrected_capture_passed": false,
     "session_stopped_and_audited": true
+  },
+  "native_batch_capture": {
+    "report": "BATCH-CAPTURE-NATIVE-QUALIFICATION.json",
+    "offline_passed": true,
+    "installed": false,
+    "public_transport_implemented": false
   }
 }

@@ -98,3 +98,93 @@ size_t pd_capture_read(struct pd_capture* c, uint64_t id, uint32_t offset, int64
     memcpy(out + PD_CAPTURE_HEADER, c->samples + 8 * offset, PD_CAPTURE_CHUNK * 8);
     return PD_CAPTURE_REPLY;
 }
+
+void pd_capture_batch_begin(struct pd_capture_batch* b, uint64_t id, unsigned count,
+                            const struct pd_capture_meta* m, int64_t now)
+{
+    if (!id || id <= b->id) { return; }
+    b->id = id; b->requested = count; b->completed = 0;
+    b->started_ns = now; b->last_ns = 0; b->state = PD_CAPTURE_UNAVAILABLE;
+    if (count < 1 || count > PD_CAPTURE_BATCH_MAX || !m->keyed ||
+        !m->measurement_tones || !m->measurement_id || !m->binding_valid) { return; }
+    for (unsigned i = 0; i < count; ++i) {
+        b->frames[i].id = 0; b->frames[i].state = PD_CAPTURE_EMPTY;
+    }
+    pd_capture_begin(&b->frames[0], id, m, now);
+    b->state = b->frames[0].state;
+}
+
+void pd_capture_batch_invalidate(struct pd_capture_batch* b)
+{
+    if (b->state == PD_CAPTURE_PENDING) { b->state = PD_CAPTURE_INVALID; }
+}
+
+void pd_capture_batch_feed(struct pd_capture_batch* b, const struct pd_capture_meta* m,
+                           const unsigned char* samples, size_t bytes, int64_t now)
+{
+    if (b->state != PD_CAPTURE_PENDING) { return; }
+    if (!samples || !bytes || bytes % 8 || bytes > 4096 || now < b->started_ns ||
+        now - b->started_ns > kLifetimeNs || (b->last_ns &&
+        (now < b->last_ns || now - b->last_ns > 100000000))) {
+        pd_capture_batch_invalidate(b); return;
+    }
+    /* Validate even the tail beyond the last frame before publishing a batch. */
+    for (size_t i = 0; i < bytes; i += 4) {
+        if ((samples[i + 3] & 0x7f) == 0x7f && (samples[i + 2] & 0x80)) {
+            pd_capture_batch_invalidate(b); return;
+        }
+    }
+    b->last_ns = now;
+    while (bytes && b->completed < b->requested) {
+        struct pd_capture* c = &b->frames[b->completed];
+        size_t take = (PD_CAPTURE_SAMPLES - c->count) * 8;
+        if (take > bytes) { take = bytes; }
+        pd_capture_feed(c, m, samples, take, now);
+        if (c->state != PD_CAPTURE_PENDING && c->state != PD_CAPTURE_READY) {
+            b->state = c->state; return;
+        }
+        samples += take; bytes -= take;
+        if (c->state != PD_CAPTURE_READY) { break; }
+        ++b->completed;
+        if (b->completed == b->requested) {
+            b->state = PD_CAPTURE_READY;
+        } else {
+            pd_capture_begin(&b->frames[b->completed], b->id, &b->frames[0].meta, now);
+        }
+    }
+}
+
+size_t pd_capture_batch_read(struct pd_capture_batch* b, uint64_t id, uint32_t offset,
+                             int64_t now, unsigned char* out, size_t capacity)
+{
+    if (!out || capacity < PD_CAPTURE_BATCH_REPLY) { return 0; }
+    if ((b->state == PD_CAPTURE_PENDING || b->state == PD_CAPTURE_READY) &&
+        (now < b->started_ns || now - b->started_ns > kLifetimeNs)) {
+        b->state = PD_CAPTURE_EXPIRED;
+    }
+    unsigned index = offset / PD_CAPTURE_SAMPLES;
+    enum pd_capture_state state = id && id == b->id && b->requested >= 1 &&
+        b->requested <= PD_CAPTURE_BATCH_MAX && index < b->requested &&
+        !(offset % PD_CAPTURE_CHUNK) ? b->state : PD_CAPTURE_UNAVAILABLE;
+    size_t size = PD_CAPTURE_BATCH_HEADER;
+    memset(out, 0, PD_CAPTURE_BATCH_HEADER);
+    if (state == PD_CAPTURE_PENDING || state == PD_CAPTURE_READY) {
+        if (index <= b->completed && index < b->requested) {
+            struct pd_capture* c = &b->frames[index];
+            size_t legacy = pd_capture_read(c, id, offset % PD_CAPTURE_SAMPLES, now, out, capacity);
+            if (c->state == PD_CAPTURE_EXPIRED) { b->state = PD_CAPTURE_EXPIRED; }
+            state = c->state;
+            if (legacy == PD_CAPTURE_REPLY) {
+                memmove(out + PD_CAPTURE_BATCH_HEADER, out + PD_CAPTURE_HEADER,
+                        8 * PD_CAPTURE_CHUNK);
+                size = PD_CAPTURE_BATCH_REPLY;
+            }
+        } else {
+            state = PD_CAPTURE_PENDING;
+        }
+    }
+    memcpy(out, "PDIQ0005", 8); put64(out + 8, id);
+    put32(out + 16, (uint32_t)state); put32(out + 20, offset);
+    put32(out + 96, index); put32(out + 100, b->requested);
+    return size;
+}

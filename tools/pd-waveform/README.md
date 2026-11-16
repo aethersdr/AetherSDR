@@ -49,9 +49,10 @@ building a package.
 
 `AETHER_PD_STATUS_FD` optionally names a private connected Unix datagram
 socket, paired with an owner descriptor. It replaces the TCP status listener.
-Only a nine-byte status request (`?` and eight request-counter bytes) is
-accepted; replies echo the counter followed by the bounded JSON snapshot.
-It has no RF or lifecycle control verbs. The managed shim creates this pair
+Status uses a nine-byte request (`?` and eight request-counter bytes); replies
+echo the counter followed by bounded JSON. `B` begins a single IQ snapshot and
+`R` reads a chunk. The native batch candidate adds `G` and `H`, described below.
+There are no RF or lifecycle control verbs. The managed shim creates this pair
 itself and keeps stop on a separate lifetime pipe.
 
 The shim supplies this contract through its trusted launcher handoff. The
@@ -248,3 +249,31 @@ timestamps distinguish collection before submission, worker queueing,
 estimation, and consumption by the packet thread. Rejected estimates remain
 visible. These observations do not change alignment acceptance or RF duration;
 the latest event can overwrite a reset record, and the count covers both kinds.
+
+### Native batch capture candidate
+
+The private descriptor supports collecting one to four consecutive 16,384-sample
+frames on the existing DSP event loop. The fixed batch storage is 524,744 bytes
+on the tested host ABI, including 512 KiB of raw IQ. It adds no thread, allocation
+in the packet path, RF keying, source rearm, or source-duration extension.
+
+`G` is 21 bytes: opcode, BE64 request nonce, BE64 capture ID and BE32 frame count
+(1–4). It starts only with keyed, ready measurement tones and a valid feedback
+binding. Repeated or older IDs cannot restart acquisition. `H` has the same
+layout with a linear sample offset instead of count; offsets must be multiples
+of 1,024 and below 65,536. Replies retain the request nonce prefix. `PDIQ0005`
+extends the 96-byte single-frame header with BE32 frame index at offset 96 and
+BE32 requested frame count at offset 100. The offset at byte 20 is linear across
+the batch. Ready replies carry 1,024 unchanged complex float32 samples.
+
+Packet tails carry into the next frame. Source, generation, correction state,
+frequency, stream, rate, tone profile and feedback binding must remain identical.
+Changed metadata, nonfinite input, clock reversal, a gap over 100 ms, an explicit
+source cancellation, or a per-frame collection timeout invalidates an unfinished
+batch. Completed batches survive normal unkey and remain readable only within
+five seconds of batch start. A newer batch replaces the previous one.
+
+This native component is not yet exposed by the shim HTTP API or used by the
+desktop. `BATCH-CAPTURE-NATIVE-QUALIFICATION.json` records component tests and
+the remaining shim, desktop, timing and installed-RF qualification work. The
+installed release still uses sequential single-frame capture.

@@ -34,6 +34,21 @@ int main(void)
     capture[0]='R';
     assert(send(pair[1],capture,21,0)==21 && pd_status_query(pair[0],&query)==1);
     assert(query.operation=='R' && query.capture_id==9 && query.capture_offset==1024);
+    capture[0]='G';capture[19]=0;capture[20]=4;
+    assert(send(pair[1],capture,21,0)==21 && pd_status_query(pair[0],&query)==1);
+    assert(query.operation=='G' && query.capture_id==9 && query.capture_offset==4);
+    capture[20]=0;
+    assert(send(pair[1],capture,21,0)==21 && pd_status_query(pair[0],&query)==-1);
+    capture[20]=5;
+    assert(send(pair[1],capture,21,0)==21 && pd_status_query(pair[0],&query)==-1);
+    capture[0]='H';capture[19]=0xc0;capture[20]=0;
+    assert(send(pair[1],capture,21,0)==21 && pd_status_query(pair[0],&query)==1);
+    assert(query.operation=='H' && query.capture_offset==49152);
+    capture[20]=1;
+    assert(send(pair[1],capture,21,0)==21 && pd_status_query(pair[0],&query)==-1);
+    capture[18]=1;capture[19]=0;capture[20]=0;
+    assert(send(pair[1],capture,21,0)==21 && pd_status_query(pair[0],&query)==-1);
+    capture[18]=0;
     for (unsigned length=0;length<21;++length) {
         assert(send(pair[1],capture,length,0)==(ssize_t)length && pd_status_query(pair[0],&query)==-1);
     }

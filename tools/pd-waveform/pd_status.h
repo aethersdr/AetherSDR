@@ -11,6 +11,7 @@ struct pd_status_query {
     uint64_t capture_id;
     uint32_t capture_offset;
 };
-// '?' status, 'B' begin IQ snapshot, 'R' read snapshot. No radio controls.
+// '?' status, 'B'/'R' single snapshot, 'G'/'H' bounded batch begin/read.
+// G carries a frame count; H carries a linear sample offset. No radio controls.
 int pd_status_query(int fd, struct pd_status_query*);
 int pd_status_reply(int fd, const unsigned char nonce[8], const char* json, size_t size);

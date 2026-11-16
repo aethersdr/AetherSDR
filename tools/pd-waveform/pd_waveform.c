@@ -533,6 +533,7 @@ typedef struct {
     uint64_t key_iq_frames, warm_starts, cached_packets;
     struct pd_local_iq local_iq;
     struct pd_capture capture;
+    struct pd_capture_batch capture_batch;
     int64_t local_min_age_ns, local_age_sum_ns;
     uint64_t local_age_bins[256];
     int fb_audio;                 // 1 = audio route, 0 = DAX IQ
@@ -674,6 +675,7 @@ static void log_bounded_source_end(wf_t* w, const char* reason)
 static void disarm_bounded_test(wf_t* w, const char* reason)
 {
     log_bounded_source_end(w, reason);
+    pd_capture_batch_invalidate(&w->capture_batch);
     w->measurement_tone_sent_ns = 0;
     pd_calibration_cancel(&w->calibration);
     if (w->test_duration_samples) {
@@ -769,6 +771,24 @@ static struct pd_capture_meta capture_meta(const wf_t* w)
     };
 }
 
+static size_t capture_query(wf_t* w, const struct pd_status_query* query, int64_t now,
+                            unsigned char* body, size_t capacity)
+{
+    if (query->operation=='B' || query->operation=='G') {
+        struct pd_capture_meta meta=capture_meta(w);
+        if (query->operation=='B') { pd_capture_begin(&w->capture,query->capture_id,&meta,now); }
+        else { pd_capture_batch_begin(&w->capture_batch,query->capture_id,query->capture_offset,&meta,now); }
+    }
+    if (query->operation=='G' || query->operation=='H') {
+        uint32_t offset=query->operation=='G' ? 0 : query->capture_offset;
+        return pd_capture_batch_read(&w->capture_batch,query->capture_id,offset,now,body,capacity);
+    }
+    if (query->operation=='B' || query->operation=='R') {
+        return pd_capture_read(&w->capture,query->capture_id,query->capture_offset,now,body,capacity);
+    }
+    return 0;
+}
+
 static void reference_restart(wf_t* w)
 {
     w->tx_last_send_ns = 0;
@@ -843,6 +863,7 @@ static int feedback_binding_valid(const wf_t* w)
 static void start_feedback(wf_t* w)
 {
     pd_capture_invalidate(&w->capture);
+    pd_capture_batch_invalidate(&w->capture_batch);
     ++w->acquisition_generation;
     w->acquisition_pending = 0;
     w->eq_pending = w->eq_n = 0;
@@ -1515,15 +1536,18 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         w->n_fb_pkts++;
         if (!(v.cls & CLASS_FLOAT_BIT)) {
             pd_capture_invalidate(&w->capture);
+            pd_capture_batch_invalidate(&w->capture_batch);
             if (!w->daxiq_format_logged)
                 logf_("DAX IQ arrives as class 0x%04x, not float samples: feedback off", v.cls);
             w->daxiq_format_logged = 1;
             return;
         }
-        if (w->local_iq_mode && w->capture.state == PD_CAPTURE_PENDING) {
+        if (w->local_iq_mode && (w->capture.state == PD_CAPTURE_PENDING ||
+            w->capture_batch.state == PD_CAPTURE_PENDING)) {
             struct pd_capture_meta meta = capture_meta(w);
-            pd_capture_feed(&w->capture, &meta, v.payload, (size_t)v.words * 4,
-                            pd_iq_monotonic_ns());
+            int64_t now = pd_iq_monotonic_ns();
+            pd_capture_feed(&w->capture, &meta, v.payload, (size_t)v.words * 4, now);
+            pd_capture_batch_feed(&w->capture_batch, &meta, v.payload, (size_t)v.words * 4, now);
         }
         if (!w->keyed || w->active_slice < 0 || !w->feedback_ok)
             return;
@@ -1671,6 +1695,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
 static void reset_histories(wf_t* w)
 {
     pd_capture_invalidate(&w->capture);
+    pd_capture_batch_invalidate(&w->capture_batch);
     ++w->acquisition_generation;
     w->acquisition_pending = 0;
     w->eq_pending = w->eq_n = 0;
@@ -2941,12 +2966,8 @@ int main(int argc, char** argv)
                     }
                 } else if (request>0) {
                     int64_t now=pd_iq_monotonic_ns();
-                    if (query.operation=='B') {
-                        struct pd_capture_meta meta=capture_meta(&w);
-                        pd_capture_begin(&w.capture,query.capture_id,&meta,now);
-                    }
-                    unsigned char body[PD_CAPTURE_REPLY];
-                    size_t size=pd_capture_read(&w.capture,query.capture_id,query.capture_offset,now,body,sizeof(body));
+                    unsigned char body[PD_CAPTURE_BATCH_REPLY];
+                    size_t size=capture_query(&w,&query,now,body,sizeof(body));
                     if (size) { (void)pd_status_reply(private_status,query.nonce,(const char*)body,size); }
                 }
             }

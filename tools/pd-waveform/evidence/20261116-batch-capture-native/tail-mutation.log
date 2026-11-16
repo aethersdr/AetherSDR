@@ -1,0 +1,1 @@
+tail-mutant: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/capture_test.c:60: check_batch_capture: Assertion `b->state==PD_CAPTURE_READY && b->completed==4' failed.
