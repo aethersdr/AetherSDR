@@ -42,6 +42,7 @@ class FirstPackageTest(unittest.TestCase):
 
     def test_exact_archives_match_approved_plan(self):
         native_name, carrier_name, native, carrier = self.artifacts(self.plan)
+        self.assertTrue(native_name.isalnum(), "legacy firmware strips hyphenated native prefixes")
         self.assertEqual(package.verify_uploads(native, carrier, self.plan), (native_name, carrier_name))
 
     def test_archive_with_different_token_identity_refused(self):

@@ -1,9 +1,10 @@
 # Independent first installation (development)
 
-The ARM64 first-install path has local transaction and authorization coverage.
-Clean installation, reboot persistence and IQ access with this path are **not yet
-qualified on a radio**. Radio changes are on operator hold while another agent
-uses the bench. The existing installation has not been moved or stopped.
+The ARM64 development path passed clean installation, reboot persistence and
+receive-only local DAX IQ qualification on a FLEX-8600 running 4.3.16.42034.
+Installation used ordinary public waveform uploads, without an installed shim
+credential or diagnostics bridge as its installation transport. This is a bench
+qualification of the development candidate, not production or FLEX-6000 approval.
 
 ## Authorization and identity
 
@@ -68,9 +69,9 @@ when its protected intent matches. A different attempt cannot adopt that store.
 A terminal failed installation needs an explicit owned-store recovery/removal
 workflow before a new attempt; this client does not silently erase it.
 
-## Qualification still to run
+## Qualification procedure
 
-1. Obtain exclusive bench access after the operator lifts the hold. Confirm the
+1. Obtain exclusive bench access. Confirm the
    current radio/firmware and receive state. Do not transmit.
 2. Rebuild and verify the current candidate and record all artifact digests.
 3. Preserve the old store, private identity and systemd units in a protected,
@@ -93,7 +94,69 @@ workflow before a new attempt; this client does not silently erase it.
    fails. Actual FLEX-6000 installation and Linux 2.6 behavior remain separate
    hardware gates; this initial requester supports ARM64 only.
 
+## Recorded FLEX-8600 result
+
 Evidence and build scripts are under `fresh-install-implementation` in the
-persistent evidence root recorded by `../PROGRESS.json`. The first clean-state
-setup attempt failed before executing its job because another diagnostics
-receiver held the bridge socket. No candidate has been uploaded.
+persistent evidence root recorded by `../PROGRESS.json`.
+
+- `attempt-04/radio-install.json`: public native requester and container carrier
+  installed the exact approved plan and initialized a new local identity.
+  The predecessor store, units and standalone container were preserved separately
+  before testing. Bench root diagnostics prepared that fixture and audited it;
+  they did not deliver or authorize the installation.
+- `reboot-validation.json`: one reboot changed the boot ID, and the same identity
+  and committed plan returned automatically after 44.187 seconds. The original
+  `reboot-result.json` remains a failed raw report because its immediate SSH
+  boot-ID read preceded diagnostics availability. The subsequent host audit
+  supplies the missing boot-ID evidence; no second reboot was needed.
+- `receive-iq-result.json`: with FDX disabled, the installed AetherPD process
+  supplied 16,384 complex IQ samples at 48 kHz, centered on 7.150 MHz. All
+  32,768 float components were finite and 30,252 were nonzero. Capture covered
+  about 341 ms. No RF commands were sent; keyed and correcting remained false.
+- `post-reboot-audit-result.json`: the surviving primary ran as UID 78666 with
+  all capability sets zero and NoNewPrivs enabled. Session workers, fixed ARP,
+  private bootstrap sockets, temporary installer/recovery units and carrier
+  containers were absent; `accept_local` remained zero. Fixed runtime boot and
+  session adapters remain installed for their bounded jobs.
+- `cached-artifact-cleanup-result.json`: failed-attempt retained upload files
+  were removed after exact hash checks. Successful temporary uploads were
+  removed through the proper firmware removal commands. Protected predecessor
+  backups remain available; they are not part of the new identity.
+- `backup-audit-result.json` and `stop-backup-result.json`: the preserved legacy
+  standalone shim container restarted under its original `always` policy after
+  reboot. It was stopped again; its identity hash is unchanged. The new runtime
+  was verified independently by executable hash, UID, new bearer token and
+  committed plan. The backup container policy remains unchanged, so another
+  reboot can restart it until backup retirement is resolved. This bench-fixture
+  limitation is not a clean absence-of-predecessor proof after reboot.
+
+The signed release SHA256 is
+`06473495180114154d284c6d920bf8793687ff44ca4d3fcfb684c4d049bb1289`,
+built from native source at `7c87bc223`. The approved plan BLAKE2b-256 is
+`fdbfa7ede771b14fa5dd451dab90e7ef79251b5274313fc16c692ec1a66e6a9f`.
+The release uses a development publisher key.
+
+## Firmware upload contract
+
+Native packages use `file filename <name>.ssdr_waveform` followed by
+`file upload <size> new_waveform`, and removal uses `waveform uninstall`.
+Container archives use `file upload <size> waveform_docker_image <name>.tar.gz`
+and `waveform remove_container`. They do not use the native upload route.
+The native basename is alphanumeric: this firmware strips hyphenated prefixes
+from legacy upload names, which prevents the matching archive directory from
+starting. These commands agree with the existing WaveformInstaller and FlexLib
+paths and were exercised on the bench.
+
+The native requester does not register a DSP waveform, so public waveform
+inventory is not its readiness signal. The authenticated handoff and exact
+committed plan establish success. Optional `client program` labeling was refused
+by this firmware in the receive proof; omitting that label allowed normal GUI
+registration and IQ capture.
+
+## Remaining gates
+
+Production desktop consent and credential-vault integration, publisher catalogue,
+installation interruption qualification and the actual FLEX-6000 adapter/hardware
+remain open. A local identity does not prove Tailscale enrollment persistence.
+This receive-only result does not qualify RF correction, sustained performance,
+stock APD comparison, or the rest of the production completion plan.

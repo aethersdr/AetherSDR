@@ -27,7 +27,7 @@ def build(requester, worker, plan, release, licenses):
     if bundle.blake(release) != plan[24:56]:
         raise ValueError('release does not match approved plan')
     public = b'PDFPUB01' + receipt + plan[244:276]
-    name = 'AetherPDFirst-' + plan[244:252].hex()
+    name = 'AetherPDFirst' + plan[244:252].hex()
     cfg = f'''[header]
 Name: {name}
 Version: "0.1.0"
@@ -66,7 +66,7 @@ def verify_uploads(native, carrier, plan):
         entries = archive.infolist()
         if len(entries) != 8 or sum(x.file_size for x in entries) > 24*1024*1024:
             raise ValueError('native archive exceeds fixed shape or size')
-        name = 'AetherPDFirst-' + plan[244:252].hex()
+        name = 'AetherPDFirst' + plan[244:252].hex()
         content = lambda leaf: archive.read(name + '/' + leaf)
         if content('plan') != plan:
             raise ValueError('native archive differs from approved plan')

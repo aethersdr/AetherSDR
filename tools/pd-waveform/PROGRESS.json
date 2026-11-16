@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-15T19:21:07.099144+00:00",
+  "updated_utc": "2026-11-16T02:39:34.662317+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -34,7 +34,6 @@
   },
   "remaining": [
     "Complete RAM-only request authorization for upgrades without any credential in upload archives.",
-    "Establish initial-install trust independently of an already-installed shim.",
     "Complete ordinary-user operator approval, credential, UI and PR4770 integration.",
     "Resolve alignment slip and cold-start bypass; qualify final process graph, failure/unkey/restart behavior.",
     "Repeat matched8600 RF measurements and compare final candidate with stock APD.",
@@ -47,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Radio changes on explicit operator hold while another agent uses the bench. After release, qualify the independent first-install candidate through public uploads, then reboot persistence and receive-only DAX IQ with FDX off. Preserve the old installation before any clean-state mutation.",
+  "next_action": "Complete production desktop first-install consent/credential integration and remaining final-process failure qualification; actual FLEX-6000 hardware and RF/stock-APD gates remain. Independent ARM64 fresh installation, reboot and receive-only FDX-off IQ have passed.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1050,7 +1049,7 @@
     ]
   },
   "fresh_install_implementation": {
-    "status": "implemented_locally; radio_qualification_on_operator_hold",
+    "status": "fresh_public_install_reboot_and_receive_iq_passed_on_8600",
     "contract": "tools/pd-waveform/request/FIRST-INSTALL.md",
     "evidence": "fresh-install-implementation under evidence_root",
     "completed": [
@@ -1071,24 +1070,47 @@
       "installation_cases_passed": 14,
       "installation_cases_skipped": 2,
       "go_shim_full_suite": "passed; 23.196 seconds",
-      "arm64_signed_candidate": "Current native source at 7c87bc223 rebuilt and independently verified in candidate-final; release SHA256 06473495180114154d284c6d920bf8793687ff44ca4d3fcfb684c4d049bb1289. Not uploaded.",
+      "arm64_signed_candidate": "Installed and verified candidate-final, native source 7c87bc223; release SHA256 06473495180114154d284c6d920bf8793687ff44ca4d3fcfb684c4d049bb1289.",
       "standalone_radio_probe": "Shell launcher observed UID78666/GID20, no capabilities, NNP1; old private configuration unreadable with errno13, requester exit3.",
-      "package_consent_binding_cases": 3
+      "package_consent_binding_cases": 3,
+      "package_and_upload_cases": 6
     },
     "radio_state": {
-      "new_candidate_uploaded": false,
-      "old_shim_stopped": false,
-      "old_identity_moved": false,
-      "rebooted": false,
-      "iq_qualified_with_new_path": false,
+      "new_candidate_uploaded": true,
+      "old_shim_stopped": true,
+      "old_identity_moved": true,
+      "old_identity_preserved_in_protected_backup": true,
+      "rebooted": true,
+      "iq_qualified_with_new_path": true,
+      "FDX": false,
       "rf_commands": []
     },
-    "hold": "Operator confirmed another agent/tool is using the radio and requested holding radio changes. Clean-state bench setup failed before job execution because another receiver held the diagnostics bridge socket.",
+    "hold": "Operator resumed exclusive radio work; qualification completed without RF.",
     "remaining": [
-      "After exclusive access returns, prepare a new attempt for candidate-final and preserve/verify the recoverable old-install backup.",
-      "Perform clean first installation through public upload only and audit temporary authority/cached artifacts.",
-      "Qualify reboot identity persistence, automatic startup, unprivileged runtime and FDX-off local DAX IQ.",
-      "Production desktop consent/credential-vault integration, independent publisher catalogue and actual FLEX-6000 adapter/hardware qualification remain separate work."
-    ]
+      "Retire or safely archive the preserved legacy standalone container before another reboot; its original always restart policy remains.",
+      "Production desktop consent/credential-vault integration and independent publisher catalogue.",
+      "Final-process installation interruption/failure qualification.",
+      "Actual FLEX-6000 privilege adapter, Linux 2.6 and teammate hardware qualification.",
+      "Full production plan: DSP/RF repeatability, PR4770 integration, stock APD comparison and release gates."
+    ],
+    "live_evidence": {
+      "installation": "attempt-04/radio-install.json",
+      "reboot": "reboot-validation.json",
+      "raw_reboot_report": "reboot-result.json (early diagnostic SSH check failed; supplemental host audit confirms reboot)",
+      "iq": "receive-iq-result.json",
+      "post_reboot_cleanup": "post-reboot-audit-result.json",
+      "cached_upload_cleanup": "cached-artifact-cleanup-result.json",
+      "automatic_ready_seconds": 44.187,
+      "iq_samples": 16384,
+      "sample_rate_hz": 48000,
+      "primary_uid": 78666,
+      "primary_all_capability_sets_zero": true,
+      "temporary_bootstrap_removed": true,
+      "fixed_boot_and_session_adapters_retained": true,
+      "installed_shim_used_for_authorization": false,
+      "diagnostics_bridge_used_for_installation": false,
+      "diagnostics_bridge_used_for_fixture_and_audit": true,
+      "predecessor_backup": "backup-audit-result.json and stop-backup-result.json: legacy container restarted under original always policy, then stopped again; identity preserved. Another reboot can restart it until backup retirement."
+    }
   }
 }

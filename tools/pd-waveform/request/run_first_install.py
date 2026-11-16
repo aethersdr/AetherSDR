@@ -18,6 +18,18 @@ from pathlib import Path
 from first_install_package import verify_uploads
 
 
+def upload_commands(name, size):
+    if name.endswith('.ssdr_waveform'):
+        return ['file filename '+name, f'file upload {size} new_waveform']
+    if name.endswith('.tar.gz'):
+        return [f'file upload {size} waveform_docker_image {name}']
+    raise ValueError('unsupported first-install artifact type')
+
+
+def removal_command(name):
+    return ('waveform remove_container ' if name.startswith('aetherpd-first-') else 'waveform uninstall ') + name
+
+
 class Radio:
     def __init__(self, host, commands):
         self.host, self.allowed = host, commands
@@ -62,8 +74,9 @@ class Radio:
         return list(self.observed)
 
     def upload(self, name, data):
-        self.command('file filename ' + name)
-        reply = self.command(f'file upload {len(data)} new_waveform')
+        reply = ''
+        for command in upload_commands(name, len(data)):
+            reply = self.command(command)
         port = int(reply) if reply else 42607
         if not 1024 <= port <= 65535:
             raise ValueError('invalid upload port')
@@ -94,7 +107,7 @@ def main():
     if hashlib.blake2b(plan, digest_size=32).hexdigest() != args.approve_plan or args.approve_plan != meta['plan_blake2b_256']:
         raise ValueError('approval does not match this exact first-install plan')
     names = [meta['native_name'], meta['carrier_name']]
-    if not re.fullmatch(r'AetherPDFirst-[a-f0-9]{16}', names[0]) or not re.fullmatch(r'aetherpd-first-[a-f0-9]{16}', names[1]):
+    if not re.fullmatch(r'AetherPDFirst[a-f0-9]{16}', names[0]) or not re.fullmatch(r'aetherpd-first-[a-f0-9]{16}', names[1]):
         raise ValueError('unexpected per-attempt waveform names')
     payloads = {}
     for leaf in [names[0]+'.ssdr_waveform', names[1]+'.tar.gz']:
@@ -113,9 +126,9 @@ def main():
     if not re.fullmatch('[0-9a-f]{64}', token) or hashlib.sha256(token.encode()).digest() != plan[148:180]:
         raise ValueError('token does not match approved identity')
     commands = {'sub waveform all', 'info'}
-    commands.update('waveform uninstall '+name for name in names)
+    commands.update(removal_command(name) for name in names)
     for leaf, data in payloads.items():
-        commands.update(['file filename '+leaf, f'file upload {len(data)} new_waveform'])
+        commands.update(upload_commands(leaf, len(data)))
     radio = Radio(args.host, commands)
     report = {'passed': False, 'plan_blake2b_256': args.approve_plan, 'rf_commands': [],
               'installed_shim_used_for_authorization': False, 'diagnostics_bridge_used_for_installation': False}
@@ -136,6 +149,12 @@ def main():
             attempted.append(name)
             radio.upload(leaf, data)
             print('Uploaded '+name, flush=True)
+            # This short-lived native helper does not register a DSP waveform.
+            # Public inventory is not its readiness signal. The carrier's UID-
+            # checked RAM handoff and final commitment validate native startup.
+            if name == names[0]:
+                time.sleep(3)
+                continue
             deadline = time.monotonic()+60
             while True:
                 inventory = radio.inventory()
@@ -144,8 +163,6 @@ def main():
                 if time.monotonic() >= deadline:
                     raise TimeoutError('uploaded waveform did not appear')
                 time.sleep(.5)
-            if name == names[0]:
-                time.sleep(2)
         deadline = time.monotonic()+180
         while time.monotonic() < deadline:
             try:
@@ -172,7 +189,7 @@ def main():
         report['removals'] = {}
         for name in reversed(attempted):
             try:
-                radio.command('waveform uninstall '+name)
+                radio.command(removal_command(name))
                 report['removals'][name] = 'acknowledged'
             except Exception as error:
                 report['removals'][name] = type(error).__name__

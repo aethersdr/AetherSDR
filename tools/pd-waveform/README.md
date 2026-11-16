@@ -11,6 +11,13 @@ The FLEX-8600 baseline at the 10 W setting improved paired IMD3 from about
 −27.8/−27.3 dBc to −44.3/−50.1 dBc. Those are finite bench results, not complete
 qualification of this managed-startup revision or the FLEX-6000.
 
+The independent development installer passed a fresh FLEX-8600 installation,
+automatic reboot recovery with the same new local identity, and receive-only
+DAX IQ capture with FDX off. Temporary installation authority and session capture
+resources were removed; the surviving shim had no capabilities. See
+[the first-install qualification](request/FIRST-INSTALL.md) for evidence and
+remaining production/FLEX-6000 gates.
+
 Build from the repository root with Zig installed:
 
 ```sh
