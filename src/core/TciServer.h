@@ -119,7 +119,7 @@ public:
     bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
     // Run TCI TX audio through the client TX voice chain (EQ, compressor, ...)
     // before it is transmitted. For voice clients; off by default because
-    // digital-mode clients send pre-shaped tones. Persists to TciTxVoiceDsp.
+    // digital-mode clients send pre-shaped tones. Persists as Tci.TxVoiceDsp.
     void setTxVoiceDsp(bool on);
     bool txVoiceDsp() const { return m_txVoiceDsp; }
     // The application owns PC Audio preferences; refresh after its toggle.

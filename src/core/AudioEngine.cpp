@@ -10538,6 +10538,17 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm, const TxCoordinator::C
     feedDaxTxAudioInternal(inPcm, true, false, TxAudioSource::ClientLeveled, context);
 }
 
+void AudioEngine::foldTciStereoToMono(QByteArray& interleavedStereoFloat32)
+{
+    auto* s = reinterpret_cast<float*>(interleavedStereoFloat32.data());
+    const int frames = interleavedStereoFloat32.size() / static_cast<int>(2 * sizeof(float));
+    for (int i = 0; i < frames; ++i) {
+        const float m = 0.5f * (s[2 * i] + s[2 * i + 1]);
+        s[2 * i] = m;
+        s[2 * i + 1] = m;
+    }
+}
+
 void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
 {
     if (!m_tciTxVoiceDsp.load(std::memory_order_acquire) || inPcm.isEmpty()) {
@@ -10555,19 +10566,8 @@ void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::C
         m_tciTxVoiceDspWasOn = true;
     }
 
-    // Interleaved stereo float32 at 24 kHz. The processor reads the left channel
-    // of a canonical duplicated-mono block, so fold L/R into both first; a client
-    // that fills only one channel then still transmits.
     QByteArray block = inPcm;
-    {
-        auto* s = reinterpret_cast<float*>(block.data());
-        const int frames = block.size() / static_cast<int>(2 * sizeof(float));
-        for (int i = 0; i < frames; ++i) {
-            const float m = 0.5f * (s[2 * i] + s[2 * i + 1]);
-            s[2 * i] = m;
-            s[2 * i + 1] = m;
-        }
-    }
+    foldTciStereoToMono(block);
     m_tciTxVoiceProcessor->setStageOrder(m_txChainPacked.load(std::memory_order_acquire));
     // The client sets its own level (ClientLeveled): the PC mic slider is a mic
     // control and is not applied here, as it is not on the bypass path either.
@@ -10583,6 +10583,7 @@ void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::C
     if (!processed) {
         return;
     }
+    m_tciTxVoiceBlocks.fetch_add(1, std::memory_order_relaxed);
 
     // The chain returns 24 kHz stereo Int16; the rest of the TCI path is float.
     const auto* i16 = reinterpret_cast<const int16_t*>(block.constData());

@@ -343,13 +343,20 @@ public:
     void feedDaxTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
     // TCI TX audio. Identical to feedDaxTxAudio() unless setTciTxVoiceDsp(true):
     // then the audio first runs through the client TX voice chain the mic uses
-    // (gate, EQ, de-esser, compressor, tube, enhancer, reverb, final limiter).
+    // (EQ, compressor, tube, enhancer, reverb, final limiter).
     // Off by default, because digital-mode TCI clients (WSJT-X, JTDX) send
     // pre-shaped tones that a voice chain would distort. DAX is never affected.
     void feedTciTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
     // Any thread.
     void setTciTxVoiceDsp(bool on) { m_tciTxVoiceDsp.store(on, std::memory_order_release); }
     bool tciTxVoiceDsp() const { return m_tciTxVoiceDsp.load(std::memory_order_acquire); }
+    // Blocks the TCI voice chain has produced since construction (any thread).
+    quint64 tciTxVoiceBlocks() const { return m_tciTxVoiceBlocks.load(std::memory_order_relaxed); }
+    // Interleaved stereo float32 in place: both channels become (L + R) / 2.
+    // The voice chain reads one channel of a duplicated-mono block, so a TCI
+    // client that fills only one side still transmits. A trailing odd sample
+    // is left as it is.
+    static void foldTciStereoToMono(QByteArray& interleavedStereoFloat32);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
@@ -1484,6 +1491,7 @@ private:
     // aside while TCI audio is fresh, so their blocks never interleave.
     std::unique_ptr<TxVoiceProcessor>   m_tciTxVoiceProcessor;
     std::atomic<bool> m_tciTxVoiceDsp{false};
+    std::atomic<quint64> m_tciTxVoiceBlocks{0};
     // Audio thread only: the processor is reset each time the option turns on.
     bool m_tciTxVoiceDspWasOn{false};
     // Audio-thread only: prevents duplicate queued recovery work after the

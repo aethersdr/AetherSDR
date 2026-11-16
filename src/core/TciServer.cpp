@@ -90,6 +90,25 @@ void writeRecordingSetting(const QString& key, const QJsonValue& value)
     settings.save();
 }
 
+// TCI feature options, one nested document under the root key "Tci"
+// (Principle V): TxVoiceDsp (bool, off by default). Absent or unreadable
+// reads as all defaults.
+QJsonObject readTciFeatureSettings()
+{
+    return QJsonDocument::fromJson(
+        AppSettings::instance().value("Tci", "{}").toString().toUtf8()).object();
+}
+
+void writeTciFeatureSetting(const QString& key, const QJsonValue& value)
+{
+    auto& settings = AppSettings::instance();
+    QJsonObject tci = readTciFeatureSettings();
+    tci.insert(key, value);
+    settings.setValue("Tci", QString::fromUtf8(
+        QJsonDocument(tci).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
 QString tciCommandName(const QString& message)
 {
     const QString trimmed = message.trimmed().toLower();
@@ -176,8 +195,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         .object();
     m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
     m_lineOutPcAudioOffConsent = recording.value("lineOutPcAudioOffConsent").toBool(false);
-    m_txVoiceDsp = AppSettings::instance().value("TciTxVoiceDsp", "False").toString()
-        == QStringLiteral("True");
+    m_txVoiceDsp = readTciFeatureSettings().value("TxVoiceDsp").toBool(false);
     if (m_model) { m_model->setLineOutPcAudioOffConsent(m_lineOutPcAudioOffConsent); }
     m_io = std::make_unique<TciIoWorker>();
     m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
@@ -3038,9 +3056,7 @@ void TciServer::setTxVoiceDsp(bool on)
 {
     if (m_txVoiceDsp == on) { return; }
     m_txVoiceDsp = on;
-    auto& s = AppSettings::instance();
-    s.setValue(QStringLiteral("TciTxVoiceDsp"), on ? "True" : "False");
-    s.save();
+    writeTciFeatureSetting(QStringLiteral("TxVoiceDsp"), on);
     if (m_audio) { m_audio->setTciTxVoiceDsp(on); }
     emit txVoiceDspChanged(on);
 }

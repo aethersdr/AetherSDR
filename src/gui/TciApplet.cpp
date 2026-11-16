@@ -259,16 +259,13 @@ void TciApplet::buildUI()
     m_txVoiceDsp->setAccessibleName(tr("Run TCI TX audio through the TX DSP chain"));
     m_txVoiceDsp->setAccessibleDescription(tr(
         "When enabled, audio a TCI client transmits goes through the same TX chain as "
-        "the microphone: gate, EQ, de-esser, compressor, tube, enhancer, reverb and the "
+        "the microphone: EQ, compressor, tube, enhancer, reverb and the "
         "final limiter. For voice clients such as remote-operation apps. Leave it off "
         "for digital modes (WSJT-X, JTDX, fldigi): their tones must not be processed. "
         "DAX audio is never affected. Off by default."));
     m_txVoiceDsp->setToolTip(m_txVoiceDsp->accessibleDescription());
-    {
-        const QSignalBlocker blocker(m_txVoiceDsp);
-        m_txVoiceDsp->setChecked(
-            AppSettings::instance().value("TciTxVoiceDsp", "False").toString() == "True");
-    }
+    // TciServer owns the setting; the box shows it once a server is attached.
+    m_txVoiceDsp->setEnabled(false);
     applyCanonSheet(m_txVoiceDsp, [] {
         return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
             + canonIndicatorRules();
@@ -277,13 +274,7 @@ void TciApplet::buildUI()
     txDspRow->addStretch();
     outer->addLayout(txDspRow);
     connect(m_txVoiceDsp, &QCheckBox::toggled, this, [this](bool on) {
-        if (m_tciServer) {
-            m_tciServer->setTxVoiceDsp(on);
-        } else {
-            auto& ss = AppSettings::instance();
-            ss.setValue("TciTxVoiceDsp", on ? "True" : "False");
-            ss.save();
-        }
+        if (m_tciServer) { m_tciServer->setTxVoiceDsp(on); }
     });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
@@ -510,9 +501,10 @@ void TciApplet::setTciServer(TciServer* tci)
         const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
         m_lineOutPcAudioOffConsent->setChecked(tci && tci->lineOutPcAudioOffConsent());
     }
-    if (tci) {
+    {
         const QSignalBlocker blocker(m_txVoiceDsp);
-        m_txVoiceDsp->setChecked(tci->txVoiceDsp());
+        m_txVoiceDsp->setChecked(tci && tci->txVoiceDsp());
+        m_txVoiceDsp->setEnabled(tci != nullptr);
     }
     if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
     if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }

@@ -38,6 +38,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
+| **TX audio through TX DSP (voice clients)** | Runs audio a TCI client transmits through the same client TX chain as the microphone (see [TX voice DSP](#tx-voice-dsp)). Off by default; leave it off for digital modes. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -231,6 +232,17 @@ not keep the stream open.
 Server-side `line_out_recorder_*` file recording is not implemented.
 Live TX, MON and multi-client recording qualification remain outstanding
 ([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
+
+### TX voice DSP
+
+TCI transmit audio normally goes to the radio as the client sent it, which is what digital-mode clients (WSJT-X, JTDX, fldigi) need: their tones must not pass a voice compressor or EQ. A voice client, such as a remote-operation app, can instead be given the same client TX chain as the microphone (EQ, compressor, tube, enhancer, reverb, final limiter) with **TX audio through TX DSP (voice clients)** in the TCI Server applet ([#7066](https://github.com/aethersdr/AetherSDR/issues/7066)).
+
+- Off by default. Off, the transmit path is unchanged.
+- The stages, their order and their settings are the microphone's; there is no second chain to configure.
+- The PC mic gain and RNNoise are not applied, because the client sets its own level.
+- Left and right are folded to mono before the chain.
+- DAX transmit audio never passes through it.
+- It changes only the audio. When and how the radio keys does not change.
 
 ### TX overflow handling
 
