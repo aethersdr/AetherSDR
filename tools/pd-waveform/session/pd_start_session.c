@@ -3,14 +3,25 @@
 #undef PD_SERVICE_MAIN
 #include "../boot/pd_transaction.h"
 
-/* Socket activation passes a connected local stream as stdin. Admission and
- * the 48-byte request finish before any network or scheduling mutation. */
-static int start_frame(const unsigned char frame[48],char id[37],uint32_t* gui)
+/* Socket activation admits the fixed request before any network or scheduler
+ * mutation. V2 adds only a bounded channel and explicit pan identity. */
+enum { kStartLegacySize=48,kStartSelectedSize=56 };
+static uint32_t start_u32(const unsigned char* bytes)
 {
-    if(memcmp(frame,"PDSTART1",8)){return 0;}
+    return ((uint32_t)bytes[0]<<24)|((uint32_t)bytes[1]<<16)|((uint32_t)bytes[2]<<8)|bytes[3];
+}
+static int start_frame(const unsigned char* frame,size_t size,char id[37],uint32_t* gui,struct pd_iq_selection* selection)
+{
+    if(!frame || (size!=kStartLegacySize && size!=kStartSelectedSize)){return 0;}
+    if(memcmp(frame,size==kStartLegacySize?"PDSTART1":"PDSTART2",8)){return 0;}
     memcpy(id,frame+8,36);id[36]=0;
     if(!service_uuid(id)){return 0;}
-    *gui=((uint32_t)frame[44]<<24)|((uint32_t)frame[45]<<16)|((uint32_t)frame[46]<<8)|frame[47];
+    *gui=start_u32(frame+44);
+    *selection=(struct pd_iq_selection){1,0};
+    if(size==kStartSelectedSize){
+        *selection=(struct pd_iq_selection){start_u32(frame+48),start_u32(frame+52)};
+        if(!selection->pan || !pd_iq_selection_valid(*selection)){return 0;}
+    }
     return *gui!=0;
 }
 static int start_peer(int channel,int program)
@@ -27,26 +38,32 @@ static int start_peer(int channel,int program)
         protected_program(&actual) && actual.st_dev==expected.st_dev && actual.st_ino==expected.st_ino;
     if(executable>=0){close(executable);}return valid;
 }
-static int start_read(int fd,unsigned char frame[48])
+static int start_read(int fd,unsigned char frame[kStartSelectedSize])
 {
-    int64_t begin=service_ms();size_t used=0;
-    while(begin>=0 && used<48){
+    int64_t begin=service_ms();size_t used=0,wanted=8;
+    while(begin>=0 && used<wanted){
         int64_t now=service_ms();if(now<begin || now-begin>=2000){return 0;}
         struct pollfd p={fd,POLLIN,0};int ready=poll(&p,1,(int)(2000-(now-begin)));
         if(ready<0 && errno==EINTR){continue;}
         if(ready<=0 || p.revents&(POLLERR|POLLNVAL)){return 0;}
-        ssize_t count=recv(fd,frame+used,48-used,MSG_DONTWAIT);
+        ssize_t count=recv(fd,frame+used,wanted-used,MSG_DONTWAIT);
         if(count<0 && (errno==EINTR || errno==EAGAIN)){continue;}
         if(count<=0){return 0;}used+=(size_t)count;
+        if(used==8){
+            if(!memcmp(frame,"PDSTART1",8)){wanted=kStartLegacySize;}
+            else if(!memcmp(frame,"PDSTART2",8)){wanted=kStartSelectedSize;}
+            else{return 0;}
+        }
     }
-    return used==48;
+    return used==wanted?(int)used:0;
 }
 #ifdef PD_START_TEST
 extern int pd_start_test_installation(void);
-extern int pd_start_test_launch(const char* id,uint32_t gui,int control,int installation);
+extern int pd_start_test_launch(const char* id,uint32_t gui,int control,int installation,struct pd_iq_selection selection);
 #endif
-static int start_session_launch(const char* id,uint32_t gui)
+static int start_session_launch(const char* id,uint32_t gui,struct pd_iq_selection selection)
 {
+    if(!pd_iq_selection_valid(selection)){return 5;}
 #ifdef PD_START_TEST
     int installation=pd_start_test_installation();
 #else
@@ -54,9 +71,9 @@ static int start_session_launch(const char* id,uint32_t gui)
 #endif
     if(installation<0){return 6;}
 #ifdef PD_START_TEST
-    int result=pd_start_test_launch(id,gui,0,installation);
+    int result=pd_start_test_launch(id,gui,0,installation,selection);
 #else
-    int result=service_launch(id,gui,0,installation);
+    int result=service_launch(id,gui,0,installation,selection);
 #endif
     close(installation);return result;
 }
@@ -73,7 +90,8 @@ int PD_START_MAIN(int argc,char** argv)
     if(shim<0){return 3;}
     int admitted=start_peer(0,shim);close(shim);
     if(!admitted){return 4;}
-    unsigned char frame[48];char id[37];uint32_t gui=0;
-    if(!start_read(0,frame) || !start_frame(frame,id,&gui)){return 5;}
-    return start_session_launch(id,gui);
+    unsigned char frame[kStartSelectedSize];char id[37];uint32_t gui=0;struct pd_iq_selection selection;
+    int size=start_read(0,frame);
+    if(!size || !start_frame(frame,(size_t)size,id,&gui,&selection)){return 5;}
+    return start_session_launch(id,gui,selection);
 }

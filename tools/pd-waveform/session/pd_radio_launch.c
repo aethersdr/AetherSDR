@@ -2,6 +2,7 @@
 #include "pd_session_launch.c"
 #undef PD_SESSION_MAIN
 #include <inttypes.h>
+#include "pd_iq_selection.h"
 
 struct radio_child { pid_t pid;int log; };
 static int radio_line(int fd,char* line,size_t capacity,int timeout)
@@ -19,7 +20,7 @@ static int radio_line(int fd,char* line,size_t capacity,int timeout)
     }
     return 0;
 }
-static struct radio_child radio_spawn(int program,const int* fds,size_t count,char* const* args,int ordinary_child,const char* id,uint32_t gui,int diagnostics)
+static struct radio_child radio_spawn(int program,const int* fds,size_t count,char* const* args,int ordinary_child,const char* id,uint32_t gui,int diagnostics,struct pd_iq_selection selection)
 {
     struct radio_child child={.pid=-1,.log=-1};int output[2];
     if(diagnostics){
@@ -35,7 +36,10 @@ static struct radio_child radio_spawn(int program,const int* fds,size_t count,ch
         for(size_t i=0;i<count;++i){int flags=fcntl(fds[i],F_GETFD);if(flags<0 || fcntl(fds[i],F_SETFD,flags&~FD_CLOEXEC)){_exit(40);}}
         if(ordinary_child && !drop_root()){_exit(41);}
         char gui_entry[64],id_entry[96];snprintf(gui_entry,sizeof(gui_entry),"SHIM_PD_GUI_HANDLE=0x%08x",gui);snprintf(id_entry,sizeof(id_entry),"SHIM_PD_GUI_CLIENT_ID=%s",id);
-        char* env[]={"PATH=/usr/bin:/bin",gui_entry,id_entry,NULL};
+        char channel_entry[32],pan_entry[48];
+        snprintf(channel_entry,sizeof(channel_entry),"SHIM_PD_IQ_CHANNEL=%u",selection.channel);
+        snprintf(pan_entry,sizeof(pan_entry),"SHIM_PD_FEEDBACK_PAN=0x%08x",selection.pan);
+        char* env[]={"PATH=/usr/bin:/bin",gui_entry,id_entry,channel_entry,pan_entry,NULL};
         fexecve(executable,args,env);_exit(42);
     }
     close(output[1]);child.log=output[0];return child;
@@ -45,13 +49,14 @@ static int radio_arp_ready(const char* line)
     return !strcmp(line,"{\"event\":\"ready\",\"uid\":65534,\"owned\":true,\"success\":true,\"rf_commands\":[]}\n") ||
         !strcmp(line,"{\"event\":\"ready\",\"uid\":65534,\"owned\":false,\"success\":true,\"rf_commands\":[]}\n");
 }
-static int radio_stream_ready(const char* line,uint32_t* sid,uint32_t* pan)
+static int radio_stream_ready(const char* line,uint32_t* sid,uint32_t* pan,struct pd_iq_selection selection)
 {
-    unsigned stream=0,client=0,feedback=0;int used=0;
-    int fields=sscanf(line,"{\"event\":\"ready\",\"stream\":\"0x%8x\",\"client\":\"0x%8x\",\"pan\":\"0x%8x\",\"uid\":78666,\"success\":true,\"issued\":191,\"replies\":191,\"fields\":127,\"parser_failed\":false,\"rf_commands\":[]}\n%n",&stream,&client,&feedback,&used);
-    if(fields!=3 || !stream || !client || !feedback || used!=(int)strlen(line)){return 0;}
+    unsigned stream=0,client=0,feedback=0,channel=0;int used=0;
+    int fields=sscanf(line,"{\"event\":\"ready\",\"stream\":\"0x%8x\",\"client\":\"0x%8x\",\"pan\":\"0x%8x\",\"channel\":%1u,\"uid\":78666,\"success\":true,\"issued\":191,\"replies\":191,\"fields\":127,\"parser_failed\":false,\"rf_commands\":[]}\n%n",&stream,&client,&feedback,&channel,&used);
+    if(fields!=4 || !stream || !client || !feedback || used!=(int)strlen(line) ||
+       !pd_iq_selection_valid(selection) || channel!=selection.channel || (selection.pan && selection.pan!=feedback)){return 0;}
     char canonical[320];
-    int length=snprintf(canonical,sizeof(canonical),"{\"event\":\"ready\",\"stream\":\"0x%08x\",\"client\":\"0x%08x\",\"pan\":\"0x%08x\",\"uid\":78666,\"success\":true,\"issued\":191,\"replies\":191,\"fields\":127,\"parser_failed\":false,\"rf_commands\":[]}\n",stream,client,feedback);
+    int length=snprintf(canonical,sizeof(canonical),"{\"event\":\"ready\",\"stream\":\"0x%08x\",\"client\":\"0x%08x\",\"pan\":\"0x%08x\",\"channel\":%u,\"uid\":78666,\"success\":true,\"issued\":191,\"replies\":191,\"fields\":127,\"parser_failed\":false,\"rf_commands\":[]}\n",stream,client,feedback,channel);
     if(length<=0 || length>=(int)sizeof(canonical) || strcmp(line,canonical)){return 0;}
     *sid=stream;*pan=feedback;return 1;
 }
@@ -110,6 +115,8 @@ int PD_RADIO_MAIN(int argc,char** argv)
 {
     (void)argv;
     if(argc!=1 || geteuid()!=0 || !standard_streams() || syscall(SYS_sched_getscheduler,0)!=SCHED_OTHER){return 2;}
+    struct pd_iq_selection selection;
+    if(!pd_iq_selection_environment(&selection)){return 3;}
     uint32_t gui=0;const char* id=getenv("SHIM_PD_GUI_CLIENT_ID");
     if(!client_id(id) || !launch_handle(getenv("SHIM_PD_GUI_HANDLE"),&gui)){return 3;}
     const char* session_text=getenv("SHIM_PD_SESSION_FD");
@@ -130,20 +137,20 @@ int PD_RADIO_MAIN(int argc,char** argv)
     struct radio_child children[3]={{.pid=-1,.log=-1},{.pid=-1,.log=-1},{.pid=-1,.log=-1}};
     char read_text[16],channel_text[16];snprintf(read_text,sizeof(read_text),"%d",life[0]);snprintf(channel_text,sizeof(channel_text),"%d",handoff[1]);
     char* arp_args[]={"pd-fixed-arp",read_text,NULL};int arp_fds[]={life[0]};char line[384];int ok=0,udp=-1;unsigned port=0;uint32_t sid=0,pan=0;
-    children[2]=radio_spawn(programs[0],arp_fds,1,arp_args,0,id,gui,0);
+    children[2]=radio_spawn(programs[0],arp_fds,1,arp_args,0,id,gui,0,selection);
     if(children[2].pid>0 && radio_line(children[2].log,line,sizeof(line),3000) && radio_arp_ready(line)){
         char* source_args[]={"pd-iq-source",channel_text,read_text,NULL};int source_fds[]={handoff[1],life[0]};
-        children[0]=radio_spawn(programs[1],source_fds,2,source_args,1,id,gui,0);close(handoff[1]);handoff[1]=-1;
+        children[0]=radio_spawn(programs[1],source_fds,2,source_args,1,id,gui,0,selection);close(handoff[1]);handoff[1]=-1;
         struct pollfd ready={handoff[0],POLLIN,0};
         if(children[0].pid>0 && poll(&ready,1,4000)>0){udp=radio_udp(handoff[0],&port);}
-        if(udp>=0 && radio_line(children[0].log,line,sizeof(line),6000) && radio_stream_ready(line,&sid,&pan)){
+        if(udp>=0 && radio_line(children[0].log,line,sizeof(line),6000) && radio_stream_ready(line,&sid,&pan,selection)){
             uint64_t generation=0;int random=open("/dev/urandom",O_RDONLY|O_CLOEXEC);
             if(random>=0){if(read(random,&generation,sizeof(generation))!=(ssize_t)sizeof(generation)){generation=0;}close(random);}
             if(generation){
                 char udp_text[16],output_text[16],sid_text[16],generation_text[24];
                 snprintf(udp_text,sizeof(udp_text),"%d",udp);snprintf(output_text,sizeof(output_text),"%d",iq[0]);snprintf(sid_text,sizeof(sid_text),"%08x",sid);snprintf(generation_text,sizeof(generation_text),"%" PRIx64,generation);
                 char* capture_args[]={"pd-capture-bootstrap",udp_text,output_text,read_text,sid_text,generation_text,"48000","0",NULL};int capture_fds[]={udp,iq[0],life[0]};
-                children[1]=radio_spawn(programs[2],capture_fds,3,capture_args,0,id,gui,1);
+                children[1]=radio_spawn(programs[2],capture_fds,3,capture_args,0,id,gui,1,selection);
                 // Capture readiness is enforced by the private DSP IQ handshake,
                 // then by Go helper admission before its registration gate.
                 ok=children[1].pid>0;
@@ -154,7 +161,7 @@ int PD_RADIO_MAIN(int argc,char** argv)
     for(unsigned i=0;i<3;++i){if(children[i].log>=0){close(children[i].log);children[i].log=-1;}}
     close(life[0]);close(handoff[0]);if(handoff[1]>=0){close(handoff[1]);}if(udp>=0){close(udp);}close(iq[0]);
     if(ok){
-        prepared_feedback_pan=pan;
+        prepared_feedback_pan=pan;prepared_feedback_channel=selection.channel;
         for(unsigned i=0;i<3;++i){prepared_setup_pids[i]=children[i].pid;}
         char event[320];int length=snprintf(event,sizeof(event),"{\"event\":\"native_resources_prepared\",\"source_pid\":%ld,\"capture_pid\":%ld,\"arp_pid\":%ld,\"stream\":\"0x%08x\",\"port\":%u,\"rf_commands\":[]}\n",(long)children[0].pid,(long)children[1].pid,(long)children[2].pid,sid,port);
         if(length>0 && length<(int)sizeof(event) && write(1,event,(size_t)length)==length){

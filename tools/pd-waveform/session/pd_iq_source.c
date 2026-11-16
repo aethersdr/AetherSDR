@@ -62,6 +62,8 @@ static int source_send(int channel,int udp,unsigned port)
 int PD_IQ_SOURCE_MAIN(int argc,char** argv)
 {
     if(argc!=3 || !ordinary() || getgid()!=20 || getegid()!=20 || getgroups(0,NULL)!=0 || !standard_streams()){return 2;}
+    struct pd_iq_selection selection;
+    if(!pd_iq_selection_environment(&selection)){return 3;}
     int channel=descriptor(argv[1]),life=descriptor(argv[2]);uint32_t gui=0;
     if(channel<0 || life<0 || channel==life || !source_channel(channel) || !source_lifetime(life) ||
        !handle(getenv("SHIM_PD_GUI_HANDLE"),&gui) || !client_id(getenv("SHIM_PD_GUI_CLIENT_ID"))){return 3;}

@@ -472,8 +472,16 @@ qualify the6300 network profile or kernel.
 
 `pd-start-session` takes no arguments. Its stdin must be a connected Unix
 stream from UID78666/GID20, whose process executable matches the protected
-sibling `flex-tailnet-shim` inode. It reads only `PDSTART1`,36ASCII UUID bytes,
-and a nonzero32-bit GUI handle in network byte order (48bytes total), within2s.
+sibling `flex-tailnet-shim` inode. It reads one of two fixed frames within a
+single 2-second deadline:
+
+- `PDSTART1`: 36 ASCII UUID bytes and a nonzero 32-bit GUI handle in network
+  byte order (48 bytes total). This retains channel 1 with observed pan discovery.
+- `PDSTART2`: the same identity followed by a 32-bit channel (1–4) and a nonzero
+  32-bit pan ID, both in network byte order (56 bytes total). Unsupported,
+  partial or malformed selection is rejected before the installation lease;
+  it cannot fall back to the legacy frame.
+
 The service manager supplies the fixed executable and owns the whole process
 cgroup. There is no caller-selected helper, path, PID, network profile or
 scheduler setting.
@@ -548,29 +556,41 @@ FLEX6000 supervision. Session start and expiry never initiate transmission.
 
 The installed constructor's IQ owner subscribes to pan status without changing
 any receiver. It requires the created stream's explicit `pan` field, plus that
-panadapter's `client_handle` matching the bound GUI and `daxiq_channel=1`.
+panadapter's `client_handle` matching the bound GUI and `daxiq_channel` matching
+the selected channel. Explicit selection also requires the stream's `pan` to
+match the requested pan; the constructor does not reassign a pan or channel.
 Partial readback cannot report ready. Up to eight pan identities are tracked;
 removed unrelated pans free their slot. The `S` prefix is a status recipient,
 not resource ownership. Stream and pan IDs have no numeric relationship.
 
-The private ready record includes the observed pan ID. The constructor passes
-that exact ID to the DSP as `AETHER_PD_FEEDBACK_PAN`; it does not accept a
+The private ready record includes the observed pan ID and selected channel. The
+constructor checks both against the request and passes them to the DSP as
+`AETHER_PD_FEEDBACK_PAN` and `AETHER_PD_DAXIQ`; it does not accept a
 caller-selected path, executable or network setting. The DSP waits for its own
 matching owner/channel readback and ignores other pans, including a foreign
-pan advertising channel 1. Removing or reassigning the selected pan invalidates
+pan advertising the selected channel. Removing or reassigning the selected pan invalidates
 this session and cancels an armed measurement. Restoring status does not rearm
 or revive the binding: stop and explicitly start a new session.
 
 The IQ owner, constructor and DSP must be upgraded together. The new private
 ready grammar requires issued/reply mask191 and field mask127, and rejects the
-older record without a pan. This change adds no capabilities or RF commands.
+older record without a pan or channel. This change adds no capabilities or RF commands.
 Development prepared launches without the constructor retain their earlier
 unsealed behavior; they are not equivalent to this installed path.
 
-Channel 1 is still fixed in the constructor. Operator channel/pan selection,
-public observed-binding metadata, capture/export provenance, and live
+The native constructor accepts explicit channel/pan selection; the public shim
+and desktop still use the legacy request. Versioned public selection, operator
+controls, observed-binding metadata, capture/export provenance, and live
 qualification of this exact candidate remain required before claiming the full
 PR4770 workflow. The binding is grounded in the published FlexLib
 `DAXIQStream.StatusUpdate` (`pan`, `daxiq_channel`) and
 `Panadapter.StatusUpdate` (`client_handle`, `daxiq_channel`), corroborated by
 saved FLEX-8600 stream/pan status from the local IQ tests.
+
+
+The selected native path is qualified offline in
+[`IQ-SELECTION-NATIVE-QUALIFICATION.json`](../IQ-SELECTION-NATIVE-QUALIFICATION.json).
+It is not installed or live-qualified. Ordinary-user source ownership,
+fixed local ARP/capture operations, credential checks and priority policy are
+unchanged. The root bootstrap remains temporary; this protocol does not add
+a general privileged command surface.

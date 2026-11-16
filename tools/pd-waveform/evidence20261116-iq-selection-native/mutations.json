@@ -1,0 +1,16 @@
+[
+  {
+    "mutation": "selected-pan",
+    "exit": -6,
+    "expected_assertion_failed": true,
+    "restored_sha256": "5766712c36e2ba755e7f0f0d1718cd133bbe541343fb8aaa03899b9bc077ba7d",
+    "restored_exit": 0
+  },
+  {
+    "mutation": "selected-channel",
+    "exit": -6,
+    "expected_assertion_failed": true,
+    "restored_sha256": "453e1127d276b1544ec6512164886f90cc5b16f58bfa4bb463b85e6a93e2ef34",
+    "restored_exit": 0
+  }
+]

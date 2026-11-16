@@ -8,7 +8,7 @@
 static const char kFull[]="S12345678|stream 0x20000001 type=dax_iq daxiq_channel=1 pan=0x40000001 daxiq_rate=48000 client_handle=0x12345678 client_gui_handle=0x11223344 ip=172.30.2.1 active=1\n";
 static struct stream_state state(void)
 {
-    return (struct stream_state){.client=0x12345678,.gui=0x11223344,.stream=0x20000001,.issued=127};
+    return (struct stream_state){.client=0x12345678,.gui=0x11223344,.stream=0x20000001,.issued=127,.channel=1};
 }
 static int wire(struct stream_state* s,const char* text)
 {
@@ -78,6 +78,22 @@ int main(void)
         s=state();struct stream_input input={0};assert(wire(&s,kFull));
         assert(feed(&s,&input,(const unsigned char*)pan,split));
         assert(feed(&s,&input,(const unsigned char*)pan+split,strlen(pan)-split) && stream_binding_valid(&s));
+    }
+    for(unsigned channel=1;channel<=4;++channel){
+        char selected[320],observed[160];
+        snprintf(selected,sizeof(selected),"S0|stream 0x20000001 type=dax_iq daxiq_channel=%u pan=0x40000003 daxiq_rate=48000 client_handle=0x12345678 client_gui_handle=0x11223344 ip=172.30.2.1\n",channel);
+        snprintf(observed,sizeof(observed),"S0|display pan 0x40000003 client_handle=0x11223344 daxiq_channel=%u\n",channel);
+        s=state();s.channel=channel;s.pan=0x40000003;
+        assert(wire(&s,observed) && wire(&s,selected) && stream_binding_valid(&s));
+        s.binding_ready=1;
+        assert(!wire(&s,"S0|stream 0x20000001 pan=0x40000001\n") && s.failed);
+        s=state();s.channel=channel;s.pan=0x40000003;
+        assert(!wire(&s,kFull) && s.failed);
+        s=state();s.channel=channel;s.pan=0x40000003;
+        assert(wire(&s,observed));
+        unsigned wrong=channel==4?1:channel+1;
+        snprintf(observed,sizeof(observed),"S0|display pan 0x40000003 daxiq_channel=%u\n",wrong);
+        assert(wire(&s,observed) && !stream_binding_valid(&s));
     }
     /* Framing must not depend on recv() boundaries. */
     for(size_t split=0;split<=strlen(kFull);++split){

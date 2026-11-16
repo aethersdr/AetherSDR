@@ -1,0 +1,347 @@
+spacing 200 Hz: emitted 1205.0/1405.0 Hz, amplitudes 0.350000/0.350000, peak 0.700000
+spacing 1001 Hz: emitted 804.5/1805.5 Hz, amplitudes 0.350000/0.350000, peak 0.700000
+spacing 1190 Hz: emitted 710.0/1900.0 Hz, amplitudes 0.350000/0.350000, peak 0.700000
+spacing 2610 Hz: emitted 0.0/2610.0 Hz, amplitudes 0.350000/0.350000, peak 0.700000
+spacing 10000 Hz: emitted -3695.0/6305.0 Hz, amplitudes 0.350000/0.350000, peak 0.700000
+deadline fault cancels bounded sources; measurement retirement/late dispatch holds silence with live mic until READY; calibration returns to voice; socket-free
+1794839274.770 measurement window: event=model_changed ready=0 now_ns=34235173577763 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235173574764 iq_age_ns=0 deadline_ns=34265173575081 fits=0 solution=0
+1794839274.770 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.770 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839274.787 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839274.787 measurement window: event=model_changed ready=0 now_ns=34235191114173 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235191083741 iq_age_ns=0 deadline_ns=34243191087552 fits=0 solution=0
+1794839274.787 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.787 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 1, centred within 14000 Hz of 7.150000 MHz
+1794839274.787 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839274.787 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=45 test_active=0
+1794839274.805 measurement window: event=model_changed ready=0 now_ns=34235209238530 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235209235225 iq_age_ns=0 deadline_ns=34265209235652 fits=0 solution=0
+1794839274.805 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.805 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=42 test_active=0
+1794839274.824 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839274.824 measurement window: event=model_changed ready=0 now_ns=34235227688731 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235227660852 iq_age_ns=0 deadline_ns=34243227664518 fits=0 solution=0
+1794839274.824 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.824 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 1, centred within 14000 Hz of 7.150000 MHz
+1794839274.824 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839274.824 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=42 test_active=0
+1794839274.842 measurement window: event=model_changed ready=0 now_ns=34235246038411 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235246035082 iq_age_ns=0 deadline_ns=34265246035558 fits=0 solution=0
+1794839274.842 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.842 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839274.861 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839274.861 measurement window: event=model_changed ready=0 now_ns=34235264841602 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235264811638 iq_age_ns=0 deadline_ns=34243264815565 fits=0 solution=0
+1794839274.861 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.861 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 1, centred within 14000 Hz of 7.150000 MHz
+1794839274.861 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839274.861 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=42 test_active=0
+1794839274.879 measurement window: event=model_changed ready=0 now_ns=34235282552627 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235282549342 iq_age_ns=0 deadline_ns=34265282549688 fits=0 solution=0
+1794839274.879 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.879 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839274.895 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839274.895 measurement window: event=model_changed ready=0 now_ns=34235298647151 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235298615838 iq_age_ns=0 deadline_ns=34243298619798 fits=0 solution=0
+1794839274.895 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.895 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 1, centred within 14000 Hz of 7.150000 MHz
+1794839274.895 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839274.895 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=39 test_active=0
+1794839274.911 measurement window: event=model_changed ready=0 now_ns=34235314522587 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235314517945 iq_age_ns=0 deadline_ns=34265314518340 fits=0 solution=0
+1794839274.911 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.911 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839274.927 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839274.927 measurement window: event=model_changed ready=0 now_ns=34235331248668 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235331217810 iq_age_ns=0 deadline_ns=34243331222673 fits=0 solution=0
+1794839274.927 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.927 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 1, centred within 14000 Hz of 7.150000 MHz
+1794839274.927 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839274.927 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=39 test_active=0
+1794839274.943 measurement window: event=model_changed ready=0 now_ns=34235347272379 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235347269548 iq_age_ns=0 deadline_ns=34265347269831 fits=0 solution=0
+1794839274.943 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.944 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=41 test_active=0
+1794839274.966 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839274.966 measurement window: event=model_changed ready=0 now_ns=34235369948184 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235369916620 iq_age_ns=0 deadline_ns=34243369921622 fits=0 solution=0
+1794839274.966 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.966 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 1, centred within 14000 Hz of 7.150000 MHz
+1794839274.966 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839274.966 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=54 test_active=0
+1794839274.982 measurement window: event=model_changed ready=0 now_ns=34235385715827 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235385712743 iq_age_ns=0 deadline_ns=34265385713258 fits=0 solution=0
+1794839274.982 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839274.982 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839275.000 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.000 measurement window: event=model_changed ready=0 now_ns=34235404028709 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235403994545 iq_age_ns=0 deadline_ns=34243403998357 fits=0 solution=0
+1794839275.000 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.000 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 2, centred within 14000 Hz of 7.150000 MHz
+1794839275.000 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.000 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839275.023 measurement window: event=model_changed ready=0 now_ns=34235426661082 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235426658361 iq_age_ns=0 deadline_ns=34265426658686 fits=0 solution=0
+1794839275.023 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.023 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=39 test_active=0
+1794839275.041 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.041 measurement window: event=model_changed ready=0 now_ns=34235444639454 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235444607422 iq_age_ns=0 deadline_ns=34243444612155 fits=0 solution=0
+1794839275.041 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.041 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 2, centred within 14000 Hz of 7.150000 MHz
+1794839275.041 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.041 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839275.059 measurement window: event=model_changed ready=0 now_ns=34235462624018 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235462620797 iq_age_ns=0 deadline_ns=34265462621300 fits=0 solution=0
+1794839275.059 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.059 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=39 test_active=0
+1794839275.077 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.077 measurement window: event=model_changed ready=0 now_ns=34235480435058 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235480395787 iq_age_ns=0 deadline_ns=34243480400154 fits=0 solution=0
+1794839275.077 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.077 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 2, centred within 14000 Hz of 7.150000 MHz
+1794839275.077 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.077 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839275.094 measurement window: event=model_changed ready=0 now_ns=34235497564114 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235497561358 iq_age_ns=0 deadline_ns=34265497561691 fits=0 solution=0
+1794839275.094 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.094 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839275.118 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.118 measurement window: event=model_changed ready=0 now_ns=34235521326348 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235521291180 iq_age_ns=0 deadline_ns=34243521295851 fits=0 solution=0
+1794839275.118 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.118 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 2, centred within 14000 Hz of 7.150000 MHz
+1794839275.118 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.118 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=43 test_active=0
+1794839275.139 measurement window: event=model_changed ready=0 now_ns=34235542486190 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235542482935 iq_age_ns=0 deadline_ns=34265542483291 fits=0 solution=0
+1794839275.139 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.139 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839275.157 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.157 measurement window: event=model_changed ready=0 now_ns=34235560335481 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235560302790 iq_age_ns=0 deadline_ns=34243560307398 fits=0 solution=0
+1794839275.157 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.157 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 2, centred within 14000 Hz of 7.150000 MHz
+1794839275.157 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.157 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=31 test_active=0
+1794839275.175 measurement window: event=model_changed ready=0 now_ns=34235578366580 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235578364485 iq_age_ns=0 deadline_ns=34265578364735 fits=0 solution=0
+1794839275.175 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.175 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=31 test_active=0
+1794839275.192 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.192 measurement window: event=model_changed ready=0 now_ns=34235596196742 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235596165284 iq_age_ns=0 deadline_ns=34243596169605 fits=0 solution=0
+1794839275.192 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.192 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 2, centred within 14000 Hz of 7.150000 MHz
+1794839275.192 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.192 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=40 test_active=0
+1794839275.214 measurement window: event=model_changed ready=0 now_ns=34235617599873 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235617596873 iq_age_ns=0 deadline_ns=34265617597260 fits=0 solution=0
+1794839275.214 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.214 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=31 test_active=0
+1794839275.234 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.234 measurement window: event=model_changed ready=0 now_ns=34235637511651 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235637479694 iq_age_ns=0 deadline_ns=34243637483623 fits=0 solution=0
+1794839275.234 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.234 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 3, centred within 14000 Hz of 7.150000 MHz
+1794839275.234 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.234 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=42 test_active=0
+1794839275.253 measurement window: event=model_changed ready=0 now_ns=34235656817519 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235656814603 iq_age_ns=0 deadline_ns=34265656814786 fits=0 solution=0
+1794839275.253 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.253 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=37 test_active=0
+1794839275.271 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.271 measurement window: event=model_changed ready=0 now_ns=34235675178690 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235675147069 iq_age_ns=0 deadline_ns=34243675151249 fits=0 solution=0
+1794839275.271 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.271 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 3, centred within 14000 Hz of 7.150000 MHz
+1794839275.271 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.271 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839275.290 measurement window: event=model_changed ready=0 now_ns=34235694164965 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235694161861 iq_age_ns=0 deadline_ns=34265694162134 fits=0 solution=0
+1794839275.290 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.290 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=45 test_active=0
+1794839275.315 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.315 measurement window: event=model_changed ready=0 now_ns=34235718950625 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235718917064 iq_age_ns=0 deadline_ns=34243718921197 fits=0 solution=0
+1794839275.315 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.315 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 3, centred within 14000 Hz of 7.150000 MHz
+1794839275.315 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.315 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=38 test_active=0
+1794839275.331 measurement window: event=model_changed ready=0 now_ns=34235735050964 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235735047645 iq_age_ns=0 deadline_ns=34265735048194 fits=0 solution=0
+1794839275.331 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.331 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839275.354 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.354 measurement window: event=model_changed ready=0 now_ns=34235757895607 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235757862156 iq_age_ns=0 deadline_ns=34243757866554 fits=0 solution=0
+1794839275.354 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.354 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 3, centred within 14000 Hz of 7.150000 MHz
+1794839275.354 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.354 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=40 test_active=0
+1794839275.377 measurement window: event=model_changed ready=0 now_ns=34235780587195 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235780584093 iq_age_ns=0 deadline_ns=34265780584400 fits=0 solution=0
+1794839275.377 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.377 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839275.399 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.399 measurement window: event=model_changed ready=0 now_ns=34235803192508 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235803163122 iq_age_ns=0 deadline_ns=34243803166847 fits=0 solution=0
+1794839275.399 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.399 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 3, centred within 14000 Hz of 7.150000 MHz
+1794839275.399 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.399 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=38 test_active=0
+1794839275.417 measurement window: event=model_changed ready=0 now_ns=34235820829775 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235820827481 iq_age_ns=0 deadline_ns=34265820827796 fits=0 solution=0
+1794839275.417 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.417 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=41 test_active=0
+1794839275.435 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.435 measurement window: event=model_changed ready=0 now_ns=34235838751306 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235838719971 iq_age_ns=0 deadline_ns=34243838724020 fits=0 solution=0
+1794839275.435 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.435 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 3, centred within 14000 Hz of 7.150000 MHz
+1794839275.435 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.435 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=42 test_active=0
+1794839275.453 measurement window: event=model_changed ready=0 now_ns=34235856437495 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235856434778 iq_age_ns=0 deadline_ns=34265856435068 fits=0 solution=0
+1794839275.453 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.453 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=1993 test_active=0
+1794839275.470 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.470 measurement window: event=model_changed ready=0 now_ns=34235874203869 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235874161638 iq_age_ns=0 deadline_ns=34243874165740 fits=0 solution=0
+1794839275.470 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.470 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 4, centred within 14000 Hz of 7.150000 MHz
+1794839275.470 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.470 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=38 test_active=0
+1794839275.489 measurement window: event=model_changed ready=0 now_ns=34235892987207 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235892984554 iq_age_ns=0 deadline_ns=34265892984940 fits=0 solution=0
+1794839275.489 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.489 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=37 test_active=0
+1794839275.509 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.509 measurement window: event=model_changed ready=0 now_ns=34235912425712 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235912394328 iq_age_ns=0 deadline_ns=34243912398247 fits=0 solution=0
+1794839275.509 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.509 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 4, centred within 14000 Hz of 7.150000 MHz
+1794839275.509 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.509 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839275.527 measurement window: event=model_changed ready=0 now_ns=34235930552689 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235930549755 iq_age_ns=0 deadline_ns=34265930549916 fits=0 solution=0
+1794839275.527 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.527 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=28 test_active=0
+1794839275.544 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.544 measurement window: event=model_changed ready=0 now_ns=34235947423262 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235947394026 iq_age_ns=0 deadline_ns=34243947398100 fits=0 solution=0
+1794839275.544 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.544 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 4, centred within 14000 Hz of 7.150000 MHz
+1794839275.544 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.544 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=37 test_active=0
+1794839275.560 measurement window: event=model_changed ready=0 now_ns=34235963758994 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235963756065 iq_age_ns=0 deadline_ns=34265963756299 fits=0 solution=0
+1794839275.560 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.560 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=41 test_active=0
+1794839275.578 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.578 measurement window: event=model_changed ready=0 now_ns=34235981792205 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235981759797 iq_age_ns=0 deadline_ns=34243981764109 fits=0 solution=0
+1794839275.578 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.578 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 4, centred within 14000 Hz of 7.150000 MHz
+1794839275.578 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.578 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=39 test_active=0
+1794839275.596 measurement window: event=model_changed ready=0 now_ns=34235999692739 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34235999686627 iq_age_ns=0 deadline_ns=34265999689673 fits=0 solution=0
+1794839275.596 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.596 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=42 test_active=0
+1794839275.613 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.613 measurement window: event=model_changed ready=0 now_ns=34236017153060 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34236017123151 iq_age_ns=0 deadline_ns=34244017127124 fits=0 solution=0
+1794839275.613 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.613 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 4, centred within 14000 Hz of 7.150000 MHz
+1794839275.613 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.613 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=0.000000 iq_age_ns=37 test_active=0
+1794839275.630 measurement window: event=model_changed ready=0 now_ns=34236033426667 phase=armed keyed=0 local=1 fault=1 aligned=0 feedback=0 noise_left=0 test_left=0 tone1=0 tone2=0 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34236033423900 iq_age_ns=0 deadline_ns=34266033424131 fits=0 solution=0
+1794839275.630 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.630 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=41 test_active=0
+1794839275.647 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.647 measurement window: event=model_changed ready=0 now_ns=34236050622479 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=0 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34236050589111 iq_age_ns=0 deadline_ns=34244050593663 fits=0 solution=0
+1794839275.647 bounded source ended: reason=model_changed source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.647 transmit without feedback: put a panadapter on the coupler's input with DAX IQ channel 4, centred within 14000 Hz of 7.150000 MHz
+1794839275.647 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.647 source arm refused: purpose=M control=1 idle=1 gui=11223344 keyed=0 tx_on=0 api=1 leased=1 registered=1 slice=0 owner=11223344 correction=1 native_apd=0 local_iq=1 frames=1 stream=20000000 tx_mhz=7.150000 pan_mhz=7.150000 iq_age_ns=41 test_active=0
+1794839275.667 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.667 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.667 bounded source ended: reason=feedback_invalidated source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1
+1794839275.667 TX dispatch deadline missed: 20.006 ms; correction retired
+1794839275.667 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.689 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.689 measurement window: event=feedback_invalidated ready=0 now_ns=34236092479235 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=95872 test_left=191872 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34236092302615 iq_age_ns=0 deadline_ns=34244092306852 fits=0 solution=0
+1794839275.689 bounded source ended: reason=feedback_invalidated source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1
+1794839275.689 TX dispatch deadline missed: 20.007 ms; correction retired
+1794839275.689 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.711 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.711 measurement window: event=feedback_invalidated ready=0 now_ns=34236114992762 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=95872 test_left=191872 tone1=-3695 tone2=6305 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=34236114818093 iq_age_ns=0 deadline_ns=34244114823284 fits=0 solution=0
+1794839275.711 bounded source ended: reason=feedback_invalidated source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1
+1794839275.711 TX dispatch deadline missed: 20.006 ms; correction retired
+1794839275.711 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.736 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.738 bounded source ended: reason=source_deadline source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.738 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.738 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.738 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.738 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.738 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.739 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.768 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.768 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.770 bounded source ended: reason=source_deadline source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.771 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.771 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.772 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.790 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.792 bounded source ended: reason=source_deadline source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.792 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.792 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.792 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.792 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.792 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.793 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.816 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.817 bounded source ended: reason=source_deadline source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.817 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.817 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.817 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.817 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.817 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.818 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.840 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.842 bounded source ended: reason=source_samples_complete source=0000000000000001 phase=completed keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.842 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.842 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.842 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.842 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.842 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.843 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.866 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.866 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.868 bounded source ended: reason=source_samples_complete source=0000000000000001 phase=completed keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.869 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.869 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.870 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.894 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.895 bounded source ended: reason=source_samples_complete source=0000000000000001 phase=completed keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.896 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.896 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.896 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.896 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.896 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.897 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.916 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.917 bounded source ended: reason=source_samples_complete source=0000000000000001 phase=completed keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.918 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.918 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.918 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.918 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.918 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.919 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.942 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.943 bounded source ended: reason=operator_cancel source=0000000000000001 phase=canceled keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.943 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.943 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.943 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.944 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.944 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.945 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.967 bounded source ended: reason=model_changed source=0000000000000001 phase=armed keyed=0 tx_on=0 samples_left=192000 generated=0 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.967 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.969 bounded source ended: reason=operator_cancel source=0000000000000001 phase=canceled keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.970 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.970 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.971 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.995 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.996 bounded source ended: reason=operator_cancel source=0000000000000001 phase=canceled keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.996 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839275.996 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.996 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.997 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839275.997 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839275.998 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.022 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.023 bounded source ended: reason=operator_cancel source=0000000000000001 phase=canceled keyed=1 tx_on=1 samples_left=0 generated=2048 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839276.023 bounded source ended: reason=measurement_dispatch_expired source=0000000000000001 phase=expired keyed=1 tx_on=1 samples_left=0 generated=4096 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839276.023 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.023 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.023 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.023 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.025 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.048 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.060 measurement window: event=tx_admission_ended ready=0 now_ns=34236463637417 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=0 test_left=144000 tone1=1205 tone2=1405 tone_sent_ns=34236451813716 guard_ns=500000000 iq_valid_ns=34236460890745 iq_age_ns=0 deadline_ns=34244451711286 fits=0 solution=0
+1794839276.060 bounded source ended: reason=tx_admission_ended source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=144000 generated=48000 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839276.060 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.084 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.096 measurement window: event=tx_admission_ended ready=0 now_ns=34236499584325 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=0 test_left=144000 tone1=804 tone2=1806 tone_sent_ns=34236488232494 guard_ns=500000000 iq_valid_ns=34236496775049 iq_age_ns=0 deadline_ns=34244488101207 fits=0 solution=0
+1794839276.096 bounded source ended: reason=tx_admission_ended source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=144000 generated=48000 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839276.096 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.120 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.132 measurement window: event=tx_admission_ended ready=0 now_ns=34236535712378 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=0 test_left=144000 tone1=710 tone2=1900 tone_sent_ns=34236524022815 guard_ns=500000000 iq_valid_ns=34236532902010 iq_age_ns=0 deadline_ns=34244523900024 fits=0 solution=0
+1794839276.132 bounded source ended: reason=tx_admission_ended source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=144000 generated=48000 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839276.132 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.155 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.166 measurement window: event=tx_admission_ended ready=0 now_ns=34236570290303 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=0 test_left=144000 tone1=0 tone2=2610 tone_sent_ns=34236558475680 guard_ns=500000000 iq_valid_ns=34236567824321 iq_age_ns=0 deadline_ns=34244558372931 fits=0 solution=0
+1794839276.167 bounded source ended: reason=tx_admission_ended source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=144000 generated=48000 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839276.167 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794839276.190 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)
+1794839276.202 measurement window: event=tx_admission_ended ready=0 now_ns=34236605615540 phase=running keyed=1 local=1 fault=0 aligned=0 feedback=1 noise_left=0 test_left=144000 tone1=-3695 tone2=6305 tone_sent_ns=34236593837526 guard_ns=500000000 iq_valid_ns=34236602684312 iq_age_ns=0 deadline_ns=34244593728653 fits=0 solution=0
+1794839276.202 bounded source ended: reason=tx_admission_ended source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=144000 generated=48000 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=0
+1794839276.202 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz

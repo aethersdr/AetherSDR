@@ -1,6 +1,7 @@
 #define main inherited_shim_program_main
 #include "pd_shim_launch.c"
 #undef main
+#include "pd_iq_selection.h"
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -86,8 +87,9 @@ static int service_keep_descriptors(int output,int error,int installation)
     int kept[6]={0,1,2,output,error,installation<0?0:installation};
     return close_unrelated(kept,-1);
 }
-static int service_launch(const char* id,uint32_t gui,int control,int installation)
+static int service_launch(const char* id,uint32_t gui,int control,int installation,struct pd_iq_selection selection)
 {
+    if(!pd_iq_selection_valid(selection)){return 2;}
     char directory_path[PATH_MAX];int directory=executable_directory(directory_path);
     if(directory<0){return 3;}
     int program=open_program(directory,"pd-radio-launch");close(directory);
@@ -107,10 +109,12 @@ static int service_launch(const char* id,uint32_t gui,int control,int installati
          * no caller-provided descriptor reaches the constructor. */
         int kept[6]={0,1,2,control<0?0:3,1,2};
         if(!close_unrelated(kept,executable)){_exit(5);}
-        char identity[96],handle[64];
+        char identity[96],handle[64],channel_entry[32],pan_entry[48];
         snprintf(identity,sizeof(identity),"SHIM_PD_GUI_CLIENT_ID=%s",id);
         snprintf(handle,sizeof(handle),"SHIM_PD_GUI_HANDLE=0x%08x",gui);
-        char* env[]={"PATH=/usr/bin:/bin",identity,handle,control<0?NULL:"SHIM_PD_SESSION_FD=3",NULL};
+        snprintf(channel_entry,sizeof(channel_entry),"SHIM_PD_IQ_CHANNEL=%u",selection.channel);
+        snprintf(pan_entry,sizeof(pan_entry),"SHIM_PD_FEEDBACK_PAN=0x%08x",selection.pan);
+        char* env[]={"PATH=/usr/bin:/bin",identity,handle,channel_entry,pan_entry,control<0?NULL:"SHIM_PD_SESSION_FD=3",NULL};
         char* args[]={"pd-radio-launch",NULL};fexecve(executable,args,env);_exit(6);
     }
     close(program);close(output[1]);close(error[1]);
@@ -127,5 +131,7 @@ int PD_SERVICE_MAIN(int argc,char** argv)
     uint32_t gui=0;const char* id=getenv("SHIM_PD_GUI_CLIENT_ID");
     if(argc!=1 || getuid()!=0 || geteuid()!=0 || !service_uuid(id) ||
        !launch_handle(getenv("SHIM_PD_GUI_HANDLE"),&gui)){return 2;}
-    return service_launch(id,gui,-1,-1);
+    struct pd_iq_selection selection;
+    if(!pd_iq_selection_environment(&selection)){return 2;}
+    return service_launch(id,gui,-1,-1,selection);
 }

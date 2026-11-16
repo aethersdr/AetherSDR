@@ -1,0 +1,34 @@
+[
+  {
+    "test": "iq-stream",
+    "exit": 0
+  },
+  {
+    "test": "iq-source",
+    "exit": 0
+  },
+  {
+    "test": "radio-launch",
+    "exit": 0
+  },
+  {
+    "test": "session-launch",
+    "exit": 0
+  },
+  {
+    "test": "service-launch",
+    "exit": 0
+  },
+  {
+    "test": "start-session",
+    "exit": 0
+  },
+  {
+    "test": "primary-launch",
+    "exit": 0
+  },
+  {
+    "test": "shim-launch",
+    "exit": 0
+  }
+]

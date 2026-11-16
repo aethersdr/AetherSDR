@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "pd_iq_selection.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -24,7 +25,7 @@
 enum { kLine=4096,kBind=970101,kSubscribe=970102,kPort=970103,kCreate=970104,kRate=970105,kConfirm=970106,kRemove=970107,kPan=970108,kPanCount=8 };
 struct stream_pan { uint32_t id,owner,channel;unsigned fields;int removed; };
 struct stream_state {
-    uint32_t client,gui,stream,pan;
+    uint32_t client,gui,stream,pan,channel;
     unsigned issued,replies,fields;
     int failed,removed,binding_ready;
     struct stream_pan pans[kPanCount];
@@ -93,7 +94,7 @@ static struct stream_pan* stream_find_pan(struct stream_state* s,uint32_t id,int
 static int stream_binding_valid(struct stream_state* s)
 {
     struct stream_pan* pan=stream_find_pan(s,s->pan,0);
-    return s->pan && pan && pan->fields==3 && !pan->removed && pan->owner==s->gui && pan->channel==1;
+    return s->pan && pan && pan->fields==3 && !pan->removed && pan->owner==s->gui && pan->channel==s->channel;
 }
 static void stream_parse_pan(struct stream_state* s,char* body)
 {
@@ -158,7 +159,8 @@ static void parse_line(struct stream_state* s,char* line)
         char value[64];int found=attribute(words,keys[i],value,sizeof(value));uint32_t h=0;
         if(found<0){s->failed=1;return;}if(!found){continue;}
         if(i==2 && !(s->issued&(1u<<(kRate-kBind)))){continue;}
-        int valid=i==0?!strcmp(value,"dax_iq"):i==1?!strcmp(value,"1"):i==2?!strcmp(value,"48000"):
+        char selected_channel[2]={(char)('0'+s->channel),0};
+        int valid=i==0?!strcmp(value,"dax_iq"):i==1?!strcmp(value,selected_channel):i==2?!strcmp(value,"48000"):
             i==3?(handle(value,&h) && h==s->client):i==4?(handle(value,&h) && h==s->gui):
             i==5?!strcmp(value,"172.30.2.1"):(handle(value,&h) && (!s->pan || s->pan==h));
         if(i==6 && valid){s->pan=h;}
@@ -260,19 +262,21 @@ static int close_others(int api,int udp,int life)
 }
 static int event(const char* name,const struct stream_state* s,int success)
 {
-    char line[320];int n=snprintf(line,sizeof(line),"{\"event\":\"%s\",\"stream\":\"0x%08x\",\"client\":\"0x%08x\",\"pan\":\"0x%08x\",\"uid\":%u,\"success\":%s,\"issued\":%u,\"replies\":%u,\"fields\":%u,\"parser_failed\":%s,\"rf_commands\":[]}\n",name,s->stream,s->client,s->pan,(unsigned)geteuid(),success?"true":"false",s->issued,s->replies,s->fields,s->failed?"true":"false");
+    char line[320];int n=snprintf(line,sizeof(line),"{\"event\":\"%s\",\"stream\":\"0x%08x\",\"client\":\"0x%08x\",\"pan\":\"0x%08x\",\"channel\":%u,\"uid\":%u,\"success\":%s,\"issued\":%u,\"replies\":%u,\"fields\":%u,\"parser_failed\":%s,\"rf_commands\":[]}\n",name,s->stream,s->client,s->pan,s->channel,(unsigned)geteuid(),success?"true":"false",s->issued,s->replies,s->fields,s->failed?"true":"false");
     return n>0 && n<(int)sizeof(line) && write(1,line,(size_t)n)==n;
 }
 static int run_stream(int api,int life,unsigned port,const char* gui_id,struct stream_state* s,struct stream_input* in)
 {
     char text[160];
+    if(s->channel<1 || s->channel>4){return 0;}
     if(!observe(api,life,s,in,0,0,1)){return 0;}
     snprintf(text,sizeof(text),"C%d|client bind client_id=%s\n",kBind,gui_id);
     if(!issue(api,s,1u,text) || !observe(api,life,s,in,1u,0,1)){return 0;}
     snprintf(text,sizeof(text),"C%d|sub daxiq all\nC%d|client udpport %u\n",kSubscribe,kPort,port);
     if(!issue(api,s,6u,text) || !observe(api,life,s,in,7u,0,1)){return 0;}
     if(!issue(api,s,128u,"C970108|sub pan all\n") || !observe(api,life,s,in,135u,0,1)){return 0;}
-    if(!issue(api,s,8u,"C970104|stream create type=dax_iq daxiq_channel=1\n") || !observe(api,life,s,in,15u,0,1)){return 0;}
+    snprintf(text,sizeof(text),"C970104|stream create type=dax_iq daxiq_channel=%u\n",s->channel);
+    if(!issue(api,s,8u,text) || !observe(api,life,s,in,15u,0,1)){return 0;}
     snprintf(text,sizeof(text),"C%d|stream set 0x%08X daxiq_rate=48000\n",kRate,s->stream);
     if(!issue(api,s,16u,text) || !observe(api,life,s,in,31u,0,1)){return 0;}
     if(!issue(api,s,32u,"C970106|sub daxiq all\n") || !observe(api,life,s,in,191u,1,1)){return 0;}
@@ -293,6 +297,9 @@ int main(int argc,char** argv)
 {
     if(argc!=4 || !ordinary() || !standard_streams()){return 2;}
     int api=descriptor(argv[1]),udp=descriptor(argv[2]),life=descriptor(argv[3]);unsigned port=0;struct stream_state s={0};struct stream_input in={0};
+    struct pd_iq_selection selection;
+    if(!pd_iq_selection_environment(&selection)){return 3;}
+    s.channel=selection.channel;s.pan=selection.pan;
     const char* gui_id=getenv("SHIM_PD_GUI_CLIENT_ID");
     if(api<0 || udp<0 || life<0 || !handle(getenv("SHIM_PD_GUI_HANDLE"),&s.gui) || !client_id(gui_id) || !prepared(api,udp,life,&port)){return 3;}
     if(prctl(PR_SET_DUMPABLE,0,0,0,0) || !close_others(api,udp,life) || !nonblock(api) || !nonblock(1)){return 4;}

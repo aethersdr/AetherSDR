@@ -1,0 +1,1 @@
+selected-channel-mutation: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/session/start_session_test.c:49: main: Assertion `start_frame(frame,56,id,&gui,&selection) && gui==1 && selection.channel==channel && selection.pan==0x40000002' failed.
