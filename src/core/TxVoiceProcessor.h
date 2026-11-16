@@ -138,7 +138,7 @@ public:
 
     // Configured-path delay expressed in 48 kHz DSP frames. Includes exact
     // serial ingress/egress SRC group delay, RNNoise's nominal one-frame delay,
-    // and enabled gate lookahead. The matched L/R egress SRCs run in parallel
+    // and the final limiter's look-ahead while it is enabled. The matched L/R egress SRCs run in parallel
     // and therefore contribute one delay. RNNoise's callback-sized streaming
     // adapter can add startup silence for irregular block partitions, so its
     // term is not an exact wall-clock guarantee. Reverb pre-delay is an

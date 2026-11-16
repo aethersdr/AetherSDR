@@ -5,16 +5,21 @@
 // imported preset is dropped rather than packed. AetherTX's gate and de-esser
 // are retired: a saved order that names them loads without them, an operator
 // who had the gate on gets RN2 instead, once, and both stages' keys go.
-// Isolated settings, no audio device, no radio.
+// The final limiter: one object under ClientFinalLimiterTx; a fresh install
+// gets it on at -0.5 dB with 1.5 ms of look-ahead, the legacy flat keys are
+// folded into the object once and removed with their values kept, and a TX
+// profile carries the look-ahead. Isolated settings, no audio device, no radio.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ChannelStripPresets.h"
+#include "core/ClientFinalLimiter.h"
 #include "core/SettingsPaths.h"
 #include "core/TxChainLayout.h"
 
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
 #include <QStringList>
@@ -46,6 +51,9 @@ private slots:
     void theOldDefaultBecomesTheNewDefault();
     void aGateThatWasOnBecomesRn2Once();
     void aGateThatWasOffLeavesRn2Alone();
+    void aFreshInstallGetsTheLookaheadLimiterOn();
+    void aSavedFinalLimiterIsKept();
+    void aTxProfileCarriesTheLookahead();
 };
 
 void TxChainSettingsTest::initTestCase()
@@ -221,6 +229,127 @@ void TxChainSettingsTest::aGateThatWasOffLeavesRn2Alone()
     QVERIFY(!s.contains("ClientGateTxEnabled"));
     QVERIFY(!s.contains("ClientGateTxRatio"));
     QVERIFY(!s.value("AetherialTubePreampTx").toString().contains(QStringLiteral("\"rn2\":true")));
+}
+
+namespace {
+constexpr auto kFinalLimiterKey = "ClientFinalLimiterTx";
+constexpr const char* kLegacyFinalLimiterKeys[] = {
+    "ClientFinalLimiterTxEnabled", "ClientFinalLimiterTxCeilingDb",
+    "ClientFinalLimiterTxOutputTrimDb", "ClientFinalLimiterTxDcBlock",
+};
+
+void clearFinalLimiterSettings()
+{
+    auto& s = AppSettings::instance();
+    s.remove(kFinalLimiterKey);
+    for (const char* key : kLegacyFinalLimiterKeys) {
+        s.remove(key);
+    }
+    s.save();
+}
+
+QJsonObject storedFinalLimiter()
+{
+    return QJsonDocument::fromJson(
+        AppSettings::instance().value(kFinalLimiterKey, "{}").toString().toUtf8()).object();
+}
+}  // namespace
+
+void TxChainSettingsTest::aFreshInstallGetsTheLookaheadLimiterOn()
+{
+    clearFinalLimiterSettings();
+    {
+        AudioEngine engine;
+        auto* lim = engine.clientFinalLimiterTx();
+        QVERIFY(lim);
+        QVERIFY(lim->isEnabled());
+        QCOMPARE(lim->ceilingDb(), -0.5f);
+        QCOMPARE(lim->lookaheadMs(), 1.5f);
+        lim->setLookaheadMs(4.5f);
+        engine.saveClientFinalLimiterSettings();
+    }
+    auto& s = AppSettings::instance();
+    s.save();
+    s.load();  // what is on disk, not the cache
+    // One object, and no flat key written beside it.
+    const QJsonObject o = storedFinalLimiter();
+    QCOMPARE(o.value("lookaheadMs").toDouble(), 4.5);
+    QCOMPARE(o.value("enabled").toBool(false), true);
+    QCOMPARE(o.value("ceilingDb").toDouble(), -0.5);
+    for (const char* key : kLegacyFinalLimiterKeys) {
+        QVERIFY2(!s.contains(key), key);
+    }
+    AudioEngine reread;
+    QCOMPARE(reread.clientFinalLimiterTx()->lookaheadMs(), 4.5f);
+    clearFinalLimiterSettings();
+}
+
+// An installation that saved its limiter in the legacy flat keys (off, as
+// #3004 shipped it) keeps every value; the keys fold into the object once and
+// go, and the look-ahead, which had no flat key, takes its default.
+void TxChainSettingsTest::aSavedFinalLimiterIsKept()
+{
+    clearFinalLimiterSettings();
+    auto& s = AppSettings::instance();
+    s.setValue("ClientFinalLimiterTxEnabled", "False");
+    s.setValue("ClientFinalLimiterTxCeilingDb", "-1");
+    s.setValue("ClientFinalLimiterTxOutputTrimDb", "2.5");
+    s.setValue("ClientFinalLimiterTxDcBlock", "False");
+    s.save();
+    {
+        AudioEngine engine;
+        auto* lim = engine.clientFinalLimiterTx();
+        QVERIFY(lim);
+        QVERIFY(!lim->isEnabled());
+        QCOMPARE(lim->ceilingDb(), -1.0f);
+        QCOMPARE(lim->outputTrimDb(), 2.5f);
+        QVERIFY(!lim->dcBlockEnabled());
+        QCOMPARE(lim->lookaheadMs(), 1.5f);
+    }
+    s.load();
+    for (const char* key : kLegacyFinalLimiterKeys) {
+        QVERIFY2(!s.contains(key), key);
+    }
+    const QJsonObject o = storedFinalLimiter();
+    QCOMPARE(o.value("enabled").toBool(true), false);
+    QCOMPARE(o.value("ceilingDb").toDouble(), -1.0);
+    // The migration ran once: the object alone reproduces the saved state,
+    // and a legacy key that comes back (an older settings import) neither
+    // overrides it nor stays.
+    s.setValue("ClientFinalLimiterTxEnabled", "True");
+    s.save();
+    {
+        AudioEngine reread;
+        QVERIFY(!reread.clientFinalLimiterTx()->isEnabled());
+        QCOMPARE(reread.clientFinalLimiterTx()->outputTrimDb(), 2.5f);
+    }
+    s.load();
+    QVERIFY(!s.contains("ClientFinalLimiterTxEnabled"));
+    clearFinalLimiterSettings();
+}
+
+void TxChainSettingsTest::aTxProfileCarriesTheLookahead()
+{
+    AudioEngine engine;
+    auto* lim = engine.clientFinalLimiterTx();
+    QVERIFY(lim);
+    lim->setLookaheadMs(4.0f);
+    const QJsonObject captured = ChannelStripPresets::captureTxJson(&engine);
+    QCOMPARE(captured.value("finalLimiter").toObject().value("lookaheadMs").toDouble(), 4.0);
+
+    lim->setLookaheadMs(0.5f);
+    ChannelStripPresets::applyTxJson(&engine, captured);
+    QCOMPARE(lim->lookaheadMs(), 4.0f);
+
+    // An older profile without the key leaves the look-ahead alone.
+    QJsonObject old = captured;
+    QJsonObject fl = old.value("finalLimiter").toObject();
+    fl.remove("lookaheadMs");
+    old["finalLimiter"] = fl;
+    lim->setLookaheadMs(2.0f);
+    ChannelStripPresets::applyTxJson(&engine, old);
+    QCOMPARE(lim->lookaheadMs(), 2.0f);
+    clearFinalLimiterSettings();
 }
 
 int main(int argc, char** argv)

@@ -312,6 +312,17 @@ tools/build_update_manifest.py           @aethersdr/maintainers
 tools/publish_update_manifest.py         @aethersdr/maintainers
 packaging/update-signing.pub             @aethersdr/maintainers
 
+# Release Offload (RFC #6964) runs in update-signing with the same upload
+# credential and a release-write token, and deletes release assets once its
+# copies check out: the workflow and the tool it runs. Inside that job the
+# tool also imports build_update_manifest.py and publish_update_manifest.py
+# (gated above: keep them gated while this workflow runs them) and
+# release_manual_signing.py, which sign-release.yml also runs in the job that
+# holds the GPG release key, so it is carved back here.
+.github/workflows/release-offload.yml    @aethersdr/maintainers
+tools/offload_release_assets.py          @aethersdr/maintainers
+tools/release_manual_signing.py          @aethersdr/maintainers
+
 # NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
 # .github/copilot-instructions.md, .claude/commands/) and the two release
 # skills (.claude/skills/release-prep/, .claude/skills/tag-release/) are
