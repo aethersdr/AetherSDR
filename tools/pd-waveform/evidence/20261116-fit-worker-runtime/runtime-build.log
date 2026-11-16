@@ -1,0 +1,5 @@
+Completed short/armv7
+Completed short/arm64
+Completed second-distinct-long-source-path/armv7
+Completed second-distinct-long-source-path/arm64
+Both complete runtime releases reproduced byte for byte.
