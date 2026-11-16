@@ -392,7 +392,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
-    c.clientTransverters = true;
+    c.clientTransverters = ClientTransverterSupport{};
 
     const std::span<const IcomBand> bands = bandsFor(m);
     c.declaredBandRanges.reserve(static_cast<int>(bands.size()));

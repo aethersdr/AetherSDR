@@ -4921,7 +4921,7 @@ RadioCapabilities RadioModel::backendCapabilities() const
 
 void RadioModel::setClientTransverters(const QVector<ClientTransverter>& list)
 {
-    m_clientXvtrsAvailable = m_backend && m_backend->capabilities().clientTransverters;
+    m_clientXvtrsAvailable = m_backend && m_backend->capabilities().clientTransverters.has_value();
     if (!usesClientTransverters()) {
         return;
     }
@@ -4955,7 +4955,7 @@ void RadioModel::setClientTransverters(const QVector<ClientTransverter>& list)
 void RadioModel::loadClientTransverters()
 {
     m_clientXvtrs = ClientTransverterSet{};
-    m_clientXvtrsAvailable = m_backend && m_backend->capabilities().clientTransverters;
+    m_clientXvtrsAvailable = m_backend && m_backend->capabilities().clientTransverters.has_value();
     if (!usesClientTransverters()) {
         return;
     }

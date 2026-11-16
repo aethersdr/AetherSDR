@@ -115,7 +115,11 @@ struct Fixture {
         backend->caps.family = QStringLiteral("icom");
         backend->caps.canTransmit = true;
         backend->caps.hasTuner = true;
-        backend->caps.clientTransverters = qualified;
+        if (qualified) {
+            backend->caps.clientTransverters = ClientTransverterSupport{};
+        } else {
+            backend->caps.clientTransverters.reset();
+        }
         backend->caps.tuningMinHz = 30.0e3;
         backend->caps.tuningMaxHz = 470.0e6;
         backend->caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
