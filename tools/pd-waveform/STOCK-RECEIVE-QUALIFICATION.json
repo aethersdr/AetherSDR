@@ -1,0 +1,239 @@
+{
+  "updated_utc": "2026-11-16T17:58:56.659457+00:00",
+  "production_ready": false,
+  "RF_transmitted": false,
+  "runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
+  "desktop_source": "b1256a1657319360279029cabfcbcb647728b86a",
+  "status": "Installed local IQ capture works receive-only in USB with stock APD selected and AetherPD explicitly bypassed",
+  "radio": {
+    "model": "FLEX-8600",
+    "firmware": "4.3.16.42034",
+    "frequency_mhz": 7.15,
+    "FDX": false,
+    "feedback": "RX_A",
+    "IQ_channel": 4
+  },
+  "captures": {
+    "stock-off-receive": {
+      "status": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": false,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 2126147620,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "disabled"
+      },
+      "manifest": {
+        "capture_id": "843d8be179d5d8154e21bd666c895d42",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 2126147620,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "3124127268650",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "3124468319812",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "10",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "sha256": "5b780445f00327120adea05e77698dd6a117c174a213f44540345f987f8752f9",
+      "bytes": 131072
+    },
+    "stock-on-receive": {
+      "status": {
+        "available": true,
+        "calibration_control": true,
+        "calibration_required": false,
+        "calibration_state": "idle",
+        "correcting": false,
+        "correction_control": true,
+        "correction_enabled": false,
+        "faults": {
+          "dispatch_deadlines": 0,
+          "rejected_input": 0,
+          "send_errors": 0,
+          "stale_iq": 0
+        },
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 2126147620,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "input_limited_samples": 0,
+        "keyed": false,
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "measurement_control": true,
+        "measurement_tone_capture_version": 3,
+        "measurement_tone_config": {
+          "center_hz": 1305,
+          "max_spacing_hz": 10000,
+          "min_spacing_hz": 200,
+          "source_id": "0000000000000000",
+          "spacing_hz": 1190
+        },
+        "measurement_tone_control": true,
+        "registered": true,
+        "source_purpose": "calibration",
+        "state": "disabled"
+      },
+      "manifest": {
+        "capture_id": "696bbb51985066c043f5cdf5a890e7b8",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 2126147620,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "3125300271449",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "3125642277176",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "11",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "sha256": "1d952e9ceaeecf0c61af499d859995855a25545452248e30728e34aab267c33c",
+      "bytes": 131072
+    }
+  },
+  "analysis": {
+    "production_code_used": true,
+    "report": "analyzer-check.json",
+    "existing_exports_checked": 4,
+    "max_product_difference_db": 4.973799150320701e-14,
+    "negative_cases": {
+      "truncated": {
+        "exit": 3,
+        "stderr": ""
+      },
+      "nonfinite": {
+        "exit": 5,
+        "stderr": ""
+      },
+      "zero": {
+        "exit": 7,
+        "stderr": "Could not resolve two tones in the capture\n"
+      }
+    },
+    "absolute_watts_calibrated": false,
+    "ADC_headroom_known": false
+  },
+  "bench_script_failures_preserved": [
+    "Initial script treated expected HTTP 503 starting as terminal. Re-poll proved the same session live; it was resumed rather than restarted.",
+    "Bypass request needs an active PD slice. The bench script was corrected to select PD while idle before bypass, then switch USB.",
+    "Public state prioritizes explicit bypass: stock APD enabled plus correction disabled reports disabled, not blocked_by_radio_apd. Assertion corrected against aetherpd.go; no product code or interlock changed."
+  ],
+  "cleanup": {
+    "radio_idle": true,
+    "stock_APD_off": true,
+    "AetherPD_session_stopped": true,
+    "ARP_absent": true,
+    "accept_local": "0",
+    "remaining_processes": 3,
+    "runtime_hashes_verified": true,
+    "all_remaining_processes_UID78666_caps_zero_NNP1": true,
+    "temporary_audit_removed": true,
+    "processing_settings_restored": false
+  },
+  "remaining_comparison_steps": [
+    "Prepare a finite PC-audio source with the same 710/1900 Hz tones, explicit GUI keying and the installed bounded unkey helper. No DAX audio feedback.",
+    "Confirm the audio route and stock sampler RX_A readback without RF; retain the 10 W configured maximum and existing bench power checks.",
+    "Take bounded stock OFF and ON captures; require observed stock equalizer activity before attributing correction. Label cached/warm versus fresh acquisition.",
+    "Collect four complete 16384-sample frames at 48 kHz for each result and analyze using this production BH7/IMD code. Reject mismatched output power, invalid ownership, incomplete frames or source changes.",
+    "Report current stock and AetherPD results with their exact sources, drive, timing and power-matching limits. Repeat rather than substitute the older stock report if a current match is unavailable."
+  ],
+  "limits": [
+    "Receive-only stock selection is not proof stock APD corrects during TX.",
+    "Offline reader agreement verifies use of the same analyzer, not an independent calibrated RF measurement.",
+    "No RF comparison, sustained speech or broader production gate is closed by this report."
+  ],
+  "evidence_directory": "evidence/20261116-stock-receive",
+  "evidence_sha256": {
+    "receive-probe.py": "4005291a03400323703b384142cf38a084b2538313bc290e194396ff38111900",
+    "receive-probe.json": "2fc71e6b0bea955b738d902905d7fc6f78759538a17a6e87a0b4cb5fffd42b98",
+    "stock-off-receive.f32le": "5b780445f00327120adea05e77698dd6a117c174a213f44540345f987f8752f9",
+    "stock-on-receive.f32le": "1d952e9ceaeecf0c61af499d859995855a25545452248e30728e34aab267c33c",
+    "startup-poll-refusal-receive-probe.py": "2ae7fb29765e414ccbbe27ba288d375a13e91f286a800403097b794914168e15",
+    "receive-probe-first-attempt.json": "9ec35b32a4c13177366a1409782e9fba3870f5f5a6ce102e73a4900825312e63",
+    "idle-mode-refusal.py": "cd7c51daabf509b248a8a4f393e850049874830f11283e3f99d4a57cf6d11c30",
+    "idle-mode-refusal.json": "26400d283e615bfb337adf77d03f52de15336b87f87d6139579c4365434b6599",
+    "state-label-refusal-receive-probe.py": "159804ae8010e041d5b42eca2f33315d18bf1f7c51b899dcbac18c353aacb2fc",
+    "receive-probe-state-label-refusal.json": "08a8887bbf0006735e0caaa659036d60d573d1a377f7c24f3b3e65baea9c5055",
+    "state-label-refusal-stock-off-receive.f32le": "1ff2ddd759fb3cf60c6147a0118a1d0fabcfa11394a9706b6b15b2b5e56a55f3",
+    "analyze-raw.cpp": "62c84e202157d1d4742b7d19e37ddaeeebceab54d699b4ff166a78a73edf50df",
+    "check-analyzer.py": "d60670aea759a06be5d2c22b469969811ad7e79ecb1add95d047c7d28f0b83ac",
+    "analyzer-check.json": "649f4aafd5e1dbcfa1c67078d498b4c4306958bf2e4feb57ff2f3458df862090",
+    "save-receive-evidence.py": "eddf6c40c341bb233a9509091ffb3a8a55470ab393a15a4cbbee7b67fcfcc2be",
+    "stock-receive-idle-job.py": "995f34fd0c7d19fae6fc357767d45c6f43bd5d51cd9307ec4f73f0f95739ad26",
+    "stock-receive-idle-result.json": "5ef368a5d87ee63f8e8d9fa79dc19e45184e7d09e4bc22004bdbbbae80e472da"
+  }
+}

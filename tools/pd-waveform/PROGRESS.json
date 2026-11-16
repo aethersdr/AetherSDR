@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T17:52:52.355018+00:00",
+  "updated_utc": "2026-11-16T17:58:56.659457+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Prepare matched final-candidate stock APD capture using a separate receive-only measurement path; preserve mutual exclusion with AetherPD correction. Then continue sustained/speech, remaining process faults, historical failure attribution, installation/6300 and independent release gates.",
+  "next_action": "Prepare finite PC-audio stock tone source, installed bounded unkey control and read-only APD telemetry; then bounded stock OFF/ON RF captures with matched output and the same analyzer. Preserve all remaining P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Exact installed runtime and desktop passed finite matched 5/10 W OFF/ON measurements using local DAX IQ with FDX disabled. Raw IQ independently recomputed; session stopped and cleanup audited.",
+  "current_focus": "Stock-comparison prerequisite passed: installed local DAX IQ captures in USB with stock APD selected and AetherPD bypassed. The same production analyzer reproduces all four current RF exports. No stock RF comparison yet.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -3200,5 +3200,10 @@
     ],
     "stock_comparison_complete": false,
     "production_ready": false
+  },
+  "stock_receive": {
+    "report": "STOCK-RECEIVE-QUALIFICATION.json",
+    "receive_only_passed": true,
+    "RF_comparison_complete": false
   }
 }

@@ -1,0 +1,302 @@
+{
+  "build_command": [
+    "g++",
+    "-std=c++20",
+    "-O2",
+    "-I",
+    "/home/jeremy/AetherSDR/build/aetherpd-source/src",
+    "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/stock-candidate/analyze-raw.cpp",
+    "/home/jeremy/AetherSDR/build/aetherpd-source/src/core/txlinearity/ImdAnalyzer.cpp",
+    "/home/jeremy/AetherSDR/build/aetherpd-source/src/core/txlinearity/TxSpectrumAnalyzer.cpp",
+    "/home/jeremy/AetherSDR/build/aetherpd-source/src/core/txlinearity/SpectrumWindow.cpp",
+    "/home/jeremy/AetherSDR/build/aetherpd-source/src/core/dsp/FftwPlannerLock.cpp",
+    "-lfftw3",
+    "-pthread",
+    "-o",
+    "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/stock-candidate/analyze-raw"
+  ],
+  "source_commit": "567924c9bf6757d96e8e706724cbd99d1c187ea4",
+  "production_sources_sha256": {
+    "src/core/txlinearity/ImdAnalyzer.cpp": "fd154ca3268777d2762978e18fc96203196fd5526e05642534d0f40cc312c873",
+    "src/core/txlinearity/TxSpectrumAnalyzer.cpp": "5eff9a066e47360821d96bdef83e385142b7cc5436ab3f5e1a965c6bd72c3c64",
+    "src/core/txlinearity/SpectrumWindow.cpp": "8e60977778e75c7f34fe2b3db0a7d891b02c5fa676c11b37e8c50bb35d8e742e",
+    "src/core/dsp/FftwPlannerLock.cpp": "fa82096a14d0d86645dfd7adcc2589d057b58183ad4c297bbd0c089ad3915234"
+  },
+  "cases": [
+    {
+      "watts": 5,
+      "mode": "off",
+      "export_sha256": "bddb9ea187ab3266c811795547d6bc83bd16b88284ed7ae04054c10e0c388713",
+      "iq_sha256": "cf1a272487164da50fb816f94dba54929872cf523398e62cf8ebba44b40a7fd5",
+      "max_product_error_db": 4.973799150320701e-14,
+      "result": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.974157374729,
+          1899.97075389611
+        ],
+        "fundamental_pep_db_raw_iq": 91.4720953419448,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -28.1014897705554,
+            "dbc_fundamental_pep": -34.1212266350105,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -27.5710158513668,
+            "dbc_fundamental_pep": -33.5907527158219,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -41.6646598738239,
+            "dbc_fundamental_pep": -47.684396738279,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -41.8950603005119,
+            "dbc_fundamental_pep": -47.914797164967,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -53.0834016927699,
+            "dbc_fundamental_pep": -59.103138557225,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -53.23320154461,
+            "dbc_fundamental_pep": -59.2529384090651,
+            "noise_limited": false
+          }
+        ]
+      }
+    },
+    {
+      "watts": 5,
+      "mode": "on",
+      "export_sha256": "ab57bebf1754e4adbff54ef2a71a7498c9b42327a5220dc3c7736e3e3d22adb2",
+      "iq_sha256": "48cc8e599862b70b9b50ec6f941731b6764b1a9846fbf61dd35c11430fc2ec7e",
+      "max_product_error_db": 3.552713678800501e-14,
+      "result": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.974128348725,
+          1899.97070581406
+        ],
+        "fundamental_pep_db_raw_iq": 91.7644932622862,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -44.3767708058856,
+            "dbc_fundamental_pep": -50.3965012357614,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -54.4995363076793,
+            "dbc_fundamental_pep": -60.5192667375551,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -56.1913328203045,
+            "dbc_fundamental_pep": -62.2110632501804,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -64.2197548456152,
+            "dbc_fundamental_pep": -70.2394852754911,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -79.8650929870169,
+            "dbc_fundamental_pep": -85.8848234168927,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -63.0670657919475,
+            "dbc_fundamental_pep": -69.0867962218233,
+            "noise_limited": false
+          }
+        ]
+      }
+    },
+    {
+      "watts": 10,
+      "mode": "off",
+      "export_sha256": "3720a027caa820cb904e5826a7805b684912c5f3ed16059919982dd66b443fdc",
+      "iq_sha256": "5cf890bd8fafc089013dd9669741e979f30adfb8bb645b1081956762aec637d1",
+      "max_product_error_db": 3.552713678800501e-14,
+      "result": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.97416707635,
+          1899.97072164932
+        ],
+        "fundamental_pep_db_raw_iq": 94.5756762614815,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -27.5411389311665,
+            "dbc_fundamental_pep": -33.5608814438401,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -27.0043420872475,
+            "dbc_fundamental_pep": -33.0240845999211,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -39.4692218747223,
+            "dbc_fundamental_pep": -45.4889643873959,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -39.65706450901,
+            "dbc_fundamental_pep": -45.6768070216837,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -48.8138012893123,
+            "dbc_fundamental_pep": -54.8335438019859,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -48.9027962388385,
+            "dbc_fundamental_pep": -54.9225387515121,
+            "noise_limited": false
+          }
+        ]
+      }
+    },
+    {
+      "watts": 10,
+      "mode": "on",
+      "export_sha256": "4d96c580026705fe227f402277c8aa4d942d3d14f8dc03b0d2768404ac0009d0",
+      "iq_sha256": "dc5c814a0e7b3de72244494f2792f61205cbbce11f0d795b20a988f7665f71b0",
+      "max_product_error_db": 4.263256414560601e-14,
+      "result": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.974171593079,
+          1899.97072978814
+        ],
+        "fundamental_pep_db_raw_iq": 94.8923576952321,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -44.3637693258561,
+            "dbc_fundamental_pep": -50.3834996497728,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -51.3578456729574,
+            "dbc_fundamental_pep": -57.3775759968741,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -54.2205700516644,
+            "dbc_fundamental_pep": -60.240300375581,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -60.6987972820164,
+            "dbc_fundamental_pep": -66.7185276059331,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -65.5187700254563,
+            "dbc_fundamental_pep": -71.5385003493729,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -63.00524231258,
+            "dbc_fundamental_pep": -69.0249726364966,
+            "noise_limited": false
+          }
+        ]
+      }
+    }
+  ],
+  "negative_cases": {
+    "truncated": {
+      "exit": 3,
+      "stderr": ""
+    },
+    "nonfinite": {
+      "exit": 5,
+      "stderr": ""
+    },
+    "zero": {
+      "exit": 7,
+      "stderr": "Could not resolve two tones in the capture\n"
+    }
+  },
+  "binary_sha256": "4d35a61bc586c90b05c5263602f198260895e7a5385ebfddc7d336619a1923b1"
+}
