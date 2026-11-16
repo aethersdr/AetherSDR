@@ -1038,6 +1038,10 @@ private:
     // and the embedded EQ panel inside AetherialAudioStrip.  Writes TX
     // filter cutoffs to TransmitModel, or RX filter offsets to the
     // active SliceModel (with mode-aware audio→slice conversion).
+    // A stock AetherTX preset's TX filter: set it (snapped to the radio's
+    // allowed edges) if connected to a radio that takes it. `note` says what
+    // happened, for the AetherTX Settings status line.
+    bool applyStockTxFilter(int lowHz, int highHz, QString* note);
     void onEqCutoffsDragRequested(ClientEqApplet::Path path,
                                   int audioLow, int audioHigh);
     // Single handler for TX chain-stage enable/bypass changes from

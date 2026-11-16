@@ -184,6 +184,7 @@
 #include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
 #include "AetherRxDialog.h"
+#include "core/TxFilterEdges.h"
 #include "core/TxKeyingMarker.h"
 #include "ModeFilterPresets.h"
 #include "StripEqPanel.h"
@@ -3170,6 +3171,33 @@ void MainWindow::onTxChainStageEnabledChanged(
         m_appletPanel->clientChainApplet()->refreshFromEngine();
     if (m_aetherialStrip)
         m_aetherialStrip->refreshChainPaint();
+}
+
+bool MainWindow::applyStockTxFilter(int lowHz, int highHz, QString* note)
+{
+    const auto say = [note](const QString& s) {
+        if (note) *note = s;
+    };
+    if (!m_radioModel.isConnected()) {
+        say(tr("Not connected, so the radio TX filter was not changed; set it to %1\u2013%2 Hz.")
+                .arg(lowHz).arg(highHz));
+        return false;
+    }
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    if (!caps.hasTxFilterControls) {
+        say(tr("This radio's TX filter can't be set from here; set it to %1\u2013%2 Hz.")
+                .arg(lowHz).arg(highHz));
+        return false;
+    }
+    const auto [lo, hi] = TxFilterEdges::snap(lowHz, highHz, caps.txFilterLowEdgesHz,
+                                              caps.txFilterHighEdgesHz,
+                                              m_radioModel.transmitModel().txFilterMinWidthHz());
+    m_radioModel.transmitModel().setTxFilter(lo, hi);
+    say(lo == lowHz && hi == highHz
+            ? tr("TX filter set to %1\u2013%2 Hz.").arg(lo).arg(hi)
+            : tr("TX filter set to %1\u2013%2 Hz, this radio's nearest to %3\u2013%4 Hz.")
+                  .arg(lo).arg(hi).arg(lowHz).arg(highHz));
+    return true;
 }
 
 void MainWindow::onEqCutoffsDragRequested(ClientEqApplet::Path path,
@@ -10320,6 +10348,11 @@ void MainWindow::toggleAetherialStrip()
         // writes the same TX filter command to the radio.
         connect(m_aetherialStrip, &AetherialAudioStrip::cutoffsDragRequested,
                 this, &MainWindow::onEqCutoffsDragRequested);
+        // A stock AetherTX preset carries the TX filter it was tuned for.
+        m_aetherialStrip->setStockTxFilterHandler(
+            [this](int lowHz, int highHz, QString* note) {
+                return applyStockTxFilter(lowHz, highHz, note);
+            });
         // Stage bypass via the strip's chain tiles → same handler the
         // docked Chain applet's signal connects to, so both chain
         // widgets repaint and the matching applet refreshes.

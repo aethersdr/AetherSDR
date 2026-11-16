@@ -2,6 +2,8 @@
 
 #include "CanonWindow.h"
 
+#include <functional>
+
 class QLabel;
 class QListWidget;
 class QPushButton;
@@ -22,11 +24,21 @@ class AudioEngine;
 // beside the Settings gear, where a modal is not in the way of them.
 // The profile library behind AetherTX's Settings gear: a short-lived
 // CanonWindow dialog (style guide, RFC #6226), modal over its window.
+//
+// The stock presets are listed first and are read-only: they load and export
+// but cannot be saved over or deleted. Loading one also asks the host, through
+// the StockTxFilterHandler, to set the radio TX filter the preset was tuned
+// for; the handler says what happened, for the status line.
 class AetherTxSettingsDialog : public CanonWindow {
     Q_OBJECT
 
 public:
-    AetherTxSettingsDialog(AudioEngine* audio, QWidget* parent = nullptr);
+    // Sets the radio TX filter to lowHz..highHz if it can. Returns whether it
+    // did; `note` says what the operator should know either way.
+    using StockTxFilterHandler = std::function<bool(int lowHz, int highHz, QString* note)>;
+
+    AetherTxSettingsDialog(AudioEngine* audio, QWidget* parent = nullptr,
+                           StockTxFilterHandler txFilterHandler = {});
 
 signals:
     // A profile was applied — the host window re-reads the engine, since a
@@ -36,6 +48,7 @@ signals:
 private:
     void refreshList();
     QString selectedName() const;
+    bool selectedIsStock() const;
     void updateButtonStates();
 
     void onSave();
@@ -45,6 +58,7 @@ private:
     void onImport();
 
     AetherTxProfiles* m_profiles{nullptr};
+    StockTxFilterHandler m_txFilterHandler;
     QListWidget*      m_list{nullptr};
     QPushButton*      m_saveBtn{nullptr};
     QPushButton*      m_loadBtn{nullptr};

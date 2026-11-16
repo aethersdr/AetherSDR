@@ -490,7 +490,7 @@ void AetherialAudioStrip::showSettings()
     // Modal, like the receive window's: a profile load rewrites the whole
     // chain, and letting that happen mid-drag on a stage page would be a
     // good way to lose track of what changed.
-    AetherTxSettingsDialog dlg(m_audio, this);
+    AetherTxSettingsDialog dlg(m_audio, this, m_stockTxFilterHandler);
     connect(&dlg, &AetherTxSettingsDialog::profileApplied, this, [this]() {
         refreshAllPanelsFromEngine();
         if (m_tabs) m_tabs->refreshFromHost();

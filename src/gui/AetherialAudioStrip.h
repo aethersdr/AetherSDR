@@ -4,6 +4,7 @@
 #include "core/AudioEngine.h" // AudioEngine::TxChainStage in signal sig
 
 #include "CanonWindow.h"
+#include "AetherTxSettingsDialog.h"   // StockTxFilterHandler
 
 class QPushButton;
 class QComboBox;
@@ -54,6 +55,12 @@ public:
     // calls this from its txFilterCutoffChanged subscription, the same
     // way it does for the floating ClientEqEditor.
     void setTxFilterCutoffs(int lowHz, int highHz);
+    // How a stock preset sets the radio TX filter when it is loaded from the
+    // Settings gear; MainWindow supplies it (it owns the radio model).
+    void setStockTxFilterHandler(AetherTxSettingsDialog::StockTxFilterHandler handler)
+    {
+        m_stockTxFilterHandler = std::move(handler);
+    }
 
     // Mirrored from ClientChainApplet so the strip's own record / play
     // buttons share the PUDU monitor in MainWindow.
@@ -145,6 +152,7 @@ private:
     void refreshAllPanelsFromEngine();
 
     AudioEngine*         m_audio{nullptr};
+    AetherTxSettingsDialog::StockTxFilterHandler m_stockTxFilterHandler;
     StageTabBar*         m_tabs{nullptr};
     QStackedWidget*      m_stack{nullptr};
     // Polls the engine so the enable boxes follow changes made elsewhere —

@@ -2,6 +2,7 @@
 #include "CanonIndicators.h"
 #include "ModemChrome.h"
 #include "core/AetherTxProfiles.h"
+#include "core/AetherTxStockProfiles.h"
 #include "core/ThemeManager.h"
 
 #include <QFileDialog>
@@ -22,15 +23,21 @@ namespace AetherSDR {
 namespace {
 constexpr const char* kFileFilter =
     "AetherTX profile (*.json);;All files (*)";
+// Each list item carries the profile's real name (its text may add a suffix)
+// and whether it is a stock preset.
+constexpr int kNameRole  = Qt::UserRole;
+constexpr int kStockRole = Qt::UserRole + 1;
 }
 
-AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* parent)
+AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* parent,
+                                               StockTxFilterHandler txFilterHandler)
     : CanonWindow(tr("AetherTX Settings"), parent)
     , m_profiles(new AetherTxProfiles(audio, this))
+    , m_txFilterHandler(std::move(txFilterHandler))
 {
     setObjectName(QStringLiteral("aetherTxSettingsDialog"));
     // The canon header adds about 40 px to the old 460x380.
-    resize(460, 420);
+    resize(460, 480);
     applyCanonSheet(bodyWidget(), [] {
         return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon);
     });
@@ -47,13 +54,15 @@ AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* pare
     auto* blurb = new QLabel(tr(
         "A profile is the transmit chain: every stage's settings, which of "
         "them are switched on, and the order they run in. Loading one leaves "
-        "the receive side alone."));
+        "the receive side alone. The stock presets at the top are read-only "
+        "and also set the radio's TX filter; save one under a new name to "
+        "change it."));
     blurb->setWordWrap(true);
     root->addWidget(blurb);
 
     m_list = new QListWidget;
     m_list->setObjectName(QStringLiteral("aetherTxProfileList"));
-    m_list->setAccessibleName(tr("Saved AetherTX profiles"));
+    m_list->setAccessibleName(tr("AetherTX profiles: stock presets, then yours"));
     root->addWidget(m_list, 1);
 
     // Library actions, then the two that cross the filesystem.
@@ -117,13 +126,37 @@ AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* pare
 void AetherTxSettingsDialog::refreshList()
 {
     const QString keep = selectedName();
+    const bool keepStock = selectedIsStock();
     m_list->clear();
-    m_list->addItems(m_profiles->profileNames());
-    if (!keep.isEmpty()) {
-        const auto hits = m_list->findItems(keep, Qt::MatchExactly);
-        if (!hits.isEmpty()) m_list->setCurrentItem(hits.constFirst());
+    for (const QString& name : AetherTxStockProfiles::names()) {
+        auto* item = new QListWidgetItem(tr("%1 (stock)").arg(name), m_list);
+        item->setData(kNameRole, name);
+        item->setData(kStockRole, true);
+        QString tip = AetherTxStockProfiles::summary(name);
+        if (const auto f = AetherTxStockProfiles::txFilter(name)) {
+            tip += QLatin1Char('\n') + tr("Also sets the radio TX filter to %1–%2 Hz.")
+                                           .arg(f->lowHz).arg(f->highHz);
+        }
+        item->setToolTip(tip + QLatin1Char('\n') + tr("Read-only: save it under a new name to change it."));
     }
-    if (m_list->count() == 0) {
+    for (const QString& name : m_profiles->profileNames()) {
+        // Saved under a name before it became a stock preset's: still the
+        // operator's, and labelled so the two can be told apart.
+        const QString text = AetherTxProfiles::isReservedName(name) ? tr("%1 (yours)").arg(name) : name;
+        auto* item = new QListWidgetItem(text, m_list);
+        item->setData(kNameRole, name);
+        item->setData(kStockRole, false);
+    }
+    if (!keep.isEmpty()) {
+        for (int i = 0; i < m_list->count(); ++i) {
+            QListWidgetItem* item = m_list->item(i);
+            if (item->data(kNameRole).toString() == keep && item->data(kStockRole).toBool() == keepStock) {
+                m_list->setCurrentItem(item);
+                break;
+            }
+        }
+    }
+    if (m_profiles->profileNames().isEmpty()) {
         m_status->setText(tr("No profiles yet — Save… stores the chain you "
                              "have set up now."));
     }
@@ -133,25 +166,38 @@ void AetherTxSettingsDialog::refreshList()
 QString AetherTxSettingsDialog::selectedName() const
 {
     auto* item = m_list->currentItem();
-    return item ? item->text() : QString();
+    return item ? item->data(kNameRole).toString() : QString();
+}
+
+bool AetherTxSettingsDialog::selectedIsStock() const
+{
+    auto* item = m_list->currentItem();
+    return item && item->data(kStockRole).toBool();
 }
 
 void AetherTxSettingsDialog::updateButtonStates()
 {
     const bool has = !selectedName().isEmpty();
     m_loadBtn->setEnabled(has);
-    m_deleteBtn->setEnabled(has);
+    m_deleteBtn->setEnabled(has && !selectedIsStock());
     m_exportBtn->setEnabled(has);
 }
 
 void AetherTxSettingsDialog::onSave()
 {
     bool ok = false;
+    const QString suggested = selectedIsStock()
+        ? m_profiles->uniqueName(tr("My %1").arg(selectedName()))
+        : selectedName();
     const QString name = QInputDialog::getText(
         this, tr("Save profile"), tr("Name for this transmit chain:"),
-        QLineEdit::Normal, selectedName(), &ok).trimmed();
+        QLineEdit::Normal, suggested, &ok).trimmed();
     if (!ok || name.isEmpty()) return;
 
+    if (AetherTxProfiles::isReservedName(name)) {
+        m_status->setText(tr("“%1” is a stock preset's name; save it under another name.").arg(name));
+        return;
+    }
     if (m_profiles->hasProfile(name)) {
         const auto answer = QMessageBox::question(
             this, tr("Replace profile?"),
@@ -170,6 +216,24 @@ void AetherTxSettingsDialog::onLoad()
 {
     const QString name = selectedName();
     if (name.isEmpty()) return;
+    if (selectedIsStock()) {
+        if (!m_profiles->loadStockProfile(name)) {
+            m_status->setText(tr("Could not load “%1”.").arg(name));
+            return;
+        }
+        QString note;
+        if (const auto f = AetherTxStockProfiles::txFilter(name)) {
+            if (!m_txFilterHandler) {
+                note = tr("Set the radio TX filter to %1–%2 Hz to match.").arg(f->lowHz).arg(f->highHz);
+            } else {
+                m_txFilterHandler(f->lowHz, f->highHz, &note);
+            }
+        }
+        m_status->setText(note.isEmpty() ? tr("Loaded “%1”.").arg(name)
+                                         : tr("Loaded “%1”. %2").arg(name, note));
+        emit profileApplied();
+        return;
+    }
     if (!m_profiles->loadProfile(name)) {
         m_status->setText(tr("Could not load “%1”.").arg(name));
         return;
@@ -181,7 +245,7 @@ void AetherTxSettingsDialog::onLoad()
 void AetherTxSettingsDialog::onDelete()
 {
     const QString name = selectedName();
-    if (name.isEmpty()) return;
+    if (name.isEmpty() || selectedIsStock()) return;
     const auto answer = QMessageBox::question(
         this, tr("Delete profile?"),
         tr("Delete “%1”? This cannot be undone.").arg(name),
@@ -210,7 +274,9 @@ void AetherTxSettingsDialog::onExport()
         QLatin1String(kFileFilter));
     if (path.isEmpty()) return;
 
-    if (!m_profiles->exportToFile(name, path)) {
+    const bool written = selectedIsStock() ? m_profiles->exportStockToFile(name, path)
+                                           : m_profiles->exportToFile(name, path);
+    if (!written) {
         m_status->setText(tr("Could not write %1.").arg(path));
         return;
     }
@@ -244,6 +310,10 @@ void AetherTxSettingsDialog::onImport()
         tr("Save the profile from %1 as:").arg(QFileInfo(path).fileName()),
         QLineEdit::Normal, m_profiles->uniqueName(suggested), &ok).trimmed();
     if (!ok || name.isEmpty()) return;
+    if (AetherTxProfiles::isReservedName(name)) {
+        m_status->setText(tr("“%1” is a stock preset's name; import it under another name.").arg(name));
+        return;
+    }
 
     if (m_profiles->hasProfile(name)) {
         const auto answer = QMessageBox::question(

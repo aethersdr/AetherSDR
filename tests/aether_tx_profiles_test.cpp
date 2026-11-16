@@ -5,6 +5,7 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AetherTxProfiles.h"
+#include "core/AetherTxStockProfiles.h"
 #include "core/ChannelStripPresets.h"
 #include "core/AudioEngine.h"
 #include "core/ClientCfc.h"
@@ -63,6 +64,10 @@ private slots:
     void aReceiveExportIsRefusedByKind();
     void legacyPresetsMigrateOnFirstOpen();
     void migrationDoesNotUndoADeliberateDelete();
+    void stockNamesAreReserved();
+    void uniqueNameStepsPastStockNames();
+    void aStockPresetLoadsAndExports();
+    void anOldProfileWithAStockNameIsStillTheOperators();
 
 private:
     QTemporaryDir m_home;
@@ -600,6 +605,83 @@ void AetherTxProfilesTest::migrationDoesNotUndoADeliberateDelete()
     // never importing at all, so the flag lives in the library file itself.
     AetherTxProfiles second(nullptr);
     QVERIFY(!second.hasProfile("Ragchew"));
+}
+
+// Nothing is saved, imported or stored under a stock preset's name, in any
+// case or with stray spaces; the library is untouched by the attempts.
+void AetherTxProfilesTest::stockNamesAreReserved()
+{
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine);
+    const int before = lib.profileNames().size();
+    for (const QString& n : {QStringLiteral("SSB 3 kHz"), QStringLiteral("dx punch 2.7 khz"),
+                             QStringLiteral(" ESSB 6 kHz ")}) {
+        QVERIFY(AetherTxProfiles::isReservedName(n));
+        QVERIFY(!lib.saveFromCurrent(n));
+        QVERIFY(!lib.addProfile(n, sampleProfile()));
+    }
+    QCOMPARE(lib.profileNames().size(), before);
+    QVERIFY(!AetherTxProfiles::isReservedName(QStringLiteral("SSB 3 kHz (2)")));
+}
+
+void AetherTxProfilesTest::uniqueNameStepsPastStockNames()
+{
+    AetherTxProfiles lib(nullptr);
+    QCOMPARE(lib.uniqueName(QStringLiteral("SSB 3 kHz")), QStringLiteral("SSB 3 kHz (2)"));
+    QCOMPARE(lib.uniqueName(QStringLiteral("ESSB 6 kHz")), QStringLiteral("ESSB 6 kHz (2)"));
+}
+
+// A stock preset loads through its own call (a library name does not reach
+// it), and exports as a file that imports back under a name of the
+// operator's choosing.
+void AetherTxProfilesTest::aStockPresetLoadsAndExports()
+{
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine);
+    QVERIFY(!lib.loadProfile(QStringLiteral("SSB 3 kHz")));      // not in the library
+    QVERIFY(!lib.loadStockProfile(QStringLiteral("My chain")));   // not stock
+    QVERIFY(lib.loadStockProfile(QStringLiteral("SSB 3 kHz")));
+
+    const QString path = m_home.filePath(QStringLiteral("stock-export.json"));
+    QVERIFY(lib.exportStockToFile(QStringLiteral("ssb 3 khz"), path));
+    QString suggested;
+    QString error;
+    const QJsonObject read = AetherTxProfiles::readFile(path, &suggested, &error);
+    QVERIFY2(!read.isEmpty(), qPrintable(error));
+    QCOMPARE(suggested, QStringLiteral("SSB 3 kHz"));
+    QCOMPARE(read.value("peak").toObject().value("clipDb").toDouble(),
+             AetherTxStockProfiles::profile(QStringLiteral("SSB 3 kHz"))
+                 .value("peak").toObject().value("clipDb").toDouble());
+    QCOMPARE(lib.uniqueName(suggested), QStringLiteral("SSB 3 kHz (2)"));
+    QVERIFY(lib.addProfile(lib.uniqueName(suggested), read));
+    QVERIFY(lib.deleteProfile(QStringLiteral("SSB 3 kHz (2)")));
+}
+
+// Saved under the name before it was reserved: it stays in the library, is
+// listed, loads its own settings (not the stock preset's) and can be deleted.
+void AetherTxProfilesTest::anOldProfileWithAStockNameIsStillTheOperators()
+{
+    QFile f(SettingsPaths::configDir() + "/AetherTxProfiles.json");
+    QJsonObject root{{"version", 1}};
+    if (f.open(QIODevice::ReadOnly)) {
+        root = QJsonDocument::fromJson(f.readAll()).object();
+        f.close();
+    }
+    QJsonObject profiles = root.value("profiles").toObject();
+    QJsonObject mine{{"comp", QJsonObject{{"enabled", true}, {"ratio", 7.0}}}};
+    profiles[QStringLiteral("DX Punch 2.7 kHz")] = mine;
+    root["profiles"] = profiles;
+    QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    f.write(QJsonDocument(root).toJson());
+    f.close();
+
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine);
+    QVERIFY(lib.profileNames().contains(QStringLiteral("DX Punch 2.7 kHz")));
+    QVERIFY(lib.loadProfile(QStringLiteral("DX Punch 2.7 kHz")));
+    QCOMPARE(engine.clientCompTx()->ratio(), 7.0f);
+    QVERIFY(lib.deleteProfile(QStringLiteral("DX Punch 2.7 kHz")));
+    QVERIFY(!lib.hasProfile(QStringLiteral("DX Punch 2.7 kHz")));
 }
 
 int main(int argc, char** argv)

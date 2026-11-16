@@ -1024,6 +1024,7 @@ set(CORE_SOURCES
     src/core/ChannelStripPresets.cpp
     src/core/AetherRxProfiles.cpp
     src/core/AetherTxProfiles.cpp
+    src/core/AetherTxStockProfiles.cpp
     src/core/Biquad.cpp
     src/core/StereoBiquad.cpp
     src/core/ClientEq.cpp

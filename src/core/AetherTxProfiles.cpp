@@ -1,4 +1,5 @@
 #include "AetherTxProfiles.h"
+#include "AetherTxStockProfiles.h"
 #include "AudioEngine.h"
 #include "ChannelStripPresets.h"
 #include "SettingsPaths.h"
@@ -139,7 +140,7 @@ bool AetherTxProfiles::hasProfile(const QString& name) const
 
 bool AetherTxProfiles::saveFromCurrent(const QString& name)
 {
-    if (name.trimmed().isEmpty() || !m_engine) return false;
+    if (name.trimmed().isEmpty() || !m_engine || isReservedName(name)) return false;
 
     QJsonObject p = ChannelStripPresets::captureTxJson(m_engine);
     p["createdBy"] = QStringLiteral("AetherSDR ") + QCoreApplication::applicationVersion();
@@ -147,9 +148,14 @@ bool AetherTxProfiles::saveFromCurrent(const QString& name)
     return addProfile(name.trimmed(), p);
 }
 
+bool AetherTxProfiles::isReservedName(const QString& name)
+{
+    return AetherTxStockProfiles::contains(name);
+}
+
 bool AetherTxProfiles::addProfile(const QString& name, const QJsonObject& profile)
 {
-    if (name.trimmed().isEmpty()) return false;
+    if (name.trimmed().isEmpty() || isReservedName(name)) return false;
     QJsonObject profiles = m_root.value("profiles").toObject();
     QJsonObject stored = profile;
     // The name is the key; a copy inside the object would be a second place
@@ -179,6 +185,13 @@ bool AetherTxProfiles::loadProfile(const QString& name)
     return true;
 }
 
+bool AetherTxProfiles::loadStockProfile(const QString& name)
+{
+    if (!m_engine || !AetherTxStockProfiles::contains(name)) return false;
+    ChannelStripPresets::applyTxJson(m_engine, AetherTxStockProfiles::profile(name));
+    return true;
+}
+
 bool AetherTxProfiles::deleteProfile(const QString& name)
 {
     QJsonObject profiles = m_root.value("profiles").toObject();
@@ -193,20 +206,16 @@ bool AetherTxProfiles::deleteProfile(const QString& name)
     return true;
 }
 
-bool AetherTxProfiles::exportToFile(const QString& name, const QString& filePath) const
+namespace {
+// One profile as a standalone file, written atomically: an export that fails
+// must not leave a truncated file behind or report success.
+bool writeExport(QJsonObject out, const QString& name, const QString& filePath, int version)
 {
-    const QJsonObject profiles = m_root.value("profiles").toObject();
-    if (!profiles.contains(name)) return false;
-
-    QJsonObject out = profiles.value(name).toObject();
     // A standalone file says what it is and what it was called, so the
     // importer has something to suggest and a reader can tell at a glance.
     out["name"]    = name;
     out["kind"]    = QStringLiteral("AetherTX profile");
-    out["version"] = kSchemaVersion;
-
-    // Same contract as the library write: an export that fails must not leave
-    // a truncated file behind, and must not tell the operator it succeeded.
+    out["version"] = version;
     QSaveFile f(filePath);
     if (!f.open(QIODevice::WriteOnly)) return false;
     const QByteArray bytes = QJsonDocument(out).toJson(QJsonDocument::Indented);
@@ -215,6 +224,21 @@ bool AetherTxProfiles::exportToFile(const QString& name, const QString& filePath
         return false;
     }
     return f.commit();
+}
+} // namespace
+
+bool AetherTxProfiles::exportStockToFile(const QString& name, const QString& filePath) const
+{
+    if (!AetherTxStockProfiles::contains(name)) return false;
+    return writeExport(AetherTxStockProfiles::profile(name),
+                       AetherTxStockProfiles::canonicalName(name), filePath, kSchemaVersion);
+}
+
+bool AetherTxProfiles::exportToFile(const QString& name, const QString& filePath) const
+{
+    const QJsonObject profiles = m_root.value("profiles").toObject();
+    if (!profiles.contains(name)) return false;
+    return writeExport(profiles.value(name).toObject(), name, filePath, kSchemaVersion);
 }
 
 QJsonObject AetherTxProfiles::readFile(const QString& path,
@@ -292,10 +316,11 @@ QString AetherTxProfiles::uniqueName(const QString& desired) const
     const QString base = desired.trimmed().isEmpty()
         ? QObject::tr("Imported profile")
         : desired.trimmed();
-    if (!hasProfile(base)) return base;
+    const auto taken = [this](const QString& n) { return hasProfile(n) || isReservedName(n); };
+    if (!taken(base)) return base;
     for (int n = 2; n < 1000; ++n) {
         const QString candidate = QStringLiteral("%1 (%2)").arg(base).arg(n);
-        if (!hasProfile(candidate)) return candidate;
+        if (!taken(candidate)) return candidate;
     }
     return base;
 }

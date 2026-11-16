@@ -155,6 +155,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/AetherTxStockProfiles.h": {
+  "tag": "universal",
+  "note": "Compiled-in stock AetherTX presets (TX profile JSON plus the TX filter each was tuned for); radio-agnostic client DSP config.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AetherRxProfiles.h": {
   "tag": "universal",
   "note": "Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares.",
@@ -902,6 +908,12 @@
  "core/TxKeyingMarker.h": {
   "tag": "ui-support",
   "note": "QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TxFilterEdges.h": {
+  "tag": "universal",
+  "note": "Pure helper fitting a wanted TX filter to a radio's capability-declared fixed edges; radio-agnostic.",
   "split": "",
   "confidence": "high"
  },

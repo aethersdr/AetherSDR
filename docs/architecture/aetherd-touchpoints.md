@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 293 touchpoint headers (238 core, 55 models) — 293/293 tagged, 0/293 converted.
+**Totals:** 295 touchpoint headers (240 core, 55 models) — 295/295 tagged, 0/295 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -17,6 +17,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherGpsPackage.h` | 2 | peripheral(aether-gps) — Pinned version, Qt resource paths, sizes and SHA-256s of the AetherGPS relay packages (tools/aether-gps: a FLEX-6000 legacy waveform and a FLEX-8000/Aurora container) that ship in AetherSDR, and the writer that hands one to the installer. Not SmartSDR wire: AetherSDR's own radio-side app, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthPackage.h). | unconverted |
 | `core/AetherRxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares. | unconverted |
 | `core/AetherTxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply. | unconverted |
+| `core/AetherTxStockProfiles.h` | 1 | universal — Compiled-in stock AetherTX presets (TX profile JSON plus the TX filter each was tuned for); radio-agnostic client DSP config. | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
 | `core/AppActivity.h` | 3 | ui-support — Process-lifetime activity hold (App Nap opt-out on macOS, process power-throttling opt-out on Windows; never blocks sleep) and startStreamThread(), the High-QoS thread start for stream threads; app plumbing, not radio state. | unconverted |
 | `core/AppSettings.h` | 115 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
@@ -183,6 +184,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/ThemeManager.h` | 197 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
+| `core/TxFilterEdges.h` | 1 | universal — Pure helper fitting a wanted TX filter to a radio's capability-declared fixed edges; radio-agnostic. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
 | `core/UlanziDialBackend.h` | 4 | ui-support — Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state | unconverted |
 | `core/UlanziDialMacOSManager.h` | 1 | ui-support — macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state. | unconverted |

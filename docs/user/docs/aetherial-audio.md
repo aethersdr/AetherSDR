@@ -250,6 +250,75 @@ profile also records the active noise-reduction method.
 
 Loading a TX profile leaves the receive side alone, and the other way round.
 
+### Stock presets (AetherTX)
+
+AetherTX Settings lists three stock presets above your own profiles, marked
+**(stock)**. They are read-only: load one, then **Save…** it under a new name
+if you want to change it. A stock preset's name can't be used for a profile
+of your own.
+
+Loading a stock preset also sets the radio's **TX filter** to the one it was
+tuned for, so Peak control's passband matches. If you aren't connected, or the
+radio's TX filter can't be set from AetherSDR, the status line tells you the
+filter to set yourself. On a radio with fixed TX filter edges, the nearest
+edges are used.
+
+| Preset | TX filter | For |
+|---|---|---|
+| **SSB 3 kHz** | 100–3100 Hz | Everyday SSB: clean, full-sounding voice with dense average power |
+| **DX Punch 2.7 kHz** | 200–2900 Hz | Weak-signal DX and pileups: narrower, with the lows trimmed for presence |
+| **ESSB 6 kHz** | 50–6050 Hz | Wide, natural ESSB with extended lows and air, for rag-chews on open bands |
+
+All three use the same core: the Compressor sets a hot, even level with its
+phase rotator on, Peak control turns that into SSB envelope density, and LIM
+holds the final ceiling. Tube, LVLR, CFC, Exciter, Reverb and the MB limiter
+are off, and **RN2 stays as you set it**.
+
+| Stage | SSB 3 kHz | DX Punch 2.7 kHz | ESSB 6 kHz |
+|---|---|---|---|
+| EQ | HPF 100, −2 dB @ 250, +3 dB @ 2.2k | HPF 200, +3 dB @ 2.2k | HPF 50, low shelf +2 dB @ 120, high shelf +3 dB @ 4k |
+| Compressor | 4:1 at −24 dB, attack 20, release 150, makeup +16, Phase 6, limiter −1 | as SSB | 3:1 at −22 dB, attack 25, release 200, makeup +14, Phase 6, limiter −1 |
+| Peak control | Clip 5 dB, CESSB on, Ceiling −1 | Clip 4 dB, CESSB on, Ceiling −1 | Clip 5 dB, CESSB on, Ceiling −1 |
+| Final Output LIM | On, −0.5 dB, 1.5 ms | same | same |
+
+Peak control is set to run in the radio's modulator; on a radio without one
+(any FLEX), it runs in AetherTX's chain, as usual. Each preset adds about
+41 ms of delay: Peak control (about 39 ms) and LIM's look-ahead (1.5 ms).
+
+**How they were tuned.** On a FLEX-8600 at 25 W into a dummy load, with a
+synthesized voice, each preset is the setting with the highest average
+forward power whose received audio stayed clearly copyable. Copyability was
+scored as intelligibility (STOI) of the transmitted signal received back
+through a sampler, with 0.75 as the floor. Against the same chain bypassed:
+
+| Preset | Average forward power | Envelope PAPR | Copyability (STOI) |
+|---|---|---|---|
+| Bypassed (each filter) | 2.2–3.7 W | 11.0–11.7 dB | 0.85–0.89 |
+| **SSB 3 kHz** | 15.1 W | 5.4 dB | 0.77 |
+| **DX Punch 2.7 kHz** | 13.4 W | 6.4 dB | 0.76 |
+| **ESSB 6 kHz** | 15.3 W | 5.2 dB | 0.78 |
+
+At the same 25 W setting, average forward power rose 6–8 dB. At an equal
+peak, the gain is the drop in envelope PAPR: 4.6–6.4 dB. Your mic and voice
+differ from the test voice, so check with **REC / PLAY**, and use **Trim**
+or the radio's mic level so that peaks reach Peak control's ceiling.
+
+### How the AetherTX stages fit together
+
+| Stage | Where it runs | What it is for | Delay |
+|---|---|---|---|
+| RN2 | Ahead of everything | Room noise | About 10 ms when on |
+| Tube | Chain | Color and density | – |
+| EQ | Chain | Tone, high- and low-pass | – |
+| LVLR | Chain | A slow level rider for quiet or distant voices | About 7 ms at 1 ms attack |
+| CFC | Chain | Compression and EQ as curves over frequency | 21 ms at FFT 1024 |
+| Compressor | Chain | Level and density; Drive and Phase | – |
+| Exciter | Chain | Presence harmonics | – |
+| Reverb | Chain | Room sound | – |
+| MB limiter | Fixed, after the chain | Per-band peak control, for tone | 5 ms |
+| Peak control | Fixed, after the MB limiter | SSB envelope density: clipper, CESSB, ALC | About 39 ms |
+| Final Output LIM | Fixed, last | 48 kHz sample ceiling | The look-ahead, 1.5 ms by default |
+
 Individual settings live in AetherSDR's settings database; you can inspect
 them with **Settings → Settings Browser...** (see [Settings and Backups](./settings-and-backups.md)).
 
@@ -698,14 +767,8 @@ after every change.
 
 #### Contest / DX punch
 
-| Stage | Setting |
-|---|---|
-| RN2 | On |
-| EQ | HPF 200, +2 @ 500, −3 @ 1k, +5 @ 2.5k |
-| Compressor | Ratio 8:1, Attack 10, Release 100, makeup +8, Limiter on; try Drive +6 and Phase 4 |
-| Tube | Model B, Drive 12, Dry/Wet 60 % |
-| Exciter | Odd, high Air 12, high Mix 40 % |
-| Reverb | Off |
+Load the **DX Punch 2.7 kHz** stock preset (see
+[Stock presets](#stock-presets-aethertx)) and save your own copy to adjust.
 
 ## Known issues
 

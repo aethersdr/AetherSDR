@@ -2487,6 +2487,23 @@ target_include_directories(aether_tx_profiles_test PRIVATE src)
 target_link_libraries(aether_tx_profiles_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME aether_tx_profiles_test COMMAND aether_tx_profiles_test)
 
+# The stock AetherTX presets: each applies key for key with nothing clamped,
+# runs the tuned chain, leaves RN2 alone, carries its TX filter, and adds the
+# latency the docs give. Isolated settings, no audio device, no radio.
+add_executable(aether_tx_stock_profiles_test
+    tests/aether_tx_stock_profiles_test.cpp
+)
+target_include_directories(aether_tx_stock_profiles_test PRIVATE src tests)
+target_link_libraries(aether_tx_stock_profiles_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME aether_tx_stock_profiles_test COMMAND aether_tx_stock_profiles_test)
+
+# TxFilterEdges::snap: a stock preset's TX filter fitted to a radio's allowed
+# edges. Pure.
+add_executable(tx_filter_edges_test tests/tx_filter_edges_test.cpp)
+target_include_directories(tx_filter_edges_test PRIVATE src)
+target_link_libraries(tx_filter_edges_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME tx_filter_edges_test COMMAND tx_filter_edges_test)
+
 add_executable(aether_rx_profiles_test
     tests/aether_rx_profiles_test.cpp
 )
@@ -11725,6 +11742,7 @@ set(AETHER_SETTINGS_CONSUMERS
     comp_makeup_fader_test
     stage_tab_bar_drag_test
     aether_tx_profiles_test
+    aether_tx_stock_profiles_test
     tx_chain_settings_test
     aether_rx_profiles_test
     theme_manager_test

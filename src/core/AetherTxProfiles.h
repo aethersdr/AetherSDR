@@ -32,6 +32,11 @@ class AudioEngine;
 //   }
 // Export writes one profile at top level with its "name"; import accepts that
 // or a whole library.
+//
+// The stock presets (AetherTxStockProfiles) are not in this file. Their names
+// are reserved: saveFromCurrent() and addProfile() refuse one, and
+// uniqueName() steps past them. A profile an operator saved under such a name
+// before it became reserved still loads, renames and deletes as their own.
 class AetherTxProfiles : public QObject {
     Q_OBJECT
 
@@ -48,10 +53,20 @@ public:
     // Apply a stored profile to the engine's TX modules. False if absent.
     bool loadProfile(const QString& name);
 
+    // Apply a stock preset's chain. The radio TX filter that goes with it
+    // (AetherTxStockProfiles::txFilter) is the caller's to set: this class
+    // only reaches the audio engine. False if `name` is not a stock preset.
+    bool loadStockProfile(const QString& name);
+
+    // A stock name: reserved, never saved into the library.
+    static bool isReservedName(const QString& name);
+
     bool deleteProfile(const QString& name);
 
     // Write one profile to a standalone JSON file.
     bool exportToFile(const QString& name, const QString& filePath) const;
+    // The same for a stock preset, so it can be passed on or edited outside.
+    bool exportStockToFile(const QString& name, const QString& filePath) const;
 
     // Read a file written by exportToFile() — or a whole library — without
     // storing anything. Returns the first profile it contains, with the name
