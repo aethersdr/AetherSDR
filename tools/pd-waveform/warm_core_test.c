@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <unistd.h>
 
 static void seed_curve(pd_core* core)
 {
@@ -26,13 +27,23 @@ static void fill(double* data,int n)
 }
 int main(void)
 {
+    alarm(15);
     pd_core* core=pd_core_create(24000,64,0.7);assert(core);
+    // A fit retired before publication never enables IQC. Calcc can still
+    // request its stop; an inactive curve has no packet-driven ramp to drain.
+    pd_fit_request(0);
+    pd_core_invalidate(core);
+    CurveEMA empty = {0};
+    SetTXAiqcStart(0,NULL,&empty,1,NULL,&empty,1,NULL,&empty,0);
+    assert(!txa[0].iqc.p->run && pd_core_rejected_fits(core)==1);
+    SetTXAiqcEnd(0);
+    assert(!txa[0].iqc.p->run && !pd_core_swap_pending(core));
     seed_curve(core);
     double reference[128];fill(reference,64);pd_core_correct(core,reference,64);
     pd_fit_request(0); // queued fit from the old burst must not publish later
     pd_core_pause(core,1);
     assert(pd_core_cached_solution(core) && !pd_core_current_solution(core));
-    assert(pd_fit_publish(0)==0 && pd_core_rejected_fits(core)==1);
+    assert(pd_fit_publish(0)==0 && pd_core_rejected_fits(core)==2);
     IQC q=txa[0].iqc.p;
     for(int i=0;i<CURVE_EMA_PTS;++i){q->m_calavg[0].ys[i]=1.6;}
     double data[128];fill(data,64);pd_core_correct_cached(core,data,64);

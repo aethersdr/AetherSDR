@@ -1,0 +1,216 @@
+PASS: TX filter edges retire cache; native APD blocks correction/training until observed off; sampler and repeated status preserve valid cache
+DIAGNOSTIC_FIXTURE {"diagnostics":{"version":1,"alignment":{"count":1,"truncated":false,"text":"alignment evidence: reason=tx_dispatch mono_ns=57897816849121 ref_generation=8 delay=0.000 coherence=0.000 tx_packets=3 tx_discontinuities=0 tx_dropped=0 tx_age_ns=0 sent=0 send_errors=0 deadlines=1 session_max_send_gap_ns=0 session_max_work_ns=0 iq_frames=1 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=0 iq_old=0 iq_age_ns=8070 ref_fifo=384 fb_fifo=0"},"source_end":{"count":0,"truncated":false,"text":""}},"name":"AetherPD","version":"0.1.0","registered":true,"active_slice":1,"tx_mhz":7.150000,"pan_mhz":7.151000,"daxiq_stream":"0x20000001","daxiq_reply":"","keyed":true,"feedback_ok":true,"correction":true,"aligned":false,"delay_samples":0.00,"delay_corr":0.000,"coherence":0.000,"offset_hz":0.0000,"fits":0,"correcting":false,"calc_state":0,"tx_pkts":4,"tx_held":0,"fb_pkts":1,"other_pkts":0,"other_last":"sid 0x00000000 cls 0x0000","ref_fifo":0,"fb_fifo":0,"acq":0,"eq_ready":false,"eq_residual_db":-300.0,"feedback":"local","fb_slice":-1,"fb_mhz":0.000000,"fb_dax_stream":"0x00000000","local_iq_fault":true,"local_iq_frames":1,"local_iq_stale":0,"tx_rejected":0,"model_resets":7,"model_recoveries":1,"rejected_fits":0,"cached_model":false,"warm_starts":0,"cached_packets":0,"tx_sent_datagrams":0,"tx_send_errors":0,"tx_max_send_gap_ns":0,"tx_max_work_ns":0,"tx_trace_rows":0,"tx_trace_dropped":0,"scheduler_policy":0,"scheduler_priority":0,"tx_deadline_faults":1,"api_leased":false,"native_apd_blocked":false,"collection_full_bins":0,"collection_bin_counts":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"transport_cache_enabled":false,"transport_pending":false,"transport_recoveries":0,"transport_eq_distance":-1.000000,"mic_peak":0.200000,"prelimit_peak":0.227275,"limited_samples":0,"generated_samples":512,"quiet_blocks":0,"reference_power":0.000000000,"signal_present":false,"test_active":false,"test_remaining_samples":0,"mic_gain":1.000000,"base_peak":0.700000,"measurement":{"source_id":"0000000000000000","tones":false},"measurement_control":false,"correction_control":false,"measurement_tone_control":false,"measurement_tone_capture_version":3,"measurement_capture_batch_version":1,"measurement_tone_config":{"min_spacing_hz":200,"max_spacing_hz":10000,"center_hz":1305,"spacing_hz":1190,"source_id":"0000000000000000"},"source_purpose":"calibration","calibration_control":false,"calibration_state":"idle","calibration_samples_left":0}
+PASS: quiet feedback holds model/frequency, advances FIR histories and cannot train noise-only EQ; coherent resume works and active mismatch still retires correction
+PASS: bounded diagnostic source fades to normal mic, disarms on unkey/fault, never rearms, validates duration; legacy test mode preserved
+PASS: diagnostic mic peak and limiter counts expose normal-mic overdrive without changing the limiter
+PASS: final-send late dispatch and injected send failure retire paired histories; pthread scheduler query works in static musl
+PASS: 20 ms dispatch gap retires correction before output; 5 ms dispatch and warm-key idle preserve valid correction; opt-in guard leaves legacy mode unchanged
+PASS: fresh post-key IQ required; gap, stale TX/IQ, malformed IQ, interlock/configuration/mode changes invalidate cache; unrelated status preserves cache
+1794862936.539 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.539 PD selected on slice 1
+1794862936.539 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.556 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.556 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.557 alignment evidence: reason=tx_continuity mono_ns=57896960583351 ref_generation=11 delay=0.000 coherence=0.000 tx_packets=5 tx_discontinuities=1 tx_dropped=0 tx_age_ns=0 sent=0 send_errors=0 deadlines=0 session_max_send_gap_ns=0 session_max_work_ns=0 iq_frames=2 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=1 iq_old=0 iq_age_ns=5529 ref_fifo=384 fb_fifo=0
+1794862936.582 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.582 PD selected on slice 1
+1794862936.583 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.585 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794862936.613 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.613 PD selected on slice 1
+1794862936.613 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.615 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.649 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.649 PD selected on slice 1
+1794862936.649 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.651 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.651 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.682 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.682 PD selected on slice 1
+1794862936.682 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.685 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.716 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.716 PD selected on slice 1
+1794862936.716 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.718 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.744 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.744 PD selected on slice 1
+1794862936.744 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.746 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.790 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.790 PD selected on slice 1
+1794862936.790 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.793 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.824 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.824 PD selected on slice 1
+1794862936.824 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.826 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.852 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.852 PD selected on slice 1
+1794862936.852 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.854 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.881 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.881 PD selected on slice 1
+1794862936.881 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.883 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.911 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.911 PD selected on slice 1
+1794862936.911 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.913 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.913 native APD enabled or active: AetherPD correction and learning blocked
+1794862936.939 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.939 PD selected on slice 1
+1794862936.939 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.941 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862936.941 native APD enabled or active: AetherPD correction and learning blocked
+1794862936.970 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862936.970 PD selected on slice 1
+1794862936.970 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862936.972 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.007 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.007 PD selected on slice 1
+1794862937.007 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.009 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.038 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.038 PD selected on slice 1
+1794862937.038 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.041 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.072 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.072 PD selected on slice 1
+1794862937.072 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.074 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.100 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.100 PD selected on slice 1
+1794862937.100 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.102 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.129 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.129 PD selected on slice 1
+1794862937.129 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.131 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.131 PD released by slice 1
+1794862937.159 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.159 PD selected on slice 1
+1794862937.159 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.161 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.187 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.187 PD selected on slice 1
+1794862937.187 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.190 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.190 native APD enabled or active: AetherPD correction and learning blocked
+1794862937.190 receive: 0 fits, cache 0, delay 0.00, offset 0.000 Hz
+1794862937.190 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.190 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.190 native APD off: AetherPD correction and learning may restart
+1794862937.217 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.217 PD selected on slice 1
+1794862937.217 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.219 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.219 native APD enabled or active: AetherPD correction and learning blocked
+1794862937.219 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.219 native APD off: AetherPD correction and learning may restart
+1794862937.254 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.254 PD selected on slice 1
+1794862937.254 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.261 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.261 native APD enabled or active: AetherPD correction and learning blocked
+1794862937.261 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.261 native APD off: AetherPD correction and learning may restart
+1794862937.294 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.294 PD selected on slice 1
+1794862937.294 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.296 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.296 native APD enabled or active: AetherPD correction and learning blocked
+1794862937.296 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.296 native APD off: AetherPD correction and learning may restart
+1794862937.322 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.322 PD selected on slice 1
+1794862937.322 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.324 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.324 native APD enabled or active: AetherPD correction and learning blocked
+1794862937.324 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.324 native APD off: AetherPD correction and learning may restart
+1794862937.353 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.353 PD selected on slice 1
+1794862937.353 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.356 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.356 native APD enabled or active: AetherPD correction and learning blocked
+1794862937.356 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.356 native APD off: AetherPD correction and learning may restart
+1794862937.381 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.381 PD selected on slice 1
+1794862937.381 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.383 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.383 native APD enabled or active: AetherPD correction and learning blocked
+1794862937.383 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.383 native APD off: AetherPD correction and learning may restart
+1794862937.411 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.411 PD selected on slice 1
+1794862937.411 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.413 alignment evidence: reason=tx_dispatch mono_ns=57897816849121 ref_generation=8 delay=0.000 coherence=0.000 tx_packets=3 tx_discontinuities=0 tx_dropped=0 tx_age_ns=0 sent=0 send_errors=0 deadlines=1 session_max_send_gap_ns=0 session_max_work_ns=0 iq_frames=1 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=0 iq_old=0 iq_age_ns=8070 ref_fifo=384 fb_fifo=0
+1794862937.413 TX dispatch deadline missed: 20.005 ms; correction retired
+1794862937.413 alignment evidence: reason=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+1794862937.440 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.440 PD selected on slice 1
+1794862937.440 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.442 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.442 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.469 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.469 PD selected on slice 1
+1794862937.469 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.497 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.497 PD selected on slice 1
+1794862937.497 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.500 alignment evidence: reason=tx_output mono_ns=57897903315691 ref_generation=8 delay=0.000 coherence=0.000 tx_packets=2 tx_discontinuities=0 tx_dropped=0 tx_age_ns=0 sent=1 send_errors=0 deadlines=1 session_max_send_gap_ns=20002803 session_max_work_ns=124072 iq_frames=1 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=0 iq_old=0 iq_age_ns=6459 ref_fifo=256 fb_fifo=0
+1794862937.500 TX output discontinuity: gap 20.003 ms, sent 1052/1052; correction retired
+1794862937.526 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.526 PD selected on slice 1
+1794862937.526 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.528 alignment evidence: reason=tx_output mono_ns=57897931668406 ref_generation=8 delay=0.000 coherence=0.000 tx_packets=2 tx_discontinuities=0 tx_dropped=0 tx_age_ns=0 sent=1 send_errors=1 deadlines=0 session_max_send_gap_ns=0 session_max_work_ns=87238 iq_frames=1 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=0 iq_old=0 iq_age_ns=4707 ref_fifo=256 fb_fifo=0
+1794862937.528 TX output discontinuity: gap 0.000 ms, sent -1/1052; correction retired
+1794862937.553 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.553 PD selected on slice 1
+1794862937.553 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.557 feedback stopped matching (coherence 0.10): finding the delay again
+1794862937.557 alignment evidence: reason=coherence mono_ns=57897960715021 ref_generation=8 delay=0.000 coherence=0.105 tx_packets=2 tx_discontinuities=0 tx_dropped=0 tx_age_ns=0 sent=0 send_errors=0 deadlines=0 session_max_send_gap_ns=0 session_max_work_ns=0 iq_frames=1 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=0 iq_old=0 iq_age_ns=6242 ref_fifo=0 fb_fifo=0
+1794862937.582 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.582 PD selected on slice 1
+1794862937.582 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.612 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.612 PD selected on slice 1
+1794862937.613 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.643 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.643 PD selected on slice 1
+1794862937.643 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.652 bounded source ended: reason=source_samples_complete mono_ns=57898055506405 source=0000000000000000 phase=idle keyed=1 tx_on=1 samples_left=0 generated=5999 iq_frames=1 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1256 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000000 slice=1 correction=1 native_apd=0 iq_valid_ns=57898046630022
+1794862937.652 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.652 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.678 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.678 PD selected on slice 1
+1794862937.678 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.680 bounded source ended: reason=tx_admission_ended mono_ns=57898084070971 source=0000000000000000 phase=idle keyed=1 tx_on=1 samples_left=0 generated=256 iq_frames=1 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1295 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000000 slice=1 correction=1 native_apd=0 iq_valid_ns=57898081860112
+1794862937.680 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.705 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.705 PD selected on slice 1
+1794862937.705 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.707 bounded source ended: reason=feedback_invalidated mono_ns=57898110575928 source=0000000000000000 phase=idle keyed=1 tx_on=1 samples_left=0 generated=256 iq_frames=1 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1378 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000000 slice=1 correction=1 native_apd=0 iq_valid_ns=57898108386393
+1794862937.734 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.734 PD selected on slice 1
+1794862937.734 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.736 bounded source ended: reason=tx_admission_ended mono_ns=57898139644578 source=0000000000000000 phase=idle keyed=0 tx_on=1 samples_left=0 generated=256 iq_frames=1 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1247 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000000 slice=1 correction=1 native_apd=0 iq_valid_ns=57898137438389
+1794862937.763 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.763 PD selected on slice 1
+1794862937.763 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.765 receive: 0 fits, cache 1, delay 0.00, offset 0.000 Hz
+1794862937.765 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.791 registered AetherPD: tx_in 0x84000001 rx_in 0x84000000
+1794862937.791 PD selected on slice 1
+1794862937.791 transmit: feedback shift -1000 Hz (tx 7.150000 MHz, pan 7.151000 MHz)
+1794862937.793 bounded source ended: reason=pd_mode_released mono_ns=57898196549612 source=0000000000000000 phase=idle keyed=0 tx_on=1 samples_left=0 generated=256 iq_frames=1 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1261 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=0 software_owner=0 idle=0 gui=00000000 slice=1 correction=1 native_apd=0 iq_valid_ns=57898194449663
+1794862937.793 PD released by slice 1
+1794862937.799 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794862937.799 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794862937.799 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794862937.799 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794862937.799 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794862937.799 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s
+1794862937.800 AETHER_PD_TEST_SECONDS requires valid test tones and .25..15s

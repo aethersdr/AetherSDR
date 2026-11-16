@@ -314,6 +314,16 @@ void SetTXAiqcEnd (int channel)
 {
 	IQC a = txa[channel].iqc.p;
 	EnterCriticalSection (&ch[channel].csDSP);
+	/* A rejected first fit leaves IQC off. No audio callback can advance
+	 * its END ramp in that state, so complete the stop synchronously. */
+	if (!_InterlockedAnd(&a->run, 1))
+	{
+		a->state = DONE;
+		a->count = 0;
+		InterlockedBitTestAndReset(&a->busy, 0);
+		LeaveCriticalSection(&ch[channel].csDSP);
+		return;
+	}
 	InterlockedBitTestAndSet (&a->busy, 0);
 	a->state = END;
 	a->count = 0;

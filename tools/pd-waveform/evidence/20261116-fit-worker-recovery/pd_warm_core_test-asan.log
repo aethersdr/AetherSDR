@@ -1,0 +1,1 @@
+PASS: warm snapshot is independent, unkeyed bypass, 5 ms ramp, stale-fit rejection, hard invalidation; 12432 coefficient bytes in RAM

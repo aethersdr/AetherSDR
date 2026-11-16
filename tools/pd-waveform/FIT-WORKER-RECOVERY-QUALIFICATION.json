@@ -1,0 +1,67 @@
+{
+  "updated_utc": "2026-11-16T21:02:56.932408+00:00",
+  "status": "inactive_correction_stop_deadlock_reproduced_fixed_component_qualified_not_installed",
+  "production_ready": false,
+  "installed": false,
+  "radio_changes": false,
+  "RF_transmissions": 0,
+  "problem": "After a retired first fit is rejected, IQC remains run=0. Calcc can still request SetTXAiqcEnd because its running bit was set before attempting publication. END sets busy and waits for xiqc, but xiqc skips all transitions while run=0. The shared correction-change worker can then no longer execute queued fits.",
+  "fix": "Under the existing csDSP lock, an already inactive IQC completes END immediately, clears busy and returns; active curves retain the existing ramp.",
+  "regression": "Create a fresh core, tag then invalidate a fit, invoke the stale first-fit publisher, assert IQC remains off, then request END and verify no pending transition; existing warm/cached-generation checks follow.",
+  "before": {
+    "command": "timeout 18s .../pd_warm_core_test",
+    "observed_exit_code": 142,
+    "reason": "15-second test alarm while inactive END waits; observed in tool completion. Empty redirected test log preserved."
+  },
+  "after": {
+    "ctest_passed": [
+      "pd_warm_core_test",
+      "pd_recovery_collection_test",
+      "pd_dispatch_deadline_test",
+      "pd_calibration_dispatch_test"
+    ],
+    "ctest_seconds": 3.31,
+    "sanitizers": {
+      "pd_warm_core_test": 0,
+      "pd_recovery_collection_test": 0,
+      "pd_dispatch_deadline_test": 0,
+      "pd_calibration_dispatch_test": 0
+    },
+    "ARM_builds": {
+      "armv7": {
+        "bytes": 271916,
+        "sha256": "b80143c61e514ab4ac2913ab4d080980da9f4f83d4ff46ce8be39c79601ce993"
+      },
+      "arm64": {
+        "bytes": 282800,
+        "sha256": "bed41f7b3f3308acdacf783e327a16d713a0b7466ac100c812b8b909d0716be8"
+      }
+    }
+  },
+  "live_correlation": "The previous off run unkeyed before its fit published. The next on run began with one rejected fit; alignment/EQ succeeded, but published solution remained absent and calcc reached state6. This is consistent with the demonstrated worker deadlock; installed causal proof remains required. Cumulative fit count does not prove a current-generation fit completed.",
+  "next": [
+    "Rebuild reproducible signed runtime and ordinary upgrade with installed b515f34a4 release as predecessor.",
+    "Install and verify receive-only IQ, then separately invoke bounded matched 5 W reference/corrected runs.",
+    "Verify corrected cold/warm publication and four-frame capture within existing source/key bounds.",
+    "All remaining P1-P10 gates remain."
+  ],
+  "source_sha256": {
+    "tools/pd-waveform/vendor/iqc.c": "7b55fd68fa9bf9e5a387147529afe77adc1e0d12127120ec7e52b51e8307234c",
+    "tools/pd-waveform/warm_core_test.c": "02c7b828ae3d54b2ff09740c01cfb889a6d25c053271d58b624f54220cef56a8"
+  },
+  "evidence_sha256": {
+    "before-build.log": "5178ab27b2dfabc2ef0a33beb31db2b833e6a6057a5abcddaa9afec5d81190b4",
+    "before.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "after-build.log": "572174b0aebde1c4990ab1f72c227588adfe504eeac2a4f337eb4e8ddabbb6ce",
+    "after.log": "5cb9e8166ca3bae227653a25f0fe6e151132bf7e925a506c08a1f6909cf30e82",
+    "sanitizers-build.log": "12b2936eb3279a2cbf383a699adf7ec158dd4887efb1f8cfc0ae83e994822636",
+    "native-sanitizers.json": "0638dc8b4eb7454cd6d1ce9242c78333163d81d313808bc6aa635a30e645edb2",
+    "pd_warm_core_test-asan.log": "cf9c8666fa3dbffcadbf8b73f01ce5cac7e22129b659d761f11223605ef36d74",
+    "pd_recovery_collection_test-asan.log": "59b9482b9f15ea61be3e6c5d9c6117cc7cabd0ae3cd7aa850e2acbcddae1186b",
+    "pd_dispatch_deadline_test-asan.log": "155c5f1d1551bf016aa9a5d1ef266552b0a321f9fe7a5317dccf1f74bec3c6fd",
+    "pd_calibration_dispatch_test-asan.log": "e19f494ff4a6471006cf0ca2d4cc55f32c9485554f5d47bf3a4fc8b27f6daf3c",
+    "cross-builds.json": "f8416a91a62f1b8534e25894f89100aa15ba91c320c5f7b1e12f1a649c90be37",
+    "check-native.py": "7482fe2ad04259e3e8ae2feea87fcc43b71ecd758c080d5eb58aac5c16aff0f3",
+    "cross-build.py": "82634bdec90e72b536f7eb3e69feff4a40b8bae3fb36a57641fc119bc881254f"
+  }
+}

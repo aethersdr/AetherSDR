@@ -1,0 +1,3 @@
+low-excitation coverage 13/16; upper counts 0/0; current solution 0
+fresh calibration recovered with full amplitude coverage; fits 1 -> 2
+PASS: invalidation stays bypassed under incomplete amplitude coverage and recovers on fresh full-range data, with no stale-cache reuse
