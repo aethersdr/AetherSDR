@@ -235,8 +235,54 @@ private slots:
         QTRY_VERIFY(backend.connectionSession().has_value());
     }
 
+    void reconnectBeforeDisconnectNotification_data()
+    {
+        QTest::addColumn<bool>("replaceEndpoint");
+        QTest::newRow("same-endpoint") << false;
+        QTest::newRow("replacement-endpoint") << true;
+    }
+
+    void reconnectBeforeDisconnectNotification()
+    {
+        QFETCH(bool, replaceEndpoint);
+        RadioModel model;
+        RadioInfo selected = demoInfo();
+        selected.family = QStringLiteral("flex");
+        QSignalSpy starting(model.backend(), &IRadioBackend::connectionSessionStarting);
+        QSignalSpy ended(model.backend(), &IRadioBackend::disconnected);
+        model.connectToRadio(selected);
+        QTRY_VERIFY(model.backend()->connectionSession().has_value());
+        QVERIFY(!model.isConnectAttemptInFlight());
+        const quint64 firstEpoch = model.backend()->connectionSession()->epoch;
+        RadioConnection* wire = model.connection();
+        // End the worker transport without delivering its queued owner notification.
+        QMetaObject::invokeMethod(wire, [wire] { wire->disconnectFromRadio(); }, Qt::BlockingQueuedConnection);
+        QVERIFY(!model.isConnected());
+        QVERIFY(model.backend()->connectionSession());
+        if (replaceEndpoint) { selected.address = QHostAddress(QStringLiteral("127.0.0.2")); }
+
+        model.connectToRadio(selected);
+        QCOMPARE(starting.size(), 2);
+        QCOMPARE(ended.size(), 1);
+        QTRY_VERIFY(model.isConnected() && !model.isConnectAttemptInFlight());
+        QVERIFY(model.backend()->connectionSession());
+        QVERIFY(model.backend()->connectionSession()->epoch != firstEpoch);
+        drain(wire);
+        QVERIFY(model.isConnected());
+        QCOMPARE(ended.size(), 1);
+        model.disconnectFromRadio();
+    }
+
+    void wanSelectionClosesLanAndRejectsItsQueuedEvents_data()
+    {
+        QTest::addColumn<bool>("transportEnded");
+        QTest::newRow("connected-transport") << false;
+        QTest::newRow("ended-transport") << true;
+    }
+
     void wanSelectionClosesLanAndRejectsItsQueuedEvents()
     {
+        QFETCH(bool, transportEnded);
         WanConnection wan; // never initialized or connected
         RadioModel model;
         RadioInfo selected = demoInfo();
@@ -244,7 +290,12 @@ private slots:
         model.connectToRadio(selected);
         QTRY_VERIFY(model.backend()->connectionSession().has_value());
         RadioConnection* wire = model.connection();
-        QMetaObject::invokeMethod(wire, [wire] { emit wire->disconnected(); }, Qt::BlockingQueuedConnection);
+        QMetaObject::invokeMethod(wire, [wire, transportEnded] {
+            if (transportEnded) { wire->disconnectFromRadio(); }
+            else { emit wire->disconnected(); }
+        }, Qt::BlockingQueuedConnection);
+        QCOMPARE(wire->isConnected(), !transportEnded);
+        QVERIFY(model.backend()->connectionSession());
         model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);
         QVERIFY(model.isWan());
         QVERIFY(!wire->isConnected());

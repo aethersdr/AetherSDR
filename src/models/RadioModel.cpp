@@ -4189,7 +4189,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         && info.bindSettings.bindAddress == m_lastInfo.bindSettings.bindAddress
         && info.sessionBindAddress == m_lastInfo.sessionBindAddress) { return; }
     const QPointer<RadioModel> intentOwner(this);
-    if (isConnected() || m_connectAttemptActive || m_wanConn) {
+    // The snapshot remains owned until the worker's queued disconnect is delivered.
+    const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
+    if (isConnected() || m_connectAttemptActive || m_wanConn || hasLanSession) {
         const quint64 retiringIntent = m_connectionIntentRevision + 1;
         disconnectFromRadio();
         if (!intentOwner || m_connectionIntentRevision != retiringIntent) { return; }
@@ -4356,8 +4358,9 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     if (!wan) { return; }
     const QPointer<RadioModel> intentOwner(this);
     const QPointer<WanConnection> selected(wan);
+    const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
     if ((m_wanConn && m_wanConn != wan)
-        || (!m_wanConn && (isConnected() || m_connectAttemptActive))) {
+        || (!m_wanConn && (isConnected() || m_connectAttemptActive || hasLanSession))) {
         const quint64 retiringIntent = m_connectionIntentRevision + 1;
         disconnectFromRadio();
         if (!intentOwner || !selected || m_connectionIntentRevision != retiringIntent) { return; }
