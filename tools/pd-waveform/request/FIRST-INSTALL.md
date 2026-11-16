@@ -476,10 +476,14 @@ phase, terminal failed-store recovery, or pending attempts on other platforms.
 ## Failed fresh-install retry component
 
 The current native source supports an explicit redelivery retry of a terminal
-failed `PDFST001` transaction. This component is not included in the pinned
-`0.0.0-first.7c87bc223` desktop package or the installed radio candidate. The
-ordinary pending-upload resume proof above therefore does not qualify failed
-transaction retry. A newly signed package and live qualification remain required.
+failed `PDFST001` transaction. The separately signed
+`0.0.0-retry.d60df159f` candidate is built and independently pinned in the
+qualification desktop; its native signatures and three desktop test suites pass.
+Its release is 9,005,703 bytes. Assembly with identical inputs was reproducible;
+complete binary rebuild reproducibility has not been tested. The installed radio
+still runs `0.0.0-first.7c87bc223`. The ordinary pending-upload resume proof above
+does not qualify failed transaction retry; live qualification of the new candidate
+remains required.
 
 Only the authenticated bootstrap delivery path can publish `transaction-retry`.
 It requires the exact terminal failed fresh plan, republishes the bounded

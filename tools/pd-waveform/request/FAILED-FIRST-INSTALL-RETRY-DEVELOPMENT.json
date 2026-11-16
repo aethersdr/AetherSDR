@@ -1,6 +1,6 @@
 {
-  "updated_utc": "2026-11-16T07:37:28.090900+00:00",
-  "status": "native_failed_fresh_retry_component_tested_not_packaged_or_installed",
+  "updated_utc": "2026-11-16T07:42:33.158512+00:00",
+  "status": "native_failed_fresh_retry_component_tested_signed_candidate_built_not_installed",
   "production_ready": false,
   "source_base": "9eb3c7ea43044d8a42ad34c42745761226c3b299",
   "evidence": "first-install-failed-retry-development under evidence_root",
@@ -33,7 +33,6 @@
   "radio_changed": false,
   "installed_candidate": "0.0.0-first.7c87bc223 remains unchanged",
   "remaining": [
-    "Build a separately signed candidate with this worker and independently pin it in the desktop.",
     "Induce a bounded actual worker failure during fresh installation; qualify explicit same-plan retry, identity preservation, authority removal, reboot and IQ.",
     "Complete remaining power-loss boundaries, authenticated catalogue, actual FLEX-6000 adapter/hardware, DSP/PR4770/RF and release gates."
   ],
@@ -55,7 +54,8 @@
     "worker-tests.log": "45c47dc2d6ab71a406d7d96cb8babdcc9c335928768142e443cd9137aff4b9cd",
     "transaction-tests.log": "d1ab79618995bfe24b8885a0df5369555c341050aa56b1bd8bfb1cad5c72394d",
     "transaction-asan.log": "7de94fa3d54d0ff5138217947a318dd29698479266ce7507fa5cfee06e65404b",
-    "mutation-test.log": "07ea5671b0b49e02d1b04d9d2a66461d928ed671097c4e6ca98b87ed5c84b18b"
+    "mutation-test.log": "07ea5671b0b49e02d1b04d9d2a66461d928ed671097c4e6ca98b87ed5c84b18b",
+    "live-qualification-plan.json": "20e7169b791ac1572513ecbae1aa5599afa59438718a8c3875cf04294f67091a"
   },
   "binaries": {
     "worker/pd-install-worker": "d6d973f4b3c4322fbdf057193da44d4bc5b20b1b918e769fed9d4bdfa80ac58d",
@@ -63,5 +63,36 @@
     "transaction-asan/transaction-check": "233d7eb44a3a7daaad34b0802faafe936c90c061b7cf450f3d069d00681538de",
     "arm64/pd-install-worker": "a149186c5c9563205bb7da08122d4fa872fd3069252990d0528d8f4752cba0d0",
     "armv7/pd-boot": "41b42751ceaa4cd914d6191237ba06ff0e2d68f22d3f43448f49df4fc6b3c2b9"
+  },
+  "candidate": {
+    "version": "0.0.0-retry.d60df159f",
+    "source_commit": "d60df159fe39699e7b3375092d21bbeceeae0bea",
+    "evidence": "failed-first-install-candidate under evidence_root",
+    "release_sha256": "8c527f6c0d7adcacdb0480400f0066c6b902623010cda20266cdab942db7ca1e",
+    "release_blake2b_256": "d4d8b4c5a7f9e3d5cfe62e18ffd208f9ea6b3741ffa010ff515d0709ff686734",
+    "publisher_key": "232a86b94d380eb3462a5957639f8e3b744c343148e72fac55e4e5d487d1fe6b",
+    "release_bytes": 9005703,
+    "worker_bytes": 249672,
+    "release_and_worker_native_signature_verification": true,
+    "assembly_reproducible": true,
+    "binary_rebuild_reproducibility_tested": false,
+    "desktop_pins_built": true,
+    "desktop_test_suites_passed": 3,
+    "private_signing_seed_persisted": false,
+    "installed": false
+  },
+  "negative_evidence": [
+    "Initial development version label used an extra hyphen and was rejected by the existing selection schema. Corrected label passed; schema unchanged.",
+    "Fixture-key expectation flag was mistakenly enabled for an independently keyed candidate. The dialog correctly refused the foreign fixture journal. All three suites passed without the fixture-only flag; the initial failure log is retained."
+  ],
+  "candidate_files": {
+    "build-candidate.py": "be6c910b1a353e175c6c9bcad01723ef02e71911febf917cfda4eed30119b5b7",
+    "build-report.json": "df8743e4f7dace032971110abccf73d234ad01fe48c8778983ee2a81f91eb043",
+    "selection.json": "605caa37f5c240fb3ea68d024e1ad09ca1d61c9362efea74405664d120ac20a0",
+    "desktop-configure.log": "26b9d42a835cc8fe7cd3a5818a04b1cd2da76c50b8f6830e17e7d2cf507b35cf",
+    "desktop-configure-final.log": "56f176b72241ac6c4100b5235013ea59b55b0a5e921e0ecce5e22561ed1c0015",
+    "desktop-build.log": "e843b8523931f20fb40e028388cc24d48f55800fb0b37ca76246579bce060d2c",
+    "desktop-tests.log": "eb0f7885859c6374e216e905df3d8379f222af151083beb7f9ff8d6ffc8a58a6",
+    "desktop-tests-final.log": "8fb1bf60f2c4dffd9b11d0cedb4abaf4cacadf77991b847140f707c270d0c858"
   }
 }
