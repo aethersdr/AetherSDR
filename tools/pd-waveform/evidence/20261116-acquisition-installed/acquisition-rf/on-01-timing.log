@@ -1,0 +1,96 @@
+{
+  "label": "on-01",
+  "events": [
+    {
+      "count": 1,
+      "host_elapsed_s": 0.678,
+      "record": {
+        "count": 1,
+        "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=12 key_ns=1106716384181 submitted_ns=1108465663794 started_ns=1108465688109 completed_ns=1108731538035 consumed_ns=1108742028895 delay=1840.470 envelope=0.833436 phase=0.999145 offset_hz=-0.029732 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+        "truncated": false
+      },
+      "fields": {
+        "reason": "acquisition",
+        "source": "0000000000000002",
+        "generation": "12",
+        "key_ns": "1106716384181",
+        "submitted_ns": "1108465663794",
+        "started_ns": "1108465688109",
+        "completed_ns": "1108731538035",
+        "consumed_ns": "1108742028895",
+        "delay": "1840.470",
+        "envelope": "0.833436",
+        "phase": "0.999145",
+        "offset_hz": "-0.029732",
+        "noise_left": "47360",
+        "samples_left": "143360",
+        "tone_sent_ns": "0",
+        "guard_ns": "500000000"
+      },
+      "observed_before_current_intent": true,
+      "key_to_submission_ms": 1749.279613,
+      "queue_ms": 0.024315,
+      "worker_ms": 265.849926,
+      "consume_ms": 10.49086,
+      "key_to_result_ms": 2025.644714,
+      "accepted": true
+    },
+    {
+      "count": 2,
+      "host_elapsed_s": 4.037,
+      "record": {
+        "count": 2,
+        "text": "alignment evidence: reason=acquisition source=0000000000000005 generation=16 key_ns=1218545958932 submitted_ns=1220298633474 started_ns=1220298677640 completed_ns=1220559385637 consumed_ns=1220572545882 delay=1744.470 envelope=0.833464 phase=0.999149 offset_hz=-0.029792 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+        "truncated": false
+      },
+      "fields": {
+        "reason": "acquisition",
+        "source": "0000000000000005",
+        "generation": "16",
+        "key_ns": "1218545958932",
+        "submitted_ns": "1220298633474",
+        "started_ns": "1220298677640",
+        "completed_ns": "1220559385637",
+        "consumed_ns": "1220572545882",
+        "delay": "1744.470",
+        "envelope": "0.833464",
+        "phase": "0.999149",
+        "offset_hz": "-0.029792",
+        "noise_left": "47360",
+        "samples_left": "143360",
+        "tone_sent_ns": "0",
+        "guard_ns": "500000000"
+      },
+      "observed_before_current_intent": false,
+      "key_to_submission_ms": 1752.674542,
+      "queue_ms": 0.044166,
+      "worker_ms": 260.707997,
+      "consume_ms": 13.160245,
+      "key_to_result_ms": 2026.58695,
+      "accepted": true
+    }
+  ],
+  "missed_record_counts": [],
+  "first_observed_tones_after_intent_s": 6.478000000000001,
+  "GUI_outcome": "Idle. Arm the source, then prepare.",
+  "diagnostics_at_end": {
+    "alignment": {
+      "count": 2,
+      "text": "alignment evidence: reason=acquisition source=0000000000000005 generation=16 key_ns=1218545958932 submitted_ns=1220298633474 started_ns=1220298677640 completed_ns=1220559385637 consumed_ns=1220572545882 delay=1744.470 envelope=0.833464 phase=0.999149 offset_hz=-0.029792 noise_left=47360 samples_left=143360 tone_sent_ns=0 guard_ns=500000000",
+      "truncated": false
+    },
+    "source_end": {
+      "count": 2,
+      "text": "bounded source ended: reason=interlock_ineligible mono_ns=1226257468029 source=0000000000000005 phase=running keyed=1 tx_on=1 samples_left=6912 generated=185088 iq_frames=45107 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=642865 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=51d0ac57 slice=0 correction=1 native_apd=0 iq_valid_ns=1226252286145",
+      "truncated": false
+    },
+    "version": 1
+  },
+  "faults_at_end": {
+    "dispatch_deadlines": 0,
+    "rejected_input": 0,
+    "send_errors": 0,
+    "stale_iq": 0
+  },
+  "released": true
+}

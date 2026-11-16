@@ -1,0 +1,1 @@
+pd_calibration_dispatch_test: /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/calibration_dispatch_test.c:302: check_bypass_measurement_readiness: Assertion `measurement_tones_ready(&w,now)' failed.
