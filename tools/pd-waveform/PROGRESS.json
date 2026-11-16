@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T09:18:57.618415+00:00",
+  "updated_utc": "2026-11-16T09:40:28.967955+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -2461,18 +2461,46 @@
     "status": "component_export_and_independent_numerical_check_passed",
     "evidence": "tools/pd-waveform/RAW-IQ-EXPORT-QUALIFICATION.json",
     "radio_changed": false,
-    "live_raw_iq_pending": true,
-    "comparison_control_gap": "No ordinary-user correction-OFF selector; native startup env only."
+    "live_raw_iq_pending": false,
+    "comparison_control_gap": "Closed by idle correction selector, installed and exercised through GUI at 5W and 10W settings.",
+    "latest_live_report": "tools/pd-waveform/CORRECTION-SELECTION-LIVE-QUALIFICATION.json"
   },
   "correction_selection": {
-    "status": "native_shim_desktop_component_checks_passed_not_installed",
+    "status": "installed_8600_idle_controls_and_matched_RF_checked",
     "evidence": "tools/pd-waveform/CORRECTION-SELECTION-QUALIFICATION.json",
-    "installed": false
+    "installed": true,
+    "latest_live_report": "tools/pd-waveform/CORRECTION-SELECTION-LIVE-QUALIFICATION.json"
   },
   "correction_selection_candidate": {
-    "status": "signed_successor_built_native_verified_not_installed",
+    "status": "signed_successor_installed_rebooted_and_matched_RF_checked",
     "evidence": "tools/pd-waveform/CORRECTION-SELECTION-CANDIDATE.json",
     "release_sha256": "176f8c7a9ae68562c280a84b8b1dfc88516b5857811afdf37bac68fb24459b49",
-    "source_commit": "82cf771d8eb4b453060f778f325fa482e8dedf5f"
-  }
+    "source_commit": "82cf771d8eb4b453060f778f325fa482e8dedf5f",
+    "latest_live_report": "tools/pd-waveform/CORRECTION-SELECTION-LIVE-QUALIFICATION.json"
+  },
+  "latest_correction_selection_live": {
+    "status": "signed_upgrade_reboot_idle_selection_and_matched_RF_qualified_with_limits",
+    "report": "tools/pd-waveform/CORRECTION-SELECTION-LIVE-QUALIFICATION.json",
+    "native_source_commit": "82cf771d8eb4b453060f778f325fa482e8dedf5f",
+    "upgrade_s": 48.189,
+    "reboot_ready_s": 64.265,
+    "identity_preserved": true,
+    "matched_nominal_power_settings_w": [
+      5,
+      10
+    ],
+    "raw_iq_retained_and_independently_recomputed": true,
+    "production_ready": false,
+    "remaining": [
+      "One finite OFF/ON pair at each tested nominal power setting is not sustained operation, speech qualification, a stock-APD comparison or an all-band claim.",
+      "Absolute power and ADC clipping/headroom remain uncalibrated; LP-100A integration is deferred. Reported watts are radio samples, not independently calibrated power.",
+      "Natural 128-sample alignment slip and historical cold-start all-bypass root causes remain open. Successful acquisitions do not resolve those failures.",
+      "Cold correction acquisition remains close to the eight-second source boundary; no source limit or unkey guard was extended.",
+      "Each broker teardown reported one output error and loss_seen=1 after its stopped session; DSP end-of-run fault counters and input limiting were zero. This does not prove loss-free scheduling for arbitrary durations.",
+      "Stop retains an unprivileged private control peer/supervisor for stopped status. IQ/DSP workers, packet descriptors and temporary ARP are removed; it is not a single-process baseline.",
+      "One commanded reboot proves this release restarts and retains identity on this 8600; physical power loss, interrupted transactions and actual FLEX-6300 remain separate gates.",
+      "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
+    ]
+  },
+  "current_focus": "Signed correction-selection successor installed and rebooted on 8600; matched 5W/10W-setting raw-DAX-IQ OFF/ON evidence retained. Next: repeated/sustained and final-process-failure qualification, unresolved alignment/cold-start investigation; all original P1-P10 delivery gates retained."
 }

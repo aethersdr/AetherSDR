@@ -1,0 +1,1906 @@
+{
+  "updated_utc": "2026-11-16T09:40:28.967955+00:00",
+  "status": "signed_upgrade_reboot_idle_selection_and_matched_RF_qualified_with_limits",
+  "production_ready": false,
+  "native_source_commit": "82cf771d8eb4b453060f778f325fa482e8dedf5f",
+  "desktop_source_commit": "2245f5aaa6dcf941c365a4166cf2ee4c9510ba13",
+  "desktop_binary_sha256": "2850d900f5c519d75f0cb319fba5dba34b8a34af6ab9f3ef753fb72df36adecf",
+  "upgrade": {
+    "installation_after": {
+      "body": {
+        "firmware": "4.3.16.42034",
+        "installation_committed": true,
+        "profile": 1,
+        "selected_release_blake2b_256": "c2cd49ff7723d4f25c7a18a10060ed555f104e1a5960f6cfc2d74ca9e9896c0e",
+        "selected_release_key": "91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f",
+        "serial": "2125-1213-8600-8895",
+        "state": "committed",
+        "upgrade_plan_blake2b_256": "485f0cd189d58d5a4aa61cf2c2f2e0a727630a9a6d9ec3898c5d758f52b2a4b1"
+      },
+      "http_status": 200
+    },
+    "panel": {
+      "pdState": {
+        "value": "Status unknown",
+        "enabled": true
+      },
+      "pdDetail": {
+        "enabled": true
+      },
+      "pdReceipt": {
+        "enabled": true
+      },
+      "pdMessage": {
+        "value": "No current status is available. The request may have failed or its reply may have been lost; controls are not retried automatically.",
+        "enabled": true
+      },
+      "pdStart": {
+        "value": "Start AetherPD",
+        "enabled": true
+      },
+      "pdStop": {
+        "value": "Stop AetherPD",
+        "enabled": true
+      },
+      "pdArm": {
+        "value": "Arm calibration",
+        "enabled": false,
+        "accessibleDescription": "Fresh, unkeyed status with calibration available is required. Radio APD must be off."
+      },
+      "pdCancel": {
+        "value": "Cancel calibration",
+        "enabled": true
+      },
+      "pdRestore": {
+        "value": "Restore receive",
+        "enabled": true
+      },
+      "pdRefresh": {
+        "value": "Refresh",
+        "enabled": true
+      },
+      "pdMeasurement": {
+        "value": "Measure linearity\u2026",
+        "enabled": true
+      },
+      "pdEnableCorrection": {
+        "value": "Enable correction",
+        "enabled": false,
+        "accessibleDescription": "Fresh idle status and no armed source or pending update are required. The requested state must differ from the current state."
+      },
+      "pdBypassCorrection": {
+        "value": "Bypass correction",
+        "enabled": false,
+        "accessibleDescription": "Fresh idle status and no armed source or pending update are required. The requested state must differ from the current state."
+      },
+      "pdInstallState": {
+        "value": "Radio confirmed the update. Temporary installer cleanup confirmed.",
+        "enabled": true
+      },
+      "pdInstallPlan": {
+        "value": "Development build \u2014 not qualified for production.\nRadio: 2125-1213-8600-8895\nFirmware: 4.3.16.42034\n\nChanges on approval:\n\u2022 Verify and replace the AetherPD payload and service.\n\u2022 Install fixed boot and local-session helpers for reboot and IQ setup.\n\u2022 Restart the shim while retaining its Remote Access identity.\n\u2022 Retire temporary delivery and upgrade workers. Fixed boot/session helpers remain installed.\nThe update does not transmit or arm calibration.\n\nTemporary executables: pd-accept, pd-carrier, pd-send, pd-deliver, signed upgrade worker, pd-update.\nPermanent helper: pd-boot.\nFixed units: aetherpd-boot.service, aetherpd-start.socket, aetherpd-start@.service, aetherpd-shim.service.\n\nPrevious release (BLAKE2b-256): d4d8b4c5a7f9e3d5cfe62e18ffd208f9ea6b3741ffa010ff515d0709ff686734\nNew release (BLAKE2b-256): c2cd49ff7723d4f25c7a18a10060ed555f104e1a5960f6cfc2d74ca9e9896c0e\nPublisher key (Ed25519): 91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f\nAttempt (BLAKE2b-256): 485f0cd189d58d5a4aa61cf2c2f2e0a727630a9a6d9ec3898c5d758f52b2a4b1\nTemporary carrier: aetherpd-carrier-419bc495b4093ad71b6b813edebe0a99\nCarrier archive (SHA-256): caa2726f206505afd6afdc8419fa1f86fdac2453b7a527e109fe807e472b7a26",
+        "enabled": true,
+        "accessibleDescription": "Read-only target, changes and authenticated package identifiers to review before approving."
+      },
+      "pdInstallCancel": {
+        "value": "Cancel update",
+        "enabled": false,
+        "accessibleDescription": "No pending update can be canceled in this connection."
+      },
+      "pdInstallApprove": {
+        "value": "Approve update",
+        "enabled": false,
+        "accessibleDescription": "A verified plan for this connection and an idle transmitter are required."
+      },
+      "pdDone": {
+        "value": "Done",
+        "enabled": true
+      },
+      "pdInstallPrepare": {
+        "value": "Prepare update",
+        "enabled": true
+      },
+      "pdInstallFirst": {
+        "value": "Prepare first installation",
+        "enabled": false,
+        "accessibleDescription": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first."
+      },
+      "pdInstallCheck": {
+        "value": "Check saved installation",
+        "enabled": true
+      },
+      "pdInstallSaved": {
+        "value": "Prepare saved attempt",
+        "enabled": false,
+        "accessibleDescription": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first."
+      },
+      "pdInstallCleanup": {
+        "value": "Remove temporary installer packages",
+        "enabled": false,
+        "accessibleDescription": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."
+      }
+    },
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "elapsed_s": 48.189,
+    "root_diagnostics_used": false,
+    "rf_commands": [],
+    "monitor_limitation": "One-shot driver expected terminal text without cleanup suffix; stopped its read-only polling after actual full GUI confirmation and authenticated status. No repeated approval."
+  },
+  "receive_only_selection": {
+    "passed": true,
+    "events": [
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": null,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      },
+      {
+        "request": {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "PD",
+          "id": "0"
+        },
+        "result": {
+          "id": 0,
+          "mode": "PD",
+          "ok": true,
+          "requested": true,
+          "slice": "mode",
+          "unchanged": false
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "panMenuDaxBtn",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "panMenuDaxBtn"
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "daxPanel/QComboBox",
+          "action": "setCurrentIndex",
+          "value": "1"
+        },
+        "result": {
+          "action": "setCurrentIndex",
+          "class": "QComboBox",
+          "newValue": "1",
+          "ok": true,
+          "target": "daxPanel/QComboBox"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": true,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "idle"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdRefresh",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdRefresh"
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdBypassCorrection",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdBypassCorrection"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": true,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "idle"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": false,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "disabled"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": 23,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdEnableCorrection",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdEnableCorrection"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": true,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "idle"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": 23,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdBypassCorrection",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdBypassCorrection"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": false,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "disabled"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": null,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      }
+    ],
+    "last_correction_enabled": false,
+    "rf_commands": []
+  },
+  "reboot": {
+    "passed": true,
+    "rf_commands": [],
+    "reboot_commands_sent": 1,
+    "radio_before": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.46875,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "before": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "c2cd49ff7723d4f25c7a18a10060ed555f104e1a5960f6cfc2d74ca9e9896c0e",
+      "selected_release_key": "91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "485f0cd189d58d5a4aa61cf2c2f2e0a727630a9a6d9ec3898c5d758f52b2a4b1"
+    },
+    "identity_before": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [
+        {
+          "expires_in_s": 300,
+          "listening": false,
+          "name": "AetherGPS",
+          "port": 2947,
+          "target": "192.168.50.100"
+        }
+      ],
+      "hostname": "flx8600",
+      "installation_id": "421daf94e1ebbd8502975ad35e9b47022548bff1883a17506db0eb32be5dc78c",
+      "key_expiry": "",
+      "last_error": "",
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "local",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "boot_id_before": "a1bf06e0-259a-4bae-991c-8d860884ec0a",
+    "both_down_s": 8.786,
+    "after": {
+      "firmware": "4.3.16.42034",
+      "installation_committed": true,
+      "profile": 1,
+      "selected_release_blake2b_256": "c2cd49ff7723d4f25c7a18a10060ed555f104e1a5960f6cfc2d74ca9e9896c0e",
+      "selected_release_key": "91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f",
+      "serial": "2125-1213-8600-8895",
+      "state": "committed",
+      "upgrade_plan_blake2b_256": "485f0cd189d58d5a4aa61cf2c2f2e0a727630a9a6d9ec3898c5d758f52b2a4b1"
+    },
+    "ready_s": 64.265,
+    "identity_after": {
+      "advertised_routes": [],
+      "allow": [],
+      "approved_routes": [],
+      "claimable": false,
+      "discovered_devices": [],
+      "dns_name": "",
+      "exposed_ports": [],
+      "hostname": "flx8600",
+      "installation_id": "421daf94e1ebbd8502975ad35e9b47022548bff1883a17506db0eb32be5dc78c",
+      "key_expiry": "",
+      "last_error": "",
+      "provisioned": true,
+      "recent_commands": [],
+      "routes": [],
+      "session_detail": [],
+      "sessions": 0,
+      "share_discovered": false,
+      "state": "local",
+      "tailnet_ip": "",
+      "version": "0.5.2"
+    },
+    "boot_id_after": "85910aea-b999-472f-b6f2-a139d845c5f8",
+    "radio_after": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": null,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 0,
+      "slots": [
+        {
+          "id": 0,
+          "state": "empty"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": null,
+      "version": "4.3.16.42034"
+    },
+    "elapsed_s": 64.478
+  },
+  "post_reboot_receive": {
+    "passed": true,
+    "events": [
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": 23.359375,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      },
+      {
+        "request": {
+          "cmd": "slice",
+          "action": "mode",
+          "value": "PD",
+          "id": "0"
+        },
+        "result": {
+          "id": 0,
+          "mode": "PD",
+          "ok": true,
+          "requested": false,
+          "slice": "mode",
+          "unchanged": true
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "panMenuDaxBtn",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "panMenuDaxBtn"
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "daxPanel/QComboBox",
+          "action": "setCurrentIndex",
+          "value": "1"
+        },
+        "result": {
+          "action": "setCurrentIndex",
+          "class": "QComboBox",
+          "newValue": "1",
+          "ok": true,
+          "target": "daxPanel/QComboBox"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": true,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "idle"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdRefresh",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdRefresh"
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdBypassCorrection",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdBypassCorrection"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": false,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "disabled"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": null,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdEnableCorrection",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdEnableCorrection"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": true,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "idle"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": 23.34375,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      },
+      {
+        "request": {
+          "cmd": "invoke",
+          "target": "pdBypassCorrection",
+          "action": "click"
+        },
+        "result": {
+          "action": "click",
+          "class": "QPushButton",
+          "deferred": true,
+          "ok": true,
+          "target": "pdBypassCorrection"
+        }
+      },
+      {
+        "status": {
+          "body": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "idle",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": false,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000000",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "calibration",
+            "state": "disabled"
+          },
+          "http_status": 200
+        }
+      },
+      {
+        "request": {
+          "cmd": "get",
+          "model": "radio"
+        },
+        "result": {
+          "model": "radio",
+          "ok": true,
+          "radio": {
+            "callsign": "KK7GWY",
+            "connectState": "connected",
+            "connected": true,
+            "fullDuplex": false,
+            "iaruRegion": 2,
+            "maxSlices": 4,
+            "model": "FLEX-8600",
+            "name": "",
+            "nickname": "FLX8600",
+            "paTemp": 23.34375,
+            "panCount": 1,
+            "serial": "2125-1213-8600-8895",
+            "sliceCount": 1,
+            "slots": [
+              {
+                "id": 0,
+                "state": "ours"
+              },
+              {
+                "id": 1,
+                "state": "empty"
+              },
+              {
+                "id": 2,
+                "state": "empty"
+              },
+              {
+                "id": 3,
+                "state": "empty"
+              }
+            ],
+            "transmitting": false,
+            "txPower": 0,
+            "version": "4.3.16.42034"
+          }
+        }
+      }
+    ],
+    "last_correction_enabled": false,
+    "rf_commands": []
+  },
+  "audit": {
+    "rf_commands": [],
+    "installation_mutated": false,
+    "processes": [
+      {
+        "pid": 6090,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "role": "primary",
+        "sha256": "623fd734084f77b49005115ff988cb4daed916bc61feb62c1fdea5266e413031"
+      },
+      {
+        "pid": 6391,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "role": "fixed_helper",
+        "sha256": "63ce7c2e2507e343b3297fe9480407b76912a331779c4affffd8a832ec06c15f"
+      },
+      {
+        "pid": 6392,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "role": "fixed_helper",
+        "sha256": "623fd734084f77b49005115ff988cb4daed916bc61feb62c1fdea5266e413031"
+      }
+    ],
+    "identity_sha256": "dac9c7673f8bf67b9d544471fa25410d19c1df0b016916d888fd7bcf2410c07d",
+    "generation": "485f0cd189d58d5a4aa61cf2c2f2e0a727630a9a6d9ec3898c5d758f52b2a4b1",
+    "candidate_selected": true,
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/var/lib/smartsdr/.aetherpd-upgrade": false,
+      "/var/lib/smartsdr/.aetherpd-upgrade-retired": false,
+      "/var/lib/smartsdr/.aetherpd-upgrade-staging": false,
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false
+    },
+    "private_sockets": [],
+    "arp": [],
+    "accept_local": "0",
+    "matching_containers": [],
+    "matching_images": [],
+    "boot_id": "a1bf06e0-259a-4bae-991c-8d860884ec0a",
+    "runtime_binaries": {
+      "flex-tailnet-shim": "623fd734084f77b49005115ff988cb4daed916bc61feb62c1fdea5266e413031",
+      "aether-pd": "e06154f34cda20899578e35685ad5b414ddee6b402bd3e38e67432fd1bed3df9",
+      "pd-primary-launch": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+      "pd-start-session": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592",
+      "pd-radio-launch": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "session_journal": "Started aetherpd-start@1-6090-78666.service - AetherPD owned local session (PID 6090/UID 78666).\n{\"event\":\"native_resources_prepared\",\"source_pid\":6395,\"capture_pid\":6398,\"arp_pid\":6393,\"stream\":\"0x20000000\",\"port\":40366,\"rf_commands\":[]}\n{\"event\":\"supervisor_ready\",\"uid\":65534,\"worker_pid\":6399,\"status\":0,\"rf_commands\":[]}\n{\"event\":\"ready\",\"uid\":65534,\"clock_pid\":6401,\"raw_fd_closed\":true,\"strict_seccomp\":true}\n2026/11/16 03:30:34 AetherPD: captured owned receive baseline before DSP startup\n2026/11/16 03:30:34 AetherPD: owned API lease guardian armed before DSP startup\n2026/11/16 03:30:34 AetherPD: owned receive guardian armed before DSP startup\n1794821434.851 discarded 90 pre-activation IQ datagrams\n1794821434.851 AetherPD 0.1.0 starting, radio 127.0.0.1, udp 32818, feedback DAX IQ 1 at 48000 Hz, peak 0.70, correction on\n1794821434.892 command 1: 10000002 unknown client program AetherPD\n1794821434.907 registered AetherPD: tx_in 0x81000001 rx_in 0x81000000\n1794821459.823 PD selected on slice 0\n2026/11/16 03:31:51 AetherPD: recorded owned PD receiver in receive-recovery journal\n1794821513.016 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)\n1794821513.016 measurement window: event=periodic ready=0 now_ns=5762892802624 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=5762889459670 iq_age_ns=1113861 deadline_ns=5770892272647 fits=0 solution=0\n1794821513.016 tx: aligned 0, fits 0, correcting 0, state 0, offset 0.000 Hz\n1794821513.016 calibration: key 0.001 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.000000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0\n1794821515.018 loop delay 1608.47 samples (67.02 ms), envelope correlation 0.83, phase correlation 0.999\n1794821515.018 measurement window: event=periodic ready=0 now_ns=5764894720784 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=47872 test_left=143872 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=5764894438768 iq_age_ns=448627 deadline_ns=5770892272647 fits=0 solution=0\n1794821515.018 tx: aligned 1, fits 0, correcting 0, state 0, offset -0.030 Hz\n1794821515.018 calibration: key 2.002 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.470944, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0\n1794821516.856 transmit path fitted: 31 taps, -28.6 dB of the feedback left unexplained\n1794821517.019 measurement window: event=periodic ready=0 now_ns=5766895679637 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=95744 tone1=710 tone2=1900 tone_sent_ns=5766885177427 guard_ns=500000000 iq_valid_ns=5766893445636 iq_age_ns=1121249 deadline_ns=5770892272647 fits=0 solution=0\n1794821517.019 tx: aligned 1, fits 0, correcting 0, state 2, offset -0.029 Hz\n1794821517.019 calibration: key 4.003 s, EQ 1 residual -28.6 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0\n1794821519.019 measurement window: event=periodic ready=1 now_ns=5768895878458 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=47744 tone1=710 tone2=1900 tone_sent_ns=5766885177427 guard_ns=500000000 iq_valid_ns=5768895492517 iq_age_ns=1168824 deadline_ns=5770892272647 fits=1 solution=1\n1794821519.019 tx: aligned 1, fits 1, correcting 0, state 7, offset -0.029 Hz\n1794821520.655 measurement window: event=interlock_ineligible ready=1 now_ns=5770531663378 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=8576 tone1=710 tone2=1900 tone_sent_ns=5766885177427 guard_ns=500000000 iq_valid_ns=5770530447573 iq_age_ns=789401 deadline_ns=5770892272647 fits=1 solution=1\n1794821520.655 bounded source ended: reason=interlock_ineligible source=0000000000000004 phase=running keyed=1 tx_on=1 samples_left=8576 generated=183424 iq_frames=23401 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=789401 tx_discontinuities=0 tx_rejected=0 deadlines=0\n1794821520.655 receive: 1 fits, cache 1, delay 1608.47, offset -0.029 Hz\n2026/11/16 03:32:39 AetherPD: recorded owned PD receiver in receive-recovery journal\n1794821559.985 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)\n1794821559.985 measurement window: event=periodic ready=0 now_ns=5809861876759 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=5809860761509 iq_age_ns=2437795 deadline_ns=5817861466262 fits=1 solution=0\n1794821559.985 tx: aligned 0, fits 1, correcting 0, state 6, offset -0.029 Hz\n1794821559.985 calibration: key 0.000 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.000000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 1\n1794821561.970 loop delay 1752.47 samples (73.02 ms), envelope correlation 0.83, phase correlation 0.999\n1794821561.989 measurement window: event=periodic ready=0 now_ns=5811865499528 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=48000 test_left=144000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=5811865451491 iq_age_ns=1455951 deadline_ns=5817861466262 fits=1 solution=0\n1794821561.989 tx: aligned 1, fits 1, correcting 0, state 6, offset -0.030 Hz\n1794821561.989 calibration: key 2.004 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.470944, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 1\n1794821563.782 transmit path fitted: 31 taps, -29.5 dB of the feedback left unexplained\n1794821563.990 measurement window: event=periodic ready=0 now_ns=5813866455504 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=95872 tone1=710 tone2=1900 tone_sent_ns=5813861135010 guard_ns=500000000 iq_valid_ns=5813863453362 iq_age_ns=1130158 deadline_ns=5817861466262 fits=2 solution=0\n1794821563.990 tx: aligned 1, fits 2, correcting 0, state 2, offset -0.029 Hz\n1794821563.990 calibration: key 4.005 s, EQ 1 residual -29.5 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 1\n1794821565.991 measurement window: event=periodic ready=0 now_ns=5815867664885 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=47872 tone1=710 tone2=1900 tone_sent_ns=5813861135010 guard_ns=500000000 iq_valid_ns=5815865448977 iq_age_ns=1124806 deadline_ns=5817861466262 fits=2 solution=0\n1794821565.991 tx: aligned 1, fits 2, correcting 0, state 6, offset -0.029 Hz\n1794821565.991 calibration: key 6.006 s, EQ 1 residual -29.5 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 1\n1794821567.797 measurement window: event=interlock_ineligible ready=1 now_ns=5817674037058 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=4608 tone1=710 tone2=1900 tone_sent_ns=5813861135010 guard_ns=500000000 iq_valid_ns=5817672440479 iq_age_ns=445978 deadline_ns=5817861466262 fits=3 solution=1\n1794821567.797 bounded source ended: reason=interlock_ineligible source=0000000000000007 phase=running keyed=1 tx_on=1 samples_left=4608 generated=187392 iq_frames=36258 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=445978 tx_discontinuities=0 tx_rejected=0 deadlines=0\n1794821567.798 receive: 3 fits, cache 1, delay 1752.47, offset -0.029 Hz\n1794821627.999 shim session ended\n1794821627.999 stopping\n{\"event\":\"complete\",\"reason\":\"output\",\"received\":52766,\"forwarded\":52765,\"stale\":0,\"invalid\":0,\"foreign\":0,\"backpressure\":0,\"output_errors\":1,\"loss_seen\":1,\"clock_faults\":0,\"future_wait\":32730,\"clock_pid\":6401,\"startup_discarded\":64,\"strict_seccomp\":true,\"raw_fd_closed\":true,\"rf_commands\":[]}\n{\"event\":\"session_stopped\",\"uid\":65534,\"worker_pid\":6399,\"status\":0,\"rf_commands\":[]}\n",
+    "own_probe_cache_removed": true,
+    "passed": true
+  },
+  "audit_orchestration": {
+    "job_container_deleted": true,
+    "temporary_host_directory_deleted": true
+  },
+  "measurements": {
+    "5W_setting": {
+      "comparison": {
+        "file": "correction-selection-live/on-01.json",
+        "sha256": "14ae5d318e19ab6ae655bfd378052e74b76f36f5809b63d691564669d4dce164",
+        "frames": 4,
+        "samples_per_frame": 16384,
+        "max_spectrum_error_db": 3.6179789617563074e-06,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -44.28895947774836,
+            "dbc_fundamental_pep": -50.30868890930439,
+            "dbc_sampled_pep": -50.313216116149384,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -54.04496031562863,
+            "dbc_fundamental_pep": -60.06468974718466,
+            "dbc_sampled_pep": -60.069216954029656,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -56.78980737915455,
+            "dbc_fundamental_pep": -62.80953681071058,
+            "dbc_sampled_pep": -62.81406401755558,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -62.76890655650719,
+            "dbc_fundamental_pep": -68.78863598806322,
+            "dbc_sampled_pep": -68.79316319490822,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -73.55328688974913,
+            "dbc_fundamental_pep": -79.57301632130516,
+            "dbc_sampled_pep": -79.57754352815016,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -63.16399184340237,
+            "dbc_fundamental_pep": -69.1837212749584,
+            "dbc_sampled_pep": -69.1882484818034,
+            "exported_noise_limited": false
+          }
+        ],
+        "fundamental_pep_db_raw_iq": 91.75838763345168,
+        "sampled_pep_db_raw_iq": 91.76291484029667,
+        "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument.",
+        "baseline": {
+          "file": "correction-selection-live/off-01.json",
+          "sha256": "77ae83fc09b814de240e0d2b79cfb70dbb1bf64f1c58faa8f42a48e079c58029",
+          "frames": 4,
+          "samples_per_frame": 16384,
+          "max_spectrum_error_db": 3.4637206454135594e-06,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -28.023089545254187,
+              "dbc_fundamental_pep": -34.04282728969438,
+              "dbc_sampled_pep": -34.356724194614095,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -27.492759705811174,
+              "dbc_fundamental_pep": -33.51249745025137,
+              "dbc_sampled_pep": -33.82639435517108,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -41.57982057406244,
+              "dbc_fundamental_pep": -47.59955831850263,
+              "dbc_sampled_pep": -47.913455223422346,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -41.814493429077984,
+              "dbc_fundamental_pep": -47.83423117351818,
+              "dbc_sampled_pep": -48.14812807843789,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -53.11640112240136,
+              "dbc_fundamental_pep": -59.136138866841556,
+              "dbc_sampled_pep": -59.45003577176127,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -53.19945523876928,
+              "dbc_fundamental_pep": -59.219192983209474,
+              "dbc_sampled_pep": -59.53308988812919,
+              "exported_noise_limited": false
+            }
+          ],
+          "fundamental_pep_db_raw_iq": 91.43998494282326,
+          "sampled_pep_db_raw_iq": 91.75388184774297,
+          "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument."
+        },
+        "fundamental_power_difference_db": 0.3184026906284174,
+        "improvement_db": [
+          {
+            "order": 3,
+            "upper": false,
+            "per_tone": 16.26586993249417
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "per_tone": 26.552200609817454
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "per_tone": 15.209986805092115
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "per_tone": 20.954413127429206
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "per_tone": 20.436885767347768
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "per_tone": 9.96453660463309
+          }
+        ]
+      },
+      "runs": {
+        "off-01": {
+          "export": "tools/pd-waveform/evidence/20261116-correction/5w-off-01.json",
+          "sha256": "77ae83fc09b814de240e0d2b79cfb70dbb1bf64f1c58faa8f42a48e079c58029",
+          "key_request_to_unkey_observed_s": 7.945,
+          "max_sampled_radio_power_w": 3.335895299911499,
+          "max_sampled_radio_swr": 1.9921875,
+          "final_service": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "canceled",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": false,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000004",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "measurement",
+            "state": "disabled"
+          },
+          "gui_result": {
+            "enabled": true,
+            "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 uncorrected\n4 averages \u00b7 tone imbalance 0.24 dB\nIMD: dBc per tone / fundamental-derived PEP\nIMD3 lower: -28.0 / -34.0\nIMD3 upper: -27.5 / -33.5\nIMD5 lower: -41.6 / -47.6\nIMD5 upper: -41.8 / -47.8\nIMD7 lower: -53.1 / -59.1\nIMD7 upper: -53.2 / -59.2\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+            "visible": true
+          },
+          "events_sha256": "b3a8316f6b288bf657d28dc28c9e140309ce7eb37508a26057f9584e04f27d27"
+        },
+        "on-01": {
+          "export": "tools/pd-waveform/evidence/20261116-correction/5w-on-01.json",
+          "sha256": "14ae5d318e19ab6ae655bfd378052e74b76f36f5809b63d691564669d4dce164",
+          "key_request_to_unkey_observed_s": 8.121,
+          "max_sampled_radio_power_w": 3.3364267349243164,
+          "max_sampled_radio_swr": 1.3125,
+          "final_service": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "canceled",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": true,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000007",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "measurement",
+            "state": "idle"
+          },
+          "gui_result": {
+            "enabled": true,
+            "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 corrected\n4 averages \u00b7 tone imbalance 0.25 dB\nIMD: dBc per tone / fundamental-derived PEP\nIMD3 lower: -44.3 / -50.3\nIMD3 upper: -54.0 / -60.1\nIMD5 lower: -56.8 / -62.8\nIMD5 upper: -62.8 / -68.8\nIMD7 lower: -73.6 / -79.6\nIMD7 upper: -63.2 / -69.2\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+            "visible": true
+          },
+          "events_sha256": "83a42d1e7fc3309e5a7debe8eba670ee77914f16a96166a06d4a0932f2e88418"
+        }
+      }
+    },
+    "10W_setting": {
+      "comparison": {
+        "file": "correction-power10-live/on-01.json",
+        "sha256": "631b53e99e0c04bf888b8c6482949d9531657c8f65c3bdea673677245447d957",
+        "frames": 4,
+        "samples_per_frame": 16384,
+        "max_spectrum_error_db": 3.2226248833922e-06,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -44.6709488207984,
+            "dbc_fundamental_pep": -50.69067899142462,
+            "dbc_sampled_pep": -50.688019403284414,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -50.585357401473,
+            "dbc_fundamental_pep": -56.605087572099215,
+            "dbc_sampled_pep": -56.60242798395901,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -54.42059476908644,
+            "dbc_fundamental_pep": -60.44032493971266,
+            "dbc_sampled_pep": -60.437665351572456,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -60.14259290410922,
+            "dbc_fundamental_pep": -66.16232307473544,
+            "dbc_sampled_pep": -66.15966348659524,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -65.78028420437604,
+            "dbc_fundamental_pep": -71.80001437500226,
+            "dbc_sampled_pep": -71.79735478686206,
+            "exported_noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -62.130408232754576,
+            "dbc_fundamental_pep": -68.1501384033808,
+            "dbc_sampled_pep": -68.14747881524059,
+            "exported_noise_limited": false
+          }
+        ],
+        "fundamental_pep_db_raw_iq": 94.86873481503193,
+        "sampled_pep_db_raw_iq": 94.86607522689172,
+        "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument.",
+        "baseline": {
+          "file": "correction-power10-live/off-01.json",
+          "sha256": "3a6d2d23b5fd7aff550cd9ccf7d04df277a19758a4fcd921cf9dbdfbeb39a43a",
+          "frames": 4,
+          "samples_per_frame": 16384,
+          "max_spectrum_error_db": 3.7177182008463205e-06,
+          "products": [
+            {
+              "order": 3,
+              "upper": false,
+              "dbc_per_tone": -27.46911900539756,
+              "dbc_fundamental_pep": -33.48886253319395,
+              "dbc_sampled_pep": -33.806752957049426,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 3,
+              "upper": true,
+              "dbc_per_tone": -26.932823537427915,
+              "dbc_fundamental_pep": -32.95256706522431,
+              "dbc_sampled_pep": -33.27045748907978,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": false,
+              "dbc_per_tone": -39.40179612685717,
+              "dbc_fundamental_pep": -45.421539654653564,
+              "dbc_sampled_pep": -45.73943007850904,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 5,
+              "upper": true,
+              "dbc_per_tone": -39.59281852049198,
+              "dbc_fundamental_pep": -45.612562048288375,
+              "dbc_sampled_pep": -45.93045247214385,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": false,
+              "dbc_per_tone": -48.74872405132071,
+              "dbc_fundamental_pep": -54.7684675791171,
+              "dbc_sampled_pep": -55.086358002972574,
+              "exported_noise_limited": false
+            },
+            {
+              "order": 7,
+              "upper": true,
+              "dbc_per_tone": -48.79780808983185,
+              "dbc_fundamental_pep": -54.81755161762824,
+              "dbc_sampled_pep": -55.135442041483714,
+              "exported_noise_limited": false
+            }
+          ],
+          "fundamental_pep_db_raw_iq": 94.55455302727914,
+          "sampled_pep_db_raw_iq": 94.87244345113461,
+          "limitations": "Numerical cross-check only; no calibrated watts, ADC headroom or independent RF instrument."
+        },
+        "fundamental_power_difference_db": 0.31418178775278705,
+        "improvement_db": [
+          {
+            "order": 3,
+            "upper": false,
+            "per_tone": 17.201829815400842
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "per_tone": 23.652533864045083
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "per_tone": 15.018798642229271
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "per_tone": 20.54977438361724
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "per_tone": 17.031560153055338
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "per_tone": 13.332600142922729
+          }
+        ]
+      },
+      "runs": {
+        "off-01": {
+          "export": "tools/pd-waveform/evidence/20261116-correction/10w-off-01.json",
+          "sha256": "3a6d2d23b5fd7aff550cd9ccf7d04df277a19758a4fcd921cf9dbdfbeb39a43a",
+          "key_request_to_unkey_observed_s": 8.2,
+          "max_sampled_radio_power_w": 6.893287658691406,
+          "max_sampled_radio_swr": 1.7265625,
+          "final_service": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "canceled",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": false,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000004",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "measurement",
+            "state": "disabled"
+          },
+          "gui_result": {
+            "enabled": true,
+            "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 10 W \u00b7 uncorrected\n4 averages \u00b7 tone imbalance 0.24 dB\nIMD: dBc per tone / fundamental-derived PEP\nIMD3 lower: -27.5 / -33.5\nIMD3 upper: -26.9 / -33.0\nIMD5 lower: -39.4 / -45.4\nIMD5 upper: -39.6 / -45.6\nIMD7 lower: -48.7 / -54.8\nIMD7 upper: -48.8 / -54.8\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+            "visible": true
+          },
+          "events_sha256": "ccfa32ee3b1cf10a395d05f066f9622593cf2350dfa71c74151dd36992d7e4a6"
+        },
+        "on-01": {
+          "export": "tools/pd-waveform/evidence/20261116-correction/10w-on-01.json",
+          "sha256": "631b53e99e0c04bf888b8c6482949d9531657c8f65c3bdea673677245447d957",
+          "key_request_to_unkey_observed_s": 8.0,
+          "max_sampled_radio_power_w": 6.952967643737793,
+          "max_sampled_radio_swr": 1.609375,
+          "final_service": {
+            "available": true,
+            "calibration_control": true,
+            "calibration_required": false,
+            "calibration_state": "canceled",
+            "correcting": false,
+            "correction_control": true,
+            "correction_enabled": true,
+            "faults": {
+              "dispatch_deadlines": 0,
+              "rejected_input": 0,
+              "send_errors": 0,
+              "stale_iq": 0
+            },
+            "input_limited_samples": 0,
+            "keyed": false,
+            "measurement": {
+              "source_id": "0000000000000007",
+              "tones": false
+            },
+            "measurement_control": true,
+            "registered": true,
+            "source_purpose": "measurement",
+            "state": "idle"
+          },
+          "gui_result": {
+            "enabled": true,
+            "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 10 W \u00b7 corrected\n4 averages \u00b7 tone imbalance 0.25 dB\nIMD: dBc per tone / fundamental-derived PEP\nIMD3 lower: -44.7 / -50.7\nIMD3 upper: -50.6 / -56.6\nIMD5 lower: -54.4 / -60.4\nIMD5 upper: -60.1 / -66.2\nIMD7 lower: -65.8 / -71.8\nIMD7 upper: -62.1 / -68.2\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+            "visible": true
+          },
+          "events_sha256": "ffa4e3b32870527bdc61c93220bf6c7fbf62239187b8c5dabbb6770064a796a0"
+        }
+      }
+    }
+  },
+  "evidence_hashes": {
+    "correction-selection-live/measure.py": "c484b4ef0e177e08c72aced479a9b7b94dea7aa22400362ed5e708582e30b9f7",
+    "correction-selection-live/export.py": "32ef175e00490377862e4bca1b24ff6e8bd1d9affc8408774bdb9452f9e96844",
+    "correction-selection-live/off-01-events.json": "b3a8316f6b288bf657d28dc28c9e140309ce7eb37508a26057f9584e04f27d27",
+    "correction-selection-live/on-01-events.json": "83a42d1e7fc3309e5a7debe8eba670ee77914f16a96166a06d4a0932f2e88418",
+    "correction-selection-live/comparison.json": "74040b160868bfb8518784f6d7e0447f30473a8c04021be78e81d389e7df07ef",
+    "correction-power10-live/measure.py": "ad89172438f4e017c62baacc095701ae7e41b5a8d9bc8d5cce35b653ac0829e2",
+    "correction-power10-live/export.py": "32ef175e00490377862e4bca1b24ff6e8bd1d9affc8408774bdb9452f9e96844",
+    "correction-power10-live/off-01-events.json": "ccfa32ee3b1cf10a395d05f066f9622593cf2350dfa71c74151dd36992d7e4a6",
+    "correction-power10-live/on-01-events.json": "ffa4e3b32870527bdc61c93220bf6c7fbf62239187b8c5dabbb6770064a796a0",
+    "correction-power10-live/comparison.json": "c57eff3675ef1dc851023130cdb80aa60ef08357dbed27a3afdd0d62b6eba07d",
+    "correction-selection-live/upgrade-prepared.json": "fd825d40cf51d33a914550d0d080689383952c9e2c56f8f2348eadcba0cdb0f6",
+    "correction-selection-live/upgrade-approved.json": "64d8aa9a9ae49f20f668b8f51dd84303f35c7444eaf97ca6448365be70cb033c",
+    "correction-selection-live/upgrade-events.jsonl": "c85f1971ce51fefec01ff5ae8c7c26f1fe44d679e257a0366b19ca87fb50a066",
+    "correction-selection-live/upgrade-result.json": "9bcd3151ccac8e4301947c310ed239289d3529aeb5cc14128573fdbcea01bbcd",
+    "correction-selection-live/receive-check.json": "61a9babf1b027f6882e45ecbdc7f9c740971332cdbb015b3d9d06fdd18a427fd",
+    "correction-selection-live/audit-job.py": "f0ba5642300f838b59838f413626b29dba509947d51f2e7d23659b36257ecf46",
+    "correction-selection-live/audit-result.json": "eb535d2c563a191a4ed262e975b1571c363d269de9b5838ddb0e2bf22a665468",
+    "correction-selection-live/session-journal.log": "76bad99f2453fae4ae9464182bc75f53661f2094be6424813582c8f7854e1ab9",
+    "correction-selection-live/reboot-check.py": "9b82a3a6eb528edf0a69787c48feab07b89420620bce4ae4eb842fb164f2932b",
+    "correction-selection-live/reboot-check.json": "89eba608e49e772ac2f38bf9f9f8bcad554c13ae72d7bf4640bd14802cb26dac",
+    "correction-selection-live/post-reboot-receive.json": "c2b1a93cb1f9aea24d521114cc69b54fd57d0033faa8b22b8d543a661c0a88c2",
+    "correction-power10-live/audit-result.json": "d165029e2cfff52d5289ce1e2f9de6c518b5de8af921197153660d0bf4cc94f3"
+  },
+  "limitations": [
+    "One finite OFF/ON pair at each tested nominal power setting is not sustained operation, speech qualification, a stock-APD comparison or an all-band claim.",
+    "Absolute power and ADC clipping/headroom remain uncalibrated; LP-100A integration is deferred. Reported watts are radio samples, not independently calibrated power.",
+    "Natural 128-sample alignment slip and historical cold-start all-bypass root causes remain open. Successful acquisitions do not resolve those failures.",
+    "Cold correction acquisition remains close to the eight-second source boundary; no source limit or unkey guard was extended.",
+    "Each broker teardown reported one output error and loss_seen=1 after its stopped session; DSP end-of-run fault counters and input limiting were zero. This does not prove loss-free scheduling for arbitrary durations.",
+    "Stop retains an unprivileged private control peer/supervisor for stopped status. IQ/DSP workers, packet descriptors and temporary ARP are removed; it is not a single-process baseline.",
+    "One commanded reboot proves this release restarts and retains identity on this 8600; physical power loss, interrupted transactions and actual FLEX-6300 remain separate gates.",
+    "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
+  ],
+  "harness_notes": [
+    "Upgrade driver matched terminal text without the cleanup suffix; its read-only polling was interrupted only after actual full GUI confirmation. One approval, no retry.",
+    "Initial post-reboot receive script toggled an already-open DAX panel closed; bridge refused the hidden selector. Reopened it and completed receive-only validation before RF.",
+    "Initial audit invocation had an invalid local hash argument and was rejected before radio activity; the actual audit used the exact diagnostic package hash."
+  ],
+  "post_reboot_and_10W_cleanup": {
+    "rf_commands": [],
+    "installation_mutated": false,
+    "processes": [
+      {
+        "pid": 1302,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "role": "primary",
+        "sha256": "623fd734084f77b49005115ff988cb4daed916bc61feb62c1fdea5266e413031"
+      },
+      {
+        "pid": 1333,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "role": "fixed_helper",
+        "sha256": "63ce7c2e2507e343b3297fe9480407b76912a331779c4affffd8a832ec06c15f"
+      },
+      {
+        "pid": 1334,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "role": "fixed_helper",
+        "sha256": "623fd734084f77b49005115ff988cb4daed916bc61feb62c1fdea5266e413031"
+      }
+    ],
+    "identity_sha256": "dac9c7673f8bf67b9d544471fa25410d19c1df0b016916d888fd7bcf2410c07d",
+    "generation": "485f0cd189d58d5a4aa61cf2c2f2e0a727630a9a6d9ec3898c5d758f52b2a4b1",
+    "candidate_selected": true,
+    "temporary_paths": {
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/var/lib/smartsdr/.aetherpd-upgrade": false,
+      "/var/lib/smartsdr/.aetherpd-upgrade-retired": false,
+      "/var/lib/smartsdr/.aetherpd-upgrade-staging": false,
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false
+    },
+    "private_sockets": [],
+    "arp": [],
+    "accept_local": "0",
+    "matching_containers": [],
+    "matching_images": [],
+    "boot_id": "85910aea-b999-472f-b6f2-a139d845c5f8",
+    "runtime_binaries": {
+      "flex-tailnet-shim": "623fd734084f77b49005115ff988cb4daed916bc61feb62c1fdea5266e413031",
+      "aether-pd": "e06154f34cda20899578e35685ad5b414ddee6b402bd3e38e67432fd1bed3df9",
+      "pd-primary-launch": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+      "pd-start-session": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592",
+      "pd-radio-launch": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "session_journal": "Started aetherpd-start@0-1302-78666.service - AetherPD owned local session (PID 1302/UID 78666).\n{\"event\":\"native_resources_prepared\",\"source_pid\":1337,\"capture_pid\":1340,\"arp_pid\":1335,\"stream\":\"0x20000000\",\"port\":37854,\"rf_commands\":[]}\n{\"event\":\"supervisor_ready\",\"uid\":65534,\"worker_pid\":1342,\"status\":0,\"rf_commands\":[]}\n{\"event\":\"ready\",\"uid\":65534,\"clock_pid\":1343,\"raw_fd_closed\":true,\"strict_seccomp\":true}\n2026/11/16 03:37:08 AetherPD: captured owned receive baseline before DSP startup\n2026/11/16 03:37:08 AetherPD: owned API lease guardian armed before DSP startup\n2026/11/16 03:37:08 AetherPD: owned receive guardian armed before DSP startup\n1794821828.064 discarded 70 pre-activation IQ datagrams\n1794821828.064 AetherPD 0.1.0 starting, radio 127.0.0.1, udp 53754, feedback DAX IQ 1 at 48000 Hz, peak 0.70, correction on\n1794821828.110 command 1: 10000002 unknown client program AetherPD\n1794821828.132 registered AetherPD: tx_in 0x81000001 rx_in 0x81000000\n1794821838.402 PD selected on slice 0\n2026/11/16 03:38:25 AetherPD: recorded owned PD receiver in receive-recovery journal\n1794821906.969 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)\n1794821906.969 measurement window: event=periodic ready=0 now_ns=168878333752 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=168876805395 iq_age_ns=335757 deadline_ns=176878036347 fits=0 solution=0\n1794821906.969 tx: aligned 0, fits 0, correcting 0, state 0, offset 0.000 Hz\n1794821906.969 calibration: key 0.000 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.000000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0\n1794821908.970 measurement window: event=periodic ready=0 now_ns=170879561382 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=48000 test_left=144000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=170879511012 iq_age_ns=1080010 deadline_ns=176878036347 fits=0 solution=0\n1794821908.970 tx: aligned 0, fits 0, correcting 0, state 0, offset 0.000 Hz\n1794821908.970 calibration: key 2.002 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.470944, limited 0, acquisition pending 1, EQ pending 0, fit flags 0x0, rejected 0\n1794821908.974 loop delay 1723.97 samples (71.83 ms), envelope correlation 1.00, phase correlation 0.999\n1794821910.788 transmit path fitted: 31 taps, -26.3 dB of the feedback left unexplained\n1794821910.972 measurement window: event=periodic ready=0 now_ns=172881119763 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=95872 tone1=710 tone2=1900 tone_sent_ns=172875857806 guard_ns=500000000 iq_valid_ns=172878504470 iq_age_ns=1742467 deadline_ns=176878036347 fits=0 solution=0\n1794821910.972 tx: aligned 1, fits 0, correcting 0, state 2, offset -0.029 Hz\n1794821910.972 calibration: key 4.003 s, EQ 1 residual -26.3 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0\n1794821912.972 measurement window: event=periodic ready=0 now_ns=174881132157 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=47872 tone1=710 tone2=1900 tone_sent_ns=172875857806 guard_ns=500000000 iq_valid_ns=174879496096 iq_age_ns=733993 deadline_ns=176878036347 fits=0 solution=0\n1794821912.972 tx: aligned 1, fits 0, correcting 0, state 6, offset -0.029 Hz\n1794821912.972 calibration: key 6.003 s, EQ 1 residual -26.3 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 0\n1794821914.820 measurement window: event=interlock_ineligible ready=1 now_ns=176729892595 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=3584 tone1=710 tone2=1900 tone_sent_ns=172875857806 guard_ns=500000000 iq_valid_ns=176727536225 iq_age_ns=755475 deadline_ns=176878036347 fits=1 solution=1\n1794821914.820 bounded source ended: reason=interlock_ineligible source=0000000000000004 phase=running keyed=1 tx_on=1 samples_left=3584 generated=188416 iq_frames=23661 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=755475 tx_discontinuities=0 tx_rejected=0 deadlines=0\n1794821914.821 receive: 1 fits, cache 1, delay 1723.97, offset -0.029 Hz\n2026/11/16 03:39:45 AetherPD: recorded owned PD receiver in receive-recovery journal\n1794821986.171 transmit: feedback shift 0 Hz (tx 7.150000 MHz, pan 7.150000 MHz)\n1794821986.171 measurement window: event=periodic ready=0 now_ns=248080529005 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=96000 test_left=192000 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=248077520623 iq_age_ns=1088214 deadline_ns=256080209582 fits=1 solution=0\n1794821986.171 tx: aligned 0, fits 1, correcting 0, state 6, offset -0.029 Hz\n1794821986.171 calibration: key 0.000 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.000000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 1\n1794821988.172 measurement window: event=periodic ready=0 now_ns=250081244494 phase=running keyed=1 local=1 fault=1 aligned=0 feedback=1 noise_left=47872 test_left=143872 tone1=710 tone2=1900 tone_sent_ns=0 guard_ns=500000000 iq_valid_ns=250079512527 iq_age_ns=1080417 deadline_ns=256080209582 fits=1 solution=0\n1794821988.172 tx: aligned 0, fits 1, correcting 0, state 6, offset -0.029 Hz\n1794821988.172 calibration: key 2.001 s, EQ 0 residual -300.0 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.470944, limited 0, acquisition pending 1, EQ pending 0, fit flags 0x0, rejected 1\n1794821988.173 loop delay 1723.97 samples (71.83 ms), envelope correlation 1.00, phase correlation 0.999\n1794821990.011 transmit path fitted: 31 taps, -26.8 dB of the feedback left unexplained\n1794821990.172 measurement window: event=periodic ready=0 now_ns=252081576984 phase=running keyed=1 local=1 fault=1 aligned=1 feedback=1 noise_left=0 test_left=95872 tone1=710 tone2=1900 tone_sent_ns=252075819216 guard_ns=500000000 iq_valid_ns=252081526521 iq_age_ns=1093417 deadline_ns=256080209582 fits=2 solution=0\n1794821990.172 tx: aligned 1, fits 2, correcting 0, state 2, offset -0.029 Hz\n1794821990.172 calibration: key 4.001 s, EQ 1 residual -26.8 dB, phase 2, coverage 0/16, bins [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prelimit peak 0.700000, limited 0, acquisition pending 0, EQ pending 0, fit flags 0x0, rejected 1\n1794821992.174 measurement window: event=periodic ready=1 now_ns=254083553885 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=47872 tone1=710 tone2=1900 tone_sent_ns=252075819216 guard_ns=500000000 iq_valid_ns=254083505127 iq_age_ns=1075640 deadline_ns=256080209582 fits=3 solution=1\n1794821992.174 tx: aligned 1, fits 3, correcting 1, state 6, offset -0.029 Hz\n1794821993.789 measurement window: event=interlock_ineligible ready=1 now_ns=255699062589 phase=running keyed=1 local=1 fault=0 aligned=1 feedback=1 noise_left=0 test_left=9088 tone1=710 tone2=1900 tone_sent_ns=252075819216 guard_ns=500000000 iq_valid_ns=255693530542 iq_age_ns=1357842 deadline_ns=256080209582 fits=3 solution=1\n1794821993.790 bounded source ended: reason=interlock_ineligible source=0000000000000007 phase=running keyed=1 tx_on=1 samples_left=9088 generated=182912 iq_frames=45197 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1357842 tx_discontinuities=0 tx_rejected=0 deadlines=0\n1794821993.790 receive: 3 fits, cache 1, delay 1723.97, offset -0.029 Hz\n1794822011.531 shim session ended\n1794822011.531 stopping\n{\"event\":\"complete\",\"reason\":\"output\",\"received\":50106,\"forwarded\":50105,\"stale\":0,\"invalid\":0,\"foreign\":0,\"backpressure\":0,\"output_errors\":1,\"loss_seen\":1,\"clock_faults\":0,\"future_wait\":31737,\"clock_pid\":1343,\"startup_discarded\":64,\"strict_seccomp\":true,\"raw_fd_closed\":true,\"rf_commands\":[]}\n{\"event\":\"session_stopped\",\"uid\":65534,\"worker_pid\":1342,\"status\":0,\"rf_commands\":[]}\n",
+    "own_probe_cache_removed": true,
+    "passed": true
+  },
+  "post_reboot_audit_orchestration": {
+    "job_container_deleted": true,
+    "temporary_host_directory_deleted": true
+  },
+  "final_radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": null,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "final_service": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  }
+}
