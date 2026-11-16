@@ -62,6 +62,7 @@ private:
     QCheckBox* m_lineOutIncludeTx{nullptr};
     QCheckBox* m_lineOutPcAudioOffConsent{nullptr};
     QCheckBox* m_txVoiceDsp{nullptr};
+    QCheckBox* m_rxProcessed{nullptr};
     ControlAvailabilityRegistry* m_lineOutAvailability{nullptr};
     ControlAvailabilityRegistry* m_lineOutPcAudioOffAvailability{nullptr};
     QLineEdit*   m_tciPort{nullptr};

@@ -15,6 +15,8 @@
 #include <QSemaphore>
 #include <QScopeGuard>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStringList>
 #include "core/TciClient.h"
 #include <array>
@@ -647,6 +649,90 @@ public:
         PcmProducer wrong; wrong.start(PcmPurpose::Speaker);
         f.server.onSlicePcmReady(3,frame(wrong,128));
         check(f.packets[client].size()==accepted, "revoked rate generations purpose and slice mismatches rejected");
+    }
+    // #6864: the operator's raw/processed choice, the stale fallback within
+    // 500 ms, and the route handover in both directions.
+    static void processedSourceSelection()
+    {
+        AppSettings& settings = AppSettings::instance();
+        const QVariant previousTci = settings.value("Tci", "{}");
+        const auto restore = qScopeGuard([&] { settings.setValue("Tci", previousTci); settings.save(); });
+        const auto stored = [&] {
+            return QJsonDocument::fromJson(settings.value("Tci", "{}").toString().toUtf8())
+                .object().value("RxAudioSource").toString();
+        };
+        Fixture f; f.backend->add(3);
+        qint64 now = 1000;
+        f.server.m_rxSourceClock = [&now] { return now; };
+        TciClient* client = f.client();
+        PcmProducer raw; raw.start(PcmPurpose::Slice, 3);
+        const auto block = [](float left, float right) {
+            QByteArray pcm(128 * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+            auto* s = reinterpret_cast<float*>(pcm.data());
+            for (int i = 0; i < 128; ++i) { s[2*i] = left; s[2*i+1] = right; }
+            return pcm;
+        };
+        const auto lastIs = [&](float left, float right) {
+            const QList<QByteArray>& packets = f.packets[client];
+            if (packets.isEmpty()) { return false; }
+            const QVector<float> samples = floats({packets.last()});
+            return samples.size() >= 2 && samples[0] == left && samples[1] == right;
+        };
+        const auto count = [&] { return f.packets[client].size(); };
+
+        check(!f.server.rxAudioProcessed(), "processed RX: raw is the default source");
+        f.server.onSlicePcmReady(3, frame(raw, 128, 0.25f, -0.5f));
+        check(lastIs(0.25f, -0.5f), "processed RX: raw slice audio flows by default");
+        qsizetype before = count();
+        f.server.onProcessedSliceAudio(3, block(0.1f, 0.2f));
+        check(count() == before, "processed RX: processed audio is ignored while raw is selected");
+
+        f.server.setRxAudioProcessed(true);
+        check(f.server.rxAudioProcessed() && stored() == QLatin1String("processed"),
+              "processed RX: the choice persists as Tci.RxAudioSource = processed");
+        now += 20;
+        f.server.onSlicePcmReady(3, frame(raw, 128, 0.25f, -0.5f));
+        check(lastIs(0.25f, -0.5f), "processed RX: raw keeps the route until processed audio flows");
+        f.server.onProcessedSliceAudio(3, block(0.1f, 0.2f));
+        check(lastIs(0.1f, 0.2f), "processed RX: processed audio takes over the slice route");
+        now += 20;
+        before = count();
+        f.server.onSlicePcmReady(3, frame(raw, 128, 0.25f, -0.5f));
+        check(count() == before, "processed RX: raw frames are held back while processed is fresh");
+        f.server.onProcessedSliceAudio(3, block(0.3f, 0.4f));
+        check(lastIs(0.3f, 0.4f), "processed RX: the processed stream continues on its route");
+
+        now += TciRxSourceSelector::kStaleMs - 50;
+        before = count();
+        f.server.onSlicePcmReady(3, frame(raw, 128, 0.25f, -0.5f));
+        check(count() == before, "processed RX: a short processed gap does not flap to raw");
+        now += 100; // 450 ms after the last processed block
+        f.server.onSlicePcmReady(3, frame(raw, 128, 0.25f, -0.5f));
+        check(lastIs(0.25f, -0.5f), "processed RX: raw takes the route back within 500 ms");
+        now += 20;
+        f.server.onSlicePcmReady(3, frame(raw, 128, 0.5f, -0.25f));
+        check(lastIs(0.5f, -0.25f), "processed RX: raw keeps flowing after the fallback");
+
+        now += 20;
+        f.server.onProcessedSliceAudio(3, block(0.6f, 0.7f));
+        check(lastIs(0.6f, 0.7f), "processed RX: returning processed audio takes over again");
+
+        f.server.setRxAudioProcessed(false);
+        check(!f.server.rxAudioProcessed() && stored() == QLatin1String("raw"),
+              "processed RX: switching back persists Tci.RxAudioSource = raw");
+        now += 20;
+        f.server.onSlicePcmReady(3, frame(raw, 128, 0.25f, -0.5f));
+        check(lastIs(0.25f, -0.5f), "processed RX: switching to raw hands the route back at once");
+        before = count();
+        f.server.onProcessedSliceAudio(3, block(0.8f, 0.9f));
+        check(count() == before, "processed RX: late processed blocks are ignored after switching to raw");
+
+        f.server.setRxAudioProcessed(true);
+        f.server.onProcessedSliceAudio(3, block(0.1f, 0.2f));
+        f.server.retireSliceRx(3);
+        check(!f.server.m_rxSource.processedOwns(3) && f.server.m_processedRx.count(3) == 0,
+              "processed RX: removing the slice drops its processed stream");
+        f.server.setRxAudioProcessed(false);
     }
     static void resetIsolation()
     {
@@ -1410,7 +1496,7 @@ public:
         simultaneousEightReceiverHandshakes();
         lineOutCaptureConsent(); lineOutFailureIsolation(); lineOutProtocol(); lineOutDemandLifecycle(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence(); receiveAttenuationAndMeter();
-        replayAndEpochs(); resetIsolation(); sampleTypeIsNamed(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
+        replayAndEpochs(); processedSourceSelection(); resetIsolation(); sampleTypeIsNamed(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);
         return failures==0 ? 0 : 1;

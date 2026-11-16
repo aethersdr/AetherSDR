@@ -1418,7 +1418,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
     {
         std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
         ExternalRxAudioSourceState* source = findSource();
-        if (!source || !externalKiwiSourceProcessing(*source)
+        if (!source
+            || !(externalKiwiSourceProcessing(*source) || source->tciSliceTap)
             || source->dspInitializationPending) {
             return true;
         }
@@ -1529,7 +1530,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
             return ok;
         }
         source->dspInitializationPending = false;
-        if (!externalKiwiSourceProcessing(*source)) {
+        if (!(externalKiwiSourceProcessing(*source) || source->tciSliceTap)) {
             return ok;
         }
         if (needNr2 && m_nr2Enabled && m_nr2 && !source->nr2) {
@@ -6110,6 +6111,158 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             writeAudioNrIdle(pcm);
         }
     }
+}
+
+namespace {
+QString tciSliceSourceId(int sliceId)
+{
+    return QStringLiteral("tci-slice:%1").arg(sliceId);
+}
+} // namespace
+
+AudioEngine::ExternalRxAudioSourceState* AudioEngine::tciSliceSource(int sliceId)
+{
+    // Caller holds m_dspMutex. The entry lives in m_externalKiwiSources so the
+    // NR setters' per-source fan-out keeps its parameters in step; it is never
+    // enabled, so no mixing, buffering or Kiwi DSP scheduling touches it.
+    const QString id = tciSliceSourceId(sliceId);
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->tciSliceTap && source->id == id) {
+            return source.get();
+        }
+    }
+    auto source = std::make_unique<ExternalRxAudioSourceState>();
+    source->id = id;
+    source->tciSliceTap = true;
+    source->clientEffects = std::make_unique<RxClientEffects>();
+    m_externalKiwiSources.push_back(std::move(source));
+    return m_externalKiwiSources.back().get();
+}
+
+QByteArray AudioEngine::runTciSliceDsp(ExternalRxAudioSourceState& source,
+                                       const QByteArray& pcm, bool& missing)
+{
+    // Same NR selection as processMixedRxAudioData(), on this slice's own
+    // instances. An enabled processor that is absent or not yet valid yields
+    // nothing: the caller falls back to raw rather than emit unprocessed audio
+    // as "processed".
+    missing = false;
+    QByteArray nrOut;
+    if (m_rn2Enabled) {
+        if (!source.rn2 || !source.rn2->isValid()) { missing = !source.rn2; return {}; }
+        nrOut = source.rn2->process(pcm);
+    } else if (m_nr2Enabled) {
+        if (!source.nr2) { missing = true; return {}; }
+        processNr2(pcm, RxDspSource::KiwiSdr, &source);
+        nrOut = source.nr2Output;
+#ifdef HAVE_SPECBLEACH
+    } else if (m_nr4Enabled) {
+        if (!source.nr4 || !source.nr4->isValid()) { missing = !source.nr4; return {}; }
+        nrOut = source.nr4->process(pcm);
+#endif
+#ifdef HAVE_DFNR
+    } else if (m_dfnrEnabled) {
+        if (!source.dfnr || !source.dfnr->isValid()) { missing = !source.dfnr; return {}; }
+        nrOut = source.dfnr->process(pcm);
+#endif
+    } else if (m_nnrEnabled) {
+        if (!source.nnr || !source.nnr->isValid()) { missing = !source.nnr; return {}; }
+        nrOut = source.nnr->process(pcm);
+#ifdef HAVE_NVIDIA_AFX
+    } else if (m_nvAfxEnabled) {
+        if (!source.nvAfx || !source.nvAfx->isValid()) { missing = !source.nvAfx; return {}; }
+        nrOut = source.nvAfx->process(pcm);
+#endif
+#ifdef __APPLE__
+    } else if (m_mnrEnabled) {
+        if (!source.mnr || !source.mnr->isValid()) { missing = !source.mnr; return {}; }
+        nrOut = source.mnr->process(pcm);
+#endif
+    } else {
+        nrOut = pcm;
+    }
+    if (nrOut.isEmpty()) {
+        return {};
+    }
+    RxClientEffects& effects = *source.clientEffects;
+    effects.syncParametersFrom(*m_clientEqRx, *m_clientGateRx,
+        *m_clientCompRx, *m_clientTubeRx, *m_clientPuduRx);
+    RxChainModules modules;
+    modules.eq = &effects.eq();
+    modules.gate = &effects.gate();
+    modules.comp = &effects.comp();
+    modules.tube = &effects.tube();
+    modules.pudu = &effects.pudu();
+    const QByteArray* out = runRxChain(m_rxChainPacked.load(std::memory_order_acquire),
+                                       nrOut, modules, m_tciSliceChainScratch, false);
+    return out ? *out : QByteArray{};
+}
+
+void AudioEngine::processTciSliceAudio(int sliceId, const QByteArray& pcm)
+{
+    constexpr int kFrameBytes = 2 * static_cast<int>(sizeof(float));
+    if (sliceId < 0 || pcm.isEmpty() || pcm.size() % kFrameBytes != 0
+        || m_radioTransmitting) {
+        return;
+    }
+    QByteArray out;
+    QString initId;
+    {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        ExternalRxAudioSourceState* source = tciSliceSource(sliceId);
+        bool missing = false;
+        out = runTciSliceDsp(*source, pcm, missing);
+        if (missing && !source->tciInitScheduled) {
+            source->tciInitScheduled = true;
+            initId = source->id;
+        }
+    }
+    if (!initId.isEmpty()) {
+        // Off the audio thread, like scheduleAllKiwiDspStateInitialization():
+        // model loading can take long. Raw audio covers the gap.
+        std::lock_guard<std::mutex> lock(m_dspInitializationTasksMutex);
+        if (!m_dspInitializationStopping) {
+            m_dspInitializationTasks.addFuture(QtConcurrent::run([this, initId]() {
+                if (!ensureExternalKiwiSourceDspState(initId)) {
+                    return; // stays scheduled: no retry storm on a failing model
+                }
+                std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+                for (const auto& candidate : m_externalKiwiSources) {
+                    if (candidate && candidate->tciSliceTap && candidate->id == initId) {
+                        candidate->tciInitScheduled = false;
+                    }
+                }
+            }));
+        }
+    }
+    if (out.isEmpty() || out.size() % kFrameBytes != 0) {
+        return;
+    }
+    m_tciSliceDspBlocks.fetch_add(1, std::memory_order_relaxed);
+    emit tciSliceProcessedAudioReady(sliceId, out);
+}
+
+void AudioEngine::releaseTciSliceDsp(int sliceId)
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    const QString id = tciSliceSourceId(sliceId);
+    m_externalKiwiSources.erase(
+        std::remove_if(m_externalKiwiSources.begin(), m_externalKiwiSources.end(),
+            [&](const std::unique_ptr<ExternalRxAudioSourceState>& source) {
+                return source && source->tciSliceTap
+                    && (sliceId < 0 || source->id == id);
+            }),
+        m_externalKiwiSources.end());
+}
+
+int AudioEngine::tciSliceDspCount() const
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    return static_cast<int>(std::count_if(
+        m_externalKiwiSources.cbegin(), m_externalKiwiSources.cend(),
+        [](const std::unique_ptr<ExternalRxAudioSourceState>& source) {
+            return source && source->tciSliceTap;
+        }));
 }
 
 void AudioEngine::updateAuxiliaryClientEffectMeters(RxClientEffects& source)

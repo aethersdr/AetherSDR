@@ -352,6 +352,20 @@ public:
     bool tciTxVoiceDsp() const { return m_tciTxVoiceDsp.load(std::memory_order_acquire); }
     // Blocks the TCI voice chain has produced since construction (any thread).
     quint64 tciTxVoiceBlocks() const { return m_tciTxVoiceBlocks.load(std::memory_order_relaxed); }
+
+    // Processed TCI RX audio (#6864). One post-DSP tap per slice: the slice's
+    // own raw 24 kHz stereo audio runs through a private copy of the client
+    // NR stage and RX chain (the ExternalRxAudioSourceState pattern, with the
+    // operator's settings) and comes back on tciSliceProcessedAudioReady().
+    // Never the speaker mix and independent of the PC audio device. Emits
+    // nothing during TX, for misaligned input, or while an enabled NR
+    // processor for this slice is still being prepared; TciServer falls back
+    // to the raw slice stream then. Audio thread.
+    Q_INVOKABLE void processTciSliceAudio(int sliceId, const QByteArray& pcm24kStereoFloat);
+    // Drops one slice's processing state, or every slice's with -1.
+    Q_INVOKABLE void releaseTciSliceDsp(int sliceId);
+    int tciSliceDspCount() const;
+    quint64 tciSliceDspBlocks() const { return m_tciSliceDspBlocks.load(std::memory_order_relaxed); }
     // Interleaved stereo float32 in place: both channels become (L + R) / 2.
     // The voice chain reads one channel of a duplicated-mono block, so a TCI
     // client that fills only one side still transmits. A trailing odd sample
@@ -846,6 +860,8 @@ signals:
     // remain on the unguarded local tap above.
     void txTransportPcmReady(const QByteArray& int16Stereo, TxAudioSource source,
                              const AetherSDR::TxCoordinator::Context& context);
+    // Processed TCI RX audio for one slice, 24 kHz stereo float32 (#6864).
+    void tciSliceProcessedAudioReady(int sliceId, const QByteArray& pcm24kStereoFloat);
     void modemTxAudioFinished(quint64 token, const AetherSDR::TxCoordinator::Context& context);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio
@@ -986,6 +1002,10 @@ private:
         float txGateGain{1.0f};
         bool prebuffering{false};
         bool dspInitializationPending{false};
+        // A processed-TCI slice tap (#6864): never enabled, never mixed;
+        // only its NR instances and client effects are used.
+        bool tciSliceTap{false};
+        bool tciInitScheduled{false};
     };
 
     struct AutomationAudioCaptureChunk {
@@ -1043,6 +1063,9 @@ private:
     qsizetype externalKiwiOutputBufferBytes() const;
     bool ensureLegacyKiwiDspState();
     bool ensureExternalKiwiSourceDspState(const QString& sourceId);
+    ExternalRxAudioSourceState* tciSliceSource(int sliceId);
+    QByteArray runTciSliceDsp(ExternalRxAudioSourceState& source,
+                              const QByteArray& pcm, bool& missing);
     bool ensureAllKiwiDspState();
     void scheduleAllKiwiDspStateInitialization();
     void resetLegacyKiwiDspState();
@@ -1492,6 +1515,9 @@ private:
     std::unique_ptr<TxVoiceProcessor>   m_tciTxVoiceProcessor;
     std::atomic<bool> m_tciTxVoiceDsp{false};
     std::atomic<quint64> m_tciTxVoiceBlocks{0};
+    std::atomic<quint64> m_tciSliceDspBlocks{0};
+    // Scratch for the processed-TCI RX chain; used under m_dspMutex only.
+    RxChainScratch m_tciSliceChainScratch;
     // Audio thread only: the processor is reset each time the option turns on.
     bool m_tciTxVoiceDspWasOn{false};
     // Audio-thread only: prevents duplicate queued recovery work after the

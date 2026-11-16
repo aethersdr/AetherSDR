@@ -538,6 +538,12 @@ void TciIoWorker::retireRxRoute(quint64 key)
     if (route != m_rxRoutes.end()) { route->retired = true; }
 }
 
+void TciIoWorker::releaseRxRoute(quint64 key)
+{
+    resetRxRoute(key);
+    m_rxRoutes.remove(key);
+}
+
 void TciIoWorker::resetRxRoute(quint64 key)
 {
     for (RxClient& client : m_rxClients) { client.converters.remove(key); }

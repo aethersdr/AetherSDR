@@ -80,6 +80,10 @@ public:
     void setRxBindings(const QHash<quint64, TciRxBinding>& bindings);
     void receivePcm(quint64 key, const PcmFrame& frame);
     void retireRxRoute(quint64 key);
+    // Forget a route's pin so the next stream for the key may take it. Used
+    // when the operator's RX audio source hands a slice route between the raw
+    // and the processed stream (#6864).
+    void releaseRxRoute(quint64 key);
     void setRxGain(int channel, float gain);
     void setTxGain(float gain, int overflowMode);
     void setDaxTxAudioPermit(const DaxTxAudioPermit& permit);

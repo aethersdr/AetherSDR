@@ -244,6 +244,16 @@ TCI transmit audio normally goes to the radio as the client sent it, which is wh
 - DAX transmit audio never passes through it.
 - It changes only the audio. When and how the radio keys does not change.
 
+### Processed RX audio
+
+TCI clients normally receive each slice's audio raw, as the radio delivers it. Decoders such as WSJT-X, JTDX and fldigi need exactly that. With **RX audio through RX DSP (processed)** in the TCI Server applet, a slice's audio first passes AetherSDR's own RX DSP: the noise reduction that is switched on (NR2, RNNoise, NR4, ...) and the client RX chain (EQ, gate, compressor, tube, enhancer), with the same settings you hear locally. A remote-operation client then hears the cleaned-up audio ([#6864](https://github.com/aethersdr/AetherSDR/issues/6864)).
+
+- Off by default. Off, nothing changes. The setting is stored as `Tci.RxAudioSource` (`raw` or `processed`).
+- Each slice is processed on its own, from that slice's audio. TCI clients never receive the speaker mix, and other slices are never mixed in.
+- PC audio does not have to be on.
+- Raw audio takes over again within half a second whenever processed audio is not available: during TX, while a noise reduction is still starting, or when the slice delivers another sample rate than 24 kHz. It switches back when processed audio returns.
+- Receivers fed by DAX (FlexRadio) always stay raw. Line Out is not affected.
+
 ### TX overflow handling
 
 Right-click the **TX** meter in the TCI Server applet to choose how transmit samples beyond ±1.0 are treated:

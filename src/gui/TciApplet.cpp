@@ -276,6 +276,33 @@ void TciApplet::buildUI()
     connect(m_txVoiceDsp, &QCheckBox::toggled, this, [this](bool on) {
         if (m_tciServer) { m_tciServer->setTxVoiceDsp(on); }
     });
+    auto* rxProcessedRow = new QHBoxLayout;
+    rxProcessedRow->setContentsMargins(4, 1, 4, 2);
+    m_rxProcessed = new QCheckBox(tr("RX audio through RX DSP (processed)"), this);
+    m_rxProcessed->setObjectName(QStringLiteral("tciRxProcessed"));
+    m_rxProcessed->setAccessibleName(tr("Send processed RX audio to TCI clients"));
+    m_rxProcessed->setAccessibleDescription(tr(
+        "Off (raw): TCI clients receive each slice's audio as the radio delivers it, "
+        "which is what digital-mode decoders (WSJT-X, JTDX, fldigi) need. "
+        "On (processed): each slice's audio first passes AetherSDR's own RX DSP, "
+        "the noise reduction and RX chain you hear locally, so a remote-operation "
+        "client hears the same cleaned-up audio. It is that slice's own audio, not "
+        "the speaker mix, and it does not need PC audio. Whenever processed audio "
+        "is not available (during TX, while a noise reduction is starting, or at "
+        "another sample rate) the raw audio takes over within half a second. "
+        "Receivers fed by DAX and Line Out are not affected. Off by default."));
+    m_rxProcessed->setToolTip(m_rxProcessed->accessibleDescription());
+    m_rxProcessed->setEnabled(false);
+    applyCanonSheet(m_rxProcessed, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    rxProcessedRow->addWidget(m_rxProcessed);
+    rxProcessedRow->addStretch();
+    outer->addLayout(rxProcessedRow);
+    connect(m_rxProcessed, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_tciServer) { m_tciServer->setRxAudioProcessed(on); }
+    });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -490,6 +517,7 @@ void TciApplet::setTciServer(TciServer* tci)
         disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::lineOutPcAudioOffConsentChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::txVoiceDspChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::rxAudioProcessedChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
     }
     m_tciServer = tci;
@@ -506,12 +534,21 @@ void TciApplet::setTciServer(TciServer* tci)
         m_txVoiceDsp->setChecked(tci && tci->txVoiceDsp());
         m_txVoiceDsp->setEnabled(tci != nullptr);
     }
+    {
+        const QSignalBlocker blocker(m_rxProcessed);
+        m_rxProcessed->setChecked(tci && tci->rxAudioProcessed());
+        m_rxProcessed->setEnabled(tci != nullptr);
+    }
     if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
     if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }
     if (tci) {
         connect(tci, &TciServer::txVoiceDspChanged, this, [this](bool on) {
             const QSignalBlocker blocker(m_txVoiceDsp);
             m_txVoiceDsp->setChecked(on);
+        });
+        connect(tci, &TciServer::rxAudioProcessedChanged, this, [this](bool on) {
+            const QSignalBlocker blocker(m_rxProcessed);
+            m_rxProcessed->setChecked(on);
         });
         connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
             const QSignalBlocker blocker(m_lineOutIncludeTx);

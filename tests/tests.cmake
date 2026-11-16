@@ -9285,6 +9285,12 @@ target_include_directories(tci_tx_voice_dsp_test PRIVATE src)
 target_link_libraries(tci_tx_voice_dsp_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tci_tx_voice_dsp_test COMMAND tci_tx_voice_dsp_test)
 
+# RFC #6864: per-slice processed RX tap (one per slice, quiet in TX, release).
+add_executable(tci_rx_processed_dsp_test tests/tci_rx_processed_dsp_test.cpp)
+target_include_directories(tci_rx_processed_dsp_test PRIVATE src)
+target_link_libraries(tci_rx_processed_dsp_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tci_rx_processed_dsp_test COMMAND tci_rx_processed_dsp_test)
+
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
 )
