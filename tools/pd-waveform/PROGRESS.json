@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T11:05:21.457344+00:00",
+  "updated_utc": "2026-11-16T11:16:24.984641+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Reconcile10second transmit limit with independent helper startup/cleanup and native measurement expiry; retain new silence guard as component-qualified only. Complete remaining analyzer controls/settings. Radio reachability, exact reboot, new packaged DSP and full P1-P10 hardware/release gates remain open.",
+  "next_action": "Resolve analyzer10second RF deadline/cleanup semantics; source options implemented and component-tested. Radio return, exact reboot, refreshed native packages, remaining analyzer scope and full P1-P10 hardware/release gates remain open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2839,6 +2839,16 @@
         "path": "evidence/20261116-measurement-retirement/final-cross-builds.json",
         "sha256": "0a9b4b4e61ec5f50ecf83139187fd1c3a61bab8634f7e9b99d59f322aa20747e"
       }
+    ]
+  },
+  "measurement_analysis_options": {
+    "report": "MEASUREMENT-OPTIONS-QUALIFICATION.json",
+    "status": "component-qualified; not installed or live-radio qualified",
+    "tests": "4/4 focused tests, desktop/docs builds and static checks passed",
+    "remaining": [
+      "10-second RF deadline and downward-only timeout adjustment remain unresolved; current operation budget remains14seconds.",
+      "Live final-desktop and exact-candidate radio qualification; radio ports4992/48992/22222 timed out at11:15:47Z.",
+      "Full P1-P10 goal, final package refresh and actual6300 qualification."
     ]
   }
 }

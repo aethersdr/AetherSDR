@@ -9,6 +9,8 @@
 #include <memory>
 
 class QCheckBox;
+class QComboBox;
+class QSpinBox;
 class QDoubleSpinBox;
 class QLabel;
 class QPlainTextEdit;
@@ -37,6 +39,9 @@ private:
     QString m_notice;
     QCheckBox* m_dummyLoad{nullptr};
     QDoubleSpinBox* m_limit{nullptr};
+    QComboBox* m_window{nullptr};
+    QSpinBox* m_averages{nullptr};
+    QComboBox* m_order{nullptr};
     QLabel* m_state{nullptr};
     QPlainTextEdit* m_result{nullptr};
     AetherPDMeasurementSpectrum* m_spectrum{nullptr};

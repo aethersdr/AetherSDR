@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/RadioControlTypes.h"
+#include "core/AetherPDMeasurementSettings.h"
 #include "core/txlinearity/TxLinearityController.h"
 #include "core/txlinearity/TxLinearityTelemetry.h"
 
@@ -45,6 +46,9 @@ public:
     bool prepare(const RadioControlSession& session, const txlin::LinearityRunConfig& config,
                  const txlin::RunRequest& request, bool dummyLoadConfirmed);
     bool prepareCurrent(const RadioControlSession& session, double maxForwardWatts, bool dummyLoadConfirmed);
+    using AnalysisOptions = AetherPDMeasurementSettings::Values;
+    AetherPDMeasurementSettings::ReadResult analysisOptions() const;
+    bool setAnalysisOptions(const RadioControlSession& session, const AnalysisOptions& options);
     QByteArray exportResult() const;
     QByteArray exportResultCsv() const;
     QString resultSummary() const;

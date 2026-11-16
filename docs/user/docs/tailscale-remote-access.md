@@ -556,7 +556,16 @@ ADC headroom or calibrated output power.
    explicit RF action. An independent cleanup helper must be ready before the
    original-session TX request is dispatched. The source emits four seconds of
    alignment noise followed by 710/1900 Hz tones, for at most eight seconds.
-   Capture waits for the guarded tone interval and collects four frames. A cold
+   Before preparing, choose **Analysis window**, **Averages** (one to four frames)
+   and **Highest order** (IMD3, IMD5 or IMD7). These client analysis preferences
+   are remembered separately for each radio; they do not change its power,
+   tones or IQ stream. Defaults are Blackman–Harris 7, four frames and IMD7.
+   The controls lock while a measurement is pending. More averages reduce
+   estimate variance, not the physical noise floor; the four-frame ceiling
+   reserves time for snapshot retrieval within the bounded source window.
+   Window choice changes leakage and resolution, so no window guarantees a
+   particular measurable IMD depth.
+   Capture waits for the guarded tone interval and collects the selected frames. A cold
    correction fit can use most of the source window; capture waits within that
    eight-second window and reports a failure if enough qualified frames do not
    arrive. The independent transmit cutoff remains in force. Routine status

@@ -1139,6 +1139,7 @@ set(CORE_SOURCES
     src/core/txlinearity/SpectrumWindow.cpp
     src/core/txlinearity/AetherPDCaptureSource.cpp
     src/models/AetherPDMeasurementModel.cpp
+    src/core/AetherPDMeasurementSettings.cpp
     src/models/AetherPDInstallationModel.cpp
     src/models/AetherPDRunLease.cpp
     src/core/txlinearity/AetherPDTestClient.cpp

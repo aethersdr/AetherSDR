@@ -1,0 +1,37 @@
+{
+  "updated_utc": "2026-11-16T11:16:24.984641+00:00",
+  "base_commit": "659c1a669d4ff996076f32b34adc470d1d8b4196",
+  "status": "component-qualified; not installed or live-radio qualified",
+  "production_ready": false,
+  "behavior": [
+    "Window BH7/BH4/FlatTop/Hann, averages1..4 and highest IMD3/5/7 are selectable. Existing defaults remain BH7/4/7.",
+    "Exact per-radio schema1 feature document; CAS persistence preserves unknown fields and refuses malformed/future schemas. No radio drive, stream assignment or operator permission persisted.",
+    "Choices freeze during preparation/run; prepared configuration snapshots selected values. Foreign session changes refused.",
+    "Selection alone sends no radio or capture request."
+  ],
+  "verification": {
+    "desktop_build": "passed",
+    "docs_build": "passed",
+    "focused_tests": [
+      "aetherpd_measurement_settings_test",
+      "aetherpd_installation_dialog_test",
+      "aetherpd_dialog_test",
+      "tx_operation_integration_test"
+    ],
+    "focused_result": "4/4 passed",
+    "static_exit_codes": {
+      "registration": 0,
+      "settings": 0,
+      "boundary": 0,
+      "a11y": 0,
+      "diff": 0
+    },
+    "screenshot": "inspected 680x700 layout; controls/summary and footer fit"
+  },
+  "evidence": "evidence/20261116-analysis-options",
+  "remaining": [
+    "10-second RF deadline and downward-only timeout adjustment remain unresolved; current operation budget remains14seconds.",
+    "Live final-desktop and exact-candidate radio qualification; radio ports4992/48992/22222 timed out at11:15:47Z.",
+    "Full P1-P10 goal, final package refresh and actual6300 qualification."
+  ]
+}

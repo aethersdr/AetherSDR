@@ -8,18 +8,21 @@
 
 #include <QAccessible>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSpinBox>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
 namespace {
-void availability(QPushButton* button, bool enabled, const QString& reason)
+void availability(QWidget* button, bool enabled, const QString& reason)
 {
-    const QPointer<QPushButton> alive(button);
+    const QPointer<QWidget> alive(button);
     button->setEnabled(enabled);
     if (!alive) { return; }
     button->setToolTip(enabled ? QString{} : reason);
@@ -60,6 +63,34 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     limitLabel->setBuddy(m_limit);
     layout->addWidget(limitLabel);
     layout->addWidget(m_limit);
+    auto* analysis = new QGridLayout;
+    m_window = new QComboBox(bodyWidget());
+    m_window->setObjectName(QStringLiteral("pdMeasureWindow"));
+    m_window->setAccessibleName(tr("Analysis window"));
+    for (const txlin::WindowKind window : {txlin::WindowKind::BlackmanHarris7, txlin::WindowKind::BlackmanHarris4,
+                                         txlin::WindowKind::FlatTop, txlin::WindowKind::Hann}) {
+        m_window->addItem(QString::fromStdString(txlin::windowKindLabel(window)), static_cast<int>(window));
+    }
+    m_averages = new QSpinBox(bodyWidget());
+    m_averages->setObjectName(QStringLiteral("pdMeasureAverages"));
+    m_averages->setAccessibleName(tr("Averages"));
+    m_averages->setRange(1, AetherPDMeasurementSettings::kMaxAverages);
+    m_order = new QComboBox(bodyWidget());
+    m_order->setObjectName(QStringLiteral("pdMeasureOrder"));
+    m_order->setAccessibleName(tr("Highest intermodulation order"));
+    m_order->addItem(tr("IMD3"), 3);
+    m_order->addItem(tr("IMD3 + 5"), 5);
+    m_order->addItem(tr("IMD3 + 5 + 7"), 7);
+    const auto analysisField = [this, analysis](const QString& title, QWidget* field, int column) {
+        auto* label = new QLabel(title, bodyWidget());
+        label->setBuddy(field);
+        analysis->addWidget(label, 0, column);
+        analysis->addWidget(field, 1, column);
+    };
+    analysisField(tr("Analysis window"), m_window, 0);
+    analysisField(tr("Averages"), m_averages, 1);
+    analysisField(tr("Highest order"), m_order, 2);
+    layout->addLayout(analysis);
     auto* grid = new QGridLayout;
     const auto button = [this, grid](const QString& text, const char* name, int row, int col) {
         auto* result = new QPushButton(text, bodyWidget());
@@ -95,7 +126,7 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     applyCanonSheet(bodyWidget(), [] {
         return QStringLiteral(
             "QLabel,QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; }"
-            "QPlainTextEdit,QDoubleSpinBox { color: {{color.canon.inkSoft}}; background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}}; }"
+            "QPlainTextEdit,QDoubleSpinBox,QSpinBox,QComboBox { color: {{color.canon.inkSoft}}; background: {{color.canon.nested}}; border: 1px solid {{color.canon.line}}; }"
             "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}}; border: 1px solid {{color.canon.lineHi}}; padding: 6px; }"
             "QPushButton:disabled { color: {{color.canon.muted}}; }"
             "QPushButton:hover,QPushButton:focus { border-color: {{color.canon.aqua}}; }") + canonIndicatorRules() + canonSpinArrowRules();
@@ -120,6 +151,20 @@ AetherPDMeasurementDialog::AetherPDMeasurementDialog(RadioModel* radio, QWidget*
     connect(m_export, &QPushButton::clicked, this, &AetherPDMeasurementDialog::exportResult);
     connect(m_dummyLoad, &QCheckBox::toggled, this, &AetherPDMeasurementDialog::render);
     connect(m_limit, &QDoubleSpinBox::valueChanged, this, &AetherPDMeasurementDialog::render);
+    const auto saveAnalysis = [this] {
+        if (!current()) { return; }
+        const QPointer<AetherPDMeasurementDialog> alive(this);
+        const AetherPDMeasurementModel::AnalysisOptions options{
+            static_cast<txlin::WindowKind>(m_window->currentData().toInt()), m_averages->value(), m_order->currentData().toInt()};
+        m_notice.clear();
+        const bool saved = m_radio->aetherPDMeasurementModel().setAnalysisOptions(m_session, options);
+        if (!alive) { return; }
+        if (!saved) { m_notice = tr("Analysis preferences were not changed: %1").arg(m_radio->aetherPDMeasurementModel().status()); }
+        render();
+    };
+    connect(m_window, &QComboBox::currentIndexChanged, this, saveAnalysis);
+    connect(m_averages, &QSpinBox::valueChanged, this, saveAnalysis);
+    connect(m_order, &QComboBox::currentIndexChanged, this, saveAnalysis);
     markTxKeying(m_transmit);
     connect(m_transmit, &QPushButton::clicked, this, [this] {
         if (!current()) { return; }
@@ -223,6 +268,27 @@ void AetherPDMeasurementDialog::render()
     const bool changingSource = pending && *pending != aetherpd::Operation::Status;
     const bool installed = valid && !m_radio->aetherPDInstallationModel().active();
     const bool idle = state == State::Idle;
+    const AetherPDMeasurementSettings::ReadResult preferences = model ? model->analysisOptions()
+        : AetherPDMeasurementSettings::ReadResult{false, {}, tr("Original radio is unavailable.")};
+    if (idle) {
+        const QSignalBlocker windowBlock(m_window), averagesBlock(m_averages), orderBlock(m_order);
+        m_window->setCurrentIndex(m_window->findData(static_cast<int>(preferences.values.window)));
+        m_averages->setValue(preferences.values.averages);
+        m_order->setCurrentIndex(m_order->findData(preferences.values.maxOrder));
+    }
+    const QString analysisReason = preferences.usable ? tr("Analysis options are locked until this measurement ends.") : preferences.reason;
+    for (QWidget* control : {static_cast<QWidget*>(m_window), static_cast<QWidget*>(m_averages), static_cast<QWidget*>(m_order)}) {
+        availability(control, valid && idle && preferences.usable, analysisReason);
+        if (!alive) { return; }
+    }
+    if (idle && preferences.usable) {
+        m_window->setAccessibleDescription(tr("Window choice changes leakage and frequency resolution; no window guarantees a fixed measurable IMD depth."));
+        if (!alive) { return; }
+        m_averages->setAccessibleDescription(tr("One to four frames within the bounded source window. Averaging reduces estimate variance, not the physical noise floor."));
+        if (!alive) { return; }
+        m_order->setAccessibleDescription(tr("Highest odd distortion product to analyze: three, five or seven."));
+        if (!alive) { return; }
+    }
     const bool readySource = source && source->available && source->registered && source->measurementControl && !source->keyed
         && !m_radio->fullDuplexEnabled() && source->state != aetherpd::State::BlockedByRadioApd;
     availability(m_arm, installed && idle && readySource && !busy && m_dummyLoad->isChecked()
@@ -232,10 +298,10 @@ void AetherPDMeasurementDialog::render()
     availability(m_cancelSource, valid && source && source->measurementControl,
         tr("A current authenticated measurement-capable service is required."));
     if (!alive) { return; }
-    availability(m_prepare, installed && idle && readySource && !changingSource && m_dummyLoad->isChecked() && m_limit->value() > 0
+    availability(m_prepare, installed && idle && preferences.usable && readySource && !changingSource && m_dummyLoad->isChecked() && m_limit->value() > 0
         && source->measurement && source->measurement->sourceId && source->sourcePurpose == aetherpd::SourcePurpose::Measurement
         && source->calibrationState == aetherpd::CalibrationState::Armed,
-        tr("Arm the measurement source, confirm the bench path and choose a forward-power limit."));
+        preferences.usable ? tr("Arm the measurement source, confirm the bench path and choose a forward-power limit.") : preferences.reason);
     if (!alive) { return; }
     availability(m_transmit, installed && state == State::Ready && m_dummyLoad->isChecked(),
         tr("Prepare must complete a fresh receive check. Readiness expires after two seconds."));
@@ -255,7 +321,7 @@ void AetherPDMeasurementDialog::render()
         case State::CheckingReceive: message = tr("Checking receive-only DAX IQ…"); break;
         case State::Ready: message = tr("Ready for your Transmit click (valid for two seconds)."); break;
         case State::AwaitingKey: message = tr("Starting independent cleanup helper and waiting for owned TX confirmation…"); break;
-        case State::Capturing: message = tr("Transmitting: waiting for guarded tones and collecting four IQ frames…"); break;
+        case State::Capturing: message = tr("Transmitting: waiting for guarded tones and collecting the selected IQ frames…"); break;
         case State::Releasing: message = tr("Stop requested; waiting for confirmed release of this transmission."); break;
         case State::Analyzing: message = tr("Transmission released. Analyzing…"); break;
         }

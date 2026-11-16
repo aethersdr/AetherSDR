@@ -21,6 +21,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QPlainTextEdit>
 #include <QLabel>
 #include <QJsonDocument>
@@ -294,6 +295,19 @@ int main(int argc, char** argv)
     ok &= check(mb("pdMeasureTransmit")->property(kTxKeyingProperty).toBool()
         && !mb("pdMeasureTransmit")->isEnabled() && !mb("pdMeasurePrepare")->isEnabled(),
         "measurement key control is marked and initially unavailable");
+    auto* windowChoice = measurement->findChild<QComboBox*>(QStringLiteral("pdMeasureWindow"));
+    auto* averageChoice = measurement->findChild<QSpinBox*>(QStringLiteral("pdMeasureAverages"));
+    auto* orderChoice = measurement->findChild<QComboBox*>(QStringLiteral("pdMeasureOrder"));
+    const size_t beforeOptions = network.sent.size();
+    windowChoice->setCurrentIndex(windowChoice->findData(static_cast<int>(txlin::WindowKind::Hann)));
+    averageChoice->setValue(2);
+    orderChoice->setCurrentIndex(orderChoice->findData(5));
+    const auto selectedOptions = radio.aetherPDMeasurementModel().analysisOptions();
+    ok &= check(selectedOptions.usable && selectedOptions.values == AetherPDMeasurementModel::AnalysisOptions{txlin::WindowKind::Hann, 2, 5}
+        && network.sent.size() == beforeOptions && captureNetwork.sent.empty(),
+        "analysis controls persist locally for this radio without capture or RF commands");
+    ok &= check(!radio.aetherPDMeasurementModel().setAnalysisOptions({}, {}),
+        "foreign session cannot replace analysis preferences");
     measurement->findChild<QCheckBox*>(QStringLiteral("pdMeasureDummyLoad"))->setChecked(true);
     measurement->findChild<QDoubleSpinBox*>(QStringLiteral("pdMeasurePowerLimit"))->setValue(10);
     ok &= check(!mb("pdMeasurePrepare")->isEnabled(), "source capability without identity cannot prepare from UI");
@@ -342,6 +356,10 @@ int main(int argc, char** argv)
     ok &= check(radio.aetherPDMeasurementModel().state() == AetherPDMeasurementModel::State::CheckingReceive
         && captureNetwork.sent.size() == 1 && !mb("pdMeasureTransmit")->isEnabled(),
         "UI preparation uses real station configuration and receive-only capture");
+    ok &= check(!windowChoice->isEnabled() && !averageChoice->isEnabled() && !orderChoice->isEnabled()
+        && !radio.aetherPDMeasurementModel().setAnalysisOptions(radio.controlSession(), {})
+        && radio.aetherPDMeasurementModel().analysisOptions().values == selectedOptions.values,
+        "analysis options freeze in both GUI and model throughout measurement preparation");
     if (!captureNetwork.last) { return 1; }
     const QString id = QStringLiteral("0123456789abcdef0123456789abcdef");
     const auto encode = [](const QJsonObject& o) { return QJsonDocument(o).toJson(QJsonDocument::Compact); };
@@ -358,7 +376,8 @@ int main(int argc, char** argv)
         "complete receive frame enables explicit transmit only");
     const QString readyText = measurement->findChild<QLabel*>(QStringLiteral("pdMeasureState"))->text();
     ok &= check(readyText.contains("7.150000 MHz") && readyText.contains("ANT1")
-        && readyText.contains("nominal setting 5 W") && readyText.contains("abort limit 10.0 W"),
+        && readyText.contains("nominal setting 5 W") && readyText.contains("abort limit 10.0 W")
+        && readyText.contains("Hann") && readyText.contains("2 averages") && readyText.contains("IMD5"),
         "ready display identifies the original station and separates drive from abort limit");
     const auto bridge = std::make_shared<TxController>(&radio);
     TxKeyingAction::Prepared queued = prepareTxKeyingAction(mb("pdMeasureTransmit"), bridge, "click", {});

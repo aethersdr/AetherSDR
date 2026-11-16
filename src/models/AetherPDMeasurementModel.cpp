@@ -176,14 +176,18 @@ bool AetherPDMeasurementModel::prepareCurrent(const RadioControlSession& session
     if (QThread::currentThread() != thread() || !m_radio || !m_radio->txSlice()) { return false; }
     const std::optional<aetherpd::Status> source = m_radio->aetherPDModel().status();
     if (!source) { return false; }
+    const AetherPDMeasurementSettings::ReadResult preferences = analysisOptions();
+    if (!preferences.usable) { m_notice = preferences.reason; publish(); return false; }
     txlin::LinearityRunConfig config;
     config.capture.centerFreqHz = m_radio->txSlice()->frequency() * 1e6;
     config.capture.sampleRateHz = 48000;
-    // Four frames leave room for bounded HTTP retrieval inside the fixed tone window.
-    config.targetAverages = 4;
+    config.targetAverages = preferences.values.averages;
+    config.window = preferences.values.window;
+    config.imd.maxOrder = preferences.values.maxOrder;
     config.maxForwardWatts = maxForwardWatts;
     config.expectedCorrection = source->correctionEnabled;
     txlin::RunRequest request;
+    request.maxOrder = preferences.values.maxOrder;
     request.tone1Hz = config.capture.centerFreqHz + 710;
     request.tone2Hz = config.capture.centerFreqHz + 1900;
     const QString planName = AppSettings::instance().value("BandPlanName", "ARRL (US)").toString();
@@ -197,6 +201,27 @@ bool AetherPDMeasurementModel::prepareCurrent(const RadioControlSession& session
     const bool accepted = prepare(session, config, request, dummyLoadConfirmed);
     if (alive && accepted) { m_bandPlanName = planName; m_licenseClass = license; }
     return alive && accepted;
+}
+
+AetherPDMeasurementSettings::ReadResult AetherPDMeasurementModel::analysisOptions() const
+{
+    if (!m_radio || QThread::currentThread() != thread()) {
+        return {false, {}, QStringLiteral("Original radio is unavailable.")};
+    }
+    return AetherPDMeasurementSettings(m_radio->settingsScope()).load();
+}
+
+bool AetherPDMeasurementModel::setAnalysisOptions(const RadioControlSession& session, const AnalysisOptions& options)
+{
+    if (m_shuttingDown || QThread::currentThread() != thread() || !m_radio
+        || !m_radio->controlSessionCurrent(session) || state() != State::Idle) { return false; }
+    const QPointer<AetherPDMeasurementModel> alive(this);
+    QString reason;
+    const bool saved = AetherPDMeasurementSettings(m_radio->settingsScope()).save(options, reason);
+    if (!alive) { return false; }
+    m_notice = reason;
+    publish();
+    return alive && saved;
 }
 
 QByteArray AetherPDMeasurementModel::exportResultCsv() const
@@ -364,9 +389,10 @@ QByteArray AetherPDMeasurementModel::exportResult() const
 QString AetherPDMeasurementModel::preparationSummary() const
 {
     if (state() == State::Idle) { return {}; }
-    return tr("%1 MHz · %2 · %3 · nominal setting %4 W · abort limit %5 W")
+    return tr("%1 MHz · %2 · %3 · nominal setting %4 W · abort limit %5 W\n%6 · %7 averages · through IMD%8")
         .arg(m_config.capture.centerFreqHz / 1e6, 0, 'f', 6).arg(m_mode).arg(m_antenna)
-        .arg(m_powerSetting).arg(m_config.maxForwardWatts, 0, 'f', 1);
+        .arg(m_powerSetting).arg(m_config.maxForwardWatts, 0, 'f', 1)
+        .arg(QString::fromStdString(txlin::windowKindLabel(m_config.window))).arg(m_config.targetAverages).arg(m_config.imd.maxOrder);
 }
 
 QString AetherPDMeasurementModel::resultSummary() const
