@@ -7,12 +7,25 @@
 // real Hermes-Lite 2 modulator, whose IQ envelope is measured directly.
 // Nothing is keyed and no radio or socket is opened.
 //
-//   tx_papr_harness <voice-48k.wav | synthetic> [--key value ...]
+//   tx_papr_harness <voice-48k.wav | synthetic | twotone> [--key value ...]
+//                   [--profile <aethertx-profile.json>]
 //
 // Input: 48 kHz PCM16 or float32 WAV, mono or stereo (left used), or the word
 // `synthetic` for a deterministic 12 s voiced-speech stand-in (jittered
 // glottal pulses through three formant resonators, with pauses), so a run is
-// reproducible without a recording.
+// reproducible without a recording; or `twotone`, 1100 + 1300 Hz at equal
+// level (-6 dBFS peak), whose in-band intermodulation (IMD3 at 900/1500 Hz,
+// IMD5 at 700/1700 Hz) is reported in dBc below one tone.
+//
+// --profile <file> (full build only) runs the processed pass through a real
+// AudioEngine with an AetherTX profile applied by ChannelStripPresets::
+// applyTxJson -- the exact JSON a stock preset ships -- instead of the stage
+// flags below, which it rejects. The engine runs on a throwaway settings
+// profile, never the operator's. --write-profile <file> writes the profile
+// back out as the engine captures it after applying it (with no --profile,
+// a fresh engine's defaults): a template, and a check that every key took.
+// --write-wav <file> writes the processed run's 24 kHz transport (float32
+// mono WAV), for listening and offline intelligibility scoring.
 //
 // General:     --low 300 --high 2700   radio passband (Hz)
 //              --gain 0                dB applied to the input before both runs
@@ -64,6 +77,11 @@
 #include "core/TxVoiceProcessor.h"
 #include "core/dsp/SsbEnvelopeMeter.h"
 #ifndef TX_PAPR_HARNESS_NO_HL2
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/ChannelStripPresets.h"
+#include "core/ClientReverb.h"
 #include "core/backends/TxAudioSource.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "TxTestAuthority.h"
@@ -72,6 +90,8 @@
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include <algorithm>
 #include <chrono>
@@ -83,6 +103,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -491,35 +512,18 @@ struct Run {
     int latencyFrames48{0};
     double postChainPeak{0.0};        // 48 kHz, after the chain, before Final Output
     double postLimiterPeakDb{-200.0}; // 48 kHz, after Final Output
+    double limiterWorstGrDb{0.0};     // the most Final Output LIM pulled down
     std::size_t int16Clips{0};        // transport samples at or over full scale
     double meanBlockUs{0.0};          // processFloat48 per 10 ms block
     double maxBlockUs{0.0};
 };
 
-Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
+// Runs `input` through a TxVoiceProcessor wired to `processors` in `order`.
+Run runProcessor(const std::vector<float>& input, const TxVoiceProcessor::Processors& processors,
+                 uint64_t order, const ClientFinalLimiter* limiter)
 {
-    auto chain = std::make_unique<Chain>();
-    chain->configure(s, processed);
-
     TxVoiceProcessor processor;
-    TxVoiceProcessor::Processors processors;
-    processors.eq = &chain->eq;
-    processors.comp = &chain->comp;
-    processors.tube = &chain->tube;
-    processors.pudu = &chain->pudu;
-    processors.cfc = &chain->cfc;
-    processors.leveler = &chain->leveler;
-    processors.cessb = &chain->cessb;
-    processors.mbLimiter = &chain->mbl;
-    processors.finalLimiter = &chain->limiter;
     processor.setProcessors(processors);
-    using Stage = TxVoiceProcessor::Stage;
-    const std::vector<Stage> stages{Stage::Tube, Stage::Eq, Stage::Leveler, Stage::Cfc, Stage::Comp, Stage::Enh};
-    uint64_t order = 0;
-    if (!TxChainLayout::pack(stages, order)) {
-        std::fprintf(stderr, "the stage order does not fit the packed chain\n");
-        return {};
-    }
     processor.setStageOrder(order);
 
     constexpr int kBlock = 480; // 10 ms at 48 kHz
@@ -556,8 +560,14 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
             run.postChainPeak =
                 std::max(run.postChainPeak, static_cast<double>(std::fabs(post[i])));
         }
-        run.postLimiterPeakDb =
-            std::max(run.postLimiterPeakDb, static_cast<double>(chain->limiter.outputPeakDb()));
+        if (limiter) {
+            run.postLimiterPeakDb =
+                std::max(run.postLimiterPeakDb, static_cast<double>(limiter->outputPeakDb()));
+            if (limiter->isEnabled()) {
+                run.limiterWorstGrDb =
+                    std::min(run.limiterWorstGrDb, static_cast<double>(limiter->gainReductionDb()));
+            }
+        }
         const QByteArray& floats = processor.transportFloat32Stereo();
         const auto* samples = reinterpret_cast<const float*>(floats.constData());
         const int frames = static_cast<int>(floats.size() / (2 * sizeof(float)));
@@ -572,6 +582,74 @@ Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
     run.meanBlockUs = blocks ? totalUs / static_cast<double>(blocks) : 0.0;
     return run;
 }
+
+Run runChain(const std::vector<float>& input, const Settings& s, bool processed)
+{
+    auto chain = std::make_unique<Chain>();
+    chain->configure(s, processed);
+
+    TxVoiceProcessor::Processors processors;
+    processors.eq = &chain->eq;
+    processors.comp = &chain->comp;
+    processors.tube = &chain->tube;
+    processors.pudu = &chain->pudu;
+    processors.cfc = &chain->cfc;
+    processors.leveler = &chain->leveler;
+    processors.cessb = &chain->cessb;
+    processors.mbLimiter = &chain->mbl;
+    processors.finalLimiter = &chain->limiter;
+    using Stage = TxVoiceProcessor::Stage;
+    const std::vector<Stage> stages{Stage::Tube, Stage::Eq, Stage::Leveler, Stage::Cfc, Stage::Comp, Stage::Enh};
+    uint64_t order = 0;
+    if (!TxChainLayout::pack(stages, order)) {
+        std::fprintf(stderr, "the stage order does not fit the packed chain\n");
+        return {};
+    }
+    return runProcessor(input, processors, order, &chain->limiter);
+}
+
+#ifndef TX_PAPR_HARNESS_NO_HL2
+// The processed pass through a real AudioEngine with an AetherTX profile
+// applied exactly as the app applies one. Settings are already sandboxed.
+Run runProfile(const std::vector<float>& input, const QJsonObject& profile,
+               const QString& writePath, int txLowHz, int txHighHz)
+{
+    AudioEngine engine;
+    ChannelStripPresets::applyTxJson(&engine, profile);
+    // Peak control follows the radio TX filter, as MainWindow feeds it.
+    engine.setTxFilterPassband(txLowHz, txHighHz);
+    if (!writePath.isEmpty()) {
+        QFile out(writePath);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || out.write(QJsonDocument(ChannelStripPresets::captureTxJson(&engine))
+                             .toJson(QJsonDocument::Indented)) < 0) {
+            std::fprintf(stderr, "%s: cannot write\n", qPrintable(writePath));
+        }
+    }
+
+    TxVoiceProcessor::Processors processors;
+    processors.eq = engine.clientEqTx();
+    processors.comp = engine.clientCompTx();
+    processors.tube = engine.clientTubeTx();
+    processors.pudu = engine.clientPuduTx();
+    processors.reverb = engine.clientReverbTx();
+    processors.cfc = engine.clientCfcTx();
+    processors.leveler = engine.clientLevelerTx();
+    processors.cessb = engine.clientCessbTx();
+    processors.mbLimiter = engine.clientMbLimiterTx();
+    processors.finalLimiter = engine.clientFinalLimiterTx();
+    std::vector<TxVoiceProcessor::Stage> stages;
+    for (const auto stage : engine.txChainStages()) {
+        stages.push_back(static_cast<TxVoiceProcessor::Stage>(static_cast<uint8_t>(stage)));
+    }
+    uint64_t order = 0;
+    if (!TxChainLayout::pack(stages, order)) {
+        std::fprintf(stderr, "the profile's stage order does not fit the packed chain\n");
+        return {};
+    }
+    return runProcessor(input, processors, order, engine.clientFinalLimiterTx());
+}
+#endif
 
 #ifndef TX_PAPR_HARNESS_NO_HL2
 // The transport audio through the real HL2 modulator, as Hl2Backend hands it
@@ -669,20 +747,112 @@ std::vector<std::uint8_t> shifted(const std::vector<std::uint8_t>& mask, long bl
 
 } // namespace
 
+constexpr double kHarnessPi = 3.14159265358979323846;
+
+// 1100 + 1300 Hz at equal level, -6 dBFS peak: a two-tone whose IMD3 (900,
+// 1500 Hz) and IMD5 (700, 1700 Hz) land inside every SSB passband.
+std::vector<float> synthesizeTwoTone(double seconds)
+{
+    const auto total = static_cast<std::size_t>(seconds * 48000.0);
+    std::vector<float> out(total);
+    for (std::size_t n = 0; n < total; ++n) {
+        const double t = static_cast<double>(n) / 48000.0;
+        out[n] = static_cast<float>(0.25 * std::sin(2.0 * kHarnessPi * 1100.0 * t)
+                                    + 0.25 * std::sin(2.0 * kHarnessPi * 1300.0 * t));
+    }
+    return out;
+}
+
+// Power at `hz` over x (24 kHz), by a Hann-windowed single-bin DFT.
+double tonePower(const std::vector<float>& x, std::size_t from, std::size_t n, double hz)
+{
+    double re = 0.0, im = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const double w =
+            0.5 - 0.5 * std::cos(2.0 * kHarnessPi * static_cast<double>(i) / static_cast<double>(n - 1));
+        const double ph = 2.0 * kHarnessPi * hz * static_cast<double>(i) / 24000.0;
+        re += w * x[from + i] * std::cos(ph);
+        im -= w * x[from + i] * std::sin(ph);
+    }
+    return re * re + im * im;
+}
+
+// Worst in-band IMD3 and IMD5 product, dBc below the mean of the two tones,
+// over 4 s of the transport after a 2 s settle.
+void printTwoToneImd(const char* label, const std::vector<float>& transport)
+{
+    constexpr std::size_t kFrom = 2 * 24000, kN = 4 * 24000;
+    if (transport.size() < kFrom + kN) {
+        std::printf("%-9s two-tone: too short\n", label);
+        return;
+    }
+    const double tone = 0.5 * (tonePower(transport, kFrom, kN, 1100.0)
+                               + tonePower(transport, kFrom, kN, 1300.0));
+    const auto dbc = [&](double hz) {
+        return 10.0 * std::log10(std::max(tonePower(transport, kFrom, kN, hz), 1e-30) / tone);
+    };
+    const double imd3 = std::max(dbc(900.0), dbc(1500.0));
+    const double imd5 = std::max(dbc(700.0), dbc(1700.0));
+    std::printf("%-9s two-tone: IMD3 %6.1f dBc, IMD5 %6.1f dBc\n", label, imd3, imd5);
+}
+
+// Keys that only shape the measurement, allowed beside --profile.
+bool isMeasurementKey(const std::string& key)
+{
+    return key == "low" || key == "high" || key == "gain" || key.rfind("hl2", 0) == 0;
+}
+
 int main(int argc, char** argv)
 {
+#ifndef TX_PAPR_HARNESS_NO_HL2
+    // A profile run builds a real AudioEngine, which reads and writes
+    // settings: sandbox them before anything touches QStandardPaths.
+    std::optional<TestSettingsProfile> sandbox;
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--profile") == 0 || std::strcmp(argv[i], "--write-profile") == 0) {
+            sandbox.emplace(QStringLiteral("tx-papr-harness"));
+            if (!sandbox->isValid()) {
+                std::fprintf(stderr, "cannot create a settings sandbox\n");
+                return 2;
+            }
+            break;
+        }
+    }
+#endif
     QCoreApplication app(argc, argv);
+#ifndef TX_PAPR_HARNESS_NO_HL2
+    if (sandbox) {
+        AppSettings::instance().load();
+    }
+#endif
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <input-48k.wav | synthetic> [--key value ...]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <input-48k.wav | synthetic | twotone> [--key value ...]\n", argv[0]);
         return 2;
     }
     Settings settings;
+    QString profilePath;
+    QString writePath;
+    QString wavPath;
     for (int i = 2; i + 1 < argc; i += 2) {
         if (std::strncmp(argv[i], "--", 2) != 0) {
             std::fprintf(stderr, "unexpected argument %s\n", argv[i]);
             return 2;
         }
         const std::string key = argv[i] + 2;
+        if (key == "write-wav") {
+            wavPath = QString::fromLocal8Bit(argv[i + 1]);
+            continue;
+        }
+        if (key == "profile" || key == "write-profile") {
+#ifdef TX_PAPR_HARNESS_NO_HL2
+            std::fprintf(stderr, "--%s: needs the full build (TX_PAPR_HARNESS_NO_HL2)\n",
+                         key.c_str());
+            return 2;
+#else
+            (key == "profile" ? profilePath : writePath) = QString::fromLocal8Bit(argv[i + 1]);
+            continue;
+#endif
+        }
         bool known = false;
         for (const char* k : kKnownKeys) {
             known = known || key == k;
@@ -707,9 +877,33 @@ int main(int argc, char** argv)
     }
 #endif
 
+    QJsonObject profile;
+    if (!profilePath.isEmpty() || !writePath.isEmpty()) {
+        for (const auto& [key, value] : settings.values) {
+            if (!isMeasurementKey(key)) {
+                std::fprintf(stderr, "--%s: a stage flag cannot be combined with --profile\n",
+                             key.c_str());
+                return 2;
+            }
+        }
+    }
+    if (!profilePath.isEmpty()) {
+        QFile file(profilePath);
+        const auto doc = file.open(QIODevice::ReadOnly)
+            ? QJsonDocument::fromJson(file.readAll()) : QJsonDocument();
+        if (!doc.isObject()) {
+            std::fprintf(stderr, "%s: not a JSON object\n", qPrintable(profilePath));
+            return 2;
+        }
+        profile = doc.object();
+    }
+
     std::vector<float> input;
     std::string error;
-    if (std::strcmp(argv[1], "synthetic") == 0) {
+    const bool twoTone = std::strcmp(argv[1], "twotone") == 0;
+    if (twoTone) {
+        input = synthesizeTwoTone(8.0);
+    } else if (std::strcmp(argv[1], "synthetic") == 0) {
         input = synthesizeVoice(12.0);
     } else if (!readWav48(argv[1], input, error)) {
         std::fprintf(stderr, "%s: %s\n", argv[1], error.c_str());
@@ -722,7 +916,14 @@ int main(int argc, char** argv)
 
     const SsbPassband band{settings.get("low", 300), settings.get("high", 2700)};
     const Run baseline = runChain(input, settings, false);
+#ifndef TX_PAPR_HARNESS_NO_HL2
+    const Run processed = profilePath.isEmpty() && writePath.isEmpty()
+        ? runChain(input, settings, true)
+        : runProfile(input, profile, writePath, static_cast<int>(settings.get("low", 300)),
+                     static_cast<int>(settings.get("high", 2700)));
+#else
     const Run processed = runChain(input, settings, true);
+#endif
     if (baseline.transport.empty() || processed.transport.empty()) {
         std::fprintf(stderr, "the voice processor produced no output\n");
         return 1;
@@ -734,7 +935,11 @@ int main(int argc, char** argv)
     for (const auto& [key, value] : settings.values) {
         std::printf(" --%s %g", key.c_str(), value);
     }
-    std::printf("%s\n", settings.values.empty() ? " (none: both runs bypassed)" : "");
+    std::printf("%s\n", settings.values.empty() && profilePath.isEmpty()
+                               ? " (none: both runs bypassed)" : "");
+    if (!profilePath.isEmpty()) {
+        std::printf("profile: %s\n", qPrintable(profilePath));
+    }
     std::printf("added latency: baseline %.1f ms, processed %.1f ms\n",
                 baseline.latencyFrames48 / 48.0, processed.latencyFrames48 / 48.0);
     for (const Run* r : {&baseline, &processed}) {
@@ -750,6 +955,35 @@ int main(int argc, char** argv)
                     "real time)\n",
                     "", r->meanBlockUs, r->maxBlockUs, r->meanBlockUs / 100.0,
                     r->maxBlockUs / 100.0);
+        std::printf("%-9s Final Output LIM: worst gain reduction %.2f dB\n", "",
+                    r->limiterWorstGrDb);
+    }
+    if (!wavPath.isEmpty()) {
+        QFile wav(wavPath);
+        if (wav.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            const auto bytes = static_cast<uint32_t>(processed.transport.size() * sizeof(float));
+            const auto le32 = [&](uint32_t v) { wav.write(reinterpret_cast<const char*>(&v), 4); };
+            const auto le16 = [&](uint16_t v) { wav.write(reinterpret_cast<const char*>(&v), 2); };
+            wav.write("RIFF");
+            le32(36 + bytes);
+            wav.write("WAVEfmt ");
+            le32(16);
+            le16(3); // IEEE float
+            le16(1); // mono
+            le32(24000);
+            le32(24000 * 4);
+            le16(4);
+            le16(32);
+            wav.write("data");
+            le32(bytes);
+            wav.write(reinterpret_cast<const char*>(processed.transport.data()), bytes);
+        } else {
+            std::fprintf(stderr, "%s: cannot write\n", qPrintable(wavPath));
+        }
+    }
+    if (twoTone) {
+        printTwoToneImd("baseline", baseline.transport);
+        printTwoToneImd("processed", processed.transport);
     }
     std::printf("\n%-26s %8s %8s %8s %8s %8s %8s %8s\n", "run / radio", "audio", "env pk",
                 "act rms", "PAPR", "p99.9", "env/aud", "OOB");
