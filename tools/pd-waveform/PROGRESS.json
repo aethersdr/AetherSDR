@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T18:12:19.694471+00:00",
+  "updated_utc": "2026-11-16T18:32:08.182469+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Continue sustained/speech and final-process failure qualification, investigate historical alignment and cold-start failures, then finish installation/ARMv7/actual6300 and independent release gates. Finite stock comparison is documented with limits; do not treat it as sustained or universal superiority.",
+  "next_action": "Build exact signed runtime packages from the committed diagnostics source; deploy matching desktop before runtime, verify receive-only status/cleanup, then continue bounded cold/warm tone/speech and final-process faults. Preserve prior finite RF and stock evidence without extending its scope.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Finite current-candidate stock APD comparison completed at 10 W setting, local IQ4, FDX off, approximately matched output. Warm stock model; negative inactive/under-driven attempts retained. Radio idle, temporary sessions/routes removed.",
+  "current_focus": "Bounded native failure diagnostics now component-qualified through native, shim and desktop; package and install before continuing live startup/alignment and sustained RF qualification.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -3211,5 +3211,11 @@
     "finite_RF_comparison_complete": true,
     "sustained_qualification_complete": false,
     "production_ready": false
+  },
+  "retained_diagnostics": {
+    "report": "RETAINED-DIAGNOSTICS-QUALIFICATION.json",
+    "component_qualified": true,
+    "installed": false,
+    "historical_failures_resolved": false
   }
 }

@@ -40,6 +40,59 @@ void rejects(const QJsonObject& o, const char* reason)
     check(!parseStatus(encode(o)), reason);
 }
 
+void diagnosticProtocol()
+{
+    const QJsonObject alignment{{"count", 2}, {"truncated", false},
+        {"text", "alignment evidence: reason=tx_dispatch mono_ns=123 delay=-128.000"}};
+    const QJsonObject source{{"count", 3}, {"truncated", false},
+        {"text", "bounded source ended: reason=feedback_invalidated phase=running keyed=1"}};
+    const QJsonObject diagnostics{{"version", 1}, {"alignment", alignment}, {"source_end", source}};
+    QJsonObject status = idle();
+    status["diagnostics"] = diagnostics;
+    const auto parsed = parseStatus(encode(status));
+    check(parsed && parsed->diagnostics && parsed->diagnostics->alignment.count == 2
+        && parsed->diagnostics->sourceEnd.text == source.value("text").toString()
+        && !parsed->correcting && !parsed->keyed, "historical diagnostics lost or changed RF state");
+    for (const auto& [key, value] : std::array<std::pair<const char*, QJsonValue>, 10>{{
+        {"count", -1}, {"count", 1.5}, {"count", 4294967296.0}, {"count", 0},
+        {"text", "wrong producer"}, {"text", "alignment evidence: reason=x\n"},
+        {"text", "alignment evidence: reason=\"x\""}, {"text", "alignment evidence: reason=\\x"},
+        {"truncated", true}, {"command", "xmit 1"}}}) {
+        QJsonObject bad = alignment;
+        bad[key] = value;
+        QJsonObject changed = diagnostics;
+        changed["alignment"] = bad;
+        status["diagnostics"] = changed;
+        rejects(status, "invalid diagnostic accepted");
+    }
+    QJsonObject changed = diagnostics;
+    changed["version"] = 2;
+    status["diagnostics"] = changed;
+    rejects(status, "unknown diagnostic version accepted");
+    QJsonObject maximum = alignment;
+    maximum["count"] = 4294967295.0;
+    maximum["truncated"] = true;
+    const QString prefix = QStringLiteral("alignment evidence: reason=");
+    maximum["text"] = prefix + QString(1023-prefix.size(), u'x');
+    changed["version"] = 1;
+    changed["alignment"] = maximum;
+    status["diagnostics"] = changed;
+    check(parseStatus(encode(status)).has_value(), "bounded truncation rejected");
+    maximum["text"] = maximum.value("text").toString() + u'x';
+    changed["alignment"] = maximum;
+    status["diagnostics"] = changed;
+    rejects(status, "oversized diagnostic accepted");
+    const QString fixturePath = qEnvironmentVariable("AETHER_PD_DIAGNOSTIC_PUBLIC");
+    if (!fixturePath.isEmpty()) {
+        QFile fixture(fixturePath);
+        check(fixture.open(QIODevice::ReadOnly), "native/Go diagnostic fixture missing");
+        const auto composed = parseStatus(fixture.readAll());
+        check(composed && composed->diagnostics
+            && (composed->diagnostics->sourceEnd.count > 0 || composed->diagnostics->alignment.count > 0)
+            && !composed->correcting, "native/Go/Qt composition rejected");
+    }
+}
+
 void feedbackBindingProtocol()
 {
     QJsonObject status = idle();
@@ -232,6 +285,7 @@ void captureProtocol()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    diagnosticProtocol();
     configuredTones();
     feedbackBindingProtocol();
     captureProtocol();

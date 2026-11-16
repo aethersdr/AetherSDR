@@ -67,7 +67,18 @@ struct FeedbackBinding {
     bool operator==(const FeedbackBinding&) const = default;
 };
 
+struct DiagnosticRecord {
+    quint32 count = 0;
+    bool truncated = false;
+    QString text;
+};
+struct Diagnostics {
+    DiagnosticRecord alignment;
+    DiagnosticRecord sourceEnd;
+};
+
 struct Status {
+    std::optional<Diagnostics> diagnostics;
     std::optional<FeedbackBinding> feedbackBinding;
     std::optional<MeasurementSource> measurement;
     std::optional<MeasurementToneConfig> measurementToneConfig;

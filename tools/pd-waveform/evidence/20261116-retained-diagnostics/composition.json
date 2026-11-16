@@ -1,0 +1,70 @@
+[
+  {
+    "case": 0,
+    "diagnostics": {
+      "version": 1,
+      "alignment": {
+        "count": 0,
+        "truncated": false,
+        "text": ""
+      },
+      "source_end": {
+        "count": 2,
+        "truncated": false,
+        "text": "bounded source ended: reason=feedback_invalidated mono_ns=48833276226807 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1 control=1 software_owner=1 idle=0 gui=00005678 slice=0 correction=1 native_apd=0 iq_valid_ns=48833276102278"
+      }
+    },
+    "native_go_qt": true
+  },
+  {
+    "case": 1,
+    "diagnostics": {
+      "version": 1,
+      "alignment": {
+        "count": 0,
+        "truncated": false,
+        "text": ""
+      },
+      "source_end": {
+        "count": 1,
+        "truncated": false,
+        "text": "bounded source ended: reason=feedback_invalidated mono_ns=48833285859102 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1 control=1 software_owner=1 idle=0 gui=00005678 slice=0 correction=1 native_apd=0 iq_valid_ns=48833285789104"
+      }
+    },
+    "native_go_qt": true
+  },
+  {
+    "case": 2,
+    "diagnostics": {
+      "version": 1,
+      "alignment": {
+        "count": 0,
+        "truncated": false,
+        "text": ""
+      },
+      "source_end": {
+        "count": 1,
+        "truncated": false,
+        "text": "bounded source ended: reason=feedback_invalidated mono_ns=48833294816720 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=191872 generated=128 iq_frames=1 iq_starts=0 iq_stale=0 iq_invalid=0 iq_age_ns=0 tx_discontinuities=0 tx_rejected=0 deadlines=1 control=1 software_owner=1 idle=0 gui=00005678 slice=0 correction=1 native_apd=0 iq_valid_ns=48833294745030"
+      }
+    },
+    "native_go_qt": true
+  },
+  {
+    "case": 3,
+    "diagnostics": {
+      "version": 1,
+      "alignment": {
+        "count": 1,
+        "truncated": false,
+        "text": "alignment evidence: reason=tx_dispatch mono_ns=48833931658270 ref_generation=8 delay=0.000 coherence=0.000 tx_packets=3 tx_discontinuities=0 tx_dropped=0 tx_age_ns=0 sent=0 send_errors=0 deadlines=1 session_max_send_gap_ns=0 session_max_work_ns=0 iq_frames=1 iq_discontinuities=0 iq_stale=0 iq_invalid=0 iq_duplicates=0 iq_old=0 iq_age_ns=342 ref_fifo=384 fb_fifo=0"
+      },
+      "source_end": {
+        "count": 0,
+        "truncated": false,
+        "text": ""
+      }
+    },
+    "native_go_qt": true
+  }
+]

@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "updated_utc": "2026-11-16T18:32:08.182469+00:00",
+  "base_commit": "5f6f001c2b43f8815591904197d7a7441faa0945",
+  "status": "Bounded native failure diagnostics and strict shim/desktop projection component-qualified; not installed",
+  "production_ready": false,
+  "installed": false,
+  "changes": [
+    "Retain latest alignment and bounded-source retirement records in 2064 bytes of fixed native state; counters saturate at UINT32_MAX.",
+    "Record event monotonic timestamps, continuity, ownership/admission and IQ freshness at existing alignment-reset and source-retirement diagnostic sites.",
+    "Expose versioned optional diagnostics through existing authenticated status, with 1023-byte records, explicit truncation, exact nested schema and printable ASCII validation in Go and Qt.",
+    "Desktop stores diagnostic history separately from operational status; no new keying, rearm or recovery decisions. Native status buffers raised from4096 to8192 inside existing16KiB protocol limit."
+  ],
+  "validation": {
+    "native_tests": 3,
+    "qt_protocol_tests": 1,
+    "native_go_qt_compositions": 4,
+    "go_race": {
+      "pass": 261,
+      "fail": 0,
+      "skip": 15,
+      "including_subtests": {
+        "pass": 575,
+        "fail": 0,
+        "skip": 20
+      },
+      "seconds": 24.826,
+      "package_action": "pass"
+    },
+    "native_asan_ubsan_lsan": {
+      "pd_dispatch_deadline_test": 0,
+      "pd_calibration_dispatch_test": 0
+    },
+    "mutations": {
+      "alignment": {
+        "exit": -6,
+        "assertion": "alignment-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/retained-diagnostics/alignment-test.c:177: main: Assertion `f.w.alignment_event.count==1 && !f.w.alignment_event.truncated' failed."
+      },
+      "source_end": {
+        "exit": -6,
+        "assertion": "source_end-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/retained-diagnostics/source_end-test.c:129: check_source: Assertion `w.source_end_event.count==source_events_before+1 && !w.source_end_event.truncated' failed."
+      }
+    },
+    "cross_builds": {
+      "armv7": {
+        "bytes": 268444,
+        "sha256": "ecda20b69766fe822fe9e0edc6e7d518515a3d3732e9425087471adf9a8f4607"
+      },
+      "arm64": {
+        "bytes": 280048,
+        "sha256": "27da79b76889946c2840ff9fb7f52b1a7b064e04df3751c2630eb3edddac18b5"
+      }
+    },
+    "desktop_build": "AetherSDR succeeded",
+    "desktop_sha256": "761382999f434e1fea351fa65adbf95a00df3da52aa970967cdf160d2f7be0bb",
+    "static": "Engine boundary:0 blockers,101 tracked baseline warnings; test registration and diff check passed"
+  },
+  "limitations": [
+    "No installation or new RF in this qualification. Installed runtime remains e8d68ad4b and running desktop remains b1256a165.",
+    "Historical natural128sample slip and cold-start cancellation remain unattributed; diagnostic availability is not a root-cause finding.",
+    "Only latest event of each kind is retained. Counters expose overwritten events; records disappear on DSP exit. Bench must collect before stop; abrupt unobserved exit can still lose evidence.",
+    "Successful voice-calibration arm internally invalidates then restores its accepted arm, so an existing model_changed retirement record can occur during successful setup; distinguish event count/time from current state.",
+    "Older development desktops reject extra status fields: deploy matching desktop before new runtime. No production upgrade compatibility claim.",
+    "Full signed runtime packages, installed recovery/RF, sustained speech, ARMv7 first-install, actual6300 and release gates remain open.",
+    "Sanitizer harness initially linked duplicate pd_local_iq definitions; corrected harness excludes duplicate for the embedded-IQ test. Initial failure retained; final runs passed.",
+    "This retains existing diagnostic sites, not a complete event journal. An already-cleared arm can omit a retirement record; this does not claim complete cancellation attribution."
+  ],
+  "source_sha256": {
+    "src/core/AetherPDProtocol.cpp": "053ad4fbeb69f2a533634d20f03fc1913ea77f4884fc48ce8779796addcff99d",
+    "src/core/AetherPDProtocol.h": "be050057a97dcffb65c78102d3da0be3acc5fec03ccd41c01b60861b2ac62b2b",
+    "tests/aetherpd_protocol_test.cpp": "993e57ea3db537f43ed82f4aed9ce3dd86ae0edc270e0e5e6fe7288d3109f821",
+    "tools/flex-tailnet-shim/README.md": "794e6e89d58e0af41c37064ee4f1a48bf5d1a54ecc50ff278e6196cb40175ab5",
+    "tools/flex-tailnet-shim/aetherpd.go": "460363c9560284d2e19a56d8d67658fdabb809ae0f2a8a4dfd21b5b3b30339e9",
+    "tools/pd-waveform/calibration_dispatch_test.c": "4109a887bb745a92e92815f87fb7ca1218eda7f6cf375bc5c6a6b88916f65d6e",
+    "tools/pd-waveform/dispatch_deadline_test.c": "38f6a6d6cdd8cf10b0c6ba2068d72a93e03d0d86c173a42d6acc10aca4095a2f",
+    "tools/pd-waveform/pd_waveform.c": "4b5440a9f714a89c8b143b95cf9b43032bca285e0b5b956cdf91809ea3b185d8",
+    "tools/flex-tailnet-shim/aetherpd_diagnostics.go": "46811b168a65619f375a3182c9b700c94e227d04769551ad038b5d1201de5bd0",
+    "tools/flex-tailnet-shim/aetherpd_diagnostics_test.go": "ce4453d8d72ad188577f8ff67e31b482c8b6df6068e8495a5fbedb200c348d1f"
+  },
+  "evidence_directory": "evidence/20261116-retained-diagnostics",
+  "evidence_sha256": {
+    "build.log": "4b5b9c4002d592904100d376563a544009537fb27ae1d92026153d2cc4386857",
+    "final-native-build.log": "f8edd1e36bb112517d54a2e4b85c723158f09cf2b937ff3290487e3f4618d4a2",
+    "final-native-tests.log": "e164f5478c6342e5a18a2955edbc06dedf9fb77c72cea0f52f523cd4ecaca9cf",
+    "go-tests.log": "f59c547e80340603d3ddc25ab05b7f0b5ed0e70945f0c4f6f49ed1e7c99cc1a7",
+    "go-full.jsonl": "f44402acfc3cd7677820b1fb5cb4117d6f35daf7e3bc3dbb8858fed3a3500aa5",
+    "go-summary.json": "361a236e3ac7f0b226313edd025d12b8cad94b163af5a5bcc46a4ce494970897",
+    "qt-tests.log": "15fb37658079b5a124423f7cbd3758cc43fed14924014ad0e49e72d2eef4ff64",
+    "composed-build.log": "fdba126663a14914c1aee692fe271e07a07d9067a794cf3a2fa01444c5b103da",
+    "engine-boundary.log": "69eb2004112263193fe9dc81451539051d0eb8d86f325515fd7b00d29dc58ddf",
+    "test-registration.log": "159cae34bc871940fca10b3979690db7a3d285db3d4cff2eaca5f580b4e5cbb5",
+    "cross-build.py": "82634bdec90e72b536f7eb3e69feff4a40b8bae3fb36a57641fc119bc881254f",
+    "cross-builds.json": "789d70b722fdb1610628ffe7338e96d22b7ebd2c207656a289888a06df049bae",
+    "final-cross-build.log": "1e228490c910c07842b8c970118db07d4931711ece4aef40fb75cb0942858dd6",
+    "check-native.py": "fdce15b161ceea07484785e7e8851ca0f2ce2858a1e982c70f97e8855eac78d5",
+    "sanitizer-initial-link-failure.log": "2b5a96624149e37ca9e88793e338be2a40f5472aea3da66e8444e5ea6d03a6d9",
+    "final-sanitizers.log": "d1b7af7b1ff4eadddfd7f177a1ed0e71ab8d15f4a4c1ec75fbc167a087b1009e",
+    "native-sanitizers.json": "6b79a179955c29abebc97976fbf9fa6eef0fbd79ef471227fb7f1114f0b17547",
+    "mutation-check.py": "d395916e31c071aefd414decafeab1b1f3dc109fe3af1d0e949c9be87482289d",
+    "final-mutation-build.log": "6642f647c615104911c638f96f3185dfef620318a2211a4ab6da45030c034fd8",
+    "mutations.json": "4eac46633507eab9b3fcc34730faea723a057830996bcc404ec10b543946aa03",
+    "alignment-mutation.log": "c7521f17723dad8a4418edf949b0b2b00d61482dbb66db2f1e9508d63f914875",
+    "source_end-mutation.log": "677296cc048b3b2a76d8add4a18fa982effdfa6a2171044df407ad1535f36c60",
+    "compose.py": "47b8a2d496f54c92af73fa05e74ac7358e9a392f76bea3ae158b692af271cdb4",
+    "final-composition.log": "766920024e99f1dc031e57a6c8f4264325c1cdb6e8d28fae8e6c0b7e55abc242",
+    "composition.json": "05aa3c70dfc77952c255d1ab89d76ae36541db9a66441c57fb2a39515a7b9fa9",
+    "pd_dispatch_deadline_test-asan.log": "741f94ee8367e1d7f3e38ee9eb369d50a3e993e4045ab1a969a29d3aaff35992",
+    "pd_calibration_dispatch_test-asan.log": "04116ede324f60e217dd6d31cf611ab3e6c1d4c08cc9d2a21b6ce5e493e8b071",
+    "pd_dispatch_deadline_test-composition.log": "a42a1a5d408790ad9c5f355fc5ff3b322a2a2c42b6e62ede00d8d42a66a48a99",
+    "pd_calibration_dispatch_test-composition.log": "37382591327fa1c2aaba45254090a19058809ba99b1064249b2091a15e069272",
+    "native-fixture-0.json": "c05f604abcda89d73daff22abf6926c42be0891269c02391f9dabcec76400d93",
+    "public-fixture-0.json": "3b8cd2304fb22dcfef2532ec51bdf5229769a3abc4e866d4dea53a217449e568",
+    "composition-go-0.log": "77b03bace73dc9cab2ab6122f8307162fd9abc3ac2574a88b41731c2d69a64e1",
+    "composition-qt-0.log": "0b91649e9315f10948c3742b437d39e8d48440399c6fed14900d8e4f812009d5",
+    "native-fixture-1.json": "9a4fe346020aa27230b6b0e4ef98790dfd9e945ba8de55d8f4effe09507dfe76",
+    "public-fixture-1.json": "00fdb69a20172531e7330dfa2991afae167da1fcc3e88b2825724aa5a15d007b",
+    "composition-go-1.log": "8c5ddafebe603a2a7ae753aaf7207b821e50ce8b5e4952d56bdf932135817fac",
+    "composition-qt-1.log": "0b91649e9315f10948c3742b437d39e8d48440399c6fed14900d8e4f812009d5",
+    "native-fixture-2.json": "13c530079e17008fe7dd666db05eac6a47c0bf9bfd7084f3cc72acd5a20aa306",
+    "public-fixture-2.json": "61ca66fbefd1b0de313484fe03e32d85e35592f1907502236e9133b74535d85d",
+    "composition-go-2.log": "8c5ddafebe603a2a7ae753aaf7207b821e50ce8b5e4952d56bdf932135817fac",
+    "composition-qt-2.log": "0b91649e9315f10948c3742b437d39e8d48440399c6fed14900d8e4f812009d5",
+    "native-fixture-3.json": "0ffe8c28aaa94f900269ada0649ac14324fbad82a96ea8e23454c4f954e2dc65",
+    "public-fixture-3.json": "a65cb4c7073af65493b7ff18d952cdbf6369cb96b16df9e40c8a83719550265f",
+    "composition-go-3.log": "355eab16fb034381d51a7badbdd38a850ec18b1465c19526f03c40bff3666248",
+    "composition-qt-3.log": "0b91649e9315f10948c3742b437d39e8d48440399c6fed14900d8e4f812009d5"
+  }
+}

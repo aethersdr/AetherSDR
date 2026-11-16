@@ -121,13 +121,24 @@ static void check_source(unsigned char opcode)
     api_line(&w,key);assert(w.keyed && w.calibration.phase==PD_CAL_RUNNING);
     mic_packet(&w,0);assert(sends>0 && output_peak>1e-8 && test_source_active(&w));
     unsigned before=sends;output_peak=0;
+    uint32_t source_events_before=w.source_end_event.count;
     w.tx_last_send_ns=pd_iq_monotonic_ns()-INT64_C(20000000);
     mic_packet(&w,1);
     assert(w.tx_deadline_faults==1 && !w.tx_send_errors && !w.tx_rejected);
     assert(w.keyed && w.calibration.phase==PD_CAL_CANCELED && !w.test_f1 && !w.test_left);
+    assert(w.source_end_event.count==source_events_before+1 && !w.source_end_event.truncated);
+    assert(strstr(w.source_end_event.text,"reason=feedback_invalidated") &&
+        strstr(w.source_end_event.text,"phase=running") && strstr(w.source_end_event.text,"keyed=1") &&
+        strstr(w.source_end_event.text,"software_owner=1") && strstr(w.source_end_event.text,"gui=00005678"));
+    char diagnostic_status[8192];
+    int diagnostic_size=status_json(&w,diagnostic_status,sizeof(diagnostic_status));
+    assert(diagnostic_size>0 && (size_t)diagnostic_size<sizeof(diagnostic_status));
+    assert(strstr(diagnostic_status,w.source_end_event.text));
+    printf("DIAGNOSTIC_FIXTURE %s",diagnostic_status);
     assert(sends>before && output_peak==0 && !correction_ready(&w));
     mic_packet(&w,2);assert(w.calibration.phase==PD_CAL_CANCELED && !w.test_f1 && output_peak==0);
     api_line(&w,idle);assert(!w.keyed);
+    assert(w.source_end_event.count==source_events_before+1 && strstr(w.source_end_event.text,"phase=running"));
     pd_acquire_destroy(w.acquire);pd_core_destroy(w.core);
     pd_align_destroy(w.align);pd_eq_destroy(w.eq);pd_eq_destroy(w.trusted_eq);
     free(w.ref.buf);free(w.fbk.buf);free(w.acq_tx);free(w.acq_rx);

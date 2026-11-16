@@ -17,10 +17,11 @@ const aetherPDMaxStatusBytes = 16 << 10
 
 var aetherPDReads = make(chan struct{}, 1)
 
-// Operational state and the selected IQ binding cross the shim boundary.
-// Native debug fields and packet metadata stay local to the waveform.
+// Operational state, selected IQ binding and bounded failure records cross the
+// shim boundary. Other native debug fields stay local to the waveform.
 // This report never authorizes capture provisioning or transmitter control.
 type aetherPDStatus struct {
+	Diagnostics                   *pdDiagnostics           `json:"diagnostics,omitempty"`
 	FeedbackBinding               *pdFeedbackBinding       `json:"feedback_binding,omitempty"`
 	MeasurementToneCaptureVersion uint32                   `json:"measurement_tone_capture_version,omitempty"`
 	MeasurementToneControl        bool                     `json:"measurement_tone_control,omitempty"`
@@ -177,6 +178,12 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 		}
 		if !result.FeedbackBinding.Valid && (result.Correcting || result.CalibrationState == "armed" || result.CalibrationState == "running") {
 			return result, errors.New("active source without IQ binding")
+		}
+	}
+	if raw, present := fields["diagnostics"]; present {
+		result.Diagnostics, err = parsePDDiagnostics(raw)
+		if err != nil {
+			return result, err
 		}
 	}
 	var transportPending bool

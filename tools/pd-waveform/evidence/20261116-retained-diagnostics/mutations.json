@@ -1,0 +1,10 @@
+{
+  "alignment": {
+    "exit": -6,
+    "assertion": "alignment-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/retained-diagnostics/alignment-test.c:177: main: Assertion `f.w.alignment_event.count==1 && !f.w.alignment_event.truncated' failed."
+  },
+  "source_end": {
+    "exit": -6,
+    "assertion": "source_end-mutant: /home/jeremy/AetherSDR/build/aetherpd-shim-integration/retained-diagnostics/source_end-test.c:129: check_source: Assertion `w.source_end_event.count==source_events_before+1 && !w.source_end_event.truncated' failed."
+  }
+}

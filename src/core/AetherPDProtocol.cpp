@@ -142,6 +142,39 @@ bool counter(const QJsonObject& o, const char* key, quint64& result)
     return true;
 }
 
+std::optional<DiagnosticRecord> diagnosticRecord(const QJsonValue& value, const char* prefix)
+{
+    if (!value.isObject()) { return std::nullopt; }
+    const QJsonObject o = value.toObject();
+    DiagnosticRecord result;
+    quint64 count = 0;
+    if (o.size() != 3 || !counter(o, "count", count) || count > std::numeric_limits<quint32>::max()
+        || !boolean(o, "truncated", result.truncated) || !o.value(QStringLiteral("text")).isString()) {
+        return std::nullopt;
+    }
+    result.count = static_cast<quint32>(count);
+    result.text = o.value(QStringLiteral("text")).toString();
+    if (result.text.size() > 1023 || (count == 0 && (!result.text.isEmpty() || result.truncated))
+        || (count != 0 && !result.text.startsWith(QLatin1String(prefix)))
+        || (result.truncated && result.text.size() != 1023)) { return std::nullopt; }
+    for (const QChar ch : result.text) {
+        if (ch < u' ' || ch > u'~' || ch == u'"' || ch == u'\\') { return std::nullopt; }
+    }
+    return result;
+}
+
+std::optional<Diagnostics> diagnostics(const QJsonValue& value)
+{
+    if (!value.isObject()) { return std::nullopt; }
+    const QJsonObject o = value.toObject();
+    quint64 version = 0;
+    if (o.size() != 3 || !counter(o, "version", version) || version != 1) { return std::nullopt; }
+    const auto alignment = diagnosticRecord(o.value(QStringLiteral("alignment")), "alignment evidence: reason=");
+    const auto sourceEnd = diagnosticRecord(o.value(QStringLiteral("source_end")), "bounded source ended: reason=");
+    if (!alignment || !sourceEnd) { return std::nullopt; }
+    return Diagnostics{*alignment, *sourceEnd};
+}
+
 std::optional<State> state(const QJsonValue& value)
 {
     if (!value.isString()) {
@@ -356,9 +389,14 @@ std::optional<Status> parseStatus(const QByteArray& json)
         QStringLiteral("calibration_state"), QStringLiteral("calibration_samples_left"),
         QStringLiteral("measurement_control"), QStringLiteral("source_purpose"), QStringLiteral("measurement"),
         QStringLiteral("measurement_tone_control"), QStringLiteral("measurement_tone_capture_version"), QStringLiteral("measurement_tone_config"),
-        QStringLiteral("input_limited_samples"), QStringLiteral("faults"), QStringLiteral("feedback_binding")};
+        QStringLiteral("input_limited_samples"), QStringLiteral("faults"), QStringLiteral("feedback_binding"),
+        QStringLiteral("diagnostics")};
     for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
         if (!known.contains(it.key())) { return std::nullopt; }
+    }
+    if (o.contains(QStringLiteral("diagnostics"))) {
+        s.diagnostics = diagnostics(o.value(QStringLiteral("diagnostics")));
+        if (!s.diagnostics) { return std::nullopt; }
     }
     if (o.contains(QStringLiteral("feedback_binding"))) {
         const QJsonValue binding = o.value(QStringLiteral("feedback_binding"));

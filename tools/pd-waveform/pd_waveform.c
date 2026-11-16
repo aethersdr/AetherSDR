@@ -456,8 +456,17 @@ static void fifo_pop(fifo_t* f, double* out, int n)
 
 /* -------------------------------------------------------------- state */
 
+// Latest event of each kind survives model resets, but not process exit.
+// Fixed storage avoids a logging pipe or disk writes on the DSP path.
+struct pd_diagnostic_record {
+    uint32_t count;
+    int truncated;
+    char text[1024];
+};
+
 typedef struct {
     int api, udp, seq;
+    struct pd_diagnostic_record alignment_event, source_end_event;
     int api_leased, api_inherited_used, api_lease_failed;
     char rbuf[16384];
     size_t rlen;
@@ -579,12 +588,12 @@ struct pd_tx_trace_row {
 
 // Snapshot continuity before invalidation clears alignment and reference state.
 // Session maxima include earlier keys; they are context, not event latency.
-struct alignment_evidence { char line[1024]; };
+struct alignment_evidence { char line[1024]; int truncated; };
 static struct alignment_evidence capture_alignment_evidence(const wf_t* w, const char* reason)
 {
-    struct alignment_evidence evidence = { { 0 } };
+    struct alignment_evidence evidence = { { 0 }, 0 };
     if (!w->aligned && !w->warm_started) { return evidence; }
-    snprintf(evidence.line, sizeof(evidence.line),"alignment evidence: reason=%s mono_ns=%lld ref_generation=%llu "
+    int size = snprintf(evidence.line, sizeof(evidence.line),"alignment evidence: reason=%s mono_ns=%lld ref_generation=%llu "
           "delay=%.3f coherence=%.3f tx_packets=%ld tx_discontinuities=%llu tx_dropped=%llu "
           "tx_age_ns=%lld sent=%llu send_errors=%llu deadlines=%llu "
           "session_max_send_gap_ns=%lld session_max_work_ns=%lld "
@@ -600,31 +609,45 @@ static struct alignment_evidence capture_alignment_evidence(const wf_t* w, const
           (unsigned long long)w->local_iq.stale, (unsigned long long)w->local_iq.invalid,
           (unsigned long long)w->local_iq.duplicates, (unsigned long long)w->local_iq.old,
           (long long)w->local_iq.last_age_ns, w->ref.n, w->fbk.n);
+    evidence.truncated = size < 0 || (size_t)size >= sizeof(evidence.line);
     return evidence;
 }
-static void log_alignment_evidence(const struct alignment_evidence* evidence)
+static void log_alignment_evidence(wf_t* w, const struct alignment_evidence* evidence)
 {
-    if (evidence->line[0]) { logf_("%s", evidence->line); }
+    if (evidence->line[0]) {
+        if (w->alignment_event.count < UINT32_MAX) { ++w->alignment_event.count; }
+        memcpy(w->alignment_event.text, evidence->line, sizeof(evidence->line));
+        w->alignment_event.truncated = evidence->truncated;
+        logf_("%s", evidence->line);
+    }
 }
 
 static void log_measurement_window(const wf_t* w, const char* event);
 
-static void log_bounded_source_end(const wf_t* w, const char* reason)
+static void log_bounded_source_end(wf_t* w, const char* reason)
 {
     if (w->calibration.phase == PD_CAL_ARMED || w->calibration.phase == PD_CAL_RUNNING ||
         (test_source_active(w) && w->test_duration_samples)) {
         log_measurement_window(w, reason);
         // One bounded retirement record captures the source and stream state.
         // This does not log packets or change cancellation policy.
-        logf_("bounded source ended: reason=%s source=%016llx phase=%s keyed=%d tx_on=%d "
+        int size = snprintf(w->source_end_event.text, sizeof(w->source_end_event.text),
+              "bounded source ended: reason=%s mono_ns=%lld source=%016llx phase=%s keyed=%d tx_on=%d "
               "samples_left=%d generated=%llu iq_frames=%llu iq_starts=%llu iq_stale=%llu "
-              "iq_invalid=%llu iq_age_ns=%lld tx_discontinuities=%llu tx_rejected=%llu deadlines=%llu",
-              reason, (unsigned long long)w->calibration.source_id, pd_calibration_name(&w->calibration),
+              "iq_invalid=%llu iq_age_ns=%lld tx_discontinuities=%llu tx_rejected=%llu deadlines=%llu "
+              "control=%d software_owner=%d idle=%d gui=%08x slice=%d correction=%d native_apd=%d iq_valid_ns=%lld",
+              reason, (long long)pd_iq_monotonic_ns(), (unsigned long long)w->calibration.source_id, pd_calibration_name(&w->calibration),
               w->keyed, w->tx_on, w->calibration.samples_left, (unsigned long long)w->generated_samples,
               (unsigned long long)w->local_iq.frames, (unsigned long long)w->local_iq.starts,
               (unsigned long long)w->local_iq.stale, (unsigned long long)w->local_iq.invalid,
               (long long)w->local_iq.last_age_ns, (unsigned long long)w->tx_guard.discontinuities,
-              (unsigned long long)w->tx_rejected, (unsigned long long)w->tx_deadline_faults);
+              (unsigned long long)w->tx_rejected, (unsigned long long)w->tx_deadline_faults,
+              w->calibration_control, w->calibration_software_owner, w->calibration_idle,
+              w->calibration_gui, w->active_slice, w->correct, w->native_apd_enabled || w->native_apd_active,
+              (long long)w->local_iq.last_valid_ns);
+        w->source_end_event.truncated = size < 0 || (size_t)size >= sizeof(w->source_end_event.text);
+        if (w->source_end_event.count < UINT32_MAX) { ++w->source_end_event.count; }
+        logf_("%s", w->source_end_event.text);
     }
 }
 
@@ -1257,7 +1280,7 @@ static void send_pairs(wf_t* w, uint32_t sid, int* count, const float* pairs, in
                     struct alignment_evidence evidence = capture_alignment_evidence(w, "tx_output");
                     if (late && sent == len) { local_feedback_suspend_transport(w); }
                     else { local_feedback_invalidate(w, 1); }
-                    log_alignment_evidence(&evidence);
+                    log_alignment_evidence(w, &evidence);
                     if (test_source_active(w)) { w->test_noise_left = TEST_NOISE_SAMPLES; }
                     logf_("TX output discontinuity: gap %.3f ms, sent %ld/%d; correction retired",
                           gap / 1e6, (long)sent, len);
@@ -1356,7 +1379,7 @@ static void calibrate(wf_t* w)
                       pd_align_coherence(w->align));
                 struct alignment_evidence evidence = capture_alignment_evidence(w, "coherence");
                 local_feedback_invalidate(w, 1);
-                log_alignment_evidence(&evidence);
+                log_alignment_evidence(w, &evidence);
                 // Measure again on noise, past the samples already in flight.
                 w->test_noise_left = TEST_NOISE_SAMPLES;
                 w->settle_left = SETTLE_SAMPLES;
@@ -1419,7 +1442,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             ++w->tx_rejected;
             struct alignment_evidence evidence = capture_alignment_evidence(w, result == PD_TX_STALE ? "tx_stale" : "tx_invalid");
             local_feedback_invalidate(w, 1);
-            log_alignment_evidence(&evidence);
+            log_alignment_evidence(w, &evidence);
             return;
         }
         if (result == PD_TX_DROP || result == PD_TX_FOREIGN) {
@@ -1429,7 +1452,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         if (result == PD_TX_START && seen) {
             struct alignment_evidence evidence = capture_alignment_evidence(w, "tx_continuity");
             local_feedback_invalidate(w, 1);
-            log_alignment_evidence(&evidence);
+            log_alignment_evidence(w, &evidence);
         }
         if (w->local_iq_mode && w->keyed && w->tx_deadline_ns && w->tx_last_send_ns &&
             w->tx_handler_start_ns - w->tx_last_send_ns > w->tx_deadline_ns) {
@@ -1437,7 +1460,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             w->tx_deadline_in_packet = 1;
             struct alignment_evidence evidence = capture_alignment_evidence(w, "tx_dispatch");
             local_feedback_suspend_transport(w);
-            log_alignment_evidence(&evidence);
+            log_alignment_evidence(w, &evidence);
             if (test_source_active(w)) { w->test_noise_left = TEST_NOISE_SAMPLES; }
             logf_("TX dispatch deadline missed: %.3f ms; correction retired",
                   (w->tx_handler_start_ns - w->tx_last_send_ns) / 1e6);
@@ -1748,7 +1771,7 @@ static int local_feedback_poll(wf_t* w)
         if (received == 2) {
             struct alignment_evidence evidence = capture_alignment_evidence(w, "iq_continuity_or_rejection");
             local_feedback_invalidate(w, !bytes || w->local_iq.frames > 1);
-            log_alignment_evidence(&evidence);
+            log_alignment_evidence(w, &evidence);
         }
         if (bytes) {
             int64_t age = w->local_iq.last_age_ns;
@@ -1768,7 +1791,7 @@ static int local_feedback_poll(wf_t* w)
         if (!w->local_iq_fault) {
             struct alignment_evidence evidence = capture_alignment_evidence(w, "iq_expired");
             local_feedback_invalidate(w, 1);
-            log_alignment_evidence(&evidence);
+            log_alignment_evidence(w, &evidence);
         }
     }
     return 1;
@@ -2025,6 +2048,25 @@ static int status_feedback_binding(const wf_t* w,char* out,size_t cap)
         w->local_iq_mode && feedback_binding_valid(w)?"true":"false",w->feedback_binding_failed?"true":"false");
 }
 
+static int status_diagnostics(const wf_t* w, char* out, size_t cap)
+{
+    const struct pd_diagnostic_record* records[] = { &w->alignment_event, &w->source_end_event };
+    for (unsigned i = 0; i < 2; ++i) {
+        // Records contain only fixed labels, literal reasons and numbers.
+        // Refuse unsafe text rather than inserting unescaped JSON.
+        for (size_t j = 0; j < sizeof(records[i]->text); ++j) {
+            unsigned char ch = (unsigned char)records[i]->text[j];
+            if (!ch) { break; }
+            if (j == sizeof(records[i]->text)-1 || ch < 32 || ch > 126 || ch == '"' || ch == '\\') { return -1; }
+        }
+    }
+    return snprintf(out, cap,
+        "\"diagnostics\":{\"version\":1,\"alignment\":{\"count\":%llu,\"truncated\":%s,\"text\":\"%s\"},"
+        "\"source_end\":{\"count\":%llu,\"truncated\":%s,\"text\":\"%s\"}},",
+        (unsigned long long)w->alignment_event.count, w->alignment_event.truncated ? "true" : "false", w->alignment_event.text,
+        (unsigned long long)w->source_end_event.count, w->source_end_event.truncated ? "true" : "false", w->source_end_event.text);
+}
+
 static int status_json(const wf_t* w, char* out, size_t cap)
 {
     struct sched_param scheduling = {0};
@@ -2045,8 +2087,10 @@ static int status_json(const wf_t* w, char* out, size_t cap)
     }
     char binding[192];int binding_size=status_feedback_binding(w,binding,sizeof(binding));
     if(binding_size<0 || binding_size>=(int)sizeof(binding)){return -1;}
+    char diagnostics[2304];int diagnostic_size=status_diagnostics(w,diagnostics,sizeof(diagnostics));
+    if(diagnostic_size<0 || diagnostic_size>=(int)sizeof(diagnostics)){return -1;}
     return snprintf(out, cap,
-        "{%s\"name\":\"%s\",\"version\":\"%s\",\"registered\":%s,\"active_slice\":%d,"
+        "{%s%s\"name\":\"%s\",\"version\":\"%s\",\"registered\":%s,\"active_slice\":%d,"
         "\"tx_mhz\":%.6f,\"pan_mhz\":%.6f,\"daxiq_stream\":\"0x%08x\",\"daxiq_reply\":\"%s\",\"keyed\":%s,"
         "\"feedback_ok\":%s,\"correction\":%s,\"aligned\":%s,\"delay_samples\":%.2f,"
         "\"delay_corr\":%.3f,\"coherence\":%.3f,\"offset_hz\":%.4f,\"fits\":%d,"
@@ -2054,7 +2098,7 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         "\"other_pkts\":%ld,\"other_last\":\"sid 0x%08x cls 0x%04x\",\"ref_fifo\":%d,"
         "\"fb_fifo\":%d,\"acq\":%d,\"eq_ready\":%s,\"eq_residual_db\":%.1f,"
         "\"feedback\":\"%s\",\"fb_slice\":%d,\"fb_mhz\":%.6f,\"fb_dax_stream\":\"0x%08x\",\"local_iq_fault\":%s,\"local_iq_frames\":%llu,\"local_iq_stale\":%llu,\"tx_rejected\":%llu,\"model_resets\":%llu,\"model_recoveries\":%llu,\"rejected_fits\":%u,\"cached_model\":%s,\"warm_starts\":%llu,\"cached_packets\":%llu,\"tx_sent_datagrams\":%llu,\"tx_send_errors\":%llu,\"tx_max_send_gap_ns\":%lld,\"tx_max_work_ns\":%lld,\"tx_trace_rows\":%u,\"tx_trace_dropped\":%u,\"scheduler_policy\":%d,\"scheduler_priority\":%d,\"tx_deadline_faults\":%llu,\"api_leased\":%s,\"native_apd_blocked\":%s,\"collection_full_bins\":%d,\"collection_bin_counts\":[%s],\"transport_cache_enabled\":%s,\"transport_pending\":%s,\"transport_recoveries\":%llu,\"transport_eq_distance\":%.6f,\"mic_peak\":%.6f,\"prelimit_peak\":%.6f,\"limited_samples\":%llu,\"generated_samples\":%llu,\"quiet_blocks\":%llu,\"reference_power\":%.9f,\"signal_present\":%s,\"test_active\":%s,\"test_remaining_samples\":%d,\"mic_gain\":%.6f,\"base_peak\":%.6f,\"measurement\":{\"source_id\":\"%016llx\",\"tones\":%s},\"measurement_control\":%s,\"correction_control\":%s,\"measurement_tone_control\":%s,\"measurement_tone_capture_version\":3,\"measurement_tone_config\":{\"min_spacing_hz\":%u,\"max_spacing_hz\":%u,\"center_hz\":%d,\"spacing_hz\":%u,\"source_id\":\"%016llx\"},\"source_purpose\":\"%s\",\"calibration_control\":%s,\"calibration_state\":\"%s\",\"calibration_samples_left\":%d}\n",
-        binding, WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
+        binding, diagnostics, WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
         w->daxiq_sid, w->daxiq_reply, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
         pd_align_delay(w->align), pd_align_estimate_corr(w->align), pd_align_coherence(w->align),
@@ -2092,7 +2136,7 @@ static void serve_status(const wf_t* w, int ls)
     if (fd < 0)
         return;
     if (lan_caller(&a)) {
-        char body[4096];
+        char body[8192];
         int n = status_json(w, body, sizeof body);
         if (n > 0 && (size_t)n < sizeof body && write(fd, body, (size_t)n) != n)
             logf_("status write short");
@@ -2867,7 +2911,7 @@ int main(int argc, char** argv)
                 int request=pd_status_query(private_status,&query);
                 if (!request) { break; }
                 if (request>0 && query.operation=='?') {
-                    char body[4096];int size=status_json(&w,body,sizeof(body));
+                    char body[8192];int size=status_json(&w,body,sizeof(body));
                     if (size>0 && (size_t)size<sizeof(body)) {
                         (void)pd_status_reply(private_status,query.nonce,body,(size_t)size);
                     }
