@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QtEndian>
@@ -282,6 +283,62 @@ void captureProtocol()
 }
 } // namespace
 
+void batchProtocol()
+{
+    const QString id(32, u'a');
+    QJsonArray frames;
+    for (int i = 0; i < 4; ++i) {
+        frames.append(QJsonObject{{"capture_id",id},{"format","f32le-iq-v1"},{"sample_rate_hz",48000},{"center_hz",7150000},
+            {"sample_count",16384},{"chunk_samples",512},{"keyed",true},{"correcting",true},
+            {"first_receive_ns",QString::number(1000000000ULL+quint64(i)*341000000)},
+            {"last_receive_ns",QString::number(1341000000ULL+quint64(i)*341000000)},
+            {"source",QJsonObject{{"kind","local_dax_iq"},{"stream_id",1073741825},{"generation","7"}}},
+            {"feedback_binding",QJsonObject{{"transport","local_dax_iq"},{"channel",3},{"pan",1073741826},{"gui_handle",7},{"valid",true},{"failed",false}}},
+            {"measurement",QJsonObject{{"source_id","000000000000001f"},{"tones",true}}},
+            {"measurement_tone_config",QJsonObject{{"source_id","000000000000001f"},{"min_spacing_hz",200},{"max_spacing_hz",10000},{"center_hz",1305},{"spacing_hz",1190}}}});
+    }
+    const QJsonObject envelope{{"capture_id",id},{"frames",frames}};
+    const QByteArray good = encode(envelope);
+    const auto batch = parseCaptureBatchManifest(good,4);
+    check(batch && batch->frames.size()==4, "valid batch rejected");
+    check(captureBatchBeginRequest(4)->path==QStringLiteral("/v4/aetherpd/capture/4")
+        && captureBatchChunkRequest(*batch,3,31)->path.endsWith("/3/31"), "batch request wrong");
+    check(!captureBatchBeginRequest(0) && !captureBatchBeginRequest(5)
+        && !captureBatchChunkRequest(*batch,-1,0) && !captureBatchChunkRequest(*batch,4,0)
+        && !captureBatchChunkRequest(*batch,0,32), "unbounded batch request");
+    for (int count : {0,1,3,5}) { check(!parseCaptureBatchManifest(good,count), "wrong batch count accepted"); }
+    for (qsizetype i=0;i<good.size();++i) { check(!parseCaptureBatchManifest(good.first(i),4), "truncated batch accepted"); }
+    for (const char* key : {"center_hz","correcting","source","feedback_binding","measurement_tone_config"}) {
+        QJsonObject changed=frames[3].toObject(); changed[QLatin1String(key)]=QJsonValue::Null;
+        QJsonArray bad=frames;bad[3]=changed;
+        check(!parseCaptureBatchManifest(encode({{"capture_id",id},{"frames",bad}}),4), "partial or mixed batch accepted");
+    }
+    QByteArray duplicate=good;
+    duplicate.replace("\"stream_id\":1073741825", "\"stream_id\":1,\"stream_id\":1073741825");
+    check(!parseCaptureBatchManifest(duplicate,4), "nested duplicate batch key accepted");
+    QJsonObject chunk{{"capture_id",id},{"frame_index",3},{"offset",31*512},{"iq_f32le",QString::fromLatin1(QByteArray(4096,'\0').toBase64())}};
+    check(parseCaptureBatchChunk(encode(chunk),*batch,3,31).has_value(), "batch chunk rejected");
+    check(!parseCaptureBatchChunk(encode(chunk),*batch,2,31), "chunk moved between frames");
+    chunk["frame_index"]=3.5;
+    check(!parseCaptureBatchChunk(encode(chunk),*batch,3,31), "fractional frame index accepted");
+    const QString directory=qEnvironmentVariable("AETHER_PD_CAPTURE_BATCH_FIXTURE_DIR");
+    if (!directory.isEmpty()) {
+        QFile file(directory+"/manifest.json");check(file.open(QIODevice::ReadOnly),"native batch manifest missing");
+        const auto native=parseCaptureBatchManifest(file.readAll(),4);check(native.has_value(),"native Go batch rejected by Qt");
+        for (int f=0;f<4;++f) {
+            for (int c=0;c<32;++c) {
+                QFile part(directory+QStringLiteral("/chunk-%1-%2.json").arg(f).arg(c));check(part.open(QIODevice::ReadOnly),"native batch chunk missing");
+                const auto bytes=parseCaptureBatchChunk(part.readAll(),*native,f,c);check(bytes.has_value(),"native Go batch chunk rejected by Qt");
+                for (int i=0;i<512;++i) {
+                    const quint32 index=quint32(f*16384+c*512+i);
+                    check(qFromLittleEndian<quint32>(bytes->constData()+8*i)==0x3e000000+index
+                        && qFromLittleEndian<quint32>(bytes->constData()+8*i+4)==0xbe000000+index,"native C/Go/Qt sample differs");
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -289,6 +346,7 @@ int main(int argc, char** argv)
     configuredTones();
     feedbackBindingProtocol();
     captureProtocol();
+    batchProtocol();
     for (const char* name : {"idle", "armed", "correcting", "unavailable"}) {
         QFile fixture(QString::fromUtf8(AETHERPD_TESTDATA_DIR) + QLatin1Char('/')
                       + QLatin1String(name) + QStringLiteral(".json"));

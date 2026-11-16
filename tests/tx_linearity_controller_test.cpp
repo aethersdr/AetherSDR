@@ -43,6 +43,7 @@ struct SourceState {
     ITxCaptureSource::FrameCallback frame;
     ITxCaptureSource::ErrorCallback error;
     ITxCaptureSource::ReadyCallback ready;
+    ITxCaptureSource::AcquisitionCallback acquired;
     bool gate = false;
     bool running = false;
     int stops = 0;
@@ -57,6 +58,7 @@ public:
     std::string describe() const override { return "injected source"; }
     void setFrameCallback(FrameCallback callback) override { m_data->frame = std::move(callback); }
     void setErrorCallback(ErrorCallback callback) override { m_data->error = std::move(callback); }
+    void setAcquisitionCallback(AcquisitionCallback callback) override { m_data->acquired = std::move(callback); }
     void setGateOpen(bool open) override { m_data->gate = open; }
 private:
     std::shared_ptr<SourceState> m_data;
@@ -163,6 +165,37 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     previousHandler = qInstallMessageHandler(captureDiagnostic);
+    for (int fault = 0; fault < 6; ++fault) {
+        Fixture f;
+        f.start();
+        f.source->acquired(fault == 1 ? 1 : 2);
+        check(f.lease->releases == 1 && f.finished == 0, "batch receipt did not request release before download");
+        if (fault == 1) {
+            f.lease->observed = Lease::State::Released; f.controller->poll();
+            check(f.result && !f.result->error.empty() && !f.result->measurement, "wrong sealed count accepted");
+            continue;
+        }
+        check(f.source->running, "sealed batch download stopped before delivery");
+        f.lease->observed = Lease::State::Released;
+        f.controller->poll();
+        check(f.finished == 0, "confirmed unkey published a partial batch");
+        if (fault == 2) { f.controller->stop(); }
+        if (fault == 3) { f.current = false; f.controller->poll(); }
+        if (fault == 4) { f.now += 6000; f.controller->poll(); }
+        if (fault == 5) { const auto error = f.source->error; error("download failed"); }
+        f.send(frame(0)); f.send(frame(1));
+        check(f.lease->starts == 1 && f.lease->releases == 1 && f.finished == 1 && !f.source->running,
+            "batch completion duplicated key/release or kept source alive");
+        check(f.result && (f.result->measurement.has_value() == (fault == 0)), "sealed batch cancellation or completion was misreported");
+    }
+    {
+        Fixture f; f.start(); f.source->acquired(2);
+        f.send(frame(0)); f.send(frame(1));
+        check(f.finished == 0 && !f.source->running && f.lease->releases == 1,
+            "complete download analyzed before confirmed release");
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        check(f.result && f.result->measurement && f.finished == 1, "released batch failed analysis");
+    }
     {
         Fixture f;
         SafetyLimits limits;

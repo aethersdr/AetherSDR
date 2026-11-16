@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -357,6 +358,15 @@ func TestPDCaptureBatchNativePublicFixture(t *testing.T) {
 	if waitErr != nil || response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &manifest) != nil || !manifest.valid(4) {
 		t.Fatal(waitErr, response.Code, response.Body.String())
 	}
+	directory := os.Getenv("AETHER_PD_CAPTURE_BATCH_FIXTURE_DIR")
+	if directory != "" {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "manifest.json"), response.Body.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for frame := 0; frame < 4; frame++ {
 		if manifest.Frames[frame].SampleRate != 48000 || manifest.Frames[frame].Source.Generation != "7" ||
 			manifest.Frames[frame].ToneConfig.SpacingHz != 1190 || manifest.Frames[frame].Binding.Channel != 3 {
@@ -365,6 +375,11 @@ func TestPDCaptureBatchNativePublicFixture(t *testing.T) {
 		for chunk := 0; chunk < 32; chunk++ {
 			path := fmt.Sprintf("/v4/aetherpd/capture/%s/%d/%d", manifest.CaptureID, frame, chunk)
 			r := call(t, h, "GET", path, "192.168.50.20:4000", "owner", "")
+			if directory != "" {
+				if err := os.WriteFile(filepath.Join(directory, fmt.Sprintf("chunk-%d-%d.json", frame, chunk)), r.Body.Bytes(), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			var payload pdCaptureBatchChunk
 			if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &payload) != nil || payload.Frame != frame || payload.Offset != chunk*512 || len(payload.IQ) != 4096 {
 				t.Fatal(frame, chunk, r.Code)

@@ -22,33 +22,37 @@ constexpr double kMaxExactJsonCounter = 9'007'199'254'740'991.0;
 
 // QJsonDocument validates syntax but collapses duplicate members. Scan its
 // validated input before using the object, including escaped-equivalent keys.
-// The protocol has objects and scalar values only, with no arrays.
-bool uniqueKeys(const QByteArray& json)
+// Arrays are admitted only by the bounded batch-capture envelope parser.
+bool uniqueKeys(const QByteArray& json, bool allowArrays)
 {
     QList<QSet<QString>> objects;
     QList<bool> expectKey;
+    QList<bool> arrays;
     for (qsizetype i = 0; i < json.size(); ++i) {
         const char c = json.at(i);
-        if (c == '[' || c == ']') {
+        if ((c == '[' || c == ']') && !allowArrays) {
             return false;
         }
-        if (c == '{') {
+        if (c == '{' || c == '[') {
             if (objects.size() == 4) {
                 return false;
             }
             objects.append(QSet<QString>{});
-            expectKey.append(true);
-        } else if (c == '}') {
-            if (objects.isEmpty()) {
+            expectKey.append(c == '{');
+            arrays.append(c == '[');
+        } else if (c == '}' || c == ']') {
+            if (objects.isEmpty() || arrays.last() != (c == ']')) {
                 return false;
             }
             objects.removeLast();
             expectKey.removeLast();
+            arrays.removeLast();
         } else if (c == ',' || c == ':') {
             if (expectKey.isEmpty()) {
                 return false;
             }
-            expectKey.last() = c == ',';
+            if (arrays.last() && c == ':') { return false; }
+            expectKey.last() = c == ',' && !arrays.last();
         } else if (c == '-') {
             return false;
         } else if (c >= '0' && c <= '9') {
@@ -57,7 +61,7 @@ bool uniqueKeys(const QByteArray& json)
             }
             if (i + 1 < json.size()) {
                 const char next = json.at(i + 1);
-                if (next != ',' && next != '}' && next != ' ' && next != '\t' && next != '\r' && next != '\n') {
+                if (next != ',' && next != '}' && !(allowArrays && next == ']') && next != ' ' && next != '\t' && next != '\r' && next != '\n') {
                     return false;
                 }
             }
@@ -84,14 +88,14 @@ bool uniqueKeys(const QByteArray& json)
     return objects.isEmpty();
 }
 
-std::optional<QJsonObject> object(const QByteArray& json)
+std::optional<QJsonObject> object(const QByteArray& json, bool allowArrays = false)
 {
     if (json.isEmpty() || json.size() > kMaxReplyBytes) {
         return std::nullopt;
     }
     QJsonParseError error;
     const QJsonDocument doc = QJsonDocument::fromJson(json, &error);
-    if (error.error != QJsonParseError::NoError || !doc.isObject() || !uniqueKeys(json)) {
+    if (error.error != QJsonParseError::NoError || !doc.isObject() || !uniqueKeys(json, allowArrays)) {
         return std::nullopt;
     }
     return doc.object();
@@ -390,7 +394,7 @@ std::optional<Status> parseStatus(const QByteArray& json)
         QStringLiteral("measurement_control"), QStringLiteral("source_purpose"), QStringLiteral("measurement"),
         QStringLiteral("measurement_tone_control"), QStringLiteral("measurement_tone_capture_version"), QStringLiteral("measurement_tone_config"),
         QStringLiteral("input_limited_samples"), QStringLiteral("faults"), QStringLiteral("feedback_binding"),
-        QStringLiteral("diagnostics")};
+        QStringLiteral("diagnostics"), QStringLiteral("measurement_capture_batch_version")};
     for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
         if (!known.contains(it.key())) { return std::nullopt; }
     }
@@ -453,6 +457,12 @@ std::optional<Status> parseStatus(const QByteArray& json)
             || (s.measurementToneControl && !s.measurementControl)) { return std::nullopt; }
     } else if (o.contains(QStringLiteral("measurement_tone_control"))
                || o.contains(QStringLiteral("measurement_tone_capture_version"))) { return std::nullopt; }
+    if (o.contains(QStringLiteral("measurement_capture_batch_version"))) {
+        quint64 version = 0;
+        if (!counter(o, "measurement_capture_batch_version", version) || version != 1
+            || !s.measurementToneConfig) { return std::nullopt; }
+        s.captureBatchVersion = quint32(version);
+    }
     return consistent(s) ? std::optional<Status>(s) : std::nullopt;
 }
 
@@ -588,6 +598,62 @@ std::optional<QByteArray> parseCaptureChunk(const QByteArray& json, const Captur
     }
     return raw;
 }
+std::optional<Request> captureBatchBeginRequest(int count)
+{
+    if (count < 1 || count > kCaptureBatchMax) { return std::nullopt; }
+    return Request{"POST", QStringLiteral("/v4/aetherpd/capture/%1").arg(count), 4000};
+}
+
+std::optional<Request> captureBatchChunkRequest(const CaptureBatchManifest& batch, int frame, int chunk)
+{
+    if (!captureIdValid(batch.captureId) || batch.frames.empty() || batch.frames.size() > kCaptureBatchMax
+        || frame < 0 || std::size_t(frame) >= batch.frames.size()
+        || batch.frames[frame].captureId != batch.captureId || !captureChunkRequest(batch.frames[frame], chunk)) {
+        return std::nullopt;
+    }
+    return Request{"GET", QStringLiteral("/v4/aetherpd/capture/%1/%2/%3").arg(batch.captureId).arg(frame).arg(chunk), 1500};
+}
+
+std::optional<CaptureBatchManifest> parseCaptureBatchManifest(const QByteArray& json, int count)
+{
+    if (!captureBatchBeginRequest(count) || json.size() > 8192) { return std::nullopt; }
+    const std::optional<QJsonObject> parsed = object(json, true);
+    if (!parsed || parsed->size() != 2 || !parsed->value(QStringLiteral("frames")).isArray()) { return std::nullopt; }
+    CaptureBatchManifest batch;
+    batch.captureId = parsed->value(QStringLiteral("capture_id")).toString();
+    const QJsonArray frames = parsed->value(QStringLiteral("frames")).toArray();
+    if (!captureIdValid(batch.captureId) || frames.size() != count) { return std::nullopt; }
+    for (const QJsonValue& value : frames) {
+        if (!value.isObject()) { return std::nullopt; }
+        const std::optional<CaptureManifest> frame = parseCaptureManifest(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact));
+        if (!frame || frame->captureId != batch.captureId || !frame->keyed || !frame->source || !frame->feedbackBinding
+            || !frame->measurement || !frame->measurement->tones || !frame->measurementToneConfig) { return std::nullopt; }
+        if (!batch.frames.empty()) {
+            const CaptureManifest& first = batch.frames.front();
+            const CaptureManifest& previous = batch.frames.back();
+            if (frame->firstReceiveNs < previous.lastReceiveNs || frame->firstReceiveNs <= previous.firstReceiveNs
+                || frame->firstReceiveNs - previous.lastReceiveNs > 100'000'000
+                || frame->source != first.source || frame->feedbackBinding != first.feedbackBinding
+                || frame->measurement->sourceId != first.measurement->sourceId || frame->measurementToneConfig != first.measurementToneConfig
+                || frame->sampleRateHz != first.sampleRateHz || frame->centerHz != first.centerHz
+                || frame->correcting != first.correcting) { return std::nullopt; }
+        }
+        batch.frames.push_back(*frame);
+    }
+    return batch;
+}
+
+std::optional<QByteArray> parseCaptureBatchChunk(const QByteArray& json,
+                                                const CaptureBatchManifest& batch, int frame, int chunk)
+{
+    if (json.size() > 8192 || !captureBatchChunkRequest(batch, frame, chunk)) { return std::nullopt; }
+    std::optional<QJsonObject> parsed = object(json);
+    quint64 index = 0;
+    if (!parsed || parsed->size() != 4 || !counter(*parsed, "frame_index", index) || index != quint64(frame)) { return std::nullopt; }
+    parsed->remove(QStringLiteral("frame_index"));
+    return parseCaptureChunk(QJsonDocument(*parsed).toJson(QJsonDocument::Compact), batch.frames[frame], chunk);
+}
+
 std::optional<Request> testRequest(TestOperation operation, const QString& testId)
 {
     if (operation == TestOperation::Begin) {

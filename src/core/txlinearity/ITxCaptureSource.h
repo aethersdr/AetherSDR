@@ -20,6 +20,10 @@ public:
     // has stopped receiving is the exact situation §8 exists to prevent.
     using ErrorCallback = std::function<void(const std::string& reason)>;
     using ReadyCallback = std::function<void()>;
+    // A bounded remote source may seal all requested frames before downloading
+    // them. After this callback it must acquire no more samples for this run.
+    // The controller can release TX; stop/gate closure still cancels delivery.
+    using AcquisitionCallback = std::function<void(int frames)>;
 
     virtual ~ITxCaptureSource() = default;
 
@@ -43,6 +47,7 @@ public:
     // callbacks before start() and must not invoke either after stop() returns.
     virtual void setFrameCallback(FrameCallback callback) = 0;
     virtual void setErrorCallback(ErrorCallback callback) = 0;
+    virtual void setAcquisitionCallback(AcquisitionCallback callback) { (void)callback; }
 
     // Capture gate: only frames assembled while open reach the frame callback,
     // and a partial frame straddling either edge is discarded rather than

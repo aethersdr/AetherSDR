@@ -175,6 +175,7 @@ bool TxLinearityController::prepare(const LinearityRunConfig& config, const RunR
     m_frames.reserve(config.targetAverages);
     m_keyObservedMs.reset();
     m_gateOpen = false;
+    m_captureSealed = false;
     m_status.clear();
     m_state = State::CheckingReceive;
     const std::uint64_t generation = ++m_generation;
@@ -186,6 +187,9 @@ bool TxLinearityController::prepare(const LinearityRunConfig& config, const RunR
         if (guard && generation == guard->m_generation) {
             guard->finishCapture(error.empty() ? "Capture source failed" : error);
         }
+    });
+    m_source->setAcquisitionCallback([guard, generation](int frames) {
+        if (guard) { guard->acquisitionComplete(frames, generation); }
     });
     m_timer.start();
     const bool started = m_source->start(config.capture);
@@ -246,13 +250,19 @@ bool TxLinearityController::startRun(std::shared_ptr<ITxLinearityRunLease> lease
 
 void TxLinearityController::stop()
 {
-    if (m_state != State::Idle && m_state != State::Releasing) { finishCapture("Stopped by the operator"); }
+    if (m_state != State::Idle && (m_state != State::Releasing || m_captureSealed)) { finishCapture("Stopped by the operator"); }
 }
 
 void TxLinearityController::poll()
 {
     if (m_shuttingDown || m_state == State::Idle || m_state == State::Analyzing) { return; }
     if (m_state == State::Releasing) {
+        if (m_captureSealed) {
+            if (!current()) { finishCapture("Original radio session is no longer current"); return; }
+            const std::int64_t now = m_environment.nowMs();
+            if (now < m_prepareMs || now >= m_downloadDeadlineMs) { finishCapture("Sealed IQ batch download timed out"); }
+            return;
+        }
         if (!m_finishingCapture && m_lease && m_lease->state() == ITxLinearityRunLease::State::Released) { complete(); }
         return;
     }
@@ -291,12 +301,35 @@ void TxLinearityController::poll()
     }
 }
 
-void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_t generation)
+void TxLinearityController::acquisitionComplete(int frames, std::uint64_t generation)
 {
     if (generation != m_generation || m_state != State::Capturing || !m_gateOpen) { return; }
     const QPointer<TxLinearityController> guard(this);
     poll();
     if (!guard || generation != m_generation || m_state != State::Capturing || !m_gateOpen) { return; }
+    const std::int64_t now = m_environment.nowMs();
+    if (frames != m_config.targetAverages || !m_frames.empty()
+        || now > std::numeric_limits<std::int64_t>::max() - 6000) {
+        finishCapture("Capture source sealed an unexpected batch"); return;
+    }
+    m_captureSealed = true;
+    m_gateOpen = false;
+    m_downloadDeadlineMs = now + 6000;
+    m_state = State::Releasing;
+    // The source promised immutable completed frames, so keep only its bounded
+    // download alive. No keying or source acquisition can follow this receipt.
+    m_lease->release();
+}
+
+void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_t generation)
+{
+    const auto accepting = [this] {
+        return (m_state == State::Capturing && m_gateOpen) || (m_state == State::Releasing && m_captureSealed);
+    };
+    if (generation != m_generation || !accepting()) { return; }
+    const QPointer<TxLinearityController> guard(this);
+    poll();
+    if (!guard || generation != m_generation || !accepting()) { return; }
     if (frame.feedback.size() != std::size_t(m_config.capture.frameSamples)
         || frame.sampleRateHz != m_config.capture.sampleRateHz
         || !std::isfinite(frame.centerFreqHz) || std::abs(frame.centerFreqHz - m_config.capture.centerFreqHz) > 0.5
@@ -368,14 +401,16 @@ void TxLinearityController::finishTelemetryCapture(const std::string& error, std
 
 void TxLinearityController::finishCapture(const std::string& error)
 {
-    if (m_shuttingDown || m_state == State::Idle || m_state == State::Releasing) { return; }
+    if (m_shuttingDown || m_state == State::Idle || (m_state == State::Releasing && !m_captureSealed)) { return; }
+    const bool releaseRequested = m_state == State::Releasing;
+    m_captureSealed = false;
     ++m_generation;
     m_status = error;
     m_state = State::Releasing;
     m_gateOpen = false;
     m_finishingCapture = true;
     const QPointer<TxLinearityController> guard(this);
-    if (m_lease) { m_lease->release(); }
+    if (m_lease && !releaseRequested) { m_lease->release(); }
     if (!guard) { return; }
     m_source->stop();
     if (!guard) { return; }

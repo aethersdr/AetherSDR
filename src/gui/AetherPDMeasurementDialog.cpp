@@ -451,7 +451,7 @@ void AetherPDMeasurementDialog::render()
         case State::Ready: message = tr("Ready for your Transmit click (valid for two seconds)."); break;
         case State::AwaitingKey: message = tr("Starting independent cleanup helper and waiting for owned TX confirmation…"); break;
         case State::Capturing: message = tr("Transmitting: waiting for guarded tones and collecting the selected IQ frames…"); break;
-        case State::Releasing: message = tr("Stop requested; waiting for confirmed release of this transmission."); break;
+        case State::Releasing: message = tr("Stop requested; waiting for confirmed release and any remaining IQ downloads."); break;
         case State::Analyzing: message = tr("Transmission released. Analyzing…"); break;
         }
     }

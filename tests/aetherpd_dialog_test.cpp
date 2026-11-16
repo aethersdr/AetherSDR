@@ -559,6 +559,14 @@ int main(int argc, char** argv)
         "only a new explicit arm clears the refusal and submits another source request");
     network.last->complete(200, "{\"state\":\"measurement_arm_accepted\"}");
     measurementStatus["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}};
+    measurementStatus["measurement_capture_batch_version"] = 1;
+    measurementStatus["measurement_tone_control"] = true;
+    measurementStatus["measurement_tone_capture_version"] = 3;
+    measurementStatus["measurement_tone_config"] = QJsonObject{{"source_id", "0000000000000001"},
+        {"min_spacing_hz", 200}, {"max_spacing_hz", 10000}, {"center_hz", 1305}, {"spacing_hz", 1190}};
+    measurementStatus["feedback_binding"] = QJsonObject{{"transport", "local_dax_iq"}, {"channel", 3}, {"pan", 1073741826},
+        {"gui_handle", 7}, {"valid", true}, {"failed", false}};
+
     network.last->complete(200, QJsonDocument(measurementStatus).toJson());
     ok &= check(mb("pdMeasurePrepare")->isEnabled(), "observed original source enables explicit receive preparation");
     mb("pdMeasurePrepare")->click();
@@ -575,7 +583,9 @@ int main(int argc, char** argv)
     captureNetwork.last->complete(200, encode({{"capture_id", id}, {"format", "f32le-iq-v1"}, {"source", QJsonObject{{"kind", "local_dax_iq"}, {"stream_id", 1073741825}, {"generation", "7"}}},
         {"sample_rate_hz", 48000}, {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
         {"keyed", false}, {"correcting", false}, {"first_receive_ns", "1000000000"}, {"last_receive_ns", "1341000000"},
-        {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}}}));
+        {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", false}}},
+        {"measurement_tone_config", measurementStatus["measurement_tone_config"]},
+        {"feedback_binding", measurementStatus["feedback_binding"]}}));
     for (int i = 0; i < 32; ++i) {
         captureNetwork.captureChunk(i)->complete(200, encode({{"capture_id", id}, {"offset", i * 512},
             {"iq_f32le", QString::fromLatin1(QByteArray(4096, '\0').toBase64())}}));

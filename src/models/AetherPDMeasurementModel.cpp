@@ -106,7 +106,7 @@ bool AetherPDMeasurementModel::current() const
     // Unkey cancels the source. Completed frames keep their identity while the
     // exact operation releases; an ended source cannot reopen capture or key.
     const bool retiring = m_controller && (state() == State::Releasing || state() == State::Analyzing);
-    return source && source->measurement && m_measurementSourceId
+    return source && source->captureBatchVersion == 1 && source->measurement && m_measurementSourceId
         && source->measurement->sourceId == m_measurementSourceId
         && source->measurementToneConfig == m_measurementTones
         && source->sourcePurpose == aetherpd::SourcePurpose::Measurement
@@ -180,6 +180,11 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
     const std::optional<aetherpd::Status> source = m_radio->aetherPDModel().status();
     const aetherpd::MeasurementToneConfig tones = source && source->measurementToneConfig
         ? *source->measurementToneConfig : aetherpd::MeasurementToneConfig{};
+    if (source && source->captureBatchVersion != 1) {
+        m_notice = tr("Update AetherPD to a batch-capable shim before preparing a measurement.");
+        publish();
+        return false;
+    }
     if (!source || !source->measurementControl || !source->measurement || !source->measurement->sourceId
         || source->sourcePurpose != aetherpd::SourcePurpose::Measurement || source->keyed
         || source->calibrationState != aetherpd::CalibrationState::Armed
@@ -200,7 +205,8 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
         return false;
     }
     const std::function<bool()> bound = m_radio->bindAetherPDCapture(session, *m_capture);
-    if (!bound || !m_capture->setMeasurementSource(source->measurement->sourceId, source->measurementToneConfig)) { return false; }
+    if (!bound || !m_capture->setMeasurementSource(source->measurement->sourceId, source->measurementToneConfig)
+        || !m_capture->setBatchCount(config.targetAverages)) { return false; }
     const quint64 generation = ++m_generation;
     for (const QMetaObject::Connection& connection : m_stationConnections) { disconnect(connection); }
     m_stationConnections = {

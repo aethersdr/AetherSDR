@@ -5,6 +5,7 @@
 #include <QtGlobal>
 
 #include <optional>
+#include <vector>
 
 namespace AetherSDR::aetherpd {
 
@@ -83,6 +84,7 @@ struct Status {
     std::optional<MeasurementSource> measurement;
     std::optional<MeasurementToneConfig> measurementToneConfig;
     bool measurementToneControl{false};
+    quint32 captureBatchVersion{0};
     bool available{false};
     State state{State::Unavailable};
     bool registered{false};
@@ -134,6 +136,16 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json);
 // Returns exactly 512 unchanged little-endian float32 complex samples.
 std::optional<QByteArray> parseCaptureChunk(const QByteArray& json,
                                           const CaptureManifest& manifest, int chunk);
+inline constexpr int kCaptureBatchMax = 4;
+struct CaptureBatchManifest {
+    QString captureId;
+    std::vector<CaptureManifest> frames;
+};
+std::optional<Request> captureBatchBeginRequest(int count);
+std::optional<Request> captureBatchChunkRequest(const CaptureBatchManifest& batch, int frame, int chunk);
+std::optional<CaptureBatchManifest> parseCaptureBatchManifest(const QByteArray& json, int count);
+std::optional<QByteArray> parseCaptureBatchChunk(const QByteArray& json,
+                                                const CaptureBatchManifest& batch, int frame, int chunk);
 
 enum class TestOperation { Begin, Status, Stop };
 enum class TestState { Observing, Retiring, Ended };

@@ -97,6 +97,7 @@ private:
     bool validConfig(const LinearityRunConfig& config, const RunRequest& request) const;
     void receiveReady(std::uint64_t generation);
     void receiveFrame(const CaptureFrame& frame, std::uint64_t generation);
+    void acquisitionComplete(int frames, std::uint64_t generation);
     void finishTelemetryCapture(const std::string& error, std::int64_t now, const TxTelemetry& telemetry);
     void finishCapture(const std::string& error);
     void complete();
@@ -118,9 +119,11 @@ private:
     std::int64_t m_prepareMs = 0;
     std::int64_t m_readyMs = 0;
     std::int64_t m_deadlineMs = 0;
+    std::int64_t m_downloadDeadlineMs = 0;
     std::optional<std::int64_t> m_keyObservedMs;
     bool m_gateOpen = false;
     bool m_shuttingDown = false;
     bool m_finishingCapture = false;
+    bool m_captureSealed = false;
 };
 } // namespace AetherSDR::txlin

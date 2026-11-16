@@ -12,6 +12,7 @@
 #include <QtEndian>
 
 #include <bit>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -64,6 +65,8 @@ void AetherPDCaptureSource::abandon()
     m_deadline.stop();
     m_age.invalidate();
     m_manifest.reset();
+    m_batch.reset();
+    m_batchIndex = 0;
     m_bytes.clear();
     m_chunk = 0;
     m_checkingReady = false;
@@ -95,6 +98,7 @@ void AetherPDCaptureSource::setSession(const QHostAddress& address, const QStrin
     stop();
     m_binding.reset();
     m_measurementSourceId = 0;
+    m_batchCount = 0;
     m_measurementTones.reset();
     m_legacyCapture = m_sourceIdentitySupported = false;
     m_address = address;
@@ -127,8 +131,16 @@ bool AetherPDCaptureSource::setMeasurementSource(quint64 sourceId,
 
 aetherpd::Request AetherPDCaptureSource::beginRequest() const
 {
+    if (m_batchCount && !m_checkingReady) { return *aetherpd::captureBatchBeginRequest(m_batchCount); }
     return m_measurementTones || m_binding ? aetherpd::captureBeginWithTonesRequest()
                               : aetherpd::captureBeginRequest(!m_legacyCapture);
+}
+
+bool AetherPDCaptureSource::setBatchCount(int count)
+{
+    if (QThread::currentThread() != thread() || m_running || !aetherpd::captureBatchBeginRequest(count)) { return false; }
+    m_batchCount = count;
+    return true;
 }
 
 bool AetherPDCaptureSource::tonesMatch(const std::optional<aetherpd::MeasurementToneConfig>& observed) const
@@ -155,6 +167,7 @@ bool AetherPDCaptureSource::start(const CaptureConfig& config)
 {
     if (QThread::currentThread() != thread() || m_running || !sessionCurrent()
         || !m_frameCallback || !m_errorCallback || config.frameSamples != aetherpd::kCaptureSamples
+        || (m_batchCount && (!m_acquisitionCallback || !m_measurementSourceId || !m_measurementTones || !m_binding))
         || !std::isfinite(config.centerFreqHz) || config.centerFreqHz <= 0 || config.centerFreqHz > 1e9
         || (config.sampleRateHz != 24000 && config.sampleRateHz != 48000
             && config.sampleRateHz != 96000 && config.sampleRateHz != 192000)) {
@@ -177,6 +190,12 @@ void AetherPDCaptureSource::setErrorCallback(ErrorCallback callback)
 {
     stop();
     m_errorCallback = std::move(callback);
+}
+
+void AetherPDCaptureSource::setAcquisitionCallback(AcquisitionCallback callback)
+{
+    stop();
+    m_acquisitionCallback = std::move(callback);
 }
 
 void AetherPDCaptureSource::setGateOpen(bool open)
@@ -293,6 +312,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     if (m_waitingForTones) {
         const std::optional<aetherpd::Status> observed = aetherpd::parseStatus(body);
         if (!observed || !observed->available || !observed->registered
+            || (m_batchCount && observed->captureBatchVersion != 1)
             || !observed->measurement || observed->measurement->sourceId != m_measurementSourceId
             || (m_binding && observed->feedbackBinding != m_binding)
             || !tonesMatch(observed->measurementToneConfig)
@@ -312,38 +332,45 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
         send(beginRequest());
         return;
     }
+    if (!m_manifest && m_batchCount && !m_checkingReady) {
+        m_batch = aetherpd::parseCaptureBatchManifest(body, m_batchCount);
+        if (!m_batch || !std::all_of(m_batch->frames.begin(), m_batch->frames.end(),
+                [this](const aetherpd::CaptureManifest& frame) { return manifestMatches(frame); })) {
+            fail("IQ batch does not match the prepared measurement"); return;
+        }
+        m_batchIndex = 0;
+        m_manifest = m_batch->frames.front();
+        m_sourceIdentitySupported = true;
+        // All samples are sealed on the radio. Request release before spending
+        // any time downloading them; this separate deadline cannot extend RF.
+        m_captureBudgetMs = kCaptureTimeoutMs;
+        m_age.restart();
+        m_deadline.start(m_captureBudgetMs);
+        const AcquisitionCallback acquired = m_acquisitionCallback;
+        const QPointer<AetherPDCaptureSource> guard(this);
+        acquired(m_batchCount);
+        if (!guard || generation != m_generation || !m_running || !m_gate) { return; }
+        requestChunks();
+        return;
+    }
     if (!m_manifest) {
         m_manifest = aetherpd::parseCaptureManifest(body);
-        if (!m_manifest || m_manifest->keyed != !m_checkingReady || m_manifest->sampleRateHz != m_config.sampleRateHz
-            || (m_binding && m_manifest->feedbackBinding != m_binding)
-            || !tonesMatch(m_manifest->measurementToneConfig)
-            || m_manifest->source.has_value() == m_legacyCapture
-            || (m_verifiedReceiveSource && (!m_manifest->source
-                || m_verifiedReceiveSource->streamId != m_manifest->source->streamId))
-            || std::abs(double(m_manifest->centerHz) - m_config.centerFreqHz) > 0.5
-            || (m_measurementSourceId && (!m_manifest->measurement
-                || m_manifest->measurement->sourceId != m_measurementSourceId
-                || (!m_checkingReady && !m_manifest->measurement->tones)))) {
+        if (!m_manifest || !manifestMatches(*m_manifest)) {
             fail("IQ capture does not match the expected key state, rate, center or source"); return;
         }
         m_sourceIdentitySupported = m_manifest->source.has_value();
-        m_bytes.resize(8 * aetherpd::kCaptureSamples);
-        // Queue one fixed snapshot, allowing the network worker to make progress
-        // without a GUI event-loop round trip between every 512-sample chunk.
-        const QPointer<AetherPDCaptureSource> guard(this);
-        for (int index = 0; index < kChunkCount; ++index) {
-            send(*aetherpd::captureChunkRequest(*m_manifest, index), index);
-            if (!guard || generation != m_generation || !m_running) { return; }
-        }
+        requestChunks();
         return;
     }
-    const std::optional<QByteArray> bytes = aetherpd::parseCaptureChunk(body, *m_manifest, chunk);
+    const std::optional<QByteArray> bytes = m_batch
+        ? aetherpd::parseCaptureBatchChunk(body, *m_batch, m_batchIndex, chunk)
+        : aetherpd::parseCaptureChunk(body, *m_manifest, chunk);
     if (!bytes) { fail("IQ capture chunk was invalid or belonged to another snapshot"); return; }
     std::memcpy(m_bytes.data() + chunk * 8 * aetherpd::kCaptureChunkSamples,
                 bytes->constData(), static_cast<std::size_t>(bytes->size()));
     ++m_chunk;
     if (m_chunk < kChunkCount) { return; }
-    m_deadline.stop();
+    if (!m_batch || m_batchIndex + 1 == m_batchCount) { m_deadline.stop(); }
     if (m_bytes.size() != 8 * aetherpd::kCaptureSamples) {
         fail("IQ capture was incomplete"); return;
     }
@@ -359,6 +386,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     frame.centerFreqHz = double(m_manifest->centerHz);
     frame.timestampNs = m_manifest->firstReceiveNs;
     frame.sourceCaptureId = m_manifest->captureId.toStdString();
+    if (m_batch) { frame.sourceCaptureId += "/" + std::to_string(m_batchIndex); }
     if (m_manifest->source) {
         frame.sourceStream = CaptureStreamIdentity{m_manifest->source->streamId, m_manifest->source->generation};
     }
@@ -383,8 +411,38 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     const QPointer<AetherPDCaptureSource> guard(this);
     callback(frame);
     if (!guard || generation != m_generation || !m_running || !m_gate) { return; }
+    if (m_batch) {
+        if (++m_batchIndex == m_batchCount) { return; }
+        m_manifest = m_batch->frames[m_batchIndex];
+        requestChunks();
+        return;
+    }
     QTimer::singleShot(0, this, [this, generation] {
         if (generation == m_generation) { beginCapture(); }
     });
+}
+
+bool AetherPDCaptureSource::manifestMatches(const aetherpd::CaptureManifest& manifest) const
+{
+    return manifest.keyed == !m_checkingReady && manifest.sampleRateHz == m_config.sampleRateHz
+        && (!m_binding || manifest.feedbackBinding == m_binding) && tonesMatch(manifest.measurementToneConfig)
+        && manifest.source.has_value() != m_legacyCapture
+        && (!m_verifiedReceiveSource || (manifest.source && m_verifiedReceiveSource->streamId == manifest.source->streamId))
+        && std::abs(double(manifest.centerHz) - m_config.centerFreqHz) <= 0.5
+        && (!m_measurementSourceId || (manifest.measurement && manifest.measurement->sourceId == m_measurementSourceId
+            && (m_checkingReady || manifest.measurement->tones)));
+}
+
+void AetherPDCaptureSource::requestChunks()
+{
+    m_bytes.resize(8 * aetherpd::kCaptureSamples);
+    m_chunk = 0;
+    const quint64 generation = m_generation;
+    const QPointer<AetherPDCaptureSource> guard(this);
+    for (int index = 0; index < kChunkCount; ++index) {
+        send(m_batch ? *aetherpd::captureBatchChunkRequest(*m_batch, m_batchIndex, index)
+                     : *aetherpd::captureChunkRequest(*m_manifest, index), index);
+        if (!guard || generation != m_generation || !m_running) { return; }
+    }
 }
 } // namespace AetherSDR::txlin

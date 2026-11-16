@@ -933,9 +933,16 @@ void aetherPDMeasurementWorkflow()
     sourceStatus["calibration_state"] = "armed";
     sourceStatus["calibration_samples_left"] = 192000;
     sourceStatus["state"] = "measurement_armed";
+    sourceStatus["measurement_capture_batch_version"] = 1;
+    sourceStatus["measurement_tone_control"] = true;
+    sourceStatus["measurement_tone_capture_version"] = 3;
+    sourceStatus["measurement_tone_config"] = QJsonObject{{"source_id", "0000000000000001"},
+        {"min_spacing_hz", 200}, {"max_spacing_hz", 10000}, {"center_hz", 1305}, {"spacing_hz", 1190}};
+    sourceStatus["feedback_binding"] = QJsonObject{{"transport", "local_dax_iq"}, {"channel", 3}, {"pan", 1073741826},
+        {"gui_handle", 7}, {"valid", true}, {"failed", false}};
     QByteArray idle = QJsonDocument(sourceStatus).toJson();
     double lowerTone = 710, upperTone = 1900;
-    bool configured = false;
+    bool configured = true;
     const QString captureId = QStringLiteral("0123456789abcdef0123456789abcdef");
     const auto encode = [](const QJsonObject& object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); };
     const auto manifest = [&](bool keyed) {
@@ -1114,8 +1121,16 @@ void aetherPDMeasurementWorkflow()
                 running["calibration_state"] = "running";
                 running["measurement"] = QJsonObject{{"source_id", "0000000000000001"}, {"tones", true}};
                 measurementNetwork.last->complete(200, encode(running));
-                measurementNetwork.last->complete(200, manifest(true));
-                for (int i = 0; i < 32; ++i) { measurementNetwork.captureChunk(i)->complete(200, chunk(i)); }
+                check(measurementNetwork.sent.back().request.url().path() == QStringLiteral("/v4/aetherpd/capture/1"),
+                    "measurement did not request one native batch");
+                measurementNetwork.last->complete(200, encode({{"capture_id", captureId},
+                    {"frames", QJsonArray{QJsonDocument::fromJson(manifest(true)).object()}}}));
+                check(proof.valid() && model->state() == State::Releasing && !model->result(),
+                    "sealed batch did not request owned unkey before downloads");
+                for (int i = 0; i < 32; ++i) {
+                    QJsonObject data = QJsonDocument::fromJson(chunk(i)).object(); data["frame_index"] = 0;
+                    measurementNetwork.captureChunk(i)->complete(200, encode(data));
+                }
             }
         }
         check(model->state() == State::Releasing && !model->result() && model->exportResult().isEmpty()
@@ -1163,12 +1178,12 @@ void aetherPDMeasurementWorkflow()
                     "released JSON and CSV lost immutable snapshot binding");
                 const QJsonObject profile = capture.value("source_tones").toObject();
                 check(profile.value("source_id").toString() == QStringLiteral("0000000000000001")
-                    && profile.value("lower_offset_hz").toDouble() == 804.5
-                    && profile.value("upper_offset_hz").toDouble() == 1805.5
-                    && exported.value("requested_tone1_hz").toDouble() == 7150804.5
-                    && exported.value("requested_tone2_hz").toDouble() == 7151805.5
-                    && model->resultSummary().contains("804.5/1805.5 Hz")
-                    && model->exportResultCsv().contains("\"Capture lower tone offset\",\"804.5\""),
+                    && profile.value("lower_offset_hz").toDouble() == lowerTone
+                    && profile.value("upper_offset_hz").toDouble() == upperTone
+                    && exported.value("requested_tone1_hz").toDouble() == 7150000 + lowerTone
+                    && exported.value("requested_tone2_hz").toDouble() == 7150000 + upperTone
+                    && (scenario != 11 || (model->resultSummary().contains("804.5/1805.5 Hz")
+                        && model->exportResultCsv().contains("\"Capture lower tone offset\",\"804.5\""))),
                     "composed measurement/export lost confirmed fractional tone configuration");
             } else {
                 check(capture.value("source_tones").isNull(), "legacy capture invented confirmed tone metadata");

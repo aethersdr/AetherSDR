@@ -78,7 +78,9 @@ public:
         const QString suffix = QStringLiteral("/%1").arg(index);
         for (auto it = sent.rbegin(); it != sent.rend(); ++it) {
             const QString path = it->request.url().path();
-            if (path.startsWith(QStringLiteral("/v1/aetherpd/capture/")) && path.endsWith(suffix)) {
+            if ((path.startsWith(QStringLiteral("/v1/aetherpd/capture/"))
+                    || path.startsWith(QStringLiteral("/v4/aetherpd/capture/")))
+                && it->method == GetOperation && path.endsWith(suffix)) {
                 return it->reply;
             }
         }

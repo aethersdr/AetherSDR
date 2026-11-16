@@ -4,6 +4,7 @@
 #include "core/txlinearity/TxLinearityController.h"
 
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QMetaObject>
 #include <QThread>
@@ -50,6 +51,31 @@ QJsonObject receiveManifest()
     result[QStringLiteral("keyed")] = false;
     result[QStringLiteral("correcting")] = false;
     return result;
+}
+QJsonObject boundManifest(int index, bool keyed = true)
+{
+    QJsonObject result = manifest();
+    result["keyed"] = keyed;
+    result["correcting"] = keyed;
+    result["first_receive_ns"] = QString::number(1000000000ULL + quint64(index)*85000000);
+    result["last_receive_ns"] = QString::number(1085000000ULL + quint64(index)*85000000);
+    result["measurement"] = QJsonObject{{"source_id", "000000000000001f"}, {"tones", keyed}};
+    result["measurement_tone_config"] = QJsonObject{{"source_id", "000000000000001f"}, {"min_spacing_hz", 200},
+        {"max_spacing_hz", 10000}, {"center_hz", 1305}, {"spacing_hz", 1190}};
+    result["feedback_binding"] = QJsonObject{{"transport", "local_dax_iq"}, {"channel", 3}, {"pan", 1073741826},
+        {"gui_handle", 7}, {"valid", true}, {"failed", false}};
+    return result;
+}
+QByteArray batchStatus()
+{
+    const QJsonObject identity = boundManifest(0);
+    return encode({{"available",true},{"registered",true},{"keyed",true},{"correction_enabled",true},
+        {"correcting",true},{"state","correcting"},{"calibration_required",false},{"calibration_control",true},
+        {"calibration_state","running"},{"calibration_samples_left",90000},{"input_limited_samples",0},
+        {"measurement_control",true},{"source_purpose","measurement"},{"measurement",identity["measurement"]},
+        {"measurement_tone_control",true},{"measurement_tone_capture_version",3},{"measurement_capture_batch_version",1},
+        {"measurement_tone_config",identity["measurement_tone_config"]},{"feedback_binding",identity["feedback_binding"]},
+        {"faults",QJsonObject{{"dispatch_deadlines",0},{"send_errors",0},{"rejected_input",0},{"stale_iq",0}}}});
 }
 QByteArray chunk(int index)
 {
@@ -101,6 +127,54 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     bool ok = true;
+    for (int fault = 0; fault < 7; ++fault) {
+        Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0, acquired = 0;
+        setup(source, frames, errors);
+        source.setAcquisitionCallback([&](int count) {
+            acquired += count;
+            ok &= check(network.sent.size() == 2, "batch chunks requested before acquisition callback");
+            if (fault == 3) { source.stop(); }
+        });
+        source.setFrameCallback([&](const CaptureFrame& frame) {
+            ok &= check(frame.sourceCaptureId == kId.toStdString() + "/" + std::to_string(frames), "batch frame identity was reused");
+            ++frames;
+            if (fault == 4) { source.stop(); }
+        });
+        ok &= check(source.setMeasurementSource(31, AetherSDR::aetherpd::MeasurementToneConfig{31,1190})
+            && source.setFeedbackBinding({3,0x40000002,7,true,false}) && source.setBatchCount(4)
+            && source.start(config()), "batch setup refused");
+        source.setGateOpen(true);
+        network.last->complete(200, batchStatus());
+        ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v4/aetherpd/capture/4"), "selected average count not sent to batch collector");
+        QJsonArray batch;
+        for (int i = 0; i < 4; ++i) { batch.append(boundManifest(i)); }
+        if (fault == 1) {
+            QJsonObject changed = batch[3].toObject(); changed["center_hz"] = 7160000; batch[3] = changed;
+        }
+        network.last->complete(fault == 6 ? 501 : 200, encode({{"capture_id",kId},{"frames",batch}}));
+        if (fault == 1 || fault == 3 || fault == 6) {
+            ok &= check(frames == 0 && acquired == (fault == 3 ? 4 : 0) && errors == (fault == 3 ? 0 : 1)
+                && network.sent.size() == 2, "invalid/canceled batch downloaded or retried");
+            continue;
+        }
+        ok &= check(acquired == 4 && errors == 0, "complete batch did not seal before download");
+        for (int frame = 0; frame < 4; ++frame) {
+            const auto sent = network.sent;
+            for (int index = 0; index < 32; ++index) {
+                const auto& pending = sent[sent.size()-32+index];
+                ok &= check(pending.request.url().path() == QStringLiteral("/v4/aetherpd/capture/%1/%2/%3").arg(kId).arg(frame).arg(index), "wrong batch download path");
+                QJsonObject body = QJsonDocument::fromJson(chunk(index)).object();
+                body["frame_index"] = fault == 2 ? frame+1 : frame;
+                if (fault == 5) { source.setGateOpen(false); break; }
+                pending.reply->complete(200, encode(body));
+                if (fault == 2) { break; }
+            }
+            if (fault != 0) { break; }
+        }
+        QCoreApplication::processEvents();
+        ok &= check(frames == (fault == 0 ? 4 : fault == 4 ? 1 : 0) && errors == (fault == 2 ? 1 : 0), "batch delivery or cancellation failed");
+        ok &= check(network.sent.size() == (fault == 0 ? 130 : 34), "batch acquisition restarted or downloaded after cancellation");
+    }
     for (int fault = 0; fault < 7; ++fault) {
         Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0;
         setup(source, frames, errors);

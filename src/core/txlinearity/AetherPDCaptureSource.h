@@ -30,6 +30,7 @@ public:
     bool setFeedbackBinding(const aetherpd::FeedbackBinding& binding);
     bool setMeasurementSource(quint64 sourceId,
                               std::optional<aetherpd::MeasurementToneConfig> tones = std::nullopt);
+    bool setBatchCount(int count);
     bool start(const CaptureConfig& config) override;
     void stop() override;
     bool checkReceiveReady(ReadyCallback ready) override;
@@ -38,6 +39,7 @@ public:
     std::string describe() const override { return "On-radio AetherPD raw DAX IQ"; }
     void setFrameCallback(FrameCallback callback) override;
     void setErrorCallback(ErrorCallback callback) override;
+    void setAcquisitionCallback(AcquisitionCallback callback) override;
     std::optional<aetherpd::CaptureSourceIdentity> receiveSourceIdentity() const;
 
 private:
@@ -51,6 +53,8 @@ private:
     bool sessionCurrent() const;
     aetherpd::Request beginRequest() const;
     bool tonesMatch(const std::optional<aetherpd::MeasurementToneConfig>& observed) const;
+    bool manifestMatches(const aetherpd::CaptureManifest& manifest) const;
+    void requestChunks();
 
     QNetworkAccessManager m_ownedNetwork;
     QPointer<QNetworkAccessManager> m_network;
@@ -66,13 +70,17 @@ private:
     FrameCallback m_frameCallback;
     ErrorCallback m_errorCallback;
     ReadyCallback m_readyCallback;
+    AcquisitionCallback m_acquisitionCallback;
     std::optional<aetherpd::FeedbackBinding> m_binding;
     std::optional<aetherpd::CaptureManifest> m_manifest;
+    std::optional<aetherpd::CaptureBatchManifest> m_batch;
     std::optional<aetherpd::CaptureSourceIdentity> m_verifiedReceiveSource;
     QByteArray m_bytes;
     quint64 m_generation{0};
     int m_chunk{0};
     int m_captureBudgetMs{0};
+    int m_batchCount{0};
+    int m_batchIndex{0};
     bool m_running{false};
     bool m_gate{false};
     bool m_checkingReady{false};

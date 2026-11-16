@@ -21,6 +21,7 @@ var aetherPDReads = make(chan struct{}, 1)
 // shim boundary. Other native debug fields stay local to the waveform.
 // This report never authorizes capture provisioning or transmitter control.
 type aetherPDStatus struct {
+	CaptureBatchVersion           uint32                   `json:"measurement_capture_batch_version,omitempty"`
 	Diagnostics                   *pdDiagnostics           `json:"diagnostics,omitempty"`
 	FeedbackBinding               *pdFeedbackBinding       `json:"feedback_binding,omitempty"`
 	MeasurementToneCaptureVersion uint32                   `json:"measurement_tone_capture_version,omitempty"`
@@ -165,6 +166,11 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 		return result, errors.New("partial measurement tone configuration")
 	} else if _, present := fields["measurement_tone_capture_version"]; present {
 		return result, errors.New("partial measurement tone capture capability")
+	}
+	if _, present := fields["measurement_capture_batch_version"]; present {
+		if err = read("measurement_capture_batch_version", &result.CaptureBatchVersion); err != nil || result.CaptureBatchVersion != 1 || result.MeasurementToneConfig == nil {
+			return result, errors.New("invalid measurement batch capability")
+		}
 	}
 	if _, present := fields["limited_samples"]; present {
 		if err = read("limited_samples", &result.InputLimitedSamples); err != nil {

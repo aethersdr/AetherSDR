@@ -611,7 +611,14 @@ ADC headroom or calibrated output power.
    reports it. Older shims show **DAX IQ stream identity not reported**. The ID
    does not identify a DAX channel number or antenna. The measurement rejects
    a changed stream, or a changed acquisition generation between averaged frames.
-   Capture waits for the guarded tone interval and collects the selected frames. A cold
+   Capture waits for the guarded tone interval and collects the selected frames
+   consecutively on the radio. Once the complete batch is stored, the desktop
+   requests unkey before downloading the samples. Downloads have a separate
+   six-second limit and cannot extend transmission. Results require every
+   requested frame and confirmed release; stopping or losing the original
+   session discards unfinished downloads. This workflow requires the matching
+   batch-capable AetherPD shim; older shims cannot perform the measurement.
+   A cold
    correction fit can use most of the source window; capture waits within that
    eight-second window and reports a failure if enough qualified frames do not
    arrive. The independent helper initiates cleanup on its fixed timer;

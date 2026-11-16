@@ -1,0 +1,43 @@
+{
+  "checkpoint_utc": "2026-11-16T20:28:19.107909+00:00",
+  "status": "development_checkpoint_incomplete_validation",
+  "production_ready": false,
+  "installed_on_radio": false,
+  "implemented": [
+    "Desktop batch manifest/chunk parsing and capability negotiation.",
+    "Selected-average batch acquisition and early release request before IQ download.",
+    "Bounded download, cancellation, session and provenance checks.",
+    "Model/UI wiring, regression tests, native/shim batch capability advertisement and operator documentation."
+  ],
+  "validation": {
+    "build": "AetherSDR and five focused test targets build successfully.",
+    "native_to_http_fixture": "TestPDCaptureBatchNativePublicFixture passed; exported manifest plus 128 chunk fixtures.",
+    "final_focused_tests": {
+      "passed": [
+        "aetherpd_protocol_test (with native/public fixture)",
+        "aetherpd_capture_source_test",
+        "tx_linearity_controller_test"
+      ],
+      "failed": [
+        "aetherpd_dialog_test: AetherPD explicit controls and credential/window lifetime"
+      ]
+    },
+    "integration_test": "Started; not yet qualified at checkpoint. See checkpoint-ctest.log.",
+    "caution": "Earlier dialog pass used a binary preceding the final relink; final rebuilt failure is authoritative."
+  },
+  "remaining": [
+    "Diagnose rebuilt dialog test failure and finish tx_operation_integration_test.",
+    "Add focused native/shim/Qt batch-capability status validation tests.",
+    "Complete final native cross-builds, sanitizer/regression and documentation checks.",
+    "Package and install matching desktop/native/shim through ordinary authenticated workflow.",
+    "Qualify cold/warm batch acquisition, bounded unkey and complete-result publication on 8600.",
+    "Retain full P1-P10 plan: historical alignment/cold-bypass diagnosis, sustained/repeated RF, final faults/reboot/update/rollback, stock APD comparison, actual 6300 team qualification and independent release review."
+  ],
+  "constraints": [
+    "No RF or radio changes in this checkpoint turn.",
+    "LP-100A integration deferred by operator.",
+    "No issues filed or remote push."
+  ],
+  "evidence_directory": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/batch-desktop",
+  "production_plan": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/production-completion-plan-20261113.json"
+}
