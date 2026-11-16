@@ -1,0 +1,8 @@
+armv7 1024 False peak 38976512 decimal headroom 2023488
+armv7 1024 True peak 38953984 decimal headroom 2046016
+armv7 4096 False peak 39510016 decimal headroom 1489984
+armv7 4096 True peak 39419904 decimal headroom 1580096
+arm64 1024 False peak 37982208 decimal headroom 3017792
+arm64 1024 True peak 37959680 decimal headroom 3040320
+arm64 4096 False peak 38510592 decimal headroom 2489408
+arm64 4096 True peak 38420480 decimal headroom 2579520

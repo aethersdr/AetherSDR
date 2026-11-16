@@ -1,0 +1,112 @@
+{
+  "who": {
+    "agentName": "Codex AetherPD",
+    "automationIdentity": "aetherpd-shim-integration",
+    "guiClientId": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+    "guiClientIdTransient": true,
+    "label": "",
+    "name": "aetherpd-partial-release",
+    "ok": true,
+    "pid": 1365774,
+    "readOnly": false,
+    "socket": "/tmp/aetherpd-partial-release",
+    "station": "Codex AetherPD",
+    "txAllowed": true,
+    "version": "26.11.2"
+  },
+  "radio": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": null,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "transmit": {
+    "accTxDelay": 0,
+    "activeMicProfile": "Default",
+    "activeProfile": "Default",
+    "amCarrierLevel": 34,
+    "apdEnabled": false,
+    "atuEnabled": true,
+    "atuMemories": false,
+    "atuStatus": "manual_bypass",
+    "cwBreakIn": true,
+    "cwDelay": 41,
+    "cwIambic": true,
+    "cwIambicMode": 1,
+    "cwPitch": 600,
+    "cwSidetone": true,
+    "cwSpeed": 30,
+    "cwSwapPaddles": false,
+    "cwlEnabled": false,
+    "dax": false,
+    "dexp": false,
+    "dexpLevel": 50,
+    "maxPowerLevel": 10,
+    "micAcc": false,
+    "micBias": false,
+    "micBoost": false,
+    "micLevel": 80,
+    "micSelection": "PC",
+    "monGainCw": 80,
+    "monGainSb": 10,
+    "monPanCw": 50,
+    "monitor": false,
+    "mox": false,
+    "pttMicOverride": false,
+    "rfPower": 10,
+    "showTxInWaterfall": false,
+    "speechProc": false,
+    "speechProcLevel": 1,
+    "speechProcLevelMaximum": 2,
+    "transmitting": false,
+    "tunePower": 5,
+    "tuning": false,
+    "tx1Delay": 0,
+    "tx2Delay": 0,
+    "tx3Delay": 0,
+    "txDelay": 0,
+    "txFilterHigh": 4000,
+    "txFilterLow": 50,
+    "voxDelay": 5,
+    "voxEnable": false,
+    "voxLevel": 0
+  },
+  "status_client_exit": 0,
+  "shim": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  }
+}

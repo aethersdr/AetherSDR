@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T18:32:08.182469+00:00",
+  "updated_utc": "2026-11-16T18:43:18.083082+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Build exact signed runtime packages from the committed diagnostics source; deploy matching desktop before runtime, verify receive-only status/cleanup, then continue bounded cold/warm tone/speech and final-process faults. Preserve prior finite RF and stock evidence without extending its scope.",
+  "next_action": "Use installed diagnostics in bounded cold/warm 5W tone/speech and scheduling-fault tests, retaining event snapshots before stop. Qualify fa8dd7aec reboot/rollback and final-process failures; keep actual6300, sustained/stock workflow and release gates open.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Bounded native failure diagnostics now component-qualified through native, shim and desktop; package and install before continuing live startup/alignment and sustained RF qualification.",
+  "current_focus": "Committed diagnostics source fa8dd7aec installed through normal same-publisher desktop upgrade; two-path ARMv7/ARM64 runtime and full ARM64 update package reproduced, receive-only local IQ4/FDX-off and cleanup passed.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2896,22 +2896,22 @@
   },
   "ledger_note": "Earlier component entries are historical checkpoints. Use current_focus, next_action, current_delivery_status and their linked reports for the latest state; old remaining lists are not cumulative current blockers.",
   "current_delivery_status": {
-    "runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "desktop_source": "b1256a1657319360279029cabfcbcb647728b86a",
-    "runtime_report": "GUARDIAN-INSTALLED-QUALIFICATION.json",
+    "runtime_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
+    "desktop_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
+    "runtime_report": "DIAGNOSTICS-INSTALLED-QUALIFICATION.json",
     "desktop_reports": [
       "CAPTURE-DESKTOP-QUALIFICATION.json",
       "AUTHORIZATION-DEADLINE-QUALIFICATION.json",
       "TIMEOUT-CONTROL-QUALIFICATION.json",
       "POWER-CONTROL-QUALIFICATION.json"
     ],
-    "installed_runtime_source": "e8d68ad4bcfca1bf87f1d95b6c613cda17fac097",
-    "installed_state": "Runtime e8d68ad4b with desktop b1256a165; finite 5/10 W pairs and stock APD comparison passed with stated limits. Native session stopped and cleanup audited.",
+    "installed_runtime_source": "fa8dd7aecfe8e9e35a9e108bbd5f03481951093f",
+    "installed_state": "Runtime and desktop fa8dd7aec; authenticated update, local IQ receive and cleanup audited. Session stopped; no new candidate RF or reboot yet.",
     "latest_read_only_network_probe": {
-      "utc": "2026-11-16T17:19:41.305947+00:00",
+      "utc": "2026-11-16T18:43:18.083082+00:00",
       "address": "192.168.50.100",
       "radio_mutations": false,
-      "status": "final stopped API state and read-only exact-runtime/privilege/ARP audit passed"
+      "status": "post-update receive session stopped; exact runtime, privilege, identity and ARP audit passed"
     },
     "historical_failure_audit": "HISTORICAL-STARTUP-AUDIT.json",
     "pending_gates": [
@@ -3016,7 +3016,7 @@
       "first_install_arm64_complete": true,
       "first_install_armv7_complete": false
     },
-    "latest_live_report": "STOCK-CANDIDATE-QUALIFICATION.json",
+    "latest_live_report": "DIAGNOSTICS-INSTALLED-QUALIFICATION.json",
     "first_install_live": {
       "report": "FIRST-IQ-LIVE-QUALIFICATION.json",
       "normal_reboot_s": 44.172,
@@ -3215,7 +3215,8 @@
   "retained_diagnostics": {
     "report": "RETAINED-DIAGNOSTICS-QUALIFICATION.json",
     "component_qualified": true,
-    "installed": false,
-    "historical_failures_resolved": false
+    "installed": true,
+    "historical_failures_resolved": false,
+    "installed_report": "DIAGNOSTICS-INSTALLED-QUALIFICATION.json"
   }
 }
