@@ -94,6 +94,7 @@ void AetherPDCaptureSource::setSession(const QHostAddress& address, const QStrin
 {
     stop();
     m_measurementSourceId = 0;
+    m_measurementTones.reset();
     m_legacyCapture = m_sourceIdentitySupported = false;
     m_address = address;
     m_token = token;
@@ -105,11 +106,28 @@ void AetherPDCaptureSource::clearSession()
     setSession({}, {}, {});
 }
 
-bool AetherPDCaptureSource::setMeasurementSource(quint64 sourceId)
+bool AetherPDCaptureSource::setMeasurementSource(quint64 sourceId,
+                                                std::optional<aetherpd::MeasurementToneConfig> tones)
 {
-    if (QThread::currentThread() != thread() || m_running || !sourceId) { return false; }
+    if (QThread::currentThread() != thread() || m_running || !sourceId
+        || (tones && (!tones->valid() || tones->sourceId != sourceId))) { return false; }
     m_measurementSourceId = sourceId;
+    m_measurementTones = tones;
     return true;
+}
+
+aetherpd::Request AetherPDCaptureSource::beginRequest() const
+{
+    return m_measurementTones ? aetherpd::captureBeginWithTonesRequest()
+                              : aetherpd::captureBeginRequest(!m_legacyCapture);
+}
+
+bool AetherPDCaptureSource::tonesMatch(const std::optional<aetherpd::MeasurementToneConfig>& observed) const
+{
+    // Missing configuration is the legacy fixed pair. Once confirmed, a profile
+    // must survive status, receive readiness and every transmitted snapshot.
+    return m_measurementTones ? observed == m_measurementTones
+                             : !observed || observed->spacingHz == aetherpd::kDefaultToneSpacingHz;
 }
 
 bool AetherPDCaptureSource::sessionCurrent() const
@@ -185,7 +203,7 @@ void AetherPDCaptureSource::beginCapture()
     m_waitingForTones = m_measurementSourceId && !m_checkingReady;
     m_captureBudgetMs = m_waitingForTones ? kMeasurementCaptureTimeoutMs : kCaptureTimeoutMs;
     m_deadline.start(m_captureBudgetMs);
-    send(m_waitingForTones ? *aetherpd::request(aetherpd::Operation::Status) : aetherpd::captureBeginRequest(!m_legacyCapture));
+    send(m_waitingForTones ? *aetherpd::request(aetherpd::Operation::Status) : beginRequest());
 }
 
 void AetherPDCaptureSource::send(const aetherpd::Request& descriptor, int chunk)
@@ -251,7 +269,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     const QByteArray body = reply->read(kMaxReplyBytes + 1);
     const int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (body.size() <= kMaxReplyBytes && !m_manifest && !m_waitingForTones
-        && !m_legacyCapture && !m_sourceIdentitySupported && chunk < 0
+        && !m_measurementTones && !m_legacyCapture && !m_sourceIdentitySupported && chunk < 0
         && reply->url().path() == QStringLiteral("/v2/aetherpd/capture") && (code == 404 || code == 501)) {
         // Only explicit version absence permits legacy capture, within the
         // original deadline. A previously observed identity cannot disappear.
@@ -267,6 +285,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
         const std::optional<aetherpd::Status> observed = aetherpd::parseStatus(body);
         if (!observed || !observed->available || !observed->registered
             || !observed->measurement || observed->measurement->sourceId != m_measurementSourceId
+            || !tonesMatch(observed->measurementToneConfig)
             || (observed->calibrationState != aetherpd::CalibrationState::Running
                 && observed->calibrationState != aetherpd::CalibrationState::Armed)) {
             fail("Measurement source changed or ended before capture"); return;
@@ -280,12 +299,13 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
             return;
         }
         m_waitingForTones = false;
-        send(aetherpd::captureBeginRequest(!m_legacyCapture));
+        send(beginRequest());
         return;
     }
     if (!m_manifest) {
         m_manifest = aetherpd::parseCaptureManifest(body);
         if (!m_manifest || m_manifest->keyed != !m_checkingReady || m_manifest->sampleRateHz != m_config.sampleRateHz
+            || !tonesMatch(m_manifest->measurementToneConfig)
             || m_manifest->source.has_value() == m_legacyCapture
             || (m_verifiedReceiveSource && (!m_manifest->source
                 || m_verifiedReceiveSource->streamId != m_manifest->source->streamId))
@@ -332,6 +352,10 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
         frame.sourceStream = CaptureStreamIdentity{m_manifest->source->streamId, m_manifest->source->generation};
     }
     frame.correctionActive = m_manifest->correcting;
+    if (m_manifest->measurementToneConfig) {
+        const aetherpd::MeasurementToneConfig& tones = *m_manifest->measurementToneConfig;
+        frame.sourceTones = CaptureToneProfile{tones.sourceId, tones.lowerOffsetHz(), tones.upperOffsetHz()};
+    }
     frame.clippingKnown = false;
     frame.feedback.reserve(aetherpd::kCaptureSamples);
     const char* samples = m_bytes.data();

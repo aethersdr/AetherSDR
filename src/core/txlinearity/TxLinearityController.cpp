@@ -87,7 +87,7 @@ bool TxLinearityController::validConfig(const LinearityRunConfig& config, const 
     const CaptureConfig& capture = config.capture;
     const std::int64_t guards = std::int64_t(capture.settleMsAfterKey) + capture.settleMsBeforeUnkey;
     const double halfRate = capture.sampleRateHz / 2;
-    return capture.frameSamples == 16384 && std::isfinite(capture.sampleRateHz)
+    const bool bounded = capture.frameSamples == 16384 && std::isfinite(capture.sampleRateHz)
         && capture.sampleRateHz > 0 && capture.sampleRateHz <= 192000
         && std::isfinite(capture.centerFreqHz) && capture.centerFreqHz > 0
         && capture.settleMsAfterKey >= 0 && capture.settleMsBeforeUnkey >= 0
@@ -97,6 +97,7 @@ bool TxLinearityController::validConfig(const LinearityRunConfig& config, const 
         && (config.window == WindowKind::BlackmanHarris7 || config.window == WindowKind::BlackmanHarris4
             || config.window == WindowKind::Hann || config.window == WindowKind::FlatTop)
         && std::isfinite(config.maxForwardWatts) && config.maxForwardWatts > 0
+        && (request.maxOrder == 3 || request.maxOrder == 5 || request.maxOrder == 7)
         && config.imd.maxOrder == request.maxOrder
         && std::isfinite(request.tone1Hz) && std::isfinite(request.tone2Hz)
         && std::abs(request.tone1Hz - capture.centerFreqHz) < halfRate
@@ -108,6 +109,20 @@ bool TxLinearityController::validConfig(const LinearityRunConfig& config, const 
         && std::isfinite(config.imd.shoulderBandwidthHz) && config.imd.shoulderBandwidthHz > 0
         && std::isfinite(config.imd.acprGapHz) && config.imd.acprGapHz >= 0
         && std::isfinite(config.imd.acprBandwidthHz) && config.imd.acprBandwidthHz > 0;
+    if (!bounded) { return false; }
+    const double binHz = capture.sampleRateHz / capture.frameSamples;
+    const double lobeBins = makeWindow(config.window, 2).mainLobeHalfBins;
+    const double lower = std::min(request.tone1Hz, request.tone2Hz) - capture.centerFreqHz;
+    const double upper = std::max(request.tone1Hz, request.tone2Hz) - capture.centerFreqHz;
+    const double spacing = upper - lower;
+    const double products = double(request.maxOrder - 1) / 2 * spacing;
+    // Reject before RF if a requested product would be truncated, or a tone's
+    // main lobe overlaps the DC exclusion used by the peak search.
+    return spacing >= 2 * lobeBins * binHz
+        && std::abs(lower) > (config.imd.dcNotchBins + lobeBins) * binHz
+        && std::abs(upper) > (config.imd.dcNotchBins + lobeBins) * binHz
+        && lower - products > -halfRate + lobeBins * binHz
+        && upper + products < halfRate - lobeBins * binHz;
 }
 
 bool TxLinearityController::prepare(const LinearityRunConfig& config, const RunRequest& request)
@@ -254,10 +269,15 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
         || !std::isfinite(frame.centerFreqHz) || std::abs(frame.centerFreqHz - m_config.capture.centerFreqHz) > 0.5
         || frame.sourceCaptureId.empty() || frame.sourceCaptureId.size() > 128 || frame.timestampNs == 0
         || (frame.sourceStream && (!frame.sourceStream->streamId || !frame.sourceStream->generation))
+        || (frame.sourceTones && (!frame.sourceTones->sourceId
+            || !std::isfinite(frame.sourceTones->lowerOffsetHz) || !std::isfinite(frame.sourceTones->upperOffsetHz)
+            || std::abs(frame.sourceTones->lowerOffsetHz - (std::min(m_request.tone1Hz, m_request.tone2Hz) - m_config.capture.centerFreqHz)) > 1e-6
+            || std::abs(frame.sourceTones->upperOffsetHz - (std::max(m_request.tone1Hz, m_request.tone2Hz) - m_config.capture.centerFreqHz)) > 1e-6))
         || (m_config.expectedCorrection && frame.correctionActive != m_config.expectedCorrection)
         || (!m_frames.empty() && (frame.timestampNs <= m_frames.back().timestampNs
             || frame.correctionActive != m_frames.front().correctionActive
-            || frame.sourceStream != m_frames.front().sourceStream))
+            || frame.sourceStream != m_frames.front().sourceStream
+            || frame.sourceTones != m_frames.front().sourceTones))
         || std::any_of(m_frames.begin(), m_frames.end(), [&](const CaptureFrame& old) { return old.sourceCaptureId == frame.sourceCaptureId; })
         || std::any_of(frame.feedback.begin(), frame.feedback.end(), [](const std::complex<float>& value) {
             return !std::isfinite(value.real()) || !std::isfinite(value.imag());
@@ -271,6 +291,7 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
     stored.timestampNs = frame.timestampNs;
     stored.sourceCaptureId = frame.sourceCaptureId;
     stored.sourceStream = frame.sourceStream;
+    stored.sourceTones = frame.sourceTones;
     stored.correctionActive = frame.correctionActive;
     stored.clipped = frame.clipped;
     stored.clippingKnown = frame.clippingKnown;
@@ -345,7 +366,7 @@ void TxLinearityController::complete()
             if (!analyzer.accumulate(frame.feedback)) { result.error = "Spectrum analysis rejected capture"; break; }
             clipped |= frame.clipped;
             clippingKnown &= frame.clippingKnown;
-            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs, std::move(frame.feedback), frame.sourceStream});
+            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs, std::move(frame.feedback), frame.sourceStream, frame.sourceTones});
         }
         if (result.error.empty()) {
             result.correctionActive = m_frames.front().correctionActive;

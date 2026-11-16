@@ -27,7 +27,8 @@ public:
 
     void setSession(const QHostAddress& address, const QString& token, std::function<bool()> current);
     void clearSession();
-    bool setMeasurementSource(quint64 sourceId);
+    bool setMeasurementSource(quint64 sourceId,
+                              std::optional<aetherpd::MeasurementToneConfig> tones = std::nullopt);
     bool start(const CaptureConfig& config) override;
     void stop() override;
     bool checkReceiveReady(ReadyCallback ready) override;
@@ -47,6 +48,8 @@ private:
     void fail(const std::string& reason);
     void captureTimeout();
     bool sessionCurrent() const;
+    aetherpd::Request beginRequest() const;
+    bool tonesMatch(const std::optional<aetherpd::MeasurementToneConfig>& observed) const;
 
     QNetworkAccessManager m_ownedNetwork;
     QPointer<QNetworkAccessManager> m_network;
@@ -75,5 +78,6 @@ private:
     bool m_legacyCapture{false};
     bool m_sourceIdentitySupported{false};
     quint64 m_measurementSourceId{0};
+    std::optional<aetherpd::MeasurementToneConfig> m_measurementTones;
 };
 } // namespace AetherSDR::txlin

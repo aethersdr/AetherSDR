@@ -177,21 +177,43 @@ std::optional<CalibrationState> calibrationState(const QJsonValue& value)
     return std::nullopt;
 }
 
-std::optional<MeasurementSource> measurementSource(const QJsonValue& value)
+std::optional<quint64> measurementId(const QJsonValue& value)
 {
-    if (!value.isObject()) { return std::nullopt; }
-    const QJsonObject o = value.toObject();
-    if (o.size() != 2 || !o.value(QStringLiteral("source_id")).isString()) { return std::nullopt; }
-    const QString id = o.value(QStringLiteral("source_id")).toString();
+    if (!value.isString()) { return std::nullopt; }
+    const QString id = value.toString();
     if (id.size() != 16) { return std::nullopt; }
     for (const QChar c : id) {
         if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return std::nullopt; }
     }
     bool valid = false;
-    MeasurementSource result;
-    result.sourceId = id.toULongLong(&valid, 16);
-    if (!valid || !boolean(o, "tones", result.tones) || (result.tones && !result.sourceId)) { return std::nullopt; }
+    const quint64 result = id.toULongLong(&valid, 16);
+    return valid ? std::optional<quint64>(result) : std::nullopt;
+}
+
+std::optional<MeasurementSource> measurementSource(const QJsonValue& value)
+{
+    if (!value.isObject()) { return std::nullopt; }
+    const QJsonObject o = value.toObject();
+    const std::optional<quint64> id = measurementId(o.value(QStringLiteral("source_id")));
+    if (o.size() != 2 || !id) { return std::nullopt; }
+    MeasurementSource result{*id, false};
+    if (!boolean(o, "tones", result.tones) || (result.tones && !result.sourceId)) { return std::nullopt; }
     return result;
+}
+
+std::optional<MeasurementToneConfig> toneConfig(const QJsonValue& value)
+{
+    if (!value.isObject()) { return std::nullopt; }
+    const QJsonObject o = value.toObject();
+    const std::optional<quint64> id = measurementId(o.value(QStringLiteral("source_id")));
+    quint64 minimum = 0, maximum = 0, center = 0, spacing = 0;
+    if (o.size() != 5 || !id || !counter(o, "min_spacing_hz", minimum) || minimum != kMinToneSpacingHz
+        || !counter(o, "max_spacing_hz", maximum) || maximum != kMaxToneSpacingHz
+        || !counter(o, "center_hz", center) || center != quint64(kToneCenterHz)
+        || !counter(o, "spacing_hz", spacing) || spacing < kMinToneSpacingHz || spacing > kMaxToneSpacingHz) {
+        return std::nullopt;
+    }
+    return MeasurementToneConfig{*id, quint32(spacing)};
 }
 
 bool consistent(const Status& s)
@@ -228,6 +250,11 @@ bool consistent(const Status& s)
 }
 } // namespace
 
+bool MeasurementToneConfig::valid() const
+{
+    return spacingHz >= kMinToneSpacingHz && spacingHz <= kMaxToneSpacingHz;
+}
+
 bool Faults::any() const
 {
     return dispatchDeadlines != 0 || sendErrors != 0 || rejectedInput != 0 || staleIq != 0;
@@ -247,6 +274,17 @@ std::optional<Request> request(Operation operation)
     case Operation::Start: return Request{"POST", QStringLiteral("/v1/aetherpd/start"), 22'000};
     }
     return std::nullopt;
+}
+
+Request measurementToneRequest()
+{
+    return {"POST", QStringLiteral("/v2/aetherpd/measurement/arm"), 8'000};
+}
+
+std::optional<QByteArray> measurementToneBody(quint32 spacingHz)
+{
+    if (spacingHz < kMinToneSpacingHz || spacingHz > kMaxToneSpacingHz) { return std::nullopt; }
+    return QJsonDocument(QJsonObject{{QStringLiteral("spacing_hz"), qint64(spacingHz)}}).toJson(QJsonDocument::Compact);
 }
 
 std::optional<QByteArray> startBody(const StartIdentity& identity)
@@ -289,6 +327,7 @@ std::optional<Status> parseStatus(const QByteArray& json)
         QStringLiteral("calibration_required"), QStringLiteral("calibration_control"),
         QStringLiteral("calibration_state"), QStringLiteral("calibration_samples_left"),
         QStringLiteral("measurement_control"), QStringLiteral("source_purpose"), QStringLiteral("measurement"),
+        QStringLiteral("measurement_tone_control"), QStringLiteral("measurement_tone_capture_version"), QStringLiteral("measurement_tone_config"),
         QStringLiteral("input_limited_samples"), QStringLiteral("faults")};
     for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
         if (!known.contains(it.key())) { return std::nullopt; }
@@ -332,6 +371,16 @@ std::optional<Status> parseStatus(const QByteArray& json)
         s.measurement = measurementSource(o.value(QStringLiteral("measurement")));
         if (!s.measurement) { return std::nullopt; }
     }
+    if (o.contains(QStringLiteral("measurement_tone_config"))) {
+        s.measurementToneConfig = toneConfig(o.value(QStringLiteral("measurement_tone_config")));
+        quint64 version = 0;
+        if (!s.measurementToneConfig || !counter(o, "measurement_tone_capture_version", version) || version != 3
+            || !s.measurement || s.measurement->sourceId != s.measurementToneConfig->sourceId
+            || (o.contains(QStringLiteral("measurement_tone_control"))
+                && !boolean(o, "measurement_tone_control", s.measurementToneControl))
+            || (s.measurementToneControl && !s.measurementControl)) { return std::nullopt; }
+    } else if (o.contains(QStringLiteral("measurement_tone_control"))
+               || o.contains(QStringLiteral("measurement_tone_capture_version"))) { return std::nullopt; }
     return consistent(s) ? std::optional<Status>(s) : std::nullopt;
 }
 
@@ -376,6 +425,11 @@ Request captureBeginRequest(bool withSourceIdentity)
     return {"POST", withSourceIdentity ? QStringLiteral("/v2/aetherpd/capture") : QStringLiteral("/v1/aetherpd/capture"), 4000};
 }
 
+Request captureBeginWithTonesRequest()
+{
+    return {"POST", QStringLiteral("/v3/aetherpd/capture"), 4000};
+}
+
 std::optional<Request> captureChunkRequest(const CaptureManifest& manifest, int chunk)
 {
     if (!captureIdValid(manifest.captureId) || chunk < 0 || chunk >= kCaptureSamples / kCaptureChunkSamples) {
@@ -389,7 +443,8 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
     if (json.size() > 2048) { return std::nullopt; }
     const std::optional<QJsonObject> parsed = object(json);
     if (!parsed || parsed->size() != 10 + int(parsed->contains(QStringLiteral("measurement")))
-        + int(parsed->contains(QStringLiteral("source")))) { return std::nullopt; }
+        + int(parsed->contains(QStringLiteral("source")))
+        + int(parsed->contains(QStringLiteral("measurement_tone_config")))) { return std::nullopt; }
     const QJsonObject& o = *parsed;
     CaptureManifest m;
     m.captureId = o.value(QStringLiteral("capture_id")).toString();
@@ -422,6 +477,11 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
             return std::nullopt;
         }
         m.source = CaptureSourceIdentity{quint32(stream), generation};
+    }
+    if (o.contains(QStringLiteral("measurement_tone_config"))) {
+        m.measurementToneConfig = toneConfig(o.value(QStringLiteral("measurement_tone_config")));
+        if (!m.measurementToneConfig || !m.measurement || !m.source || !m.measurementToneConfig->sourceId
+            || m.measurementToneConfig->sourceId != m.measurement->sourceId) { return std::nullopt; }
     }
     m.sampleRateHz = quint32(rate);
     return m;

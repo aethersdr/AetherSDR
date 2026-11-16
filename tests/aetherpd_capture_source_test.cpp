@@ -412,6 +412,63 @@ int main(int argc, char** argv)
         completeCapture(network); QCoreApplication::processEvents();
         ok &= check(!source && frames == 1 && errors == 0 && network.sent.size() == 33, "callback destruction revived source");
     }
+    for (int fault = 0; fault <= 6; ++fault) {
+        Network network;
+        AetherPDCaptureSource source(network); int frames = 0, errors = 0, ready = 0;
+        std::optional<AetherSDR::txlin::CaptureToneProfile> capturedTones;
+        source.setFrameCallback([&](const CaptureFrame& frame) { ++frames; capturedTones = frame.sourceTones; });
+        source.setErrorCallback([&](const std::string&) { ++errors; });
+        source.setSession(QHostAddress(QStringLiteral("192.168.50.100")), kToken, [] { return true; });
+        ok &= check(!source.setMeasurementSource(31, AetherSDR::aetherpd::MeasurementToneConfig{32, 1001}),
+            "bound a profile from a different source");
+        ok &= check(source.setMeasurementSource(31, AetherSDR::aetherpd::MeasurementToneConfig{31, 1001})
+            && source.start(config()) && source.checkReceiveReady([&] { ++ready; }), "configured receive check refused");
+        ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v3/aetherpd/capture"),
+            "configured capture used a legacy endpoint");
+        if (fault == 0) {
+            network.last->complete(501, "{}");
+            ok &= check(errors == 1 && ready == 0 && network.sent.size() == 1, "configured capture fell back after version refusal");
+            continue;
+        }
+        const QJsonObject profile{{"source_id", "000000000000001f"}, {"min_spacing_hz", 200},
+            {"max_spacing_hz", 10000}, {"center_hz", 1305}, {"spacing_hz", 1001}};
+        QJsonObject received = receiveManifest();
+        received["measurement"] = QJsonObject{{"source_id", "000000000000001f"}, {"tones", false}};
+        if (fault != 1) { received["measurement_tone_config"] = profile; }
+        if (fault == 2) { QJsonObject changed = profile; changed["spacing_hz"] = 1190; received["measurement_tone_config"] = changed; }
+        network.last->complete(200, encode(received));
+        if (fault <= 2) { ok &= check(errors == 1 && ready == 0, "receive readiness accepted missing or changed tones"); continue; }
+        for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
+        ok &= check(ready == 1 && frames == 0 && errors == 0, "configured receive check did not finish without TX");
+        source.setGateOpen(true);
+        QJsonObject status{{"available", true}, {"registered", true}, {"keyed", true},
+            {"correction_enabled", true}, {"correcting", false}, {"state", "calibrating"},
+            {"calibration_required", false}, {"calibration_control", true}, {"calibration_state", "running"},
+            {"calibration_samples_left", 90000}, {"input_limited_samples", 0},
+            {"measurement_control", true}, {"source_purpose", "measurement"},
+            {"measurement", QJsonObject{{"source_id", "000000000000001f"}, {"tones", true}}},
+            {"faults", QJsonObject{{"dispatch_deadlines",0},{"send_errors",0},{"rejected_input",0},{"stale_iq",0}}}};
+        if (fault != 3) {
+            status["measurement_tone_control"] = true; status["measurement_tone_capture_version"] = 3;
+            QJsonObject observed = profile;
+            if (fault == 4) { observed["spacing_hz"] = 1190; }
+            status["measurement_tone_config"] = observed;
+        }
+        network.last->complete(200, encode(status));
+        if (fault <= 4) { ok &= check(errors == 1 && frames == 0, "tone observation allowed profile loss or replacement"); continue; }
+        QJsonObject captured = manifest();
+        captured["measurement"] = status["measurement"];
+        QJsonObject observed = profile;
+        if (fault == 5) { observed["spacing_hz"] = 1190; }
+        captured["measurement_tone_config"] = observed;
+        network.last->complete(200, encode(captured));
+        if (fault == 5) { ok &= check(errors == 1 && frames == 0, "capture accepted changed profile after good status"); continue; }
+        for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
+        ok &= check(errors == 0 && frames == 1 && capturedTones && capturedTones->sourceId == 31
+            && capturedTones->lowerOffsetHz == 804.5 && capturedTones->upperOffsetHz == 1805.5,
+            "configured capture lost observed source or half-Hz offsets");
+        source.stop();
+    }
     for (int fault = 0; fault < 4; ++fault) {
         Network network;
         AetherPDCaptureSource source(network); int frames = 0, errors = 0;

@@ -1,0 +1,133 @@
+{
+  "updated_utc": "2026-11-16T13:42:38.520119+00:00",
+  "status": "desktop_core_and_composed_workflow_qualified_offline",
+  "production_ready": false,
+  "installed": false,
+  "source_base": "687cf166cec8dd22afb07456fe391fc8fa0b1340",
+  "evidence": "evidence20261116-tone-desktop",
+  "implemented": [
+    "Strict native/shim configured-tone status and capture parsing, preserving half-Hz, zero and negative carrier-relative offsets; partial, mismatched, duplicate or unsupported configurations are refused.",
+    "Explicit configured arm in client/session model requires fresh advertised capability and never falls back to a different tone pair; receipt is not observed state.",
+    "Capture binds the observed source/profile before receive readiness. V3 is mandatory for confirmed configurations with no downgrade on404/501, and matching profile is required in status and each immutable frame. Legacy status retains the documented default pair.",
+    "Measurement preparation derives frequencies from observed source state. Profile changes invalidate the original preparation.",
+    "Controller retains per-frame source/profile through release and analysis; missing/changing metadata or offsets different from the authorized frequencies retire the original TX lease.",
+    "Before receive readiness or TX, refuse a highest-order IMD product outside the IQ bandwidth with its main-lobe margin, or a fundamental overlapping the DC exclusion. Validate order before span arithmetic.",
+    "JSON and CSV preserve captured source IDs and both offsets; result summary, PNG caption/metadata and accessibility retain the captured offsets."
+  ],
+  "validation": {
+    "linux_application_built": true,
+    "registered_tests_pass": 7,
+    "registered_tests": [
+      "aetherpd_protocol_test",
+      "aetherpd_client_test",
+      "aetherpd_model_test",
+      "aetherpd_capture_source_test",
+      "tx_linearity_controller_test",
+      "aetherpd_dialog_test",
+      "tx_operation_integration_test"
+    ],
+    "final_ctest_seconds": 21.54,
+    "address_undefined_leak_sanitizers": {
+      "aetherpd_protocol_test": 0,
+      "aetherpd_client_test": 0,
+      "aetherpd_model_test": 0,
+      "aetherpd_capture_source_test": 0,
+      "tx_linearity_controller_test": 0
+    },
+    "native_c_go_qt_profiles": [
+      {
+        "spacing_hz": 200,
+        "exit": 0,
+        "manifest_sha256": "e7213b620e098fda553c3218452e8cc067159f1f8dd5d9ac0f1495701bc9075a"
+      },
+      {
+        "spacing_hz": 1001,
+        "exit": 0,
+        "manifest_sha256": "671179e1dfb564f12646c570a5c8277945f79a745ca2df8110bea9a197dea455"
+      },
+      {
+        "spacing_hz": 1190,
+        "exit": 0,
+        "manifest_sha256": "213789043cdc18a6264bb78cace3a9a94caf17d593c45c3d4ff19fa0b24b0f79"
+      },
+      {
+        "spacing_hz": 2610,
+        "exit": 0,
+        "manifest_sha256": "dfd62dace743f88e5174a2fb9aee9fdeea22f9365f2956a11c9f78e725cd45d0"
+      },
+      {
+        "spacing_hz": 10000,
+        "exit": 0,
+        "manifest_sha256": "3bfdebe28016427a41931a3bdbb94b9490b302b16b0bb5f737010582038da0b8"
+      }
+    ],
+    "composed_fixture": {
+      "tone_offsets_hz": [
+        804.5,
+        1805.5
+      ],
+      "imd3_expected_dbc_per_tone": -40,
+      "tolerance_db": 0.1,
+      "release_required_before_export": true,
+      "real_rf": false
+    },
+    "png": "spectrum.png; inspected900x360 with captured offsets legible",
+    "mutations": [
+      {
+        "mutation": "profile-match",
+        "caught": true,
+        "exit": 1,
+        "assertion": "receive readiness accepted missing or changed tones",
+        "restored_source_sha256": "1b7efce505fbddb74c336688cbd846cf1f4624bf980da47f79d146212a89a630"
+      },
+      {
+        "mutation": "product-bandwidth",
+        "caught": true,
+        "exit": 1,
+        "assertion": "requested IMD products outside IQ bandwidth admitted or valid order refused",
+        "restored_source_sha256": "44f319101ef2f22e179ce478be761d960353dbd0ecfed6acc14dbb01937ef469"
+      }
+    ],
+    "docs_build": true,
+    "test_registration_strict": true,
+    "engine_boundary_blocking_findings": 0,
+    "exact_half_hz_preparation_followup": {
+      "passed": true,
+      "ctest_seconds": 9.82,
+      "rejects_rounded_tones_before_receive_or_tx": true
+    }
+  },
+  "qualification_notes": [
+    "First composed test run failed only its next-arm cooldown assertion because the added fixture changed measurement.source_id without changing the tone-profile source_id. The parser correctly refused the inconsistent fixture; corrected identity and final full regression passed.",
+    "Ten-kHz spacing is representable and fits IMD3 at48kHz IQ. IMD5/7 do not fit and are refused before keying. Native2610Hz spacing produces a DC lower tone; transport accepts that truthful metadata, while this analyzer refuses to measure a fundamental overlapping DC leakage.",
+    "PNG fixture tests generic captured offsets -1000/+1000; half-Hz native-profile provenance is independently tested through native/Go/Qt, capture adapter and composed measurement/export."
+  ],
+  "radio": {
+    "utc": "2026-11-16T13:38:45.679724+00:00",
+    "checks": [
+      {
+        "port": 4992,
+        "connected": false,
+        "error": "[Errno 113] No route to host"
+      },
+      {
+        "port": 48992,
+        "connected": false,
+        "error": "[Errno 113] No route to host"
+      },
+      {
+        "port": 22222,
+        "connected": false,
+        "error": "[Errno 113] No route to host"
+      }
+    ],
+    "commands_sent": false
+  },
+  "remaining": [
+    "Add the operator tone-spacing selector and capability/readback behavior; existing Arm measurement source button still requests the default pair.",
+    "Give actionable preflight feedback for selected spacing, order and DC exclusion; retain explicit arm/key separation.",
+    "Finish DAX IQ channel/pan ownership contract and the rest of PR4770.",
+    "Refresh reproducible authenticated packages and final disk budget; install and qualify on the8600 once it returns.",
+    "Complete fullP1-P10 gates: reboot/process-graph qualification, natural alignment/cold-start diagnosis, repeated RF/stockAPD comparison, actual6300 and independent release checks."
+  ]
+}

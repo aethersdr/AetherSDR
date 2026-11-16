@@ -28,7 +28,8 @@ public:
 
     void setRadioAddress(const QHostAddress& address);
     bool submit(aetherpd::Operation operation, const QString& adminToken,
-                std::optional<aetherpd::StartIdentity> identity = std::nullopt);
+                std::optional<aetherpd::StartIdentity> identity = std::nullopt,
+                std::optional<quint32> toneSpacingHz = std::nullopt);
     void cancelPending();
     bool busy() const { return !m_reply.isNull(); }
 

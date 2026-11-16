@@ -74,6 +74,13 @@ struct CaptureStreamIdentity {
     bool operator==(const CaptureStreamIdentity&) const = default;
 };
 
+struct CaptureToneProfile {
+    std::uint64_t sourceId = 0;
+    double lowerOffsetHz = 0;
+    double upperOffsetHz = 0;
+    bool operator==(const CaptureToneProfile&) const = default;
+};
+
 // One contiguous capture frame handed from the source to the analyzer.
 //
 // `reference` is engaged only when the capture source supplies an ideal TX
@@ -99,6 +106,7 @@ struct CaptureFrame {
     std::optional<bool> correctionActive;
     // Optional, scoped to the original capture process; never inferred from settings.
     std::optional<CaptureStreamIdentity> sourceStream;
+    std::optional<CaptureToneProfile> sourceTones;
 };
 
 // ── Measurement results ─────────────────────────────────────────────────────

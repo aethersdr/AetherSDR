@@ -105,6 +105,7 @@ bool AetherPDMeasurementModel::current() const
     const bool retiring = m_controller && (state() == State::Releasing || state() == State::Analyzing);
     return source && source->measurement && m_measurementSourceId
         && source->measurement->sourceId == m_measurementSourceId
+        && source->measurementToneConfig == m_measurementTones
         && source->sourcePurpose == aetherpd::SourcePurpose::Measurement
         && (source->calibrationState == aetherpd::CalibrationState::Armed
             || source->calibrationState == aetherpd::CalibrationState::Running || retiring)
@@ -174,13 +175,15 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
         || !m_radio->controlSessionCurrent(session) || m_radio->fullDuplexEnabled()
         || (m_injectedNetwork && (!m_network || m_network->thread() != thread()))) { return false; }
     const std::optional<aetherpd::Status> source = m_radio->aetherPDModel().status();
+    const aetherpd::MeasurementToneConfig tones = source && source->measurementToneConfig
+        ? *source->measurementToneConfig : aetherpd::MeasurementToneConfig{};
     if (!source || !source->measurementControl || !source->measurement || !source->measurement->sourceId
         || source->sourcePurpose != aetherpd::SourcePurpose::Measurement || source->keyed
         || source->calibrationState != aetherpd::CalibrationState::Armed
         || !AetherPDMeasurementSettings::validTimeout(config.timeoutMs)
         || config.capture.sampleRateHz != 48000
-        || std::abs(request.tone1Hz - (config.capture.centerFreqHz + 710)) > 0.5
-        || std::abs(request.tone2Hz - (config.capture.centerFreqHz + 1900)) > 0.5
+        || std::abs(request.tone1Hz - (config.capture.centerFreqHz + tones.lowerOffsetHz())) > 1e-6
+        || std::abs(request.tone2Hz - (config.capture.centerFreqHz + tones.upperOffsetHz())) > 1e-6
         || !std::any_of(request.allocations.begin(), request.allocations.end(), [&](const txlin::AllocationRange& band) {
             return band.lowHz <= config.capture.centerFreqHz - 4500 && band.highHz >= config.capture.centerFreqHz + 7500;
         })) { return false; }
@@ -194,7 +197,7 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
         return false;
     }
     const std::function<bool()> bound = m_radio->bindAetherPDCapture(session, *m_capture);
-    if (!bound || !m_capture->setMeasurementSource(source->measurement->sourceId)) { return false; }
+    if (!bound || !m_capture->setMeasurementSource(source->measurement->sourceId, source->measurementToneConfig)) { return false; }
     const quint64 generation = ++m_generation;
     for (const QMetaObject::Connection& connection : m_stationConnections) { disconnect(connection); }
     m_stationConnections = {
@@ -207,6 +210,7 @@ bool AetherPDMeasurementModel::prepare(const RadioControlSession& session,
     m_session = session;
     m_current = bound;
     m_measurementSourceId = source->measurement->sourceId;
+    m_measurementTones = source->measurementToneConfig;
     m_slice = slice;
     m_frequencyMHz = slice->frequency();
     m_mode = slice->mode();
@@ -245,8 +249,9 @@ bool AetherPDMeasurementModel::prepareCurrent(const RadioControlSession& session
     config.expectedCorrection = source->correctionEnabled;
     txlin::RunRequest request;
     request.maxOrder = preferences.values.maxOrder;
-    request.tone1Hz = config.capture.centerFreqHz + 710;
-    request.tone2Hz = config.capture.centerFreqHz + 1900;
+    const aetherpd::MeasurementToneConfig tones = source->measurementToneConfig.value_or(aetherpd::MeasurementToneConfig{});
+    request.tone1Hz = config.capture.centerFreqHz + tones.lowerOffsetHz();
+    request.tone2Hz = config.capture.centerFreqHz + tones.upperOffsetHz();
     const QString planName = AppSettings::instance().value("BandPlanName", "ARRL (US)").toString();
     BandPlanManager plan;
     plan.loadPlans();
@@ -288,10 +293,14 @@ QByteArray AetherPDMeasurementModel::exportResultCsv() const
 
 QString AetherPDMeasurementModel::Result::sourceSummary() const
 {
-    if (measurement.captures.empty() || !measurement.captures.front().sourceStream) {
-        return tr("DAX IQ stream identity not reported");
+    QString description = measurement.captures.empty() || !measurement.captures.front().sourceStream
+        ? tr("DAX IQ stream identity not reported")
+        : tr("DAX IQ stream 0x%1").arg(measurement.captures.front().sourceStream->streamId, 8, 16, QLatin1Char('0'));
+    if (!measurement.captures.empty() && measurement.captures.front().sourceTones) {
+        const txlin::CaptureToneProfile& tones = *measurement.captures.front().sourceTones;
+        description += tr(" · captured tone offsets %1/%2 Hz").arg(tones.lowerOffsetHz, 0, 'f', 1).arg(tones.upperOffsetHz, 0, 'f', 1);
     }
-    return tr("DAX IQ stream 0x%1").arg(measurement.captures.front().sourceStream->streamId, 8, 16, QLatin1Char('0'));
+    return description;
 }
 
 QByteArray AetherPDMeasurementModel::Result::toCsv() const
@@ -340,6 +349,11 @@ QByteArray AetherPDMeasurementModel::Result::toCsv() const
         row(QStringLiteral("Capture IQ stream ID"), stamp.sourceStream
             ? QStringLiteral("0x%1").arg(stamp.sourceStream->streamId, 8, 16, QLatin1Char('0')) : QString{},
             {}, id, stamp.sourceStream ? QStringLiteral("reported") : QStringLiteral("unknown"));
+        row(QStringLiteral("Capture tone source ID"), stamp.sourceTones
+            ? QStringLiteral("%1").arg(stamp.sourceTones->sourceId, 16, 16, QLatin1Char('0')) : QString{},
+            {}, id, stamp.sourceTones ? QStringLiteral("reported") : QStringLiteral("legacy fixed pair"));
+        row(QStringLiteral("Capture lower tone offset"), stamp.sourceTones ? number(stamp.sourceTones->lowerOffsetHz) : QString{}, QStringLiteral("Hz"), id);
+        row(QStringLiteral("Capture upper tone offset"), stamp.sourceTones ? number(stamp.sourceTones->upperOffsetHz) : QString{}, QStringLiteral("Hz"), id);
         row(QStringLiteral("Capture IQ generation"), stamp.sourceStream
             ? QString::number(stamp.sourceStream->generation) : QString{},
             {}, id, stamp.sourceStream ? QStringLiteral("reported") : QStringLiteral("unknown"));
@@ -413,6 +427,9 @@ QByteArray AetherPDMeasurementModel::exportResult() const
             {"source_stream", stamp.sourceStream ? QJsonValue(QJsonObject{
                 {"kind", "local_dax_iq"}, {"stream_id", qint64(stamp.sourceStream->streamId)},
                 {"generation", QString::number(stamp.sourceStream->generation)}}) : QJsonValue()},
+            {"source_tones", stamp.sourceTones ? QJsonValue(QJsonObject{
+                {"source_id", QStringLiteral("%1").arg(stamp.sourceTones->sourceId, 16, 16, QLatin1Char('0'))},
+                {"lower_offset_hz", stamp.sourceTones->lowerOffsetHz}, {"upper_offset_hz", stamp.sourceTones->upperOffsetHz}}) : QJsonValue()},
             {"sample_count", qint64(stamp.feedback.size())},
             {"iq_f32le", QString::fromLatin1(raw.toBase64())},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(raw, QCryptographicHash::Sha256).toHex())}});
@@ -474,7 +491,9 @@ QString AetherPDMeasurementModel::preparationSummary() const
     return tr("%1 MHz · %2 · %3 · nominal setting %4 W · abort limit %5 W\n%6 · %7 averages · through IMD%8 · timeout %9 s\n%10")
         .arg(m_config.capture.centerFreqHz / 1e6, 0, 'f', 6).arg(m_mode).arg(m_antenna)
         .arg(m_powerSetting).arg(m_config.maxForwardWatts, 0, 'f', 1)
-        .arg(QString::fromStdString(txlin::windowKindLabel(m_config.window))).arg(m_config.targetAverages).arg(m_config.imd.maxOrder).arg(m_config.timeoutMs / 1000).arg(identity);
+        .arg(QString::fromStdString(txlin::windowKindLabel(m_config.window))).arg(m_config.targetAverages).arg(m_config.imd.maxOrder).arg(m_config.timeoutMs / 1000).arg(identity + tr(" · tone offsets %1/%2 Hz")
+            .arg(m_request.tone1Hz - m_config.capture.centerFreqHz, 0, 'f', 1)
+            .arg(m_request.tone2Hz - m_config.capture.centerFreqHz, 0, 'f', 1));
 }
 
 QString AetherPDMeasurementModel::resultSummary() const

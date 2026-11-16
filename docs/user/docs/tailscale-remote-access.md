@@ -571,9 +571,12 @@ ADC headroom or calibrated output power.
    These client measurement preferences are remembered separately for each
    radio; they do not change its power, tones or IQ stream. Analysis defaults
    are Blackman–Harris 7, four frames and IMD7.
-   This desktop workflow uses the fixed 710/1900 Hz pair. If another client
-   arms a different spacing, its capture is refused. Cancel that source and
-   use **Arm measurement source** here before preparing a new measurement.
+   **Arm measurement source** selects 710/1900 Hz. If the shim reports a
+   configured pair, preparation uses its confirmed frequencies and requires
+   matching metadata on every capture. A configured capture never falls back
+   to a legacy endpoint. Preparation refuses a highest IMD order outside the
+   IQ bandwidth, or a fundamental overlapping the analyzer's DC exclusion;
+   use a narrower spacing or lower order as appropriate.
    The controls lock while a measurement is pending. More averages reduce
    estimate variance, not the physical noise floor; the four-frame ceiling
    reserves time for snapshot retrieval within the bounded source window.

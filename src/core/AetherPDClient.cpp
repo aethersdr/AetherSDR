@@ -100,13 +100,17 @@ void AetherPDClient::setRadioAddress(const QHostAddress& address)
 }
 
 bool AetherPDClient::submit(aetherpd::Operation operation, const QString& adminToken,
-                            std::optional<aetherpd::StartIdentity> identity)
+                            std::optional<aetherpd::StartIdentity> identity,
+                            std::optional<quint32> toneSpacingHz)
 {
-    const std::optional<aetherpd::Request> descriptor = aetherpd::request(operation);
+    const std::optional<aetherpd::Request> descriptor = toneSpacingHz
+        ? std::optional<aetherpd::Request>(aetherpd::measurementToneRequest()) : aetherpd::request(operation);
     const std::optional<QByteArray> body = operation == aetherpd::Operation::Start
         ? (identity ? aetherpd::startBody(*identity) : std::nullopt)
-        : (identity ? std::nullopt : std::optional<QByteArray>(QByteArray{}));
-    if (!descriptor || !body || !m_network || m_network->thread() != thread()
+        : (identity ? std::nullopt : toneSpacingHz ? aetherpd::measurementToneBody(*toneSpacingHz)
+                                                  : std::optional<QByteArray>(QByteArray{}));
+    if ((toneSpacingHz && operation != aetherpd::Operation::ArmMeasurement)
+        || !descriptor || !body || !m_network || m_network->thread() != thread()
         || !aetherpd::lanAddress(m_address) || !aetherpd::validAdminToken(adminToken)) {
         emit failed(operation, Failure::InvalidRequest);
         return false;
@@ -142,7 +146,7 @@ bool AetherPDClient::submit(aetherpd::Operation operation, const QString& adminT
     request.setTransferTimeout(descriptor->timeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     request.setRawHeader("Authorization", "Bearer " + adminToken.toLatin1());
-    if (operation == aetherpd::Operation::Start) {
+    if (operation == aetherpd::Operation::Start || toneSpacingHz) {
         request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     }
     m_operation = operation;

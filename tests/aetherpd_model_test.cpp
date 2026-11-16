@@ -377,6 +377,29 @@ int main(int argc, char** argv)
         ok &= check(!starter.request(Operation::Start) && !starter.active()
             && startNetwork.sent.size() == registered, "retired owner cannot start on a replacement radio");
     }
+    {
+        Network tonesNetwork;
+        AetherPDModel tonesModel(tonesNetwork);
+        tonesModel.setSession(address, token);
+        tonesNetwork.last->complete(200, idle);
+        const size_t before = tonesNetwork.sent.size();
+        ok &= check(!tonesModel.request(Operation::ArmMeasurement, 1190) && tonesNetwork.sent.size() == before,
+            "legacy status allowed configured arm");
+        QJsonObject status = QJsonDocument::fromJson(idle).object();
+        status["measurement_control"] = true; status["source_purpose"] = "calibration";
+        status["measurement"] = QJsonObject{{"source_id", "0000000000000000"}, {"tones", false}};
+        status["measurement_tone_control"] = true; status["measurement_tone_capture_version"] = 3;
+        status["measurement_tone_config"] = QJsonObject{{"source_id", "0000000000000000"}, {"min_spacing_hz", 200},
+            {"max_spacing_hz", 10000}, {"center_hz", 1305}, {"spacing_hz", 1190}};
+        tonesModel.refresh(); tonesNetwork.last->complete(200, QJsonDocument(status).toJson(QJsonDocument::Compact));
+        ok &= check(tonesModel.request(Operation::ArmMeasurement, 1001)
+            && tonesNetwork.sent.back().body == *measurementToneBody(1001), "observed capability did not admit configured arm");
+        tonesNetwork.last->complete(200, R"({"state":"measurement_arm_accepted"})");
+        ok &= check(!tonesModel.status() && tonesModel.pendingOperation() == Operation::Status,
+            "configured receipt fabricated observed profile");
+        tonesModel.clearSession();
+        ok &= check(!tonesModel.request(Operation::ArmMeasurement, 1001), "retired model configured a source");
+    }
     std::cout << (ok ? "PASS" : "FAIL") << ": PD model session fencing, observed state, cancellation, freshness and no automatic control\n";
     return ok ? 0 : 1;
 }

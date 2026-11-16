@@ -40,6 +40,55 @@ void rejects(const QJsonObject& o, const char* reason)
     check(!parseStatus(encode(o)), reason);
 }
 
+void configuredTones()
+{
+    QJsonObject status = idle();
+    status["measurement_control"] = true;
+    status["source_purpose"] = "measurement";
+    status["measurement"] = QJsonObject{{"source_id", "000000000000001f"}, {"tones", false}};
+    status["measurement_tone_control"] = true;
+    status["measurement_tone_capture_version"] = 3;
+    const QJsonObject profile{{"source_id", "000000000000001f"}, {"min_spacing_hz", 200},
+        {"max_spacing_hz", 10000}, {"center_hz", 1305}, {"spacing_hz", 1001}};
+    status["measurement_tone_config"] = profile;
+    const std::optional<Status> parsed = parseStatus(encode(status));
+    check(parsed && parsed->measurementToneControl && parsed->measurementToneConfig
+        && parsed->measurementToneConfig->lowerOffsetHz() == 804.5
+        && parsed->measurementToneConfig->upperOffsetHz() == 1805.5, "half-Hz configured tones lost precision");
+    for (const char* missing : {"measurement_tone_config", "measurement_tone_capture_version", "measurement"}) {
+        QJsonObject invalid = status; invalid.remove(QLatin1String(missing)); rejects(invalid, "partial tone status accepted");
+    }
+    for (const auto& [key, value] : std::array<std::pair<const char*, QJsonValue>, 7>{{
+        {"source_id", "0000000000000020"}, {"spacing_hz", 199}, {"spacing_hz", 10001},
+        {"spacing_hz", 1001.5}, {"spacing_hz", QJsonValue::Null}, {"center_hz", 1306}, {"extra", 1}}}) {
+        QJsonObject invalid = status; QJsonObject changed = profile; changed[QLatin1String(key)] = value;
+        invalid["measurement_tone_config"] = changed; rejects(invalid, "invalid or mismatched tone configuration accepted");
+    }
+    QByteArray duplicate = encode(status);
+    duplicate.replace("\"spacing_hz\":1001", "\"spacing_hz\":1001,\"spacing_hz\":1190");
+    check(!parseStatus(duplicate), "duplicate profile spacing accepted");
+    for (const quint32 spacing : {200U, 1001U, 1190U, 2610U, 10000U}) {
+        const MeasurementToneConfig tones{31, spacing};
+        check(tones.valid() && tones.upperOffsetHz() - tones.lowerOffsetHz() == spacing, "tone spacing changed");
+        check(measurementToneBody(spacing).has_value(), "valid spacing request rejected");
+    }
+    for (const quint32 spacing : {0U, 199U, 10001U, std::numeric_limits<quint32>::max()}) {
+        check(!measurementToneBody(spacing), "unbounded spacing request accepted");
+    }
+    check(measurementToneRequest().path == QStringLiteral("/v2/aetherpd/measurement/arm")
+        && captureBeginWithTonesRequest().path == QStringLiteral("/v3/aetherpd/capture"), "configured versions wrong");
+    QJsonObject captured{{"capture_id", "0123456789abcdef0123456789abcdef"}, {"format", "f32le-iq-v1"},
+        {"sample_rate_hz", 48000}, {"center_hz", 7150000}, {"sample_count", 16384}, {"chunk_samples", 512},
+        {"keyed", true}, {"correcting", true}, {"first_receive_ns", "1000000000"}, {"last_receive_ns", "1085000000"},
+        {"source", QJsonObject{{"kind", "local_dax_iq"}, {"stream_id", 1}, {"generation", "7"}}},
+        {"measurement", QJsonObject{{"source_id", "000000000000001f"}, {"tones", true}}},
+        {"measurement_tone_config", profile}};
+    const std::optional<CaptureManifest> manifest = parseCaptureManifest(encode(captured));
+    check(manifest && manifest->measurementToneConfig == parsed->measurementToneConfig, "capture profile did not survive parsing");
+    captured["measurement"] = QJsonObject{{"source_id", "0000000000000020"}, {"tones", true}};
+    check(!parseCaptureManifest(encode(captured)), "captured profile adopted another source identity");
+}
+
 void captureProtocol()
 {
     const QByteArray text = R"({"capture_id":"0123456789abcdef0123456789abcdef","format":"f32le-iq-v1",
@@ -125,6 +174,12 @@ void captureProtocol()
         check(file.open(QIODevice::ReadOnly), "Go capture manifest missing");
         const std::optional<CaptureManifest> native = parseCaptureManifest(file.readAll());
         check(native.has_value(), "Go capture manifest rejected");
+        const QString expectedSpacing = qEnvironmentVariable("AETHER_PD_EXPECT_TONE_SPACING");
+        if (!expectedSpacing.isEmpty()) {
+            check(native->measurementToneConfig && native->measurementToneConfig->spacingHz == expectedSpacing.toUInt()
+                && sourceManifest->measurementToneConfig == native->measurementToneConfig,
+                "native/Go/desktop confirmed tone profile changed");
+        }
         check(native->measurement && native->measurement->sourceId == 31 && native->measurement->tones, "native/Go measurement provenance changed");
         for (int index = 0; index < 32; ++index) {
             QFile part(directory + QStringLiteral("/chunk-%1.json").arg(index));
@@ -144,6 +199,7 @@ void captureProtocol()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    configuredTones();
     captureProtocol();
     for (const char* name : {"idle", "armed", "correcting", "unavailable"}) {
         QFile fixture(QString::fromUtf8(AETHERPD_TESTDATA_DIR) + QLatin1Char('/')

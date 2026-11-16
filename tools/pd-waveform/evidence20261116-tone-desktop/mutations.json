@@ -1,0 +1,16 @@
+[
+  {
+    "mutation": "profile-match",
+    "caught": true,
+    "exit": 1,
+    "assertion": "receive readiness accepted missing or changed tones",
+    "restored_source_sha256": "1b7efce505fbddb74c336688cbd846cf1f4624bf980da47f79d146212a89a630"
+  },
+  {
+    "mutation": "product-bandwidth",
+    "caught": true,
+    "exit": 1,
+    "assertion": "requested IMD products outside IQ bandwidth admitted or valid order refused",
+    "restored_source_sha256": "44f319101ef2f22e179ce478be761d960353dbd0ecfed6acc14dbb01937ef469"
+  }
+]

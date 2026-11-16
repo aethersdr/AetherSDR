@@ -160,7 +160,7 @@ std::function<bool()> AetherPDModel::measurementFence()
     return current;
 }
 
-bool AetherPDModel::request(aetherpd::Operation operation)
+bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32> toneSpacingHz)
 {
     using aetherpd::Operation;
     using Failure = AetherPDClient::Failure;
@@ -168,7 +168,8 @@ bool AetherPDModel::request(aetherpd::Operation operation)
         clearSession();
         return false;
     }
-    if (!m_active || !aetherpd::request(operation)) {
+    if (!m_active || !aetherpd::request(operation)
+        || (toneSpacingHz && (operation != Operation::ArmMeasurement || !aetherpd::measurementToneBody(*toneSpacingHz)))) {
         emit operationFailed(operation, Failure::InvalidRequest);
         return false;
     }
@@ -183,6 +184,10 @@ bool AetherPDModel::request(aetherpd::Operation operation)
         }
     }
     const std::optional<aetherpd::Status> observed = status();
+    if (toneSpacingHz && (!observed || !observed->measurementToneControl || !observed->measurementToneConfig)) {
+        emit operationFailed(operation, Failure::InvalidRequest);
+        return false;
+    }
     if (operation == Operation::Start
         && (!m_identity || !aetherpd::startBody(*m_identity) || (observed && observed->available))) {
         emit operationFailed(operation, Failure::InvalidRequest);
@@ -215,7 +220,7 @@ bool AetherPDModel::request(aetherpd::Operation operation)
     }
     const QPointer<AetherPDModel> guard(this);
     const bool submitted = m_client.submit(operation, m_token,
-        operation == Operation::Start ? m_identity : std::nullopt);
+        operation == Operation::Start ? m_identity : std::nullopt, toneSpacingHz);
     if (guard) {
         emit changed();
     }

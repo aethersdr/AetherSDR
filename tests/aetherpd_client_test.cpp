@@ -21,6 +21,23 @@ int main(int argc, char** argv)
         if (!check(freshNetwork.sent.back().request.rawHeader("Authorization") == "Bearer " + QByteArray(64, 'a'),
                    "first-install token preserved exactly")) { return 1; }
     }
+    {
+        Network configured;
+        AetherPDClient sender(configured);
+        sender.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));
+        ok &= check(!sender.submit(Operation::Status, token, std::nullopt, 1001)
+            && !sender.submit(Operation::ArmMeasurement, token, std::nullopt, 199) && configured.sent.empty(),
+            "invalid configured operation reached transport");
+        ok &= check(sender.submit(Operation::ArmMeasurement, token, std::nullopt, 1001)
+            && configured.sent.back().request.url().path() == QStringLiteral("/v2/aetherpd/measurement/arm")
+            && configured.sent.back().body == QByteArrayLiteral("{\"spacing_hz\":1001}"), "configured arm altered spacing or version");
+        configured.last->complete(501, "{}");
+        ok &= check(configured.sent.size() == 1 && !sender.busy(), "configured request silently fell back");
+        ok &= check(sender.submit(Operation::ArmMeasurement, token, std::nullopt, 2610), "DC-offset configuration refused by transport");
+        Reply* armedRequest = configured.last;
+        ok &= check(sender.submit(Operation::CancelCalibration, token) && armedRequest->aborted,
+            "cancel failed to preempt configured arm");
+    }
     int statusCount = 0;
     std::vector<Acknowledgment> acknowledgments;
     std::vector<Failure> failures;

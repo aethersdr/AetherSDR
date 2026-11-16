@@ -1,0 +1,7 @@
+{
+  "aetherpd_protocol_test": 0,
+  "aetherpd_client_test": 0,
+  "aetherpd_model_test": 0,
+  "aetherpd_capture_source_test": 0,
+  "tx_linearity_controller_test": 0
+}

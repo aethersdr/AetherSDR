@@ -1,0 +1,15 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 482: aetherpd_protocol_test
+1/5 Test #482: aetherpd_protocol_test ...........   Passed    0.01 sec
+    Start 483: aetherpd_client_test
+2/5 Test #483: aetherpd_client_test .............   Passed    1.91 sec
+    Start 494: aetherpd_capture_source_test
+3/5 Test #494: aetherpd_capture_source_test .....   Passed    6.42 sec
+    Start 495: tx_linearity_controller_test
+4/5 Test #495: tx_linearity_controller_test .....   Passed    0.07 sec
+    Start 499: aetherpd_model_test
+5/5 Test #499: aetherpd_model_test ..............   Passed    3.06 sec
+
+100% tests passed out of 5
+
+Total Test time (real) =  11.48 sec

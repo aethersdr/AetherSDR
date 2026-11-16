@@ -136,10 +136,22 @@ preamble, or invalidate a matching PA model. V1 arm continues to select
 must observe matching source/config status and use v3 capture provenance.
 
 The configured native/shim path is locally tested but not installed or
-RF-qualified. The desktop still arms and analyzes the default pair. Its
-pending integration must enforce the selected IMD products against the
-captured bandwidth; generator support for 10000 Hz spacing does not imply
-that every IMD order fits a 48 kHz IQ frame.
+RF-qualified. The desktop protocol and session model accept an explicit
+configured arm only with fresh matching capability; no configured request
+falls back to the legacy arm. Capture binds the observed source profile before
+receive readiness, requests v3 without fallback, and requires the same profile
+in status and every snapshot. The controller retains the confirmed per-frame
+source ID and both carrier-relative offsets through JSON and CSV export.
+
+Preparation derives frequencies from observed source configuration, retaining
+half-Hz precision. Legacy status uses the documented 710/1900 Hz pair. The
+controller refuses a requested highest-order product whose main lobe does not
+fit the capture bandwidth, or a fundamental overlapping its DC exclusion.
+At 48 kHz, 10000 Hz spacing fits IMD3 but not IMD5/7. The generator can emit a
+DC fundamental at 2610 Hz spacing; this analyzer cannot distinguish it from
+DC leakage and refuses that measurement before receive readiness or keying.
+The operator spacing selector remains pending; the existing arm button still
+requests the default pair. Final desktop/RF qualification remains required.
 
 The v2 request maps to fixed private opcode `J`, advertised by `PDTALK06`.
 The primary returns 501 for an older private session without sending the new

@@ -402,7 +402,8 @@ purpose. An acceptance receipt alone does not establish source readiness.
 
 The desktop requests and cancels the default source. Its development
 measurement panel uses captures bound to the accepted source ID and guarded
-tone window. The configured-tone extension is not yet exposed by the desktop:
+tone window. The desktop parser, capture adapter and analyzer accept confirmed
+configured tones; its operator spacing selector remains pending:
 `POST /v2/aetherpd/measurement/arm` accepts only an integer `spacing_hz`
 from 200 through 10000. It requires `PDTALK07`, native
 `measurement_tone_control=true`, and `measurement_tone_capture_version=3`.

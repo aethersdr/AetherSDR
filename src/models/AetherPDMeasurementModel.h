@@ -2,6 +2,7 @@
 
 #include "core/backends/RadioControlTypes.h"
 #include "core/AetherPDMeasurementSettings.h"
+#include "core/AetherPDProtocol.h"
 #include "core/txlinearity/TxLinearityController.h"
 #include "core/txlinearity/TxLinearityTelemetry.h"
 
@@ -90,6 +91,7 @@ private:
     std::vector<QMetaObject::Connection> m_stationConnections;
     quint64 m_generation{0};
     quint64 m_measurementSourceId{0};
+    std::optional<aetherpd::MeasurementToneConfig> m_measurementTones;
     double m_frequencyMHz{0};
     QString m_mode;
     QString m_antenna;

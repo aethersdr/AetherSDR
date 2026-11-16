@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T13:19:42.042741+00:00",
+  "updated_utc": "2026-11-16T13:39:45.340810+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Extend desktop status/capture decoding and transport to negotiated configured measurement/v3 capture, bind actual tones to source ID across analysis and exports, add operator spacing control with bandwidth/order validation. Refresh final packages and resume live gates only when the radio returns.",
+  "next_action": "Add operator tone-spacing selection with observed capability/readback and actionable bandwidth/order/DC refusal. Wire explicit arm through the original-session route without automatic keying, fallback or rearm. Then channel/pan ownership, fresh packages and outstanding live/full-goal gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Configured measurement native/shim API and snapshot provenance completed offline; desktop configured-tone workflow next. Radio still unreachable.",
+  "current_focus": "Confirmed configured-tone desktop transport, capture, controller and exports qualified offline; operator spacing selector is next. Radio still unreachable.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2939,6 +2939,22 @@
       "sanitizers_passed": 4,
       "mutations_caught": 2,
       "installed": false
+    },
+    "tone_desktop": {
+      "report": "TONE-DESKTOP-QUALIFICATION.json",
+      "status": "desktop_core_and_composed_workflow_qualified_offline",
+      "registered_tests_passed": 7,
+      "sanitizer_suites_passed": 5,
+      "native_go_qt_spacings": [
+        200,
+        1001,
+        1190,
+        2610,
+        10000
+      ],
+      "mutations_caught": 2,
+      "operator_spacing_selector": false,
+      "installed": false
     }
   },
   "power_control": {
@@ -2959,6 +2975,22 @@
     "native_tests_passed": 4,
     "sanitizers_passed": 4,
     "mutations_caught": 2,
+    "installed": false
+  },
+  "tone_desktop_qualification": {
+    "report": "TONE-DESKTOP-QUALIFICATION.json",
+    "status": "desktop_core_and_composed_workflow_qualified_offline",
+    "registered_tests_passed": 7,
+    "sanitizer_suites_passed": 5,
+    "native_go_qt_spacings": [
+      200,
+      1001,
+      1190,
+      2610,
+      10000
+    ],
+    "mutations_caught": 2,
+    "operator_spacing_selector": false,
     "installed": false
   }
 }

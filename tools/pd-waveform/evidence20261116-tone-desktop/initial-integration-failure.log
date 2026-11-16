@@ -1,0 +1,7 @@
+Initial added-fixture failure; see qualification record for correction.
+[PASS] composed workflow measures analytic -40 dBc IMD3
+[PASS] composed workflow measures analytic -40 dBc IMD3
+[PASS] next arm status requested
+[FAIL] persistent measurement controller preserves TX cooldown for a fresaether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin

@@ -470,6 +470,49 @@ int main(int argc, char** argv)
         const auto callback = f.source->ready; callback();
         check(f.ready == 0 && f.finished == 1 && f.lease->starts == 0, "late receive readiness escaped timeout");
     }
+    for (const int order : {std::numeric_limits<int>::min(), -1, 0, 8, std::numeric_limits<int>::max()}) {
+        Fixture f; f.config.imd.maxOrder = f.request.maxOrder = order;
+        check(!f.controller->prepare(f.config, f.request) && f.lease->starts == 0,
+            "invalid IMD order reached product-span arithmetic");
+    }
+    for (const int order : {3, 5, 7}) {
+        Fixture f;
+        f.config.capture.sampleRateHz = 48000;
+        f.config.imd.maxOrder = f.request.maxOrder = order;
+        f.request.tone1Hz = 7150000 + 1305 - 5000;
+        f.request.tone2Hz = 7150000 + 1305 + 5000;
+        const bool accepted = f.controller->prepare(f.config, f.request);
+        check(accepted == (order == 3) && f.lease->starts == 0,
+            "requested IMD products outside IQ bandwidth admitted or valid order refused");
+    }
+    {
+        Fixture f; f.config.capture.sampleRateHz = 48000;
+        f.request.tone1Hz = 7150000; f.request.tone2Hz = 7152610;
+        check(!f.controller->prepare(f.config, f.request) && !f.source->running && f.lease->starts == 0,
+            "DC-overlapping fundamental entered receive/TX preparation");
+    }
+    for (const int fault : {0, 1, 2, 3}) {
+        Fixture f; f.start();
+        CaptureFrame first = frame(1);
+        first.sourceTones = CaptureToneProfile{31, 750, 1875};
+        if (fault == 0) { first.sourceTones->upperOffsetHz = 1900; }
+        f.send(first);
+        if (fault != 0) {
+            CaptureFrame second = frame(2); second.sourceTones = first.sourceTones;
+            if (fault == 1) { second.sourceTones.reset(); }
+            if (fault == 2) { second.sourceTones->sourceId = 32; }
+            f.send(second);
+        }
+        check(f.lease->releases == 1 && !f.source->gate, "profile validation failed to close the original TX lease");
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        if (fault == 3) {
+            check(f.result && f.result->measurement && f.result->captures.size() == 2
+                && f.result->captures.front().sourceTones == first.sourceTones,
+                "confirmed profile missing from retained captures");
+        } else {
+            check(f.result && !f.result->measurement && !f.result->error.empty(), "invalid profile reached analysis");
+        }
+    }
     qInstallMessageHandler(previousHandler);
     return failures == 0 ? 0 : 1;
 }

@@ -64,7 +64,7 @@ int main(int argc, char** argv)
         value.acprLow = txlin::BandPower{-6000, -4000, -70, -60, -66.0206, {}};
         value.acprHigh = txlin::BandPower{4000, 6000, -70, -60, -66.0206, {}};
         capture.measurement.measurement = value;
-        capture.measurement.captures.push_back({"fixture", 1, {}, {}});
+        capture.measurement.captures.push_back({"fixture", 1, {}, {}, {}});
         if (!check(capture.sourceSummary().contains("identity not reported")
             && capture.toCsv().contains("\"Capture IQ stream ID\",\"\",\"\",\"fixture\",\"unknown\""),
             "legacy export must preserve missing source identity")) { return 1; }
@@ -72,6 +72,7 @@ int main(int argc, char** argv)
             1073741825, std::numeric_limits<std::uint64_t>::max()};
         if (!check(capture.toCsv().contains("18446744073709551615"),
             "CSV must preserve the full unsigned generation")) { return 1; }
+        capture.measurement.captures.front().sourceTones = txlin::CaptureToneProfile{42, -1000, 1000};
         spectrum.setResult(&capture);
         QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(&spectrum);
         const QImage image = QImage::fromData(spectrum.exportPng(), "PNG");
@@ -81,6 +82,8 @@ int main(int argc, char** argv)
             && image.text(QStringLiteral("Description")).contains("5 W setting")
             && image.text(QStringLiteral("Description")).contains("timeout 10 s")
             && image.text(QStringLiteral("Description")).contains("DAX IQ stream 0x40000001")
+            && image.text(QStringLiteral("Description")).contains("captured tone offsets -1000.0/1000.0 Hz")
+            && accessible && accessible->text(QAccessible::Value).contains("captured tone offsets -1000.0/1000.0 Hz")
             && !image.text(QStringLiteral("Description")).contains("dBFS")
             && accessible && accessible->role() == QAccessible::Graphic
             && accessible->text(QAccessible::Value).contains("ADC headroom unknown"),

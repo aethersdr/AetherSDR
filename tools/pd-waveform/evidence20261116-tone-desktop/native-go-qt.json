@@ -1,0 +1,27 @@
+[
+  {
+    "spacing_hz": 200,
+    "exit": 0,
+    "manifest_sha256": "e7213b620e098fda553c3218452e8cc067159f1f8dd5d9ac0f1495701bc9075a"
+  },
+  {
+    "spacing_hz": 1001,
+    "exit": 0,
+    "manifest_sha256": "671179e1dfb564f12646c570a5c8277945f79a745ca2df8110bea9a197dea455"
+  },
+  {
+    "spacing_hz": 1190,
+    "exit": 0,
+    "manifest_sha256": "213789043cdc18a6264bb78cace3a9a94caf17d593c45c3d4ff19fa0b24b0f79"
+  },
+  {
+    "spacing_hz": 2610,
+    "exit": 0,
+    "manifest_sha256": "dfd62dace743f88e5174a2fb9aee9fdeea22f9365f2956a11c9f78e725cd45d0"
+  },
+  {
+    "spacing_hz": 10000,
+    "exit": 0,
+    "manifest_sha256": "3bfdebe28016427a41931a3bdbb94b9490b302b16b0bb5f737010582038da0b8"
+  }
+]

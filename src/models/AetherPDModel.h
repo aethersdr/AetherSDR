@@ -26,7 +26,7 @@ public:
     void clearSession();
     void reconcileSession();
     bool refresh();
-    bool request(aetherpd::Operation operation);
+    bool request(aetherpd::Operation operation, std::optional<quint32> toneSpacingHz = std::nullopt);
     // Bind a capture source and return the SAME original-session fence for the
     // measurement controller. Empty means refused. Credentials stay inside
     // the model/source; this never starts capture or grants transmit authority.

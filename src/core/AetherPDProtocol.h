@@ -37,8 +37,23 @@ struct MeasurementSource {
     bool tones{false};
 };
 
+inline constexpr quint32 kMinToneSpacingHz = 200;
+inline constexpr quint32 kMaxToneSpacingHz = 10000;
+inline constexpr quint32 kDefaultToneSpacingHz = 1190;
+inline constexpr double kToneCenterHz = 1305;
+struct MeasurementToneConfig {
+    quint64 sourceId{0};
+    quint32 spacingHz{kDefaultToneSpacingHz};
+    bool valid() const;
+    double lowerOffsetHz() const { return kToneCenterHz - double(spacingHz) / 2; }
+    double upperOffsetHz() const { return kToneCenterHz + double(spacingHz) / 2; }
+    bool operator==(const MeasurementToneConfig&) const = default;
+};
+
 struct Status {
     std::optional<MeasurementSource> measurement;
+    std::optional<MeasurementToneConfig> measurementToneConfig;
+    bool measurementToneControl{false};
     bool available{false};
     State state{State::Unavailable};
     bool registered{false};
@@ -72,6 +87,7 @@ struct CaptureSourceIdentity {
 struct CaptureManifest {
     std::optional<CaptureSourceIdentity> source;
     std::optional<MeasurementSource> measurement;
+    std::optional<MeasurementToneConfig> measurementToneConfig;
     QString captureId;
     quint32 sampleRateHz{0};
     quint64 centerHz{0};
@@ -82,6 +98,7 @@ struct CaptureManifest {
 };
 
 Request captureBeginRequest(bool withSourceIdentity = false);
+Request captureBeginWithTonesRequest();
 std::optional<Request> captureChunkRequest(const CaptureManifest& manifest, int chunk);
 std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json);
 // Returns exactly 512 unchanged little-endian float32 complex samples.
@@ -135,10 +152,13 @@ std::optional<QByteArray> installationAttempt(const QByteArray& plan, const QByt
 std::optional<InstallationObservation> parseInstallationObservation(const QByteArray& json);
 InstallationMatch matchInstallation(const InstallationPlan& plan, const InstallationObservation& observed);
 
-// Start carries only the current GUI identity; all other requests are empty.
+// Start carries only the current GUI identity. Configured measurement carries
+// only a bounded spacing; neither request grants transmitter authority.
 // Acknowledgments never establish observed registration or correction state.
 std::optional<Request> request(Operation operation);
 std::optional<QByteArray> startBody(const StartIdentity& identity);
+std::optional<QByteArray> measurementToneBody(quint32 spacingHz);
+Request measurementToneRequest();
 std::optional<Status> parseStatus(const QByteArray& json);
 std::optional<Acknowledgment> parseAcknowledgment(Operation operation, int httpStatus,
                                                  const QByteArray& json);

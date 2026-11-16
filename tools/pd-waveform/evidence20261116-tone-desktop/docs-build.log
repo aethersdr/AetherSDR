@@ -1,0 +1,19 @@
+
+> aethersdr-user-docs@0.0.0 build
+> docusaurus build
+
+[INFO] [en] Creating an optimized production build...
+[webpackbar] ℹ Compiling Client
+[webpackbar] ℹ Compiling Server
+[webpackbar] ✔ Server: Compiled successfully in 1.86s
+[webpackbar] ✔ Client: Compiled successfully in 3.30s
+(node:19) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[SUCCESS] Generated static files in "build".
+[INFO] Use `npm run serve` command to test your build locally.
+┌──────────────────────────────────────────────────────────┐
+│           @docusaurus/core update check failed           │
+│           Try running with sudo or get access            │
+│           to the local update config store via           │
+│ sudo chown -R $USER:$(id -gn $USER) /home/jeremy/.config │
+└──────────────────────────────────────────────────────────┘

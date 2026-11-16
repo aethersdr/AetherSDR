@@ -1,0 +1,21 @@
+{
+  "utc": "2026-11-16T13:38:45.679724+00:00",
+  "checks": [
+    {
+      "port": 4992,
+      "connected": false,
+      "error": "[Errno 113] No route to host"
+    },
+    {
+      "port": 48992,
+      "connected": false,
+      "error": "[Errno 113] No route to host"
+    },
+    {
+      "port": 22222,
+      "connected": false,
+      "error": "[Errno 113] No route to host"
+    }
+  ],
+  "commands_sent": false
+}
