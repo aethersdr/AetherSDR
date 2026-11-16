@@ -92,10 +92,18 @@ private:
     void disconnectSlice(SliceModel* slice);
     void updateModeUi();
     int  liveValue() const;
-    // Returns true when the current slice mode selects TCI as the calibration
-    // audio source (DIGU/DIGL with a live TciServer). The source is latched at
-    // sweep start (m_audioConn) and must not change mid-sweep.
+    // Returns true when the current slice mode and DAX channel select TCI as
+    // the calibration audio source (DIGU/DIGL with daxChannel >= 1). Requires
+    // daxChannel >= 1 so that host-demodulating backends (HL2, etc.) and Flex
+    // slices without a DAX channel assigned fall back to PC Audio rather than
+    // producing a channel-match that can never fire.
     bool isTciMode() const;
+    // Connect (or reconnect) the appropriate audio source to the calibration
+    // engine based on the current slice mode. Keeps audio live at all times —
+    // not just during auto sweeps — so the manual slider path always has fresh
+    // RMS data. Called from the constructor, updateModeUi(), onStartStop()
+    // (before startAutoSweep()), and onFinished().
+    void rewireAudioSource();
     // Any noise reduction stage that mutates the audio before the calibration
     // tap is emitted. For the PC-Audio path: client-side NR2/RN2/NR4/DFNR/MNR/
     // BNR/NNR via AudioEngine, plus radio-side NR. For the TCI path: only
