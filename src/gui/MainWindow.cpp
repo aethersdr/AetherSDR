@@ -4849,7 +4849,7 @@ void MainWindow::showAgcCalibrationDialog(int sliceId)
     // A canon dialog, so not showOrRaisePersistent(): that applies View →
     // Frameless Window, which a CanonWindow does not follow.
     if (!m_agcCalibrationDialog) {
-        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, floorFn, this);
+        auto* dlg = new AgcCalibrationDialog(&m_radioModel, m_audio, tciServer(), floorFn, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_agcCalibrationDialog = dlg;
     }

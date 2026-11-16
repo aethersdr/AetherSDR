@@ -3,6 +3,7 @@
 #include "gui/CanonIndicators.h"
 #include "core/AudioEngine.h"
 #include "core/ThemeManager.h"
+#include "core/TciServer.h"
 #include "models/MeterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -260,10 +261,11 @@ void AgcCurveWidget::paintEvent(QPaintEvent*)
 
 AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
                                            AudioEngine* audio,
+                                           TciServer* tci,
                                            NoiseFloorFn noiseFloorFn,
                                            QWidget* parent)
     : CanonWindow(QStringLiteral("AGC-T Calibration"), parent),
-      m_radio(radio), m_audio(audio), m_noiseFloorFn(std::move(noiseFloorFn))
+      m_radio(radio), m_audio(audio), m_tci(tci), m_noiseFloorFn(std::move(noiseFloorFn))
 {
     setObjectName(QStringLiteral("agcCalibrationDialog"));
     theme::setContainer(this, QStringLiteral("canon/agcCalibration"));
@@ -316,9 +318,12 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     m_modeLabel = new QLabel(this);
     m_modeLabel->setProperty("agcRole", QStringLiteral("mode"));
     m_modeLabel->setWordWrap(true);
+    m_sourceLabel = new QLabel(this);
+    m_sourceLabel->setProperty("agcRole", QStringLiteral("hint"));
     m_quietLabel = new QLabel(this);
     m_quietLabel->setWordWrap(true);
     body->addWidget(m_modeLabel);
+    body->addWidget(m_sourceLabel);
     body->addWidget(m_quietLabel);
 
     m_curve = new AgcCurveWidget(this);
@@ -372,17 +377,17 @@ AgcCalibrationDialog::AgcCalibrationDialog(RadioModel* radio,
     connect(&m_engine, &AgcTCalibrator::quietSpotStatus, this, &AgcCalibrationDialog::onQuietSpot);
     connect(&m_engine, &AgcTCalibrator::finished, this, &AgcCalibrationDialog::onFinished);
     connect(&m_engine, &AgcTCalibrator::noAudio, this, [this] {
-        // After onFinished(), which set "Calibration stopped." The sweep listens
-        // to this computer's audio, which PC Audio off stops; so can a stall,
-        // so ask rather than say.
-        m_recLabel->setText(tr("Stopped: no audio on this computer. Is PC Audio on?"));
+        // After onFinished(), which set "Calibration stopped." The message is
+        // source-aware: TCI operators never use PC Audio for calibration.
+        if (isTciMode()) {
+            m_recLabel->setText(tr("Stopped: no TCI audio. Is your TCI client receiving on this slice?"));
+        } else {
+            m_recLabel->setText(tr("Stopped: no audio on this computer. Is PC Audio on?"));
+        }
     });
 
-    // Live audio level (cross-thread; auto-queued) and S-meter feed.
-    if (m_audio) {
-        connect(m_audio, &AudioEngine::levelChanged,
-                &m_engine, &AgcTCalibrator::onAudioLevel);
-    }
+    // Audio source is latched at sweep start (see onStartStop). S-meter feed
+    // is always from the radio model regardless of audio source.
     if (m_radio) {
         connect(&m_radio->meterModel(), &MeterModel::sLevelChanged,
                 &m_engine, &AgcTCalibrator::onSLevel);
@@ -470,6 +475,9 @@ void AgcCalibrationDialog::connectSlice(SliceModel* slice)
     connect(slice, &SliceModel::agcModeChanged, this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::externalReceiveAgcModeChanged,
             this, &AgcCalibrationDialog::updateModeUi);
+    // Source label (TCI vs PC Audio) depends on the slice mode.
+    connect(slice, &SliceModel::modeChanged,
+            this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::agcThresholdChanged, &m_engine, &AgcTCalibrator::onValueChanged);
     connect(slice, &SliceModel::agcOffLevelChanged, &m_engine, &AgcTCalibrator::onValueChanged);
     connect(slice, &SliceModel::agcThresholdChanged, this, &AgcCalibrationDialog::refreshFromSlice);
@@ -497,8 +505,24 @@ int AgcCalibrationDialog::liveValue() const
                : m_slice->agcThreshold();
 }
 
+bool AgcCalibrationDialog::isTciMode() const
+{
+    if (!m_tci || !m_slice) {
+        return false;
+    }
+    const QString& m = m_slice->mode();
+    return m == QStringLiteral("DIGU") || m == QStringLiteral("DIGL");
+}
+
 bool AgcCalibrationDialog::nrSuppressesCalibration() const
 {
+    if (isTciMode()) {
+        // TCI audio never passes through AudioEngine, so client-side NR stages
+        // (NR2/RN2/NR4/DFNR/MNR/BNR/NNR) do not affect the calibration tap.
+        // Only radio-side NR (slice nr flag) matters here.
+        return m_slice && m_slice->nrOn();
+    }
+    // PC Audio path: all NR stages post-NR levelChanged matter.
     if (m_audio && (m_audio->nr2Enabled() || m_audio->rn2Enabled()
                   || m_audio->nr4Enabled() || m_audio->dfnrEnabled()
                   || m_audio->mnrEnabled() || m_audio->nvAfxEnabled()
@@ -536,6 +560,17 @@ void AgcCalibrationDialog::updateModeUi()
         m_hintLabel->setText(QStringLiteral(
             "Tune to a clear spot, then Auto Sweep — or move the AGC-T "
             "slider and watch where the noise bends."));
+    }
+
+    // Update the audio source label regardless of slice state.
+    if (m_sourceLabel) {
+        if (isTciMode()) {
+            m_sourceLabel->setText(QStringLiteral("Audio source: TCI (DIGU/DIGL)"));
+        } else if (m_tci) {
+            m_sourceLabel->setText(QStringLiteral("Audio source: PC Audio (switch to DIGU/DIGL for TCI)"));
+        } else {
+            m_sourceLabel->setText(QStringLiteral("Audio source: PC Audio"));
+        }
     }
 
     if (!m_slice) {
@@ -619,6 +654,25 @@ void AgcCalibrationDialog::onStartStop()
     }
     m_curve->clear();
     m_applyBtn->setEnabled(false);
+
+    // Latch the audio source at sweep start. Source must not change mid-sweep:
+    // DAX (TCI) is pre-AF-gain; PC Audio is post-volume — mixing them splices
+    // two different gain references. Connect only one, and remember it so we can
+    // disconnect on finish/stop.
+    disconnect(m_audioConn);
+    if (isTciMode() && m_tci) {
+        const int daxCh = m_slice ? m_slice->daxChannel() : -1;
+        m_audioConn = connect(m_tci, &TciServer::rxLevel,
+                              &m_engine, [this, daxCh](int ch, float rms) {
+            if (ch == daxCh) {
+                m_engine.onAudioLevel(rms);
+            }
+        });
+    } else if (m_audio) {
+        m_audioConn = connect(m_audio, &AudioEngine::levelChanged,
+                              &m_engine, &AgcTCalibrator::onAudioLevel);
+    }
+
     m_engine.startAutoSweep();
 }
 
@@ -674,6 +728,10 @@ void AgcCalibrationDialog::onQuietSpot(bool quiet, float marginDb)
 
 void AgcCalibrationDialog::onFinished(bool applied)
 {
+    // Release the latched audio source connection (set in onStartStop).
+    disconnect(m_audioConn);
+    m_audioConn = {};
+
     m_startStopBtn->setText(QStringLiteral("Auto Sweep"));
     if (applied) {
         m_applyBtn->setEnabled(false);
