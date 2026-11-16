@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T07:24:42.220600+00:00",
+  "updated_utc": "2026-11-16T07:37:28.090900+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Preserve the qualified independent first install, crash-after-delivery cleanup, and native-before-carrier exact-plan resume/reboot/IQ paths. Finish terminal failed-store recovery and remaining transaction interruption/power-loss qualification; authenticated shipping catalogue, actual FLEX-6000 provisioning/hardware and final DSP/PR4770/RF/release gates remain.",
+  "next_action": "Build and independently pin a new signed candidate containing tested failed-fresh-install retry. Qualify a bounded real worker failure followed by explicit same-plan retry, preserved identity, cleanup, reboot and local IQ. Existing installed 7c87 candidate remains qualified only for the recorded healthy and desktop-crash paths. Full P1-P10 scope remains.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1815,6 +1815,73 @@
       "passed": true,
       "diagnostics_job_deleted": true,
       "diagnostics_directory_deleted": true
+    }
+  },
+  "failed_first_install_retry_development": {
+    "updated_utc": "2026-11-16T07:37:28.090900+00:00",
+    "status": "native_failed_fresh_retry_component_tested_not_packaged_or_installed",
+    "production_ready": false,
+    "source_base": "9eb3c7ea43044d8a42ad34c42745761226c3b299",
+    "evidence": "first-install-failed-retry-development under evidence_root",
+    "implemented": [
+      "New authenticated fresh bootstrap delivery can authorize one forward retry only for the exact terminal failed plan.",
+      "Exclusive transaction lock protects bounded root-owned retry publication; original failure retained.",
+      "Partial publication never authorizes a forward step; consumption is synced before advancing.",
+      "Boot recovery consumes/discards authorization and never goes forward.",
+      "Identity, installation ID, token hash, hostname and selected payload remain bound to the original plan.",
+      "Migration and committed redelivery remain cleanup-only."
+    ],
+    "checks": {
+      "whole_worker_namespace_cases": 46,
+      "native_transaction_cases": 26,
+      "transaction_ASan_UBSan_LSan": true,
+      "partial_marker_guard_mutation_detected": true,
+      "ARM64_worker_build": true,
+      "Cortex_A8_ARMv7_boot_build": true,
+      "test_registration": "passed",
+      "diff_check": "passed"
+    },
+    "scope": [
+      "Native whole-worker service/radio adapters are fixtures.",
+      "Injected process death exercises actual filesystem transaction paths but not physical power loss.",
+      "ARMv7 compile does not qualify Linux 2.6/Cortex-A8 hardware or first-install adapter.",
+      "Sanitizer scope is transaction driver and linked components; not whole worker service graph."
+    ],
+    "authority_boundary": "Existing approved public-upload boundary; no new isolation from a process sharing waveform UID and able to redeliver the exact approved job.",
+    "rf_commands": [],
+    "radio_changed": false,
+    "installed_candidate": "0.0.0-first.7c87bc223 remains unchanged",
+    "remaining": [
+      "Build a separately signed candidate with this worker and independently pin it in the desktop.",
+      "Induce a bounded actual worker failure during fresh installation; qualify explicit same-plan retry, identity preservation, authority removal, reboot and IQ.",
+      "Complete remaining power-loss boundaries, authenticated catalogue, actual FLEX-6000 adapter/hardware, DSP/PR4770/RF and release gates."
+    ],
+    "source_files": {
+      "tools/pd-waveform/boot/README.md": "69d7026123bd11098b1e0c956d062ad184e5b56761a5be473f93e31f256307a1",
+      "tools/pd-waveform/boot/pd_install_worker.c": "cbf0815dae1bbf87ce2d18c82f8a4a878c8cb326a2c62dd39f129e5ed4295717",
+      "tools/pd-waveform/boot/pd_transaction.c": "e56cf19689e991dd77eb32a19e7f7443c3a81ea821a0155f862a1c10b56b7afe",
+      "tools/pd-waveform/boot/pd_transaction.h": "1bef7f4b5a156734989b004e77d5de3483fcb54ac1bde8213322ffac5114405f",
+      "tools/pd-waveform/boot/test_transaction.py": "4c4bf11d7b669e1ab41acac3bea0c0f0a358a603ed6adb7986acfc40ba2f24c6",
+      "tools/pd-waveform/boot/test_worker.py": "36b9c07ce218046468eba5f41e624c07bf99341ca380523f5b80081cebb1db76",
+      "tools/pd-waveform/boot/transaction_check.c": "3d3039f8144927049519c42a3d390b9aeb3bbfd19bfc12d110ee4a43c6035442",
+      "tools/pd-waveform/request/FIRST-INSTALL.md": "98bba1f3c3419e77add5692424fdb3b1283313b911863a105865f849d08ed3a3"
+    },
+    "files": {
+      "build-checks.py": "b4b17c46d9c97ed4b4f5ee9a5acec1d1579db414fda5a5a004eec1d3da1fd9b4",
+      "build-portability.py": "e29d24d0f28d36d204aafc278c7ee2fc363953655ea25333b632a03e1f5114b4",
+      "build.log": "c1e0791f68a48001e4ec3898fcb7ddb2095dcb0bebcd5102fb8c0504eb027be1",
+      "portability-build.log": "dc0f2d92e454e4462c24a002ed7029956769809bd36fb3fd8d3c2410169dec88",
+      "worker-tests.log": "45c47dc2d6ab71a406d7d96cb8babdcc9c335928768142e443cd9137aff4b9cd",
+      "transaction-tests.log": "d1ab79618995bfe24b8885a0df5369555c341050aa56b1bd8bfb1cad5c72394d",
+      "transaction-asan.log": "7de94fa3d54d0ff5138217947a318dd29698479266ce7507fa5cfee06e65404b",
+      "mutation-test.log": "07ea5671b0b49e02d1b04d9d2a66461d928ed671097c4e6ca98b87ed5c84b18b"
+    },
+    "binaries": {
+      "worker/pd-install-worker": "d6d973f4b3c4322fbdf057193da44d4bc5b20b1b918e769fed9d4bdfa80ac58d",
+      "transaction/transaction-check": "446f20a5f1a48df25cbd1ea0a9ef7c6dec34bd2839f51b500493649a9af99ea8",
+      "transaction-asan/transaction-check": "233d7eb44a3a7daaad34b0802faafe936c90c061b7cf450f3d069d00681538de",
+      "arm64/pd-install-worker": "a149186c5c9563205bb7da08122d4fa872fd3069252990d0528d8f4752cba0d0",
+      "armv7/pd-boot": "41b42751ceaa4cd914d6191237ba06ff0e2d68f22d3f43448f49df4fc6b3c2b9"
     }
   }
 }

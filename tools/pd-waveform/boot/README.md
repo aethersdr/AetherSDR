@@ -2339,3 +2339,13 @@ carrier preparation on the existing thread pool. It neither loads credentials no
 contacts the radio. **Approve update** remains a separate exact-plan action.
 Changing connections or canceling preparation discards late results. A package
 prepared successfully is still a development candidate, not production-qualified.
+
+### Failed fresh-install retry
+
+The `PDFST001` bootstrap has a separately bounded terminal-failure retry path.
+A new authenticated delivery can authorize the exact failed fresh plan once;
+boot recovery cannot authorize or execute that forward retry. The transaction
+keeps `transaction-failed`, consumes a protected `transaction-retry` before
+advancing, and retains the existing identity. Migration and committed redelivery
+remain cleanup-only. See [the first-install contract](../request/FIRST-INSTALL.md#failed-fresh-install-retry-component)
+for the authority boundary, crash semantics and qualification limits.

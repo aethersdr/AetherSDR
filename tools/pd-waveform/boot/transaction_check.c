@@ -63,7 +63,7 @@ static int cleanup(void* p)
 }
 int main(int argc,char** argv)
 {
-    if(argc!=5 && !(argc==6 && !strcmp(argv[5],"recover"))){return 2;}fault=argv[4];unsigned char record[PD_MIGRATION_SIZE];
+    if(argc!=5 && !(argc==6 && (!strcmp(argv[5],"recover") || !strcmp(argv[5],"authorize-retry")))){return 2;}fault=argv[4];unsigned char record[PD_MIGRATION_SIZE];
     int source=open(argv[2],O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
     if(source<0 || pread(source,record,sizeof(record),0)!=sizeof(record)){if(source>=0){close(source);}return 2;}close(source);
     int store=open(argv[1],O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
@@ -72,7 +72,8 @@ int main(int argc,char** argv)
     if(store<0 || model<0 || pread(model,&state,sizeof(state),0)!=sizeof(state)){return 2;}
     const struct pd_transaction_ops ops={NULL,prepare,copy,retire,activate,rollback,cleanup};
     const struct pd_transaction_ops recover_ops={NULL,NULL,NULL,NULL,NULL,rollback,cleanup};
-    int result=argc==6?pd_transaction_recover(store,record,&recover_ops):pd_transaction_run(store,record,&ops);
+    int result=argc==6 && !strcmp(argv[5],"authorize-retry")?(pd_transaction_authorize_retry(store,record)?1:-2):
+        argc==6?pd_transaction_recover(store,record,&recover_ops):pd_transaction_run(store,record,&ops);
     close(model);if(store_descriptor>=0){close(store_descriptor);}
     return result==1?0:result==0?10:result==-1?11:12;
 }

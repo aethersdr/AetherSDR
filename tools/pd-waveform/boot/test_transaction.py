@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import approval
 import migration
+import first_install
 
 CHECKER=None
 
@@ -32,14 +33,58 @@ class TransactionTest(unittest.TestCase):
         return dict(zip(['old_present','old_running','new_running','old_identity','new_identity','authority',
                          'prepared','copied','retired','activated','rollbacks','cleanups'],struct.unpack('=12I',self.model.read_bytes())))
 
-    def invoke(self,fault='',expected=0,recover=False):
-        result=subprocess.run([str(CHECKER),str(self.store),str(self.record),str(self.model),fault,*(['recover'] if recover else [])],capture_output=True,timeout=5)
+    def invoke(self,fault='',expected=0,recover=False,authorize=False):
+        result=subprocess.run([str(CHECKER),str(self.store),str(self.record),str(self.model),fault,*(['authorize-retry'] if authorize else ['recover'] if recover else [])],capture_output=True,timeout=5)
         self.assertEqual(result.returncode,expected,result.stderr.decode(errors='replace'))
 
     def assert_owner(self,new):
         s=self.state();self.assertEqual(s['new_running'],int(new));self.assertEqual(s['old_running'],int(not new))
         self.assertEqual(s['authority'],0)
         self.assertEqual(s['new_identity'] if new else s['old_identity'],42 if s['activated'] else 41)
+
+    def fresh_failed(self):
+        self.raw=first_install.encode(approval.encode(1,'4.3.16.42034','fixture-8600',bytes(range(32))),b't'*32,'fixture',b'n'*32)
+        self.record.write_bytes(self.raw)
+        self.invoke('fail:activate',expected=10)
+        values=list(struct.unpack('=12I',self.model.read_bytes()));values[5]=1
+        self.model.write_bytes(struct.pack('=12I',*values))
+
+    def test_retry_authorization_requires_exact_failed_fresh_transaction(self):
+        self.invoke(authorize=True,expected=12)
+        self.fresh_failed();failed=(self.store/'transaction').read_bytes()
+        self.invoke(authorize=True)
+        self.assertEqual((self.store/'transaction-failed').read_bytes(),failed)
+        self.assertEqual((self.store/'transaction-retry').read_bytes(),b'PDRETRY1'+self.raw)
+        self.invoke();self.assertFalse((self.store/'transaction-retry').exists())
+        self.assertEqual((self.store/'transaction-failed').read_bytes(),failed)
+        self.invoke(authorize=True,expected=12)
+
+    def test_boot_discards_retry_and_preserves_failed_state(self):
+        self.fresh_failed();self.invoke(authorize=True);before=self.state()['activated']
+        self.invoke(recover=True,expected=10)
+        self.assertEqual(self.state()['activated'],before);self.assertFalse((self.store/'transaction-retry').exists())
+        self.assertEqual((self.store/'transaction').read_bytes(),b'PDTXN001'+self.raw+struct.pack('>I',7))
+
+    def test_interrupted_retry_publication_never_authorizes_forward(self):
+        self.fresh_failed();self.invoke('kill:transaction-retry:0',expected=-signal.SIGKILL,authorize=True)
+        self.assertTrue((self.store/'transaction-retry.new').exists());before=self.state()['activated']
+        self.invoke(expected=10);self.assertEqual(self.state()['activated'],before)
+        self.assertFalse((self.store/'transaction-retry.new').exists())
+
+    def test_retry_authorization_is_serialized_and_preserves_foreign_partial(self):
+        self.fresh_failed();fd=os.open(self.store/'transaction.lock',os.O_RDWR)
+        try:
+            fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);self.invoke(authorize=True,expected=12)
+            self.assertFalse((self.store/'transaction-failed').exists())
+        finally:os.close(fd)
+        partial=self.store/'transaction-failed.new';partial.write_bytes(b'foreign');partial.chmod(0o600)
+        self.invoke(authorize=True,expected=12);self.assertEqual(partial.read_bytes(),b'foreign')
+        self.assertFalse((self.store/'transaction-retry').exists())
+
+    def test_retry_consumption_is_one_shot_even_after_process_death(self):
+        self.fresh_failed();self.invoke(authorize=True);before=self.state()['activated']
+        self.invoke('kill:retry-consumed:0',expected=-signal.SIGKILL)
+        self.invoke(expected=10);self.assertEqual(self.state()['activated'],before)
 
     def test_commit_releases_authority_and_preserves_new_identity(self):
         self.invoke();self.assert_owner(True);s=self.state()

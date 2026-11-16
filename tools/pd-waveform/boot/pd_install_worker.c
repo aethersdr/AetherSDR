@@ -161,11 +161,14 @@ static int worker_bootstrap_locked(int root,int parent,int units,int run,int sel
         return worker_rearm(parent,units,self,plan);
     }
     if(errno!=ENOENT){return 4;}
+    int retry=0;
     int store=openat(parent,"aetherpd",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     if(store>=0){
         int terminal=pd_transaction_at_phase(store,plan,PD_TRANSACTION_COMMITTED) || pd_transaction_at_phase(store,plan,PD_TRANSACTION_ROLLED_BACK);
         if(terminal){
-            int ok=pd_capsule_finish_cleanup(parent,units,store,pd_release_key,plan);close(store);return ok?0:4;
+            int ok=pd_capsule_finish_cleanup(parent,units,store,pd_release_key,plan);
+            retry=migration->fresh && pd_transaction_at_phase(store,plan,PD_TRANSACTION_ROLLED_BACK);
+            if(!ok || !retry){close(store);return ok?0:4;}
         }
         close(store);
     }else if(errno!=ENOENT){return 4;}
@@ -182,7 +185,8 @@ static int worker_bootstrap_locked(int root,int parent,int units,int run,int sel
     int ok=stage>=0 && worker_stage_approval(stage,target) && pd_install_prepare(parent,units,stage,pd_release_key,release,digest);
     if(stage>=0){close(stage);}
     store=ok?openat(parent,"aetherpd",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC):-1;
-    ok=ok && store>=0 && pd_migration_bind(store,plan) && pd_capsule_publish(parent,self,0,pd_release_key,plan);
+    ok=ok && store>=0 && pd_migration_bind(store,plan) && pd_capsule_publish(parent,self,0,pd_release_key,plan) &&
+        (!retry || pd_transaction_authorize_retry(store,plan));
     if(store>=0){close(store);}return ok?worker_rearm(parent,units,self,plan):4;
 }
 static int worker_bootstrap(void)

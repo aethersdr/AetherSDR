@@ -30,6 +30,11 @@ struct pd_transaction_ops {
  * recovery before this function can stop or retire the predecessor. */
 int pd_transaction_run(int store,const unsigned char approval[PD_MIGRATION_SIZE],
                        const struct pd_transaction_ops* ops);
+/* Called only by a newly delivered, authenticated fresh-install bootstrap,
+ * after republishing its recovery capsule. Authorizes one forward retry of
+ * the same terminal failed plan and retains the prior failure record.
+ * The normal worker consumes it; boot recovery discards it without advancing. */
+int pd_transaction_authorize_retry(int store,const unsigned char approval[PD_MIGRATION_SIZE]);
 /* Boot recovery never takes a forward step, even without a published journal.
  * Only rollback and cleanup callbacks are required. */
 int pd_transaction_recover(int store,const unsigned char approval[PD_MIGRATION_SIZE],

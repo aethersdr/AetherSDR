@@ -162,6 +162,65 @@ static int transaction_write(int store,const unsigned char* approval,unsigned ph
         pd_transaction_checkpoint("rename",phase) && !fsync(store) &&
         pd_transaction_checkpoint("durable",phase);
 }
+static int transaction_record_matches(int store,const char* name,const unsigned char* expected,size_t size,int partial)
+{
+    int fd=openat(store,name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+    if(fd<0){return errno==ENOENT?0:-1;}
+    struct stat st;unsigned char bytes[kTransactionSize];
+    int ok=!fstat(fd,&st) && st.st_size>=0 && st.st_size<=(off_t)size &&
+        (partial || st.st_size==(off_t)size) && size<=sizeof(bytes) && transaction_file(fd,st.st_size) &&
+        transaction_read(fd,bytes,(size_t)st.st_size) && !memcmp(bytes,expected,(size_t)st.st_size);
+    close(fd);return ok?1:-1;
+}
+static int transaction_publish_record(int store,const char* name,const unsigned char* bytes,size_t size)
+{
+    char temporary[48];snprintf(temporary,sizeof(temporary),"%s.new",name);
+    int present=transaction_record_matches(store,name,bytes,size,0);
+    int partial=transaction_record_matches(store,temporary,bytes,size,1);
+    if(present<0 || partial<0){return 0;}
+    if(partial && unlinkat(store,temporary,0)){return 0;}
+    if(present){return !fsync(store);}
+    int fd=openat(store,temporary,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+    int ok=fd>=0;size_t used=0;
+    while(ok && used<size){
+        ssize_t n=write(fd,bytes+used,size-used);if(n<0 && errno==EINTR){continue;}
+        if(n<=0){ok=0;break;}used+=(size_t)n;
+    }
+    ok=ok && !fsync(fd);if(fd>=0 && close(fd)){ok=0;}
+    return ok && pd_transaction_checkpoint(name,0) && !renameat(store,temporary,store,name) && !fsync(store);
+}
+static int transaction_take_retry(int store,const unsigned char* approval,unsigned phase,int* authorized)
+{
+    unsigned char bytes[8+PD_MIGRATION_SIZE];memcpy(bytes,"PDRETRY1",8);memcpy(bytes+8,approval,PD_MIGRATION_SIZE);
+    int present=transaction_record_matches(store,"transaction-retry",bytes,sizeof(bytes),0);
+    int partial=transaction_record_matches(store,"transaction-retry.new",bytes,sizeof(bytes),1);
+    *authorized=0;
+    if(present<0 || partial<0){return 0;}
+    if(!present && !partial){return 1;}
+    struct pd_migration parsed;
+    if(phase!=PD_TRANSACTION_ROLLED_BACK || !pd_migration_parse(approval,PD_MIGRATION_SIZE,&parsed) || !parsed.fresh){return 0;}
+    unsigned char failed[kTransactionSize];transaction_encode(failed,approval,PD_TRANSACTION_ROLLED_BACK);
+    if(transaction_record_matches(store,"transaction-failed",failed,sizeof(failed),0)!=1){return 0;}
+    if((partial && unlinkat(store,"transaction-retry.new",0)) || (present && unlinkat(store,"transaction-retry",0)) || fsync(store)){return 0;}
+    *authorized=present;
+    return pd_transaction_checkpoint("retry-consumed",0);
+}
+int pd_transaction_authorize_retry(int store,const unsigned char approval[PD_MIGRATION_SIZE])
+{
+    struct stat st;struct pd_migration parsed;unsigned phase=0;
+    if(!pd_migration_parse(approval,PD_MIGRATION_SIZE,&parsed) || !parsed.fresh ||
+        fstat(store,&st) || !S_ISDIR(st.st_mode) || st.st_uid!=transaction_owner() || (st.st_mode&022)){return 0;}
+    int lock=openat(store,"transaction.lock",O_RDWR|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+    if(!transaction_file(lock,0) || flock(lock,LOCK_EX|LOCK_NB)){if(lock>=0){close(lock);}return 0;}
+    unsigned char failed[kTransactionSize],retry[8+PD_MIGRATION_SIZE];
+    transaction_encode(failed,approval,PD_TRANSACTION_ROLLED_BACK);
+    memcpy(retry,"PDRETRY1",8);memcpy(retry+8,approval,PD_MIGRATION_SIZE);
+    int ok=transaction_phase(store,approval,&phase) && phase==PD_TRANSACTION_ROLLED_BACK &&
+        fstatat(store,"transaction.new",&st,AT_SYMLINK_NOFOLLOW)<0 && errno==ENOENT &&
+        transaction_publish_record(store,"transaction-failed",failed,sizeof(failed)) &&
+        transaction_publish_record(store,"transaction-retry",retry,sizeof(retry));
+    close(lock);return ok;
+}
 static int transaction_rollback(int store,const unsigned char* approval,const struct pd_transaction_ops* ops)
 {
     if(!transaction_write(store,approval,PD_TRANSACTION_ROLLBACK) || !ops->rollback(ops->context) ||
@@ -170,6 +229,9 @@ static int transaction_rollback(int store,const unsigned char* approval,const st
 }
 static int transaction_execute(int store,const unsigned char* approval,const struct pd_transaction_ops* ops,unsigned phase,int recovery)
 {
+    int retry=0;
+    if(!transaction_take_retry(store,approval,phase,&retry)){return -2;}
+    if(retry && !recovery){phase=0;}
     if(phase==PD_TRANSACTION_COMMITTED || phase==PD_TRANSACTION_ROLLED_BACK){
         /* Re-entry can observe a rename whose directory sync was interrupted. */
         if(!transaction_clear_partial(store,approval) || !pd_transaction_checkpoint("terminal",phase) ||

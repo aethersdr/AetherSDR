@@ -473,6 +473,45 @@ This is one live native-before-carrier interruption and one completed-install
 reboot. It does not qualify power loss during a transaction, every interrupted
 phase, terminal failed-store recovery, or pending attempts on other platforms.
 
+## Failed fresh-install retry component
+
+The current native source supports an explicit redelivery retry of a terminal
+failed `PDFST001` transaction. This component is not included in the pinned
+`0.0.0-first.7c87bc223` desktop package or the installed radio candidate. The
+ordinary pending-upload resume proof above therefore does not qualify failed
+transaction retry. A newly signed package and live qualification remain required.
+
+Only the authenticated bootstrap delivery path can publish `transaction-retry`.
+It requires the exact terminal failed fresh plan, republishes the bounded
+recovery capsule, and holds the exclusive transaction lock while preserving the
+old failed journal in `transaction-failed`. A migration or committed transaction
+cannot receive this grant. The marker and its partial publication are fixed-size,
+root-owned, mode 0600, single-link files; foreign bytes and unsafe metadata are
+preserved and refused.
+
+A normal worker consumes and directory-syncs the grant before taking any forward
+step. A crash after consumption cannot reuse it. An interrupted marker publication
+never authorizes a forward step. Boot recovery consumes/discards the grant and
+cleans the already failed transaction; it does not retry installation. The new
+forward transaction uses the original plan, token hash, hostname and installation
+ID. Existing identity bytes must still match; the retry never erases or adopts
+another identity. The old failure record remains after success. Repeated failures
+reuse these bounded records rather than accumulating a history directory.
+
+This keeps the existing public-upload authority boundary. It does not provide
+cryptographic operator isolation from another process already sharing the waveform
+UID and able to redeliver the same exact approved job. It grants no arbitrary
+command, path, different payload or different identity.
+
+`first-install-failed-retry-development` records 46 whole-worker namespace tests,
+26 transaction tests, transaction ASan/UBSan/LSan passes, ARM64 worker and Cortex-A8
+ARMv7 boot-helper builds. The tests cover boot refusal to advance, interrupted
+publication/consumption, metadata and lock refusal, identity and selection
+preservation, and committed redelivery without reactivation. A separate mutant
+that accepted a partial retry marker as authorization was rejected by the regression.
+The radio and service adapters in whole-worker tests are fixtures; this is not
+physical power-loss, live retry or FLEX-6000 hardware qualification.
+
 ## Remaining gates
 
 Authenticated production package distribution, unresolved-attempt recovery,

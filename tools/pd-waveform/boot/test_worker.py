@@ -140,6 +140,65 @@ class WorkerTest(unittest.TestCase):
   self.assertEqual((self.store/'migration-approved').read_bytes(),self.plan)
   self.assertEqual(json.loads((self.store/'state/provision.json').read_text())['installation_id'],self.plan[244:276].hex())
   self.assertEqual(self.state()['new_running'],1)
+ def failed_fresh(self):
+  self.fresh();self.invoke('bootstrap');self.invoke(fault='fail:activate:after');self.clean()
+  self.assertEqual(self.state()['new_running'],0);self.assertEqual(self.state()['enabled'],0)
+  self.assertEqual((self.store/'transaction').read_bytes(),b'PDTXN001'+self.plan+struct.pack('>I',7))
+  return (self.store/'state/provision.json').read_bytes()
+ def test_explicit_failed_fresh_retry_preserves_identity_and_failure(self):
+  identity=self.failed_fresh();failed=(self.store/'transaction').read_bytes()
+  self.invoke('bootstrap');self.assertEqual((self.store/'transaction-retry').read_bytes(),b'PDRETRY1'+self.plan)
+  self.invoke();self.clean()
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+  self.assertEqual((self.store/'transaction-failed').read_bytes(),failed)
+  self.assertEqual((self.store/'transaction').read_bytes(),b'PDTXN001'+self.plan+struct.pack('>I',5))
+  self.assertFalse((self.store/'transaction-retry').exists());self.assertEqual(self.state()['new_running'],1)
+ def test_boot_recovery_discards_retry_without_forward_steps(self):
+  identity=self.failed_fresh();before=self.events().count('activate:before');self.invoke('bootstrap')
+  self.invoke('recover');self.clean()
+  self.assertEqual(self.events().count('activate:before'),before);self.assertEqual(self.state()['new_running'],0)
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+  self.assertFalse((self.store/'transaction-retry').exists())
+ def test_retry_consumption_death_never_rearms_on_recovery(self):
+  identity=self.failed_fresh();self.invoke('bootstrap');before=self.events().count('activate:before')
+  self.invoke(fault='kill:transaction:retry-consumed:0',expected=137)
+  self.invoke('recover');self.clean();self.assertEqual(self.events().count('activate:before'),before)
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity);self.assertEqual(self.state()['new_running'],0)
+  self.invoke('bootstrap');self.invoke();self.clean();self.assertEqual(self.state()['new_running'],1)
+ def test_retry_publication_death_does_not_authorize_forward(self):
+  identity=self.failed_fresh();self.invoke('bootstrap',fault='kill:transaction:transaction-retry:0',expected=137)
+  self.assertTrue((self.store/'transaction-retry.new').exists());before=self.events().count('activate:before')
+  self.invoke('recover');self.clean();self.assertEqual(self.events().count('activate:before'),before)
+  self.assertFalse((self.store/'transaction-retry.new').exists())
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+ def test_retry_after_first_forward_checkpoint_still_rolls_back_on_boot(self):
+  identity=self.failed_fresh();self.invoke('bootstrap');before=self.events().count('activate:before')
+  self.invoke(fault='kill:transaction:durable:1',expected=137);self.invoke('recover');self.clean()
+  self.assertEqual(self.events().count('activate:before'),before);self.assertEqual(self.state()['new_running'],0)
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+ def test_retry_after_selection_publication_preserves_same_selected_identity(self):
+  self.fresh();self.invoke('bootstrap');self.invoke(fault='kill:transaction:file:5',expected=137)
+  identity=(self.store/'state/provision.json').read_bytes();selection=(self.store/'first-selection').read_bytes()
+  self.invoke('recover');self.clean();self.invoke('bootstrap');self.invoke();self.clean()
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+  self.assertEqual((self.store/'first-selection').read_bytes(),selection);self.assertEqual(self.state()['new_running'],1)
+ def test_foreign_retry_record_is_preserved_without_activation(self):
+  identity=self.failed_fresh();self.invoke('bootstrap');marker=self.store/'transaction-retry'
+  foreign=bytearray(marker.read_bytes());foreign[-1]^=1;marker.write_bytes(foreign)
+  before=self.events().count('activate:before');self.invoke(expected=4)
+  self.assertEqual(marker.read_bytes(),foreign);self.assertEqual(self.events().count('activate:before'),before)
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
+ def test_retry_marker_metadata_is_checked_before_consumption(self):
+  self.failed_fresh();self.invoke('bootstrap');marker=self.store/'transaction-retry';original=marker.read_bytes()
+  marker.chmod(0o644);self.invoke(expected=4);self.assertEqual(marker.read_bytes(),original)
+  marker.chmod(0o600);alias=self.store/'retry-alias';os.link(marker,alias);self.invoke(expected=4);alias.unlink()
+  marker.unlink();alias.write_bytes(original);alias.chmod(0o600);marker.symlink_to('retry-alias')
+  self.invoke(expected=4);self.assertTrue(marker.is_symlink());self.assertEqual(alias.read_bytes(),original)
+ def test_failed_retry_history_cannot_be_substituted(self):
+  identity=self.failed_fresh();self.invoke('bootstrap');history=self.store/'transaction-failed'
+  original=history.read_bytes();history.write_bytes(b'x'*len(original));self.invoke(expected=4)
+  self.assertEqual(history.read_bytes(),b'x'*len(original));self.assertTrue((self.store/'transaction-retry').exists())
+  self.assertEqual((self.store/'state/provision.json').read_bytes(),identity)
  def test_fresh_install_refuses_existing_predecessor(self):
   self.fresh();(self.fixture/'model').write_bytes(struct.pack('=5i',1,1,0,0,0))
   self.invoke('bootstrap',expected=3);self.assertFalse(self.store.exists())
