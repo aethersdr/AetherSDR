@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var testUnkeyIdentity = pdStartIdentity{"11111111-2222-4333-8444-555555555555", 0x11223344}
+var testUnkeyIdentity = pdStartIdentity{GUIClientID: "11111111-2222-4333-8444-555555555555", GUIHandle: 0x11223344}
 
 func TestPDTestUnkeyBind(t *testing.T) {
 	const tail = "S01020304|interlock state=READY\nR910000|0|0x11223344\n"
@@ -52,7 +52,7 @@ func TestPDTestUnkeyBindRefusals(t *testing.T) {
 		}
 	}
 	wire := &pdObservationWire{Reader: strings.NewReader("")}
-	if _, err := bindPDTestUnkeyAPI(context.Background(), wire, pdStartIdentity{"bad\ncommand", 1}); err == nil || wire.writes.Len() != 0 {
+	if _, err := bindPDTestUnkeyAPI(context.Background(), wire, pdStartIdentity{GUIClientID: "bad\ncommand", GUIHandle: 1}); err == nil || wire.writes.Len() != 0 {
 		t.Fatal("invalid identity reached transport")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

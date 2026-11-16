@@ -152,7 +152,7 @@ func (p *aetherPDProcess) startTestUnkey(ctx context.Context, durationMS int) (*
 		if err != nil {
 			return nil, err
 		}
-		api, client, err := preparePDTestUnkeyAPI(runCtx, pdStartIdentity{original.clientID, original.guiHandle})
+		api, client, err := preparePDTestUnkeyAPI(runCtx, pdStartIdentity{GUIClientID: original.clientID, GUIHandle: original.guiHandle})
 		if err != nil {
 			return nil, err
 		}

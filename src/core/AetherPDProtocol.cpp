@@ -153,6 +153,8 @@ std::optional<State> state(const QJsonValue& value)
     if (text == QLatin1String("cleanup_unconfirmed")) { return State::CleanupUnconfirmed; }
     if (text == QLatin1String("stopped_receive_unconfirmed")) { return State::StoppedReceiveUnconfirmed; }
     if (text == QLatin1String("starting")) { return State::Starting; }
+    if (text == QLatin1String("feedback_binding_pending")) { return State::FeedbackBindingPending; }
+    if (text == QLatin1String("feedback_binding_failed")) { return State::FeedbackBindingFailed; }
     if (text == QLatin1String("disabled")) { return State::Disabled; }
     if (text == QLatin1String("blocked_by_radio_apd")) { return State::BlockedByRadioApd; }
     if (text == QLatin1String("measurement_armed")) { return State::MeasurementArmed; }
@@ -216,10 +218,25 @@ std::optional<MeasurementToneConfig> toneConfig(const QJsonValue& value)
     return MeasurementToneConfig{*id, quint32(spacing)};
 }
 
+std::optional<FeedbackBinding> feedbackBinding(const QJsonObject& object)
+{
+    FeedbackBinding binding;
+    quint64 channel = 0, pan = 0, gui = 0;
+    if (object.size() != 6 || object.value(QStringLiteral("transport")) != QLatin1String("local_dax_iq")
+        || !counter(object, "channel", channel) || channel < 1 || channel > 4
+        || !counter(object, "pan", pan) || pan == 0 || pan > std::numeric_limits<quint32>::max()
+        || !counter(object, "gui_handle", gui) || gui == 0 || gui > std::numeric_limits<quint32>::max()
+        || !boolean(object, "valid", binding.valid) || !boolean(object, "failed", binding.failed)
+        || (binding.valid && binding.failed)) { return std::nullopt; }
+    binding.channel = quint32(channel); binding.pan = quint32(pan); binding.guiHandle = quint32(gui);
+    return binding;
+}
+
 bool consistent(const Status& s)
 {
     const bool armed = s.calibrationState == CalibrationState::Armed;
     const bool running = s.calibrationState == CalibrationState::Running;
+    if (s.feedbackBinding && !s.feedbackBinding->valid && (armed || running || s.correcting)) { return false; }
     if (armed || running) {
         if (!s.calibrationControl || s.calibrationSamplesLeft == 0
             || s.calibrationSamplesLeft > 192'000 || running != s.keyed) {
@@ -240,6 +257,8 @@ bool consistent(const Status& s)
     if (s.calibrationRequired && !s.faults.any()) { return false; }
     State expected = State::Calibrating;
     if (!s.registered) { expected = State::Starting; }
+    else if (s.feedbackBinding && s.feedbackBinding->failed) { expected = State::FeedbackBindingFailed; }
+    else if (s.feedbackBinding && !s.feedbackBinding->valid) { expected = State::FeedbackBindingPending; }
     else if (!s.correctionEnabled) { expected = State::Disabled; }
     else if (s.state == State::BlockedByRadioApd) { expected = State::BlockedByRadioApd; }
     else if (armed) { expected = s.sourcePurpose == SourcePurpose::Measurement ? State::MeasurementArmed : State::CalibrationArmed; }
@@ -328,9 +347,15 @@ std::optional<Status> parseStatus(const QByteArray& json)
         QStringLiteral("calibration_state"), QStringLiteral("calibration_samples_left"),
         QStringLiteral("measurement_control"), QStringLiteral("source_purpose"), QStringLiteral("measurement"),
         QStringLiteral("measurement_tone_control"), QStringLiteral("measurement_tone_capture_version"), QStringLiteral("measurement_tone_config"),
-        QStringLiteral("input_limited_samples"), QStringLiteral("faults")};
+        QStringLiteral("input_limited_samples"), QStringLiteral("faults"), QStringLiteral("feedback_binding")};
     for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
         if (!known.contains(it.key())) { return std::nullopt; }
+    }
+    if (o.contains(QStringLiteral("feedback_binding"))) {
+        const QJsonValue binding = o.value(QStringLiteral("feedback_binding"));
+        if (!binding.isObject()) { return std::nullopt; }
+        s.feedbackBinding = feedbackBinding(binding.toObject());
+        if (!s.feedbackBinding) { return std::nullopt; }
     }
     if (!boolean(o, "registered", s.registered) || !boolean(o, "keyed", s.keyed)
         || !boolean(o, "correction_enabled", s.correctionEnabled) || !boolean(o, "correcting", s.correcting)

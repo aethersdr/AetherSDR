@@ -13,7 +13,7 @@ enum class Operation { Status, ArmMeasurement, ArmCalibration, CancelCalibration
 enum class State {
     Unavailable, Starting, Disabled, BlockedByRadioApd, MeasurementArmed, CalibrationArmed,
     RecalibrationRequired, Idle, Correcting, Calibrating, Stopped, CleanupUnconfirmed,
-    StoppedReceiveUnconfirmed
+    StoppedReceiveUnconfirmed, FeedbackBindingPending, FeedbackBindingFailed
 };
 enum class SourcePurpose { Calibration, Measurement };
 enum class CalibrationState { Unavailable, Idle, Completed, Canceled, Expired, Armed, Running };
@@ -50,7 +50,17 @@ struct MeasurementToneConfig {
     bool operator==(const MeasurementToneConfig&) const = default;
 };
 
+struct FeedbackBinding {
+    quint32 channel{0};
+    quint32 pan{0};
+    quint32 guiHandle{0};
+    bool valid{false};
+    bool failed{false};
+    bool operator==(const FeedbackBinding&) const = default;
+};
+
 struct Status {
+    std::optional<FeedbackBinding> feedbackBinding;
     std::optional<MeasurementSource> measurement;
     std::optional<MeasurementToneConfig> measurementToneConfig;
     bool measurementToneControl{false};

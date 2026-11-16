@@ -172,6 +172,13 @@ static void check_configured_spectrum(unsigned spacing,double lower,double upper
     pd_align_destroy(w.align);pd_eq_destroy(w.eq);pd_eq_destroy(w.trusted_eq);
     free(w.ref.buf);free(w.fbk.buf);free(w.acq_tx);free(w.acq_rx);
 }
+static void check_binding_status(const wf_t* w,unsigned channel,int valid,int failed)
+{
+    char status[4096],expected[192];int size=status_json(w,status,sizeof(status));
+    assert(size>0 && size<(int)sizeof(status));
+    snprintf(expected,sizeof(expected),"\"feedback_binding\":{\"transport\":\"local_dax_iq\",\"channel\":%u,\"pan\":1073741825,\"gui_handle\":287454020,\"valid\":%s,\"failed\":%s}",channel,valid?"true":"false",failed?"true":"false");
+    assert(strstr(status,expected));
+}
 static void check_feedback_binding(unsigned channel)
 {
     setenv("AETHER_PD_FEEDBACK","local",1);
@@ -196,9 +203,9 @@ static void check_feedback_binding(unsigned channel)
         char idle[]="S0|interlock state=READY tx_client_handle=0x00000000 source= reason= tx_allowed=1";
         api_line(&w,idle);
         char partial[128];snprintf(partial,sizeof(partial),"S0|display pan 0x40000001 center=7.150000 daxiq_channel=%u",channel);
-        api_line(&w,partial);assert(!feedback_binding_valid(&w));
+        api_line(&w,partial);assert(!feedback_binding_valid(&w));check_binding_status(&w,channel,0,0);
         char owned[]="S0|display pan 0x40000001 client_handle=0x11223344";
-        api_line(&w,owned);assert(feedback_binding_valid(&w));
+        api_line(&w,owned);assert(feedback_binding_valid(&w));check_binding_status(&w,channel,1,0);
         uint64_t resets=w.correction_resets;
         char foreign[]="S0|display pan 0x40000002 client_handle=0x55667788 daxiq_channel=1 center=50.000000";
         api_line(&w,foreign);assert(feedback_binding_valid(&w) && w.feedback_pan==0x40000001 && w.pan_mhz==7.15 && w.correction_resets==resets);
@@ -212,6 +219,7 @@ static void check_feedback_binding(unsigned channel)
         char fault[160];snprintf(fault,sizeof(fault),"%s",faults[f]);api_line(&w,fault);
         assert(w.feedback_binding_failed && !feedback_binding_valid(&w) && !w.feedback_ok &&
             w.calibration.phase!=PD_CAL_ARMED && w.calibration.phase!=PD_CAL_RUNNING);
+        check_binding_status(&w,channel,0,1);
         api_line(&w,idle);
         char restored[160];snprintf(restored,sizeof(restored),"S0|display pan 0x40000001 client_handle=0x11223344 daxiq_channel=%u center=7.150000",channel);
         api_line(&w,restored);assert(!feedback_binding_valid(&w));

@@ -2011,6 +2011,14 @@ static int lan_caller(const struct sockaddr_in* a)
 }
 
 // What the operator needs to see during a transmit test.
+static int status_feedback_binding(const wf_t* w,char* out,size_t cap)
+{
+    if(!w->sealed_feedback_pan){if(cap){out[0]=0;}return 0;}
+    return snprintf(out,cap,"\"feedback_binding\":{\"transport\":\"%s\",\"channel\":%d,\"pan\":%u,\"gui_handle\":%u,\"valid\":%s,\"failed\":%s},",
+        w->local_iq_mode?"local_dax_iq":"unsupported",w->daxiq_ch,w->sealed_feedback_pan,w->calibration_gui,
+        w->local_iq_mode && feedback_binding_valid(w)?"true":"false",w->feedback_binding_failed?"true":"false");
+}
+
 static int status_json(const wf_t* w, char* out, size_t cap)
 {
     struct sched_param scheduling = {0};
@@ -2029,8 +2037,10 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         if (written < 0 || (size_t)written >= sizeof(counts_json) - count_size) return -1;
         count_size += (size_t)written;
     }
+    char binding[192];int binding_size=status_feedback_binding(w,binding,sizeof(binding));
+    if(binding_size<0 || binding_size>=(int)sizeof(binding)){return -1;}
     return snprintf(out, cap,
-        "{\"name\":\"%s\",\"version\":\"%s\",\"registered\":%s,\"active_slice\":%d,"
+        "{%s\"name\":\"%s\",\"version\":\"%s\",\"registered\":%s,\"active_slice\":%d,"
         "\"tx_mhz\":%.6f,\"pan_mhz\":%.6f,\"daxiq_stream\":\"0x%08x\",\"daxiq_reply\":\"%s\",\"keyed\":%s,"
         "\"feedback_ok\":%s,\"correction\":%s,\"aligned\":%s,\"delay_samples\":%.2f,"
         "\"delay_corr\":%.3f,\"coherence\":%.3f,\"offset_hz\":%.4f,\"fits\":%d,"
@@ -2038,7 +2048,7 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         "\"other_pkts\":%ld,\"other_last\":\"sid 0x%08x cls 0x%04x\",\"ref_fifo\":%d,"
         "\"fb_fifo\":%d,\"acq\":%d,\"eq_ready\":%s,\"eq_residual_db\":%.1f,"
         "\"feedback\":\"%s\",\"fb_slice\":%d,\"fb_mhz\":%.6f,\"fb_dax_stream\":\"0x%08x\",\"local_iq_fault\":%s,\"local_iq_frames\":%llu,\"local_iq_stale\":%llu,\"tx_rejected\":%llu,\"model_resets\":%llu,\"model_recoveries\":%llu,\"rejected_fits\":%u,\"cached_model\":%s,\"warm_starts\":%llu,\"cached_packets\":%llu,\"tx_sent_datagrams\":%llu,\"tx_send_errors\":%llu,\"tx_max_send_gap_ns\":%lld,\"tx_max_work_ns\":%lld,\"tx_trace_rows\":%u,\"tx_trace_dropped\":%u,\"scheduler_policy\":%d,\"scheduler_priority\":%d,\"tx_deadline_faults\":%llu,\"api_leased\":%s,\"native_apd_blocked\":%s,\"collection_full_bins\":%d,\"collection_bin_counts\":[%s],\"transport_cache_enabled\":%s,\"transport_pending\":%s,\"transport_recoveries\":%llu,\"transport_eq_distance\":%.6f,\"mic_peak\":%.6f,\"prelimit_peak\":%.6f,\"limited_samples\":%llu,\"generated_samples\":%llu,\"quiet_blocks\":%llu,\"reference_power\":%.9f,\"signal_present\":%s,\"test_active\":%s,\"test_remaining_samples\":%d,\"mic_gain\":%.6f,\"base_peak\":%.6f,\"measurement\":{\"source_id\":\"%016llx\",\"tones\":%s},\"measurement_control\":%s,\"correction_control\":%s,\"measurement_tone_control\":%s,\"measurement_tone_capture_version\":3,\"measurement_tone_config\":{\"min_spacing_hz\":%u,\"max_spacing_hz\":%u,\"center_hz\":%d,\"spacing_hz\":%u,\"source_id\":\"%016llx\"},\"source_purpose\":\"%s\",\"calibration_control\":%s,\"calibration_state\":\"%s\",\"calibration_samples_left\":%d}\n",
-        WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
+        binding, WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
         w->daxiq_sid, w->daxiq_reply, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
         pd_align_delay(w->align), pd_align_estimate_corr(w->align), pd_align_coherence(w->align),

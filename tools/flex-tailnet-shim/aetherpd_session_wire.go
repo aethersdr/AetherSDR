@@ -19,10 +19,12 @@ var errPDSessionClosed = errors.New("AetherPD session channel unavailable")
 type pdStartIdentity struct {
 	GUIClientID string `json:"gui_client_id"`
 	GUIHandle   uint32 `json:"gui_handle"`
+	IQChannel   uint32 `json:"iq_channel,omitempty"`
+	FeedbackPan uint32 `json:"feedback_pan,omitempty"`
 }
 
-func (id pdStartIdentity) frame() ([48]byte, error) {
-	var frame [48]byte
+func (id pdStartIdentity) frame() ([]byte, error) {
+	frame := make([]byte, 48)
 	if len(id.GUIClientID) != 36 || id.GUIHandle == 0 {
 		return frame, errors.New("invalid GUI identity")
 	}
@@ -37,7 +39,17 @@ func (id pdStartIdentity) frame() ([48]byte, error) {
 			return frame, errors.New("invalid GUI UUID")
 		}
 	}
-	copy(frame[:8], "PDSTART1")
+	if id.IQChannel != 0 || id.FeedbackPan != 0 {
+		if id.IQChannel < 1 || id.IQChannel > 4 || id.FeedbackPan == 0 {
+			return nil, errors.New("invalid IQ selection")
+		}
+		frame = make([]byte, 56)
+		copy(frame[:8], "PDSTART2")
+		binary.BigEndian.PutUint32(frame[48:52], id.IQChannel)
+		binary.BigEndian.PutUint32(frame[52:56], id.FeedbackPan)
+	} else {
+		copy(frame[:8], "PDSTART1")
+	}
 	copy(frame[8:44], id.GUIClientID)
 	binary.BigEndian.PutUint32(frame[44:], id.GUIHandle)
 	return frame, nil

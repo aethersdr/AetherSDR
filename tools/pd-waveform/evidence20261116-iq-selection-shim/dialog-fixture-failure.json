@@ -1,0 +1,5 @@
+{
+  "failure": "Existing tone-edit no-command assertion counted from before the newly inserted binding status polls",
+  "fix": "Snapshot the request count immediately before the tone edit; retain the exact no-new-request assertion",
+  "production_source_changed": false
+}

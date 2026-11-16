@@ -547,7 +547,11 @@ ADC headroom or calibrated output power.
    feedback panadapter and verifies that this GUI owns it. Removing the pan or
    reassigning its channel or owner ends that binding; stop and start AetherPD
    explicitly after correcting the assignment. Another pan reporting the same
-   channel cannot take its place. Confirm **Dummy load connected;
+   channel cannot take its place. **Waiting for DAX IQ binding** means the
+   service has not yet observed matching pan ownership. **DAX IQ binding failed —
+   stop and start AetherPD again** means that binding was lost. Arming and
+   correction controls remain dimmed while binding is invalid; correct the
+   assignment, then explicitly stop and start the session. Confirm **Dummy load connected;
    feedback attenuation checked**.
    Before arming, you can choose **Radio power setting (W)** and click
    **Apply power**. This requests the nominal setting without transmitting;

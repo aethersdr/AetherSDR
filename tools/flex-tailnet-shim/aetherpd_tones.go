@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -50,41 +49,9 @@ func pdToneConfig(sourceID string, spacing uint32) *pdMeasurementToneConfig {
 	return &pdMeasurementToneConfig{pdToneMinSpacing, pdToneMaxSpacing, pdToneCenter, spacing, sourceID}
 }
 
-// These small fixed objects reject duplicates, missing/null values, extensions
-// and trailing data. A future contract needs an explicitly negotiated version.
-func decodePDToneObject(raw []byte, fields map[string]any) error {
-	bad := errors.New("invalid tone configuration")
-	d := json.NewDecoder(bytes.NewReader(raw))
-	token, err := d.Token()
-	if err != nil || token != json.Delim('{') {
-		return bad
-	}
-	seen := map[string]bool{}
-	for d.More() {
-		token, err = d.Token()
-		key, ok := token.(string)
-		destination, known := fields[key]
-		if err != nil || !ok || !known || seen[key] {
-			return bad
-		}
-		seen[key] = true
-		var value json.RawMessage
-		if d.Decode(&value) != nil || bytes.Equal(value, []byte("null")) || json.Unmarshal(value, destination) != nil {
-			return bad
-		}
-	}
-	if token, err = d.Token(); err != nil || token != json.Delim('}') || len(seen) != len(fields) {
-		return bad
-	}
-	if _, err = d.Token(); err != io.EOF {
-		return bad
-	}
-	return nil
-}
-
 func parsePDToneConfig(raw []byte) (*pdMeasurementToneConfig, error) {
 	var c pdMeasurementToneConfig
-	err := decodePDToneObject(raw, map[string]any{
+	err := decodePDExactObject(raw, map[string]any{
 		"min_spacing_hz": &c.MinSpacingHz, "max_spacing_hz": &c.MaxSpacingHz,
 		"center_hz": &c.CenterHz, "spacing_hz": &c.SpacingHz, "source_id": &c.SourceID,
 	})
@@ -109,7 +76,7 @@ func aetherPDToneArmHandler(n *Node) http.HandlerFunc {
 		var spacing uint32
 		body, err := io.ReadAll(io.LimitReader(r.Body, 129))
 		if err != nil || len(body) > 128 || r.URL.RawQuery != "" ||
-			decodePDToneObject(body, map[string]any{"spacing_hz": &spacing}) != nil || !pdToneSpacingValid(spacing) {
+			decodePDExactObject(body, map[string]any{"spacing_hz": &spacing}) != nil || !pdToneSpacingValid(spacing) {
 			writeJSON(w, 400, apiError{"expected integer spacing_hz from 200 through 10000"})
 			return
 		}

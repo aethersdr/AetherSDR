@@ -27,6 +27,8 @@ QString stateText(aetherpd::State state)
     case State::CleanupUnconfirmed: return QObject::tr("Session ended — cleanup unconfirmed");
     case State::StoppedReceiveUnconfirmed: return QObject::tr("Stopped — receive recovery unconfirmed");
     case State::Starting: return QObject::tr("Starting");
+    case State::FeedbackBindingPending: return QObject::tr("Waiting for DAX IQ binding");
+    case State::FeedbackBindingFailed: return QObject::tr("DAX IQ binding failed — stop and start AetherPD again");
     case State::Disabled: return QObject::tr("Correction disabled");
     case State::BlockedByRadioApd: return QObject::tr("Blocked by radio APD");
     case State::MeasurementArmed: return QObject::tr("Measurement tones armed — waiting for your transmission");
@@ -371,20 +373,22 @@ void AetherPDDialog::render()
     if (!alive) { return; }
     const bool arm = status && status->available && status->registered && !status->keyed
         && status->correctionEnabled && status->calibrationControl
+        && (!status->feedbackBinding || status->feedbackBinding->valid)
         && status->state != aetherpd::State::BlockedByRadioApd
         && status->calibrationState != aetherpd::CalibrationState::Armed
         && status->calibrationState != aetherpd::CalibrationState::Running && !pending;
     enable(m_arm, active && !installing && arm, installing ? tr("Wait for the service update to finish before arming calibration.")
-        : tr("Fresh, unkeyed status with calibration available is required. Radio APD must be off."));
+        : tr("Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off."));
     if (!alive) { return; }
     const bool correction = active && !installing && !pending && status && status->available
         && status->registered && !status->keyed && status->correctionControl
+        && (!status->feedbackBinding || status->feedbackBinding->valid)
         && status->state != aetherpd::State::BlockedByRadioApd
         && status->calibrationState != aetherpd::CalibrationState::Armed
         && status->calibrationState != aetherpd::CalibrationState::Running;
     const QString correctionReason = status && !status->correctionControl
         ? tr("The installed service does not support correction selection.")
-        : tr("Fresh idle status and no armed source or pending update are required. The requested state must differ from the current state.");
+        : tr("Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.");
     enable(m_enableCorrection, correction && !status->correctionEnabled, correctionReason);
     if (!alive) { return; }
     enable(m_bypassCorrection, correction && status->correctionEnabled, correctionReason);

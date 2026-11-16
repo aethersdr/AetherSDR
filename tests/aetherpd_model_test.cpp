@@ -154,6 +154,33 @@ int main(int argc, char** argv)
         if (!check(!measurement.lastAcknowledgment() && measurement.pendingOperation() == Operation::CancelCalibration,
             "late measurement receipt overrode cancellation")) { return 1; }
     }
+    for (int change = 0; change < 5; ++change) {
+        Network controls, captures;
+        AetherPDModel owner(controls);
+        owner.setSession(address, token, [] { return true; },
+            StartIdentity{QStringLiteral("0D3EA0E8-B052-4AC6-9D32-D96918634469"), 0x321b4de});
+        QJsonObject original = QJsonDocument::fromJson(idle).object();
+        const QJsonObject binding{{"transport", "local_dax_iq"}, {"channel", 3},
+            {"pan", 1073741826}, {"gui_handle", 52540638}, {"valid", true}, {"failed", false}};
+        original["feedback_binding"] = binding;
+        controls.last->complete(200, QJsonDocument(original).toJson());
+        AetherSDR::txlin::AetherPDCaptureSource source(captures);
+        const std::function<bool()> fence = owner.bindCaptureSource(source);
+        if (!check(fence && fence(), "valid binding did not prepare capture")) { return 1; }
+        QJsonObject changed = original; QJsonObject next = binding;
+        if (change == 0) { next["valid"] = false; changed["state"] = "feedback_binding_pending"; }
+        if (change == 1) { next["channel"] = 2; }
+        if (change == 2) { next["pan"] = 1073741825; }
+        if (change == 3) { next["gui_handle"] = 52540639; }
+        changed["feedback_binding"] = next;
+        if (change == 4) { changed.remove("feedback_binding"); }
+        owner.refresh(); controls.last->complete(200, QJsonDocument(changed).toJson());
+        if (!check(!fence(), "binding change retained prepared capture")) { return 1; }
+        if (change == 0 && !check(!owner.bindCaptureSource(source), "invalid binding prepared new capture")) { return 1; }
+        if (change == 3 && !check(!owner.status(), "another GUI's native binding adopted")) { return 1; }
+        owner.refresh(); controls.last->complete(200, QJsonDocument(original).toJson());
+        if (!check(!fence(), "restored binding revived old preparation")) { return 1; }
+    }
     {
         Network controls, captures;
         AetherPDModel owner(controls);
@@ -165,6 +192,18 @@ int main(int argc, char** argv)
             && controls.sent.size() == legacyRequests, "legacy service accepted correction selection")) { return 1; }
         QJsonObject supported = QJsonDocument::fromJson(idle).object();
         supported["correction_control"] = true;
+        owner.refresh(); controls.last->complete(200, QJsonDocument(supported).toJson());
+        for (const bool failed : {false, true}) {
+            QJsonObject unbound = supported;
+            unbound["state"] = failed ? "feedback_binding_failed" : "feedback_binding_pending";
+            unbound["feedback_binding"] = QJsonObject{{"transport", "local_dax_iq"}, {"channel", 3},
+                {"pan", 1073741826}, {"gui_handle", 52540638}, {"valid", false}, {"failed", failed}};
+            owner.refresh(); controls.last->complete(200, QJsonDocument(unbound).toJson());
+            const size_t before = controls.sent.size();
+            if (!check(owner.status() && !owner.request(Operation::ArmCalibration)
+                && !owner.request(Operation::EnableCorrection) && controls.sent.size() == before,
+                "invalid IQ binding admitted source or correction")) { return 1; }
+        }
         owner.refresh(); controls.last->complete(200, QJsonDocument(supported).toJson());
         AetherSDR::txlin::AetherPDCaptureSource source(captures);
         const std::function<bool()> fence = owner.bindCaptureSource(source);

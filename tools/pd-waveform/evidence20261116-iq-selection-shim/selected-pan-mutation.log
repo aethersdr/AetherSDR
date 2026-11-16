@@ -1,0 +1,6 @@
+--- FAIL: TestPDSelectedStartRequiresObservedBinding (0.01s)
+    --- FAIL: TestPDSelectedStartRequiresObservedBinding/wrong_pan (0.00s)
+        aetherpd_binding_test.go:151: 202
+FAIL
+FAIL	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	0.022s
+FAIL

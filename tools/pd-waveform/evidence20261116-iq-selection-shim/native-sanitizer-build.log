@@ -1,0 +1,29 @@
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_acquire.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+In file included from /home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/dispatch_deadline_test.c:37:
+/home/jeremy/AetherSDR/build/aetherpd-source/tools/pd-waveform/pd_local_iq.c:1:9: warning: ‘_POSIX_C_SOURCE’ redefined
+    1 | #define _POSIX_C_SOURCE 200809L
+      |         ^~~~~~~~~~~~~~~
+In file included from /usr/include/pthread.h:21,
+                 from /home/jeremy/AetherSDR/build/aetherpd-source/third_party/wdsp/port/include/wdsp_port.h:12,
+                 from <command-line>:
+/usr/include/features.h:319:10: note: this is the location of the previous definition
+  319 | # define _POSIX_C_SOURCE        202405L
+      |          ^~~~~~~~~~~~~~~
+{'pd_iq_stream_policy_test': 0, 'pd_calibration_dispatch_test': 0, 'pd_dispatch_deadline_test': 0}

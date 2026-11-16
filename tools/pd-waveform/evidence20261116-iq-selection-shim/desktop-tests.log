@@ -1,0 +1,32 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 482: aetherpd_protocol_test
+1/4 Test #482: aetherpd_protocol_test ...........   Passed    0.01 sec
+    Start 483: aetherpd_client_test
+2/4 Test #483: aetherpd_client_test .............   Passed    1.91 sec
+    Start 499: aetherpd_model_test
+3/4 Test #499: aetherpd_model_test ..............   Passed    3.06 sec
+    Start 503: aetherpd_dialog_test
+4/4 Test #503: aetherpd_dialog_test .............***Failed    0.14 sec
+AppSettings: created new settings store with defaults
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+FAIL: editing sends no command and requested half-Hz offsets remain distinct from observed tones
+aether.waveform.measurement: TX linearity safety abort {"forward_watts":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null},"limits":{"max_forward_watts":10,"max_pa_temp_c":75,"max_swr":2,"max_transmit_ms":10000,"min_supply_volts":11,"telemetry_max_age_ms":2000,"vitals_max_age_ms":3000},"now_ms":35210252,"pa_temp_c":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null},"phase":"pre_key","reason":"Radio telemetry stopped updating","supply_volts":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null},"swr":{"age_ms":null,"finite":false,"observed_at_ms":null,"present":false,"value":null}}
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+FAIL: AetherPD explicit controls and credential/window lifetime
+
+
+75% tests passed, 1 tests failed out of 4
+
+Total Test time (real) =   5.13 sec
+
+The following tests FAILED:
+	503 - aetherpd_dialog_test (Failed)
+Errors while running CTest

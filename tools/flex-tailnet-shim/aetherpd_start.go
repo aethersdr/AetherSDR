@@ -12,56 +12,25 @@ import (
 
 type pdSessionStart struct{ cancel context.CancelFunc }
 
-func decodePDStart(r io.Reader) (pdStartIdentity, error) {
+func decodePDStart(r io.Reader) (pdStartIdentity, error) { return decodePDStartVersion(r, false) }
+func decodePDStartVersion(r io.Reader, selected bool) (pdStartIdentity, error) {
 	var id pdStartIdentity
 	data, err := io.ReadAll(io.LimitReader(r, 513))
 	if err != nil || len(data) > 512 {
 		return id, errors.New("invalid start request size")
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	token, err := dec.Token()
-	if err != nil || token != json.Delim('{') {
-		return id, errors.New("expected start object")
+	fields := map[string]any{"gui_client_id": &id.GUIClientID, "gui_handle": &id.GUIHandle}
+	if selected {
+		fields["iq_channel"] = &id.IQChannel
+		fields["feedback_pan"] = &id.FeedbackPan
 	}
-	seen := map[string]bool{}
-	for dec.More() {
-		token, err = dec.Token()
-		if err != nil {
-			return id, err
-		}
-		key, ok := token.(string)
-		if !ok || seen[key] {
-			return id, errors.New("duplicate start field")
-		}
-		seen[key] = true
-		var raw json.RawMessage
-		if err = dec.Decode(&raw); err != nil {
-			return id, err
-		}
-		if bytes.Equal(raw, []byte("null")) {
-			return id, errors.New("null start field")
-		}
-		switch key {
-		case "gui_client_id":
-			err = json.Unmarshal(raw, &id.GUIClientID)
-		case "gui_handle":
-			err = json.Unmarshal(raw, &id.GUIHandle)
-		default:
-			return id, errors.New("unknown start field")
-		}
-		if err != nil {
-			return id, err
-		}
-	}
-	if _, err = dec.Token(); err != nil {
+	if err = decodePDExactObject(data, fields); err != nil {
 		return id, err
 	}
-	if _, err = dec.Token(); err != io.EOF {
-		return id, errors.New("trailing start data")
+	if selected && (id.IQChannel == 0 || id.FeedbackPan == 0) {
+		return id, errors.New("missing IQ selection")
 	}
-	if len(seen) != 2 {
-		return id, errors.New("missing start identity")
-	}
+
 	_, err = id.frame()
 	return id, err
 }
@@ -78,7 +47,8 @@ func (n *Node) retirePDSessionLocked() {
 		n.pdSession.Close()
 	}
 }
-func aetherPDStartHandler(n *Node) http.HandlerFunc {
+func aetherPDStartHandler(n *Node) http.HandlerFunc { return aetherPDStartVersionHandler(n, false) }
+func aetherPDStartVersionHandler(n *Node, selected bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)
 		if !n.checkToken(token) {
@@ -86,10 +56,10 @@ func aetherPDStartHandler(n *Node) http.HandlerFunc {
 			return
 		}
 		if r.URL.RawQuery != "" {
-			writeJSON(w, 400, apiError{"start accepts only a GUI identity body"})
+			writeJSON(w, 400, apiError{"start accepts only its versioned identity body"})
 			return
 		}
-		id, err := decodePDStart(r.Body)
+		id, err := decodePDStartVersion(r.Body, selected)
 		if err != nil {
 			writeJSON(w, 400, apiError{err.Error()})
 			return
@@ -119,6 +89,9 @@ func aetherPDStartHandler(n *Node) http.HandlerFunc {
 		}
 		n.mu.Unlock()
 		channel, err := dial(ctx, id)
+		if err == nil && selected && channel != nil {
+			err = confirmPDSelectedBinding(ctx, channel, id)
+		}
 		n.mu.Lock()
 		authorized := n.checkTokenLocked(token)
 		valid := authorized && n.pdStarting == pending && ctx.Err() == nil && err == nil && channel != nil

@@ -422,9 +422,24 @@ int main(int argc, char** argv)
             {"spacing_hz", 1190}, {"min_spacing_hz", 200}, {"max_spacing_hz", 10000}, {"center_hz", 1305}};
         button(*dialog, "pdRefresh")->click();
         network.last->complete(200, QJsonDocument(configurable).toJson());
+        for (const bool failed : {false, true}) {
+            QJsonObject unbound = configurable;
+            unbound["state"] = failed ? "feedback_binding_failed" : "feedback_binding_pending";
+            unbound["feedback_binding"] = QJsonObject{{"transport", "local_dax_iq"}, {"channel", 3},
+                {"pan", 1073741826}, {"gui_handle", 7}, {"valid", false}, {"failed", failed}};
+            button(*dialog, "pdRefresh")->click(); network.last->complete(200, QJsonDocument(unbound).toJson());
+            const size_t before = network.sent.size();
+            ok &= check(!toneChoice->isEnabled() && !mb("pdMeasureArm")->isEnabled()
+                && !button(*dialog, "pdArm")->isEnabled() && !model.armSource(session, 1190)
+                && !mb("pdMeasureArm")->accessibleDescription().isEmpty()
+                && network.sent.size() == before && label("pdState").contains(QStringLiteral("DAX IQ binding")),
+                "pending or failed IQ binding did not disable source with an accessible reason");
+        }
+        button(*dialog, "pdRefresh")->click(); network.last->complete(200, QJsonDocument(configurable).toJson());
         ok &= check(toneChoice->isEnabled(), "configured source enables tone selection");
+        const size_t beforeEditing = network.sent.size();
         toneChoice->setValue(1001);
-        ok &= check(network.sent.size() == beforeTones + 1 && captureNetwork.sent.empty()
+        ok &= check(network.sent.size() == beforeEditing && captureNetwork.sent.empty()
             && toneStatus->text().contains("804.5 / 1805.5") && toneStatus->text().contains("710.0 / 1900.0"),
             "editing sends no command and requested half-Hz offsets remain distinct from observed tones");
         button(*dialog, "pdRefresh")->click();

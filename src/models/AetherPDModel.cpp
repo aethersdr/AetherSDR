@@ -143,7 +143,8 @@ std::function<bool()> AetherPDModel::measurementFence()
 {
     const std::optional<aetherpd::Status> observed = status();
     if (!active() || !m_current || !m_identity || !aetherpd::startBody(*m_identity)
-        || !observed || !observed->available || !observed->registered) {
+        || !observed || !observed->available || !observed->registered
+        || (observed->feedbackBinding && !observed->feedbackBinding->valid)) {
         return {};
     }
     const QPointer<AetherPDModel> owner(this);
@@ -154,7 +155,8 @@ std::function<bool()> AetherPDModel::measurementFence()
         if (!*live || owner->m_generation != generation || owner->m_captureGeneration != captureGeneration
             || !owner->active()) { *live = false; return false; }
         const std::optional<aetherpd::Status> latest = owner->status();
-        *live = latest && latest->available && latest->registered;
+        *live = latest && latest->available && latest->registered
+            && (!latest->feedbackBinding || latest->feedbackBinding->valid);
         return *live;
     };
     return current;
@@ -195,7 +197,8 @@ bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32
     }
     if ((operation == Operation::EnableCorrection || operation == Operation::BypassCorrection)
         && (!observed || !observed->available || !observed->registered || !observed->correctionControl
-            || observed->keyed || observed->state == aetherpd::State::BlockedByRadioApd
+            || observed->keyed || (observed->feedbackBinding && !observed->feedbackBinding->valid)
+            || observed->state == aetherpd::State::BlockedByRadioApd
             || observed->calibrationState == aetherpd::CalibrationState::Armed
             || observed->calibrationState == aetherpd::CalibrationState::Running)) {
         emit operationFailed(operation, Failure::InvalidRequest);
@@ -206,6 +209,7 @@ bool AetherPDModel::request(aetherpd::Operation operation, std::optional<quint32
             || observed->keyed || !observed->calibrationControl
             || (operation == Operation::ArmCalibration && !observed->correctionEnabled)
             || (operation == Operation::ArmMeasurement && !observed->measurementControl)
+            || (observed->feedbackBinding && !observed->feedbackBinding->valid)
             || observed->state == aetherpd::State::BlockedByRadioApd
             || observed->calibrationState == aetherpd::CalibrationState::Armed
             || observed->calibrationState == aetherpd::CalibrationState::Running)) {
@@ -236,9 +240,15 @@ void AetherPDModel::onStatus(const aetherpd::Status& status)
     if (!m_active || m_pending != aetherpd::Operation::Status) {
         return;
     }
+    if (status.feedbackBinding && m_identity && status.feedbackBinding->guiHandle != m_identity->guiHandle) {
+        onFailure(aetherpd::Operation::Status, AetherPDClient::Failure::InvalidReply);
+        return;
+    }
     m_pending.reset();
     m_failure.reset();
     if (!status.available || !status.registered
+        || (status.feedbackBinding && !status.feedbackBinding->valid)
+        || (m_status && m_status->feedbackBinding != status.feedbackBinding)
         || (m_statusAge.isValid() && m_statusAge.elapsed() >= kStatusFreshnessMs)) {
         invalidateStatus();
     }

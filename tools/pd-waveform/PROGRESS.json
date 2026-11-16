@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T14:31:10.092662+00:00",
+  "updated_utc": "2026-11-16T14:51:12.431144+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Implement versioned public shim channel/pan selection with native observed confirmation and no legacy fallback; carry immutable binding through status/capture/export and desktop controls. Then fresh complete packages and outstanding live/full-goal gates.",
+  "next_action": "Carry explicit channel/pan selection through desktop start controls and original-session request; add immutable binding to native capture snapshots, shim manifests, neutral capture frames and exports. Then complete authenticated packages and remaining live/full-goal gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Native PDSTART2 channel/pan selection qualified offline through the fixed constructor and DSP. Public shim confirmation, metadata and desktop integration are next. Radio remains unreachable.",
+  "current_focus": "Public selected-start endpoint and native observed-binding status qualified through Go and desktop parsing. Desktop invalidates prepared captures on binding loss/change. Operator selection and snapshot/export provenance are next; radio access remains unresolved.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -2964,7 +2964,7 @@
       "mutations_caught": 1,
       "installed": false
     },
-    "source_provenance_note": "runtime_source/desktop_source identify earlier packaged checkpoints. Later tone, pan_binding and iq_selection_native reports identify component changes; no updated complete runtime package is qualified.",
+    "source_provenance_note": "runtime_source/desktop_source identify earlier packaged checkpoints. Later tone, pan_binding, iq_selection_native and iq_selection_shim reports identify component changes; no updated complete runtime package is qualified.",
     "pan_binding": {
       "report": "PAN-BINDING-QUALIFICATION.json",
       "status": "fixed_channel_pan_binding_qualified_offline",
@@ -2989,6 +2989,20 @@
         4
       ],
       "public_selected_start": false,
+      "installed": false
+    },
+    "iq_selection_shim": {
+      "report": "IQ-SELECTION-SHIM-QUALIFICATION.json",
+      "status": "selected_public_start_and_observed_binding_qualified_offline",
+      "go_race_passed": 261,
+      "native_registered_tests_passed": 3,
+      "desktop_registered_tests_passed": 4,
+      "native_go_qt_cases": 12,
+      "sanitizer_suites_passed": 4,
+      "mutations_caught": 1,
+      "public_selected_start": true,
+      "desktop_selected_start": false,
+      "capture_binding_metadata": false,
       "installed": false
     }
   },

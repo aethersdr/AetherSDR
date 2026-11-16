@@ -1,0 +1,4 @@
+=== RUN   TestPDNativeBindingInterop
+--- PASS: TestPDNativeBindingInterop (0.02s)
+PASS
+ok  	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	1.045s

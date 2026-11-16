@@ -206,9 +206,27 @@ There are no executable, command, address, descriptor, PID, scheduling, power
 or RF parameters. HTTP202 means `start_requested`, not registered or correcting.
 A concurrent start returns409; no start is retried automatically.
 
+`POST /v2/aetherpd/start` additionally requires exactly `iq_channel` (integer
+1–4) and `feedback_pan` (nonzero uint32). The original GUI identity remains
+mandatory. The native constructor must report the same channel, pan and GUI
+owner through `feedback_binding`, with `transport=local_dax_iq`, `valid=true`
+and `failed=false`, before this selected request returns HTTP202. Pending
+readback uses the existing 20-second startup deadline. Missing support,
+mismatch, binding failure, cancellation or token revocation closes the owned
+session; there is no retry through v1. Confirmation does not establish
+calibration, correction, feedback level or permission to transmit.
+
+Status includes this fixed six-field binding object only when the native
+session has a sealed pan. `feedback_binding_pending` and
+`feedback_binding_failed` distinguish readback still pending from a latched
+binding loss. The binding identity cannot change during a session; stop and
+explicitly start again after repairing the pan assignment. Desktop status
+parsing and disabled-control reasons support these fields, while the desktop
+start button still uses channel1 discovery until the selection UI is complete.
+
 The ordinary shim connects only to `/run/aetherpd/start.sock`. A protected
 socket-activated `pd-start-session` admits only UID78666/GID20 peers executing
-the installed protected shim inode. The48-byte request is bounded to2s. The
+the installed protected shim inode. The legacy48-byte or selected56-byte request is bounded to2s. The
 fixed constructor prepares local DAX IQ and the existing guardian graph,
 then drops authority before executing the private Go session role. That role
 has no discovery, Tailscale node, provisioning API or public listener. All

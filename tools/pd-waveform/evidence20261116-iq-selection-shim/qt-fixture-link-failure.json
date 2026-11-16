@@ -1,0 +1,6 @@
+{
+  "failure": "Standalone fixture link rejected copy relocation against Qt6 protected QByteArray::_empty symbol",
+  "cause": "The ad-hoc compiler command omitted the project fPIC flag",
+  "fix": "Build standalone fixtures with -fPIC, matching the project configuration",
+  "production_source_changed": false
+}

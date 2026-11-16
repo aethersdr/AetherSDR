@@ -1,0 +1,5 @@
+[0/2] Re-checking globbed directories...
+[1/8] Capturing build identity (git describe)
+[2/6] Automatic MOC and UIC for target aetherpd_dialog_test
+[3/5] Building CXX object CMakeFiles/aetherpd_dialog_test.dir/tests/aetherpd_dialog_test.cpp.o
+[4/5] Linking CXX executable aetherpd_dialog_test

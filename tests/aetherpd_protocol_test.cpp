@@ -40,6 +40,39 @@ void rejects(const QJsonObject& o, const char* reason)
     check(!parseStatus(encode(o)), reason);
 }
 
+void feedbackBindingProtocol()
+{
+    QJsonObject status = idle();
+    QJsonObject binding{{"transport", "local_dax_iq"}, {"channel", 3}, {"pan", 1073741826},
+        {"gui_handle", 52540638}, {"valid", true}, {"failed", false}};
+    status["feedback_binding"] = binding;
+    const std::optional<Status> parsed = parseStatus(encode(status));
+    check(parsed && parsed->feedbackBinding && parsed->feedbackBinding->channel == 3
+        && parsed->feedbackBinding->pan == 1073741826 && parsed->feedbackBinding->guiHandle == 52540638
+        && parsed->feedbackBinding->valid, "observed IQ binding lost");
+    for (const auto& [key, value] : std::array<std::pair<const char*, QJsonValue>, 11>{{
+        {"transport", "audio"}, {"channel", 0}, {"channel", 5}, {"channel", 1.5},
+        {"pan", 0}, {"pan", 4294967296.0}, {"gui_handle", 0}, {"valid", QJsonValue::Null},
+        {"failed", true}, {"extra", 1}, {"gui_handle", "52540638"}}}) {
+        QJsonObject invalid = status; QJsonObject changed = binding; changed[QLatin1String(key)] = value;
+        invalid["feedback_binding"] = changed; rejects(invalid, "invalid IQ binding accepted");
+    }
+    QByteArray duplicate = encode(status);
+    duplicate.replace("\"channel\":3", "\"channel\":3,\"channel\":1");
+    check(!parseStatus(duplicate), "duplicate IQ channel accepted");
+    for (const bool failed : {false, true}) {
+        binding["valid"] = false; binding["failed"] = failed;
+        status["feedback_binding"] = binding;
+        status["state"] = failed ? "feedback_binding_failed" : "feedback_binding_pending";
+        const std::optional<Status> changed = parseStatus(encode(status));
+        check(changed && changed->state == (failed ? State::FeedbackBindingFailed : State::FeedbackBindingPending), "IQ wait/failure lost");
+        QJsonObject armed = status; armed["calibration_state"] = "armed"; armed["calibration_samples_left"] = 96000;
+        rejects(armed, "armed source without binding accepted");
+        armed = status; armed["correcting"] = true; rejects(armed, "correction without binding accepted");
+        armed = status; armed.remove("feedback_binding"); rejects(armed, "binding state without metadata accepted");
+    }
+}
+
 void configuredTones()
 {
     QJsonObject status = idle();
@@ -200,6 +233,7 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     configuredTones();
+    feedbackBindingProtocol();
     captureProtocol();
     for (const char* name : {"idle", "armed", "correcting", "unavailable"}) {
         QFile fixture(QString::fromUtf8(AETHERPD_TESTDATA_DIR) + QLatin1Char('/')

@@ -17,10 +17,11 @@ const aetherPDMaxStatusBytes = 16 << 10
 
 var aetherPDReads = make(chan struct{}, 1)
 
-// Only operational state crosses the shim boundary. Native debug fields,
-// client identifiers and packet metadata stay local to the waveform.
+// Operational state and the selected IQ binding cross the shim boundary.
+// Native debug fields and packet metadata stay local to the waveform.
 // This report never authorizes capture provisioning or transmitter control.
 type aetherPDStatus struct {
+	FeedbackBinding               *pdFeedbackBinding       `json:"feedback_binding,omitempty"`
 	MeasurementToneCaptureVersion uint32                   `json:"measurement_tone_capture_version,omitempty"`
 	MeasurementToneControl        bool                     `json:"measurement_tone_control,omitempty"`
 	MeasurementToneConfig         *pdMeasurementToneConfig `json:"measurement_tone_config,omitempty"`
@@ -54,35 +55,9 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 	if len(data) == 0 || len(data) > aetherPDMaxStatusBytes {
 		return result, errors.New("invalid status size")
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	token, err := dec.Token()
-	if err != nil || token != json.Delim('{') {
-		return result, errors.New("expected status object")
-	}
-	fields := make(map[string]json.RawMessage)
-	for dec.More() {
-		token, err = dec.Token()
-		if err != nil {
-			return result, err
-		}
-		key, ok := token.(string)
-		if !ok {
-			return result, errors.New("invalid status key")
-		}
-		if _, exists := fields[key]; exists {
-			return result, errors.New("duplicate status key")
-		}
-		var value json.RawMessage
-		if err = dec.Decode(&value); err != nil {
-			return result, err
-		}
-		fields[key] = value
-	}
-	if _, err = dec.Token(); err != nil {
+	fields, err := decodePDFields(data)
+	if err != nil {
 		return result, err
-	}
-	if _, err = dec.Token(); err != io.EOF {
-		return result, errors.New("trailing status data")
 	}
 	read := func(name string, dst any) error {
 		value, ok := fields[name]
@@ -195,6 +170,15 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 			return result, err
 		}
 	}
+	if raw, present := fields["feedback_binding"]; present {
+		result.FeedbackBinding, err = parsePDFeedbackBinding(raw)
+		if err != nil {
+			return result, err
+		}
+		if !result.FeedbackBinding.Valid && (result.Correcting || result.CalibrationState == "armed" || result.CalibrationState == "running") {
+			return result, errors.New("active source without IQ binding")
+		}
+	}
 	var transportPending bool
 	if _, present := fields["transport_pending"]; present {
 		if err = read("transport_pending", &transportPending); err != nil {
@@ -221,6 +205,10 @@ func parseAetherPDStatus(data []byte) (aetherPDStatus, error) {
 	switch {
 	case !result.Registered:
 		result.State = "starting"
+	case result.FeedbackBinding != nil && result.FeedbackBinding.Failed:
+		result.State = "feedback_binding_failed"
+	case result.FeedbackBinding != nil && !result.FeedbackBinding.Valid:
+		result.State = "feedback_binding_pending"
 	case !result.CorrectionEnabled:
 		result.State = "disabled"
 	case blocked:

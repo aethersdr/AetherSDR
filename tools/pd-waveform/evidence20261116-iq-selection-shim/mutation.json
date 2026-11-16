@@ -1,0 +1,7 @@
+{
+  "mutation": "omit-selected-pan-confirmation",
+  "exit": 1,
+  "expected_case_failed": true,
+  "restored_sha256": "17209199aca5adda15387e2d82c7e1604707aabc49e600d7e8d5b109ada790e0",
+  "restored_exit": 0
+}

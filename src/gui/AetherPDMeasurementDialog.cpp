@@ -376,6 +376,7 @@ void AetherPDMeasurementDialog::render()
         if (!alive) { return; }
     }
     const bool readySource = source && source->available && source->registered && source->measurementControl && !source->keyed
+        && (!source->feedbackBinding || source->feedbackBinding->valid)
         && !m_radio->fullDuplexEnabled() && source->state != aetherpd::State::BlockedByRadioApd;
     const bool toneCapable = source && source->measurementToneControl && source->measurementToneConfig;
     if (source && source->measurementControl && !toneCapable) {

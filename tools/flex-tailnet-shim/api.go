@@ -152,6 +152,7 @@ func newAPIWithAetherPDReader(n *Node, read func(context.Context) (aetherPDStatu
 	mux.HandleFunc("GET /v1/aetherpd/install-request/{requestID}", aetherPDInstallStateHandler(n, false))
 	mux.HandleFunc("DELETE /v1/aetherpd/install-request/{requestID}", aetherPDInstallStateHandler(n, true))
 	mux.HandleFunc("POST /v1/aetherpd/start", aetherPDStartHandler(n))
+	mux.HandleFunc("POST /v2/aetherpd/start", aetherPDStartVersionHandler(n, true))
 	mux.HandleFunc("POST /v1/aetherpd/test-unkey", aetherPDTestUnkeyHandler(n, pdTestBegin))
 	mux.HandleFunc("GET /v1/aetherpd/test-unkey/{testID}", aetherPDTestUnkeyHandler(n, pdTestStatus))
 	mux.HandleFunc("POST /v1/aetherpd/test-unkey/{testID}/stop", aetherPDTestUnkeyHandler(n, pdTestStop))

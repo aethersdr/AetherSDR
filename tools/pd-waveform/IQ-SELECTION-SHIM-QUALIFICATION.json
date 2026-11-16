@@ -1,0 +1,127 @@
+{
+  "updated_utc": "2026-11-16T14:51:12.431144+00:00",
+  "status": "selected_public_start_and_observed_binding_qualified_offline",
+  "production_ready": false,
+  "installed": false,
+  "source_base": "8fe1cc5f2cc694238fa74cd094ba43f4b260ac50",
+  "evidence": "evidence20261116-iq-selection-shim",
+  "implemented": [
+    "Authenticated POST/v2/aetherpd/start requires exact GUI UUID/handle plus IQ channel1..4 and nonzero pan, bounded to512 bytes. Existing v1 remains two-field legacy startup; neither endpoint accepts the other schema.",
+    "Go encodes PDSTART2 directly and keeps the original root socket peer check. Selected startup queries only private status until matching native local_dax_iq channel/pan/GUI readback is valid, within the existing20s overall deadline. Missing support, mismatch, failure, cancellation or token revocation retires that session with no v1 retry.",
+    "Native sealed sessions emit immutable identity plus valid/failed readback state in feedback_binding. Strict shim parsing exposes only this bounded object, refuses contradictory active-source/correction states, and reports binding_pending/binding_failed separately from successful calibration.",
+    "Desktop protocol parses the six-field binding object and distinguishes pending and failed states. Model and existing controls refuse source/correction actions without valid binding and provide accessible reasons.",
+    "Desktop rejects binding for a different original GUI; any binding loss, identity change or metadata disappearance invalidates prepared capture generations. Restored readback cannot revive an old preparation.",
+    "Shared strict JSON object decoding preserves duplicate/null/unknown-field checks for start and tone requests. No new privileged operation, RF command or automatic rearm is introduced."
+  ],
+  "validation": {
+    "go_full_race_suite_before_adding_opt_in_interop": {
+      "pass": 261,
+      "skip": 13
+    },
+    "added_native_go_interop_test": "Passed separately with supplied native fixture and parser; production Go source identical to full-race run except a mutation restored byte-for-byte.",
+    "native_ctest": [
+      "pd_dispatch_deadline_test",
+      "pd_calibration_dispatch_test",
+      "pd_iq_stream_policy_test"
+    ],
+    "desktop_ctest": [
+      "aetherpd_protocol_test",
+      "aetherpd_client_test",
+      "aetherpd_model_test",
+      "aetherpd_dialog_test"
+    ],
+    "native_sanitizers": {
+      "pd_iq_stream_policy_test": 0,
+      "pd_calibration_dispatch_test": 0,
+      "pd_dispatch_deadline_test": 0
+    },
+    "desktop_protocol_address_undefined_leak_sanitizers_passed": true,
+    "composed_protocol": {
+      "go_frames_parsed_by_native": 4,
+      "native_status_to_go_to_qt_cases": 12,
+      "channels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "states": [
+        "pending",
+        "valid",
+        "failed"
+      ],
+      "scope": "Current compiled components and real generated JSON/frames; no radio, installed process graph or RF."
+    },
+    "mutation": {
+      "mutation": "omit-selected-pan-confirmation",
+      "exit": 1,
+      "expected_case_failed": true,
+      "restored_sha256": "17209199aca5adda15387e2d82c7e1604707aabc49e600d7e8d5b109ada790e0",
+      "restored_exit": 0
+    },
+    "static_arm_builds": {
+      "aether-pd-armv7": {
+        "bytes": 267100,
+        "sha256": "da146e34554d6d04396ae212b9308b2e5c32d8afc80cdd8b3135000228c5a8c4"
+      },
+      "aether-pd-arm64": {
+        "bytes": 278808,
+        "sha256": "2cee961599714af184bacb4dd7062fd874a316bb1f2cbba9b61f01623824538b"
+      },
+      "shim-armv7": {
+        "bytes": 21889184,
+        "sha256": "3adda11b13c337d228f627e59ae6cc450dbb8bb82d874e26337cc8835005235d"
+      },
+      "shim-arm64": {
+        "bytes": 21495968,
+        "sha256": "ffd908998a7f76d213062ecb6768252e557fcfe9bbdcc16f0fcd8e389057ae97"
+      }
+    },
+    "full_linux_desktop_build_passed": true,
+    "docs_build_passed": true,
+    "test_registration_passed": true,
+    "a11y_findings": 0,
+    "preserved_initial_failures": [
+      "Pending/cancel fixture used httptest non-LAN peer and correctly got403; fixed fixture address, not ingress policy.",
+      "Standalone Qt fixture/sanitizer compiler omitted project fPIC, causing protected-symbol link failure; rebuilt with fPIC.",
+      "Added binding polls changed an old tone-edit request count baseline; assertion now snapshots immediately before editing and still requires exactly zero new requests.",
+      "Final capture-guard rebuild initially failed on an unqualified Failure enum; the shell continued into old test binaries. desktop-binding-tests.log is explicitly disqualified. Qualified the enum and used subprocess check=True to gate the successful full rebuild and new model/dialog tests."
+    ],
+    "final_desktop_guard_proof": {
+      "build": "final-desktop-build.log",
+      "tests": "final-desktop-tests.log",
+      "tests_seconds": 3.21,
+      "disqualified_stale_binary_result": "desktop-binding-tests.log"
+    }
+  },
+  "not_yet_complete": [
+    "Desktop start selection UI and request transport still use legacy channel1 discovery; public v2 endpoint is not yet used by the desktop start button.",
+    "Capture snapshot and export provenance do not yet include immutable feedback binding. Prepared-capture invalidation is implemented but is not a substitute for snapshot metadata.",
+    "Complete authenticated packages and boot/runtime/desktop compatibility qualification remain; older strict desktop parsers reject the added status field.",
+    "Exact-candidate installation, reboot persistence, IQ access and final RF remain unverified while radio access is unavailable.",
+    "All remaining production-plan gates including natural slip/cold-start diagnosis, repeated5/10W measurements, matched stockAPD, actual6300 and release review."
+  ],
+  "source_sha256": {
+    "src/core/AetherPDProtocol.cpp": "29c04c480da8fc68e72f51c34a95753a286b450fe64648de91210383cc10ec0a",
+    "src/core/AetherPDProtocol.h": "6b4ec401032343712e16fa7468c2a3826ad7d6231c2634189a31951e80c8d674",
+    "src/gui/AetherPDDialog.cpp": "58f48460b0a16d1b2e44924b10f742625d1f4fb0bdb685783260308ab23d0468",
+    "src/gui/AetherPDMeasurementDialog.cpp": "fd11bf6d56ff6504f87e3d3be90db82cf14205b95b4a2de3e718b0a1eb38ffbf",
+    "src/models/AetherPDMeasurementModel.cpp": "fd99ccafc9e92116819dbc915aa4cfa2f57ff386408e6cf68a19fab7b3d6cc90",
+    "src/models/AetherPDModel.cpp": "7a51405b770fba791dc8d78b6aa6d143094eaef37cd93119677051fa27eb81da",
+    "tests/aetherpd_dialog_test.cpp": "9f132e882767d594450bff401daef714f2cb44111dad9d0bad5e3475b3c4f1b9",
+    "tests/aetherpd_model_test.cpp": "f11f84a115099f8cb80587d7d637a90e11310975c890641a101da7d45b9856ba",
+    "tests/aetherpd_protocol_test.cpp": "22ea944840850c5f9ead13f94fb566e78905d241ad43e9933639d9eeff8f1e6d",
+    "tools/flex-tailnet-shim/aetherpd.go": "91820126fc1fa6303179d622441939ebc16d5e7b730349ad58329be98f92029e",
+    "tools/flex-tailnet-shim/aetherpd_session_wire.go": "aba888e8c273e7730ee03c3258a0f1ff16e6972a0979b75fd426e40fb5c87e69",
+    "tools/flex-tailnet-shim/aetherpd_start.go": "d99c12937dcba9a43251c6abb3dcc9a131ee4c47dd568c28dca979e42e599814",
+    "tools/flex-tailnet-shim/aetherpd_test_unkey_linux.go": "8f9c0d6f9e3b7917eaa54ec0613667f18e69a2cf95ca5e35ce62a475ab9023a4",
+    "tools/flex-tailnet-shim/aetherpd_test_unkey_linux_test.go": "ba90160a68dae0219db869cabeb0fffc5939493145bcf846d4c53f82df2b67a0",
+    "tools/flex-tailnet-shim/aetherpd_tones.go": "133e683e59a1fdeb8a6c69ffe417e0144de1aa99e37887429068c548cb5efa94",
+    "tools/flex-tailnet-shim/api.go": "e46ff1f3dc287bb7267232f79f40c198ac3e42bf93fbdc354866b0def868971d",
+    "tools/pd-waveform/calibration_dispatch_test.c": "42c7b09f6de7f5b3fda17978d9c32021230253348bb892d6465984d083f93120",
+    "tools/pd-waveform/pd_waveform.c": "2ca3d7ebd8fbbe4d9e8f71702c6d8e57979b45fcdb3ee7f3ccaf2621107139f8",
+    "tools/flex-tailnet-shim/aetherpd_binding.go": "17209199aca5adda15387e2d82c7e1604707aabc49e600d7e8d5b109ada790e0",
+    "tools/flex-tailnet-shim/aetherpd_binding_test.go": "e0c4e597f3a71fc14b31af12b969fe4b57b2dfa9378b89b24fed31aa4ef4b51b",
+    "tools/flex-tailnet-shim/aetherpd_object.go": "daeb3a8619b281d9ee9ff741a1f9af6e2def9eb878f8cb27549d77a6ea1933c5"
+  }
+}

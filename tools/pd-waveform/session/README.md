@@ -578,9 +578,10 @@ older record without a pan or channel. This change adds no capabilities or RF co
 Development prepared launches without the constructor retain their earlier
 unsealed behavior; they are not equivalent to this installed path.
 
-The native constructor accepts explicit channel/pan selection; the public shim
-and desktop still use the legacy request. Versioned public selection, operator
-controls, observed-binding metadata, capture/export provenance, and live
+The native constructor and public v2 shim endpoint accept explicit channel/pan
+selection and require matching observed native binding before success. Desktop
+startup still uses the legacy request. Operator selection controls, immutable
+capture/export provenance, and live
 qualification of this exact candidate remain required before claiming the full
 PR4770 workflow. The binding is grounded in the published FlexLib
 `DAXIQStream.StatusUpdate` (`pan`, `daxiq_channel`) and

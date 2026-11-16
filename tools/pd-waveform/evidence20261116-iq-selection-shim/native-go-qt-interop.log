@@ -1,0 +1,1 @@
+PASS: all 12 native-to-Go-to-Qt binding states preserve exact channel, pan, GUI and validity

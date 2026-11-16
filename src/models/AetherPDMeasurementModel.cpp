@@ -304,6 +304,10 @@ QString AetherPDMeasurementModel::sourceArmReason(const RadioControlSession& ses
         || !source->calibrationControl || m_radio->aetherPDModel().pendingOperation()) {
         return tr("Wait for a fresh measurement-capable service with no pending request.");
     }
+    if (source->feedbackBinding && !source->feedbackBinding->valid) {
+        return source->feedbackBinding->failed ? tr("DAX IQ binding failed. Stop and start AetherPD again.")
+            : tr("Waiting for the selected DAX IQ pan and owner readback.");
+    }
     const TransmitModel& tx = m_radio->transmitModel();
     if (state() != State::Idle || source->keyed || source->calibrationState == aetherpd::CalibrationState::Armed
         || source->calibrationState == aetherpd::CalibrationState::Running || tx.isTransmitting() || tx.isTuning()

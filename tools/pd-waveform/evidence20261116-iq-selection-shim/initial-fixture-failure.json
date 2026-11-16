@@ -1,0 +1,1 @@
+{"test":"TestPDSelectedBindingPendingCancelAndRevocation","failure":"httptest default peer 192.0.2.1 was correctly rejected by API ingress policy (403); nil channel assertion then panicked","fix":"Use existing permitted LAN fixture address 192.168.50.20:4000 and explicitly assert channel creation before inspection","production_guard_changed":false}
