@@ -234,6 +234,17 @@ private slots:
         };
         const QImage first = withLabels(background);
 
+        // Cursor-frequency chrome and the opaque dBm axis are foreground,
+        // not part of the cached pre-label strip. A narrow label refresh must
+        // repaint their occlusion in the same order as a complete frame.
+        const QColor foregroundColor(7, 18, 33);
+        const auto withForeground = [&](QImage image) {
+            QPainter painter(&image);
+            painter.fillRect(logicalCoverage, foregroundColor);
+            return image;
+        };
+        const QImage firstWithForeground = withForeground(first);
+
         // Moving values must replace old glyphs, not blend over them.
         flag.setRelativeSignalLevel(-15);
         QTest::qWait(80);
@@ -249,6 +260,44 @@ private slots:
         }
         partial = withLabels(partial);
         QCOMPARE(partial, expected);
+
+        QImage clippedPartial = first.copy();
+        for (int y = 0; y < strip.height(); ++y) {
+            std::memcpy(clippedPartial.scanLine(strip.top() + y)
+                            + strip.left() * 4,
+                        savedBackgroundStrip.constScanLine(y),
+                        static_cast<size_t>(strip.width() * 4));
+        }
+        {
+            QPainter painter(&clippedPartial);
+            painter.setClipRect(logicalCoverage);
+            flag.drawSmartMtrLabels(painter);
+        }
+        QCOMPARE(clippedPartial, expected);
+
+        const QImage fullForeground = withForeground(expected);
+        QImage partialForeground = firstWithForeground.copy();
+        for (int y = 0; y < strip.height(); ++y) {
+            std::memcpy(partialForeground.scanLine(strip.top() + y)
+                            + strip.left() * 4,
+                        savedBackgroundStrip.constScanLine(y),
+                        static_cast<size_t>(strip.width() * 4));
+        }
+        QImage missingForeground = partialForeground.copy();
+        {
+            QPainter painter(&missingForeground);
+            painter.setClipRect(logicalCoverage);
+            flag.drawSmartMtrLabels(painter);
+        }
+        QVERIFY2(missingForeground != fullForeground,
+                 "missing foreground repaint must change the finished pixels");
+        {
+            QPainter painter(&partialForeground);
+            painter.setClipRect(logicalCoverage);
+            flag.drawSmartMtrLabels(painter);
+            painter.fillRect(logicalCoverage, foregroundColor);
+        }
+        QCOMPARE(partialForeground, fullForeground);
 
         // Clearing values may shrink the coverage to empty. A full rebuild
         // must then exactly erase the old text, including at fractional DPR.
