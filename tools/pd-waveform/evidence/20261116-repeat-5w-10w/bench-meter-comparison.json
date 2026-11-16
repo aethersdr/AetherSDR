@@ -1,0 +1,29 @@
+{
+  "packets": 493,
+  "powered_packets": 55,
+  "max_reported_swr": 1.578125,
+  "max_power_derived_swr": 1.2548222272441092,
+  "highest": [
+    {
+      "ns": 59071306284897,
+      "forward_dBm": 35.25,
+      "reflected_dBm": 10.59375,
+      "swr": 1.3359375,
+      "derived_swr": 1.1242793968722138
+    },
+    {
+      "ns": 59070752677148,
+      "forward_dBm": 33.90625,
+      "reflected_dBm": 10.2421875,
+      "swr": 1.578125,
+      "derived_swr": 1.140373953765507
+    },
+    {
+      "ns": 59070814178403,
+      "forward_dBm": 35.2265625,
+      "reflected_dBm": 10.40625,
+      "swr": 1.578125,
+      "derived_swr": 1.1218123578022186
+    }
+  ]
+}

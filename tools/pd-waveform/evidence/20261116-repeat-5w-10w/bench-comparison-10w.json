@@ -1,0 +1,169 @@
+{
+  "cases": {
+    "off-01": {
+      "analysis": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.974194042693,
+          1899.97071169927
+        ],
+        "tone_imbalance_db": 0.244141981906907,
+        "fundamental_pep_db_raw_iq": 94.5652391488998,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -27.4293637492257,
+            "dbc_fundamental_pep": -33.4491060707957,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -26.8930281352083,
+            "dbc_fundamental_pep": -32.9127704567784,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -39.363952001353,
+            "dbc_fundamental_pep": -45.3836943229231,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -39.5679324361625,
+            "dbc_fundamental_pep": -45.5876747577326,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -48.7078027021985,
+            "dbc_fundamental_pep": -54.7275450237686,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -48.7704284445178,
+            "dbc_fundamental_pep": -54.7901707660879,
+            "noise_limited": false
+          }
+        ]
+      },
+      "independent": {
+        "max_difference_db": 4.973799150320701e-14,
+        "iq_sha256": "bf41f33b03d1e0601626451e7b769538e54de7ccaac3eb8bb9d4dbeb7771d635"
+      },
+      "gui_max_difference_db": 4.973799150320701e-14
+    },
+    "on-01": {
+      "analysis": {
+        "valid": true,
+        "clipping_known": false,
+        "absolute_power_calibrated": false,
+        "frames": 4,
+        "sample_rate_hz": 48000,
+        "fft_size": 16384,
+        "window": "blackman-harris-7",
+        "tones_hz": [
+          709.974223660651,
+          1899.97073876727
+        ],
+        "tone_imbalance_db": 0.245653611969743,
+        "fundamental_pep_db_raw_iq": 94.8995357709631,
+        "products": [
+          {
+            "order": 3,
+            "upper": false,
+            "dbc_per_tone": -43.7025429122315,
+            "dbc_fundamental_pep": -49.7222745836759,
+            "noise_limited": false
+          },
+          {
+            "order": 3,
+            "upper": true,
+            "dbc_per_tone": -52.988385458219,
+            "dbc_fundamental_pep": -59.0081171296634,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": false,
+            "dbc_per_tone": -54.8057807048963,
+            "dbc_fundamental_pep": -60.8255123763407,
+            "noise_limited": false
+          },
+          {
+            "order": 5,
+            "upper": true,
+            "dbc_per_tone": -59.9248564318888,
+            "dbc_fundamental_pep": -65.9445881033332,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": false,
+            "dbc_per_tone": -67.3563365315696,
+            "dbc_fundamental_pep": -73.3760682030141,
+            "noise_limited": false
+          },
+          {
+            "order": 7,
+            "upper": true,
+            "dbc_per_tone": -61.278926727275,
+            "dbc_fundamental_pep": -67.2986583987194,
+            "noise_limited": false
+          }
+        ]
+      },
+      "independent": {
+        "max_difference_db": 7.105427357601002e-14,
+        "iq_sha256": "5cfb619ed2a0ec2adba8156c2fff40d5c1939a684a7aaf1fa580d00f72aff7c7"
+      },
+      "gui_max_difference_db": 4.263256414560601e-14
+    }
+  },
+  "power_match_db": 0.3342966220632917,
+  "improvement_db": [
+    {
+      "order": 3,
+      "upper": false,
+      "db": 16.2731791630058
+    },
+    {
+      "order": 3,
+      "upper": true,
+      "db": 26.0953573230107
+    },
+    {
+      "order": 5,
+      "upper": false,
+      "db": 15.441828703543301
+    },
+    {
+      "order": 5,
+      "upper": true,
+      "db": 20.356923995726298
+    },
+    {
+      "order": 7,
+      "upper": false,
+      "db": 18.648533829371097
+    },
+    {
+      "order": 7,
+      "upper": true,
+      "db": 12.508498282757202
+    }
+  ]
+}
