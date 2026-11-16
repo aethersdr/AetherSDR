@@ -1,0 +1,192 @@
+{
+  "controls": {
+    "pdMeasurement": {
+      "value": "Measure linearity\u2026",
+      "enabled": true
+    },
+    "pdMeasureDummyLoad": {
+      "value": "checked",
+      "enabled": true
+    },
+    "pdMeasureRadioPower": {
+      "value": "5",
+      "enabled": true,
+      "toolTip": "Requests the nominal radio setting without transmitting. Wait for radio readback before arming; actual output is measured separately."
+    },
+    "pdMeasureApplyPower": {
+      "value": "Apply power",
+      "enabled": false,
+      "toolTip": "Choose a different radio power setting first."
+    },
+    "pdMeasurePowerStatus": {
+      "value": "Radio reports 5 W setting; actual RF output may differ.",
+      "enabled": true
+    },
+    "pdMeasurePowerLimit": {
+      "value": "10",
+      "enabled": true
+    },
+    "pdMeasureWindow": {
+      "value": "Blackman-Harris 7",
+      "enabled": true
+    },
+    "pdMeasureAverages": {
+      "value": "4",
+      "enabled": true
+    },
+    "pdMeasureOrder": {
+      "value": "IMD3 + 5 + 7",
+      "enabled": true
+    },
+    "pdMeasureTimeout": {
+      "value": "10",
+      "enabled": true,
+      "toolTip": "Three to ten seconds from Transmit measurement, including startup. Short limits may end before capture completes. Expiry requests stop; confirmed RF release can occur later."
+    },
+    "pdMeasureToneSpacing": {
+      "value": "1190",
+      "enabled": true
+    },
+    "pdMeasureToneStatus": {
+      "value": "Requested offsets: 710.0 / 1900.0 Hz from carrier. Reported offsets: 710.0 / 1900.0 Hz; source 0000000000000001.",
+      "enabled": true
+    },
+    "pdMeasureArm": {
+      "value": "Arm measurement source",
+      "enabled": true
+    },
+    "pdMeasureCancelSource": {
+      "value": "Cancel source",
+      "enabled": true
+    },
+    "pdMeasurePrepare": {
+      "value": "Prepare receive check",
+      "enabled": false,
+      "toolTip": "Arm the measurement source, confirm the bench path and choose a forward-power limit."
+    },
+    "pdMeasureTransmit": {
+      "value": "Transmit measurement",
+      "enabled": false,
+      "toolTip": "Prepare must complete a fresh receive check. Readiness expires after two seconds."
+    },
+    "pdMeasureStop": {
+      "value": "Stop measurement",
+      "enabled": false,
+      "toolTip": "No measurement is pending."
+    },
+    "pdMeasureExport": {
+      "value": "Export result\u2026",
+      "enabled": true
+    },
+    "pdMeasureState": {
+      "value": "Test transmission ended before capture completed",
+      "enabled": true
+    },
+    "pdMeasureSpectrum": {
+      "enabled": true
+    },
+    "pdMeasureResult": {
+      "value": "7.150000 MHz \u00b7 ANT1 \u00b7 nominal setting 5 W \u00b7 correction unknown\nTransmit authorization timeout 10 s\nDAX IQ stream identity not reported\nTest transmission ended before capture completed\nADC headroom unknown; absolute power and raw IQ scale are uncalibrated.",
+      "enabled": true
+    }
+  },
+  "radio": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 24.09375,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "service": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "canceled",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "diagnostics": {
+        "alignment": {
+          "count": 1,
+          "text": "alignment evidence: reason=acquisition source=0000000000000001 generation=11 key_ns=1614354479576 submitted_ns=1616105333322 started_ns=1616105359192 completed_ns=1616336392994 consumed_ns=1616338586383 delay=1828.470 envelope=0.833448 phase=0.999147 offset_hz=-0.029659 noise_left=48384 samples_left=144384 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 1,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=1616889717835 source=0000000000000001 phase=running keyed=1 tx_on=1 samples_left=131200 generated=60800 iq_frames=10533 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=844826 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=484c0026 slice=0 correction=1 native_apd=0 iq_valid_ns=1616885253483",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 1212940326,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000001",
+        "tones": false
+      },
+      "measurement_capture_batch_version": 1,
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000001",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "measurement",
+      "state": "idle"
+    },
+    "http_status": 200
+  }
+}

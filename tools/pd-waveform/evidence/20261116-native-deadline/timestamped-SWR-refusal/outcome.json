@@ -1,0 +1,100 @@
+{
+  "passed": false,
+  "positive_GUI_key_actions": 1,
+  "error": "AssertionError: ('SWR guard', {'volts': 13.53125, 'fwd_dbm': 35.2734375, 'ref_dbm': 9.7734375, 'temp_c': 24.09375, 'watts': 3.3677802830688894, 'swr': 2.671875})",
+  "radio_after": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 24.09375,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 2.646392822265625,
+    "version": "4.3.16.42034"
+  },
+  "status_after": {
+    "body": {
+      "available": true,
+      "calibration_control": true,
+      "calibration_required": false,
+      "calibration_state": "canceled",
+      "correcting": false,
+      "correction_control": true,
+      "correction_enabled": true,
+      "diagnostics": {
+        "alignment": {
+          "count": 2,
+          "text": "alignment evidence: reason=acquisition source=0000000000000002 generation=14 key_ns=1827331412473 submitted_ns=1829083633703 started_ns=1829083655480 completed_ns=1829322982134 consumed_ns=1829336312082 delay=1772.470 envelope=0.833471 phase=0.999149 offset_hz=-0.029681 noise_left=47872 samples_left=143872 tone_sent_ns=0 guard_ns=500000000",
+          "truncated": false
+        },
+        "source_end": {
+          "count": 2,
+          "text": "bounded source ended: reason=interlock_ineligible mono_ns=1831481494406 source=0000000000000002 phase=running keyed=1 tx_on=1 samples_left=92416 generated=99584 iq_frames=69059 iq_starts=1 iq_stale=0 iq_invalid=0 iq_age_ns=1531877 tx_discontinuities=0 tx_rejected=0 deadlines=0 control=1 software_owner=0 idle=0 gui=484c0026 slice=0 correction=1 native_apd=0 iq_valid_ns=1831481269926",
+          "truncated": false
+        },
+        "version": 1
+      },
+      "faults": {
+        "dispatch_deadlines": 0,
+        "rejected_input": 0,
+        "send_errors": 0,
+        "stale_iq": 0
+      },
+      "feedback_binding": {
+        "channel": 4,
+        "failed": false,
+        "gui_handle": 1212940326,
+        "pan": 1073741824,
+        "transport": "local_dax_iq",
+        "valid": true
+      },
+      "input_limited_samples": 0,
+      "keyed": false,
+      "measurement": {
+        "source_id": "0000000000000002",
+        "tones": false
+      },
+      "measurement_capture_batch_version": 1,
+      "measurement_control": true,
+      "measurement_tone_capture_version": 3,
+      "measurement_tone_config": {
+        "center_hz": 1305,
+        "max_spacing_hz": 10000,
+        "min_spacing_hz": 200,
+        "source_id": "0000000000000002",
+        "spacing_hz": 1190
+      },
+      "measurement_tone_control": true,
+      "registered": true,
+      "source_purpose": "measurement",
+      "state": "idle"
+    },
+    "http_status": 200
+  }
+}

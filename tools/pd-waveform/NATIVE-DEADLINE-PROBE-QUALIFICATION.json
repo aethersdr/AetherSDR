@@ -1,0 +1,123 @@
+{
+  "updated_utc": "2026-11-16T22:18:52.692357+00:00",
+  "status": "native_deadline_live_proof_unqualified_preserved_vitals_and_SWR_refusals",
+  "production_ready": false,
+  "runtime_source": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "desktop_source": "8d06b8300",
+  "release_blake2b_256": "9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce",
+  "RF_attempts": 2,
+  "nominal_W": 5,
+  "configured_max_W": 10,
+  "frequency_MHz": 7.15,
+  "FDX": false,
+  "native_DSP_signals": 0,
+  "automatic_retries": false,
+  "attempts": [
+    {
+      "label": "vitals-refusal",
+      "reason": "External bench monitor incorrectly used2second expiry for slow voltage/temperature; it resumed desktop and requested unkey before native deadline.",
+      "RF_key_actions": 1,
+      "native_deadline_proven": false
+    },
+    {
+      "label": "timestamped-SWR-refusal",
+      "reason": "External monitor matched existing shipping3second vitals/2second power-SWR policy and used kernel arrival stamps. ReportedSWR2.671875 caused desktop resume and unkey before native deadline.",
+      "RF_key_actions": 1,
+      "native_deadline_proven": false
+    }
+  ],
+  "preparation_note": "First prepare script encountered a temporarily disabled power control. The separately invoked RF coordinator independently revalidated5Wsetting,10Wmaximum and all receive/bench checks before its one key. Future preparation must wait for the control to settle.",
+  "bench_monitor_fix": {
+    "production_code_changed": false,
+    "existing_policy_source": "src/models/AetherPDMeasurementModel.cpp",
+    "existing_policy_source_sha256": "b630010734e9ac5cd26a465369f134b73ce21785dd1b721342a3cdc99a0e421e",
+    "vitals_max_age_ms": 3000,
+    "power_and_SWR_max_age_ms": 2000,
+    "kernel_timestamp": "Linux SO_TIMESTAMPNS=35, matching this host header; host-only development monitor",
+    "timestamp_scope": "Host kernel UDP receive time, not FPGA origin time. Reject truncated ancillary data, missing timestamp and receive clock discontinuity; no read-time freshness reset.",
+    "receive_only_check": {
+      "passed": true,
+      "checks": 121,
+      "rows": 94,
+      "max_queue_age_ms": 20.147627,
+      "kernel_timestamps": true,
+      "samples": "See evidence file"
+    },
+    "queued_packet_proof": {
+      "passed": true,
+      "RF_commands": [],
+      "deliberate_drain_pause_ms": 150,
+      "queued_packets": 2,
+      "oldest_queue_age_ms": 107.165105,
+      "newest_queue_age_ms": 46.509393,
+      "rows": "See evidence file"
+    }
+  },
+  "SWR_refusal": {
+    "raw_same_packet": {
+      "8": 4515,
+      "9": 1251,
+      "10": 342
+    },
+    "reported_SWR": 2.671875,
+    "forward_W": 3.3677802830688894,
+    "reflected_W": 0.009491694466050332,
+    "directional_power_derived_SWR": 1.1121296790823403,
+    "kernel_receive_realtime_ns": 1794867268076264942,
+    "interpretation": "Radio-reported SWR disagrees with same-packet directional ratio; physical/vendor root cause remains unqualified. Existing production guard thresholds and sources unchanged."
+  },
+  "final_cleanup": {
+    "radio_idle": true,
+    "service_state": "stopped",
+    "remaining_processes": 3,
+    "UID78666_caps_zero_NNP1": true,
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "temporary_installer_paths_absent": true,
+    "all_probe_containers_and_host_scratch_removed": true,
+    "runtime_hashes_match_manifest": true
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/prepare.py": "60a2257ae8af99a603e41383834827a8b31659d37a0b341a865abf143656b783",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/fault-template.py": "4651783d5785282efc705addad1e3e869ef69475fa6986bc7683eba31c0540fb",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/run-keyed-once.py": "1669cbaf262eb47947dfb15b5c87070dbbb54693eb7cb06de3dc78e76a8b9649",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/meter-watch.py": "0b7aeb98994c044a046709db698a764bf3e7e5eda7a7b88a2be011f4d37c2840",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/resume-watchdog.py": "0ad00ba94b0d520a3c4bcbb925c46be6f0b7b36b1d55c0078cf23dd4ecc40598",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/keyed-events.json": "f9cc746718a63f81d900364bb52d2097fe1ed96d214f22b102a4427fee39cc36",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/keyed-result.json": "67cc81057d97a178ae104ae1063bf86b008aab801b4323f5c63c29b040f127c7",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/outcome.json": "b11002dfe658912969c5dface0259cde037746f1c4b74df65de46f5dd2694850",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/independent-meters.json": "5e028e0f3cdb8442637c33e49c39301d4502681be6dfc0ab5d2f83a15724ca14",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/watchdog.json": "98cf8355ef150250799606db314121179c8ab8d6fbc0c963dca004f9af30ce47",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/preflight-controls.json": "4a8108050949cc77f88ebc3599aa4fe63777c49d9ce6d6b26b99c4a4166ac333",
+    "tools/pd-waveform/evidence/20261116-native-deadline/vitals-refusal/receive-meter-delivery.json": "e9931f0c4b0c8d6b0b41428a81c16b00e128b0455d172d651ce0a532e3d5fdfb",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/fault-template.py": "4651783d5785282efc705addad1e3e869ef69475fa6986bc7683eba31c0540fb",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/run-keyed-once.py": "3e0e83ee2873fd73e6a9eb4d335391adaedaf0684d370bf3aebce2269334d18e",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/meter-watch.py": "41637a78894d69d6f624dd540d18dc74f273053d0a4ba4fe04f07040bd0f33b7",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/resume-watchdog.py": "0ad00ba94b0d520a3c4bcbb925c46be6f0b7b36b1d55c0078cf23dd4ecc40598",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/receive-meter-check.json": "c4dd5b2184aabd498f144c0885009271b1fce0abc1cbd94abc84d4c92b64b83e",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/keyed-events.json": "0ab05092b6c3724ba68873fb3bda886d14d1b938f605e17f17716be197950df6",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/keyed-result.json": "7ae7b2386ea1746599741336737b99cffa0f6899d4ada7a7f508c7bdf29f312d",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/outcome.json": "59eee92c0163ecb2a6de7a5dea50017b5727214eba0cd94313c5e2d3d9bfb331",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/independent-meters.json": "6a2ea6d8942f97dcaafc5815432a821db8599e64544627af3c2747167c284bba",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/watchdog.json": "3faf1358e87004c30e1991aa7e57eaab73f1dae45175575f54d54785163d6406",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/queue-age-check.py": "0153c617c37801e2a73d6d727e50f213fb265f6e778716b79202601317f832cb",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/queue-age-check.json": "1e6a0d741d6f2d768b917b33bb5afb67a7659bafe45752081ff35a2d65799e2a",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/final-stop.json": "97a58e79c04f56ef9b8c8ae7ecb01a3450d5b77ece13369dafd67c411b3d0594",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/final-audit-job.py": "9e79e24534f4189c21ce5bae3f65e451579dfabfe44d886c4c69ea95cbdc7a21",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/final-audit-result.json": "fb8f6a60f9a7b0523ba113c9cf976ac6573b72601fd62bc15670a02c592e5bc5",
+    "tools/pd-waveform/evidence/20261116-native-deadline/timestamped-SWR-refusal/prepare-settled.py": "c84783948427c77c077ec5945cba8682f5e7b2021f4580c8c03aa4b9af8caa42"
+  },
+  "local_generated_job_sha256": {
+    "desktop-only-deadline/keyed-job.py": "fcee2b7ca4d74963b1d250ae28539837979500f30f0b1d3b5731b29bb72044b7",
+    "desktop-only-deadline-02/keyed-job.py": "b76bf96d6c0634760b63aa09dfc8cc9db870a78c9fc9140acf8142c2f02c17ec"
+  },
+  "remaining": [
+    "Full desktop-only pause/native deadline with sameDSPalive remains unqualified; both runs were stopped by host-side guards.",
+    "An independent power/SWR reference would avoid relying solely on conflicting radio metrics. User preference about resuming deferred LP100A integration is pending; continue non-RF work while deferred.",
+    "Steady-output failure cases and remaining process/API/credential/partial-start/scheduling coverage.",
+    "Full P1-P10 goal remains open, including natural128sample slip, sustained/matchedRF and stockAPD comparison, actual6300, production signing and independent release gates."
+  ],
+  "future_prepare_variant": "prepare-settled.py waits for the enabled power control. Syntax checked only; not used to produce this evidence."
+}

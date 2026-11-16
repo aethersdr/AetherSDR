@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "RF_commands": [],
+  "deliberate_drain_pause_ms": 150,
+  "queued_packets": 2,
+  "oldest_queue_age_ms": 107.165105,
+  "newest_queue_age_ms": 46.509393,
+  "rows": [
+    {
+      "ns": 62407289976258,
+      "kernel_receive_realtime_ns": 1794867446886680265,
+      "drained_ns": 62407397141363,
+      "packet_count": 3,
+      "raw": {
+        "8": 0,
+        "9": 0,
+        "10": 128
+      }
+    },
+    {
+      "ns": 62407350651230,
+      "kernel_receive_realtime_ns": 1794867446947355267,
+      "drained_ns": 62407397160623,
+      "packet_count": 5,
+      "raw": {
+        "8": 0,
+        "9": 0,
+        "10": 128
+      }
+    }
+  ]
+}
