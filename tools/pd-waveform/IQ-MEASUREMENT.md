@@ -3,8 +3,10 @@
 This development path supplies raw feedback for the PR 4770 analyzer. It is
 implemented in the DSP, its owning Go process, the authenticated HTTP relay
 and the desktop capture adapter/controller. The measurement model composes
-the production TX lease; the development operator GUI exposes the composed workflow. It has local C/Go/HTTP and adapter/controller/analyzer
-integration evidence, not live-radio qualification.
+the production TX lease; the development operator GUI exposes the composed workflow. It has local C/Go/HTTP and adapter/controller/analyzer integration evidence.
+The installed FLEX-8600 completed two finite, four-frame corrected GUI runs
+with FDX disabled; see [the qualification record](GUI-FOUR-FRAME-QUALIFICATION.json).
+This is not production or FLEX-6000 qualification.
 
 The DSP observes its existing guarded local DAX IQ stream before decimation
 or feedback equalization. It creates no stream, changes no panadapter or
@@ -338,8 +340,9 @@ an `ITxLinearityRunLease` for that operator-authorized transmission. The lease
 must arm a non-renewable independent cutoff before dispatching through the
 existing TX gate; the controller's 25 ms timer is not that cutoff.
 
-**The development `AetherPDRunLease` is component-tested but not live-qualified
-in the operator measurement UI.** The controller unit tests inject a
+**The development `AetherPDRunLease` has component tests and two successful
+normal-release runs in the installed FLEX-8600 measurement UI. Final keyed
+failure and independent-cutoff qualification remain required.** The controller unit tests inject a
 lease; the model integration test exercises the real adapter and TX gate. Its
 `Released` observation must confirm release of the original
 TX operation; successful enqueueing of an unkey command is insufficient. The
@@ -348,8 +351,8 @@ after a source/session failure. Production integration must expose that pending
 state and keep the independent cutoff effective across GUI stalls or destruction.
 The installed `pd-unkey-guard` uses its session lifetime pipe. A development
 [bounded mode](guardian/README.md#bounded-measurement-mode-development) adds
-a fixed cleanup-initiation timer, exposed through the development API above but
-not deployed. It does not
+a fixed cleanup-initiation timer, exposed through the development API above and exercised by the installed
+FLEX-8600 measurement workflow. It does not
 by itself establish an RF-cessation deadline. The automation watchdog polls
 on the GUI thread. Neither alone satisfies this independent cutoff contract.
 The existing independent TX coordinator and Flex ordered stop evidence are
@@ -369,8 +372,8 @@ cannot become available again. The session supervisor serializes startup through
 child termination, closes pending/active test lifetimes on session Stop, and
 includes them in shutdown waiting. Its production start method prepares a fixed
 loopback API connection bound to the original GUI identity. These components
-are host-tested through authenticated test operations; the connection factory
-is not live-qualified. The lease keeps the original intent through startup and must
+are host-tested through authenticated test operations; the connection factory has also been exercised by the two installed
+FLEX-8600 runs, without fault injection. The lease keeps the original intent through startup and must
 budget cleanup and scheduling time, and refuse replacement while any previous
 helper remains unaccounted for.
 
@@ -463,9 +466,12 @@ cooldown. These are component results, not firmware or RF-cutoff qualification.
 The development operator window now composes explicit source arm, receive
 preparation, scoped transmission, stop and atomic JSON export. LP-100A integration
 is deferred by the operator;
-the current model consumes radio telemetry only. No live run of this workflow
-is qualified. Final bench
-tests must measure capture overhead and correction continuity on the 8600;
+the current model consumes radio telemetry only. The two installed FLEX-8600
+runs completed four captures each, with logged key-to-unkey command intervals
+of 7.789 seconds cold and 6.104 seconds warm. Both used a 5 W setting; sampled
+forward power peaked near 3.41 W. These timings do not establish an independent
+RF-cessation bound or power calibration. Matched correction-off/on measurements,
+raw-IQ cross-checks and final failure tests remain;
 actual Linux 2.6/Cortex-A8 qualification remains required. Validate the raw
 DAX IQ full-scale convention before interpreting magnitude 1.0 as ADC
 clipping; relative spectral ratios alone do not establish that calibration.
@@ -496,9 +502,13 @@ qualify the independently granted measurement operation. Closing requests stop
 but does not claim RF release or stop correction. An unused arm remains bounded
 by its original 30-second expiry unless explicitly canceled.
 
-The UI and export require installed-radio qualification, including four-frame
-transfer time within the tone window and real backend release evidence. A local
-injected-transport test is not evidence of those hardware properties.
+The two finite installed FLEX-8600 runs completed four-frame transfer within
+the tone window and reached confirmed backend release. Cold completion was
+close to the eight-second source limit; scheduling/network variability and
+actual FLEX-6300 behavior remain unqualified. The record preserves the failed
+cleanup audit: its single-primary expectation was incorrect because Stop
+retains an unprivileged status channel. The DSP/capture workers and temporary
+ARP entry were gone; three control processes remained with zero capabilities.
 
 After all frames have been accepted, normal unkey cancels the bounded source.
 The model therefore permits the same source to be ended while waiting for

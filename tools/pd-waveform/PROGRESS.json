@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T08:36:31.620938+00:00",
+  "updated_utc": "2026-11-16T08:47:10.213186+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Qualify current desktop measurement diagnostics against the installed shim at bounded5W, recording exact SWR abort evidence; complete cold/warm four-frame capture without weakening source or independent unkey bounds.",
+  "next_action": "Run matched correction-OFF/ON through the integrated analyzer with retained raw IQ for numerical cross-check; preserve the successful cold/warm four-frame proof. Historical slip, cold variability, final failure cases, stockAPD,6000 adapter/disk/hardware and release gates remain.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2422,6 +2422,39 @@
       "Installed-service live measurement with this desktop diagnostic.",
       "Actual triggering SWR sample is not yet known; prior periodic readings cannot identify it.",
       "Cold-start four-frame capture, natural alignment-slip qualification and remaining P1-P10 gates."
+    ]
+  },
+  "GUI_four_frame_cold_warm": {
+    "status": "two_finite_GUI_four_frame_corrected_measurements_passed",
+    "evidence": "GUI-FOUR-FRAME-QUALIFICATION.json",
+    "desktop_commit": "56af0c8fcea1de8007defa57651d0663c03c72b2",
+    "results": [
+      {
+        "case": "cold-01",
+        "key_to_unkey_command_ms": 7789,
+        "imd3_dbc_per_tone": [
+          -44.31790628172698,
+          -53.936858618202606
+        ]
+      },
+      {
+        "case": "warm-01",
+        "key_to_unkey_command_ms": 6104,
+        "imd3_dbc_per_tone": [
+          -44.39536946915229,
+          -55.3112904235543
+        ]
+      }
+    ],
+    "production_ready": false,
+    "remaining": [
+      "Two finite corrected-tone measurements are not a matched OFF/ON improvement or stock-APD comparison.",
+      "No safety abort occurred, so exact abort logging has component/sanitizer proof but no live triggering sample in these runs.",
+      "Historical natural128sample slip and all-bypass cold start remain unattributed; successful runs do not establish their root cause.",
+      "Cold four-frame completion fits narrowly inside the source window; scheduling/network variability and actual6300 remain unqualified.",
+      "ADC clipping/headroom and absolute power calibration remain unknown in the analyzer export. Radio samples are not LP100A readings.",
+      "Raw IQ was not retained for an independent numerical reanalysis; structured operator exports and capture identities are retained.",
+      "No production or all-band claim; remaining P1-P10 failure, RF,6300,installer and release gates remain."
     ]
   }
 }
