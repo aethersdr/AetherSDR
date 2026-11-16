@@ -1,0 +1,128 @@
+{
+  "utc": "2026-11-16T09:18:57.618415+00:00",
+  "status": "signed_successor_built_native_verified_not_installed",
+  "production_ready": false,
+  "build": {
+    "production_ready": false,
+    "installed": false,
+    "purpose": "Correction selection successor for matched IQ measurement",
+    "source_commit": "82cf771d8eb4b453060f778f325fa482e8dedf5f",
+    "source_sha256": "46387d083adeddff104a922e4b58c75a28edf41bc8b79f875f252c92a0718c67",
+    "build_script_sha256": "e15cf62998a79719d40d2d04606e2e370074897f83f00d3368e74edfdf2ea146",
+    "finalizer_sha256": "f19c2331af6e2498f72d5c18ed31ad472827cfa0404096450fd62fd075fb48a0",
+    "native_release_verified": true,
+    "native_previous_release_verified": true,
+    "native_worker_verified": "466768 e74f5b653bbb6be3141b4f4bd89efbacf120115c5d8cebb9ab925bf4ca9951e2 4566d67966d9fb316062a18d29bc131ac15f83166d84d67b35aa69f6ace758f7",
+    "private_signing_seed_persisted": false,
+    "previous_key": "232a86b94d380eb3462a5957639f8e3b744c343148e72fac55e4e5d487d1fe6b",
+    "candidate_key": "91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f",
+    "reused_payload_files": [
+      "LICENSES"
+    ],
+    "payload_files": {
+      "flex-tailnet-shim": "623fd734084f77b49005115ff988cb4daed916bc61feb62c1fdea5266e413031",
+      "aether-pd": "e06154f34cda20899578e35685ad5b414ddee6b402bd3e38e67432fd1bed3df9",
+      "pd-primary-launch": "21050e15565de8295c8bd1a47b4072bbc0a7900a4fd8f01c9b1a744e197164bc",
+      "pd-start-session": "b905f5088cade64b12f2b052a0c7d004ffe86418ab6934165ee6189b1cc17592",
+      "pd-radio-launch": "4433917af5781dbdd7b06308f597f60ad8ef8aacd438642e74281cd9f0192b05",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "1cbdde394b8414d9c70d725f347987971cdbbe440dd94af168a489848c3478a4",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "c84b8e47a5ff0381ab195031ed26fc4f2bea0448d2559f647405991ba13f070e",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "LICENSES": "3be5adaf8142d02da1afff41462888e81622f01adb11def823324fb337ee91f1"
+    },
+    "files": {
+      "LICENSES": {
+        "size": 215346,
+        "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+      },
+      "candidate.release": {
+        "size": 9006666,
+        "sha256": "176f8c7a9ae68562c280a84b8b1dfc88516b5857811afdf37bac68fb24459b49"
+      },
+      "pd-accept": {
+        "size": 29984,
+        "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+      },
+      "pd-carrier": {
+        "size": 6291616,
+        "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+      },
+      "pd-deliver": {
+        "size": 109008,
+        "sha256": "d4cb3cac2f7a8ad8c98762266ba7daaee6fa2774fc8ece00aaf94c09dfc1b106"
+      },
+      "pd-send": {
+        "size": 42344,
+        "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+      },
+      "previous.release": {
+        "size": 9005703,
+        "sha256": "8c527f6c0d7adcacdb0480400f0066c6b902623010cda20266cdab942db7ca1e"
+      },
+      "worker.envelope": {
+        "size": 466952,
+        "sha256": "dad03bd6bb23eef5e96db41ff1d6254e6801813cf203f5afcdcae6abfc8cb399"
+      }
+    },
+    "assembly_reproducible": true,
+    "binary_rebuild_reproducibility_tested": false,
+    "limits": [
+      "Initial native worker check asked for first-install role1 and correctly rejected upgrade role2. Corrected verifier role2 passed without changing artifact bytes.",
+      "Not installed or RF qualified; full runtime reproducibility not repeated for this candidate.",
+      "Development publisher pins only; no shipping catalogue or production trust claim."
+    ]
+  },
+  "desktop_development_pins": {
+    "version": "0.0.0-correction.82cf771d8",
+    "firmware": "4.3.16.42034",
+    "profile": 1,
+    "candidate_key": "91f40ac4f5e1bf3623b1a7f31dbfc835b79f265fe19743e00af884ad7451cb3f",
+    "previous_key": "232a86b94d380eb3462a5957639f8e3b744c343148e72fac55e4e5d487d1fe6b",
+    "files": {
+      "LICENSES": {
+        "size": 215346,
+        "sha256": "3acd62434bb56358ffb5f34e1909bb53a0f29470523f637427ac80f23c1c2127"
+      },
+      "candidate.release": {
+        "size": 9006666,
+        "sha256": "176f8c7a9ae68562c280a84b8b1dfc88516b5857811afdf37bac68fb24459b49"
+      },
+      "pd-accept": {
+        "size": 29984,
+        "sha256": "4cda5ed6f692de5ea8950c78b418979a6d7d1f2dc5ed3da6d0147d3e8f84c31d"
+      },
+      "pd-carrier": {
+        "size": 6291616,
+        "sha256": "b1c90bc317f59c49438079934dc7cfbfc607a98cb78bf458e6f608218dd1c8dc"
+      },
+      "pd-deliver": {
+        "size": 109008,
+        "sha256": "d4cb3cac2f7a8ad8c98762266ba7daaee6fa2774fc8ece00aaf94c09dfc1b106"
+      },
+      "pd-send": {
+        "size": 42344,
+        "sha256": "c2cd5aede08badfd67dd4fa0d989f92ab9715961bd49e654a20d4806ced757df"
+      },
+      "previous.release": {
+        "size": 9005703,
+        "sha256": "8c527f6c0d7adcacdb0480400f0066c6b902623010cda20266cdab942db7ca1e"
+      },
+      "worker.envelope": {
+        "size": 466952,
+        "sha256": "dad03bd6bb23eef5e96db41ff1d6254e6801813cf203f5afcdcae6abfc8cb399"
+      }
+    }
+  },
+  "evidence_files": {
+    "build-candidate.py": "e15cf62998a79719d40d2d04606e2e370074897f83f00d3368e74edfdf2ea146",
+    "finalize.py": "f19c2331af6e2498f72d5c18ed31ad472827cfa0404096450fd62fd075fb48a0",
+    "build.log": "ebe41203a2a5176945c951208e3a292f381f040eaae1394ffd5dd4ec2486c4f1",
+    "verification.log": "700bddfe8b430903a5291069db1b9b33d4263ef775ea7b78e9c22623e2215e29",
+    "source-sha256.json": "9b738d890bbe3fce9fe116a0a47406b8bb7afae5929e3aae9053013e885865ce",
+    "selection.json": "94ec2564839630ac605e63464c0bf323d77569ab79ef2f7f547de0215644543e",
+    "build-report.json": "3d963baa0235f891d125a081be41e460c88a0af15fce430d574f743c904da73c"
+  },
+  "next": "Finish desktop pin build, inspect live unkeyed radio and exact GUI upgrade plan, then use authorized operator approval through ordinary installed-shim update. Preserve identity and confirm native correction-control readback before any separate RF test."
+}
