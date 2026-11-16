@@ -1,0 +1,52 @@
+{
+  "before": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 24.203125,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "request": {
+    "action": "click",
+    "class": "QPushButton",
+    "deferred": true,
+    "ok": true,
+    "target": "pdStop"
+  },
+  "after": {
+    "body": {
+      "available": false,
+      "state": "stopped"
+    },
+    "http_status": 200
+  }
+}

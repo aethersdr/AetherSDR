@@ -1,0 +1,31 @@
+{
+  "updated_utc": "2026-11-16T21:37:48.555946+00:00",
+  "status": "USB_start_guard_live_controls_and_receive_IQ_passed",
+  "production_ready": false,
+  "desktop_source": "8d06b8300",
+  "runtime_source": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "runtime_release": "9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce",
+  "RF_transmissions": 0,
+  "proof": [
+    "DIGU radio readback dims Start with actionable USB reason.",
+    "Invoking the disabled control leaves it disabled and does not key.",
+    "USB readback enables Start; no automatic service start or key.",
+    "Explicit Start reads complete131072byte localDAXIQ frame with FDX disabled.",
+    "Stop confirms session cleanup."
+  ],
+  "header_dependency": "Explicit existing SliceModel include supports neutral mode, active and receive-readback signals; generated touchpoint manifest updated.",
+  "evidence_sha256": {
+    "controls-proof.json": "96a114b18917455613485adaa25899bc11cba1046cb4a53d90dddeceaeaff108",
+    "prove-controls.py": "b63956bf8b921bc8be0cb2734dcac9460d8e6283c5580867d4e36386d2c3efcf",
+    "instance.json": "82e429dd72f8ab8def413ee9c3a90938697580a732ed803e0204eee20c0efafa",
+    "desktop-provenance.json": "7217d5c924e490bd89fe05d1acba627a714019186c322cf2b6d9d1b3906a3a90",
+    "stopped-before-relaunch.json": "3ba5f51a9bb493704146276e72cc8b28ea7b13a54f9ffb0940cea6a0c60bb9f8",
+    "usb-receive-iq-check.json": "8cdc6e66be9f768604954c4ce28a45da6382e4355aa23feeff0c4b2034e39d8c",
+    "receive-iq.log": "b1ed88748e721ddbbaf1fbc31737d7d14f4373dada786d4447908b1aacbb67cc"
+  },
+  "remaining": [
+    "Final packaged runtime failure/restart/unkey and reboot/update/rollback checks.",
+    "Further10W/sustained-tone/speech and stockAPD comparisons.",
+    "Natural128sample alignment-slip cause, actual6300 teammate qualification and independent release gates."
+  ]
+}

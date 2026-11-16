@@ -1,0 +1,284 @@
+{
+  "RF_commands": [],
+  "DIGU": {
+    "pdState": {
+      "value": "Status unknown",
+      "enabled": true
+    },
+    "pdDetail": {
+      "enabled": true
+    },
+    "pdReceipt": {
+      "enabled": true
+    },
+    "pdMessage": {
+      "value": "No current status is available. The request may have failed or its reply may have been lost; controls are not retried automatically.",
+      "enabled": true
+    },
+    "pdIqSelection": {
+      "value": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+      "enabled": true,
+      "accessibleDescription": "Choose an owned feedback pan. Assign its IQ channel in the pan's DAX panel first. This choice sends no radio commands."
+    },
+    "pdIqObserved": {
+      "value": "No confirmed native IQ binding. Choose a pan, then start AetherPD.",
+      "enabled": true
+    },
+    "pdStart": {
+      "value": "Start AetherPD",
+      "enabled": false,
+      "toolTip": "Select USB on the active receiver and wait for radio readback before starting AetherPD.",
+      "accessibleDescription": "Select USB on the active receiver and wait for radio readback before starting AetherPD."
+    },
+    "pdStop": {
+      "value": "Stop AetherPD",
+      "enabled": true
+    },
+    "pdArm": {
+      "value": "Arm calibration",
+      "enabled": false,
+      "toolTip": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+      "accessibleDescription": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off."
+    },
+    "pdCancel": {
+      "value": "Cancel calibration",
+      "enabled": true
+    },
+    "pdRestore": {
+      "value": "Restore receive",
+      "enabled": true
+    },
+    "pdRefresh": {
+      "value": "Refresh",
+      "enabled": true
+    },
+    "pdMeasurement": {
+      "value": "Measure linearity\u2026",
+      "enabled": true
+    },
+    "pdEnableCorrection": {
+      "value": "Enable correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdBypassCorrection": {
+      "value": "Bypass correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdInstallState": {
+      "value": "No update prepared",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "First-install development package 0.0.0-guardian.e8d68ad4b \u2014 not qualified for production.\nDevelopment package 0.0.0-batch.489b1ed5f \u2014 not qualified for production.\nChoose Prepare update to verify the package and review its plan. Preparation does not change the radio.\nPrepare first installation is for a radio without a managed AetherPD installation. Review and approve its plan before any upload. Check saved installation only reads the previous attempt's outcome.",
+      "enabled": true,
+      "accessibleDescription": "Read-only target, changes and authenticated package identifiers to review before approving."
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": false,
+      "toolTip": "No pending update can be canceled in this connection.",
+      "accessibleDescription": "No pending update can be canceled in this connection."
+    },
+    "pdInstallApprove": {
+      "value": "Approve update",
+      "enabled": false,
+      "toolTip": "A verified plan for this connection and an idle transmitter are required.",
+      "accessibleDescription": "A verified plan for this connection and an idle transmitter are required."
+    },
+    "pdDone": {
+      "value": "Done",
+      "enabled": true
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": true
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false,
+      "toolTip": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first.",
+      "accessibleDescription": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first."
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": true
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false,
+      "toolTip": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first.",
+      "accessibleDescription": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first."
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false,
+      "toolTip": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required.",
+      "accessibleDescription": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."
+    }
+  },
+  "disabled_click": {
+    "class": "QPushButton",
+    "disabled": true,
+    "error": "refused: 'pdStart' is disabled \u2014 the radio won't accept the change",
+    "ok": false
+  },
+  "USB": {
+    "pdState": {
+      "value": "Status unknown",
+      "enabled": true
+    },
+    "pdDetail": {
+      "enabled": true
+    },
+    "pdReceipt": {
+      "enabled": true
+    },
+    "pdMessage": {
+      "value": "No current status is available. The request may have failed or its reply may have been lost; controls are not retried automatically.",
+      "enabled": true
+    },
+    "pdIqSelection": {
+      "value": "IQ Ch 4 \u2014 7.150000 MHz \u2014 pan 0x40000000",
+      "enabled": true,
+      "accessibleDescription": "Choose an owned feedback pan. Assign its IQ channel in the pan's DAX panel first. This choice sends no radio commands."
+    },
+    "pdIqObserved": {
+      "value": "No confirmed native IQ binding. Choose a pan, then start AetherPD.",
+      "enabled": true
+    },
+    "pdStart": {
+      "value": "Start AetherPD",
+      "enabled": true
+    },
+    "pdStop": {
+      "value": "Stop AetherPD",
+      "enabled": true
+    },
+    "pdArm": {
+      "value": "Arm calibration",
+      "enabled": false,
+      "toolTip": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off.",
+      "accessibleDescription": "Fresh, unkeyed status with calibration and DAX IQ binding available is required. Radio APD must be off."
+    },
+    "pdCancel": {
+      "value": "Cancel calibration",
+      "enabled": true
+    },
+    "pdRestore": {
+      "value": "Restore receive",
+      "enabled": true
+    },
+    "pdRefresh": {
+      "value": "Refresh",
+      "enabled": true
+    },
+    "pdMeasurement": {
+      "value": "Measure linearity\u2026",
+      "enabled": true
+    },
+    "pdEnableCorrection": {
+      "value": "Enable correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdBypassCorrection": {
+      "value": "Bypass correction",
+      "enabled": false,
+      "toolTip": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state.",
+      "accessibleDescription": "Fresh idle status with DAX IQ binding and no armed source or pending update is required. The requested state must differ from the current state."
+    },
+    "pdInstallState": {
+      "value": "No update prepared",
+      "enabled": true
+    },
+    "pdInstallPlan": {
+      "value": "First-install development package 0.0.0-guardian.e8d68ad4b \u2014 not qualified for production.\nDevelopment package 0.0.0-batch.489b1ed5f \u2014 not qualified for production.\nChoose Prepare update to verify the package and review its plan. Preparation does not change the radio.\nPrepare first installation is for a radio without a managed AetherPD installation. Review and approve its plan before any upload. Check saved installation only reads the previous attempt's outcome.",
+      "enabled": true,
+      "accessibleDescription": "Read-only target, changes and authenticated package identifiers to review before approving."
+    },
+    "pdInstallCancel": {
+      "value": "Cancel update",
+      "enabled": false,
+      "toolTip": "No pending update can be canceled in this connection.",
+      "accessibleDescription": "No pending update can be canceled in this connection."
+    },
+    "pdInstallApprove": {
+      "value": "Approve update",
+      "enabled": false,
+      "toolTip": "A verified plan for this connection and an idle transmitter are required.",
+      "accessibleDescription": "A verified plan for this connection and an idle transmitter are required."
+    },
+    "pdDone": {
+      "value": "Done",
+      "enabled": true
+    },
+    "pdInstallPrepare": {
+      "value": "Prepare update",
+      "enabled": true
+    },
+    "pdInstallFirst": {
+      "value": "Prepare first installation",
+      "enabled": false,
+      "toolTip": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first.",
+      "accessibleDescription": "A first-install package compiled for this firmware and no saved or pending installation are required. Check a saved installation first."
+    },
+    "pdInstallCheck": {
+      "value": "Check saved installation",
+      "enabled": true
+    },
+    "pdInstallSaved": {
+      "value": "Prepare saved attempt",
+      "enabled": false,
+      "toolTip": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first.",
+      "accessibleDescription": "A pending saved attempt, its trusted package, and an idle transmitter are required. Check saved installation first."
+    },
+    "pdInstallCleanup": {
+      "value": "Remove temporary installer packages",
+      "enabled": false,
+      "toolTip": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required.",
+      "accessibleDescription": "Check the saved installation first. Exact commitment, unfinished cleanup and an idle transmitter are required."
+    }
+  },
+  "radio_after": {
+    "callsign": "KK7GWY",
+    "connectState": "connected",
+    "connected": true,
+    "fullDuplex": false,
+    "iaruRegion": 2,
+    "maxSlices": 4,
+    "model": "FLEX-8600",
+    "name": "",
+    "nickname": "FLX8600",
+    "paTemp": 24.15625,
+    "panCount": 1,
+    "serial": "2125-1213-8600-8895",
+    "sliceCount": 1,
+    "slots": [
+      {
+        "id": 0,
+        "state": "ours"
+      },
+      {
+        "id": 1,
+        "state": "empty"
+      },
+      {
+        "id": 2,
+        "state": "empty"
+      },
+      {
+        "id": 3,
+        "state": "empty"
+      }
+    ],
+    "transmitting": false,
+    "txPower": 0,
+    "version": "4.3.16.42034"
+  },
+  "passed": true
+}
