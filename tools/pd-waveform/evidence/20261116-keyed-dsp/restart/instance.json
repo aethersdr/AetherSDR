@@ -1,0 +1,9 @@
+{
+  "pid": 2037172,
+  "socket": "/tmp/aetherpd-usb-start",
+  "binary_sha256": "571e811bfd871c83adabd47cda863809c44add9e0b82f0086c4813c4e3e7f847",
+  "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+  "runtime_source_before_update": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "desktop_source": "8d06b8300",
+  "keying_requires_explicit_bridge_action": true
+}

@@ -1,0 +1,133 @@
+{
+  "before": {
+    "model": "radio",
+    "ok": true,
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 24.171875,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    }
+  },
+  "request_USB": {
+    "id": 0,
+    "mode": "USB",
+    "ok": true,
+    "requested": false,
+    "slice": "mode",
+    "unchanged": true
+  },
+  "slices": {
+    "ok": true,
+    "slices": [
+      {
+        "active": true,
+        "adaptiveActive": false,
+        "adaptiveFilterEnabled": false,
+        "adaptiveHetReject": false,
+        "adaptiveMaxHighCut": 4000,
+        "adaptiveMinLowCut": 0,
+        "adaptiveMinSnr": 1,
+        "adaptiveResponse": 1,
+        "adaptiveSplatter": 1,
+        "agcMode": "med",
+        "agcThreshold": 60,
+        "agcThresholdMode": "manual",
+        "anf": false,
+        "apf": false,
+        "apfLevel": 30,
+        "audioGain": 50,
+        "audioMute": false,
+        "audioPan": 50,
+        "automaticAgcThresholdActiveOrPending": false,
+        "automaticSquelch": false,
+        "automaticSquelchMarginDb": 10,
+        "chainMode": "USB",
+        "daxChannel": 0,
+        "diversity": false,
+        "diversityChild": false,
+        "diversityIndex": 1342177293,
+        "diversityParent": false,
+        "externalReceiveReplacement": false,
+        "filterHigh": 2800,
+        "filterLow": 100,
+        "filterPreset": "",
+        "filterPresetId": 0,
+        "flexAgcMode": "med",
+        "flexAgcOffLevel": 10,
+        "flexAgcThreshold": 60,
+        "flexAudioGain": 50,
+        "flexAudioMute": false,
+        "flexAudioPan": 50,
+        "flexSquelch": true,
+        "flexSquelchLevel": 20,
+        "fmRepeaterOffsetFreq": 0,
+        "fmToneMode": "off",
+        "fmToneValue": "67.0",
+        "frequency": 7.15,
+        "inCapture": true,
+        "letter": "A",
+        "linkedTo": -1,
+        "locked": false,
+        "manualSquelchLevel": 20,
+        "mode": "USB",
+        "nb": false,
+        "nbFill": 0,
+        "nbKind": 0,
+        "nbLevel": 50,
+        "nr": false,
+        "nrLevel": 50,
+        "panId": "0x40000000",
+        "receiveAgcMode": "med",
+        "receiveAgcOffLevel": 10,
+        "receiveAgcThreshold": 60,
+        "receiveSquelch": true,
+        "receiveSquelchLevel": 20,
+        "repeaterOffsetDir": "simplex",
+        "rfGain": 0,
+        "ritFreq": 0,
+        "ritOn": false,
+        "rxAntenna": "RX_A",
+        "sliceId": 0,
+        "squelch": true,
+        "squelchLevel": 20,
+        "stepHz": 100,
+        "txAntenna": "ANT1",
+        "txOffsetFreq": 0,
+        "txSlice": true,
+        "xitFreq": 0,
+        "xitOn": false
+      }
+    ]
+  }
+}

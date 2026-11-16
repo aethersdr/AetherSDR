@@ -1,0 +1,109 @@
+{
+  "updated_utc": "2026-11-16T21:56:30.569858+00:00",
+  "status": "one_installed_keyed_DSP_death_unkey_cleanup_and_explicit_receive_IQ_restart_passed",
+  "production_ready": false,
+  "runtime_source": "489b1ed5fbbedefed448feb1078e2b1fbb5522d4",
+  "desktop_source": "8d06b8300",
+  "release_blake2b_256": "9de3a15952c806ea85a4248f7920d2ac2f0eff13b5c98cb4d4cd94b6acddf2ce",
+  "bench": {
+    "frequency_MHz": 7.15,
+    "tx_antenna": "ANT1",
+    "feedback": "RX_A local DAX IQ channel4",
+    "FDX": false,
+    "nominal_W": 5,
+    "configured_max_W": 10,
+    "forward_power_abort_W": 10,
+    "source_limit_s": 8,
+    "independent_measurement_guard_ms": 9000,
+    "desktop_authorization_s": 10
+  },
+  "attempts": [
+    {
+      "label": "refused",
+      "positive_GUI_key_actions": 1,
+      "DSP_signals": 0,
+      "result": "Fault harness wrongly assumed one unkey guard. The shipped graph correctly has lifetime and bounded measurement guards. Source completed normally; no runtime change or automatic retry."
+    },
+    {
+      "label": "injected",
+      "positive_GUI_key_actions": 1,
+      "DSP_signals": 1,
+      "result": "Both exact guardian roles, binary hashes, UID/capabilities, session cgroup, target pidfd/start ticks and live GUI TX owner validated before SIGKILL."
+    }
+  ],
+  "injected_case": {
+    "unkey_after_signal_ms": 577.179137,
+    "key_to_idle_ms": 2606.464931,
+    "workers_gone_after_signal_ms": 629.449677,
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0"
+  },
+  "original_worker_pid_checks_including_zombies": 10,
+  "after_fault_processes": {
+    "count": 3,
+    "all_UID_78666_zero_caps_NNP_1": true
+  },
+  "public_state_after_fault": {
+    "body": {
+      "available": false,
+      "state": "cleanup_unconfirmed"
+    },
+    "http_status": 200
+  },
+  "no_automatic_restart": true,
+  "explicit_restart": {
+    "passed": true,
+    "IQ_bytes": 131072,
+    "IQ_sha256": "da1290fa573c823d80dd3691371b26dd8b416551fd2631a4b8103b3fd4a015e6",
+    "stopped_status": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    }
+  },
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/refused/fault-template.py": "8715dc698872fd83d8102609a5d60f579d4d44e7c0c587fb3d6d97d729434521",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/refused/run-keyed-once.py": "e88247d05c40b62ab44e3dfe231924ee3992f264dc2ce35d77e5c3b4758d9c9f",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/refused/keyed-result.json": "5cae1c805200018a3819582967e271a4847730a46329dfb9c0215970333bad31",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/refused/keyed-events.json": "ddaf149af64bdf36e86c5d2bacf0c7a8e6b1a7defe53b6556c5d66985470fb51",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/refused/outcome.json": "6c440b6f0b596b337e5450457e884a22dded712682ee641dbadc512d45296ba4",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/refused/prepare.py": "60a2257ae8af99a603e41383834827a8b31659d37a0b341a865abf143656b783",
+    "local_generated_source:fit-worker-keyed-dsp/keyed-job.py": "1fe3d0799d88552a63d3b59941e8e8a95ba23f7a36bc2f88c99f57de38c9a4f4",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/injected/fault-template.py": "5fa406eb19b908620962f0186b824b3a629b14c4751e754d112ecc80600effa2",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/injected/run-keyed-once.py": "c91a25902d6956e8af5511fa2bbf5f3549f5c465b92dc866158e5cc9448b0dd3",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/injected/keyed-result.json": "1bd9fe487c89cdc246f1095550523e8c727512b79ad6b977febffa88daf4b231",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/injected/keyed-events.json": "140c3119f9b3ad35ec1df08f44bc5411eba23968f5127f3d9d486a1aa6122eee",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/injected/outcome.json": "f524d1fae88964870713bf5b6ab200f844c3992908bed2f9f52ee19bfb7f9a32",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/injected/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "local_generated_source:fit-worker-keyed-dsp-02/keyed-job.py": "aa0a5abb5361f8627fc3ad0876c650a0fd515137cc42d50c244330af8a3827e5",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/USB-readback.json": "5031ad271ee5c56186e9af1d73aeb6dd015c0a9783b2ceeea5636f8a2fb3094f",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/instance.json": "82e429dd72f8ab8def413ee9c3a90938697580a732ed803e0204eee20c0efafa",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/receive-iq-check.py": "d3ad0d4ced430973e86a69e9be51488f5ea2062b1345e9a5185e7b811ec7ba08",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/usb-receive-iq-check.json": "d6e0c066afbc22fb57c19b2bf4bb3eed896bd79eb1d75c239f4333306094c43f",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/usb-receive-iq.f32le": "da1290fa573c823d80dd3691371b26dd8b416551fd2631a4b8103b3fd4a015e6",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/after-restart-job.py": "9e79e24534f4189c21ce5bae3f65e451579dfabfe44d886c4c69ea95cbdc7a21",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/run-job.py": "fc9dad92b01278a4879f84c5330befd1608c85ac626026e314ea6416cfecc32b",
+    "tools/pd-waveform/evidence/20261116-keyed-dsp/restart/after-restart-result.json": "fc8bb3140e4eac32d2656600700cd74e62fabc7706b456099c5c7dd787254498"
+  },
+  "limitations": [
+    "One successful keyed DSP fault on FLEX-8600, not a worst-case latency or complete failure matrix.",
+    "Desktop and both native guard processes remain present during injection. This does not isolate the source of the observed unkey or prove independence under a simultaneous desktop stall.",
+    "Runtime source and release are unchanged; this is live qualification, not a new package build.",
+    "Earlier refusal did not inject a fault; its ordinary successful RF result does not count as failure qualification.",
+    "Raw IQ scale and actual absolute RF power remain uncalibrated; LP-100A remains deferred.",
+    "Natural128sample alignment slip, remaining process/API/credential/partial-start/scheduling failures, sustained RF/stockAPD comparison, actual6300 hardware and independent release gates remain open."
+  ],
+  "generated_job_source_note": "Committed templates and coordinator generate the fixed one-shot readiness callback parameters. Exact generated job hashes refer to preserved local evidence_root files; callback nonces are not shipping credentials.",
+  "final_cleanup": {
+    "passed": true,
+    "process_count": 3,
+    "all_UID_78666_zero_caps_NNP_1": true,
+    "fixed_ARP_absent": true,
+    "accept_local": "0",
+    "temporary_installer_paths_absent": true,
+    "all_temporary_diagnostics_containers_and_host_directories_removed": true
+  }
+}
