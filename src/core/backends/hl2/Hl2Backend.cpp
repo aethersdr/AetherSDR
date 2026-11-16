@@ -372,8 +372,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_pureSignal, &Hl2PureSignal::statusChanged, this,
             [this](const Hl2PureSignalStatus& s) {
         m_psStatus = s;
-        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
-                             pureSignalFields());
+        // Worker updates queued before linkDown must not publish after the
+        // seam's final disconnected notification (IRadioBackend rule 6).
+        if (m_connected) {
+            emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
+                                 pureSignalFields());
+        }
     }, Qt::QueuedConnection);
     AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
 
@@ -554,6 +558,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             resetIoBoardSchedule();
             resetBandscopeMirrors();
             refreshPureSignalAvailability();
+            emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
+                                 pureSignalFields());
             emit disconnected();
         }
     });

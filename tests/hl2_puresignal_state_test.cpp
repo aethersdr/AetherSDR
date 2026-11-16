@@ -34,6 +34,11 @@ struct Hl2PureSignalBackendTestAccess {
         QMetaObject::invokeMethod(b.m_metis, name, Qt::BlockingQueuedConnection);
         QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
     }
+    static void drain(Hl2Backend& b)
+    {
+        QMetaObject::invokeMethod(b.m_pureSignal, [] {}, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
+    }
     static QVariantMap fields(const Hl2Backend& b) { return b.pureSignalFields(); }
     static bool wanted(const Hl2Backend& b) { return b.m_psWanted; }
     static int attenuation(const Hl2Backend& b) { return b.m_psAttenuationDb; }
@@ -88,7 +93,25 @@ void persistenceChild(bool write)
     } else {
         check(enabled(b) && Access::wanted(b), "separate process restores enabled from disk at linkUp");
         check(Access::attenuation(b) == 31, "auto-attenuate starts safely at 31, ignoring saved manual -20");
+        Access::drain(b);
+        bool disconnected = false;
+        int lateStatus = 0;
+        QVariantMap lastFields;
+        QObject lifecycleObserver;
+        QObject::connect(&b, &IRadioBackend::disconnected, &lifecycleObserver, [&] {
+            check(lastFields.contains("available") && !lastFields.value("available").toBool()
+                  && !lastFields.value("enabled").toBool(), "final unavailable PS status precedes disconnected");
+            disconnected = true;
+        });
+        QObject::connect(&b, &IRadioBackend::extensionStatus, &lifecycleObserver,
+                         [&](const QString&, const QString&, const QVariantMap& fields) {
+                             lastFields = fields;
+                             if (disconnected) { ++lateStatus; }
+                         });
         Access::edge(b, "linkDown");
+        Access::drain(b);
+        check(lateStatus == 0, "queued PureSignal status cannot emit after disconnected");
+        disconnected = false;
         check(!enabled(b) && Access::wanted(b), "watchdog off preserves operator preference");
         Access::staleKey(b);
         Access::edge(b, "linkUp");
