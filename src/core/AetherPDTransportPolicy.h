@@ -6,6 +6,14 @@
 namespace AetherSDR::aetherpd {
 inline bool validAdminToken(const QString& token)
 {
+    // Provisioned shim identities use base64url; independent first installs
+    // use lowercase hex. Both encode a 32-byte secret without header syntax.
+    if (token.size() == 64) {
+        for (const QChar c : token) {
+            if (!((c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f'))) { return false; }
+        }
+        return true;
+    }
     if (token.size() != 43) { return false; }
     for (const QChar c : token) {
         if (!((c >= u'A' && c <= u'Z') || (c >= u'a' && c <= u'z')

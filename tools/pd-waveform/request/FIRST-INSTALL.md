@@ -153,6 +153,27 @@ committed plan establish success. Optional `client program` labeling was refused
 by this firmware in the receive proof; omitting that label allowed normal GUI
 registration and IQ capture.
 
+## Desktop commitment monitoring
+
+`AetherPDInstallationMonitor::beginFirstInstallation` accepts the exact approved
+`PDFST001` bytes, the new token and an independently trusted raw publisher key.
+The token must hash to the approved identity. The plan has no predecessor or
+publisher-key field; the key must come from authenticated package metadata,
+never from the status response. Upgrade and first-install records remain
+separate and cannot be converted implicitly.
+
+The monitor accepts only a matching committed fresh record. Another attempt or
+an upgrade record stays pending; changed target, selected release or publisher
+fails the match. It performs bounded GET requests only. Both existing base64url
+shim tokens and the fixed lowercase-hex first-install token format are accepted
+by the common AetherPD transport policy. Malformed token syntax is rejected
+before network access.
+
+The `first-install-desktop-monitor` evidence directory records four registered
+Qt test passes, scoped address/undefined/leak sanitizer checks, and a read-only
+live match against the installed 8600. This component is not yet connected to
+first-install package preparation, operator consent or credential-vault storage.
+
 ## Remaining gates
 
 Production desktop consent and credential-vault integration, publisher catalogue,

@@ -31,6 +31,9 @@ public:
     ~AetherPDInstallationMonitor() override;
     bool begin(const QHostAddress& address, const QString& token, const QByteArray& approvedPlan,
                int timeoutMs = 180'000);
+    bool beginFirstInstallation(const QHostAddress& address, const QString& newToken,
+                                const QByteArray& approvedPlan, const QByteArray& publisherKey,
+                                int timeoutMs = 180'000);
     void poll();
     void cancel();
     State state() const { return m_state; }
@@ -41,6 +44,8 @@ signals:
                   AetherSDR::AetherPDInstallationMonitor::Reason reason);
 
 private:
+    bool beginPlan(const QHostAddress& address, const QString& token,
+                   const aetherpd::InstallationPlan& plan, int timeoutMs);
     void initialize();
     std::optional<qint64> now();
     void abandonReply();

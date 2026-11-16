@@ -12,6 +12,15 @@ int main(int argc, char** argv)
     Network network;
     AetherPDClient client(network);
     const QString token(43, u'a');
+    {
+        Network freshNetwork;
+        AetherPDClient freshClient(freshNetwork);
+        freshClient.setRadioAddress(QHostAddress(QStringLiteral("192.168.50.100")));
+        if (!check(freshClient.submit(Operation::Status, QString(64, u'a')),
+                   "first-install identity can use ordinary AetherPD control")) { return 1; }
+        if (!check(freshNetwork.sent.back().request.rawHeader("Authorization") == "Bearer " + QByteArray(64, 'a'),
+                   "first-install token preserved exactly")) { return 1; }
+    }
     int statusCount = 0;
     std::vector<Acknowledgment> acknowledgments;
     std::vector<Failure> failures;

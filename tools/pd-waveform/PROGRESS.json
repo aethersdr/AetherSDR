@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T02:39:34.662317+00:00",
+  "updated_utc": "2026-11-16T05:17:14.616736+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Complete production desktop first-install consent/credential integration and remaining final-process failure qualification; actual FLEX-6000 hardware and RF/stock-APD gates remain. Independent ARM64 fresh installation, reboot and receive-only FDX-off IQ have passed.",
+  "next_action": "Integrate authenticated first-install package preparation and public native/container uploads into desktop coordinator; save the new token in the credential vault before upload and retain exact-plan approval/session ownership. Preserve all remaining P1-P10 gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -1112,5 +1112,24 @@
       "diagnostics_bridge_used_for_fixture_and_audit": true,
       "predecessor_backup": "backup-audit-result.json and stop-backup-result.json: legacy container restarted under original always policy, then stopped again; identity preserved. Another reboot can restart it until backup retirement."
     }
+  },
+  "worktree": "/home/jeremy/AetherSDR/build/aetherpd-source",
+  "desktop_first_install_monitor": {
+    "status": "desktop_first_install_monitor_live_verified_not_coordinator",
+    "project_tests_passed": 4,
+    "scoped_sanitizer_tests_passed": 2,
+    "mutation": {
+      "removed": "fresh-install publisher key comparison",
+      "detected": true,
+      "exit": 1
+    },
+    "remaining": [
+      "First-install authenticated package preparation and upload coordinator",
+      "Explicit operator consent and new-token credential-vault storage",
+      "Final-process faults and interruption qualification",
+      "Actual FLEX-6000 hardware qualification and all outstanding P1-P10 RF/release gates"
+    ],
+    "evidence": "first-install-desktop-monitor/validation.json under evidence_root",
+    "live": "Production Qt monitor confirmed exact new plan and independently pinned release key using GET only, no RF."
   }
 }

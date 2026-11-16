@@ -2,6 +2,7 @@
 #include "AetherPDTestNetwork.h"
 #include "core/AetherPDInstallationMonitor.h"
 
+#include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QtEndian>
@@ -115,6 +116,96 @@ bool parserChecks()
     QJsonObject prior = good; prior[QStringLiteral("upgrade_plan_blake2b_256")] = QString(64, u'e');
     const std::optional<InstallationObservation> old = parseInstallationObservation(encode(prior));
     ok &= check(old && matchInstallation(*plan, *old) == InstallationMatch::OtherPlan, "previous plan remains pending");
+    return ok;
+}
+
+bool firstInstallationChecks()
+{
+    bool ok = true;
+    QFile fixture(QStringLiteral(AETHERPD_INSTALLATION_TESTDATA_DIR "/first-approved.hex"));
+    if (!check(fixture.open(QIODevice::ReadOnly), "Python first-install plan fixture readable")) { return false; }
+    const QByteArray bytes = QByteArray::fromHex(fixture.readAll().trimmed());
+    const QByteArray publisherKey(32, char(3));
+    for (const QString& identityToken : {token, QString(64, u'a')}) {
+        QByteArray identityPlan = bytes;
+        identityPlan.replace(148, 32, QCryptographicHash::hash(identityToken.toLatin1(), QCryptographicHash::Sha256));
+        Network identityNetwork; Monitor identityMonitor(identityNetwork, [] { return 0; });
+        ok &= check(identityMonitor.beginFirstInstallation(address, identityToken, identityPlan, publisherKey),
+                    "base64url and first-install hex identity tokens accepted");
+        identityMonitor.cancel();
+    }
+    for (const QString& invalidToken : {QString(63, u'a'), QString(65, u'a'), QString(64, u'g'),
+                                       QString(64, u'A'), QString(64, u'_'), QString(63, u'a') + u'\n'}) {
+        QByteArray identityPlan = bytes;
+        identityPlan.replace(148, 32, QCryptographicHash::hash(invalidToken.toLatin1(), QCryptographicHash::Sha256));
+        Network identityNetwork; Monitor identityMonitor(identityNetwork, [] { return 0; });
+        ok &= check(!identityMonitor.beginFirstInstallation(address, invalidToken, identityPlan, publisherKey)
+            && identityNetwork.sent.empty(), "malformed token refused even when its hash matches approval");
+    }
+    const auto plan = parseFirstInstallationPlan(bytes, publisherKey);
+    if (!check(plan.has_value(), "first-install plan parsed with independent publisher key")) { return false; }
+    ok &= check(plan->firstInstall && plan->previousDigest.isEmpty() && plan->previousKey.isEmpty()
+        && plan->candidateKey == QString::fromLatin1(publisherKey.toHex()), "fresh plan has no predecessor");
+    ok &= check(!parseInstallationPlan(bytes) && !installationAttempt(bytes, QByteArray(32, 'x'))
+        && !parseFirstInstallationPlan(approvedPlan(), publisherKey), "upgrade and fresh plans never convert implicitly");
+    for (qsizetype size = 0; size < bytes.size(); ++size) {
+        ok &= check(!parseFirstInstallationPlan(bytes.first(size), publisherKey), "truncated first plan refused");
+    }
+    ok &= check(!parseFirstInstallationPlan(bytes + 'x', publisherKey)
+        && !parseFirstInstallationPlan(bytes, QByteArray(32, '\0'))
+        && !parseFirstInstallationPlan(bytes, QByteArray(31, 'x')), "invalid length and publisher key refused");
+    for (const int offset : {0, 8, 16, 19, 20, 56, 83, 84, 147, 180, 243, 276, 307}) {
+        QByteArray bad = bytes; bad[offset] = char(0xff);
+        ok &= check(!parseFirstInstallationPlan(bad, publisherKey), "malformed first-install target/hostname/padding refused");
+    }
+    for (const int offset : {24, 148, 244}) {
+        QByteArray bad = bytes; bad.replace(offset, 32, QByteArray(32, '\0'));
+        ok &= check(!parseFirstInstallationPlan(bad, publisherKey), "zero release/identity/attempt refused");
+    }
+    QFile response(QStringLiteral(AETHERPD_INSTALLATION_TESTDATA_DIR "/first-committed.json"));
+    if (!check(response.open(QIODevice::ReadOnly), "first commitment fixture readable")) { return false; }
+    const QByteArray committed = response.readAll();
+    const auto observed = parseInstallationObservation(committed);
+    if (!check(observed && observed->firstInstall && matchInstallation(*plan, *observed) == InstallationMatch::Committed,
+               "Python plan digest and first commitment agree")) { return false; }
+    const QJsonObject good = QJsonDocument::fromJson(committed).object();
+    for (const QString& key : good.keys()) {
+        QJsonObject bad = good; bad.remove(key);
+        ok &= check(!parseInstallationObservation(encode(bad)), "first commitment requires every field");
+    }
+    for (const QString& key : {QStringLiteral("selected_release_key"), QStringLiteral("selected_release_blake2b_256")}) {
+        QJsonObject bad = good; bad[key] = QString(64, u'f');
+        const auto wrong = parseInstallationObservation(encode(bad));
+        ok &= check(wrong && matchInstallation(*plan, *wrong) == InstallationMatch::Mismatch,
+                    "first commitment never trusts substituted publisher or release");
+    }
+    QJsonObject bad = good; bad[QStringLiteral("profile")] = 2;
+    ok &= check(!parseInstallationObservation(encode(bad)), "unsupported fresh profile refused");
+    bad = good; bad[QStringLiteral("installation_committed")] = false; bad[QStringLiteral("state")] = "rolled_back";
+    ok &= check(!parseInstallationObservation(encode(bad)), "fresh plan cannot roll back to an absent predecessor");
+    bad = good; bad[QStringLiteral("upgrade_plan_blake2b_256")] = plan->planDigest;
+    ok &= check(!parseInstallationObservation(encode(bad)), "ambiguous fresh and upgrade commitment refused");
+    bad = good; bad[QStringLiteral("upgrade_plan_blake2b_256")] = bad.take(QStringLiteral("first_install_plan_blake2b_256"));
+    const auto wrongKind = parseInstallationObservation(encode(bad));
+    ok &= check(wrongKind && matchInstallation(*plan, *wrongKind) == InstallationMatch::OtherPlan,
+                "upgrade commitment cannot satisfy fresh install even with matching digest");
+    qint64 clock = 0; Network net; Monitor monitor(net, [&] { return clock; });
+    ok &= check(!monitor.beginFirstInstallation(address, QString(43, u'b'), bytes, publisherKey)
+        && !monitor.beginFirstInstallation(address, token, bytes, QByteArray()) && net.sent.empty(),
+        "mismatched identity token and missing publisher refuse before network access");
+    ok &= check(monitor.beginFirstInstallation(address, token, bytes, publisherKey), "fresh monitor began");
+    net.last->complete(503, "{}");
+    clock = 500; monitor.poll(); net.last->complete(200, encode(bad));
+    ok &= check(monitor.state() == MonitorState::Waiting, "other transaction kind stays pending");
+    bad = good; bad[QStringLiteral("first_install_plan_blake2b_256")] = QString(64, u'e');
+    clock = 1000; monitor.poll(); net.last->complete(200, encode(bad));
+    ok &= check(monitor.state() == MonitorState::Waiting, "earlier fresh attempt stays pending");
+    clock = 1500; monitor.poll(); net.last->complete(200, committed);
+    ok &= check(monitor.state() == MonitorState::Committed, "exact fresh attempt confirmed after restart");
+    for (const Network::Sent& sent : net.sent) {
+        ok &= check(sent.method == QNetworkAccessManager::GetOperation && sent.body.isEmpty(),
+                    "fresh observation never submits installation or RF commands");
+    }
     return ok;
 }
 
@@ -288,5 +379,6 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     const bool parser = parserChecks();
     const bool monitor = monitorChecks();
-    return parser && monitor ? 0 : 1;
+    const bool first = firstInstallationChecks();
+    return parser && monitor && first ? 0 : 1;
 }

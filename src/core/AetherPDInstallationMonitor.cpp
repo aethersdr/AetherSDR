@@ -2,6 +2,7 @@
 #include "AetherPDTransportPolicy.h"
 #include "TailnetShimClient.h"
 
+#include <QCryptographicHash>
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -61,12 +62,27 @@ std::optional<qint64> AetherPDInstallationMonitor::now()
 bool AetherPDInstallationMonitor::begin(const QHostAddress& address, const QString& token,
                                         const QByteArray& approvedPlan, int timeoutMs)
 {
+    const std::optional<aetherpd::InstallationPlan> plan = aetherpd::parseInstallationPlan(approvedPlan);
+    return plan && beginPlan(address, token, *plan, timeoutMs);
+}
+bool AetherPDInstallationMonitor::beginFirstInstallation(const QHostAddress& address, const QString& newToken,
+    const QByteArray& approvedPlan, const QByteArray& publisherKey, int timeoutMs)
+{
+    const std::optional<aetherpd::InstallationPlan> plan = aetherpd::parseFirstInstallationPlan(approvedPlan, publisherKey);
+    if (!plan || !aetherpd::validAdminToken(newToken)
+        || QCryptographicHash::hash(newToken.toLatin1(), QCryptographicHash::Sha256) != approvedPlan.mid(148, 32)) {
+        return false;
+    }
+    return beginPlan(address, newToken, *plan, timeoutMs);
+}
+bool AetherPDInstallationMonitor::beginPlan(const QHostAddress& address, const QString& token,
+    const aetherpd::InstallationPlan& plan, int timeoutMs)
+{
     if (QThread::currentThread() != thread() || m_state != State::Idle || !m_network
         || m_network->thread() != thread() || !aetherpd::lanAddress(address) || !aetherpd::validAdminToken(token)
         || timeoutMs < 1000 || timeoutMs > kMaxObservationMs) { return false; }
-    const std::optional<aetherpd::InstallationPlan> plan = aetherpd::parseInstallationPlan(approvedPlan);
     const std::optional<qint64> stamp = now();
-    if (!plan || !stamp) { return false; }
+    if (!stamp) { return false; }
     m_plan = plan;
     m_address = address;
     m_token = token;

@@ -522,6 +522,36 @@ std::optional<InstallationPlan> parseInstallationPlan(const QByteArray& approved
     return plan;
 }
 
+std::optional<InstallationPlan> parseFirstInstallationPlan(const QByteArray& approved,
+                                                          const QByteArray& publisherKey)
+{
+    if (approved.size() != 308 || !approved.startsWith("PDFST001")
+        || approved.mid(8, 8) != QByteArray("PDAPRV02")
+        || qFromBigEndian<quint32>(approved.constData() + 16) != 1
+        || approved.mid(20, 4) != QByteArray(4, '\0')
+        || approved.mid(276, 32) != QByteArray(32, '\0')
+        || publisherKey.size() != 32 || publisherKey == QByteArray(32, '\0')) { return std::nullopt; }
+    for (const int offset : {24, 148, 244}) {
+        if (approved.mid(offset, 32) == QByteArray(32, '\0')) { return std::nullopt; }
+    }
+    const std::optional<QString> firmware = installationField(approved.mid(56, 28), true);
+    const std::optional<QString> serial = installationField(approved.mid(84, 64), false);
+    const QByteArray hostname = approved.mid(180, 64);
+    const qsizetype end = hostname.indexOf('\0');
+    static const QRegularExpression hostnamePattern(QStringLiteral("\\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\z"));
+    if (!firmware || !serial || end < 1 || hostname.mid(end) != QByteArray(64 - end, '\0')
+        || !hostnamePattern.match(QString::fromLatin1(hostname.first(end))).hasMatch()) { return std::nullopt; }
+    InstallationPlan plan;
+    plan.firstInstall = true;
+    plan.profile = 1;
+    plan.firmware = *firmware;
+    plan.serial = *serial;
+    plan.candidateDigest = QString::fromLatin1(approved.mid(24, 32).toHex());
+    plan.candidateKey = QString::fromLatin1(publisherKey.toHex());
+    plan.planDigest = QString::fromLatin1(QCryptographicHash::hash(approved, QCryptographicHash::Blake2b_256).toHex());
+    return plan;
+}
+
 std::optional<QByteArray> installationAttempt(const QByteArray& plan, const QByteArray& nonce)
 {
     if (!parseInstallationPlan(plan) || nonce.size() != 32 || nonce == QByteArray(32, '\0')) {
@@ -542,7 +572,11 @@ std::optional<InstallationObservation> parseInstallationObservation(const QByteA
     result.profile = static_cast<quint32>(profile);
     const QString state = o.value(QStringLiteral("state")).toString();
     if (state != (result.committed ? QLatin1String("committed") : QLatin1String("rolled_back"))) { return std::nullopt; }
-    result.planDigest = o.value(QStringLiteral("upgrade_plan_blake2b_256")).toString();
+    result.firstInstall = o.contains(QStringLiteral("first_install_plan_blake2b_256"));
+    if (result.firstInstall && (!result.committed || profile != 1
+        || o.contains(QStringLiteral("upgrade_plan_blake2b_256")))) { return std::nullopt; }
+    result.planDigest = o.value(result.firstInstall ? QStringLiteral("first_install_plan_blake2b_256")
+                                                   : QStringLiteral("upgrade_plan_blake2b_256")).toString();
     result.selectedDigest = o.value(QStringLiteral("selected_release_blake2b_256")).toString();
     result.selectedKey = o.value(QStringLiteral("selected_release_key")).toString();
     result.firmware = o.value(QStringLiteral("firmware")).toString();
@@ -557,7 +591,10 @@ InstallationMatch matchInstallation(const InstallationPlan& plan, const Installa
     if (plan.profile != observed.profile || plan.serial != observed.serial || plan.firmware != observed.firmware) {
         return InstallationMatch::Mismatch;
     }
-    if (plan.planDigest != observed.planDigest) { return InstallationMatch::OtherPlan; }
+    if (plan.firstInstall != observed.firstInstall || plan.planDigest != observed.planDigest) {
+        return InstallationMatch::OtherPlan;
+    }
+    if (plan.firstInstall && !observed.committed) { return InstallationMatch::Mismatch; }
     if (observed.selectedDigest != (observed.committed ? plan.candidateDigest : plan.previousDigest)
         || observed.selectedKey != (observed.committed ? plan.candidateKey : plan.previousKey)) {
         return InstallationMatch::Mismatch;

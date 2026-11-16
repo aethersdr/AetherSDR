@@ -1,0 +1,10 @@
+{
+  "state": "committed",
+  "installation_committed": true,
+  "first_install_plan_blake2b_256": "34982c6102c4de51921777fb36807ed9feccfb9c6d5428e88f53cec300aa7d77",
+  "selected_release_blake2b_256": "0909090909090909090909090909090909090909090909090909090909090909",
+  "selected_release_key": "0303030303030303030303030303030303030303030303030303030303030303",
+  "profile": 1,
+  "firmware": "4.3.16.42034",
+  "serial": "fixture-8600"
+}

@@ -19,3 +19,12 @@ python3 tools/pd-waveform/boot/test_installation.py \
 
 The fixture replaces only native owner checks with the invoking UID. No radio
 connection, privileged service, real credential, or signing seed is involved.
+
+`first-approved.hex` is produced by `boot/first_install.py` with profile 1,
+firmware `4.3.16.42034`, serial `fixture-8600`, release bytes `09` repeated 32
+times, SHA256 of 43 ASCII `a` characters as a public test token hash, hostname
+`fixture-radio`, and nonce bytes `04` repeated 32 times. `first-committed.json`
+is a synthetic observation with that plan's BLAKE2b-256 and publisher bytes
+`03` repeated 32 times, supplied independently to the Qt test. It is not a
+native-publication fixture. The live desktop monitor evidence separately checks
+the actual Go API response on the 8600; see `tools/pd-waveform/PROGRESS.json`.

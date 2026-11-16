@@ -93,9 +93,10 @@ std::optional<Request> testRequest(TestOperation operation, const QString& testI
 std::optional<QByteArray> testBeginBody(int cleanupAfterMs);
 std::optional<TestObservation> parseTestObservation(const QByteArray& json);
 
-// Derived from the exact operator-approved PDUPGR01/PDUPGR02 bytes. This parser grants
+// Derived from exact operator-approved upgrade or first-install bytes. Parsing grants
 // no installation authority and does not authenticate a release or consent.
 struct InstallationPlan {
+    bool firstInstall{false};
     QString planDigest;
     QString previousDigest;
     QString candidateDigest;
@@ -106,6 +107,7 @@ struct InstallationPlan {
     QString serial;
 };
 struct InstallationObservation {
+    bool firstInstall{false};
     bool committed{false};
     QString planDigest;
     QString selectedDigest;
@@ -116,6 +118,10 @@ struct InstallationObservation {
 };
 enum class InstallationMatch { Committed, RolledBack, OtherPlan, Mismatch };
 std::optional<InstallationPlan> parseInstallationPlan(const QByteArray& approved);
+// PDFST001 carries no publisher key. The caller supplies the raw 32-byte key
+// from authenticated package metadata, never from the observed radio reply.
+std::optional<InstallationPlan> parseFirstInstallationPlan(const QByteArray& approved,
+                                                          const QByteArray& publisherKey);
 // Create before operator approval; retain these exact bytes for every retry of
 // delivery/observation. A new installation attempt needs a fresh random nonce.
 std::optional<QByteArray> installationAttempt(const QByteArray& plan, const QByteArray& nonce);
