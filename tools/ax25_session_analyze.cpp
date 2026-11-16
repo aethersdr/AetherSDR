@@ -64,7 +64,9 @@ int main(int argc, char** argv)
     {
         AetherAx25LibmodemShim shim;
         shim.configure(ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal));
-        const int chunk = sampleRate / 10;
+        // ~100 ms of samples, but never zero: a header with a low rate would
+        // otherwise leave `off` unchanged and spin forever (issue #7362).
+        const int chunk = std::max(1, sampleRate / 10);
         for (size_t off = 0; off < samples.size(); off += chunk) {
             const int n = int(std::min<size_t>(chunk, samples.size() - off));
             const auto frames = shim.processMonoFloat(samples.data() + off, n, sampleRate);

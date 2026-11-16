@@ -51,6 +51,12 @@ bool loadWav(const QString& path, std::vector<float>& samples, int& sampleRate, 
         err = QStringLiteral("expected mono float32 WAV (fmt=%1 ch=%2 bits=%3)").arg(format).arg(channels).arg(bits);
         return false;
     }
+    // Same plausible range as DvkWavConverter: reject headers that would make
+    // callers mis-time the stream (e.g. a 0-9 Hz rate makes sampleRate / 10 zero).
+    if (sampleRate < 8000 || sampleRate > 384000) {
+        err = QStringLiteral("sample rate %1 Hz is outside the supported 8000-384000 Hz range").arg(sampleRate);
+        return false;
+    }
     if (dataBytes % 4 != 0) {
         err = QStringLiteral("data chunk length %1 is not a multiple of 4 (float32 sample size)").arg(dataBytes);
         return false;

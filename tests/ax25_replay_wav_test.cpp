@@ -24,12 +24,15 @@ QByteArray chunk(const char* id, const QByteArray& payload)
 }
 
 QByteArray wav(const QByteArray& payload, bool oddJunk,
-               quint16 format = 3, quint16 channels = 1, quint16 bits = 32)
+               quint16 format = 3, quint16 channels = 1, quint16 bits = 32,
+               quint32 rate = 48000)
 {
-    // WAVE_FORMAT_IEEE_FLOAT, mono, 48000 Hz, 192000 bytes/s, four-byte blocks.
+    // WAVE_FORMAT_IEEE_FLOAT, mono, 32 bits, four-byte blocks.
     QByteArray header = QByteArray::fromHex("0300010080bb000000ee020004002000");
     qToLittleEndian(format, header.data());
     qToLittleEndian(channels, header.data() + 2);
+    qToLittleEndian(rate, header.data() + 4);
+    qToLittleEndian(rate * 4, header.data() + 8);
     qToLittleEndian(bits, header.data() + 14);
     QByteArray body("WAVE", 4);
     body += chunk("fmt ", header);
@@ -111,6 +114,38 @@ private slots:
         QCOMPARE(sampleRate, 48000);
         QCOMPARE(samples.size(), static_cast<size_t>(count));
         QCOMPARE(std::memcmp(samples.data(), payload.constData(), static_cast<size_t>(payload.size())), 0);
+    }
+
+    void rejectsImplausibleSampleRates_data()
+    {
+        QTest::addColumn<quint32>("rate");
+        QTest::newRow("zero") << quint32(0);
+        QTest::newRow("one") << quint32(1);
+        QTest::newRow("eight") << quint32(8);
+        QTest::newRow("nine") << quint32(9);
+        QTest::newRow("below-floor") << quint32(7999);
+        QTest::newRow("above-ceiling") << quint32(384001);
+    }
+
+    void rejectsImplausibleSampleRates()
+    {
+        QFETCH(quint32, rate);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath(QStringLiteral("implausible.wav"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray bytes = wav(QByteArray(4, '\0'), false, 3, 1, 32, rate);
+        QCOMPARE(file.write(bytes), bytes.size());
+        file.close();
+
+        std::vector<float> samples;
+        int sampleRate = 0;
+        QString error;
+        QVERIFY(!AetherSDR::Ax25ReplayWav::loadWav(path, samples, sampleRate, error));
+        QCOMPARE(error, QStringLiteral("sample rate %1 Hz is outside the supported 8000-384000 Hz range")
+                            .arg(rate));
+        QVERIFY(samples.empty());
     }
 
     void rejectsUnsupportedFormats_data()

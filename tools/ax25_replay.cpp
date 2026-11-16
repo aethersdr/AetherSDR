@@ -15,6 +15,7 @@
 #include <QCoreApplication>
 #include <QString>
 
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 
@@ -90,7 +91,9 @@ int main(int argc, char** argv)
     // path). NOTE: the frameDecoded *signal* is only emitted by feedAudio(), not
     // processMonoFloat() — counting the signal here would always report 0 even
     // when frames decode. (That bug originally masked the real SABM decodes.)
-    const int chunk = sampleRate / 10; // ~100 ms, like the live tap
+    // ~100 ms, like the live tap. Never zero: a header with a low rate would
+    // otherwise leave `off` unchanged and spin forever (issue #7362).
+    const int chunk = std::max(1, sampleRate / 10);
     for (size_t off = 0; off < samples.size(); off += chunk) {
         const int n = int(std::min<size_t>(chunk, samples.size() - off));
         const auto frames = shim.processMonoFloat(samples.data() + off, n, sampleRate);
