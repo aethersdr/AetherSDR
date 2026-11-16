@@ -8,6 +8,7 @@
 
 static const char kReady[] = "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1";
 static const char kTransmit[] = "S1234|interlock tx_client_handle=0x00005678 state=TRANSMITTING reason= source=SW tx_allowed=1";
+static const char kReserved[] = "S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=1";
 static void bytes(struct unkey_state* s, const char* text)
 {
     struct unkey_input input = {0};
@@ -71,6 +72,32 @@ int main(void)
     assert(deadline_start(&deadline, 1000, 1000));
     assert(deadline_wait(&deadline, 1001) == 500 && deadline_wait(&deadline, 1000) == 0);
     struct unkey_state bounded = {.client = 0x1234, .owner = 0x5678, .bounded = 1};
+    parse(&bounded, kReady);
+    parse(&bounded, kReserved);
+    assert(bounded.valid && !bounded.idle && !bounded.software_owner && !bounded.observation_ended);
+    parse(&bounded, kReserved); assert(!bounded.observation_ended);
+    parse(&bounded, kTransmit); assert(bounded.owned_seen && !bounded.observation_ended);
+    parse(&bounded, kReserved); assert(bounded.observation_ended);
+    parse(&bounded, kTransmit); assert(bounded.observation_ended);
+    bounded = (struct unkey_state){.client = 0x1234, .owner = 0x5678, .bounded = 1};
+    parse(&bounded, kReserved); parse(&bounded, kReady);
+    assert(bounded.observation_ended); // Released reservation cannot adopt a later key.
+    const char* rejected_reservations[] = {
+        "S0|interlock tx_client_handle=0x00009999 state=READY reason= source= tx_allowed=1",
+        "S0|interlock tx_client_handle=0x00005678 state=READY reason= source=SW tx_allowed=1",
+        "S0|interlock tx_client_handle=0x00005678 state=READY reason=FAULT source= tx_allowed=1",
+        "S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=0",
+        "S0|interlock tx_client_handle=0x00005678 state=READY reason= source=",
+        "S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=1 state=READY"
+    };
+    for (unsigned i = 0; i < sizeof(rejected_reservations) / sizeof(rejected_reservations[0]); ++i) {
+        bounded = (struct unkey_state){.client = 0x1234, .owner = 0x5678, .bounded = 1};
+        parse(&bounded, rejected_reservations[i]);
+        assert(bounded.observation_ended && !bounded.software_owner);
+        parse(&bounded, kReserved); parse(&bounded, kTransmit);
+        assert(bounded.observation_ended);
+    }
+    bounded = (struct unkey_state){.client = 0x1234, .owner = 0x5678, .bounded = 1};
     parse(&bounded, kReady); assert(!bounded.owned_seen && !bounded.observation_ended);
     parse(&bounded, kTransmit); assert(bounded.owned_seen && !bounded.observation_ended);
     parse(&bounded, kTransmit); assert(!bounded.observation_ended);

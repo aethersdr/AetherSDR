@@ -1,0 +1,9 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start 42: pd_unkey_guard_parser_test
+1/2 Test #42: pd_unkey_guard_parser_test .......   Passed    0.00 sec
+    Start 43: pd_unkey_guard_deadline_test
+2/2 Test #43: pd_unkey_guard_deadline_test .....   Passed    0.00 sec
+
+100% tests passed out of 2
+
+Total Test time (real) =   0.02 sec

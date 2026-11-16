@@ -77,6 +77,14 @@ must account for those bounds, monitor helper loss, fence queued positive keying
 and retain the existing qualified stop-evidence path. A successful unkey reply
 is still only command acceptance.
 
+After initial idle admission, a complete READY snapshot owned by the prepared
+GUI may precede the first software-TX status (observed on FLEX-8600 4.3.16).
+The helper keeps waiting through that reservation without extending its timer.
+The snapshot itself authorizes no unkey command. If ownership clears, changes,
+or becomes incomplete before software TX, the helper retires; a later key
+cannot reuse that observation. Owned READY after software TX still retires it.
+Initial admission continues to require unowned idle.
+
 Bounded mode tracks the first observed software-TX interval. Once it sees
 unkeying, loss of ownership, an incomplete ownership observation, or the end of
 that interval, it emits `bounded_observation_ended` and retires without adopting

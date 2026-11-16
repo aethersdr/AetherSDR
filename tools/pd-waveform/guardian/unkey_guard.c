@@ -21,7 +21,7 @@ enum { kLineBytes = 4096, kBind = 910000, kSubscribe = 910001, kRefresh = 910002
 struct unkey_state {
     uint32_t client, owner, query;
     int acknowledged, rejected, binding_acknowledged, binding_rejected, valid, idle, software_owner, unkeying;
-    int bounded, owned_seen, observation_ended;
+    int bounded, owned_seen, reservation_seen, observation_ended;
 };
 struct unkey_input { char line[kLineBytes]; size_t used; int discard; };
 
@@ -140,6 +140,15 @@ static void parse(struct unkey_state* state, const char* line)
         (!strcmp(mode, "TRANSMITTING") || !strcmp(mode, "PTT_REQUESTED"));
     state->unkeying = tx_owner == state->owner && !source[0] && !strcmp(mode, "UNKEY_REQUESTED");
     if (state->bounded) {
+        const int reservation = tx_owner == state->owner && !strcmp(mode, "READY") &&
+            !source[0] && !reason[0] && !strcmp(allowed, "1");
+        // FLEX-8600 4.3.16 publishes owned READY before software PTT starts.
+        // It grants no unkey authority and cannot bridge a released interval.
+        if (reservation && !state->owned_seen && !state->observation_ended) {
+            state->reservation_seen = 1;
+            return;
+        }
+        if (state->reservation_seen && !state->software_owner) { state->observation_ended = 1; }
         if (state->unkeying || (state->owned_seen && !state->software_owner)) { state->observation_ended = 1; }
         if (state->software_owner) { state->owned_seen = 1; }
         if (!state->idle && !state->software_owner && !state->unkeying) { state->observation_ended = 1; }

@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T16:42:59.083176+00:00",
+  "updated_utc": "2026-11-16T16:50:29.727286+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -46,7 +46,7 @@
     "RF only within explicitly authorized bounded bench limits"
   ],
   "production_ready": false,
-  "next_action": "Qualify remaining final-process fault/unkey behavior, sustained correction and stock APD comparison; diagnose historical alignment/cold-start issues and complete actual 6300 adapter/hardware plus release gates.",
+  "next_action": "Package and install the native bounded-helper reservation fix, then qualify desktop-stall independent unkey and remaining process failures; continue sustained RF/stock APD and actual6300/release gates.",
   "installation_status_development": {
     "evidence": "installation-status-development/validation.json under evidence_root",
     "status": "Host component checks passed; not deployed. Fixed terminal mirror and authenticated read-only shim endpoint implemented.",
@@ -2502,7 +2502,7 @@
       "Development publisher pins only; production catalogue, independent review, cross-platform and release gates remain. Full P1-P10 objective is unchanged."
     ]
   },
-  "current_focus": "Installed runtime: matched 5 W pair and two 10 W pairs with DAX IQ channel 4, FDX off. Fixed captured pre-key-ACK owned READY tracker failure; negative evidence retained. Production qualification remains incomplete.",
+  "current_focus": "Desktop owned-READY startup fix and 5/10 W RF pairs committed. Found the same captured READY shape prematurely retires the native bounded unkey helper; parser/run-loop fix passes offline and cross-builds but is not installed. Further RF fault tests await updated authenticated runtime.",
   "latest_installed_failure": {
     "status": "installed_8600_receive_only_crashes_restart_cleanup_passed_reboot_qualification_incomplete",
     "report": "tools/pd-waveform/RESTART-SUCCESSOR-LIVE-QUALIFICATION.json",
@@ -3079,5 +3079,9 @@
     "matched_pairs": 3,
     "failed_10w_attempt_retained": true,
     "production_ready": false
+  },
+  "guardian_owner_ready": {
+    "report": "GUARDIAN-OWNER-READY-QUALIFICATION.json",
+    "installed": false
   }
 }

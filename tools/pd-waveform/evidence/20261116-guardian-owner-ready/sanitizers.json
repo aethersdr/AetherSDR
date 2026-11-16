@@ -1,0 +1,17 @@
+{
+  "address_undefined": [
+    {
+      "test": "parser-asan",
+      "exit_code": 0,
+      "stdout": "unkey guard parser/ownership tests passed\n",
+      "stderr": ""
+    },
+    {
+      "test": "deadline-asan",
+      "exit_code": 0,
+      "stdout": "cleanup initiation is not unkey: delayed ACK adds 1900 ms\nunkey guard injected-clock deadline tests passed\n",
+      "stderr": ""
+    }
+  ],
+  "leak_sanitizer": false
+}

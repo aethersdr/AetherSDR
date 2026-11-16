@@ -1,0 +1,5 @@
+{
+  "exit_code": -6,
+  "stdout": "",
+  "stderr": "parser-before: tools/pd-waveform/guardian/unkey_guard_test.c:77: main: Assertion `bounded.valid && !bounded.idle && !bounded.software_owner && !bounded.observation_ended' failed.\n"
+}

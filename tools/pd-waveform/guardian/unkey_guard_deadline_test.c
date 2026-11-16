@@ -33,6 +33,7 @@ static struct {
     int64_t now, cleanup_due, unkey_at;
     int startup_stall, cleanup_stall, refresh_delay, cleanup_event_stall, unkey_write_stall;
     int stage, stalled, unkeys, foreign, refreshes, delayed;
+    int reservation, reservation_only, reservation_released, startup_reserved;
     char pending[1024];
 } fixture;
 
@@ -56,8 +57,9 @@ ssize_t fixture_send(int fd, const void* data, size_t size, int flags)
     assert(fd == 41 && flags == (MSG_NOSIGNAL | MSG_DONTWAIT));
     if (size == strlen("C910001|sub tx all\n") && !memcmp(data, "C910001|sub tx all\n", size)) {
         fixture.stage = 1;
-        queue("S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1\n"
-              "R910000|0|\nR910001|0|\n");
+        queue(fixture.startup_reserved
+            ? "S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=1\nR910000|0|\nR910001|0|\n"
+            : "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1\nR910000|0|\nR910001|0|\n");
     } else if (size == strlen("C910002|sub tx all\n") && !memcmp(data, "C910002|sub tx all\n", size)) {
         ++fixture.refreshes;
         fixture.stage = 3;
@@ -140,7 +142,17 @@ ssize_t fixture_write(int fd, const void* bytes, size_t size)
         assert(value);
         fixture.cleanup_due = strtoll(value + strlen("cleanup_due_ms\":\""), NULL, 10);
         fixture.stage = 2;
-        queue("S1234|interlock tx_client_handle=0x00005678 state=TRANSMITTING reason= source=SW tx_allowed=1\n");
+        char statuses[1024] = "";
+        if (fixture.reservation) {
+            strcat(statuses, "S0|interlock tx_client_handle=0x00005678 state=READY reason= source= tx_allowed=1\n");
+        }
+        if (fixture.reservation_released) {
+            strcat(statuses, "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1\n");
+        }
+        if (!fixture.reservation_only) {
+            strcat(statuses, "S1234|interlock tx_client_handle=0x00005678 state=TRANSMITTING reason= source=SW tx_allowed=1\n");
+        }
+        queue(statuses);
     }
     return (ssize_t)size;
 }
@@ -156,6 +168,19 @@ int main(void)
     reset();
     assert(run(41, 42, 0x1234, 0x5678, 9500) == 0);
     assert(fixture.unkeys == 1 && fixture.unkey_at == fixture.cleanup_due);
+    reset();
+    fixture.reservation = 1;
+    assert(run(41, 42, 0x1234, 0x5678, 9000) == 0);
+    assert(fixture.unkeys == 1 && fixture.unkey_at == fixture.cleanup_due);
+    reset();
+    fixture.reservation = fixture.reservation_only = 1;
+    assert(run(41, 42, 0x1234, 0x5678, 9000) == 4 && !fixture.unkeys);
+    reset();
+    fixture.reservation = fixture.reservation_released = 1;
+    assert(run(41, 42, 0x1234, 0x5678, 9000) == 0 && !fixture.unkeys);
+    reset();
+    fixture.startup_reserved = 1;
+    assert(run(41, 42, 0x1234, 0x5678, 9000) == 5 && !fixture.cleanup_due && !fixture.unkeys);
     reset();
     fixture.refresh_delay = 1900;
     assert(run(41, 42, 0x1234, 0x5678, 9500) == 0);

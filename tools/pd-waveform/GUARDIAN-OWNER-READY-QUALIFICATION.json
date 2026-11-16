@@ -1,0 +1,42 @@
+{
+  "updated_utc": "2026-11-16T16:50:29.727286+00:00",
+  "source_base": "54e21aa67a046c6507a2ba25716a841545392a8e",
+  "status": "component_passed_not_installed",
+  "production_ready": false,
+  "radio_used": false,
+  "cause": "Bounded on-radio helper independently treated complete own-owner READY before first software TX as observation ended, even after the desktop tracker fix. Exact observed frame shape fails the pre-change native parser replay.",
+  "fix": "Accept only a complete own-owner READY reservation after initial idle and before first observed software TX. It grants no unkey authority or deadline extension. Ownership clearing or invalid/foreign/sourced state permanently retires the attempt, as does READY after software TX.",
+  "checks": [
+    "Existing registered parser and injected-clock tests pass",
+    "Reservation then TX reaches exactly one unkey at the unchanged 9000ms deadline",
+    "Reservation alone cannot issue unkey",
+    "Reservation release then later TX cannot reuse the attempt",
+    "Owned READY at initial admission is rejected",
+    "Malformed, partial, foreign, sourced and inhibited snapshots fail closed",
+    "ASan and UBSan passed; leak sanitizer disabled for sandbox run",
+    "ARMv7 Cortex-A8 and ARM64 cross-builds passed"
+  ],
+  "artifacts": {
+    "armv7": {
+      "bytes": 35328,
+      "sha256": "bf9df32d994adebc97e7981a1dc20c1c7a4bf9ef6db6e32e5fe92a02d37f68f2"
+    },
+    "arm64": {
+      "bytes": 41704,
+      "sha256": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662"
+    }
+  },
+  "remaining": [
+    "Build authenticated reproducible runtime package and deploy through reviewed installation workflow",
+    "Live final-candidate desktop-stall/independent-unkey proof",
+    "Do not infer this helper was the sole cause of the historical early abort: desktop tracker independently failed too; helper raw event was not retained in that run",
+    "Full P1-P10 production and actual6300 qualification remain open"
+  ],
+  "evidence_directory": "evidence/20261116-guardian-owner-ready",
+  "evidence_sha256": {
+    "before.json": "9964c47deeb304a5352cee6335b9f7e1f587835308f2cf1c9ae58687523121bd",
+    "ctest.txt": "907bc14e7c1f9fed9f7eed6e13417f4a3d77c7824ed49dd2fada77bd3eaf8bd2",
+    "sanitizers.json": "48b596ae488afae77f481bac705209b113fcb7469a12c8e19ce059d98fa65a42",
+    "cross-builds.json": "56423d78c1401fc82f698d8abf9c34b4483590492d67b8ef92fd9f56a361d8e6"
+  }
+}
