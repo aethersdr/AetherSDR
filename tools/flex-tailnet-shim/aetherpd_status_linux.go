@@ -51,8 +51,12 @@ func (p *aetherPDProcess) readNativeQuery(ctx context.Context, operation byte, i
 	if p == nil || p.status == nil || p.statusReads == nil {
 		return nil, 0, errors.New("private AetherPD status unavailable")
 	}
-	if operation != '?' && operation != 'B' && operation != 'R' {
+	if operation != '?' && operation != 'B' && operation != 'R' && operation != 'G' && operation != 'H' {
 		return nil, 0, errors.New("invalid native query")
+	}
+	if (operation == 'G' && (offset < 1 || offset > aetherPDCaptureBatchMax)) ||
+		(operation == 'H' && (id == 0 || offset >= aetherPDCaptureBatchMax*aetherPDCaptureSamples || offset%aetherPDCaptureChunk != 0)) {
+		return nil, 0, errors.New("invalid native batch query")
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
@@ -85,13 +89,13 @@ func (p *aetherPDProcess) readNativeQuery(ctx context.Context, operation byte, i
 	request := make([]byte, 9)
 	request[0] = operation
 	binary.BigEndian.PutUint64(request[1:], p.statusNonce)
-	if operation == 'B' {
+	if operation == 'B' || operation == 'G' {
 		id = p.statusNonce
 	}
 	if operation != '?' {
 		request = binary.BigEndian.AppendUint64(request, id)
 	}
-	if operation == 'R' {
+	if operation == 'R' || operation == 'G' || operation == 'H' {
 		request = binary.BigEndian.AppendUint32(request, offset)
 	}
 	if _, err := p.status.Write(request); err != nil {

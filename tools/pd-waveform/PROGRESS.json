@@ -1,5 +1,5 @@
 {
-  "updated_utc": "2026-11-16T19:50:08.717108+00:00",
+  "updated_utc": "2026-11-16T19:56:39.118269+00:00",
   "status": "work_in_progress_not_production_ready",
   "branch": "feat/aetherpd-shim-integration",
   "base_commit": "5ca52a756d24228dc9df3464840db5597318bb62",
@@ -3260,5 +3260,31 @@
     "offline_passed": true,
     "installed": false,
     "public_transport_implemented": false
+  },
+  "batch_capture_shim_checkpoint": {
+    "status": "work_in_progress_not_deployed",
+    "native_component_commit": "5ea510e74bf0fdb8860f6e40bb5bb56859e61cf6",
+    "changes": [
+      "Shared legacy/native-v5 capture payload validation",
+      "Bounded native G/H query encoding",
+      "Native batch reader for one to four immutable DAX IQ frames with source, continuity and cancellation checks"
+    ],
+    "validation": {
+      "existing_capture_regressions": "PASS: go test -mod=vendor -run Test.*(Capture|NativeQuery|NativeStatus) -count=1 . using Go 1.27.1",
+      "formatting": "gofmt clean",
+      "sandbox_note": "Initial socket fixture tests denied getsockopt; identical tests passed outside sandbox."
+    },
+    "remaining": [
+      "Dedicated native-v5 batch parser, query and interoperability tests",
+      "Authenticated bounded session and HTTP batch transport",
+      "Desktop selected-average batch acquisition and cancellation integration",
+      "Package and live RF qualification without increasing source/keying deadlines"
+    ],
+    "limitations": [
+      "Checkpoint only; no claim that the new batch reader is qualified.",
+      "No public batch endpoint or desktop batch caller yet.",
+      "No deployment or RF activity performed for this checkpoint.",
+      "Full production goal remains incomplete."
+    ]
   }
 }

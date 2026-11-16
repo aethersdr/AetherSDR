@@ -35,9 +35,17 @@ func parseAetherPDCapture(data []byte, id uint64, offset uint32) (aetherPDIQCapt
 	if len(data) >= 8 && string(data[:8]) == "PDIQ0004" {
 		header = aetherPDCaptureHeaderV4
 	}
-	if len(data) < header || (string(data[:8]) != "PDIQ0001" && string(data[:8]) != "PDIQ0002" && string(data[:8]) != "PDIQ0003" && string(data[:8]) != "PDIQ0004") ||
-		id == 0 || binary.BigEndian.Uint64(data[8:16]) != id ||
-		binary.BigEndian.Uint32(data[20:24]) != offset || offset >= aetherPDCaptureSamples || offset%aetherPDCaptureChunk != 0 {
+	if offset >= aetherPDCaptureSamples || len(data) < header ||
+		(string(data[:8]) != "PDIQ0001" && string(data[:8]) != "PDIQ0002" && string(data[:8]) != "PDIQ0003" && string(data[:8]) != "PDIQ0004") {
+		return aetherPDIQCapture{}, 0, bad
+	}
+	return parseAetherPDCapturePayload(data, id, offset, header)
+}
+
+func parseAetherPDCapturePayload(data []byte, id uint64, offset uint32, header int) (aetherPDIQCapture, uint32, error) {
+	bad := errors.New("invalid private IQ snapshot")
+	if len(data) < header || id == 0 || binary.BigEndian.Uint64(data[8:16]) != id ||
+		binary.BigEndian.Uint32(data[20:24]) != offset || offset%aetherPDCaptureChunk != 0 {
 		return aetherPDIQCapture{}, 0, bad
 	}
 	state := binary.BigEndian.Uint32(data[16:20])
