@@ -148,6 +148,45 @@ QStringList one(const char* line)
     return QStringList{QString::fromLatin1(line)};
 }
 
+// This group's lines only: another offered group (antennas, say) adds its own.
+QStringList bandLines(const QStringList& lines)
+{
+    QStringList out;
+    for (const QString& line : lines) {
+        if (line.startsWith(QLatin1String("aethersdr_tx_filter_band:"))) {
+            out << line;
+        }
+    }
+    return out;
+}
+
+// A list reply: only aethersdr_ lines, the aethersdr_ext:1 list first and
+// once, tx_filter_band in it or not as `offered`, and exactly `band` as this
+// group's state line (none when null). Other groups' items and lines may ride.
+bool listReply(const QStringList& lines, bool offered, const char* band)
+{
+    int lists = 0;
+    for (const QString& line : lines) {
+        lists += line.startsWith(QLatin1String("aethersdr_ext:")) ? 1 : 0;
+    }
+    bool ok = lists == 1 && extensionLines(lines) == lines
+        && lines.first().startsWith(QLatin1String("aethersdr_ext:"))
+        && lines.first().endsWith(QLatin1Char(';'));
+    if (ok) {
+        const QString list = lines.first();
+        const QStringList items = list.mid(14, list.size() - 15).split(QLatin1Char(','));
+        ok = items.first() == QLatin1String("1")
+            && items.contains(QLatin1String("tx_filter_band")) == offered
+            && bandLines(lines) == (band ? one(band) : QStringList{});
+    }
+    if (!ok) {
+        for (const QString& line : lines) {
+            std::printf("      < %s\n", qPrintable(line));
+        }
+    }
+    return ok;
+}
+
 bool passbandIs(const TransmitModel& tx, int low, int high)
 {
     return tx.txFilterLow() == low && tx.txFilterHigh() == high;
@@ -233,7 +272,7 @@ void serverBehaviour()
     check(model.isConnected() && TciTxPassbandExtensionTest::offeredTokens(server).isEmpty(),
           "a radio without TX cutoffs is not offered tx_filter_band");
     a.send("aethersdr_ext_enable:true;");
-    check(a.take() == one("aethersdr_ext:1;"), "its enable reply lists no item");
+    check(listReply(a.take(), false, nullptr), "its enable reply does not list it");
     a.send("aethersdr_tx_filter_band:0;aethersdr_tx_filter_band:0,300,2400;");
     settle();
     check(a.take().isEmpty() && passbandIs(tx, 100, 2900) && backend->filterRequests.isEmpty(),
@@ -241,12 +280,10 @@ void serverBehaviour()
 
     backend->caps.hasTxFilterControls = true;
     emit model.capabilitiesChanged(true, backend->caps);
-    check(a.take() == QStringList({QStringLiteral("aethersdr_ext:1,tx_filter_band;"),
-                                   QStringLiteral("aethersdr_tx_filter_band:0,100,2900;")}),
+    check(listReply(a.take(), true, "aethersdr_tx_filter_band:0,100,2900;"),
           "once declared, the list offers it with its state line");
     c.send("aethersdr_ext_enable:true;");
-    check(c.take() == QStringList({QStringLiteral("aethersdr_ext:1,tx_filter_band;"),
-                                   QStringLiteral("aethersdr_tx_filter_band:0,100,2900;")}),
+    check(listReply(c.take(), true, "aethersdr_tx_filter_band:0,100,2900;"),
           "a client enabling later gets the same list and state");
     check(b.take().isEmpty(), "the plain client heard none of it");
 
@@ -336,7 +373,7 @@ void serverBehaviour()
     // Lost capability: no notice, and the item leaves the list.
     backend->caps.hasTxFilterControls = false;
     emit model.capabilitiesChanged(true, backend->caps);
-    check(a.take() == one("aethersdr_ext:1;"), "a lost capability re-sends the list without it");
+    check(listReply(a.take(), false, nullptr), "a lost capability re-sends the list without it");
     tx.setTxFilter(300, 2700);
     a.send("aethersdr_tx_filter_band:0;");
     settle();
@@ -368,8 +405,7 @@ void noticeArmsOnlyAfterASend()
     tx.setTxFilter(200, 2800);  // no client enabled: the send sends nothing
     QCoreApplication::processEvents();
     a.send("aethersdr_ext_enable:true;");
-    check(a.take() == QStringList({QStringLiteral("aethersdr_ext:1,tx_filter_band;"),
-                                   QStringLiteral("aethersdr_tx_filter_band:0,200,2800;")}),
+    check(listReply(a.take(), true, "aethersdr_tx_filter_band:0,200,2800;"),
           "limiter: the enable reply carries the current passband");
     tx.setTxFilter(300, 2400);
     QCoreApplication::processEvents();
@@ -426,15 +462,14 @@ void txMove()
     a.take();
     b.take();
     a.send("aethersdr_ext_enable:true;");
-    check(a.take() == QStringList({QStringLiteral("aethersdr_ext:1,tx_filter_band;"),
-                                   QStringLiteral("aethersdr_tx_filter_band:0,100,2900;")}),
+    check(listReply(a.take(), true, "aethersdr_tx_filter_band:0,100,2900;"),
           "with TX on trx 0 the enable reply names trx 0");
 
     // The radio reports the move: B gains TX, then A loses it.
     s1->applyChanges(on);
     s0->applyChanges(off);
     settle(600);  // past kSplitSettleMs (450 ms)
-    const QStringList heard = extensionLines(a.take());
+    const QStringList heard = bandLines(a.take());
     check(heard == one("aethersdr_tx_filter_band:1,100,2900;"),
           "moving TX to trx 1 sends the enabled client the line for trx 1, unasked");
     if (heard != one("aethersdr_tx_filter_band:1,100,2900;")) {
@@ -447,13 +482,13 @@ void txMove()
     const int requests = backend->filterRequests.size();
     a.send("aethersdr_tx_filter_band:0,300,2400;");
     settle();
-    check(a.take().isEmpty() && passbandIs(tx, 100, 2900)
+    check(bandLines(a.take()).isEmpty() && passbandIs(tx, 100, 2900)
               && backend->filterRequests.size() == requests,
           "a set on the old trx 0 is dropped");
     a.send("aethersdr_tx_filter_band:1,300,2400;");
     settle();
     check(passbandIs(tx, 300, 2400) && backend->filterRequests.size() == requests + 1
-              && extensionLines(a.take()) == one("aethersdr_tx_filter_band:1,300,2400;")
+              && bandLines(a.take()) == one("aethersdr_tx_filter_band:1,300,2400;")
               && extensionLines(b.take()).isEmpty(),
           "a set on the new trx 1 is applied and notified with trx 1");
 }
@@ -507,7 +542,7 @@ void txMoveSplit(bool gainFirst)
         s1->applyChanges(on);
     }
     settle(600);  // past the trailing flush and kSplitSettleMs (450 ms)
-    const QStringList heard = extensionLines(a.take());
+    const QStringList heard = bandLines(a.take());
     check(!heard.isEmpty() && heard.last() == QLatin1String("aethersdr_tx_filter_band:1,100,2900;"),
           gainFirst ? "gain, a turn, then loss: the last line names trx 1"
                     : "loss, a turn, then gain: the last line names trx 1");
