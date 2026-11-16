@@ -74,6 +74,13 @@ struct CaptureStreamIdentity {
     bool operator==(const CaptureStreamIdentity&) const = default;
 };
 
+struct CaptureBindingIdentity {
+    std::uint32_t channel = 0;
+    std::uint32_t pan = 0;
+    std::uint32_t guiHandle = 0;
+    bool operator==(const CaptureBindingIdentity&) const = default;
+};
+
 struct CaptureToneProfile {
     std::uint64_t sourceId = 0;
     double lowerOffsetHz = 0;
@@ -107,6 +114,7 @@ struct CaptureFrame {
     // Optional, scoped to the original capture process; never inferred from settings.
     std::optional<CaptureStreamIdentity> sourceStream;
     std::optional<CaptureToneProfile> sourceTones;
+    std::optional<CaptureBindingIdentity> sourceBinding{};
 };
 
 // ── Measurement results ─────────────────────────────────────────────────────

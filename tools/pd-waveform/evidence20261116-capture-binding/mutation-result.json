@@ -1,0 +1,7 @@
+{
+  "mutation": "omit snapshot binding comparison",
+  "exit": 1,
+  "expected_assertion": true,
+  "restored_sha256": "227d7788787c3bf1b71115f86245a971569c75f405b260c7d94e9b3a2c24ebaa",
+  "restored_exit": 8
+}

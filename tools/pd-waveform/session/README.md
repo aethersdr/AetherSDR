@@ -581,8 +581,9 @@ unsealed behavior; they are not equivalent to this installed path.
 The native constructor and public v2 shim endpoint accept explicit channel/pan
 selection and require matching observed native binding before success. Desktop
 startup uses that selected request after the operator chooses an owned assigned
-pan. Immutable capture/export provenance and live
-qualification of this exact candidate remain required before claiming the full
+pan. Native snapshots retain confirmed binding through the shim, desktop capture
+frames and JSON/CSV/PNG exports. Live
+qualification of this exact candidate remains required before claiming the full
 PR4770 workflow. The binding is grounded in the published FlexLib
 `DAXIQStream.StatusUpdate` (`pan`, `daxiq_channel`) and
 `Panadapter.StatusUpdate` (`client_handle`, `daxiq_channel`), corroborated by

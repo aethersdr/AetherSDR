@@ -49,6 +49,7 @@ struct LinearityCaptureStamp {
     std::vector<std::complex<float>> feedback;
     std::optional<CaptureStreamIdentity> sourceStream;
     std::optional<CaptureToneProfile> sourceTones;
+    std::optional<CaptureBindingIdentity> sourceBinding{};
 };
 
 struct LinearityRunResult {

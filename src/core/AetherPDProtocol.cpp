@@ -478,7 +478,8 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
     const std::optional<QJsonObject> parsed = object(json);
     if (!parsed || parsed->size() != 10 + int(parsed->contains(QStringLiteral("measurement")))
         + int(parsed->contains(QStringLiteral("source")))
-        + int(parsed->contains(QStringLiteral("measurement_tone_config")))) { return std::nullopt; }
+        + int(parsed->contains(QStringLiteral("measurement_tone_config")))
+        + int(parsed->contains(QStringLiteral("feedback_binding")))) { return std::nullopt; }
     const QJsonObject& o = *parsed;
     CaptureManifest m;
     m.captureId = o.value(QStringLiteral("capture_id")).toString();
@@ -516,6 +517,12 @@ std::optional<CaptureManifest> parseCaptureManifest(const QByteArray& json)
         m.measurementToneConfig = toneConfig(o.value(QStringLiteral("measurement_tone_config")));
         if (!m.measurementToneConfig || !m.measurement || !m.source || !m.measurementToneConfig->sourceId
             || m.measurementToneConfig->sourceId != m.measurement->sourceId) { return std::nullopt; }
+    }
+    if (o.contains(QStringLiteral("feedback_binding"))) {
+        const QJsonValue value = o.value(QStringLiteral("feedback_binding"));
+        if (!value.isObject()) { return std::nullopt; }
+        m.feedbackBinding = feedbackBinding(value.toObject());
+        if (!m.source || !m.feedbackBinding || !m.feedbackBinding->valid || m.feedbackBinding->failed) { return std::nullopt; }
     }
     m.sampleRateHz = quint32(rate);
     return m;

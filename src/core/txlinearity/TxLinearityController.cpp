@@ -302,6 +302,8 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
         || !std::isfinite(frame.centerFreqHz) || std::abs(frame.centerFreqHz - m_config.capture.centerFreqHz) > 0.5
         || frame.sourceCaptureId.empty() || frame.sourceCaptureId.size() > 128 || frame.timestampNs == 0
         || (frame.sourceStream && (!frame.sourceStream->streamId || !frame.sourceStream->generation))
+        || (frame.sourceBinding && (!frame.sourceStream || frame.sourceBinding->channel < 1
+            || frame.sourceBinding->channel > 4 || !frame.sourceBinding->pan || !frame.sourceBinding->guiHandle))
         || (frame.sourceTones && (!frame.sourceTones->sourceId
             || !std::isfinite(frame.sourceTones->lowerOffsetHz) || !std::isfinite(frame.sourceTones->upperOffsetHz)
             || std::abs(frame.sourceTones->lowerOffsetHz - (std::min(m_request.tone1Hz, m_request.tone2Hz) - m_config.capture.centerFreqHz)) > 1e-6
@@ -309,6 +311,7 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
         || (m_config.expectedCorrection && frame.correctionActive != m_config.expectedCorrection)
         || (!m_frames.empty() && (frame.timestampNs <= m_frames.back().timestampNs
             || frame.correctionActive != m_frames.front().correctionActive
+            || frame.sourceBinding != m_frames.front().sourceBinding
             || frame.sourceStream != m_frames.front().sourceStream
             || frame.sourceTones != m_frames.front().sourceTones))
         || std::any_of(m_frames.begin(), m_frames.end(), [&](const CaptureFrame& old) { return old.sourceCaptureId == frame.sourceCaptureId; })
@@ -325,6 +328,7 @@ void TxLinearityController::receiveFrame(const CaptureFrame& frame, std::uint64_
     stored.sourceCaptureId = frame.sourceCaptureId;
     stored.sourceStream = frame.sourceStream;
     stored.sourceTones = frame.sourceTones;
+    stored.sourceBinding = frame.sourceBinding;
     stored.correctionActive = frame.correctionActive;
     stored.clipped = frame.clipped;
     stored.clippingKnown = frame.clippingKnown;
@@ -399,7 +403,7 @@ void TxLinearityController::complete()
             if (!analyzer.accumulate(frame.feedback)) { result.error = "Spectrum analysis rejected capture"; break; }
             clipped |= frame.clipped;
             clippingKnown &= frame.clippingKnown;
-            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs, std::move(frame.feedback), frame.sourceStream, frame.sourceTones});
+            result.captures.push_back({frame.sourceCaptureId, frame.timestampNs, std::move(frame.feedback), frame.sourceStream, frame.sourceTones, frame.sourceBinding});
         }
         if (result.error.empty()) {
             result.correctionActive = m_frames.front().correctionActive;

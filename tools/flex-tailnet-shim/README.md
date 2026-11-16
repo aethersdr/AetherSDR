@@ -424,7 +424,7 @@ purpose. An acceptance receipt alone does not establish source readiness.
 The desktop requests and cancels the default source. Its development
 measurement panel uses captures bound to the accepted source ID and guarded
 tone window. The desktop parser, capture adapter and analyzer accept confirmed
-configured tones; its operator spacing selector remains pending:
+configured tones; the operator spacing selector uses:
 `POST /v2/aetherpd/measurement/arm` accepts only an integer `spacing_hz`
 from 200 through 10000. It requires `PDTALK07`, native
 `measurement_tone_control=true`, and `measurement_tone_capture_version=3`.
@@ -433,7 +433,15 @@ DC and negative lower offsets are retained. No RF frequency, gain, duration,
 keying or privileged-helper arguments are added.
 
 `POST /v3/aetherpd/capture` includes the immutable emitted source's tone
-configuration. Older capture endpoints refuse nondefault source profiles;
+configuration and, when present in the native snapshot, its confirmed
+`feedback_binding`. The binding is copied from the sampled metadata, never from
+a later status query. Legacy v1/v2 manifests keep their schema. Selected desktop
+sessions require this binding and refuse missing or mismatched provenance.
+The native `PDIQ0004` response is 96 header bytes: the v3 fields followed by
+big-endian uint32 channel, pan and GUI handle. All three zero means legacy
+unsealed capture; partial/invalid tuples are rejected. Completed snapshots
+retain their identity after unkey; binding changes invalidate pending collection.
+Older capture endpoints refuse nondefault source profiles;
 unsupported arms never fall back to a different spacing. The configured
 native/shim extension has local tests and remains uninstalled and unqualified
 for RF. See [`IQ-MEASUREMENT.md`](../pd-waveform/IQ-MEASUREMENT.md) for its

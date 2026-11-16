@@ -93,6 +93,7 @@ void AetherPDCaptureSource::setSession(const QHostAddress& address, const QStrin
                                       std::function<bool()> current)
 {
     stop();
+    m_binding.reset();
     m_measurementSourceId = 0;
     m_measurementTones.reset();
     m_legacyCapture = m_sourceIdentitySupported = false;
@@ -104,6 +105,14 @@ void AetherPDCaptureSource::setSession(const QHostAddress& address, const QStrin
 void AetherPDCaptureSource::clearSession()
 {
     setSession({}, {}, {});
+}
+
+bool AetherPDCaptureSource::setFeedbackBinding(const aetherpd::FeedbackBinding& binding)
+{
+    if (QThread::currentThread() != thread() || m_running || !binding.valid || binding.failed
+        || binding.channel < 1 || binding.channel > 4 || !binding.pan || !binding.guiHandle) { return false; }
+    m_binding = binding;
+    return true;
 }
 
 bool AetherPDCaptureSource::setMeasurementSource(quint64 sourceId,
@@ -118,7 +127,7 @@ bool AetherPDCaptureSource::setMeasurementSource(quint64 sourceId,
 
 aetherpd::Request AetherPDCaptureSource::beginRequest() const
 {
-    return m_measurementTones ? aetherpd::captureBeginWithTonesRequest()
+    return m_measurementTones || m_binding ? aetherpd::captureBeginWithTonesRequest()
                               : aetherpd::captureBeginRequest(!m_legacyCapture);
 }
 
@@ -269,7 +278,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     const QByteArray body = reply->read(kMaxReplyBytes + 1);
     const int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (body.size() <= kMaxReplyBytes && !m_manifest && !m_waitingForTones
-        && !m_measurementTones && !m_legacyCapture && !m_sourceIdentitySupported && chunk < 0
+        && !m_binding && !m_measurementTones && !m_legacyCapture && !m_sourceIdentitySupported && chunk < 0
         && reply->url().path() == QStringLiteral("/v2/aetherpd/capture") && (code == 404 || code == 501)) {
         // Only explicit version absence permits legacy capture, within the
         // original deadline. A previously observed identity cannot disappear.
@@ -285,6 +294,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
         const std::optional<aetherpd::Status> observed = aetherpd::parseStatus(body);
         if (!observed || !observed->available || !observed->registered
             || !observed->measurement || observed->measurement->sourceId != m_measurementSourceId
+            || (m_binding && observed->feedbackBinding != m_binding)
             || !tonesMatch(observed->measurementToneConfig)
             || (observed->calibrationState != aetherpd::CalibrationState::Running
                 && observed->calibrationState != aetherpd::CalibrationState::Armed)) {
@@ -305,6 +315,7 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     if (!m_manifest) {
         m_manifest = aetherpd::parseCaptureManifest(body);
         if (!m_manifest || m_manifest->keyed != !m_checkingReady || m_manifest->sampleRateHz != m_config.sampleRateHz
+            || (m_binding && m_manifest->feedbackBinding != m_binding)
             || !tonesMatch(m_manifest->measurementToneConfig)
             || m_manifest->source.has_value() == m_legacyCapture
             || (m_verifiedReceiveSource && (!m_manifest->source
@@ -350,6 +361,10 @@ void AetherPDCaptureSource::finish(QNetworkReply* reply, quint64 generation, int
     frame.sourceCaptureId = m_manifest->captureId.toStdString();
     if (m_manifest->source) {
         frame.sourceStream = CaptureStreamIdentity{m_manifest->source->streamId, m_manifest->source->generation};
+    }
+    if (m_manifest->feedbackBinding) {
+        const aetherpd::FeedbackBinding& binding = *m_manifest->feedbackBinding;
+        frame.sourceBinding = CaptureBindingIdentity{binding.channel, binding.pan, binding.guiHandle};
     }
     frame.correctionActive = m_manifest->correcting;
     if (m_manifest->measurementToneConfig) {

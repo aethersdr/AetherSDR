@@ -1,0 +1,3 @@
+ok  	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim	25.277s
+?   	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/cmd/tailnet-probe	[no test files]
+ok  	github.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/native/unpack	1.015s

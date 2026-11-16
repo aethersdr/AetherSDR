@@ -4,7 +4,7 @@
 #undef NDEBUG
 #include <assert.h>
 
-static const struct pd_capture_meta kMeta = {7, 7150000, 0x40000001, 192000, 1, 1, 0, 0, 0};
+static const struct pd_capture_meta kMeta = {7, 7150000, 0x40000001, 192000, 1, 1, 0, 0, 0, 0, 0, 0, 0};
 static const int64_t kNow = 10000000000LL;
 
 static void fill(struct pd_capture* c, const struct pd_capture_meta* meta)
@@ -28,7 +28,7 @@ int main(void)
     assert(c.state==PD_CAPTURE_READY && c.count==PD_CAPTURE_SAMPLES);
     for (unsigned offset=0;offset<PD_CAPTURE_SAMPLES;offset+=PD_CAPTURE_CHUNK) {
         assert(pd_capture_read(&c,1,offset,kNow+40000000,out,sizeof(out))==PD_CAPTURE_REPLY);
-        assert(!memcmp(out,"PDIQ0003",8) && pd_iq_get64(out+8)==1);
+        assert(!memcmp(out,"PDIQ0004",8) && pd_iq_get64(out+8)==1);
         assert(be32(out+16)==PD_CAPTURE_READY && be32(out+20)==offset && be32(out+24)==1024);
         assert(be32(out+28)==192000 && pd_iq_get64(out+32)==7150000);
         assert(pd_iq_get64(out+40)==7 && be32(out+64)==kMeta.stream && be32(out+68)==3);
@@ -127,6 +127,29 @@ int main(void)
     assert(pd_capture_read(&c,36,0,kNow+40000000,out,sizeof(out))==PD_CAPTURE_REPLY && be32(out+80)==10000);
     measuring.measurement_id=0;
     pd_capture_begin(&c,37,&measuring,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
+
+    struct pd_capture_meta bound=kMeta;
+    bound.iq_channel=3;bound.feedback_pan=0x40000002;bound.gui_handle=7;bound.binding_valid=1;
+    pd_capture_begin(&c,40,&bound,kNow);fill(&c,&bound);
+    assert(pd_capture_read(&c,40,0,kNow+40000000,out,sizeof(out))==PD_CAPTURE_REPLY);
+    assert(be32(out+84)==3 && be32(out+88)==0x40000002 && be32(out+92)==7);
+    for(unsigned field=0;field<4;++field){
+        struct pd_capture_meta changed=bound;
+        if(field==0){changed.iq_channel=2;}
+        if(field==1){++changed.feedback_pan;}
+        if(field==2){++changed.gui_handle;}
+        if(field==3){changed.binding_valid=0;}
+        pd_capture_begin(&c,41+field,&bound,kNow);
+        pd_capture_feed(&c,&changed,sample,sizeof(sample),kNow+1);
+        assert(c.state==PD_CAPTURE_INVALID);
+    }
+    bound.binding_valid=0;pd_capture_begin(&c,45,&bound,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
+    bound.binding_valid=1;bound.iq_channel=5;pd_capture_begin(&c,46,&bound,kNow);assert(c.state==PD_CAPTURE_UNAVAILABLE);
+    w.sealed_feedback_pan=0x40000002;w.calibration_gui=7;w.daxiq_ch=3;
+    meta=capture_meta(&w);assert(meta.feedback_pan==w.sealed_feedback_pan && !meta.binding_valid);
+    w.feedback_pan=w.sealed_feedback_pan;w.feedback_pan_owner=7;
+    meta=capture_meta(&w);assert(meta.binding_valid && meta.iq_channel==3 && meta.gui_handle==7);
+    w.feedback_binding_failed=1;meta=capture_meta(&w);assert(!meta.binding_valid);
 
     w.calibration.purpose=PD_SOURCE_MEASUREMENT;w.calibration.source_id=31;
     w.calibration.tone_spacing_hz=PD_TONE_DEFAULT_SPACING_HZ;

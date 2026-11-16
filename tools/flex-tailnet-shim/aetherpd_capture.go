@@ -16,6 +16,7 @@ const (
 	aetherPDCaptureHeader         = 72   // Legacy v1; v2 appends the source ID.
 	aetherPDCaptureHeaderV2       = 80
 	aetherPDCaptureHeaderV3       = 84
+	aetherPDCaptureHeaderV4       = 96
 	pdCapturePublicChunk          = 512 // Fits the existing 8 KiB private control reply.
 	pdCaptureBegin           byte = 'I'
 	pdCaptureBeginWithSource byte = 'J'
@@ -25,6 +26,7 @@ const (
 )
 
 type aetherPDIQCapture struct {
+	Binding                                                 *pdFeedbackBinding
 	ToneConfig                                              *pdMeasurementToneConfig
 	Measurement                                             *pdMeasurementSource
 	ID, CenterHz, Generation, FirstReceiveNS, LastReceiveNS uint64
@@ -34,6 +36,7 @@ type aetherPDIQCapture struct {
 }
 
 type pdCaptureManifest struct {
+	Binding        *pdFeedbackBinding       `json:"feedback_binding,omitempty"`
 	ToneConfig     *pdMeasurementToneConfig `json:"measurement_tone_config,omitempty"`
 	Source         *pdCaptureSource         `json:"source,omitempty"`
 	Measurement    *pdMeasurementSource     `json:"measurement,omitempty"`
@@ -154,6 +157,14 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 	if op == pdCaptureBeginWithTones && frame.Measurement != nil && frame.Measurement.SourceID != "0000000000000000" && frame.ToneConfig == nil {
 		return unavailable()
 	}
+	var binding *pdFeedbackBinding
+	if op == pdCaptureBeginWithTones && frame.Binding != nil {
+		b := *frame.Binding
+		if b.Transport != "local_dax_iq" || b.Channel < 1 || b.Channel > 4 || b.Pan == 0 || b.GUIHandle == 0 || !b.Valid || b.Failed {
+			return unavailable()
+		}
+		binding = &b
+	}
 	var toneConfig *pdMeasurementToneConfig
 	if op == pdCaptureBeginWithTones {
 		toneConfig = frame.ToneConfig
@@ -169,7 +180,7 @@ func (s *pdCaptureStore) operation(ctx context.Context, op byte,
 	s.frame = frame
 	s.expires = time.Now().Add(10 * time.Second)
 	return pdCaptureJSON(200, pdCaptureManifest{
-		Source: source, ToneConfig: toneConfig,
+		Source: source, ToneConfig: toneConfig, Binding: binding,
 		Measurement: frame.Measurement, CaptureID: s.id, Format: "f32le-iq-v1", SampleRate: frame.Rate, CenterHz: frame.CenterHz,
 		Samples: aetherPDCaptureSamples, ChunkSamples: pdCapturePublicChunk,
 		Keyed: frame.Flags&1 != 0, Correcting: frame.Flags&2 != 0,

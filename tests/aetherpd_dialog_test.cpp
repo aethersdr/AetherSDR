@@ -74,6 +74,9 @@ int main(int argc, char** argv)
         if (!check(capture.toCsv().contains("18446744073709551615"),
             "CSV must preserve the full unsigned generation")) { return 1; }
         capture.measurement.captures.front().sourceTones = txlin::CaptureToneProfile{42, -1000, 1000};
+        capture.measurement.captures.front().sourceBinding = txlin::CaptureBindingIdentity{3, 1073741826, 7};
+        if (!check(capture.toCsv().contains("Capture IQ channel") && capture.toCsv().contains("0x40000002")
+            && capture.toCsv().contains("0x00000007"), "CSV retains capture binding")) { return 1; }
         spectrum.setResult(&capture);
         QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(&spectrum);
         const QImage image = QImage::fromData(spectrum.exportPng(), "PNG");
@@ -83,6 +86,7 @@ int main(int argc, char** argv)
             && image.text(QStringLiteral("Description")).contains("5 W setting")
             && image.text(QStringLiteral("Description")).contains("timeout 10 s")
             && image.text(QStringLiteral("Description")).contains("DAX IQ stream 0x40000001")
+            && image.text(QStringLiteral("Description")).contains("IQ Ch 3 · pan 0x40000002 · GUI 0x00000007")
             && image.text(QStringLiteral("Description")).contains("captured tone offsets -1000.0/1000.0 Hz")
             && accessible && accessible->text(QAccessible::Value).contains("captured tone offsets -1000.0/1000.0 Hz")
             && !image.text(QStringLiteral("Description")).contains("dBFS")

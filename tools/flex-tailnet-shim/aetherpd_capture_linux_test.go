@@ -344,3 +344,46 @@ func TestPDMeasurementCaptureV2(t *testing.T) {
 		t.Fatal("legacy capture gained source provenance")
 	}
 }
+
+func TestAetherPDCaptureBinding(t *testing.T) {
+	legacy := captureReply(9, 0, 2)
+	good := make([]byte, aetherPDCaptureHeaderV4+8*aetherPDCaptureChunk)
+	copy(good, legacy[:aetherPDCaptureHeader])
+	copy(good[:8], "PDIQ0004")
+	copy(good[aetherPDCaptureHeaderV4:], legacy[aetherPDCaptureHeader:])
+	binary.BigEndian.PutUint32(good[84:], 3)
+	binary.BigEndian.PutUint32(good[88:], 0x40000002)
+	binary.BigEndian.PutUint32(good[92:], 7)
+	for _, pair := range [][2]uint32{{84, 0}, {84, 5}, {88, 0}, {92, 0}} {
+		bad := append([]byte(nil), good...)
+		binary.BigEndian.PutUint32(bad[pair[0]:], pair[1])
+		if _, _, err := parseAetherPDCapture(bad, 9, 0); err == nil {
+			t.Fatalf("invalid binding admitted: %v", pair)
+		}
+	}
+	for n := 0; n < len(good); n++ {
+		if _, _, err := parseAetherPDCapture(good[:n], 9, 0); err == nil {
+			t.Fatalf("prefix %d", n)
+		}
+	}
+	frame, state, err := parseAetherPDCapture(good, 9, 0)
+	if err != nil || state != 2 || frame.Binding == nil || frame.Binding.Channel != 3 || frame.Binding.Pan != 0x40000002 || frame.Binding.GUIHandle != 7 || !frame.Binding.Valid {
+		t.Fatal(frame, state, err)
+	}
+	frame.IQ = make([]byte, 8*aetherPDCaptureSamples)
+	for _, op := range []byte{pdCaptureBegin, pdCaptureBeginWithSource, pdCaptureBeginWithTones} {
+		store := pdCaptureStore{}
+		reply := store.operation(context.Background(), op, func(context.Context) (aetherPDIQCapture, error) { return frame, nil }, func() bool { return true })
+		var manifest pdCaptureManifest
+		if reply.code != 200 || json.Unmarshal(reply.body, &manifest) != nil {
+			t.Fatal(reply)
+		}
+		if op == pdCaptureBeginWithTones {
+			if manifest.Binding == nil || *manifest.Binding != *frame.Binding {
+				t.Fatal("lost immutable binding")
+			}
+		} else if manifest.Binding != nil {
+			t.Fatal("legacy schema changed")
+		}
+	}
+}

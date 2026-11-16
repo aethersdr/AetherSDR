@@ -1,0 +1,153 @@
+{
+  "updated_utc": "2026-11-16T15:24:37.197069+00:00",
+  "status": "immutable_capture_binding_qualified_offline",
+  "installed": false,
+  "production_ready": false,
+  "source_base": "657d1efb1f8437934f0a2df266def9e26be0156e",
+  "evidence": "evidence20261116-capture-binding",
+  "implemented": [
+    "Native PDIQ0004 snapshots retain channel, sealed pan and original GUI observed during collection. Sealed binding must be valid to begin; any identity or validity change invalidates pending collection. Completed samples and metadata remain immutable after unkey until the existing TTL.",
+    "Go decodes the bounded 96-byte header and requires exact metadata across chunks. Public v3 captures include confirmed snapshot feedback_binding; legacy v1/v2 manifests retain their schemas. No later status query or requested setting supplies provenance.",
+    "Desktop capture source receives the original model binding and requires an exact manifest match before readiness or sample publication. Missing or unsupported bound capture fails without legacy fallback.",
+    "Neutral frames and averaged results retain binding and reject mixed/invalid identities. Released JSON/CSV results and PNG descriptions include channel, pan and GUI from completed captures; legacy missing identity remains unknown."
+  ],
+  "validation": {
+    "full_linux_desktop_build": true,
+    "final_ctest_count": 9,
+    "authoritative_build": "restored-build.log",
+    "authoritative_tests": [
+      "restored-tests.log: eight focused tests passed; integration was deliberately terminated after verified audio-device stall",
+      "integration-final.log: identical integration binary passed outside sandbox in 9.88 seconds"
+    ],
+    "full_go_race_suite": "go-race.log (including opt-in compiled native fixture)",
+    "sanitizers": {
+      "aetherpd_protocol_test": 0,
+      "aetherpd_capture_source_test": 0,
+      "tx_linearity_controller_test": 0
+    },
+    "native_sanitizers": {
+      "pd_capture_test": 0,
+      "pd_calibration_dispatch_test": 0
+    },
+    "mutation": {
+      "mutation": "omit snapshot binding comparison",
+      "exit": 1,
+      "expected_assertion": true,
+      "restored_sha256": "227d7788787c3bf1b71115f86245a971569c75f405b260c7d94e9b3a2c24ebaa",
+      "restored_exit": 8
+    },
+    "interop": {
+      "path": "compiled native C snapshot -> Go private decoder/public API -> compiled Qt parser",
+      "tone_spacings_hz": [
+        200,
+        1001,
+        1190,
+        2610,
+        10000
+      ],
+      "manifests": 5,
+      "chunks": 160,
+      "recorded_hashes": "interop-fixture-hashes.json"
+    },
+    "static_arm_builds": {
+      "aether-pd-armv7": {
+        "bytes": 267404,
+        "sha256": "138396f17508b4178f333d2b1880e4d7a322dfc54704ba632bfe63fff56f8c28"
+      },
+      "aether-pd-arm64": {
+        "bytes": 279144,
+        "sha256": "0d5e25818628286a07c510b0c7627fa06f07ff207f8c5bb795cde1c3a95a948c"
+      },
+      "shim-arm": {
+        "bytes": 21889184,
+        "sha256": "ec5d59fba06736c44377cc748882e9d8fcae4a26d44ab822c51d56594776853b"
+      },
+      "shim-arm64": {
+        "bytes": 21495968,
+        "sha256": "8720781bca1e2cbeaac1aa55cbf93b4c17726dacf04d430e2670e5428e28013f"
+      }
+    },
+    "docs_build": true,
+    "docs_dependency_note": "Reused installed dependencies after identical package-lock check; temporary symlink removed. No npm ci run.",
+    "static_results": [
+      {
+        "command": [
+          "python3",
+          "tools/check_test_registration.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_engine_boundary.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_command_plane.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit": 0
+      }
+    ],
+    "log_normalization": "Durable log copies strip trailing whitespace only.",
+    "preserved_failure": "Sandboxed integration test stalled in Qt QMediaDevices::audioInputs -> PulseAudio mainloop teardown. Symbolized stacks preserved. Exact test PID terminated after diagnosis. Identical binary passed outside sandbox with a 60-second CTest limit; no production guard or test assertion changed."
+  },
+  "compatibility": [
+    "Native v1/v2/v3 remain readable by the new shim; v4 is emitted by the new DSP. DSP and shim must be delivered together.",
+    "Public v3 gains optional feedback_binding; older strict desktop parsers reject it. Complete packages and desktop compatibility must be qualified together.",
+    "measurement_tone_capture_version=3 identifies the tone-profile schema; it does not describe the native v4 binary header."
+  ],
+  "network_probe": {
+    "utc": "2026-11-16T15:20:35.878049+00:00",
+    "address": "192.168.50.100",
+    "radio_mutations": false,
+    "tcp_ports": {
+      "4992": "[Errno 113] No route to host",
+      "48992": "[Errno 113] No route to host",
+      "22222": "[Errno 113] No route to host"
+    }
+  },
+  "not_yet_complete": [
+    "Updated complete authenticated ARMv7/ARM64 runtime packages, reproducibility and disk/inode peak checks. Individual static binary builds do not qualify packages.",
+    "Fresh-install/update/rollback, reboot persistence and local IQ on the exact candidate: radio remains unreachable.",
+    "Live original-GUI analyzer workflow with FDX off and all final process-graph failure/RF release checks.",
+    "Natural slip/cold-start diagnosis; repeated 5/10W tones and speech; matched stock APD; actual FLEX-6300 hardware; cross-platform CI and independent release review."
+  ],
+  "source_sha256": {
+    "src/core/AetherPDProtocol.cpp": "a8a8bc6bb300c7b9e6236363c95bee9756e8bee146a3a96785f3805e8a196974",
+    "src/core/AetherPDProtocol.h": "a66bd4f9e59e591277c053fa746f6d0f38c6e00d4ac91e9894c0380c4c592d04",
+    "src/core/txlinearity/AetherPDCaptureSource.cpp": "227d7788787c3bf1b71115f86245a971569c75f405b260c7d94e9b3a2c24ebaa",
+    "src/core/txlinearity/AetherPDCaptureSource.h": "d69957a953a97528e8b9d248e1fd18ff28e40b7bee28c4de5b96b184d92fe5a8",
+    "src/core/txlinearity/TxLinearityController.cpp": "18ae21f4353461cdc57e75e45ee54cbc657bf6f0c247a2f6f6bfe2be61ff5d0f",
+    "src/core/txlinearity/TxLinearityController.h": "397163fd7e72efb4c786d7c5597a934447002246b69c05e452917cfbd9481ea7",
+    "src/core/txlinearity/TxLinearityTypes.h": "66c185e2a2d838722dcd7a3e13a73245a6156b8bc51bf5b4307501f58fda52f0",
+    "src/models/AetherPDMeasurementModel.cpp": "46d32c52509ede66e46bab7093d9f216473bc950111fa7bc05fc5ec6da5f8714",
+    "src/models/AetherPDModel.cpp": "19f9668dc4b2e9cc92f938f014b883503b95817fc9df13df4119d9337ccc9a12",
+    "tests/aetherpd_capture_source_test.cpp": "28e535bfe3e2c3d1a520dcaa7db525d18bdd0b6176962a766468c42a6fe30726",
+    "tests/aetherpd_dialog_test.cpp": "becf06917c0140c313231f13cd1d7db5b181ef6df951b9f5aea5c7efd8be0bbf",
+    "tests/tx_linearity_controller_test.cpp": "04fecacb2d430a42faaddd54372385008aa8db7b90ef377816aec16e9edfaddc",
+    "tests/tx_operation_integration_test.cpp": "0fb909d1f4e4de4bac5b15f4098d418b02a52db59b9546e55ed444ac0036012e",
+    "tools/flex-tailnet-shim/aetherpd_capture.go": "cb80b027c5174b96329feae479882d0f2be43dbf4cac3af984ddc234981db13e",
+    "tools/flex-tailnet-shim/aetherpd_capture_linux.go": "bddefc9207d8d844b6c36b7581f59904dfef60fd524d4e2560fc6a343aafa81b",
+    "tools/flex-tailnet-shim/aetherpd_capture_linux_test.go": "f7c49eeda2a5968789838a875c4363e48f8c9a0510ebbebf173e84ca12c346ec",
+    "tools/pd-waveform/capture_fixture.c": "ff7870a073cdbbf54d86cf21dadedacfa02a3938af9549a35c4b14aba05b5305",
+    "tools/pd-waveform/capture_test.c": "80f60fcbc0daa60e879c3a8fd44081f25686d0af3a92893abe8df08a0af7645d",
+    "tools/pd-waveform/pd_capture.c": "b7bbe616da9837d4e6758aaeab306bc25dbca3086dbddfd2f476bd969a54a0d5",
+    "tools/pd-waveform/pd_capture.h": "308bd8b00127c26267af20e17a9325f4bcc2840be36173317157e689660a072d",
+    "tools/pd-waveform/pd_waveform.c": "b41fa497184ac0755bb667a6aae112146ab6b20291453929ca1a2b61a7949e36"
+  }
+}

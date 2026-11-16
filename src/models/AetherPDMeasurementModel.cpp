@@ -358,6 +358,11 @@ QString AetherPDMeasurementModel::Result::sourceSummary() const
     QString description = measurement.captures.empty() || !measurement.captures.front().sourceStream
         ? tr("DAX IQ stream identity not reported")
         : tr("DAX IQ stream 0x%1").arg(measurement.captures.front().sourceStream->streamId, 8, 16, QLatin1Char('0'));
+    if (!measurement.captures.empty() && measurement.captures.front().sourceBinding) {
+        const txlin::CaptureBindingIdentity& binding = *measurement.captures.front().sourceBinding;
+        description += tr(" · IQ Ch %1 · pan 0x%2 · GUI 0x%3").arg(binding.channel)
+            .arg(binding.pan, 8, 16, QLatin1Char('0')).arg(binding.guiHandle, 8, 16, QLatin1Char('0'));
+    }
     if (!measurement.captures.empty() && measurement.captures.front().sourceTones) {
         const txlin::CaptureToneProfile& tones = *measurement.captures.front().sourceTones;
         description += tr(" · captured tone offsets %1/%2 Hz").arg(tones.lowerOffsetHz, 0, 'f', 1).arg(tones.upperOffsetHz, 0, 'f', 1);
@@ -411,6 +416,12 @@ QByteArray AetherPDMeasurementModel::Result::toCsv() const
         row(QStringLiteral("Capture IQ stream ID"), stamp.sourceStream
             ? QStringLiteral("0x%1").arg(stamp.sourceStream->streamId, 8, 16, QLatin1Char('0')) : QString{},
             {}, id, stamp.sourceStream ? QStringLiteral("reported") : QStringLiteral("unknown"));
+        row(QStringLiteral("Capture IQ channel"), stamp.sourceBinding ? QString::number(stamp.sourceBinding->channel) : QString{}, {}, id,
+            stamp.sourceBinding ? QStringLiteral("confirmed at capture") : QStringLiteral("unknown"));
+        row(QStringLiteral("Capture feedback pan"), stamp.sourceBinding
+            ? QStringLiteral("0x%1").arg(stamp.sourceBinding->pan, 8, 16, QLatin1Char('0')) : QString{}, {}, id);
+        row(QStringLiteral("Capture GUI handle"), stamp.sourceBinding
+            ? QStringLiteral("0x%1").arg(stamp.sourceBinding->guiHandle, 8, 16, QLatin1Char('0')) : QString{}, {}, id);
         row(QStringLiteral("Capture tone source ID"), stamp.sourceTones
             ? QStringLiteral("%1").arg(stamp.sourceTones->sourceId, 16, 16, QLatin1Char('0')) : QString{},
             {}, id, stamp.sourceTones ? QStringLiteral("reported") : QStringLiteral("legacy fixed pair"));
@@ -489,6 +500,9 @@ QByteArray AetherPDMeasurementModel::exportResult() const
             {"source_stream", stamp.sourceStream ? QJsonValue(QJsonObject{
                 {"kind", "local_dax_iq"}, {"stream_id", qint64(stamp.sourceStream->streamId)},
                 {"generation", QString::number(stamp.sourceStream->generation)}}) : QJsonValue()},
+            {"source_binding", stamp.sourceBinding ? QJsonValue(QJsonObject{
+                {"kind", "local_dax_iq"}, {"channel", qint64(stamp.sourceBinding->channel)},
+                {"pan", qint64(stamp.sourceBinding->pan)}, {"gui_handle", qint64(stamp.sourceBinding->guiHandle)}}) : QJsonValue()},
             {"source_tones", stamp.sourceTones ? QJsonValue(QJsonObject{
                 {"source_id", QStringLiteral("%1").arg(stamp.sourceTones->sourceId, 16, 16, QLatin1Char('0'))},
                 {"lower_offset_hz", stamp.sourceTones->lowerOffsetHz}, {"upper_offset_hz", stamp.sourceTones->upperOffsetHz}}) : QJsonValue()},

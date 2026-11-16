@@ -101,6 +101,30 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     bool ok = true;
+    for (int fault = 0; fault < 7; ++fault) {
+        Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0;
+        setup(source, frames, errors);
+        std::optional<AetherSDR::txlin::CaptureBindingIdentity> received;
+        source.setFrameCallback([&](const CaptureFrame& frame) { ++frames; received = frame.sourceBinding; });
+        const AetherSDR::aetherpd::FeedbackBinding binding{3, 0x40000002, 7, true, false};
+        ok &= check(source.setFeedbackBinding(binding) && source.start(config()), "bound capture setup");
+        source.setGateOpen(true);
+        ok &= check(network.sent.back().request.url().path() == QStringLiteral("/v3/aetherpd/capture"), "bound snapshot requests provenance schema");
+        QJsonObject reply = manifest();
+        QJsonObject identity{{"transport", "local_dax_iq"}, {"channel", 3}, {"pan", 1073741826}, {"gui_handle", 7}, {"valid", true}, {"failed", false}};
+        if (fault == 1) { identity["channel"] = 2; }
+        if (fault == 2) { identity["pan"] = 1073741825; }
+        if (fault == 3) { identity["gui_handle"] = 8; }
+        if (fault == 4) { identity["valid"] = false; }
+        if (fault != 5) { reply["feedback_binding"] = identity; }
+        network.last->complete(fault == 6 ? 404 : 200, encode(reply));
+        if (fault == 0) {
+            for (int i = 0; i < 32; ++i) { network.captureChunk(i)->complete(200, chunk(i)); }
+            ok &= check(frames == 1 && errors == 0 && received == AetherSDR::txlin::CaptureBindingIdentity{3, 0x40000002, 7}, "snapshot binding did not reach neutral frame");
+        } else {
+            ok &= check(frames == 0 && errors == 1 && network.sent.size() == 1, "mismatched or unsupported binding retried or published samples");
+        }
+    }
     for (const int status : {404, 501, 401, 503, 200}) {
         Network network; AetherPDCaptureSource source(network); int frames = 0, errors = 0, ready = 0;
         setup(source, frames, errors);

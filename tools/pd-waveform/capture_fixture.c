@@ -18,7 +18,7 @@ int main(int argc, char** argv)
 {
     if (pd_status_open("3")!=3) { return 1; }
     struct pd_capture capture={0};
-    struct pd_capture_meta meta={7,7150000,0x40000001,192000,1,1,31,1,1190};
+    struct pd_capture_meta meta={7,7150000,0x40000001,192000,1,1,31,1,1190,3,0x40000002,7,1};
     if (argc>2) { return 6; }
     if (argc==2) {
         char* end=NULL;

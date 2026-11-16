@@ -641,8 +641,11 @@ ADC headroom or calibrated output power.
    identities, timestamps, correction state, spectrum, noise limitations and
    reference conventions. Each completed capture includes its original IQ
    samples and a SHA-256 checksum for offline analysis. JSON and CSV also retain
-   each capture's reported IQ stream ID and acquisition generation; unavailable
-   identities remain explicitly unknown. All export formats include the selected
+   each capture's reported IQ stream ID and acquisition generation. Captures from
+   the selected local-IQ service also retain the confirmed channel, feedback pan
+   and GUI owner in JSON, CSV and the PNG description. These are recorded with
+   the samples; later receiver changes do not relabel an exported capture.
+   Unavailable identities remain explicitly unknown. All export formats include the selected
    transmit authorization timeout; it does not certify the measured RF duration. Exporting collects no
    new samples and never transmits. IMD is labeled both per tone and relative to
    fundamental-derived PEP; the separately measured sample-peak reference is

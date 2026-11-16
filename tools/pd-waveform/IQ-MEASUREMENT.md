@@ -51,7 +51,7 @@ the following fixed header, followed by zero or 1,024 raw complex samples:
 
 | Body offset | Type | Field |
 |---|---|---|
-| 0 | 8 bytes | `PDIQ0003` |
+| 0 | 8 bytes | `PDIQ0004` |
 | 8 | u64 | Requested capture ID |
 | 16 | u32 | State: 1 pending, 2 ready, 3 invalid, 4 expired, 5 unavailable |
 | 20 | u32 | Requested sample offset, a multiple of 1,024 below 16,384 |
@@ -65,12 +65,21 @@ the following fixed header, followed by zero or 1,024 raw complex samples:
 | 68 | u32 | Bit 0 keyed; bit 1 DSP correction active; bit 2 guarded measurement tones |
 | 72 | u64 | Accepted measurement source ID, or zero |
 | 80 | u32 | Measurement spacing in Hz, or zero when no measurement source exists |
-| 84 | bytes | Unchanged little-endian float32 I,Q pairs |
+| 84 | u32 | Confirmed DAX IQ channel, or zero for legacy unsealed capture |
+| 88 | u32 | Confirmed feedback pan ID, or zero for legacy unsealed capture |
+| 92 | u32 | Confirmed original GUI handle, or zero for legacy unsealed capture |
+| 96 | bytes | Unchanged little-endian float32 I,Q pairs |
 
 The Go reader also accepts the legacy `PDIQ0001` 72-byte header, which has
 no measurement provenance and cannot satisfy the composed measurement workflow,
-and the `PDIQ0002` 80-byte header without confirmed spacing. A configured arm
-requires native status to advertise `measurement_tone_capture_version=3`;
+the `PDIQ0002` 80-byte header without confirmed spacing, and the `PDIQ0003`
+84-byte header without a binding tuple. The tuple must be entirely absent
+(all zero) or contain channel 1–4 and nonzero pan/GUI identities. Sealed
+sessions require matching radio readback before capture; loss or change during
+collection invalidates the snapshot. Completed snapshots retain their identity
+after unkey until expiry. A configured arm
+requires native status to advertise `measurement_tone_capture_version=3`
+(the tone-profile schema, independent of the v4 binary header);
 a source with configurable tones and an older capture protocol is refused.
 The DSP and its owner must be installed together from one authenticated release.
 All header integers are big-endian. Timestamps are local process consumption
@@ -91,7 +100,7 @@ It collects a new snapshot and returns a manifest containing `capture_id`,
 `chunk_samples` (512), `keyed`, `correcting`, and `first_receive_ns` /
 `last_receive_ns`. Nanosecond timestamps are decimal strings to avoid loss of
 integer precision in JSON clients. The v1 endpoint exposes no stream or process
-identifiers. Native v2 and v3 captures also carry
+identifiers. Native v2, v3 and v4 captures also carry
 `measurement: {"source_id": "000000000000001f", "tones": true}`. The ID is a
 canonical 16-character lowercase hexadecimal string scoped to the original
 owned DSP; zero means no measurement source. The same optional object appears
@@ -122,6 +131,14 @@ no tone-config object; an identified source without a confirmed profile is
 refused on v3. V1/v2 refuse a nondefault profile, including its preamble, so
 older clients cannot silently analyze it as 710/1900 Hz. Default profiles
 retain the existing v1/v2 response shape and chunk endpoint.
+
+V3 also includes `feedback_binding` when present in the native snapshot. This
+six-field object uses the status binding schema with `valid=true` and
+`failed=false`, describing readback during collection. A selected desktop
+session requires an exact match to its pinned channel, pan and GUI identity;
+missing support never retries a legacy capture. The public v3 schema addition
+requires the matching desktop parser; older strict parsers reject it. JSON,
+CSV and PNG exports retain this captured identity, not later status.
 
 V3 maps to private opcode `K` under `PDTALK07`; older sessions return 501
 without dispatch. `POST /v2/aetherpd/measurement/arm` accepts only

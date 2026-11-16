@@ -701,6 +701,8 @@ static void log_measurement_window(const wf_t* w, const char* event)
           w->core ? pd_core_current_solution(w->core) : -1);
 }
 
+static int feedback_binding_valid(const wf_t* w);
+
 static struct pd_capture_meta capture_meta(const wf_t* w)
 {
     double hz = w->pan_mhz * 1e6;
@@ -713,7 +715,11 @@ static struct pd_capture_meta capture_meta(const wf_t* w)
         .correcting = (uint32_t)(w->correct && !w->local_iq_fault && correction_ready(w)),
         .measurement_id = measurement_source_id(w),
         .measurement_spacing_hz = measurement_source_id(w) ? w->calibration.tone_spacing_hz : 0,
-        .measurement_tones = (uint32_t)measurement_tones_ready(w,pd_iq_monotonic_ns())
+        .measurement_tones = (uint32_t)measurement_tones_ready(w,pd_iq_monotonic_ns()),
+        .iq_channel = w->sealed_feedback_pan ? (uint32_t)w->daxiq_ch : 0,
+        .feedback_pan = w->sealed_feedback_pan,
+        .gui_handle = w->sealed_feedback_pan ? w->calibration_gui : 0,
+        .binding_valid = w->sealed_feedback_pan && w->local_iq_mode && feedback_binding_valid(w)
     };
 }
 

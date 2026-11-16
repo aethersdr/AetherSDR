@@ -1,0 +1,763 @@
+Test project /home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project
+    Start  45: pd_capture_test
+1/9 Test  #45: pd_capture_test ..................   Passed    0.00 sec
+    Start  50: pd_calibration_dispatch_test
+2/9 Test  #50: pd_calibration_dispatch_test .....   Passed    1.00 sec
+    Start 482: aetherpd_protocol_test
+3/9 Test #482: aetherpd_protocol_test ...........   Passed    0.01 sec
+    Start 483: aetherpd_client_test
+4/9 Test #483: aetherpd_client_test .............   Passed    1.91 sec
+    Start 494: aetherpd_capture_source_test
+5/9 Test #494: aetherpd_capture_source_test .....   Passed    6.43 sec
+    Start 495: tx_linearity_controller_test
+6/9 Test #495: tx_linearity_controller_test .....   Passed    0.09 sec
+    Start 499: aetherpd_model_test
+7/9 Test #499: aetherpd_model_test ..............   Passed    3.06 sec
+    Start 503: aetherpd_dialog_test
+8/9 Test #503: aetherpd_dialog_test .............   Passed    0.15 sec
+    Start 881: tx_operation_integration_test
+9/9 Test #881: tx_operation_integration_test ....Subprocess terminated***Exception: 168.65 sec
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external sourcaether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+e in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status caaether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+nnot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production inteaether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+rlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles bothaether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: Backend refused operation tune mode (announced)
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+ meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] external source in pre-TX status cannot start local TX
+[PASS] production interlock reconciles both meter state and local audio gate
+[PASS] partial status retains exact latched source list without duplicate edges
+[PASS] repeated TX status publishes at most one meter/audio start edge
+[PASS] releasing hardware PTT to bare VOX retains only the existing VOX enable gate
+[PASS] explicit empty source clears the latched hardware source during TX
+[PASS] another client forces both local meter and audio gate off
+[PASS] unclaimed transmitter preserves existing local-ownership convention
+[PASS] READY releases local meter and audio state even while VOX enabled
+[PASS] READY clears stale source list before a later source-less TX
+[PASS] status reconciliation emits no commands and grants no TX operation or activity
+[PASS] explicit operator MOX still reconciles software TX without a duplicate key command
+[PASS] stale SW transmitting after explicit unkey cannot reopen local audio or restart TX
+[PASS] MOX acquires a live engine operation without a new operator timeout
+[PASS] explicit MOX release fences queued key-on
+[PASS] every primary intent dispatches once through its typed backend verb
+[PASS] no duplicate keying escapes via raw model command text
+[PASS] repeated production MOX intent does not accumulate hidden holds
+[PASS] reentrant MOX reengagement has a new handle while old release retires
+[PASS] duplicate old producer release cannot end the reengaged operation
+[PASS] new producer release drains normally with no orphaned prior hold
+[PASS] production MOX completion does not erase a second producer contribution
+[PASS] last captured producer completion ends only local intent
+[PASS] earlier CW contribution enters local drain
+[PASS] earlier draining CW keeps production TUNE interlock closed after a newer edge ends
+[PASS] TUNE becomes available after all local CW contributions drain
+[PASS] queued CW reengagement retains distinct old and current contributions
+[PASS] old CW queue completion retires only its captured contribution
+[PASS] reengagement preserves normal queued down/up/down transport delivery
+[PASS] final CW release drains all contributions without an orphaned hold
+[PASS] queued CW reengagement retains distinct old and current contributions
+[PASS] old CW queue completion retires only its captured contribution
+[PASS] reengagement preserves normal queued down/up/down transport delivery
+[PASS] final CW release drains all contributions without an orphaned hold
+[PASS] queued CW reengagement retains distinct old and current contributionsaether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.cw: CW key-down refused: TUNE is active (#5422) source= test-straight-key
+aether.cw: CW key-down refused: TUNE is active (#5422) source= test-iambic-key
+aether.cw: CWX send refused: TUNE is active (#5422)
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: FlexBackend: no operation-fenced TX command sink; refusing command
+aether.protocol: FlexBackend: no operation-fenced TX command sink; refusing command
+aether.protocol: FlexBackend: no operation-fenced TX command sink; refusing command
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+
+[PASS] old CW queue completion retires only its captured contribution
+[PASS] reengagement preserves normal queued down/up/down transport delivery
+[PASS] final CW release drains all contributions without an orphaned hold
+[PASS] queued CW reengagement retains distinct old and current contributions
+[PASS] old CW queue completion retires only its captured contribution
+[PASS] reengagement preserves normal queued down/up/down transport delivery
+[PASS] final CW release drains all contributions without an orphaned hold
+[PASS] queued CW reengagement retains distinct old and current contributions
+[PASS] old CW queue completion retires only its captured contribution
+[PASS] reengagement preserves normal queued down/up/down transport delivery
+[PASS] final CW release drains all contributions without an orphaned hold
+[PASS] queued CW reengagement retains distinct old and current contributions
+[PASS] old CW queue completion retires only its captured contribution
+[PASS] reengagement preserves normal queued down/up/down transport delivery
+[PASS] final CW release drains all contributions without an orphaned hold
+[PASS] disconnect fixture holds an entered terminal write
+[PASS] transport teardown retains recovery while an entered writer returns
+[PASS] teardown acknowledgment completes after dispatch return without a permanent latch
+[PASS] RX-only backend refuses every primary start including CW/CWX
+[PASS] refusal cannot leave optimistic TX or TUNE latched
+[PASS] key-up, bypass and clear remain available after capability loss
+[PASS] production MOX release fences dispatch after local completion
+[PASS] production completion cannot lend the radio to an independent actor
+[PASS] normal desktop reengagement remains available without a new duration cap
+[PASS] old local completion cannot acknowledge reengaged desktop TX
+[PASS] uncorrelated RX state does not release an unconfirmed owner
+[PASS] production backend teardown acknowledges the retained owner and retires its generation
+[PASS] transport teardown clears the old ownership barrier
+[PASS] test-only admission is retired without dispatching keying
+[PASS] TUNE starts through the coordinator before the CW exclusion applies
+[PASS] active TUNE refuses straight-key, iambic and CWX key-down intent
+[PASS] CW key-up cleanup remains available without ending the TUNE operation
+[PASS] an active CW key operation refuses TUNE before optimistic state or dispatch
+[PASS] TUNE is re-admitted after the CW key operation releases
+[PASS] a held paddle refuses TUNE during the keyer's inter-element gap
+[PASS] releasing the paddle re-admits TUNE
+[PASS] normal release waits for its tail
+[PASS] old RADE-style completion cannot unkey a re-engaged transmission
+[PASS] current normal tail releases once
+[PASS] backend replacement fences old operation and delayed release before reuse
+[PASS] replacement notifies immediate audio/tail cancellation independently of state edges
+[PASS] primary Flex keying never falls back to an unfenced generic sink
+[PASS] Flex seam preserves exact FlexLib 4.2.18 keying command forms
+[PASS] Flex encoder distinguishes keying from cleanup without claiming authority
+[PASS] real Flex backend selects shared API support, not model or firmware build
+[PASS] compatible API alone never certifies transmitter readiness
+[PASS] real Flex backend selects shared API support, not model or firmware build
+[PASS] compatible API alone never certifies transmitter readiness
+[PASS] real Flex backend selects shared API support, not model or firmware build
+[PASS] compatible API alone never certifies transmitter readiness
+[PASS] real Flex backend selects shared API support, not model or firmware build
+[PASS] compatible API alone never certifies transmitter readiness
+[PASS] real Flex backend selects shared API support, not model or firmware build
+[PASS] compatible API alone never certifies transmitter readiness
+[PASS] real Flex backend selects shared API support, not model or firmware build
+[PASS] compatible API alone never certifies transmitter readiness
+[PASS] real Flex backend selects shared API support, not model or firmwareaether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.9.123"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V2.0.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.connection: RX: "V1.4.0.0"
+aether.connection: RX: "H12345678"
+aether.connection: RadioConnection: assigned handle "12345678"
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+aether.protocol: LocalMemoryBank: loaded 0 memories
+aether.shutdown: phase=radio.backend.destroy event=begin
+aether.shutdown: phase=radio.backend.destroy event=end result=ok elapsed_ms=0
+aether.shutdown: phase=dax_iq.thread.join event=begin
+aether.shutdown: phase=dax_iq.thread.join event=end result=ok elapsed_ms=0
+AppSettings: refusing to save before a successful load
+qt.multimedia.ffmpeg: Using Qt multimedia with FFmpeg version 9.0.1 LGPL version 2.1 or later
+qt.multimedia.pipewire.registry: Failed to connect to pipewire instance "Operation not permitted"
+PulseAudioService: pa_context_connect() failed
+pa_write() failed while trying to wake up the mainloop: Operation not permitted
+
+
+89% tests passed, 1 tests failed out of 9
+
+Total Test time (real) = 181.32 sec
+
+The following tests FAILED:
+	881 - tx_operation_integration_test (Subprocess terminated)
+Errors while running CTest

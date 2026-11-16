@@ -27,6 +27,7 @@ public:
 
     void setSession(const QHostAddress& address, const QString& token, std::function<bool()> current);
     void clearSession();
+    bool setFeedbackBinding(const aetherpd::FeedbackBinding& binding);
     bool setMeasurementSource(quint64 sourceId,
                               std::optional<aetherpd::MeasurementToneConfig> tones = std::nullopt);
     bool start(const CaptureConfig& config) override;
@@ -65,6 +66,7 @@ private:
     FrameCallback m_frameCallback;
     ErrorCallback m_errorCallback;
     ReadyCallback m_readyCallback;
+    std::optional<aetherpd::FeedbackBinding> m_binding;
     std::optional<aetherpd::CaptureManifest> m_manifest;
     std::optional<aetherpd::CaptureSourceIdentity> m_verifiedReceiveSource;
     QByteArray m_bytes;

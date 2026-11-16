@@ -103,6 +103,7 @@ struct CaptureSourceIdentity {
     bool operator==(const CaptureSourceIdentity&) const = default;
 };
 struct CaptureManifest {
+    std::optional<FeedbackBinding> feedbackBinding;
     std::optional<CaptureSourceIdentity> source;
     std::optional<MeasurementSource> measurement;
     std::optional<MeasurementToneConfig> measurementToneConfig;

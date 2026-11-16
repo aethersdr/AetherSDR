@@ -124,7 +124,13 @@ std::function<bool()> AetherPDModel::bindCaptureSource(txlin::AetherPDCaptureSou
     if (QThread::currentThread() != thread() || source.thread() != thread()) { return {}; }
     source.clearSession();
     const std::function<bool()> current = measurementFence();
-    if (current) { source.setSession(m_address, m_token, current); }
+    if (current) {
+        const std::optional<aetherpd::Status> observed = status();
+        source.setSession(m_address, m_token, current);
+        if (observed && observed->feedbackBinding && !source.setFeedbackBinding(*observed->feedbackBinding)) {
+            source.clearSession(); return {};
+        }
+    }
     return current;
 }
 

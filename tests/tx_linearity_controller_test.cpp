@@ -524,6 +524,26 @@ int main(int argc, char** argv)
             check(f.result && !f.result->measurement && !f.result->error.empty(), "invalid profile reached analysis");
         }
     }
+    for (int fault = 0; fault < 6; ++fault) {
+        Fixture f; f.start();
+        CaptureFrame first = frame(1), second = frame(2);
+        first.sourceStream = second.sourceStream = CaptureStreamIdentity{1073741825, 7};
+        first.sourceBinding = second.sourceBinding = CaptureBindingIdentity{3, 1073741826, 7};
+        if (fault == 1) { second.sourceBinding->channel = 2; }
+        if (fault == 2) { second.sourceBinding->pan += 1; }
+        if (fault == 3) { second.sourceBinding->guiHandle += 1; }
+        if (fault == 4) { second.sourceBinding.reset(); }
+        if (fault == 5) { first.sourceBinding->channel = 5; }
+        f.send(first); if (fault != 5) { f.send(second); }
+        check(f.lease->releases == 1 && !f.source->gate, "binding completion did not release original lease");
+        f.lease->observed = Lease::State::Released; f.controller->poll();
+        if (fault == 0) {
+            check(f.result && f.result->measurement && f.result->captures.front().sourceBinding == first.sourceBinding,
+                "released result lost snapshot binding");
+        } else {
+            check(f.result && !f.result->measurement && !f.result->error.empty(), "mixed binding reached averaged result");
+        }
+    }
     qInstallMessageHandler(previousHandler);
     return failures == 0 ? 0 : 1;
 }

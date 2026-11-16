@@ -1,0 +1,364 @@
+[New LWP 1102311 (id 2)]
+[New LWP 1102310 (id 3)]
+[New LWP 1102309 (id 4)]
+[New LWP 1102299 (id 5)]
+[New LWP 1102296 (id 6)]
+[New LWP 1102295 (id 7)]
+[New LWP 1102294 (id 8)]
+[Switching to thread 1 (LWP 1102093)]
+0x00007f723a6a08f2 in ?? ()
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.archlinux.org>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+
+Thread 8 (Thread 0x7f7236dff6c0 (LWP 1102294) "PanadapterStrea"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f723a505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f723a505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f723c2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f723bf9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f723c0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f723c15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f723a698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f723a720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 7 (Thread 0x7f72365fe6c0 (LWP 1102295) "RadioConnection"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f723a505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f723a505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f723c2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f723bf9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f723c0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f723c15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f723a698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f723a720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 6 (Thread 0x7f7235dfd6c0 (LWP 1102296) "DaxIq"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f723a505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f723a505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f723c2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f723bf9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f723c0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f723c15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f723a698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f723a720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 5 (Thread 0x7f72355fc6c0 (LWP 1102299) "cuda0000280000b"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a7116f5 in poll () at /usr/lib/libc.so.6
+#2  0x00007f7216180c17 in ??? () at /usr/lib/libcuda.so.1
+#3  0x00007f7216250ac4 in ??? () at /usr/lib/libcuda.so.1
+#4  0x00007f7216168c13 in ??? () at /usr/lib/libcuda.so.1
+#5  0x00007f723a698042 in ??? () at /usr/lib/libc.so.6
+#6  0x00007f723a720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 4 (Thread 0x7f7234dfb6c0 (LWP 1102309) "PwEventLoop"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a720fcb in epoll_wait () at /usr/lib/libc.so.6
+#2  0x00007f72376ab529 in ??? () at /usr/lib/spa-0.2/support/libspa-support.so
+#3  0x00007f72376948e9 in ??? () at /usr/lib/spa-0.2/support/libspa-support.so
+#4  0x00007f723b8c50c1 in ??? () at /usr/lib/libpipewire-0.3.so.0
+#5  0x00007f723a698042 in ??? () at /usr/lib/libc.so.6
+#6  0x00007f723a720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 3 (Thread 0x7f721edff6c0 (LWP 1102310) "PWDevMon"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a711de7 in ppoll () at /usr/lib/libc.so.6
+#2  0x00007f723a505c9e in ??? () at /usr/lib/libglib-2.0.so.0
+#3  0x00007f723a505db5 in g_main_context_iteration () at /usr/lib/libglib-2.0.so.0
+#4  0x00007f723c2b114e in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#5  0x00007f723bf9bf5b in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#6  0x00007f723c0ab4f3 in QThread::exec() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#7  0x00007f723c15e71e in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6
+#8  0x00007f723a698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f723a720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 2 (Thread 0x7f7215dff6c0 (LWP 1102311) "QPulseAudioEngi"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a7116f5 in poll () at /usr/lib/libc.so.6
+#2  0x00007f723b4c6c8a in ??? () at /usr/lib/libpulse.so.0
+#3  0x00007f723b4afedd in pa_mainloop_poll () at /usr/lib/libpulse.so.0
+#4  0x00007f723b4ba723 in pa_mainloop_iterate () at /usr/lib/libpulse.so.0
+#5  0x00007f723b4ba7f1 in pa_mainloop_run () at /usr/lib/libpulse.so.0
+#6  0x00007f723b4cbf2e in ??? () at /usr/lib/libpulse.so.0
+#7  0x00007f7239ddc60f in ??? () at /usr/lib/pulseaudio/libpulsecommon-17.0.so
+#8  0x00007f723a698042 in ??? () at /usr/lib/libc.so.6
+#9  0x00007f723a720b2c in ??? () at /usr/lib/libc.so.6
+
+Thread 1 (Thread 0x7f72376d6bc0 (LWP 1102093) "tx_operation_in"):
+#0  0x00007f723a6a08f2 in ??? () at /usr/lib/libc.so.6
+#1  0x00007f723a694c79 in ??? () at /usr/lib/libc.so.6
+#2  0x00007f723a699e8d in ??? () at /usr/lib/libc.so.6
+#3  0x00007f723b4cc175 in pa_threaded_mainloop_free () at /usr/lib/libpulse.so.0
+#4  0x00007f723d5b7327 in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#5  0x00007f723d6a6782 in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#6  0x00007f723d600c5f in QPlatformAudioDevices::create() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#7  0x00007f723d60e560 in ??? () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#8  0x00007f723a69d79c in ??? () at /usr/lib/libc.so.6
+#9  0x00007f723a69d819 in pthread_once () at /usr/lib/libc.so.6
+#10 0x00007f723d60f1f8 in QPlatformMediaIntegration::audioDevices() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#11 0x00007f723d61db1a in QMediaDevices::audioInputs() () at /home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6
+#12 0x00005589f791769f in ??? ()
+#13 0x00007ffe5326bf90 in ??? ()
+#14 0x00007ffe5326c2b0 in ??? ()
+#15 0x00007ffe5326fa90 in ??? ()
+[Inferior 1 (process 1102093) detached]
+
+warning: "target:/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/tx_operation_integration_test": could not open as an executable file: Input/output error.
+
+warning: `target:/home/jeremy/AetherSDR/build/aetherpd-shim-integration/first-install-desktop-monitor/project/tx_operation_integration_test': can't open to read symbols: Input/output error.
+Error reading attached process's symbol file.
+: No such file or directory.
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Multimedia.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Concurrent.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Gui.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libGLX.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libOpenGL.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6SerialPort.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6WebSockets.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Network.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libqt6keychain.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6DBus.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libQt6Core.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/librtlsdr.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libfftw3f.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libhidapi-hidraw.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libportaudio.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libm.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libasound.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libfftw3.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libssl.so.4' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libcrypto.so.4' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libpipewire-0.3.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libstdc++.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libgcc_s.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libc.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/lib64/ld-linux-x86-64.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libEGL.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libGL.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libxkbcommon.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libpulse.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libX11.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libglib-2.0.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libz.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libfreetype.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libfontconfig.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libgthread-2.0.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libGLdispatch.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libzstd.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libgssapi_krb5.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libbrotlidec.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libbrotlicommon.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libresolv.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libgobject-2.0.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libdbus-1.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libicui18n.so.73' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libicuuc.so.73' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/lib/libicudata.so.73' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libusb-1.0.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libudev.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libjack.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libbrotlienc.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/pulseaudio/libpulsecommon-17.0.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libxcb.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libpcre2-8.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libbz2.so.1.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libpng16.so.16' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libexpat.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libkrb5.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libk5crypto.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libcom_err.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libkrb5support.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libkeyutils.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libffi.so.8' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libsystemd.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libpthread.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libdl.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libsndfile.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libasyncns.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libXau.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libXdmcp.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libogg.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libvorbisenc.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libFLAC.so.14' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libopus.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libmpg123.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libmp3lame.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libvorbis.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/spa-0.2/support/libspa-support.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/spa-0.2/support/libspa-journal.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/libffmpegmediaplugin.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libXrandr.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libXext.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6Quick.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6Qml.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6OpenGL.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libavformat.so.63' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libavcodec.so.63' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libswresample.so.7' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libswscale.so.10' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libavutil.so.61' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libXrender.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6QmlMeta.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6QmlModels.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6QmlWorkerScript.so.6' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6FFmpegStub-ssl.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6FFmpegStub-crypto.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6FFmpegStub-va.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6FFmpegStub-va-drm.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/home/jeremy/.cache/aethersdr/qt/gen/6.12.0-202609280346-1790870536-1072361/6.12.0/gcc_64/plugins/multimedia/../../lib/libQt6FFmpegStub-va-x11.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libdrm.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libva-x11.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libva.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libXfixes.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libX11-xcb.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libxcb-dri3.so.0' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libva-drm.so.2' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libssl.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libcrypto.so.3' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/libcuda.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/librt.so.1' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/spa-0.2/support/libspa-dbus.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/pipewire-0.3/libpipewire-module-protocol-native.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/pipewire-0.3/libpipewire-module-client-node.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/pipewire-0.3/libpipewire-module-client-device.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/pipewire-0.3/libpipewire-module-adapter.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/pipewire-0.3/libpipewire-module-metadata.so' as an executable file: Input/output error
+Error while mapping shared library sections:
+Could not open `target:/usr/lib/pipewire-0.3/libpipewire-module-session-manager.so' as an executable file: Input/output error
+
+warning: Unable to find dynamic linker breakpoint function.
+GDB will be unable to debug shared library initializers
+and track explicitly loaded dynamic code.
+
+warning: Could not load vsyscall page because no executable was specified
+
+warning: Target and debugger are in different PID namespaces; thread lists and other data are likely unreliable.  Connect to gdbserver inside the container.
+Error reading attached process's symbol file.
+: No such file or directory.
+Error reading attached process's symbol file.
+: No such file or directory.

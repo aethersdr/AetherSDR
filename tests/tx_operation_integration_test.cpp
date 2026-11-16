@@ -944,7 +944,10 @@ void aetherPDMeasurementWorkflow()
             {"keyed", keyed}, {"correcting", keyed}, {"first_receive_ns", "1000000000"},
             {"last_receive_ns", "1341000000"},
             {"measurement", QJsonObject{{"source_id", "0000000000000001"}, {"tones", keyed}}}};
-        if (configured) { object["measurement_tone_config"] = sourceStatus["measurement_tone_config"]; }
+        if (configured) {
+            object["measurement_tone_config"] = sourceStatus["measurement_tone_config"];
+            object["feedback_binding"] = QJsonObject{{"transport", "local_dax_iq"}, {"channel", 3}, {"pan", 1073741826}, {"gui_handle", 7}, {"valid", true}, {"failed", false}};
+        }
         return encode(object);
     };
     std::vector<std::complex<double>> tones = txlin_test::twoTone(16384, 48000, 710, 1900, .2);
@@ -1153,6 +1156,11 @@ void aetherPDMeasurementWorkflow()
                 "JSON and completed result retain selected authorization timeout");
             const QJsonObject capture = exported.value("captures").toArray().first().toObject();
             if (configured) {
+                const QJsonObject binding = capture.value("source_binding").toObject();
+                check(binding.value("kind").toString() == "local_dax_iq"
+                    && binding.value("channel").toInt() == 3 && binding.value("pan").toInteger() == 1073741826
+                    && binding.value("gui_handle").toInt() == 7 && model->exportResultCsv().contains("0x40000002"),
+                    "released JSON and CSV lost immutable snapshot binding");
                 const QJsonObject profile = capture.value("source_tones").toObject();
                 check(profile.value("source_id").toString() == QStringLiteral("0000000000000001")
                     && profile.value("lower_offset_hz").toDouble() == 804.5
