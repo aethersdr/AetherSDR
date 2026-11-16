@@ -124,8 +124,9 @@ supported on its own (both below); FlexRadio remains the primary target:
   — an unrecognised model gets no scope and no transmit rather than optimistic
   defaults. The IC-7610, IC-7760 and IC-7851 are **experimental**, with shared
   dual-receiver MAIN/SUB control, scope and audio confirmed on an IC-7851;
-  scope-capable models get native Band and Segment Zoom. The **IC-7300MK2 over built-in Ethernet/RS-BA1 is supported** as of
-  v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));
+  transmit is enabled on them but has not been qualified on hardware.
+  Scope-capable models get native Band and Segment Zoom. The **IC-7300MK2 over
+  built-in Ethernet/RS-BA1 is supported** as of v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));
   every other Icom model keeps the early, experimental treatment.
 - **ANAN-G2** — **experimental, receive-only**. openHPSDR Protocol 2 discovery
   with a single receive path, spectrum and audio, live tuning and zoom, live DDC

@@ -136,8 +136,8 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   receiver on DDC2, leaving DDC0 and DDC1 free, and keeps the AGC per radio.
   v26.11.3 gave each receiver its own state record, ahead of a second
   receiver, and let a headless aetherd tune the G2 over its measured 10 kHz to
-  61.43 MHz span with mode, filter, RIT, noise reduction and the radio's own
-  speaker. The codec is multi-DDC capable but `AnanBackend` still drives one
+  61.43 MHz span with mode, filter, AGC threshold, noise blanker, noise
+  reduction, RIT, the step attenuator as RF gain and the radio's own speaker. The codec is multi-DDC capable but `AnanBackend` still drives one
   receiver; remaining is the second receiver on its own DDC, then transmit.
 - **RTL-SDR — experimental, receive-only** — `librtlsdr` discovery with one
   panadapter and one host-demodulated slice (AM, FM, SSB, CW) on builds carrying
@@ -284,8 +284,9 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 ### Approved RFCs (open)
 
 Approved under the [RFC process](GOVERNANCE.md#rfc-process) and still open:
-**approved for implementation**, whether or not work has started. Some are
-partly delivered, such as #6964 and #7159. Full list:
+**approved for implementation**, whether or not work has started. This is a
+selection, not the whole set; some are partly delivered, such as #6964 and
+#7159. Full list:
 [`label:"RFC Approved"`](https://github.com/aethersdr/AetherSDR/issues?q=is%3Aopen+label%3A%22RFC+Approved%22).
 
 **Panadapter and display**

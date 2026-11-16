@@ -12,7 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### A connection workspace with Locations and operator profiles · new keyboard and MIDI actions from one registry · the Hermes-Lite 2 is Supported · IC-7610, IC-7760 and IC-7851 dual receive · AetherTX leads with Tube and ends in a look-ahead limiter · updates served from updates.aethersdr.com · Flex status and remote aetherd clients behind typed contracts
 
-154 merged changes from 15 human contributors, AetherClaude and nine Dependabot updates within that total. Connecting to a radio moves into one workspace with Locations, operator profiles and SmartLink accounts, with two recent-radio shortcuts in the title bar and a confirmed handoff when you switch. Dozens of new actions, for slices, panadapters, memories, antennas, filters and transmit, can be bound to a key and a MIDI control. The Hermes-Lite 2 is Supported in the desktop application, three more Icom models arrive with shared dual-receiver support, and AetherTX drops its gate and de-esser for a Tube-first chain that ends in a look-ahead brickwall limiter, on by default. The in-app updater learns to fetch from updates.aethersdr.com, ahead of the smaller release page in v26.11.4. Underneath, every Flex status line now enters through one fenced ingress as typed observations, and aetherd gains receive-only remote clients with pairing.
+154 merged changes from 15 human contributors, AetherClaude and nine Dependabot updates within that total. Connecting to a radio moves into one workspace with Locations, operator profiles and SmartLink accounts, with two recent-radio shortcuts in the title bar and a confirmed handoff when you switch. Dozens of new actions, for slices, panadapters, memories, antennas, filters and transmit, can be bound to a key and a MIDI control. The Hermes-Lite 2 is Supported in the desktop application, three more Icom models arrive with shared dual-receiver support, and AetherTX drops its gate and de-esser for a Tube-first chain that ends in a look-ahead brickwall limiter, on by default. The in-app updater learns to fetch from updates.aethersdr.com; this release's page keeps every file, and the smaller page starts with v26.11.4. Underneath, every Flex status line now enters through one fenced ingress as typed observations, and aetherd gains receive-only remote clients with pairing.
 
 ### Connecting, operators and controls
 
@@ -57,7 +57,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Icom, ANAN-G2 and other radios
 
-- **IC-7610, IC-7760 and IC-7851, experimental (#6912).** One shared MAIN/SUB control, scope and audio path, with the scope at each model's native width. The hardware evidence is from an IC-7851, receiving and selecting the TX receiver with PTT off; IC-7760 transmit is enabled from the CI-V guide, and the IC-7610 and IC-7760 still need hardware confirmation.
+- **IC-7610, IC-7760 and IC-7851, experimental (#6912).** One shared MAIN/SUB control, scope and audio path, with the scope at each model's native width. The hardware evidence is from an IC-7851, receiving and selecting the TX receiver with PTT off; Transmit is enabled on all three, IC-7760 transmit from the CI-V guide, but RF transmit has not been qualified on hardware on any of them, and the IC-7610 and IC-7760 still need hardware confirmation.
 - **Band Zoom and Segment Zoom on scope-capable Icom radios (#6586)**, each scope mode doing the zoom it can carry out, and dimmed with the reason where the radio's preset owns the edges.
 - AetherSDR never fights another client for an ANAN or an HL2: a reconnect waits while the radio is busy, and a session that loses its stream stops commanding the radio (#7270).
 - The ANAN keeps each receiver's state in its own record, ahead of a second receiver (RFC #4970) (#7020).
@@ -95,7 +95,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### aetherd
 
 - **Receive-only remote clients (#7287, #7305).** A wss/tailnet listener with scoped credentials and pairing, plus `remoteClients.list` and `remoteClients.revoke` on the local socket (RFC #3849 slice 1). The remote-engine backend is designed (#7316).
-- On an ANAN G2, headless tuning over the measured span of 10 kHz to 61.43 MHz, mode, filter and the panel's receive verbs, and the radio's own speaker (#7244, #7255, #7256). On an HL2, `frontEndOverload` and `radioSession.setCwPitch` (#7176, #7173).
+- On an ANAN G2, headless tuning over the measured span of 10 kHz to 61.43 MHz, mode, filter, AGC threshold, noise blanker, noise reduction, RIT and the step attenuator as RF gain, and the radio's own speaker (#7244, #7255, #7256). On an HL2, `frontEndOverload` and `radioSession.setCwPitch` (#7176, #7173).
 - A stop signal releases the radio before aetherd exits (#7258, #7279), and a socket path that is too long is named with its length and the limit (#7111).
 - The ARM64 AppImage ships aetherd, started as `AetherSDR --aetherd` (#7259).
 
