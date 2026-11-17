@@ -29,6 +29,7 @@ public:
     }
     static void tick(RadioModel& radio) { radio.onTxTimeoutTick(); }
     static void hostRequested(RadioModel& radio, bool on) { radio.m_txRequested = on; }
+    static bool hostRequestedNow(const RadioModel& radio) { return radio.m_txRequested; }
     static void radioPttKeyed(RadioModel& radio, bool on) { radio.m_radioPttKeyed = on; }
     static void radioPttDown(RadioModel& radio, bool down) { radio.m_radioPttObservedDown = down; }
     static bool admit(RadioModel& radio, const TxCoordinator::Request& request)
@@ -195,6 +196,8 @@ int main(int argc, char** argv)
                rec.keys.contains(QStringLiteral("tx-timeout-expired")) && rec.engaged == 0
                    && rec.moxOn == 0 && rec.tuneOn == 0 && !radio.transmitModel().isMox()
                    && !radio.transmitModel().isTuning());
+        // ...and it does unkey: cancelLocalTransmit() withdrew the host's request.
+        report("expiry_requests_the_stop", !Access::hostRequestedNow(radio));
     }
 
     // The HL2 jack still held after the stop: the notice says so.
