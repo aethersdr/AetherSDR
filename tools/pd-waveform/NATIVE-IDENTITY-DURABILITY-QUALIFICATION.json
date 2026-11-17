@@ -1,0 +1,185 @@
+{
+  "updated_utc": "2026-11-17T18:18:02.477243+00:00",
+  "status": "native_identity_parent_directory_sync_and_uncertain_commit_component_qualified_not_installed",
+  "production_ready": false,
+  "installed": false,
+  "source_parent_commit": "bfc7837519267aada255acb6ec3014b7fff11a3b",
+  "source_sha256": {
+    "tools/flex-tailnet-shim/native_state.go": "1b38bcccaa7cb2f38886e1e42c277b8efa0b498484e5f0f373609229378f3b50",
+    "tools/flex-tailnet-shim/native_state_open_linux.go": "6418ff8761e064166184ea82161801ae6820e30636e380ceea7d2a89befc0fa3",
+    "tools/flex-tailnet-shim/native_state_open_other.go": "cd440082559fac8ab191f9ba874d59f85123ecac4df7a2188bc3866833067072",
+    "tools/flex-tailnet-shim/node.go": "0463da8852de2df6e8affc2ab247d5a72f63c7e2402e975b651da9fb9b5fd6a0",
+    "tools/flex-tailnet-shim/native_state_commit_linux_test.go": "d179f9234c208472cce59b4f9407e096f0bafd6a2f606a9dc6389ef3a6b81270"
+  },
+  "problem": "Native identity writes synced the temporary file and renamed it without syncing the containing directory. A returned success did not establish completion of that directory update.",
+  "primary_reference": "https://man7.org/linux/man-pages/man2/fsync.2.html",
+  "implementation": [
+    "Keep the existing64KiB limit and one fixed temporary sibling per identity file; no new persisted artifact.",
+    "Open and pin the actual Linux directory, sync it before mutation, open the temporary relative to that descriptor, sync/close the complete file, rename relative to the same descriptor, then sync it again.",
+    "Check that the named parent still selects the pinned directory; descriptor-relative cleanup cannot delete an unrelated replacement parent's temporary file.",
+    "Errors after successful rename or changed final directory selection return a classified uncertain commit. They do not assert that the previous identity remains selected.",
+    "Block live Tailscale state reads after an uncertain commit. Retain the last successful export snapshot. Force a full durable write before a retry can succeed, including equal-value and absent-deletion retries.",
+    "For uncertain saved configuration, latch refusal of authenticated control, token-free claiming, boot enrollment and further writes. Cancel pending owned installation/session admission and the DSP/calibration lifetime; preserve the selected file for explicit reload recovery.",
+    "An uncertain startup migration returns an error rather than clearing the refusal at load completion. Pre-rename failures retain the original selected identity and its authority."
+  ],
+  "verification": {
+    "pinned_Go": "go version go1.27.1 linux/amd64",
+    "main_package_full_race_suite": "ok  \tgithub.com/aethersdr/AetherSDR/tools/flex-tailnet-shim\t26.763s",
+    "other_module_packages_race_suite": "?   \tgithub.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/cmd/tailnet-probe\t[no test files]\nok  \tgithub.com/aethersdr/AetherSDR/tools/flex-tailnet-shim/native/unpack\t1.013s",
+    "focused_test_functions": 7,
+    "focused_subcases": 12,
+    "mutations_rejected": [
+      {
+        "mutation": "missing_parent_sync",
+        "rejected_by": "TestNativeCommitWriteOrderAndFailureBoundary",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "unclassified_post_rename_failure",
+        "rejected_by": "TestNativeCommitUncertainConfigRevokesPDAndAdmission",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "cached_retry_skips_repair",
+        "rejected_by": "TestNativeCommitUncertainStateCannotSkipRepair",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "uncertain_identity_remains_readable",
+        "rejected_by": "TestNativeCommitUncertainStateCannotSkipRepair",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "keep_authority_after_uncertain_commit",
+        "rejected_by": "TestNativeCommitUncertainConfigRevokesPDAndAdmission",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "allow_write_after_latch",
+        "rejected_by": "TestNativeCommitUncertainConfigRevokesPDAndAdmission",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "startup_ignores_uncertain_migration",
+        "rejected_by": "TestNativeCommitLoadMigrationCannotClearUncertainLatch",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "rename_reopens_parent_path",
+        "rejected_by": "TestNativeCommitPinsDirectoryThroughReplacementAndCleanup",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "cleanup_reopens_parent_path",
+        "rejected_by": "TestNativeCommitPinsDirectoryThroughReplacementAndCleanup",
+        "exit": 1,
+        "Go_version": "1.27.4-X:nodwarf5"
+      },
+      {
+        "mutation": "first_claim_ignores_uncertain_commit",
+        "rejected_by": "TestNativeCommitUncertainFirstClaimDoesNotReopenEnrollment",
+        "exit": 1,
+        "Go_version": "1.27.1"
+      },
+      {
+        "mutation": "missing_pre_mutation_parent_sync",
+        "rejected_by": "TestNativeCommitWriteOrderAndFailureBoundary",
+        "exit": 1,
+        "Go_version": "1.27.1"
+      }
+    ],
+    "cross_binaries": {
+      "armv7": {
+        "bytes": 21954720,
+        "sha256": "6aa167a58110768e6206e99fa2eed66214ba538242e217b108f238cebe6a7044",
+        "build_info": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-directory-durability/shim-pinned-armv7: go1.27.1\n\tpath\tgithub.com/aethersdr/AetherSDR/tools/flex-tailnet-shim\n\tmod\tgithub.com/aethersdr/AetherSDR/tools/flex-tailnet-shim\t(devel)\t\n\tdep\tfilippo.io/edwards25519\tv1.2.0\t\n\tdep\tgithub.com/coder/websocket\tv1.8.15\t\n\tdep\tgithub.com/creachadair/msync\tv0.10.1\t\n\tdep\tgithub.com/fxamacker/cbor/v2\tv2.9.3\t\n\tdep\tgithub.com/gaissmai/bart\tv0.29.0\t\n\tdep\tgithub.com/go-json-experiment/json\tv0.0.0-20260820222146-c27c302e5fc3\t\n\tdep\tgithub.com/godbus/dbus/v5\tv5.2.2\t\n\tdep\tgithub.com/golang/groupcache\tv0.0.0-20241129210726-2c02b8208cf8\t\n\tdep\tgithub.com/google/btree\tv1.1.3\t\n\tdep\tgithub.com/hdevalence/ed25519consensus\tv0.2.0\t\n\tdep\tgithub.com/huin/goupnp\tv1.3.0\t\n\tdep\tgithub.com/jsimonetti/rtnetlink\tv1.4.2\t\n\tdep\tgithub.com/klauspost/compress\tv1.20.0\t\n\tdep\tgithub.com/mdlayher/netlink\tv1.11.2\t\n\tdep\tgithub.com/mdlayher/socket\tv0.7.0\t\n\tdep\tgithub.com/mitchellh/go-ps\tv1.0.0\t\n\tdep\tgithub.com/pires/go-proxyproto\tv0.15.0\t\n\tdep\tgithub.com/safchain/ethtool\tv0.7.0\t\n\tdep\tgithub.com/tailscale/hujson\tv0.0.0-20260727124030-b80ff77dac4f\t\n\tdep\tgithub.com/tailscale/peercred\tv0.0.0-20250107143737-35a0c7bd7edc\t\n\tdep\tgithub.com/tailscale/web-client-prebuilt\tv0.0.0-20260917222731-e0ed2d0d0fea\t\n\tdep\tgithub.com/tailscale/wireguard-go\tv0.0.0-20260928213032-417aef361226\t\n\tdep\tgithub.com/x448/float16\tv0.8.4\t\n\tdep\tgo4.org/mem\tv0.0.0-20240501181205-ae6ca9944745\t\n\tdep\tgo4.org/netipx\tv0.0.0-20260823151212-3075585bcbeb\t\n\tdep\tgolang.org/x/crypto\tv0.57.0\t\n\tdep\tgolang.org/x/crypto/x509roots/fallback\tv0.0.0-20261005185213-c3db4df58582\t\n\tdep\tgolang.org/x/exp\tv0.0.0-20260908205506-85c1c2202aba\t\n\tdep\tgolang.org/x/net\tv0.59.0\t\n\tdep\tgolang.org/x/oauth2\tv0.37.0\t\n\tdep\tgolang.org/x/sync\tv0.23.0\t\n\tdep\tgolang.org/x/sys\tv0.48.0\t\n\tdep\tgolang.org/x/term\tv0.46.0\t\n\tdep\tgolang.org/x/text\tv0.42.0\t\n\tdep\tgolang.org/x/time\tv0.16.0\t\n\tdep\tgvisor.dev/gvisor\tv0.0.0-20260915211658-a6f909f08a72\t\n\tdep\ttailscale.com\tv1.104.1\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm\n\tbuild\tGOOS=linux\n\tbuild\tGOARM=7\n"
+      },
+      "arm64": {
+        "bytes": 21495968,
+        "sha256": "70783de051fd785a00c12646dd0e862824156b8cb6d57fb73f105298d67e6995",
+        "build_info": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/native-directory-durability/shim-pinned-arm64: go1.27.1\n\tpath\tgithub.com/aethersdr/AetherSDR/tools/flex-tailnet-shim\n\tmod\tgithub.com/aethersdr/AetherSDR/tools/flex-tailnet-shim\t(devel)\t\n\tdep\tfilippo.io/edwards25519\tv1.2.0\t\n\tdep\tgithub.com/coder/websocket\tv1.8.15\t\n\tdep\tgithub.com/creachadair/msync\tv0.10.1\t\n\tdep\tgithub.com/fxamacker/cbor/v2\tv2.9.3\t\n\tdep\tgithub.com/gaissmai/bart\tv0.29.0\t\n\tdep\tgithub.com/go-json-experiment/json\tv0.0.0-20260820222146-c27c302e5fc3\t\n\tdep\tgithub.com/godbus/dbus/v5\tv5.2.2\t\n\tdep\tgithub.com/golang/groupcache\tv0.0.0-20241129210726-2c02b8208cf8\t\n\tdep\tgithub.com/google/btree\tv1.1.3\t\n\tdep\tgithub.com/hdevalence/ed25519consensus\tv0.2.0\t\n\tdep\tgithub.com/huin/goupnp\tv1.3.0\t\n\tdep\tgithub.com/jsimonetti/rtnetlink\tv1.4.2\t\n\tdep\tgithub.com/klauspost/compress\tv1.20.0\t\n\tdep\tgithub.com/mdlayher/netlink\tv1.11.2\t\n\tdep\tgithub.com/mdlayher/socket\tv0.7.0\t\n\tdep\tgithub.com/mitchellh/go-ps\tv1.0.0\t\n\tdep\tgithub.com/pires/go-proxyproto\tv0.15.0\t\n\tdep\tgithub.com/safchain/ethtool\tv0.7.0\t\n\tdep\tgithub.com/tailscale/hujson\tv0.0.0-20260727124030-b80ff77dac4f\t\n\tdep\tgithub.com/tailscale/peercred\tv0.0.0-20250107143737-35a0c7bd7edc\t\n\tdep\tgithub.com/tailscale/web-client-prebuilt\tv0.0.0-20260917222731-e0ed2d0d0fea\t\n\tdep\tgithub.com/tailscale/wireguard-go\tv0.0.0-20260928213032-417aef361226\t\n\tdep\tgithub.com/x448/float16\tv0.8.4\t\n\tdep\tgo4.org/mem\tv0.0.0-20240501181205-ae6ca9944745\t\n\tdep\tgo4.org/netipx\tv0.0.0-20260823151212-3075585bcbeb\t\n\tdep\tgolang.org/x/crypto\tv0.57.0\t\n\tdep\tgolang.org/x/crypto/x509roots/fallback\tv0.0.0-20261005185213-c3db4df58582\t\n\tdep\tgolang.org/x/exp\tv0.0.0-20260908205506-85c1c2202aba\t\n\tdep\tgolang.org/x/net\tv0.59.0\t\n\tdep\tgolang.org/x/oauth2\tv0.37.0\t\n\tdep\tgolang.org/x/sync\tv0.23.0\t\n\tdep\tgolang.org/x/sys\tv0.48.0\t\n\tdep\tgolang.org/x/term\tv0.46.0\t\n\tdep\tgolang.org/x/text\tv0.42.0\t\n\tdep\tgolang.org/x/time\tv0.16.0\t\n\tdep\tgvisor.dev/gvisor\tv0.0.0-20260915211658-a6f909f08a72\t\n\tdep\ttailscale.com\tv1.104.1\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=linux\n\tbuild\tGOARM64=v8.0\n"
+      }
+    },
+    "documentation_npm_ci_and_build": "passed",
+    "earlier_host_toolchain_result": "Host Go1.27.4-X:nodwarf5 main race suite and ARM builds passed before the final first-use/rotation test expansion. They are preserved separately and are not the pinned compiler proof."
+  },
+  "radio_access": false,
+  "RF_commands": [],
+  "reboot_commands": [],
+  "radio_credential_mutations": [],
+  "unchanged_installed_runtime": {
+    "source_commit": "e50bfbd3a2b998eac6ae69ac5d790b58c7349c28",
+    "release_blake2b_256": "a8920b11a650ce36118589f818712636bae56f35b3b1570c8a8c8f6d404f0a3f"
+  },
+  "limitations": [
+    "Source inspection establishes the original missing directory sync; no physical power-loss corruption was induced or reproduced. This is not the cause of the unrelated operator-confirmed reboot lockup.",
+    "Fault tests inject file/directory sync and rename failures around actual temporary-file operations on the development host. They do not emulate every filesystem, flash-controller failure, abrupt power loss or interrupted installation boundary.",
+    "Directory selection checks and descriptor-relative operations protect these file writes. Durability of newly created ancestor directories and the whole install/update transaction remains separate work.",
+    "ARMv7 and ARM64 binaries compile with Go1.27.1; no complete authenticated runtime/distribution reproduction, radio installation, service restart, reboot or RF qualification is claimed for this source yet.",
+    "Non-Linux helper fallback uses ordinary path-based file operations; its compilation and directory-sync behavior were not tested here, and it does not offer the Linux descriptor-relative guarantee. Native radio runtime qualification targets Linux; other platform tooling remains unqualified.",
+    "No real tailnet account, saved radio identity or operator credential was changed. Managed-owner loss/rotation recovery and platform credential stores remain separate required gates.",
+    "Actual FLEX6300 Linux2.6/Cortex-A8/one-core execution and directory-sync behavior remain required; cross-compilation does not qualify them.",
+    "Full P1-P10 remains active, including unresolved software reboot hang and final keyed/stockAPD gates. The operator-deferred5W SWR/preamble investigation remains deferred."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/additional-mutations-console.log.gz": "36718f67ad13541da206ff5a479a31f53095e933b42d8f2e5668bac98bfae613",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/additional-mutations.json.gz": "239a830668e2f9370a232309b3712ea1f2b432767e59d046260a1e1b2840941d",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/additional-mutations.py.gz": "4643cdf92f8250713d5f42884a4e55758919665f75dd087ff6b31ed26ad7d506",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/arm64-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/armv7-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/baseline-existing-tests.log.gz": "8fbe9918c1cb3646e4375dde0452ba7822099e1ea0e1ee8542c30c58497bb625",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/binary-build-info.json.gz": "03f9e88655c3a5a3da55a6a012323f69d6071c508255c137d724ebd0febee3f5",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/docs-build.log.gz": "67b3ec7b513d7456ed7b4adc6f1621e14ee8f3a937ed27e6e10791e3f3183163",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/docs-install.log.gz": "21313bc1dd77fc4875aeda489b9e0c429a44a258a2803dbbedc11ae4d5563279",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/focused-final-pinned.log.gz": "a6cee8aa86b7beb88245c2b2ad7299cc3e857a70a888c239f670ac3f880d6e41",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/focused-final.log.gz": "e59b22d6e3ccfa96bdff9379b70466048a15779de8c6093990a3df7efb29df15",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/focused-first.log.gz": "8d63b92fc84b4669fccbc9a1c73b45ad38523779c78c72fa4e9d55bb375354e6",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/focused-second.log.gz": "c62e6dc21b668ffc75f68760f3bb387dae64804d4a5fb8ad600edbd9d66f7472",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/focused-third.log.gz": "6ae5f09b803dff00d0010f90e8862284b867afec6044b3297755e03fa5ac18a4",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/full-pinned-race.log.gz": "69c8f46184ccbf2713b6c2efcb793ac43e83a9cad38850b0a404adb00d8bd6d8",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/full-race.log.gz": "a732f2a0b765ad2204baa20e22bc2ef2f9c3d861697d734ff46ecc129da5cd2f",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-allow_write_after_latch/node.go.gz": "0431b7cc58a89c6c4fbb3145fb8709c6264ce08c3d45793a28d3cbf7b779947c",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-allow_write_after_latch/result.log.gz": "a62f7890305d0353f7447715bd1d42f452df5eadbd99782e7cdf6e26e1ae1c5b",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-cached_retry_skips_repair/native_state.go.gz": "b210f00968dbd99c89b4cfca175971bee3c252d35899e927c63d19a195425910",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-cached_retry_skips_repair/result.log.gz": "a8e4edd91a6f38f7c07bd5bbd33237a3b71b0563ba3de06a3e5f043556c3b75e",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-cleanup_reopens_parent_path/native_state_open_linux.go.gz": "e634f8e75c2b850ea78f14cc395826b471570a6b2794cafb8a3b2aa476c69737",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-cleanup_reopens_parent_path/result.log.gz": "60cf23c8a937ea449acc2d7b9e9ef64dff515600295c3105610537c9ceff082c",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-first_claim_ignores_uncertain_commit/node.go.gz": "d10ecb9929b2a12fb4d23a0be30ab5e5c4251bfb17cfdc105a0ba0fe3eaf1c9d",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-first_claim_ignores_uncertain_commit/result.log.gz": "56ad50cef3f1e8ed25844a71b17d20b29ba821c2eff153bc590b565fe1aac07e",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-keep_authority_after_uncertain_commit/node.go.gz": "5dd7d9fe4bfaeab71c67235f3db2a55b7156a52d5df1e3c83c0e4e809ddf8e6f",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-keep_authority_after_uncertain_commit/result.log.gz": "a9641c4ee2208ee057188e2220da68ef77c6dfbe8e18c768d47fe80c56792697",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-missing_parent_sync/native_state.go.gz": "22aa36ad66c82922f2d670aaec7ffc493575af4b6eb13a2abc1d57b881e188df",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-missing_parent_sync/result.log.gz": "76cbcca141f221028bb08d445a448815c5f61b0c370d718a66d1b59738e742be",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-missing_pre_mutation_parent_sync/native_state.go.gz": "cf81f3fe2a7077c7908129db1cb9adb8b3d874d3bdf4737afe581236d16b84d1",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-missing_pre_mutation_parent_sync/result.log.gz": "6ac5be514c42d42468d2c0e0dcdfb61802cb9873c4163e0214f55685329e0284",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-rename_reopens_parent_path/native_state_open_linux.go.gz": "68f245e645f0ddfcb6c15c720d61a9bfbd09c881a8ebac2222d081aec0bfbc3c",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-rename_reopens_parent_path/result.log.gz": "fcf4a2c70bdb3a290e2d03f519f4178e1f26698258e636baedfd626b104c409c",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-startup_ignores_uncertain_migration/node.go.gz": "42146963b115dd725f9d48ab5cdd47fb30e7b56d3a62c534e3e4804d5c1fa8e3",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-startup_ignores_uncertain_migration/result.log.gz": "dabd8e9b87f83b47da9c0e806cd2fdd7f5aa42e8cbedb2ffa5c484fd72ea92f7",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-uncertain_identity_remains_readable/native_state.go.gz": "3fbe6328474bffb72b68ea4b358d42a3b442497a8c82fd291795d459eb9237e7",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-uncertain_identity_remains_readable/result.log.gz": "0c4df9d7607f81a43248db43ceff2e79b631c879cd6edd21ecedd9f59e5e38d4",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-unclassified_post_rename_failure/native_state.go.gz": "5b8ffe106778f66f3b209cc6fa88fe530631d5d7d9af1cb453f19b5205d7935a",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutant-unclassified_post_rename_failure/result.log.gz": "8eafc4e453bd125edf5e3c4bd9cbdcf6f7cae3efeab9c8c8b108c8fd9a5ffd7d",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutations-console.log.gz": "83d1882f33ffbbaf280988ef0e723db6df7cc732682b60f4ae836ce9c93a63db",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutations.json.gz": "5a8c2a0297c3710d649ae3f3dd1ec51abc0f74ed67a668d868cebf776371ad5b",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/mutations.py.gz": "a45baa2a441091b858e030026c8ad4b42ebf704a3d284a5192b3920a705a1059",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/original-source/native_state.go.gz": "037f9cda1305c6a1b143e4649e735511de79490b862fd8b92881f56ef853403e",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/original-source/native_state_open_linux.go.gz": "c96e5d8899986b9507184878d995fb695c9f731ba0dea9691ab7c05ea770a984",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/original-source/native_state_open_other.go.gz": "ab019574dd9c3922214ab82e00ad4b87977d09f194873097fe747642995991a6",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/original-source/node.go.gz": "2ce92f8007a63c3186ce0966627050660c106067e27a30ffacb47aaad928197e",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/pinned-arm64-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/pinned-armv7-build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/pinned-subpackages-race.log.gz": "07285eb0894226f64886322ebd0d63d8e0906ecca9c74d07da71aa89e1b3a005",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/reviewed.diff.gz": "a3f9093ab6e36e86229f8dc82cfcdfe5b2ee1912c7d1a3cae5287c8a76b35fe0",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/native-directory-durability/save-qualification.py.gz": "7ab869e0e10933ae64e05807efdc410bb1a5ff0bf6af2a289041bca5366d3caa",
+    "tools/pd-waveform/evidence/20261117-native-directory-durability/production-completion-plan.json.gz": "0207140d111da566f64f45ac9f1ebd9289ca2434b4feab0a277d603deeaaf5be"
+  }
+}

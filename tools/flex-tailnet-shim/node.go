@@ -77,9 +77,9 @@ type Node struct {
 	pdSessionCleanupConfirmed bool
 	pdSessionDial             func(context.Context, pdStartIdentity) (*pdSessionChannel, error)
 
-	// A native identity that exists but cannot be loaded is not first use.
-	// Retain its file and refuse control/enrollment until explicit recovery.
-	nativeStateLoadFailed bool
+	// An unreadable native identity or uncertain directory commit is not first
+	// use. Retain its file and refuse control/enrollment until explicit recovery.
+	nativeStateUnavailable bool
 	// Lock order is opMu, configMu, mu. Configuration file I/O never holds mu.
 	configMu sync.Mutex
 
@@ -197,13 +197,13 @@ func (n *Node) provisioned() bool { return n.cfg.TokenSHA256 != "" }
 
 // Caller holds mu. A managed installation's owner predates tailnet sign-in.
 func (n *Node) claimableLocked() bool {
-	return !n.nativeStateLoadFailed && n.cfg.InstallationID == "" && (!n.provisioned() || n.cfg.PendingSignIn)
+	return !n.nativeStateUnavailable && n.cfg.InstallationID == "" && (!n.provisioned() || n.cfg.PendingSignIn)
 }
 
 func (n *Node) load() (err error) {
 	defer func() {
 		if n.RunDir != "" {
-			n.nativeStateLoadFailed = err != nil
+			n.nativeStateUnavailable = err != nil
 			if err != nil {
 				n.cfg = provisionConfig{}
 				n.state, n.lastError = stateError, err.Error()
@@ -252,6 +252,9 @@ func (n *Node) load() (err error) {
 		n.cfg.Allow = nil
 		if err := n.save(n.cfg); err != nil {
 			log.Printf("could not save the settings without the access list: %v", err)
+			if errors.Is(err, errNativeCommitUncertain) {
+				return err
+			}
 		}
 	}
 	// A pending sign-in whose completion couldn't be saved: the tailnet
@@ -261,6 +264,9 @@ func (n *Node) load() (err error) {
 		n.cfg.PendingSignIn = false
 		if err := n.save(n.cfg); err != nil {
 			log.Printf("could not record the completed sign-in: %v", err)
+			if errors.Is(err, errNativeCommitUncertain) {
+				return err
+			}
 		}
 	}
 	if n.provisioned() {
@@ -279,14 +285,36 @@ func (n *Node) save(cfg provisionConfig) error {
 
 // Caller holds configMu through file replacement and live publication.
 func (n *Node) saveConfigLocked(cfg provisionConfig) error {
+	n.mu.Lock()
+	unavailable := n.nativeStateUnavailable
+	n.mu.Unlock()
+	if n.RunDir != "" && unavailable {
+		return errNativeStateUnavailable
+	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	if n.configWrite != nil {
-		return n.configWrite(b)
+		err = n.configWrite(b)
+	} else {
+		err = n.writeConfigFile(b)
 	}
-	return n.writeConfigFile(b)
+	if n.RunDir != "" && errors.Is(err, errNativeCommitUncertain) {
+		n.mu.Lock()
+		n.nativeStateUnavailable = true
+		n.joinGen++
+		if n.bootCancel != nil {
+			n.bootCancel()
+		}
+		n.retirePDSessionLocked()
+		if n.pdProcess != nil {
+			n.pdProcess.Stop()
+		}
+		n.state, n.lastError = stateError, "native settings replacement could not be confirmed durable; explicit recovery required"
+		n.mu.Unlock()
+	}
+	return err
 }
 
 func (n *Node) writeConfigFile(b []byte) error {
@@ -366,7 +394,7 @@ func (n *Node) setState(state, lastErr string) {
 // interrupt it with interruptBoot instead of waiting their turn.
 func (n *Node) Boot() {
 	n.mu.Lock()
-	if n.nativeStateLoadFailed {
+	if n.nativeStateUnavailable {
 		n.mu.Unlock()
 		return
 	}
@@ -780,7 +808,7 @@ func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bo
 func (n *Node) beginOp(presented string, firstUse bool) (end func(), err error) {
 	refused := func() bool {
 		n.mu.Lock()
-		failed := n.nativeStateLoadFailed
+		failed := n.nativeStateUnavailable
 		needsToken := !firstUse || !n.claimableLocked()
 		n.mu.Unlock()
 		return failed || needsToken && !n.checkToken(presented)
@@ -901,7 +929,7 @@ func (n *Node) checkToken(presented string) bool {
 }
 
 func (n *Node) checkTokenLocked(presented string) bool {
-	if n.nativeStateLoadFailed {
+	if n.nativeStateUnavailable {
 		return false
 	}
 	want := n.cfg.TokenSHA256

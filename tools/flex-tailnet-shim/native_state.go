@@ -21,6 +21,19 @@ import (
 const nativeStateFileLimit = 64 * 1024
 
 var errNativeStateLimit = errors.New("native identity file exceeds the 64 KiB limit")
+var errNativeCommitUncertain = errors.New("native identity replacement durability or selection is uncertain")
+var errNativeStateUnavailable = errors.New("native identity is unavailable; explicit recovery required")
+
+// Per-write operations allow independent file/directory sync failures in tests
+// without global hooks or another persistent file.
+type nativeStateCommitOps struct {
+	sync   func(*os.File) error
+	rename func(*os.File, string, string) error
+}
+
+func nativeStateCommitOperations() nativeStateCommitOps {
+	return nativeStateCommitOps{sync: (*os.File).Sync, rename: renameNativeStateFileAt}
+}
 
 func readNativeStateFile(path string) ([]byte, error) {
 	f, err := openNativeStateFile(path, false)
@@ -49,22 +62,52 @@ func readNativeStateFile(path string) ([]byte, error) {
 }
 
 // A fixed, private temporary name bounds crash remnants to one file per
-// identity. Callers serialize writes. File sync precedes atomic replacement;
-// parent-directory durability
-// under abrupt power loss is a separate installation qualification gate.
-func writeNativeStateFile(path string, data []byte) (err error) {
+// identity. Callers serialize writes. Sync the parent before mutation and again
+// after file sync and rename. An error after rename is an uncertain commit,
+// not proof that the previous file remains selected.
+func writeNativeStateFile(path string, data []byte) error {
+	return writeNativeStateFileWithOps(path, data, nativeStateCommitOperations())
+}
+
+func writeNativeStateFileWithOps(path string, data []byte, ops nativeStateCommitOps) (err error) {
 	if len(data) > nativeStateFileLimit {
 		return errNativeStateLimit
 	}
-	temporary := path + ".tmp"
-	f, err := openNativeStateFile(temporary, true)
+	parent, err := openNativeStateDirectory(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	if err = ops.sync(parent); err != nil {
+		return err
+	}
+	parentInfo, err := parent.Stat()
+	if err != nil {
+		return err
+	}
+	selectedParent := func() error {
+		current, statErr := os.Lstat(filepath.Dir(path))
+		if statErr != nil {
+			return statErr
+		}
+		if !os.SameFile(parentInfo, current) {
+			return errors.New("native identity parent changed")
+		}
+		return nil
+	}
+	if err = selectedParent(); err != nil {
+		return err
+	}
+	name := filepath.Base(path)
+	temporary := name + ".tmp"
+	f, err := openNativeStateFileAt(parent, temporary)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		f.Close()
 		if err != nil {
-			os.Remove(temporary)
+			removeNativeStateFileAt(parent, temporary)
 		}
 	}()
 	if err = f.Chmod(0600); err != nil {
@@ -76,22 +119,35 @@ func writeNativeStateFile(path string, data []byte) (err error) {
 	if _, err = f.Write(data); err != nil {
 		return err
 	}
-	if err = f.Sync(); err != nil {
+	if err = ops.sync(f); err != nil {
 		return err
 	}
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	if err = ops.rename(parent, temporary, name); err != nil {
+		return err
+	}
+	if err = ops.sync(parent); err != nil {
+		return fmt.Errorf("%w: %w", errNativeCommitUncertain, err)
+	}
+	if err = selectedParent(); err != nil {
+		return fmt.Errorf("%w: %w", errNativeCommitUncertain, err)
+	}
+	return nil
 }
 
 // nativeStateStore retains Tailscale's map-of-base64-values file format.
 // Publish a new cache only after its bounded file replacement succeeds.
 // Reads and exports return copies so callers cannot bypass write admission.
+// An uncertain commit blocks live reads; export retains the last committed
+// snapshot. A successful full replacement repairs the store before reuse.
 type nativeStateStore struct {
-	mu    sync.Mutex
-	path  string
-	cache map[ipn.StateKey][]byte
+	mu              sync.Mutex
+	path            string
+	cache           map[ipn.StateKey][]byte
+	commitUncertain bool
+	commitOps       *nativeStateCommitOps // nil uses real filesystem operations
 }
 
 var _ store.ExportableStore = (*nativeStateStore)(nil)
@@ -127,6 +183,9 @@ func newNativeStateStore(path string) (*nativeStateStore, error) {
 func (s *nativeStateStore) ReadState(key ipn.StateKey) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.commitUncertain {
+		return nil, errNativeCommitUncertain
+	}
 	data, ok := s.cache[key]
 	if !ok {
 		return nil, ipn.ErrStateNotExist
@@ -141,7 +200,7 @@ func (s *nativeStateStore) WriteState(key ipn.StateKey, data []byte) error {
 		return errNativeStateLimit
 	}
 	previous, present := s.cache[key]
-	if data == nil && !present || data != nil && present && bytes.Equal(previous, data) {
+	if !s.commitUncertain && (data == nil && !present || data != nil && present && bytes.Equal(previous, data)) {
 		return nil
 	}
 	next := maps.Clone(s.cache)
@@ -154,10 +213,18 @@ func (s *nativeStateStore) WriteState(key ipn.StateKey, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err = writeNativeStateFile(s.path, encoded); err != nil {
+	ops := nativeStateCommitOperations()
+	if s.commitOps != nil {
+		ops = *s.commitOps
+	}
+	if err = writeNativeStateFileWithOps(s.path, encoded, ops); err != nil {
+		if errors.Is(err, errNativeCommitUncertain) {
+			s.commitUncertain = true
+		}
 		return err
 	}
 	s.cache = next
+	s.commitUncertain = false
 	return nil
 }
 

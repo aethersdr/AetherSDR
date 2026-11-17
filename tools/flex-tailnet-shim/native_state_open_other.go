@@ -5,7 +5,31 @@ package main
 import (
 	"errors"
 	"os"
+	"path/filepath"
 )
+
+func openNativeStateDirectory(path string) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, errors.New("native identity parent is not a directory")
+	}
+	return os.Open(path)
+}
+
+func openNativeStateFileAt(parent *os.File, name string) (*os.File, error) {
+	return openNativeStateFile(filepath.Join(parent.Name(), name), true)
+}
+
+func renameNativeStateFileAt(parent *os.File, from, to string) error {
+	return os.Rename(filepath.Join(parent.Name(), from), filepath.Join(parent.Name(), to))
+}
+
+func removeNativeStateFileAt(parent *os.File, name string) error {
+	return os.Remove(filepath.Join(parent.Name(), name))
+}
 
 // Native radio builds use Linux's nonblocking, no-follow open. Keep the store
 // available to desktop tooling without requiring Unix-only open flags.

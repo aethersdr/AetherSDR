@@ -871,6 +871,13 @@ the service refuses the load or write and preserves the saved file for
 recovery. It does not erase the identity or silently sign the radio out. An unreadable
 saved configuration blocks enrollment and control; it does not make the radio
 available for a new owner to claim.
+An uncertain native identity commit is also an error: the replacement may
+already be visible even though its directory update could not be confirmed.
+For the saved configuration, this stops the owned AetherPD session and blocks
+control, new enrollment and further configuration writes. Preserve the identity
+and ask the package provider to check storage access before explicitly restarting
+the service to reload it. The service does not erase the identity or claim a
+successful rollback after this error.
 This bounds those identity files, not total radio storage; FLEX-6300 disk and
 power-loss qualification remain required.
 

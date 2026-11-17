@@ -676,21 +676,41 @@ from the LAN.
 With `-run-dir`, `provision.json` and `tsnet/tailscaled.state` each have a
 64 KiB limit, including JSON and base64 overhead. This matches the native
 installer's identity-transfer limit. Writes exceeding it are refused before
-replacing the saved identity; failed writes also retain the state store's
-previous cache. A failed native configuration load reports an error and blocks control,
+replacing the saved identity. Failures before rename retain the selected file
+and state store's previous cache. A failed native configuration load reports an error and blocks control,
 boot enrollment and first-use claiming; partially decoded credentials are not
 used. The Tailscale state file remains readable by the upstream file store.
 Each file uses one fixed temporary sibling, reused after an interrupted write,
 so retries do not create an unbounded collection of temporary files. Linux
 refuses symbolic links and special files when reading identities, and refuses
-linked or foreign-owned temporary files before truncation.
+linked or foreign-owned temporary files before truncation. Linux pins the parent
+directory across temporary-file creation, rename, cleanup and sync; replacement
+of that path cannot redirect those writes into another directory.
+
+Native writes sync the parent before mutation, sync the complete file before
+rename and sync the same parent after rename. File sync alone does not persist
+the directory entry; see [Linux fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html).
+If the final sync or directory-selection check fails, the replacement may
+already be visible. The write returns an uncertain-commit error instead of
+claiming the old file is still selected. The state store blocks live reads until
+a successful full replacement repairs it; retries cannot skip that write just
+because the old cache equals the requested value. Exports retain the last
+successfully committed snapshot.
+
+For an uncertain `provision.json` commit, the node also cancels boot enrollment,
+pending installation/session admission and the owned DSP/calibration lifetime.
+It rejects control, claiming and further configuration writes until an explicit
+restart reloads the selected identity. The saved file is retained. A failure
+before rename preserves existing authority, allowing a normal retry.
 
 These limits bound newly written native identity files and their two fixed
 temporary siblings to 256 KiB of file data. Existing oversized files and legacy
 temporary files are preserved for explicit recovery. The limits do not cap
-filesystem metadata, other waveforms, system journal or volatile caches. File sync precedes rename;
-abrupt-power-loss directory durability and actual FLEX-6300 qualification
-remain separate gates. The container layout without `-run-dir` is unchanged.
+filesystem metadata, other waveforms, system journal or volatile caches. These
+write checks do not establish durability of newly created ancestor directories,
+flash-controller behavior or interrupted transactions under actual power loss.
+Those tests and actual FLEX-6300 qualification remain separate gates. The
+container layout without `-run-dir` is unchanged.
 
 ## Build
 
