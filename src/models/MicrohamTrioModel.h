@@ -9,6 +9,7 @@
 #include "core/MicrohamTrioProtocol.h"
 #include "core/MicrohamTrioSession.h"
 #include "core/MicrohamTrioSettings.h"
+#include "core/RadioSettingsScope.h"
 
 #include <QObject>
 #include <QString>
@@ -50,6 +51,25 @@ public:
         std::optional<MicrohamTrio::Snapshot> snapshot;
         bool    stateCurrent{false};
         QString failure;   // why the last attempt failed, for the operator; empty when none
+
+        // The connected radio and what the operator said about its place on
+        // the Trio. `bindingIssue` is a sentence when the stored binding no
+        // longer matches what the Trio reports; empty otherwise.
+        bool    radioKnown{false};
+        MicrohamTrioBinding::Stored binding{MicrohamTrioBinding::Stored::None};
+        QString slotKey;
+        QString slotLabel;      // as bound
+        QString slotLabelNow;   // as the Trio reports it now; empty when not read
+        QString bindingIssue;
+    };
+
+    enum class BindResult {
+        Ok,
+        NoTrio,
+        NoRadioIdentity,
+        NoState,          // no state to read the port's label from
+        NoSuchPort,
+        WriteFailed,
     };
 
     // Production: a TCP transport and a monotonic clock, made when first needed.
@@ -79,6 +99,17 @@ public:
     void testConnection(const QString& host, quint16 port);
     bool isTesting() const { return m_testing; }
 
+    // Which radio this application has connected. A scope without a radio id
+    // names no radio: no binding is read or written for it.
+    void setRadio(const RadioSettingsScope& scope);
+    // "This radio is on Trio radio port <key>": stores the key and the label it
+    // carries now. Stored per radio; selects nothing on the Trio.
+    BindResult bindRadioSlot(const QString& slotKey);
+    // "This radio is not on the Trio".
+    BindResult setNotOnTrio();
+    // Forget what was said about this radio.
+    BindResult clearBinding();
+
     bool isConnected() const { return view().session == SessionWord::Direct; }
     bool isConnecting() const { return view().session == SessionWord::Connecting; }
     QString description() const;   // "192.168.8.10:80" while a session is wanted, else empty
@@ -92,6 +123,8 @@ public:
     // Words for the operator.
     static QString failureText(MicrohamTrioSession::Failure failure);
     static QString describeState(const MicrohamTrio::Snapshot& snapshot);
+    // The binding in words, for the Peripherals page.
+    static QString describeBinding(const View& view);
     // Device text for a log line: newlines as " | ", every other control
     // character (CR, ESC, ...) as U+FFFD, so a label cannot forge log lines.
     static QString forLog(const QString& text);
@@ -122,6 +155,8 @@ private:
     bool m_production{false};
 
     MicrohamTrioSettings m_settings;
+    RadioSettingsScope   m_scope;
+    MicrohamTrioBinding  m_binding;
     bool m_autoReconnect{false};
     bool m_released{false};
     bool m_evicted{false};

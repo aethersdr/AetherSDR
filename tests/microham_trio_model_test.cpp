@@ -1,8 +1,8 @@
 // microHAM TRIO model tests: the stored address, the session words the
 // Peripherals page shows, an eviction that is never taken back, the release
-// to the Trio's own web page, device text kept out of log lines as control
-// characters, and the proof that nothing but the handshake, keep-alives and a
-// close frame ever leaves. The device is a
+// to the Trio's own web page, the per-radio binding to a Trio radio port,
+// device text kept out of log lines as control characters, and the proof that
+// nothing but the handshake, keep-alives and a close frame ever leaves. The device is a
 // scripted transport and a hand-moved clock (tests/MicrohamTrioTestPeer.h):
 // no socket, no event loop. The settings store is a private temporary profile.
 //
@@ -13,6 +13,7 @@
 #include "core/AppSettings.h"
 #include "core/MicrohamTrioSettings.h"
 #include "core/PeripheralSettings.h"
+#include "core/RadioSettingsScope.h"
 #include "models/MicrohamTrioModel.h"
 
 #include <QCoreApplication>
@@ -296,6 +297,67 @@ void testFailures()
     }
 }
 
+void testBinding()
+{
+    Rig rig;
+    using Stored = MicrohamTrioBinding::Stored;
+    using Bind = MicrohamTrioModel::BindResult;
+    const RadioSettingsScope hl2(QStringLiteral("hl2"), QStringLiteral("trio-test-radio-a"));
+    const RadioSettingsScope other(QStringLiteral("hl2"), QStringLiteral("trio-test-radio-b"));
+    MicrohamTrioBinding::remove(hl2);
+    MicrohamTrioBinding::remove(other);
+
+    report("no Trio configured: binding refused",
+           rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::NoTrio);
+    rig.model.connectNetwork(QLatin1String(kHost), 80);
+    rig.model.setRadio(RadioSettingsScope(QStringLiteral("hl2"), QString()));
+    report("a family-only scope names no radio",
+           rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::NoRadioIdentity);
+    rig.model.setRadio(hl2);
+    report("no state yet: nothing to bind against",
+           rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::NoState);
+    rig.peer.connectHeld(rig.model, "radio2", "ant6");
+    report("a port the Trio does not have is refused",
+           rig.model.bindRadioSlot(QStringLiteral("radio9")) == Bind::NoSuchPort);
+    const int sentBefore = rig.peer.transport.sent.size();
+    report("bind to radio2", rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::Ok);
+    const MicrohamTrioModel::View view = rig.model.view();
+    report("stored with the label it carries now",
+           view.binding == Stored::Bound && view.slotKey == QStringLiteral("radio2")
+               && view.slotLabel == QStringLiteral("HL2") && view.bindingIssue.isEmpty());
+    report("binding sent nothing to the Trio", rig.peer.transport.sent.size() == sentBefore);
+    report("it reads back for this radio",
+           MicrohamTrioBinding::load(hl2).stored == Stored::Bound
+               && MicrohamTrioBinding::load(hl2).slotKey == QStringLiteral("radio2"));
+    report("and another radio does not inherit it",
+           MicrohamTrioBinding::load(other).stored == Stored::None);
+    report("in words, with focus", MicrohamTrioModel::describeBinding(view).contains(
+               QStringLiteral("radio2 \u201cHL2\u201d (has focus)")),
+           MicrohamTrioModel::describeBinding(view).toStdString());
+
+    rig.peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "IC7300"));
+    const MicrohamTrioModel::View relabelled = rig.model.view();
+    report("a relabelled port is a label error naming both labels",
+           relabelled.bindingIssue.contains(QStringLiteral("IC7300"))
+               && relabelled.bindingIssue.contains(QStringLiteral("HL2")),
+           relabelled.bindingIssue.toStdString());
+    rig.peer.push(stateDoc("radio2", "ant6"));
+    report("back to its label: no error", rig.model.view().bindingIssue.isEmpty());
+
+    rig.model.setRadio(other);
+    report("the other radio has said nothing", rig.model.view().binding == Stored::None);
+    report("not on the Trio", rig.model.setNotOnTrio() == Bind::Ok
+               && MicrohamTrioBinding::load(other).stored == Stored::NotOnTrio);
+    report("forget", rig.model.clearBinding() == Bind::Ok
+               && MicrohamTrioBinding::load(other).stored == Stored::None);
+
+    rig.model.setRadio(hl2);
+    rig.model.connectNetwork(QStringLiteral("192.0.2.99"), 80);
+    report("bound against another Trio address: an issue",
+           rig.model.view().bindingIssue.contains(QLatin1String(kHost)));
+    MicrohamTrioBinding::remove(hl2);
+}
+
 void testTestConnection()
 {
     {
@@ -487,6 +549,7 @@ int main(int argc, char** argv)
     testEvictionIsNotRetaken();
     testRelease();
     testFailures();
+    testBinding();
     testTestConnection();
     testRemove();
     testControlCharactersAreNotLogged();

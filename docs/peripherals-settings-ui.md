@@ -116,14 +116,17 @@ text, never as markup.
   Trio answered and the RADIO and antenna labels it read, and releases the
   session. It selects nothing and stores nothing; with the session already
   held it answers from that session.
-- **Radio Ports** and **Antenna Ports** list the Trio's three radio ports and
-  six antenna ports with their names, read-only.
+- **Radio Ports** lists the Trio's three radio ports with their names; the
+  marker **this AetherSDR** says which one the connected radio is cabled to
+  (stored for that radio only; it changes nothing on the Trio).
+- **Antenna Ports** lists the six antenna ports with their names, read-only.
 - Names are shown as the Trio reports them; a port is renamed on the Trio's
   own web page (**Web UI**).
 - **Web UI** closes AetherSDR's session first, then opens the Trio's page in
   the browser. **Connect** takes the session back.
 - Stored as `Peripherals.trio.ManualIp`, `Peripherals.trio.ManualPort` and
-  `Peripherals.trio.AutoConnect`.
+  `Peripherals.trio.AutoConnect`; the radio's port as the radio-scoped feature
+  `TrioBinding`.
 
 ### Transport and protocol limits
 

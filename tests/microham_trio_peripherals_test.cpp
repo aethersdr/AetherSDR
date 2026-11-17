@@ -29,15 +29,18 @@ public slots:
 #include "core/AppSettings.h"
 #include "core/MicrohamTrioSettings.h"
 #include "core/PeripheralSettings.h"
+#include "core/RadioSettingsScope.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/MicrohamTrioModel.h"
 #include "models/RadioModel.h"
 
 #include <QAbstractButton>
+#include <algorithm>
 #include <QAction>
 #include <QCheckBox>
 #include <QApplication>
 #include <QComboBox>
+#include <QRadioButton>
 #include <QDesktopServices>
 #include <QLabel>
 #include <QLineEdit>
@@ -176,15 +179,24 @@ void testRowLifecycle()
            state->text().toStdString());
 
     auto* radio2Name = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioName_radio_radio2"));
+    auto* radio2This = dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioThis_radio2"));
     auto* ant6Name = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioName_antenna_ant6"));
     report("Radio Ports and Antenna Ports list the Trio's names",
            radio2Name && radio2Name->text() == QStringLiteral("HL2") && ant6Name
                && ant6Name->text() == QStringLiteral("Dummy"));
-    // Read-only: no text field, no button, nothing to check.
+    // No text field and no push button; the only buttons are the radio-port
+    // markers, which store locally and change nothing on the Trio.
     auto* ports = dialog.findChild<QWidget*>(QStringLiteral("peripheralTrioPorts"));
+    const QList<QAbstractButton*> portButtons =
+        ports ? ports->findChildren<QAbstractButton*>() : QList<QAbstractButton*>{};
+    const bool onlyRadioMarkers = std::all_of(portButtons.cbegin(), portButtons.cend(),
+        [](const QAbstractButton* b) { return qobject_cast<const QRadioButton*>(b) != nullptr; });
     report("the ports panel edits nothing on the Trio",
-           ports && ports->findChildren<QLineEdit*>().isEmpty()
-               && ports->findChildren<QAbstractButton*>().isEmpty());
+           ports && ports->findChildren<QLineEdit*>().isEmpty() && !portButtons.isEmpty()
+               && onlyRadioMarkers);
+    report("the marker \"this AetherSDR\" is disabled with no radio connected",
+           radio2This && !radio2This->isEnabled()
+               && state->text().contains(QStringLiteral("This radio: no radio connected")));
 
     // A rename on the Trio: the shown name follows.
     peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "Spare"));
@@ -355,6 +367,42 @@ struct TrioPage {
     }
 };
 
+// The "this AetherSDR" markers share an exclusive group with "on none of
+// them": a marker must still uncheck when the binding it shows goes away.
+void testRadioMarkerFollowsTheBinding()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    const RadioSettingsScope hl2(QStringLiteral("hl2"), QStringLiteral("trio-page-radio-a"));
+    MicrohamTrioBinding::remove(hl2);
+    TrioPage page;
+    page.trio.loadSettings(false);
+    if (!page.open()) {
+        report("marker: the Trio row connects", false);
+        return;
+    }
+    page.trio.setRadio(hl2);
+    auto* radio2This = page.dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioThis_radio2"));
+    auto* notOnTrio = page.dialog.findChild<QRadioButton*>(QStringLiteral("peripheralTrioNotOnTrio"));
+    if (!radio2This || !notOnTrio) {
+        report("marker: the radio-port markers exist", false);
+        return;
+    }
+    radio2This->click();
+    report("marker: \"this AetherSDR\" on radio2 is checked and stored",
+           radio2This->isChecked() && MicrohamTrioBinding::load(hl2).stored
+                                          == MicrohamTrioBinding::Stored::Bound);
+    page.trio.clearBinding();
+    report("marker: the binding forgotten, the marker unchecks", !radio2This->isChecked());
+    radio2This->click();
+    page.trio.setRadio(RadioSettingsScope(QStringLiteral("hl2"), QString()));
+    report("marker: no radio connected, the marker unchecks",
+           !radio2This->isChecked() && !notOnTrio->isChecked());
+    page.trio.setRadio(hl2);
+    report("marker: the radio back, its binding shows again", radio2This->isChecked());
+    MicrohamTrioBinding::remove(hl2);
+    MicrohamTrioSettings::remove();
+}
+
 // An address cleared on the page and Setup closed forgets the Trio through the
 // model, so the model holds no address the store has lost.
 void testClearedAddressGoesThroughTheModel()
@@ -415,6 +463,7 @@ int main(int argc, char** argv)
     testRowLifecycle();
     testDeviceTextIsPlain();
     testConfiguredRowIsListed();
+    testRadioMarkerFollowsTheBinding();
     testClearedAddressGoesThroughTheModel();
 
     std::printf("\n%s (%d failed)\n", g_failed == 0 ? "ALL PASSED" : "FAILURES", g_failed);
