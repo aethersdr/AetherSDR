@@ -741,9 +741,15 @@ popup at a time and only while it is open; an empty combo is refused up front
 > was deliberately narrowed from the old `…/tune/atu/vox/…` set: `tune`/`atu`/`vox`
 > false-blocked **RX-only** buttons like **"Tune Now"** (net/spot retune) and VOX
 > toggles, and the genuine keying TUNE/ATU buttons all carry `markTxKeying()`
-> anyway, so the marker still covers them (#3918). Setpoint
-> **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
-> blocked — moving a value setter can't transmit.
+> anyway, so the marker still covers them (#3918). The **drive setpoints**
+> `RF power` and `Tune power` carry a second marker, `markTxSetpoint()`
+> (`aetherTxSetpoint`, `"txSetpoint": true` in `dumpTree`): they never key, but
+> they set how hard the next transmission drives an amplifier or transverter,
+> so without TX permission `invoke`, `clickAt`, `doubleClick`, `drag`,
+> `dragAt`, `wheel` and `gesture` on them are refused, exactly as
+> `transmit rfpower|tunepower` is (#5851). Reading them stays open, and
+> `controls scrub` (which only re-asserts the current value) is not gated. Other
+> setpoints like `VOX level` or `Microphone gain` are not blocked.
 >
 > **VOX:** `invoke "VOX voice-operated transmit" setChecked false` disarms
 > without TX permission; `0`, `off`, `no`, and `unchecked` are also accepted.
@@ -1459,9 +1465,9 @@ manual recovery; the owned client may still be open. The runner never kills an
 unresponsive client or falls back to another radio.
 
 The expanded applet catalogue (`tools/radiocert_persist_applets.py`) exercises
-40 non-keying setting contracts through scoped real widgets: RF/Tune setpoints,
-slice volume/pan/mute, manual SQL intent, AGC mode/threshold, mic gain, processor,
-phone monitor, AM carrier, VOX threshold/delay, downward expander, separate CW
+38 non-keying setting contracts through scoped real widgets (RF/Tune power are
+TX-gated, #5851): slice volume/pan/mute, manual SQL intent, AGC mode/threshold,
+mic gain, processor, phone monitor, AM carrier, VOX threshold/delay, downward expander, separate CW
 monitor/delay/speed, and both complete eight-band radio EQ curves and enables.
 Earlier seeds remain sentinels while later controls change. Band/mode/antenna
 round trips, normal restart and guarded cleanup have separate observations.

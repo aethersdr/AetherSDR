@@ -19,8 +19,6 @@ class Control:
 
 
 CONTROLS = (
-    Control('transmit.rfPower', 'TxApplet/RF power', 12, 9),
-    Control('transmit.tunePower', 'TxApplet/Tune power', 8, 6),
     Control('slice.audioGain', 'RxApplet/AF gain', 23, 27, scope='slice'),
     Control('slice.audioPan', 'RxApplet/Audio pan', 31, 37, scope='slice'),
     Control('slice.audioMute', 'RxApplet/Slice audio mute', True, False, 'click', scope='slice'),
@@ -55,6 +53,7 @@ CW_CONTROLS = (
 ALL_CONTROLS = CONTROLS + EQ_CONTROLS + CW_CONTROLS
 GAPS = {
     'voxEnable/cwBreakIn/PTT/TUNE/ATU': 'excluded: no transmit authorization',
+    'RF/Tune power': 'excluded: transmit drive is TX-gated like `transmit rfpower` (#5851)',
     'global/TX/mic profile loads': 'excluded: compound transition may arm transmission',
     'mic boost/bias and accessory delays': 'observable; Radio Setup UI scenario pending',
     'AGC OFF and automatic SQL intent': 'separate semantic contracts pending',

@@ -114,7 +114,8 @@ class Validator:
                     items.append({
                         "applet": applet, "kind": cls, "name": nm,
                         "value": n.get("value"), "enabled": n.get("enabled", True),
-                        "keying": bool(n.get("keying")), "range": n.get("range"),
+                        "keying": bool(n.get("keying")),
+                        "txSetpoint": bool(n.get("txSetpoint")), "range": n.get("range"),
                     })
                     seen[nm] = seen.get(nm, 0) + 1
             for c in n.get("children", []):
@@ -190,6 +191,10 @@ def main():
             continue
         if it["keying"]:
             r["status"] = "skipped-keying"
+            results.append(r)
+            continue
+        if it["txSetpoint"]:
+            r["status"] = "skipped-tx-setpoint"   # bridge refuses without ALLOW_TX (#5851)
             results.append(r)
             continue
         if it["kind"] not in NUMERIC:

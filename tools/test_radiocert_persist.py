@@ -160,6 +160,8 @@ class AppletPolicyTest(unittest.TestCase):
         self.assertEqual(len([f for f in fields if f.startswith('equalizer.tx.')]), 8)
         self.assertNotIn('transmit.voxEnable', fields)
         self.assertNotIn('transmit.cwBreakIn', fields)
+        self.assertNotIn('transmit.rfPower', fields)
+        self.assertNotIn('transmit.tunePower', fields)
 
 class AppletEvidenceTest(unittest.TestCase):
     def exercise(self, values, *, seed=False, prior=None, hidden=False):

@@ -11303,6 +11303,25 @@ add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
 set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Without TX permission the bridge refuses to change RF/Tune power on every
+# surface, as `transmit rfpower` does (#5851). Real TxApplet, offscreen, no radio.
+add_executable(automation_tx_setpoint_gate_test
+    tests/automation_tx_setpoint_gate_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(automation_tx_setpoint_gate_test PRIVATE src tests)
+target_link_libraries(automation_tx_setpoint_gate_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(automation_tx_setpoint_gate_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_tx_setpoint_gate_test COMMAND automation_tx_setpoint_gate_test)
+set_tests_properties(automation_tx_setpoint_gate_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # CW speed entry survives repeated capability limits between keystrokes.
 # Real applet/model, offscreen; no radio or sockets.
 add_executable(phone_cw_speed_entry_test
@@ -11880,6 +11899,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_connect_family_test
     automation_tx_watchdog_test
     phone_applet_vox_disarm_test
+    automation_tx_setpoint_gate_test
     automation_rn2_probe_test
     automation_nnr_probe_test
     connect_state_model_test

@@ -477,6 +477,8 @@ QJsonObject describeWidget(const QWidget* w)
     // will refuse before trying them (#3646).
     if (w->property(kTxKeyingProperty).toBool())
         o[QStringLiteral("keying")] = true;
+    if (isTxSetpointControl(w))
+        o[QStringLiteral("txSetpoint")] = true;
     {
         const QVariant sliceId = w->property("sliceId");
         if (sliceId.isValid()) {
@@ -1466,6 +1468,24 @@ bool hasTransmitControlInChain(const QWidget* widget)
         }
     }
     return false;
+}
+
+const QWidget* txSetpointInChain(const QWidget* widget)
+{
+    for (const QWidget* current = widget; current; current = current->parentWidget()) {
+        if (isTxSetpointControl(current)) {
+            return current;
+        }
+    }
+    return nullptr;
+}
+
+QString txSetpointBlockedError(const QString& target)
+{
+    return QStringLiteral("blocked: '") + target
+        + QStringLiteral("' sets transmit drive, like `transmit rfpower` "
+                         "(TX-safety guard). Enable \"Allow TX via MCP\" in Radio "
+                         "Setup → Network (or set AETHER_AUTOMATION_ALLOW_TX=1) to override.");
 }
 
 bool hasOwnTransmitMarker(const QObject* object)
@@ -4619,6 +4639,12 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 
     if (transmitControl) {
         return invokeTxAction(w, target, action, value);
+    }
+
+    if (isTxSetpointControl(w) && !m_txAllowed) {
+        qCWarning(lcAutomation).noquote()
+            << "BLOCKED transmit-setpoint invoke on" << target;
+        return err(txSetpointBlockedError(target));
     }
 
     // Power-ceiling rail (#3646): clamp RF/Tune power setpoints to the
@@ -10301,6 +10327,11 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
                                         "in Radio Setup → Network (or set "
                                         "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
         }
+        if (const QWidget* setpoint = txSetpointInChain(widget)) {
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED transmit-setpoint" << verb << "on" << setpoint->accessibleName();
+            return err(txSetpointBlockedError(setpoint->accessibleName()));
+        }
     }
 
     if (m_txMaxPower >= 0) {
@@ -11448,6 +11479,11 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
                                         "Setup → Network (or set "
                                         "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
         }
+    }
+    if (const QWidget* setpoint = m_txAllowed ? nullptr : txSetpointInChain(w)) {
+        qCWarning(lcAutomation).noquote()
+            << "BLOCKED transmit-setpoint clickAt on" << setpoint->accessibleName();
+        return err(txSetpointBlockedError(setpoint->accessibleName()));
     }
 
     // Power-ceiling rail (#3646): invoke() clamps RF/Tune power setValue to
