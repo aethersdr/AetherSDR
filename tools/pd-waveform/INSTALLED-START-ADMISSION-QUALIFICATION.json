@@ -1,0 +1,200 @@
+{
+  "updated_utc": "2026-11-17T04:07:07.659125+00:00",
+  "status": "installed_idle_start_admission_and_pending_cancellation_receive_only_qualified_on_8600",
+  "production_ready": false,
+  "runtime_source_commit": "a6a4904f70c7fb4ed1eef35aa3c48a09c8f11580",
+  "qualification_parent_commit": "384c30d2957e1320eda8a41a2d3e722d2841360b",
+  "installed_release": "177d932be6b7d2e22ee7715a0687add82fed299343ab56b0d331ac2f3ea8a686",
+  "boot_id": "da955e3f-c404-4337-97fd-1d42ddb693e8",
+  "simultaneous_idle_start": {
+    "same_GUI_identity": {
+      "gui_client_id": "5D14B8D4-A745-5620-BAF8-B3614CA1C814",
+      "gui_handle": 288543591,
+      "iq_channel": 4,
+      "feedback_pan": 1073741824
+    },
+    "requests": [
+      {
+        "body": {
+          "state": "start_requested"
+        },
+        "completed_ns": 1840212496,
+        "dispatched_ns": 19413,
+        "http_status": 202,
+        "network_error": 0,
+        "response_bounded": true
+      },
+      {
+        "body": {
+          "error": "AetherPD session already owned or starting"
+        },
+        "completed_ns": 4997184,
+        "dispatched_ns": 40512,
+        "http_status": 409,
+        "network_error": 206,
+        "response_bounded": true
+      }
+    ],
+    "both_dispatched_before_either_completed": true,
+    "dispatch_separation_ns": 21099,
+    "native_DSP_instances_observed": 1,
+    "native_worker_counts": {
+      "pd-fixed-arp": 2,
+      "pd-iq-source": 1,
+      "pd-capture-bootstrap": 3,
+      "aether-pd": 1,
+      "pd-unkey-guard": 1,
+      "pd-lease-guard": 1
+    },
+    "active_DSP_UID": 78666,
+    "active_DSP_all_capability_sets_zero": true,
+    "active_ARP_helpers_UID": 65534,
+    "active_ARP_helpers_effective_capability": "CAP_NET_ADMIN only, observed0x1000; baseline zero-capability claim does not cover these active fixed helpers.",
+    "complete_DAX_IQ_bytes": 131072,
+    "Stop_state": "stopped"
+  },
+  "pending_start_cancellation": {
+    "public_pending_observation": {
+      "body": {
+        "available": false,
+        "state": "starting"
+      },
+      "completed_ns": 25530315,
+      "http_status": 503,
+      "response_bounded": true
+    },
+    "Stop_dispatched_ns": 25551686,
+    "Stop_receipt": {
+      "body": {
+        "state": "stop_requested"
+      },
+      "completed_ns": 29743042,
+      "http_status": 202,
+      "response_bounded": true
+    },
+    "Start_result": {
+      "body": {
+        "state": "start_unavailable"
+      },
+      "completed_ns": 29856192,
+      "http_status": 503,
+      "response_bounded": true
+    },
+    "public_status_after_cancel": {
+      "body": {
+        "available": false,
+        "state": "unavailable"
+      },
+      "http_status": 503
+    },
+    "cleanup_independently_verified": true,
+    "empty_failed_records_after_cancel": [],
+    "fresh_ordinary_GUI_recovery_IQ_bytes": 131072,
+    "fresh_Stop_state": "stopped",
+    "partial_IQ_resource_allocation_before_cancel_proven": false,
+    "cleanup_latency_measured": false
+  },
+  "final_audit": {
+    "baseline_processes": [
+      {
+        "pid": 1303,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+      },
+      {
+        "pid": 1815,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 1822,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "nnp": "1",
+        "sha256": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5"
+      }
+    ],
+    "identity_sha256": "f511e5f09f41a99b0f5cd29e4e321eb6f93ec02162df41175ae6866173233cb5",
+    "runtime_hashes": {
+      "flex-tailnet-shim": "543dc44eea2fcdf77876c44efa0926b005a79eda23dc6048fd6546472a130fe5",
+      "aether-pd": "bed41f7b3f3308acdacf783e327a16d713a0b7466ac100c812b8b909d0716be8",
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "09c9103a47581d829c61ff33fa180556ccda2e3a4071ed1951fb643e0c838877",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e"
+    },
+    "ARP_absent": true,
+    "accept_local": "0",
+    "temporary_installers_absent": true,
+    "failed_session_records": 0
+  },
+  "RF_commands": [],
+  "credential_mutations": [],
+  "limitations": [
+    "Two start requests use the same real GUI identity; this does not qualify competing valid GUI owners.",
+    "Pending startup was observed around25ms; no claim that IQ/ARP had already been allocated before cancellation.",
+    "The cancelled request left public status unavailable, which is preserved; only independent audit establishes cleanup, followed by a fresh successful GUI Start/Stop.",
+    "HTTP startup/cancellation timing is not FPGA-to-DSP latency or keyed unkey timing.",
+    "No RF, credential rotation/signout, actualFLEX6300, cross-platform or release qualification in this report.",
+    "Full P1-P10 remains active; LP100A product integration is deferred but independent bench readings are now explicitly authorized."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--vault-race.cpp.gz": "394452b57a078e98d44f275e0eb339839b2a9ed1d6f0873729e4c6546df85f01",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--build-command.json.gz": "10eacfba82e13720f385e43447dd75e8eb566209ea8c15bbfeb669edcd8f2219",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--run.py.gz": "2b3242704c7d28704cffa7dfe5777e3a94842943dfdd4fe9d3038dc5164cadcd",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--active-graph-template.py.gz": "38078bde3b473347176b645453a74d5bf688d3571fe06b3d2fe6fea19978c32b",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--active-graph-job.py.gz": "0fd51ea7f54b6a6b5d1b1154a9adab58ed944542f9d834aa00e4f8ab4a211e8e",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--active-graph-result.json.gz": "0bde713c726263423f1cdca168c5e5440635d8302a2daa3e4c5b2d327391d466",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--final-audit-job.py.gz": "0c06328ae2f0e0596a31fbcab3edf62fd4a7d2373e0e15a0feb05cb2c063cce8",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--final-audit-result.json.gz": "019d187e3f69ebfe1933d2c6a3c629a2b881d15dec0c63535bddbf56e4bd717a",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--identity.json.gz": "362194c72e787f12b2885e957532cba70965d50fa271f076fb7d93e689885cd3",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--events.json.gz": "948be0cc55dc293390edca85494f64635bb44cf5f49a4334aa553e89753611be",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--outcome.json.gz": "c4a022b19bd7e243425a9cdf36e2ceb20c3ceb79307265cd2e103952f760cfb2",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-idle-start-race--receive-iq.f32le.gz": "ab6841059e8623eb8b5b15530d8c0ccb8ac8db8256656c4911f3b894b5452292",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--vault-cancel.cpp.gz": "a0f20c22cbfc0fde3fbd68d70a7b01fe97c6f028f0e6b3aab60853e7b0d72071",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--build-command.json.gz": "1daf450d741f25accd40a64c41a2718f7ef11460f91335016c274421a1591063",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--build.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--run.py.gz": "c639b21495ee74372c9e519c38b1193779dd23ac084f8927d422c0edfc7cc23f",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--helper-result.json.gz": "342dcbd9866f3c61226c9c1938caeffdda3441feb4bf4787c4e07c4fe3297bf6",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--before-restart-job.py.gz": "5ba857232f08335dc0b3d2684bd76959ae957174823018aca660fa6b5d72ce3c",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--before-restart-result.json.gz": "468a768bada6d7be016e0f82a80ffdfb02ae7724149b7d46ae1adfcda69eefa4",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--final-audit-job.py.gz": "0c06328ae2f0e0596a31fbcab3edf62fd4a7d2373e0e15a0feb05cb2c063cce8",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--final-audit-result.json.gz": "ede875e5a1948ac5a21cb98ab4732db0a0cda411d38dd03198904452c5077dca",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--outcome.json.gz": "eb2c11eac0a3c1b53dd313e81a9153e70ab3b79b0ef810f9ce54bcec5ec72ec8",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--receive-iq-check.py.gz": "d4adc45ccfafb9149fc6063e032e3b577ab3a55d87a67c5d9f4c0352eea268d8",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--usb-receive-iq-check.json.gz": "923bcbda11eb9c5c663bbde2ccc8965f4adad307960cd85fa848c7cec8015e0c",
+    "tools/pd-waveform/evidence/20261116-installed-start-admission/installed-pending-start-cancel--usb-receive-iq.f32le.gz": "fb662da087d1c03f3d52ad94e7a803c37116d66b687ec21ddfd4c72c09f59bf4"
+  }
+}
