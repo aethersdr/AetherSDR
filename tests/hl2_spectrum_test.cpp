@@ -85,6 +85,9 @@ struct Signal {
     double toneHz = 0.0;     // offset from centre; 0 with toneAmp 0 = none
     double toneAmp = 0.0;
     std::complex<double> dc{};
+    double onsetS = 0.0;     // tone and DC start this long into the call (noise before)
+    double endS = 1e9;       // ...and stop this long into it
+    double rampS = 0.0;      // raised-cosine ramp at the end, and at onset when onsetS > 0
 };
 
 // What the stream showed: per-frame centre-bin prominence, and the power
@@ -93,6 +96,7 @@ struct Seen {
     std::vector<double> centreOverFloorDb;    // one per frame, against the averaged floor
     std::vector<double> meanPower;            // per bin, averaged over the frames
     int frames = 0;
+    int rampFrames = 0;                       // left out: they hold envelope-ramp samples
 };
 
 double floorDbOf(const std::vector<double>& power)
@@ -120,7 +124,7 @@ double centreOverFloorDb(const Seen& seen)
 // wholly inside this call: a frame straddling a key-on carries the onset's
 // real splatter, which is not what is under test.
 Seen stream(Hl2Spectrum& spec, Noise& noise, std::uint64_t& n, const Signal& sig,
-            double seconds, bool collect, double capFps = 0.0)
+            double seconds, bool collect, double capFps = 0.0, bool collectAll = false)
 {
     Seen seen;
     seen.meanPower.assign(kStreamN, 0.0);
@@ -128,14 +132,27 @@ Seen stream(Hl2Spectrum& spec, Noise& noise, std::uint64_t& n, const Signal& sig
     std::vector<std::complex<float>> block(kEp6Block);
     std::vector<float> bins;
     const std::uint64_t begin = n;
+    const std::uint64_t onset = n + static_cast<std::uint64_t>(sig.onsetS * kStreamFs);
+    const double endN = static_cast<double>(n) + sig.endS * kStreamFs;
     const std::uint64_t end = n + static_cast<std::uint64_t>(seconds * kStreamFs);
     const std::uint64_t dueEvery = capFps > 0.0 ? static_cast<std::uint64_t>(kStreamFs / capFps) : 0;
     std::uint64_t lastFrame = n;
     while (n < end) {
         for (int i = 0; i < kEp6Block; ++i, ++n) {
             const double ph = 2.0 * kPi * sig.toneHz * static_cast<double>(n) / kStreamFs;
-            const std::complex<double> x = sig.toneAmp * std::complex<double>(std::cos(ph), std::sin(ph))
-                                         + sig.dc + noise.gaussian(kNoiseSigma);
+            const double t = static_cast<double>(n);
+            double on = n >= onset && t < endN ? 1.0 : 0.0;
+            if (on > 0.0 && sig.rampS > 0.0) {
+                const double ramp = sig.rampS * kStreamFs;
+                const double fromOn = sig.onsetS > 0.0 ? t - static_cast<double>(onset) : 1e18;
+                const double edge = std::min(fromOn, endN - t);
+                if (edge < ramp) {
+                    on = 0.5 * (1.0 - std::cos(kPi * edge / ramp));
+                }
+            }
+            const std::complex<double> x = on * (sig.toneAmp * std::complex<double>(std::cos(ph), std::sin(ph))
+                                                 + sig.dc)
+                                         + noise.gaussian(kNoiseSigma);
             block[static_cast<std::size_t>(i)] = {static_cast<float>(x.real()), static_cast<float>(x.imag())};
         }
         if (dueEvery > 0 && n - lastFrame < dueEvery) {
@@ -144,7 +161,18 @@ Seen stream(Hl2Spectrum& spec, Noise& noise, std::uint64_t& n, const Signal& sig
         }
         if (spec.process(block, bins) > 0) {
             lastFrame = n;
-            if (collect && n - begin >= static_cast<std::uint64_t>(kStreamN + kEp6Block)) {
+            // A frame holding samples of an envelope ramp carries a DC in
+            // transition, which no constant estimate cancels: left out.
+            const double first = static_cast<double>(n) - kStreamN;
+            const double last = static_cast<double>(n);
+            const double ramp = sig.rampS * kStreamFs;
+            const double on0 = static_cast<double>(onset);
+            const bool inRamp = ramp > 0.0
+                && ((sig.onsetS > 0.0 && first < on0 + ramp && last >= on0)
+                    || (first < endN && last >= endN - ramp));
+            if (collect && inRamp) {
+                ++seen.rampFrames;
+            } else if (collect && (collectAll || n - begin >= static_cast<std::uint64_t>(kStreamN + kEp6Block))) {
                 frames.push_back(bins);
             }
         }
@@ -285,6 +313,60 @@ void centreBinTests()
         check(20.0 * std::log10(std::abs(keyedSig.dc)) + Hl2Spectrum::kToneGainDb
                   - floorDbOf(rx.meanPower) > 25.0,
               "T/R control: the keyed DC stands far over the receive floor");
+    }
+
+    // 5 · KEY-ON LATENCY: the keyed IQ arrives ~120 ms after the host's MOX
+    // edge on the wire, behind a few-ms envelope ramp. A second key (carried
+    // transmit DC) must keep every frame from the MOX edge on at the floor,
+    // the receive-only latency frames and the one straddling the edge included;
+    // only frames holding ramp samples are left out (see stream()).
+    // 6 · dropAverage() on both T/R edges (as a T/R-time average drop does)
+    // leaves the DC estimates alone.
+    for (const double latencyS : {0.0005, 0.0021, 0.12}) {
+        for (const bool dropOnEdges : {false, true}) {
+            for (const double capFps : {0.0, 30.0}) {
+                constexpr double kHoldMs = 70.0;
+                const Signal keyedSig{12544.0, 0.5, {5e-4, -2e-4}, latencyS, 1e9, 0.004};
+                Hl2Spectrum spec(kStreamN, kStreamFs);
+                Noise noise;
+                std::uint64_t n = 0;
+                auto edge = [&](bool on) {
+                    spec.setTransmitting(on, kHoldMs);
+                    if (dropOnEdges) {
+                        spec.dropAverage();
+                    }
+                };
+                // The keyed IQ outlasts the unkey by ~30 ms on the wire.
+                Signal tail = keyedSig;
+                tail.onsetS = 0.0;
+                tail.endS = 0.03;
+                stream(spec, noise, n, {}, 1.0, false, capFps);
+                edge(true);
+                stream(spec, noise, n, keyedSig, 6.0, false, capFps);
+                edge(false);
+                stream(spec, noise, n, tail, 1.0, false, capFps);
+                edge(true);
+                const Seen second = stream(spec, noise, n, keyedSig, 1.0, true, capFps, true);
+                edge(false);
+                const Seen rx = stream(spec, noise, n, tail, 1.0, true, capFps, true);
+                std::fprintf(stderr, "  key-on latency %.4f s, cap %.0f fps%s: second key worst %.1f dB "
+                             "(first %.1f, mean %.1f), after unkey worst %.1f dB; ramp frames left out %d + %d\n",
+                             latencyS, capFps, dropOnEdges ? ", dropAverage on edges" : "",
+                             maxOf(second.centreOverFloorDb),
+                             second.centreOverFloorDb.empty() ? 1e9 : second.centreOverFloorDb.front(),
+                             centreOverFloorDb(second), maxOf(rx.centreOverFloorDb), second.rampFrames, rx.rampFrames);
+                check(second.frames > 20, "latency: frames from the edge on were produced");
+                check(second.rampFrames <= 2 && rx.rampFrames <= 2,
+                      "latency: at most two frames per edge are left out for the ramp");
+                check(maxOf(second.centreOverFloorDb) < 12.0,
+                      dropOnEdges ? "dropAverage() on T/R edges: the second key's frames stay at the floor"
+                                  : "latency: every frame of the second key, from its edge on, stays at the floor");
+                check(centreOverFloorDb(second) < 3.0, "latency: the second key's mean centre is at the floor");
+                check(maxOf(rx.centreOverFloorDb) < 12.0,
+                      dropOnEdges ? "dropAverage() on T/R edges: receive after the unkey stays at the floor"
+                                  : "latency: receive after the second unkey stays at the floor");
+            }
+        }
     }
 
     // 3 · An ON-BIN tone (bin 100 exactly) reads its textbook level and the

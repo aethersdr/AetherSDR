@@ -39,13 +39,25 @@ public:
     static constexpr double kDcTimeConstantS = 1.0;
     static constexpr int kDcFramesWithoutRate = 200;
 
-    // The T/R state. While transmitting, a separate DC estimate is tracked and
-    // subtracted, because our own TX can put a DC term on the IQ; the receive
-    // estimate is frozen. On release, receive resumes after releaseHoldMs (the
-    // T/R turnaround, tracked by neither) with its pre-key estimate. The transmit
-    // estimate carries to the next key, seeded from receive on the first.
+    // The T/R state. Our own TX can put a DC term on the IQ, so it gets its own
+    // estimate, and the receive one is frozen meanwhile. A key arms the switch;
+    // it happens where the keyed IQ arrives (kDcOnsetRun samples kDcOnsetDb over
+    // the receive power), which on the wire is ~120 ms after MOX. On release,
+    // receive resumes where the keyed IQ ends (~30 ms on the wire), at most
+    // releaseHoldMs later; neither estimate tracks in between. The transmit
+    // estimate carries to the next key (seeded from receive on the first).
     void setTransmitting(bool on, double releaseHoldMs = 0.0) noexcept;
-    [[nodiscard]] bool dcTransmitting() const noexcept { return m_dcTx; }
+    [[nodiscard]] bool dcTransmitting() const noexcept
+    {
+        return m_dcState == DcState::Tx || m_dcState == DcState::Releasing;
+    }
+    static constexpr double kDcOnsetDb = 20.0;
+    static constexpr int kDcOnsetRun = 64;
+
+    // Forget the transmit estimate (the TX leak moves with frequency): the next
+    // key seeds it from receive again. For an NCO move; the receive estimate,
+    // a converter property, is kept.
+    void forgetTransmitDc() noexcept;
 
     // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
     // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
@@ -96,14 +108,20 @@ public:
 
     // Drop the partial frame on a transport sequence gap, returning samples
     // discarded (0 = none): discard, not zero-fill, which renders as a transient.
-    // Averaging state is kept (same spectrum). A retune wants the opposite
-    // answer and calls this AND dropAverage(); buildChannel() rebuilds this
-    // object on FFT size/rate change.
+    // Averaging state is kept (same spectrum); the DC estimates restart, so the
+    // next frame is built from post-gap samples only. buildChannel() rebuilds
+    // this object on FFT size/rate change.
     std::size_t reset() noexcept
+    {
+        const std::size_t discarded = discardPartialFrame();
+        restartDc();
+        return discarded;
+    }
+    // The partial frame alone, for a retune: the DC estimates are kept.
+    std::size_t discardPartialFrame() noexcept
     {
         const std::size_t discarded = m_acc.size();
         m_acc.clear();
-        restartDc();
         return discarded;
     }
 
@@ -140,19 +158,22 @@ private:
     // time averaging is switched on or the geometry changes, so the first
     // frame after a drop is TAKEN rather than blended into silence.
     bool m_haveAverage = false;
-    // Running DC estimates (trackDc()), one per T/R state. Restarted by reset()
-    // and dropAverage(), so the frame after a gap or a retune depends on
-    // post-gap samples only.
+    // Running DC estimates (trackDc()), one per T/R state. Restarted only by
+    // reset() (a gap); dropAverage() and the T/R edges leave them alone.
     struct Dc {
         double re = 0.0;
         double im = 0.0;
     };
+    enum class DcState { Rx, Armed, Tx, Releasing };
     double m_dcAlpha = 0.0;                   // per-sample weight, from the time constant
     Dc m_rxDc;
     Dc m_txDc;
+    double m_rxPower = 0.0;                   // receive |s|^2, same filter as m_rxDc
+    double m_dcOnsetRatio = 1.0;              // kDcOnsetDb as a power ratio
     bool m_txDcSeeded = false;
-    bool m_dcTx = false;                      // the transmit estimate is the one in use
-    std::uint64_t m_dcReleaseIn = 0;          // samples until receive resumes; 0 = none pending
+    DcState m_dcState = DcState::Rx;
+    int m_dcOnsetRun = 0;                     // consecutive keyed-level samples while Armed
+    std::uint64_t m_dcReleaseIn = 0;          // samples left in the release hold
     std::uint64_t m_dcSamples = 0;            // receive samples, counted until the time constant
     // Opaque FFTW handles (kept as void* so fftw3.h stays out of the header).
     void* m_in = nullptr;                     // fftw_complex[m_fftSize]
