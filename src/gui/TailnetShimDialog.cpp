@@ -472,8 +472,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
         if (!current()) { return; }
         m_signingIn = false;
         if (!st.provisioned) {
+            TailnetShimTokenStore::clearIfCurrent(m_radioSerial, m_adminToken, m_credentialRevision);
             m_adminToken.clear();
-            TailnetShimTokenStore::save(m_radioSerial, QString());
         }
         setBusy(false);
         showStatus(st);
@@ -551,6 +551,9 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     connect(m_model, &RadioModel::otherClientsChanged, this, retireSession);
     connect(m_model, &QObject::destroyed, this, retireSession);
     TailnetShimTokenStore::load(m_radioSerial, this, [this](const QString& token) {
+        if (m_adminToken.isEmpty()) {
+            m_credentialRevision = TailnetShimTokenStore::revision(m_radioSerial);
+        }
         m_adminToken = tailnetshim::tokenAfterKeychainRead(m_adminToken, token);
         m_tokenLoaded = true;
         updateControls();
@@ -963,6 +966,7 @@ void TailnetShimDialog::onProvisioned(const TailnetShimProvisionReply& reply)
     if (!current()) { return; }
     m_client.retirePendingReplies();
     m_adminToken = reply.adminToken;
+    m_credentialRevision = TailnetShimTokenStore::revision(m_radioSerial);
     setBusy(false);
     showStatus(reply.status);
     if (!reply.error.isEmpty()) {
@@ -1091,13 +1095,11 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
         // Mid sign-in, a refused token means another computer started the
         // sign-in over, which replaced this window's code and token.
         if (operation == QLatin1String("login")) {
-            // The token is dead: forget it, here and in the keychain, so
-            // Refresh or reopening the window offers a new code instead of
-            // failing with it again. Not unasked in this window, or two open
-            // windows would keep replacing each other's code.
+            // Retire this window's revoked token without deleting a
+            // replacement saved by another window in this process.
             m_signingIn = false;
+            TailnetShimTokenStore::clearIfCurrent(m_radioSerial, m_adminToken, m_credentialRevision);
             m_adminToken.clear();
-            TailnetShimTokenStore::save(m_radioSerial, QString());
             hideSignIn();
             showError(tr("This radio's sign-in was started over from another computer. Finish "
                          "it there, or press Refresh for a new code here."));

@@ -322,7 +322,35 @@ int main(int argc, char** argv)
         QCoreApplication::processEvents(); QCoreApplication::processEvents();
         ok &= expect(!persisted && first == QStringLiteral("new-first-token") && other.isEmpty()
             && active == QStringLiteral("issued-after"), "first-install attempt is isolated and session-only storage is not durable");
-        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL"), QString());
+        const quint64 activeRevision = TailnetShimTokenStore::revision(QStringLiteral("REVIEW-SERIAL"));
+        const quint64 attemptRevision = TailnetShimTokenStore::revision(QStringLiteral("REVIEW-SERIAL/attempt-a"),
+                                                                       TailnetShimTokenStore::Entry::AetherPDFirst);
+        ok &= expect(!TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL"), QString(), activeRevision)
+                         && !TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL"), QStringLiteral("obsolete"), activeRevision)
+                         && !TailnetShimTokenStore::clearIfCurrent(QString(), QStringLiteral("issued-after"), 0)
+                         && !TailnetShimTokenStore::clearIfCurrent(QStringLiteral("UNKNOWN-SERIAL"), QStringLiteral("issued-after"), 0),
+                     "credential retirement rejects missing identity, empty proof and obsolete or unknown credentials");
+        ok &= expect(!TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL/attempt-a"),
+                            QStringLiteral("issued-after"), attemptRevision, TailnetShimTokenStore::Entry::AetherPDFirst)
+                         && !TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL"),
+                            QStringLiteral("issued-after"), activeRevision, TailnetShimTokenStore::Entry::Wspr),
+                     "credential retirement is scoped to the selected radio and entry");
+        ok &= expect(TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL/attempt-a"),
+                            QStringLiteral("new-first-token"), attemptRevision, TailnetShimTokenStore::Entry::AetherPDFirst),
+                     "the current first-install credential can be retired");
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL/attempt-a"), &app,
+            [&first](const QString& value) { first = value; }, TailnetShimTokenStore::Entry::AetherPDFirst);
+        TailnetShimTokenStore::load(QStringLiteral("REVIEW-SERIAL"), &app,
+            [&active](const QString& value) { active = value; });
+        QCoreApplication::processEvents();
+        ok &= expect(first.isEmpty() && active == QStringLiteral("issued-after"),
+                     "retiring an attempt preserves the active credential");
+        TailnetShimTokenStore::save(QStringLiteral("REVIEW-SERIAL"), QStringLiteral("issued-after"));
+        ok &= expect(!TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL"), QStringLiteral("issued-after"), activeRevision),
+                     "identical token bytes saved again cannot be retired by an earlier revision");
+        ok &= expect(TailnetShimTokenStore::clearIfCurrent(QStringLiteral("REVIEW-SERIAL"), QStringLiteral("issued-after"),
+                            TailnetShimTokenStore::revision(QStringLiteral("REVIEW-SERIAL"))),
+                     "the matching active credential can be retired");
     }
 
     ok &= expect(tailnetshim::suggestedHostname(QStringLiteral("KK7GWY FLEX-8600"))

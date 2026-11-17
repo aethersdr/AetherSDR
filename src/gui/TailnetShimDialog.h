@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QHostAddress>
 #include <QPointer>
+#include <QtTypes>
 #include <functional>
 #include "core/TailnetShimClient.h"
 
@@ -92,6 +93,7 @@ private:
     QString m_radioSerial;
     QHostAddress m_apiAddress;   // the radio's LAN address, where the API listens
     QString m_adminToken;
+    quint64 m_credentialRevision{0};
     bool m_native{false};   // the shim is a legacy waveform, not a container
     bool m_tokenLoaded{false};
     bool m_lanReachable{false};

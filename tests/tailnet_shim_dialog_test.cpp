@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <iostream>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 class TailnetShimDialogTestAccess {
@@ -35,6 +36,7 @@ public:
         }
         dialog.m_status = status;
         TailnetShimTokenStore::save(dialog.m_radioSerial, token);
+        dialog.m_credentialRevision = TailnetShimTokenStore::revision(dialog.m_radioSerial);
         dialog.m_busy = true;
         dialog.m_signingIn = true;
         dialog.m_authUrl = QStringLiteral("https://example.invalid/current-code");
@@ -324,6 +326,33 @@ int main(int argc, char** argv)
                         && !Access::signingIn(dialog) && !Access::busy(dialog)
                         && Access::authUrl(dialog).isEmpty(),
                     "matching legacy login401 still forgets the revoked credential and code");
+    }
+    for (const std::pair<bool, bool>& flags : {std::pair{false, false}, std::pair{false, true},
+                                             std::pair{true, false}, std::pair{true, true}}) {
+        const bool signOut = flags.first;
+        const QString replacement = flags.second ? QStringLiteral("other-window-new-token")
+                                                : QStringLiteral("old-window-token");
+        AetherPDTest::Network oldNetwork;
+        TailnetShimDialog oldWindow(nullptr, false, nullptr, &oldNetwork);
+        Access::prepare(oldWindow, QStringLiteral("old-window-token"), false);
+        if (signOut) {
+            ok &= check(Access::signOut(oldWindow), "old window starts an explicitly confirmed sign-out");
+        } else {
+            Access::beginLogin(oldWindow);
+        }
+        const QPointer<AetherPDTest::Reply> oldReply = oldNetwork.last;
+        AetherPDTest::Network newNetwork;
+        TailnetShimDialog newWindow(nullptr, false, nullptr, &newNetwork);
+        Access::prepare(newWindow, replacement, true);
+        oldReply->complete(signOut ? 200 : 401, signOut
+            ? QByteArray(R"({"version":"0.5.0","provisioned":false,"state":"unprovisioned"})")
+            : QByteArray(R"({"error":"revoked"})"));
+        ok &= check(Access::token(oldWindow).isEmpty()
+                        && Access::token(newWindow) == replacement
+                        && savedToken() == replacement
+                        && newNetwork.sent.empty(),
+                    signOut ? "old window sign-out cannot delete another window's replacement credential"
+                            : "old window login401 cannot delete another window's replacement credential");
     }
     return ok ? 0 : 1;
 }

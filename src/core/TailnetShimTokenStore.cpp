@@ -117,6 +117,23 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
 #endif
 }
 
+quint64 TailnetShimTokenStore::revision(const QString& radioSerial, Entry entry)
+{
+    return saveGenerations().value(keyFor(radioSerial, entry));
+}
+
+bool TailnetShimTokenStore::clearIfCurrent(const QString& radioSerial, const QString& expectedToken,
+                                          quint64 expectedRevision, Entry entry)
+{
+    if (radioSerial.trimmed().isEmpty() || expectedToken.isEmpty()
+        || sessionTokens().value(keyFor(radioSerial, entry)) != expectedToken
+        || revision(radioSerial, entry) != expectedRevision) {
+        return false;
+    }
+    save(radioSerial, QString(), nullptr, {}, entry);
+    return true;
+}
+
 void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
                                  std::function<void(const QString&)> callback, Entry entry)
 {

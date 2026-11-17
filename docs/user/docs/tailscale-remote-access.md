@@ -757,6 +757,10 @@ and owner credential. A failed auth-key join also retains local control.
 If the managed service rejects the saved owner credential, **Remote Access**
 reports the rejection and keeps that credential; it does not clear it as a
 revoked legacy sign-in token.
+If multiple **Remote Access** windows are open in one AetherSDR process, an
+older window's legacy sign-in rejection or completed disconnect cannot delete
+a credential saved later by another window, including an identical token. This protection does not
+coordinate credential changes between separate AetherSDR processes.
 Losing that saved owner credential is a separate recovery case; token-free
 takeover and reinstalling the legacy remote-access waveform are not recovery
 procedures for this managed installation.

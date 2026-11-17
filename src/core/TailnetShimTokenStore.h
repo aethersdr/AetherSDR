@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QtTypes>
 
 #include <functional>
 
@@ -37,6 +38,14 @@ public:
                      QObject* context = nullptr,
                      std::function<void(bool persisted, const QString& error)> done = {},
                      Entry entry = Entry::TailnetShim);
+    // Capture when adopting a token; every save advances this process's revision,
+    // including a save of identical bytes. It does not coordinate other processes.
+    [[nodiscard]] static quint64 revision(const QString& radioSerial, Entry entry = Entry::TailnetShim);
+    // Retire only the token/revision pair still current in this process.
+    // A reply cannot erase a credential saved by another window in the meantime.
+    // True means deletion was requested, not that persistence succeeded.
+    static bool clearIfCurrent(const QString& radioSerial, const QString& expectedToken,
+                               quint64 expectedRevision, Entry entry = Entry::TailnetShim);
     [[nodiscard]] static bool persistentStoreAvailable();
     // What a finished keychain read yields: the read, unless a save happened
     // while it ran, in which case that save's (newer) token, or none if the
