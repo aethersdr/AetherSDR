@@ -1,0 +1,610 @@
+{
+  "updated_utc": "2026-11-17T15:53:22.652008+00:00",
+  "status": "operator_hard_power_recovery_identity_autostart_IQ_and_idle_session_unit_stop_restart_qualified_software_reboot_hang_unresolved",
+  "production_ready": false,
+  "runtime_source_commit": "ea92eb13efba12f9296f0f23b8ef79fee77cdd25",
+  "release_blake2b_256": "b732344cad128503ee8f2bf67cfd912dee4cc947bf5beac212a606766f79a42c",
+  "operator_observation": {
+    "verbatim": "The power LED was green but the unit was unresponsive. Not even holding in the power button to force it off worked. I had to manually unplug the power from the rear of the radio",
+    "rear_power_removal_confirmed": true,
+    "restoration_timing_independently_observed": false
+  },
+  "software_reboot": {
+    "qualified": false,
+    "prior_failed_report": "tools/pd-waveform/PREPARED-CLEANUP-INSTALLED-QUALIFICATION.json",
+    "reboot_commands_this_turn": 0,
+    "cause": "Unresolved. The operator observation supports a radio-level hang rather than only lost network/shim access. It does not identify firmware, kernel, service ordering, hardware or AetherPD causality."
+  },
+  "recovery_after_operator_power_removal": {
+    "old_boot_id": "1225abd2-52c4-4716-af98-e789ebb0bff5",
+    "new_boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "exact_selected_release_returned_without_install_or_privileged_repair": true,
+    "owner_installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "owner_config_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "owner_verifier_fingerprint": "9d5efda3384e7d4100d905c7dcecbc5fa975f494db0ffd7f4d13d6095c5f925c",
+    "automatic_primary_service_returned_before_explicit_PD_Start": true,
+    "receive_only_PD_Start_ready_s": 1.943607299006544,
+    "capture": {
+      "metadata": {
+        "capture_id": "e58232986b7720fbf9f8f5d32a3aaa8a",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 411296927,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "459897295232",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "460238287448",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "bbad4eed3fc090bf7af138020e27aa80e52f5b1dcd99ff908123c534d6e69b73"
+    },
+    "final_status": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    },
+    "FDX": false
+  },
+  "shutdown_evidence": {
+    "available_boots_query": {
+      "name": "available-boots",
+      "argv": [
+        "/usr/bin/nsenter",
+        "--target",
+        "1",
+        "--cgroup",
+        "/usr/bin/journalctl",
+        "--list-boots",
+        "--no-pager",
+        "-n",
+        "8"
+      ],
+      "exit": 0,
+      "output": "IDX BOOT ID                          FIRST ENTRY                 LAST ENTRY\n  0 65be86a7fd984f16ae62505781cadb85 Mon 2026-04-27 14:48:57 CDT Tue 2026-11-17 09:37:37 CST\n\n",
+      "output_truncated": false
+    },
+    "previous_boot_query": {
+      "argv": [
+        "/usr/bin/nsenter",
+        "--target",
+        "1",
+        "--cgroup",
+        "/usr/bin/journalctl",
+        "--boot=1225abd252c44716af98e789ebb0bff5",
+        "--no-pager",
+        "-n",
+        "160",
+        "-o",
+        "short-monotonic"
+      ],
+      "exit": 1,
+      "output": "\nData from the specified boot (1225abd252c44716af98e789ebb0bff5) is not available: No such boot ID in journal\n",
+      "truncated": false
+    },
+    "pstore": [],
+    "scope": "Only current boot listed; corrected32-digit old boot ID is absent. Initial hyphenated-ID queries were rejected by this journalctl version and are preserved separately. No prior shutdown trace survives in the queried journal or pstore."
+  },
+  "idle_session_service_stop": {
+    "unit": "aetherpd-start@0-1313-78666.service",
+    "before": {
+      "TimeoutStopUSec": "12s",
+      "MainPID": "1639",
+      "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@0-1313-78666.service",
+      "KillMode": "control-group",
+      "SendSIGKILL": "no",
+      "Id": "aetherpd-start@0-1313-78666.service",
+      "ActiveState": "active",
+      "SubState": "running",
+      "FragmentPath": "/etc/systemd/system/aetherpd-start@.service"
+    },
+    "command": [
+      {
+        "argv": [
+          "/usr/bin/nsenter",
+          "--target",
+          "1",
+          "--cgroup",
+          "/usr/bin/systemctl",
+          "--no-block",
+          "stop",
+          "aetherpd-start@0-1313-78666.service"
+        ],
+        "exit": 0,
+        "monotonic_ns": 684820707734
+      }
+    ],
+    "original_control_processes_retired_ms": 188.225225,
+    "observations": [
+      {
+        "elapsed_ms": 54.645179,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "1639",
+          "ControlGroup": "/system.slice/system-aetherpd\\x2dstart.slice/aetherpd-start@0-1313-78666.service",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@0-1313-78666.service",
+          "ActiveState": "deactivating",
+          "SubState": "stop-sigterm",
+          "FragmentPath": "/etc/systemd/system/aetherpd-start@.service"
+        },
+        "original_survivor_pids": [
+          1639,
+          1646
+        ]
+      },
+      {
+        "elapsed_ms": 188.207021,
+        "unit": {
+          "TimeoutStopUSec": "12s",
+          "MainPID": "0",
+          "ControlGroup": "",
+          "KillMode": "control-group",
+          "SendSIGKILL": "no",
+          "Id": "aetherpd-start@0-1313-78666.service",
+          "ActiveState": "failed",
+          "SubState": "failed",
+          "FragmentPath": "/etc/systemd/system/aetherpd-start@.service"
+        },
+        "original_survivor_pids": []
+      }
+    ],
+    "primary_shim_left_running": [
+      {
+        "pid": 1313,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "cgroup": [
+          "0::/../../../system.slice/aetherpd-shim.service"
+        ],
+        "start_ticks": 4189,
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "kill_escalation_requested": false,
+    "ordinary_restart_ready_s": 2.2148215229972266,
+    "ordinary_restart_capture": {
+      "metadata": {
+        "capture_id": "48347cb39e56ae0892b3a4ac4b16e5ee",
+        "center_hz": 7150000,
+        "chunk_samples": 512,
+        "correcting": false,
+        "feedback_binding": {
+          "channel": 4,
+          "failed": false,
+          "gui_handle": 411296927,
+          "pan": 1073741824,
+          "transport": "local_dax_iq",
+          "valid": true
+        },
+        "first_receive_ns": "845973277528",
+        "format": "f32le-iq-v1",
+        "keyed": false,
+        "last_receive_ns": "846314276203",
+        "measurement": {
+          "source_id": "0000000000000000",
+          "tones": false
+        },
+        "sample_count": 16384,
+        "sample_rate_hz": 48000,
+        "source": {
+          "generation": "6",
+          "kind": "local_dax_iq",
+          "stream_id": 536870912
+        }
+      },
+      "bytes": 131072,
+      "sha256": "63167e6a06c8490c3907d39d5d7047cb0a11b91fb1d8e5e23a4bd10741c1f8fb"
+    },
+    "final_status": {
+      "body": {
+        "available": false,
+        "state": "stopped"
+      },
+      "http_status": 200
+    },
+    "meaning": "One exact stopped/idle session unit exited promptly under its existing SendSIGKILL=no policy. It ended in failed state after termination; the next ordinary Start successfully reconciled the empty record. This does not reproduce or explain the whole-radio reboot hang, or qualify active/keyed session shutdown."
+  },
+  "independent_post_power_audit": {
+    "passed": true,
+    "RF_commands": [],
+    "processes": [
+      {
+        "pid": 1313,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      },
+      {
+        "pid": 1639,
+        "exe": "/var/lib/smartsdr/aetherpd/pd-boot",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "db8ea6f4cacab3976d7ba74b1327a8a46767d9ed7441fdbbbade3f22ef325444"
+      },
+      {
+        "pid": 1646,
+        "exe": "/run/aetherpd/bin/flex-tailnet-shim",
+        "state": "S (sleeping)",
+        "uid": "78666\t78666\t78666\t78666",
+        "nnp": "1",
+        "caps": {
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapAmb": "0000000000000000"
+        },
+        "sha256": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10"
+      }
+    ],
+    "boot_id": "65be86a7-fd98-4f16-ae62-505781cadb85",
+    "owner_config_sha256": "d2e1df2b422811c47f68e2ec18440265960f6a6e2014df55033f46b14db79ed1",
+    "installation_id": "b6050e0036d2cfe91bce6f36c8c88faaea90e86722dd13c710a57015adb53654",
+    "runtime_sha256": {
+      "pd-primary-launch": "decf786355f10450819a2ee8645089873084f6745424dc495111c65df59c7ce5",
+      "pd-start-session": "568641ceb68da3176abfb42b996d521db4f5604d8a026c7add754168f752a47b",
+      "pd-radio-launch": "262a370c286bb07d1751b01211b0ca76ec75ebd29d2e1230111128ccd554b773",
+      "pd-fixed-arp": "2e6001780d2c8d42f2d422237cea7a4dcbc24d1ace9ee4aff7ee422a09072f49",
+      "pd-iq-source": "37fa974279793ccb0b4ee5891bc361a536d1cc917a12521ffe8d09781cc35ac0",
+      "pd-capture-bootstrap": "b3132499052fdb709c64fa0267171072299aae21fe0a970c0debc4648e40eccc",
+      "pd-unkey-guard": "d945aeaf3926c51e63a2054d64f4bd799334d453cc575e060ec37464cadf7662",
+      "pd-lease-guard": "297183f7504ffd6c9c6d9f4713976a2bcbfc1df5d9caa788c402fd8568c0954e",
+      "flex-tailnet-shim": "ac4406e079ba86fa281a1986fe305537cacddac5f193a0b29804fe4a5e28eb10",
+      "aether-pd": "b3fc2de87fb51a20721d53a3e0758c4206b29f4ccd6ad1b96e273400471cdf8d"
+    },
+    "arp": [],
+    "arp_journal_bytes": 0,
+    "accept_local": "0",
+    "private_sockets": [],
+    "temporary_installation_paths": {
+      "/var/lib/smartsdr/aetherpd-installation": false,
+      "/run/aetherpd-install": false,
+      "/run/aetherpd-delivery": false,
+      "/etc/systemd/system/aetherpd-install.service": false,
+      "/etc/systemd/system/aetherpd-recover.service": false,
+      "/var/lib/smartsdr/aetherpd-upgrade": false,
+      "/etc/systemd/system/aetherpd-upgrade.service": false,
+      "/etc/systemd/system/aetherpd-upgrade-recover.service": false
+    },
+    "previous_boot_journal_normalized_ID": {
+      "argv": [
+        "/usr/bin/nsenter",
+        "--target",
+        "1",
+        "--cgroup",
+        "/usr/bin/journalctl",
+        "--boot=1225abd252c44716af98e789ebb0bff5",
+        "--no-pager",
+        "-n",
+        "160",
+        "-o",
+        "short-monotonic"
+      ],
+      "exit": 1,
+      "output": "\nData from the specified boot (1225abd252c44716af98e789ebb0bff5) is not available: No such boot ID in journal\n",
+      "truncated": false
+    }
+  },
+  "preserved_preparation_refusal": {
+    "Start_actions": 0,
+    "reason": "Fresh AetherPD dialog had no selected feedback pan. Existing pan IQ4 assignment was already present; selecting that pan through pdIqSelection admitted the receive-only Start. No radio channel setting or disabled-control bypass was used."
+  },
+  "final_desktop": {
+    "instance": {
+      "pid": 4033867,
+      "socket": "/tmp/aetherpd-prepared-cleanup",
+      "binary_sha256": "431ef25f7cf3391671b8b0475ab489c75c8c415a0955dcf7ae7b426b316d5821",
+      "profile": "/home/jeremy/AetherSDR/build/aetherpd-shim-integration/guardian-owner-live/fresh/private-profile",
+      "runtime_source_before_update": "7080de965a595ac44982b8f8cfdbc5142ea07dee",
+      "desktop_source": "ea92eb13efba12f9296f0f23b8ef79fee77cdd25",
+      "keying_requires_explicit_bridge_action": true,
+      "receiver_ready": true,
+      "predecessor_channel_idle_wait_s": 20.064866319997236
+    },
+    "sha256": "431ef25f7cf3391671b8b0475ab489c75c8c415a0955dcf7ae7b426b316d5821",
+    "GUI_handle": "0x1883e49f",
+    "radio": {
+      "callsign": "KK7GWY",
+      "connectState": "connected",
+      "connected": true,
+      "fullDuplex": false,
+      "iaruRegion": 2,
+      "maxSlices": 4,
+      "model": "FLEX-8600",
+      "name": "",
+      "nickname": "FLX8600",
+      "paTemp": 23.078125,
+      "panCount": 1,
+      "serial": "2125-1213-8600-8895",
+      "sliceCount": 1,
+      "slots": [
+        {
+          "id": 0,
+          "state": "ours"
+        },
+        {
+          "id": 1,
+          "state": "empty"
+        },
+        {
+          "id": 2,
+          "state": "empty"
+        },
+        {
+          "id": 3,
+          "state": "empty"
+        }
+      ],
+      "transmitting": false,
+      "txPower": 0,
+      "version": "4.3.16.42034"
+    },
+    "transmit": {
+      "accTxDelay": 0,
+      "activeMicProfile": "Default",
+      "activeProfile": "Default",
+      "amCarrierLevel": 34,
+      "apdEnabled": false,
+      "atuEnabled": true,
+      "atuMemories": false,
+      "atuStatus": "manual_bypass",
+      "cwBreakIn": true,
+      "cwDelay": 41,
+      "cwIambic": true,
+      "cwIambicMode": 1,
+      "cwPitch": 600,
+      "cwSidetone": true,
+      "cwSpeed": 30,
+      "cwSwapPaddles": false,
+      "cwlEnabled": false,
+      "dax": false,
+      "dexp": false,
+      "dexpLevel": 50,
+      "maxPowerLevel": 10,
+      "micAcc": false,
+      "micBias": false,
+      "micBoost": false,
+      "micLevel": 80,
+      "micSelection": "PC",
+      "monGainCw": 80,
+      "monGainSb": 10,
+      "monPanCw": 50,
+      "monitor": false,
+      "mox": false,
+      "pttMicOverride": false,
+      "rfPower": 10,
+      "showTxInWaterfall": false,
+      "speechProc": false,
+      "speechProcLevel": 1,
+      "speechProcLevelMaximum": 2,
+      "transmitting": false,
+      "tunePower": 5,
+      "tuning": false,
+      "tx1Delay": 0,
+      "tx2Delay": 0,
+      "tx3Delay": 0,
+      "txDelay": 0,
+      "txFilterHigh": 4000,
+      "txFilterLow": 50,
+      "voxDelay": 5,
+      "voxEnable": false,
+      "voxLevel": 0
+    },
+    "slices": [
+      {
+        "active": true,
+        "adaptiveActive": false,
+        "adaptiveFilterEnabled": false,
+        "adaptiveHetReject": false,
+        "adaptiveMaxHighCut": 4000,
+        "adaptiveMinLowCut": 0,
+        "adaptiveMinSnr": 1,
+        "adaptiveResponse": 1,
+        "adaptiveSplatter": 1,
+        "agcMode": "med",
+        "agcThreshold": 60,
+        "agcThresholdMode": "manual",
+        "anf": false,
+        "apf": false,
+        "apfLevel": 30,
+        "audioGain": 50,
+        "audioMute": false,
+        "audioPan": 50,
+        "automaticAgcThresholdActiveOrPending": false,
+        "automaticSquelch": false,
+        "automaticSquelchMarginDb": 10,
+        "chainMode": "USB",
+        "daxChannel": 0,
+        "diversity": false,
+        "diversityChild": false,
+        "diversityIndex": 1342177293,
+        "diversityParent": false,
+        "externalReceiveReplacement": false,
+        "filterHigh": 2800,
+        "filterLow": 100,
+        "filterPreset": "",
+        "filterPresetId": 0,
+        "flexAgcMode": "med",
+        "flexAgcOffLevel": 10,
+        "flexAgcThreshold": 60,
+        "flexAudioGain": 50,
+        "flexAudioMute": false,
+        "flexAudioPan": 50,
+        "flexSquelch": true,
+        "flexSquelchLevel": 20,
+        "fmRepeaterOffsetFreq": 0,
+        "fmToneMode": "off",
+        "fmToneValue": "67.0",
+        "frequency": 7.15,
+        "inCapture": true,
+        "letter": "A",
+        "linkedTo": -1,
+        "locked": false,
+        "manualSquelchLevel": 20,
+        "mode": "USB",
+        "nb": false,
+        "nbFill": 0,
+        "nbKind": 0,
+        "nbLevel": 50,
+        "nr": false,
+        "nrLevel": 50,
+        "panId": "0x40000000",
+        "receiveAgcMode": "med",
+        "receiveAgcOffLevel": 10,
+        "receiveAgcThreshold": 60,
+        "receiveSquelch": true,
+        "receiveSquelchLevel": 20,
+        "repeaterOffsetDir": "simplex",
+        "rfGain": 0,
+        "ritFreq": 0,
+        "ritOn": false,
+        "rxAntenna": "RX_A",
+        "sliceId": 0,
+        "squelch": true,
+        "squelchLevel": 20,
+        "stepHz": 100,
+        "txAntenna": "ANT1",
+        "txOffsetFreq": 0,
+        "txSlice": true,
+        "xitFreq": 0,
+        "xitOn": false
+      }
+    ],
+    "pans": [
+      {
+        "antennas": [
+          "ANT1",
+          "ANT2",
+          "RX_A",
+          "RX_B",
+          "XVTA",
+          "XVTB"
+        ],
+        "average": 50,
+        "averageIsRequest": false,
+        "bandwidthMhz": 0.2,
+        "centerKnown": true,
+        "centerMhz": 7.15,
+        "clientHandle": "0x1883e49f",
+        "fps": 25,
+        "fpsIsRequest": false,
+        "maxDbm": 0,
+        "minDbm": -180,
+        "ownedByUs": true,
+        "panId": "0x40000000",
+        "radioReportedAverage": 50,
+        "radioReportedFps": 25,
+        "rfGain": 0,
+        "rxAntenna": "RX_A",
+        "transmitInhibitReason": "",
+        "transmitInhibited": false,
+        "waterfallLineDuration": 80,
+        "weightedAverage": false,
+        "weightedAverageKnown": true,
+        "wide": false,
+        "wnb": false,
+        "wnbLevel": 90
+      }
+    ]
+  },
+  "RF_key_actions": 0,
+  "reboot_commands_this_turn": 0,
+  "credential_mutations": [],
+  "new_package_installations": 0,
+  "remaining_shutdown_work": [
+    "Prepare a bounded read-only live shutdown log stream to the host, with URL/token redaction and independent cleanup, before any further reboot attempt; previous-boot logs cannot diagnose this event.",
+    "Inspect current firmware-service and AetherPD stop ordering; distinguish the idle-unit result from whole-system shutdown.",
+    "Any later controlled reboot must retain operator awareness of the observed hang and possible rear-power recovery. No reboot was retried in this turn."
+  ],
+  "limitations": [
+    "One operator-reported physical power removal/recovery; exact off/on timing and cold-start latency are unknown. No power cut during a chosen installation/write boundary was performed.",
+    "Cold-power persistence and receive-only recovery do not turn the failed software reboot into a pass.",
+    "No root cause for the hang, no active/keyed shutdown, sustained RF, final stockAPD, actual6300 or full P1\u2013P10 production qualification.",
+    "Operator-deferred5W SWR investigation and related preamble experiment remain parked."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/audit-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/audit-job.py.gz": "274fdbf96089a40d5301fda889cbc2bdc4f48f7e3e86287f0f451bfcad86d2c5",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/audit-result.json.gz": "5f7880449839b0e70161e3c0c08033bd48fbaec6e1a17e62c666266866369ca3",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/audit.log.gz": "5f7880449839b0e70161e3c0c08033bd48fbaec6e1a17e62c666266866369ca3",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/connected.json.gz": "65f0537bd99b9055b4eca6302e0fbab19286c1fc67eeaa18aa53e810abd26e32",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/dsp-stall-restarted-IQ.f32le.gz": "fcb26c65f698d7c462bec858815d6b9a69fede38585a3d1c0ccd5bd13ae03760",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/final-desktop-state.json.gz": "d50c62fd5bbf49887619d1f671ac3e9563e14af5113d181e9650fe63d2a3dd9c",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/initial.json.gz": "73e62bf6d6057539ca3978a645c81fa5b634520731710f282dd577d5eb1c9201",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/instance.json.gz": "ec38cf0de98d1c950d8c0fee88f331995712ba0b9df0c44e7e663605342b1281",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/open-fresh-panel.py.gz": "0d8f4a5b3cc9684dbd28dfa84926b7ad723463fac66780336be83d8beab481e1",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/panel-console.log.gz": "fb8fb30609f1b3166c30e5e7bcf30577d45786cc60ad74e22ff104bdbc5591f7",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/recover.py.gz": "3b4cae61b41b688dc72a62b531d077c8c92131dd7b31b09fec19e3049adbbb69",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/recovery-console-preparation-01.log.gz": "9f54420895cb78ee753675163cff367f976e72ece651cbd87d539a019134082c",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/recovery-console.log.gz": "32d0af17b38a6a464d9d4da47976c00f472635c58fcfc88f7fcd0779ade2e3ef",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/recovery-events-preparation-01.json.gz": "e1d2839c3c7ee78fd2fd838c15671146753d7c0f7532f754cd5ab7977809ca1f",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/recovery-events.json.gz": "2e11dbee4516cd08de0c19403268f32e9207b98df44fa54b433ac6bb0b3a74ac",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/recovery-outcome-preparation-01.json.gz": "eb4b943baa4d53125166a0865be8bc99275f41942467749a41b2302f78efac31",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/recovery-outcome.json.gz": "310c4f21ebb60960a86c526524a0f85f5bd50db6ac3f0a3783d60ec53a2527cd",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/save-qualification.py.gz": "6c14fc946be4e6e8b98bf81c6784bc28e60240c4b47cdddaee0a10d16ee36e84",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/shutdown-logs-console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/shutdown-logs-job.py.gz": "796ef173c98f32973ed7c744cd7942d681d44ad8741ff624d996fbd2bad6da27",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/shutdown-logs-result.json.gz": "ad85dd16c34d44a80d1876cb60f330cbeb13c090eaad4b6e39e1d2128f5043c5",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/shutdown-logs.log.gz": "ad85dd16c34d44a80d1876cb60f330cbeb13c090eaad4b6e39e1d2128f5043c5",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/post-hard-power-recovery/start-gate.json.gz": "549aeeb20b42b5fa373ed8d7c145259df7280c6c742a131573b6d2ff94f6791c",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/console.log.gz": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/dsp-stall-restarted-IQ.f32le.gz": "5a34ddb0e558cd77f629b627e8a6c9cdc17f74d93e2d0ab21a8477c4441c3e14",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/instance.json.gz": "ec38cf0de98d1c950d8c0fee88f331995712ba0b9df0c44e7e663605342b1281",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/recover.py.gz": "3b4cae61b41b688dc72a62b531d077c8c92131dd7b31b09fec19e3049adbbb69",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/recovery-console.log.gz": "32d0af17b38a6a464d9d4da47976c00f472635c58fcfc88f7fcd0779ade2e3ef",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/recovery-events.json.gz": "c44a571580e91a3d9fd30200d2bbcf1c9fd9bdec4f06dc14adf7489bbf3123bb",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/recovery-outcome.json.gz": "24b502b96d7f1efc396e21be20b4b54ea55bce4c5f2de86d87d84c2fefed0b79",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/run-job.py.gz": "28be88418dd03740985044538e114f1fe705132c29d096927c7cd418733087e9",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/stop-job.py.gz": "8d655b113e7383f69cc11832860ea4a77977ef74d10ed3a1cbdedea1c6c661d5",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/stop-result.json.gz": "4884e6ae8d1d045d7362855fadcb1278c3e0d1e95157caa0118243457003c4e2",
+    "tools/pd-waveform/evidence/20261117-hard-power-recovery/idle-session-unit-stop/stop.log.gz": "4884e6ae8d1d045d7362855fadcb1278c3e0d1e95157caa0118243457003c4e2"
+  }
+}
