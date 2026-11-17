@@ -121,3 +121,14 @@ into the real service. It covers grant matrices, revocation, mixed session IDs,
 schema and stale-selection failures, lifecycle conflicts, target loss, rate
 isolation and absent TX. Native firmware convergence requires separate hardware
 validation; the daemon integration smoke uses only the production simulator.
+
+## Explicit SmartLink startup
+
+`--allow-local-control --smartlink-account ACCOUNT_ID --smartlink-radio SERIAL`
+reserves the same connection target before accessing the selected saved account.
+`--list-smartlink-accounts` lists IDs and labels without reading vault secrets.
+The radio must appear in that account's current SmartLink inventory; no endpoint
+or token can be supplied by a control client. Startup does not alter catalogue
+IDs or add a remote `radio.connect` route. Existing resource/control clients can
+use the connected receiver. Failure requires fresh local startup intent, and
+certificate mismatches fail closed. WAN does not acquire headless TX eligibility.

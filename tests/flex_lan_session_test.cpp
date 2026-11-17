@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 // Production lifecycle with the built-in synthetic transport. No OS socket is
 // connected or bound, no discovery runs, and no radio/firmware peer is emulated.
 #include "TestSettingsProfile.h"
@@ -597,7 +598,6 @@ private slots:
     void wanSelectionClosesLanAndRejectsItsQueuedEvents()
     {
         QFETCH(bool, transportEnded);
-        WanConnection wan; // never initialized or connected
         RadioModel model;
         RadioInfo selected = demoInfo();
         selected.family = QStringLiteral("flex"); // exercise the LAN owner with its synthetic wire
@@ -610,7 +610,7 @@ private slots:
         }, Qt::BlockingQueuedConnection);
         QCOMPARE(wire->isConnected(), !transportEnded);
         QVERIFY(model.backend()->connectionSession());
-        model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);
+        FlexWanSessionTestAccess::connect(model);
         QVERIFY(model.isWan());
         QVERIFY(!wire->isConnected());
         QVERIFY(!model.backend()->connectionSession());
@@ -651,7 +651,6 @@ private slots:
 
     void disconnectObserverCanSelectWan()
     {
-        WanConnection wan;
         RadioModel model;
         RadioInfo selected = demoInfo();
         selected.family = QStringLiteral("flex");
@@ -661,7 +660,7 @@ private slots:
         connect(&model, &RadioModel::connectionStateChanged, this, [&](bool connected) {
             if (!connected && !selectedWan) {
                 selectedWan = true;
-                model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);
+                FlexWanSessionTestAccess::connect(model);
             }
         });
         model.disconnectFromRadio();

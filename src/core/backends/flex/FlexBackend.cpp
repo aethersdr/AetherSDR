@@ -1,5 +1,6 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/FlexLanSession.h"
+#include "core/backends/flex/FlexWanSession.h"
 #include "FlexSessionControls.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include "core/AppActivity.h"
@@ -116,7 +117,18 @@ FlexBackend::FlexBackend(QObject* parent)
             [this](quint32 streamId) { if (m_cwControls) { m_cwControls->observeStreamRemoved(streamId); } });
 
     m_lanSession = std::make_unique<FlexLanSession>(m_connection, m_panStream, &m_statusIngress);
+    m_wanSession = std::make_unique<FlexWanSession>(m_panStream, &m_statusIngress);
     initializeCommands();
+    connect(m_wanSession.get(), &FlexWanSession::starting, this, &IRadioBackend::connectionSessionStarting);
+    connect(m_wanSession.get(), &FlexWanSession::connected, this, &IRadioBackend::connected);
+    connect(m_wanSession.get(), &FlexWanSession::disconnected, this, [this] {
+        retireReceiveData();
+        emit disconnected();
+    });
+    connect(m_wanSession.get(), &FlexWanSession::errorOccurred, this, &IRadioBackend::connectionError);
+    connect(m_wanSession.get(), &FlexWanSession::versionReceived, this, &IRadioBackend::connectionVersionReceived);
+    connect(m_wanSession.get(), &FlexWanSession::certificateRequired, this, &IRadioBackend::connectionCertificateRequired);
+    connect(m_wanSession.get(), &FlexWanSession::pingMeasured, this, &IRadioBackend::connectionPingMeasured);
     connect(m_lanSession.get(), &FlexLanSession::starting, this, &IRadioBackend::connectionSessionStarting);
     connect(m_lanSession.get(), &FlexLanSession::connected, this, &IRadioBackend::connected);
     connect(m_lanSession.get(), &FlexLanSession::disconnected, this, [this] {
@@ -135,6 +147,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    m_wanSession.reset();
     m_lanSession.reset();
     m_receiveData->close();
     m_cwControls.reset();
@@ -501,7 +514,7 @@ IndependentTxControl FlexBackend::independentTxControl() const
     // Actual admission also requires complete, TX-allowed live idle readback;
     // every handoff still needs the original operation's ordered stop proof.
     // SmartLink uses another transport and remains unavailable on this path.
-    if (!m_connection || !m_connection->independentPttSupported() || !m_sequenceProvider) {
+    if (m_wanMode || !m_connection || !m_connection->independentPttSupported() || !m_sequenceProvider) {
         return {};
     }
     return {static_cast<unsigned>(TxCoordinator::Activity::Mox)};
@@ -1049,9 +1062,15 @@ RadioCapabilities FlexBackend::capabilities() const
 
 void FlexBackend::connectRadio(const RadioConnectRequest& request)
 {
-    m_commandWan = nullptr;
+    if (m_wanSession->active() || m_lanSession->active()) { return; }
+    if (request.remote && m_lanSession->closing()) { m_lanSession->disconnectRadio(); }
+    m_wanMode = request.remote.has_value();
     m_profileWriteHoldUtcMs = 0;
-    m_lanSession->connectRadio(request);
+    if (request.remote) { m_wanSession->connectRadio(*request.remote); }
+    else {
+        m_statusIngress.bind(m_connection);
+        m_lanSession->connectRadio(request);
+    }
 }
 
 void FlexBackend::disconnectRadio()
@@ -1061,6 +1080,7 @@ void FlexBackend::disconnectRadio()
 
 void FlexBackend::disconnectRadio(const RadioDisconnectRequest& request)
 {
+    if (m_wanMode) { m_wanSession->disconnectRadio(request); return; }
     const quint32 keepaliveSequence = m_sequenceProvider ? m_sequenceProvider() : 0;
     const quint32 sequence = request.receiveStreamId && m_sequenceProvider ? m_sequenceProvider() : 0;
     m_lanSession->disconnectRadio(request, sequence, keepaliveSequence);
@@ -1068,18 +1088,28 @@ void FlexBackend::disconnectRadio(const RadioDisconnectRequest& request)
 
 std::optional<ConnectionSession> FlexBackend::connectionSession() const
 {
-    return m_lanSession->snapshot();
+    return m_wanMode ? m_wanSession->snapshot() : m_lanSession->snapshot();
 }
 
 ReceiveTransportResult FlexBackend::startReceiveTransport(bool rebind)
 {
-    return m_lanSession->startReceiveTransport(rebind);
+    return m_wanMode ? m_wanSession->startReceiveTransport() : m_lanSession->startReceiveTransport(rebind);
 }
 
 bool FlexBackend::isConnected() const
 {
-    return m_commandWan ? m_commandWan->isConnected()
+    return m_wanMode ? m_wanSession->isConnected()
         : m_connection && !m_lanSession->closing() && m_connection->isConnected();
+}
+
+bool FlexBackend::connectionClosing() const
+{
+    return m_wanSession->closing() || m_lanSession->closing();
+}
+
+void FlexBackend::decideConnectionCertificate(quint64 attempt, bool accept)
+{
+    if (m_wanMode) { m_wanSession->decideCertificate(attempt, accept); }
 }
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)

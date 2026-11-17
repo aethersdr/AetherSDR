@@ -1323,23 +1323,38 @@ void RadioModel::setupBackend(const QString& family)
 
     connect(m_backend.get(), &IRadioBackend::connectionSessionStarting, this,
             [this, generation](quint64 epoch) {
-        if (generation != m_backendReceiverGeneration || m_wanConn) { return; }
+        if (generation != m_backendReceiverGeneration) { return; }
         m_statusEpoch = epoch;
+        if (m_wanSession) { m_connectedStatusEpoch = epoch; }
         openObservationSession(epoch);
     });
     connect(m_backend.get(), &IRadioBackend::connectionVersionReceived, this,
             [this, generation](const QString& version) {
-        if (generation == m_backendReceiverGeneration && !m_wanConn) { onVersionReceived(version); }
+        if (generation == m_backendReceiverGeneration) { onVersionReceived(version); }
     });
     connect(m_backend.get(), &IRadioBackend::connected, this, [this, generation] {
-        if (generation == m_backendReceiverGeneration && !m_wanConn) { onConnected(); }
+        if (generation == m_backendReceiverGeneration) { onConnected(); }
     });
     connect(m_backend.get(), &IRadioBackend::disconnected, this, [this, generation] {
-        if (generation == m_backendReceiverGeneration && !m_wanConn) { onDisconnected(); }
+        if (generation == m_backendReceiverGeneration) { onDisconnected(); }
     });
     connect(m_backend.get(), &IRadioBackend::connectionError, this,
             [this, generation](const QString& message) {
-        if (generation == m_backendReceiverGeneration && !m_wanConn) { onConnectionError(message); }
+        if (generation == m_backendReceiverGeneration) { onConnectionError(message); }
+    });
+    connect(m_backend.get(), &IRadioBackend::connectionCertificateRequired, this,
+        [this, generation](quint64 attempt, const QString& host, const QString& expected, const QString& presented) {
+            if (generation != m_backendReceiverGeneration || !isWan()) { return; }
+            const quint64 decision = ++m_certificateDecisionId;
+            m_certificateDecision = CertificateDecision{decision, generation, attempt, m_connectionIntentRevision};
+            emit certFingerprintMismatch(decision, host, expected, presented);
+        });
+    connect(m_backend.get(), &IRadioBackend::connectionPingMeasured, this, [this, generation](int ms) {
+        if (generation != m_backendReceiverGeneration || !isWan() || !isConnected()) { return; }
+        m_pingMissCount = 0;
+        m_lastPingRtt = ms;
+        evaluateNetworkQuality();
+        emit pingReceived();
     });
     connect(m_backend.get(), &IRadioBackend::configurationWarning,
             this, &RadioModel::configurationWarning);
@@ -1500,7 +1515,6 @@ void RadioModel::wireStatusIngress(quint64 generation)
     // fresh transport does; a backend rebuilt under a live SmartLink session
     // takes over its route.
     if (m_statusIngress) { openObservationSession(m_statusIngress->epoch()); }
-    if (m_wanConn && m_flexBackend) { openObservationSession(m_statusEpoch = m_flexBackend->bindWanCommandSession(m_wanConn)); }
 }
 
 void RadioModel::clearRadioSpeakerReport()
@@ -1866,6 +1880,8 @@ void RadioModel::teardownBackend()
     m_transmitModel.resetPowerProvenance();
     m_transmitModel.resetPttMicOverrideReport();
     m_backend.reset();
+    m_wanSession = false;
+    m_certificateDecision.reset();
     m_cwPitchHandedToBackend = -1;  // the next backend has been handed nothing
     acknowledgeTxTransportTeardown(m_txOperation);
     m_connection = nullptr;
@@ -2840,9 +2856,6 @@ RadioModel::~RadioModel()
         QObject::disconnect(m_connection, nullptr, this, nullptr);
     if (m_panStream)                    // likewise
         QObject::disconnect(m_panStream, nullptr, this, nullptr);
-    if (m_wanConn) {
-        QObject::disconnect(m_wanConn, nullptr, this, nullptr);
-    }
 
     // Destroy the backend, which owns the RadioConnection + PanadapterStream and
     // their worker threads: ~FlexBackend runs the exact #502 teardown ordering
@@ -2901,10 +2914,6 @@ QString RadioModel::connectState() const
 
 bool RadioModel::isConnected() const
 {
-    // SmartLink remains separately owned; every LAN family answers through the seam.
-    if (m_wanConn && m_wanConn->isConnected()) {
-        return true;
-    }
     return m_backend && m_backend->isConnected();
 }
 
@@ -3880,9 +3889,14 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    connectToRadioRequest(info, {});
+}
+
+void RadioModel::connectToRadioRequest(const RadioInfo& info, const std::optional<RemoteRadioRequest>& remote)
+{
     // Finish the old session before replacing its identity or cleanup state.
     // A callback can submit newer intent during teardown; it wins over this one.
-    if (!m_wanConn && (isConnected() || m_connectAttemptActive)
+    if (!remote && !m_wanSession && (isConnected() || m_connectAttemptActive)
         && info.address == m_lastInfo.address && info.port == m_lastInfo.port
         && info.serial == m_lastInfo.serial && info.family == m_lastInfo.family
         && info.bindSettings.mode == m_lastInfo.bindSettings.mode
@@ -3891,10 +3905,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     const QPointer<RadioModel> intentOwner(this);
     // The snapshot remains owned until the worker's queued disconnect is delivered.
     const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
-    if (isConnected() || m_connectAttemptActive || m_wanConn || hasLanSession) {
+    if (isConnected() || m_connectAttemptActive || m_wanSession || hasLanSession) {
         const quint64 retiringIntent = m_connectionIntentRevision + 1;
         disconnectFromRadio();
         if (!intentOwner || m_connectionIntentRevision != retiringIntent) { return; }
+    }
+    if (m_wanSession && m_backend && m_backend->connectionClosing()) {
+        const quint64 intent = ++m_connectionIntentRevision;
+        connect(m_backend.get(), &IRadioBackend::disconnected, this, [this, intent, info, remote] {
+            if (intent == m_connectionIntentRevision) { connectToRadioRequest(info, remote); }
+        }, Qt::SingleShotConnection);
+        return;
     }
     ++m_connectionIntentRevision;
     retireObservationSession();
@@ -3910,8 +3931,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     discardTuneInhibit();
     resetTuneOutputControl();
     cancelRadioWake();
-    releaseWanStatus();
-    m_wanConn = nullptr;  // LAN mode
+    m_wanSession = remote.has_value();
     m_sessionOverTailscale = false;
     resetRadioObservations();
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
@@ -3950,6 +3970,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // (#4912). Set after the family switch above so a backend rebuild — which
     // tears the old backend down and can emit a disconnect — cannot clear the
     // flag we are about to set.
+    m_wanSession = remote.has_value();
     m_connectAttemptActive = true;
 
     // Network identity is session-owned. Seed only the endpoint we actually
@@ -4021,6 +4042,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.serial = info.serial;
         req.version = info.version;
         req.serialIdentity = info.serialIdentity;
+        req.remote = remote;
         req.requireExplicitLocalBind = info.bindSettings.mode == RadioBindMode::Explicit;
         req.explicitLocalBindAddress = info.bindSettings.bindAddress;
         populateFamilyParams(req, info.family, info.sessionBindAddress);
@@ -4042,7 +4064,7 @@ bool RadioModel::prepareFlexBackendForWan()
 
 bool RadioModel::prepareWanConnection()
 {
-    if (isConnected() || m_connectAttemptActive) { return false; }
+    if (isConnected() || isConnectAttemptInFlight()) { return false; }
     return prepareFlexBackendForWan();
 }
 
@@ -4053,98 +4075,28 @@ void RadioModel::cancelAutomaticReconnect()
     m_reconnectTimer.stop();
 }
 
-void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
+bool RadioModel::connectViaSmartLink(const QString& serial, const QList<quint32>& disconnectHandles)
 {
-    if (!wan) { return; }
-    const QPointer<RadioModel> intentOwner(this);
-    const QPointer<WanConnection> selected(wan);
-    const bool hasLanSession = m_backend && m_backend->connectionSession().has_value();
-    if ((m_wanConn && m_wanConn != wan)
-        || (!m_wanConn && (isConnected() || m_connectAttemptActive || hasLanSession))) {
-        const quint64 retiringIntent = m_connectionIntentRevision + 1;
-        disconnectFromRadio();
-        if (!intentOwner || !selected || m_connectionIntentRevision != retiringIntent) { return; }
-    }
-    ++m_connectionIntentRevision;
-    discardTuneInhibit();
-    cancelRadioWake();
-    qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
-             << "udpPort=" << udpPort
-             << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
-
-    m_connectAttemptActive = true;  // see connectToRadio() (#4912)
-
-    clearAutomationSliceFixtures();
-    m_automationGpsNtpServerAddress.clear();
-
-    // Disconnect any stale signal connections from a previous WAN session
-    if (m_wanConn)
-        m_wanConn->disconnect(this);
-
-    m_wanConn = wan;
-    m_sessionOverTailscale = false;
-    resetRadioObservations();
-    const QPointer<RadioModel> setupOwner(this);
-    const quint64 setupGeneration = m_setupObservationGeneration + 1;
-    resetSetupObservations();
-    if (!setupOwner || setupGeneration != m_setupObservationGeneration) { return; }
-    resetGpsState();
-    // This WAN target has no discovery firmware seed. Keep the previous LAN
-    // identity out of firmware-shaped capabilities until its info reply arrives.
-    m_version.clear();
-    emit infoChanged();
-    m_wanPublicIp = publicIp;
-    m_wanUdpPort = udpPort;
-    m_intentionalDisconnect = false;
-    m_forcedDisconnectInProgress = false;
-    // Note: m_rebootInProgress is NOT cleared here — connectToRadio() runs
-    // again from the reconnect timer during a reboot, and we want to keep
-    // suppressing toasts until onConnected() actually fires.
-    m_announcedClientConnections.clear();
-    m_reconnectTimer.stop();
-
-    // Lines come through the backend's status ingress, one queued hop. The
-    // lifecycle takes the same queued hop, so it keeps its wire order with the
-    // lines: a forced-disconnect notice lands before the session ends, and
-    // nothing from a WAN that is no longer ours gets through.
-    if (m_statusIngress && m_flexBackend) {
-        openObservationSession(m_statusEpoch = m_flexBackend->bindWanCommandSession(wan));
-    } else {
-        qCWarning(lcProtocol) << "RadioModel: SmartLink session without a Flex backend; status ignored";
-    }
-    // A lifecycle call queued for an earlier bind of this (reused) connection
-    // is refused, even though the object is the same.
-    const auto current = [this, wan, route = ++m_wanRoute] { return m_wanConn == wan && m_wanRoute == route; };
-    connect(wan, &WanConnection::connected, this, [this, current] {
-        if (current()) { onConnected(); }
-    }, Qt::QueuedConnection);
-    connect(wan, &WanConnection::disconnected, this, [this, current] {
-        if (current()) { onDisconnected(); }
-    }, Qt::QueuedConnection);
-    connect(wan, &WanConnection::errorOccurred, this, [this, current](const QString& message) {
-        if (current()) { onConnectionError(message); }
-    }, Qt::QueuedConnection);
-    connect(wan, &WanConnection::certFingerprintMismatch,
-            this, &RadioModel::certFingerprintMismatch);
-    connect(wan, &WanConnection::versionReceived, this, [this, current](const QString& version) {
-        if (current()) { onVersionReceived(version); }
-    }, Qt::QueuedConnection);
-    connect(wan, &WanConnection::pingRttMeasured, this, [this, current](int ms) {
-        if (!current()) { return; }
-        m_pingMissCount = 0;
-        m_lastPingRtt = ms;
-        evaluateNetworkQuality();
-        emit pingReceived();
-    }, Qt::QueuedConnection);
-
-    // The WAN connection is already established (TLS + wan validate done)
-    // and has already received V/H. Trigger onConnected manually.
-    if (wan->isConnected()) {
-        qCDebug(lcProtocol) << "RadioModel: WAN already connected, triggering onConnected";
-        onConnected();
-    } else {
-        qCDebug(lcProtocol) << "RadioModel: WAN not yet connected, waiting for connected signal";
-    }
+    if (isConnected() || isConnectAttemptInFlight()) { return false; }
+    const auto request = m_smartLinkAccounts.connectionRequest(serial, disconnectHandles);
+    if (!request) { return false; }
+    RadioInfo info;
+    info.family = QStringLiteral("flex");
+    info.serial = request->radio.serial;
+    info.model = request->radio.model;
+    info.nickname = request->radio.nickname;
+    info.callsign = request->radio.callsign;
+    info.address = QHostAddress(request->radio.publicIp);
+    info.port = quint16(request->radio.publicTlsPort);
+    info.guiClientHandles = request->radio.guiClientHandles.split(',', Qt::SkipEmptyParts);
+    info.guiClientPrograms = request->radio.guiClientPrograms.split(',', Qt::SkipEmptyParts);
+    info.guiClientStations = request->radio.guiClientStations.split(',', Qt::SkipEmptyParts);
+    info.guiClientIps = request->radio.guiClientIps.split(',', Qt::SkipEmptyParts);
+    info.guiClientHosts = request->radio.guiClientHosts.split(',', Qt::SkipEmptyParts);
+    // Eviction belongs to this explicit broker request, never to a later retry.
+    m_pendingClientDisconnects.clear();
+    connectToRadioRequest(info, request);
+    return true;
 }
 
 void RadioModel::setPendingClientDisconnects(const QList<quint32>& handles)
@@ -4290,7 +4242,7 @@ void RadioModel::announceClientConnection(quint32 handle,
         QString latestStation = client.station.isEmpty() ? station : client.station;
         QString latestProgram = client.program.isEmpty() ? program : client.program;
 
-        if (m_wanConn && (latestSource.isEmpty() || latestSource == QStringLiteral("SmartLink"))) {
+        if (m_wanSession && (latestSource.isEmpty() || latestSource == QStringLiteral("SmartLink"))) {
             QTimer::singleShot(1250, this, [this, handle, lifecycle, latestSource, latestStation, latestProgram] {
                 if (handle == clientHandle() || !m_clientInfoMap.contains(handle)
                     || m_clientLifecycles.value(handle) != lifecycle) { return; }
@@ -4424,33 +4376,27 @@ void RadioModel::disconnectFromRadio()
     m_connectAttemptActive = false;  // the operator abandoned it (#4912)
     m_reconnectTimer.stop();
     m_pingTimer.stop();
-    if (m_wanConn) {
-        WanConnection* wan = m_wanConn;
-        wan->disconnect(this);  // remove stale signal connections before adding the one-shot teardown (#224)
-        connect(wan, &WanConnection::disconnected, this, [this, wan]() {
-            if (m_wanConn == wan) {
-                onDisconnected();
-            }
-        }, Qt::SingleShotConnection);
-        wan->disconnectFromRadio();
-        if (wan->isSocketIdle() && m_wanConn == wan) {
-            onDisconnected();
-        }
-    } else if (m_backend) {
-        m_backend->disconnectRadio(cleanup);
-    }
+    if (m_backend) { m_backend->disconnectRadio(cleanup); }
 }
 
-void RadioModel::acceptPresentedWanCert()
+void RadioModel::acceptPresentedWanCert(quint64 attempt)
 {
-    if (m_wanConn)
-        m_wanConn->acceptPresentedCert();
+    if (!m_backend || !isWan() || !m_certificateDecision || m_certificateDecision->id != attempt
+        || m_certificateDecision->backend != m_backendReceiverGeneration
+        || m_certificateDecision->intent != m_connectionIntentRevision) { return; }
+    const quint64 epoch = m_certificateDecision->attempt;
+    m_certificateDecision.reset();
+    m_backend->decideConnectionCertificate(epoch, true);
 }
 
-void RadioModel::rejectPresentedWanCert()
+void RadioModel::rejectPresentedWanCert(quint64 attempt)
 {
-    if (m_wanConn)
-        m_wanConn->rejectPresentedCert();
+    if (!m_backend || !isWan() || !m_certificateDecision || m_certificateDecision->id != attempt
+        || m_certificateDecision->backend != m_backendReceiverGeneration
+        || m_certificateDecision->intent != m_connectionIntentRevision) { return; }
+    const quint64 epoch = m_certificateDecision->attempt;
+    m_certificateDecision.reset();
+    m_backend->decideConnectionCertificate(epoch, false);
 }
 
 void RadioModel::forceDisconnect()
@@ -4460,9 +4406,7 @@ void RadioModel::forceDisconnect()
     // Close TCP/TLS without setting m_intentionalDisconnect so the UI can
     // start the normal unexpected-disconnect reconnect path.
     m_connectAttemptActive = false;  // this attempt is over; the retry re-arms it (#4912)
-    if (m_wanConn) {
-        m_wanConn->disconnectFromRadio();
-    } else if (m_backend) {
+    if (m_backend) {
         m_backend->disconnectRadio({0, RadioDisconnectRequest::Completion::Deferred});
     }
 }
@@ -6792,8 +6736,9 @@ void RadioModel::onConnected()
     m_connectedStatusEpoch = m_statusEpoch;
     resetSessionControls();
     m_sessionCommands = SessionCommandGuard::create();
-    m_sessionWire = m_wanConn ? static_cast<QObject*>(m_wanConn) : m_connection;
-    m_sessionWireGeneration = m_wanConn ? m_wanConn->commandSessionGeneration()
+    const auto transport = m_backend ? m_backend->connectionSession() : std::nullopt;
+    m_sessionWire = transport ? static_cast<QObject*>(m_backend.get()) : m_connection;
+    m_sessionWireGeneration = transport ? transport->epoch
         : m_connection ? m_connection->commandSessionGeneration() : 0;
     const RadioControlFence current = sessionControlFence();
     // A late disconnect can retire the subscriptions armed by the connect
@@ -6890,7 +6835,7 @@ void RadioModel::onConnected()
     // Register as GUI client FIRST — required before subscriptions,
     // especially on WAN/SmartLink where the radio is stricter.
     disconnectPendingClientsThen([this] {
-        if (m_wanConn) {
+        if (m_wanSession) {
             // On WAN: wait for client ip response before sending client gui.
             // The radio needs time after wan validate to accept GUI registration.
             // multiFLEX conflict on WAN is caught pre-connection via licensedClients.
@@ -6992,7 +6937,7 @@ void RadioModel::stageSessionModelsForReconnect()
     // drain its queued commands at the wrong radio. On LAN the discovery
     // serial is known here; on WAN it isn't, so registerAsGuiClient() repeats
     // this check when the "info" reply delivers chassis_serial.
-    const QString targetSerial = m_wanConn ? QString() : m_lastInfo.serial;
+    const QString targetSerial = m_lastInfo.serial;
     if (!m_staleSessionSerial.isEmpty() && !targetSerial.isEmpty()
         && targetSerial != m_staleSessionSerial) {
         qCDebug(lcProtocol) << "RadioModel: connect target serial" << targetSerial
@@ -7388,11 +7333,6 @@ void RadioModel::handleForcedClientDisconnect()
 void RadioModel::closeConnectionForTerminalDisconnect()
 {
     resetSessionControls();
-    if (m_wanConn) {
-        m_wanConn->disconnectFromRadio();
-        return;
-    }
-
     if (m_backend) {
         m_backend->disconnectRadio({m_rxAudio.streamId, RadioDisconnectRequest::Completion::Deferred});
     }
@@ -7628,18 +7568,9 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         if (!current()) { return; }
         // Always (re)start on connect — re-binds socket and re-registers
         // UDP port with the radio. start() calls stop() internally if needed. (#561)
-        bool streamOk = false;
-        quint16 udpPort = 0;
-        if (m_wanConn) {
-            QMetaObject::invokeMethod(m_panStream, [this, &streamOk, &udpPort]() {
-                streamOk = m_panStream->startWan(QHostAddress(m_wanPublicIp), m_wanUdpPort);
-                udpPort = m_panStream->localPort();
-            }, Qt::BlockingQueuedConnection);
-        } else {
-            const ReceiveTransportResult transport = m_backend->startReceiveTransport();
-            streamOk = transport.ready;
-            udpPort = transport.localPort;
-        }
+        const ReceiveTransportResult receiveTransport = m_backend->startReceiveTransport();
+        const bool streamOk = receiveTransport.ready;
+        const quint16 udpPort = receiveTransport.localPort;
 
         if (!streamOk) {
             qCWarning(lcProtocol) << "RadioModel: UDP stream setup failed — disconnecting gracefully (#894)";
@@ -7663,7 +7594,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             // working fine. (It also guards the m_panStream null deref for any
             // backend that vends no stream at all.)
             if (!m_flexBackend || !m_panStream) return;
-            if (!m_wanConn && !m_panStream->hasReceivedPackets()) {
+            if (!m_wanSession && !m_panStream->hasReceivedPackets()) {
                 qCWarning(lcProtocol) << "RadioModel: no VITA-49 UDP data received after 10s"
                                       << "target=" << targetRadioIp()
                                       << "sourceMode=" << selectedSourceMode()
@@ -7680,16 +7611,6 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             }
         });
 
-        // On WAN: use "client udp_register" via UDP (not TCP "client udpport").
-        // The radio only accepts udp_register on WAN connections.
-        if (m_wanConn) {
-            QMetaObject::invokeMethod(m_panStream,
-                [stream = m_panStream, handle = clientHandle(), guard = m_sessionCommands] {
-                    if (guard.current()) { stream->startWanUdpRegister(handle); }
-                });
-            qCDebug(lcProtocol) << "RadioModel: WAN — requested UDP registration via udp_register";
-        }
-
         qCInfo(lcProtocol).noquote()
             << "RadioModel: client udpport requested"
             << QStringLiteral("port=%1").arg(udpPort);
@@ -7702,7 +7623,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                     qCInfo(lcProtocol).noquote()
                         << "RadioModel: client udpport registered"
                         << QStringLiteral("port=%1").arg(udpPort);
-                } else if (shouldRetryLanUdpPortRegistration(m_wanConn != nullptr, code2, body)) {
+                } else if (shouldRetryLanUdpPortRegistration(m_wanSession, code2, body)) {
                     const ReceiveTransportResult transport = m_backend->startReceiveTransport(true);
                     const bool rebound = transport.ready;
 
@@ -8346,12 +8267,6 @@ void RadioModel::onDisconnected()
     emit audioOutputChanged();
 
     stopNetworkMonitor();
-    if (m_wanConn && m_panStream) {
-        QMetaObject::invokeMethod(m_panStream, [stream = m_panStream] {
-            stream->stop();
-            stream->clearRegisteredStreams();
-        }, Qt::BlockingQueuedConnection);
-    }
     // The radio sends no per-stream "removed" on a hard disconnect, so reset
     // the DAX-IQ stream state + destroy pipes here too (panStream IQ
     // registrations are cleared just above); otherwise stale `exists` makes
@@ -8432,10 +8347,9 @@ void RadioModel::onDisconnected()
     }
     m_forcedDisconnectInProgress = false;
 
-    if (m_wanConn) {
+    if (m_wanSession) {
         qCDebug(lcProtocol) << "RadioModel: WAN disconnected";
-        releaseWanStatus();
-        m_wanConn = nullptr;
+        m_wanSession = false;
     } else if (!m_intentionalDisconnect && !m_radioWakeActive && !m_lastInfo.address.isNull()) {
         qCDebug(lcProtocol) << "RadioModel: unexpected disconnect — reconnecting in 3s";
         m_reconnectTimer.start();
@@ -8485,7 +8399,7 @@ void RadioModel::onConnectionError(const QString& msg)
     m_connectAttemptActive = false;
     // A refused connect may never emit disconnected, but the radio can recover
     // after expiring a stale session. Keep retrying the same discovered radio.
-    if (!m_wanConn && !m_intentionalDisconnect && !m_lastInfo.address.isNull()
+    if (!m_wanSession && !m_intentionalDisconnect && !m_lastInfo.address.isNull()
             && !m_reconnectTimer.isActive()) {
         qCDebug(lcProtocol) << "RadioModel: connection error — reconnecting in 5s";
         m_reconnectTimer.start();
@@ -8497,7 +8411,7 @@ void RadioModel::adoptSoftwareVersion(const QString& version)
     m_version = version;
     // Only a LAN session reconnects through m_lastInfo. WAN must not replace
     // the discovery identity retained for a different LAN target.
-    if (!m_wanConn) {
+    if (!m_wanSession) {
         m_lastInfo.version = version;
     }
 }
@@ -9081,7 +8995,7 @@ QString RadioModel::selectedSourcePath() const
 
 QString RadioModel::localTcpEndpoint() const
 {
-    if (m_wanConn)
+    if (m_wanSession)
         return QStringLiteral("SmartLink/WAN");
 
     if (!m_connection) {
@@ -9936,9 +9850,9 @@ void RadioModel::logRemoteAudioRxSummary(const QString& reason) const
 
 bool RadioModel::sessionTransportCurrent() const
 {
-    if (m_wanConn) {
-        return m_sessionWire == m_wanConn && m_wanConn->isConnected()
-            && m_sessionWireGeneration == m_wanConn->commandSessionGeneration();
+    if (m_backend && m_sessionWire == m_backend.get()) {
+        const auto transport = m_backend->connectionSession();
+        return m_backend->isConnected() && transport && transport->epoch == m_sessionWireGeneration;
     }
     return !m_connection || (m_sessionWire == m_connection && m_connection->isConnected()
         && m_sessionWireGeneration == m_connection->commandSessionGeneration());
@@ -9956,8 +9870,9 @@ RadioControlFence RadioModel::registrationRejectionFence() const
         // A refusal queued before TCP close must remain terminal until the
         // model processes that close. It cannot authorize handshake writes
         // or cross a replacement transport that is connecting or connected.
-        if (model->m_wanConn || !model->m_connection
-            || model->m_sessionWire != model->m_connection) { return false; }
+        if (model->m_wanSession || !model->m_connection
+            || (model->m_sessionWire != model->m_connection
+                && model->m_sessionWire != model->m_backend.get())) { return false; }
         const ConnectionState state = model->m_connection->state();
         return state == ConnectionState::Disconnected || state == ConnectionState::Error;
     };
@@ -9966,8 +9881,10 @@ RadioControlFence RadioModel::registrationRejectionFence() const
 
 quint32 RadioModel::clientHandle() const
 {
-    if (m_wanConn)
-        return m_wanConn->clientHandle();
+    if (m_backend) {
+        const auto transport = m_backend->connectionSession();
+        if (transport) { return transport->clientHandle; }
+    }
     // No RadioConnection for a non-Flex backend; the Flex client-handle concept
     // does not apply there.
     return m_connection ? m_connection->clientHandle() : 0u;
@@ -11635,14 +11552,6 @@ bool RadioModel::observationSessionCurrent(quint64 statusEpoch) const
 bool RadioModel::displayObservationCurrent(const DisplayObservation& observation) const
 {
     return !observation.id.isEmpty() && observationSessionCurrent(observation.statusEpoch);
-}
-
-void RadioModel::releaseWanStatus()
-{
-    if (!m_wanConn) { return; }
-    ++m_wanRoute;
-    m_wanConn->disconnect(this);
-    if (m_statusIngress) { m_statusIngress->bind(m_connection); }
 }
 
 void RadioModel::wireGpsSessionReceivers()

@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 #include "FlexCommandTestSupport.h"
 // Socket-free: the Flex status ingress fence and its wire order, with real
 // transports that are never opened, plus RadioModel's production binding.
@@ -400,10 +401,9 @@ private slots:
     {
         TestSettingsProfile profile(QStringLiteral("flex-status-ingress"));
         QVERIFY(profile.isValid());
-        WanConnection wan;
         RadioModel model;
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
-        model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);
+        WanConnection& wan = FlexWanSessionTestAccess::connect(model);
         const quint64 epoch = wan.lineEpoch();
         emit wan.lineReceived(line("S0|profile global current=Before close"), epoch);
         emit wan.disconnected();
@@ -477,12 +477,11 @@ private slots:
     {
         TestSettingsProfile profile(QStringLiteral("flex-status-ingress-reuse"));
         QVERIFY(profile.isValid());
-        WanConnection wan;
         RadioModel model;
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
-        model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);
+        WanConnection& wan = FlexWanSessionTestAccess::connect(model);
         emit wan.disconnected();                                  // queued, not yet run
-        model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);   // the next session
+        FlexWanSessionTestAccess::connect(model);   // the next session
         QCoreApplication::sendPostedEvents();
         emit wan.lineReceived(line("S0|profile global current=Second session"), wan.lineEpoch());
         QCoreApplication::sendPostedEvents();
@@ -494,11 +493,10 @@ private slots:
     {
         TestSettingsProfile profile(QStringLiteral("flex-status-ingress-leave"));
         QVERIFY(profile.isValid());
-        WanConnection wan;
         RadioModel model;
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
-        model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4992);
-        QVERIFY(QMetaObject::invokeMethod(&model, "onDisconnected", Qt::DirectConnection));
+        WanConnection& wan = FlexWanSessionTestAccess::connect(model);
+        FlexWanSessionTestAccess::finish(model);
         emit wan.lineReceived(line("S0|profile global current=Stray"), wan.lineEpoch());
         QCoreApplication::sendPostedEvents();
         QVERIFY(model.activeGlobalProfile() != QLatin1String("Stray"));

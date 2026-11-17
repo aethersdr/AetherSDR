@@ -507,7 +507,7 @@ QLabel* makeWrappedLabel(const QString& text, const char* style = nullptr)
     return label;
 }
 
-QString smartLinkUserText(const SmartLinkClient* client)
+QString smartLinkUserText(const SmartLinkAccountModel* client)
 {
     if (!client)
         return QStringLiteral("Sign in to see radios at remote stations.");
@@ -2459,13 +2459,13 @@ void ConnectionPanel::onWanDisconnectClientsClicked()
     emit wanDisconnectClientsRequested(m_wanRadios[row]);
 }
 
-void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
+void ConnectionPanel::setSmartLinkAccountModel(SmartLinkAccountModel* client)
 {
     m_smartLink = client;
     if (!client)
         return;
 
-    connect(client, &SmartLinkClient::authenticated, this, [this] {
+    connect(client, &SmartLinkAccountModel::authenticated, this, [this] {
         if (m_smartLink->accountId() == QLatin1String("legacy")
             && ConnectionWorkspace::find(m_workspace.value("accounts").toArray(), "legacy").isEmpty()) {
             QJsonObject next = m_workspace;
@@ -2482,7 +2482,7 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         updateSmartLinkUi();
     });
 
-    connect(client, &SmartLinkClient::serverConnected, this, [this] {
+    connect(client, &SmartLinkAccountModel::serverConnected, this, [this] {
         QTimer::singleShot(500, this, [this] {
             if (m_smartLink && m_smartLink->isAuthenticated()) {
                 setAccountLine(smartLinkUserText(m_smartLink), AccountTone::Info);
@@ -2491,7 +2491,7 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         });
     });
 
-    connect(client, &SmartLinkClient::serverDisconnected, this, [this] {
+    connect(client, &SmartLinkAccountModel::serverDisconnected, this, [this] {
         if (!m_smartLink || !m_smartLink->isAuthenticated()) {
             if (m_slUserLabel->text().trimmed().isEmpty())
                 setAccountLine(QStringLiteral("Sign in to see radios at remote stations."), AccountTone::Hint);
@@ -2499,7 +2499,7 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         updateSmartLinkUi();
     });
 
-    connect(client, &SmartLinkClient::authFailed, this, [this](const QString& err) {
+    connect(client, &SmartLinkAccountModel::authFailed, this, [this](const QString& err) {
         m_passwordEdit->clear();
         m_loginBtn->setText("Sign In");
         m_loginBtn->setEnabled(true);
@@ -2507,7 +2507,7 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
         updateSmartLinkUi();
     });
 
-    connect(client, &SmartLinkClient::radioListReceived, this,
+    connect(client, &SmartLinkAccountModel::radioListReceived, this,
             [this](const QList<WanRadioInfo>& radios) {
         m_wanRadios.clear();
         m_wanList->clear();
@@ -4749,7 +4749,7 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
         });
     }
     qobject_cast<QVBoxLayout*>(m_modeStack->widget(SmartLinkMode)->layout())->insertLayout(0, accountRow);
-    if (!SmartLinkClient::persistentStoreAvailable()) {
+    if (!SmartLinkAccountModel::persistentStoreAvailable()) {
         qobject_cast<QVBoxLayout*>(m_modeStack->widget(SmartLinkMode)->layout())->insertWidget(1,
             makeWrappedLabel(tr("This build keeps SmartLink credentials for this session only. Account names remain saved."), kHintLabelStyle));
     }

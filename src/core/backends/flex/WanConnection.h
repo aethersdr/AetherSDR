@@ -1,6 +1,7 @@
 #pragma once
 #include "core/backends/SessionCommandGuard.h"
 
+#include "core/backends/RemoteRadioAccount.h"
 #include "CommandParser.h"
 #include "FlexCommandSession.h"
 
@@ -21,12 +22,6 @@ namespace AetherSDR {
 // (#2951 / GHSA-wfx7-w6p8-4jr2). Backs the same store WanConnection
 // uses for TOFU pin enforcement; defined in WanConnection.cpp so the
 // JSON shape stays in one place.
-struct PinnedCertInfo {
-    QString host;
-    QString fingerprintHex;
-    QString pinnedAtIso;   // empty for legacy Phase 1 entries
-};
-
 namespace WanCertCache {
     QVector<PinnedCertInfo> listPinnedCerts();
     void forgetPinnedCert(const QString& host);
@@ -40,6 +35,7 @@ namespace WanCertCache {
 // Emits the same signals as RadioConnection so RadioModel can use either.
 class WanConnection : public QObject {
     Q_OBJECT
+    friend class FlexWanSessionTestAccess;
 
 public:
     explicit WanConnection(QObject* parent = nullptr);
@@ -55,6 +51,7 @@ public:
     void connectToRadio(const QString& host, quint16 tlsPort,
                         const QString& wanHandle);
     void disconnectFromRadio();
+    void abortConnection();
 
     // Same command interface as RadioConnection
     using ResponseCallback = std::function<void(int resultCode, const QString& body)>;

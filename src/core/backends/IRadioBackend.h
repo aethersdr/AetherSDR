@@ -2,6 +2,7 @@
 
 #include "RadioStatusObservation.h"
 #include "ConnectionSession.h"
+#include "RemoteRadioAccount.h"
 #include "core/ReceiveData.h"
 #include "SetupStatusObservation.h"
 
@@ -88,6 +89,7 @@ struct RadioConnectRequest {
     // an automatically discovered preference for existing backends.
     QHostAddress explicitLocalBindAddress;
     bool requireExplicitLocalBind{false};
+    std::optional<RemoteRadioRequest> remote;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
@@ -412,6 +414,8 @@ public:
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual void disconnectRadio(const RadioDisconnectRequest&) { disconnectRadio(); }
+    virtual bool connectionClosing() const { return false; }
+    virtual void decideConnectionCertificate(quint64, bool) {}
     virtual std::optional<ConnectionSession> connectionSession() const { return std::nullopt; }
     // Start after client registration; a port collision may request one rebind.
     virtual ReceiveTransportResult startReceiveTransport(bool rebind = false)
@@ -1266,6 +1270,9 @@ signals:
     // Opens observation delivery before the transport may publish any status.
     void connectionSessionStarting(quint64 epoch);
     void connectionVersionReceived(const QString& version);
+    void connectionCertificateRequired(quint64 attempt, const QString& host,
+                                       const QString& expected, const QString& presented);
+    void connectionPingMeasured(int milliseconds);
     void connected();
     void disconnected();
     void connectionError(const QString& reason);

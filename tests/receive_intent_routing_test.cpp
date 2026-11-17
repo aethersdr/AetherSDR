@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 // #5904: the production model bindings, not a second implementation of them.
 // Injected state/dispatch only: no sockets, firmware peer, hardware or keying.
 // WAN fixtures inject connected state without opening the TLS socket.
@@ -29,7 +30,7 @@ public:
     // Bypass the live handshake; exercise the production WAN predicate.
     static void setWanConnection(RadioModel& radio, WanConnection* wan)
     {
-        radio.m_wanConn = wan;
+        radio.m_wanSession = wan != nullptr;
     }
 };
 class WanConnectionTestAccess {
@@ -778,8 +779,7 @@ void wanFallback()
     RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, &wan);
 
     // Every receive intent reaches the backend while only WAN is connected.
-    f.backend->connected = false;
-    WanConnectionTestAccess::setConnected(wan, true);
+    f.backend->connected = true;
     s->setFrequency(14.21);
     // USB -> LSB also dispatches one ModeNormalization filter edit (see
     // creationPaths() above) in addition to the explicit setFilterWidth()
@@ -789,11 +789,11 @@ void wanFallback()
     s->setAgcMode(QStringLiteral("slow"));
     check(f.backend->tunes.size() == 1 && f.backend->modes.size() == 1
               && f.backend->filters.size() == 2 && f.backend->agcs.size() == 1,
-          "a live WAN link dispatches every receive intent even though the backend's own link is down");
+          "the backend-owned WAN link dispatches every receive intent");
 
     // Sanity check the other direction: neither link connected still refuses,
     // so the fix is not just "always dispatch".
-    WanConnectionTestAccess::setConnected(wan, false);
+    f.backend->connected = false;
     s->setFrequency(14.22);
     check(f.backend->tunes.size() == 1, "neither link connected still refuses the intent");
 
@@ -812,6 +812,7 @@ void wanOverUndialedFlexConnection()
         return;
     }
     backend->setSliceCommandSinkForTest([&commands](const QString& command) { commands.append(command); });
+    FlexWanSessionTestAccess::connect(radio);
     check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "WAN fixture creates slice zero");
     SliceModel* slice = radio.slice(0);
     check(slice != nullptr, "WAN fixture has an active slice");
@@ -819,10 +820,8 @@ void wanOverUndialedFlexConnection()
         return;
     }
     QSignalSpy dropped(&radio, &RadioModel::commandDropped);
-    WanConnection wan;
-    RadioModelSliceLifecycleTestAccess::setWanConnection(radio, &wan);
-    WanConnectionTestAccess::setConnected(wan, true);
-    check(radio.backend() && !radio.backend()->isConnected(), "the FlexBackend's own link is down");
+    FlexWanSessionTestAccess::connected(radio, true);
+    check(radio.backend() && radio.backend()->isConnected(), "the FlexBackend owns WAN connectivity");
     check(radio.isConnected(), "a live WAN link connects the model despite the undialed LAN link");
     commands.clear();
     slice->setFrequency(14.21);
@@ -836,7 +835,7 @@ void wanOverUndialedFlexConnection()
                                   "slice set 0 agc_mode=slow", "slice set 0 agc_threshold=42",
                                   "slice set 0 agc_off_level=31"},
           "WAN receive edits reach the real Flex command sink exactly once with correct values");
-    WanConnectionTestAccess::setConnected(wan, false);
+    FlexWanSessionTestAccess::connected(radio, false);
     commands.clear();
     warningMessages.clear();
     const QtMessageHandler previousHandler = qInstallMessageHandler(
@@ -855,7 +854,7 @@ void wanOverUndialedFlexConnection()
     check(!radio.isConnected() && commands.isEmpty(),
           "both links down refuses every receive intent at the real Flex sink");
     check(dropped.isEmpty(), "disconnected receive edits never emit an unsupported-control notice");
-    RadioModelSliceLifecycleTestAccess::setWanConnection(radio, nullptr);
+    FlexWanSessionTestAccess::finish(radio);
 }
 }
 

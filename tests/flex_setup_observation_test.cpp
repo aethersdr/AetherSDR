@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 #include "FlexSetupStatusTestSupport.h"
 #include "RadioSetupControlFixture.h"
 #include "TestSettingsProfile.h"
@@ -374,23 +375,22 @@ void sessionSurvivesTransportError()
               "a LAN error that leaves the link up keeps setup status and entity authority");
     }
     {
-        WanConnection wan;
         RadioModel radio;
         installRadioSetupBackend(radio);
-        FlexSetupStatusTestPeer::connectWan(radio, &wan);
+        WanConnection& wan = FlexWanSessionTestAccess::connect(radio);
         emit wan.lineReceived(line("S1|usb_cable SN type=cat name=rig"), wan.lineEpoch());
         QCoreApplication::sendPostedEvents();
         check(radio.usbCableModel().cables().value("SN").name == "rig",
               "SmartLink setup status reaches the model through the ingress");
+        const auto lifetime = radio.usbCableModel().cables().value("SN").lifetime;
         QMetaObject::invokeMethod(&wan, "onSocketError", Qt::DirectConnection,
                                   Q_ARG(QAbstractSocket::SocketError, QAbstractSocket::SocketTimeoutError));
         FlexSetupStatusTestPeer::connectionError(radio);
         emit wan.lineReceived(line("S1|usb_cable SN name=rig2"), wan.lineEpoch());
         QCoreApplication::sendPostedEvents();
-        check(radio.usbCableModel().cables().value("SN").name == "rig2"
-            && radio.usbCableModel().cables().value("SN").lifetime->current(),
-              "a SmartLink socket error keeps setup status and entity authority");
-        FlexSetupStatusTestPeer::releaseWan(radio);
+        check(!radio.isWan() && !lifetime->current() && radio.usbCableModel().cables().isEmpty(),
+              "a fatal SmartLink socket error retires setup status and entity authority");
+        FlexWanSessionTestAccess::finish(radio);
     }
 }
 }

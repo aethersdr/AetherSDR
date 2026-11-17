@@ -406,8 +406,7 @@ void MainWindow::beginExplicitRadioChoice()
     if (!m_radioModel.isConnected()) {
         m_pendingWanRadio = {};
         m_userDisconnected = true;
-        m_smartLink.setAccountLocked(false);
-        m_wanConnection.disconnectFromRadio();
+        m_radioModel.disconnectFromRadio();
         m_radioModel.cancelAutomaticReconnect();
         if (m_radioModel.isConnectAttemptInFlight()) {
             awaitRadioTeardown();
@@ -542,7 +541,6 @@ void MainWindow::continueRadioSwitch(quint64 generation)
     if (generation != m_radioChoiceGeneration || m_pendingRadioTarget.isEmpty()
         || m_radioModel.isConnected() || m_radioDisconnectPending || m_radioSwitchPhase == QLatin1String("connecting")) { return; }
     m_radioSwitchPhase = QStringLiteral("connecting");
-    m_smartLink.setAccountLocked(false);
     m_pendingWanRadio = {};
     m_connPanel->connectTarget(m_pendingRadioTarget);
     scheduleRadioTabRefresh();
@@ -1016,7 +1014,7 @@ void MainWindow::wireDiscovery()
             [this](bool) { scheduleRadioTabRefresh(); });
     connect(&m_radioModel, &RadioModel::infoChanged,
             this, &MainWindow::scheduleRadioTabRefresh);
-    connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
+    connect(&m_smartLink, &SmartLinkAccountModel::radioListReceived, this,
             [this](const QList<WanRadioInfo>& radios) {
         m_smartLinkRadios = radios;
         scheduleRadioTabRefresh();
@@ -1030,7 +1028,7 @@ void MainWindow::wireDiscovery()
         scheduleRadioTabRefresh();
     };
     connect(m_connPanel, &ConnectionPanel::smartLinkSignedOut, this, dropSmartLinkTabs);
-    connect(&m_smartLink, &SmartLinkClient::serverDisconnected, this,
+    connect(&m_smartLink, &SmartLinkAccountModel::serverDisconnected, this,
             [this, dropSmartLinkTabs]() {
         if (!m_smartLink.isAuthenticated()) dropSmartLinkTabs();
     });
@@ -1116,12 +1114,12 @@ void MainWindow::wireDiscovery()
             this, &MainWindow::disconnectFromRadioByUser);
 
     // ── SmartLink ──────────────────────────────────────────────────────────
-    m_connPanel->setSmartLinkClient(&m_smartLink);
+    m_connPanel->setSmartLinkAccountModel(&m_smartLink);
     m_wanReconnectTimer.setInterval(5000);
     m_wanReconnectTimer.setSingleShot(true);
     connect(&m_wanReconnectTimer, &QTimer::timeout,
             this, &MainWindow::requestWanReconnect);
-    connect(&m_smartLink, &SmartLinkClient::authFailed,
+    connect(&m_smartLink, &SmartLinkAccountModel::authFailed,
             this, [this](const QString& err) {
         if (!m_wanReconnectTimer.isActive() || m_pendingWanRadio.serial.isEmpty()
                 || m_radioModel.isConnected()) {
@@ -1130,7 +1128,6 @@ void MainWindow::wireDiscovery()
 
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
-        m_smartLink.setAccountLocked(false);
         m_pendingWanRadio = {};
         m_connPanel->setStatusText("SmartLink sign-in required");
         statusBar()->showMessage("SmartLink reconnect stopped: " + err, 5000);
@@ -1143,11 +1140,11 @@ void MainWindow::wireDiscovery()
         }
         showConnectionDialog();
     });
-    connect(&m_smartLink, &SmartLinkClient::serverConnected,
+    connect(&m_smartLink, &SmartLinkAccountModel::serverConnected,
             this, [this] {
         m_wanReconnectAttemptInProgress = false;
     });
-    connect(&m_smartLink, &SmartLinkClient::serverDisconnected,
+    connect(&m_smartLink, &SmartLinkAccountModel::serverDisconnected,
             this, [this] {
         m_wanReconnectAttemptInProgress = false;
     });
@@ -1171,7 +1168,7 @@ void MainWindow::wireDiscovery()
             this, [this](const WanRadioInfo& info) {
         disconnectWanRadioClients(info);
     });
-    connect(&m_smartLink, &SmartLinkClient::radioListReceived,
+    connect(&m_smartLink, &SmartLinkAccountModel::radioListReceived,
             this, [this](const QList<WanRadioInfo>& radios) {
         if (!m_radioModel.isConnected() || !m_radioModel.isWan())
             return;
@@ -1189,54 +1186,14 @@ void MainWindow::wireDiscovery()
         }
     });
 
-    // SmartLink server says radio is ready — connect via TLS
-    connect(&m_smartLink, &SmartLinkClient::connectReady,
-            this, [this](const QString& handle, const QString& serial) {
-        if (serial != m_pendingWanRadio.serial) return;
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (!m_radioModel.isWan()) { return; }
         m_wanReconnectAttemptInProgress = false;
-        m_connPanel->setStatusText("TLS connecting to radio…");
-        setPanadapterConnectionAnimation(true, "Connecting to remote radio…");
-        m_wanConnection.connectToRadio(
-            m_pendingWanRadio.publicIp,
-            static_cast<quint16>(m_pendingWanRadio.publicTlsPort),
-            handle);
-    });
-
-    // WAN connection established — wire to RadioModel
-    // TODO: RadioModel needs to accept WanConnection as an alternative
-    // to RadioConnection. For now, log the event.
-    connect(&m_wanConnection, &WanConnection::connected, this, [this] {
-        qDebug() << "MainWindow: WAN connection established!";
-        m_wanReconnectTimer.stop();
-        m_wanReconnectAttemptInProgress = false;
-        m_connPanel->setStatusText("Connected via SmartLink");
-        m_connPanel->setConnected(true);
-
-        // Wire WanConnection to RadioModel for full operation
-        m_radioModel.connectViaWan(&m_wanConnection,
-            m_pendingWanRadio.publicIp,
-            static_cast<quint16>(m_pendingWanRadio.publicUdpPort > 0
-                ? m_pendingWanRadio.publicUdpPort : 4993));
-    });
-    connect(&m_wanConnection, &WanConnection::disconnected, this, [this] {
-        qDebug() << "MainWindow: WAN connection lost";
-        m_wanReconnectAttemptInProgress = false;
-        m_connPanel->setStatusText("SmartLink disconnected");
-        m_connPanel->setConnected(false);
-        if (m_userDisconnected) {
-            setPanadapterConnectionAnimation(false);
-        }
-    });
-    connect(&m_wanConnection, &WanConnection::errorOccurred, this, [this](const QString& err) {
-        if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(err); return; }
-        m_connPanel->setStatusText("SmartLink error: " + err);
-        if (!m_reconnectDlg) {
-            setPanadapterConnectionAnimation(false);
-            if (!m_radioModel.isConnected()) {
-                m_smartLink.setAccountLocked(false);
-                m_pendingWanRadio = {};
-            }
-        }
+        if (connected) {
+            m_wanReconnectTimer.stop();
+            m_connPanel->setStatusText("Connected via SmartLink");
+        } else { m_connPanel->setStatusText("SmartLink disconnected"); }
+        m_connPanel->setConnected(connected);
     });
 
 }
@@ -1245,7 +1202,7 @@ void MainWindow::disconnectFromRadioByUser()
 {
     m_connPanel->cancelConnectionAttempt();
     beginExplicitRadioChoice();
-    m_smartLink.setAccountLocked(false);
+
     m_pendingWanRadio = {};
     m_userDisconnected = true;
     m_wanReconnectTimer.stop();
@@ -1513,7 +1470,7 @@ void MainWindow::wireRadioModel()
             m_pendingDisplayWrites.flush();
             // No automatic reconnect follows, so nothing depends on the account.
             if (m_userDisconnected) {
-                m_smartLink.setAccountLocked(false);
+
                 m_pendingWanRadio = {};
             }
         }
@@ -1621,7 +1578,7 @@ void MainWindow::wireRadioModel()
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
         m_terminalConnectionError = message;
-        m_smartLink.setAccountLocked(false);
+
         m_pendingWanRadio = {};
         setPanadapterConnectionAnimation(false);
         if (m_reconnectDlg) {

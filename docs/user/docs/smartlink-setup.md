@@ -55,6 +55,26 @@ Account discovery uses one account at a time. Switching clears the previous acco
 
 On a slow or metered connection, tick **Use low bandwidth mode** under *Connection options for slower links* before connecting, and consider Opus audio compression — see [Low Bandwidth Connections](./low-bandwidth-connections.md).
 
+## Headless startup
+
+The experimental `aetherd` engine can make one explicitly selected SmartLink connection using an account already saved in this computer's operating-system keychain. Sign in through the desktop application first, then close its radio connection.
+
+List the saved account identifiers without reading their credentials:
+
+```sh
+aetherd --list-smartlink-accounts
+```
+
+Select an account identifier from that output and the radio's serial number:
+
+```sh
+aetherd --allow-local-control --smartlink-account ACCOUNT_ID --smartlink-radio RADIO_SERIAL
+```
+
+Startup reserves the engine connection while authentication, discovery and connection are in progress. It connects only to that account's matching radio. A failed or disconnected headless session requires a new explicit startup; it does not automatically reconnect or disconnect other radio users. The existing control service can observe and control the connected receiver. SmartLink startup does not enable transmit grants or add a SmartLink route to the public discovery catalogue.
+
+The daemon uses the same certificate pins as the desktop application. If a certificate changes, the headless connection fails. Review the change in the desktop application before retrying. Disconnecting a radio leaves the account signed in; signing out remains a separate action.
+
 ## Certificate pinning
 
 AetherSDR pins each SmartLink radio's TLS certificate on first use, to protect you from a man-in-the-middle.

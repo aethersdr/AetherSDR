@@ -11,10 +11,7 @@
 #include <QUrl>
 #include <QSignalBlocker>
 #include <QRegularExpression>
-
-#ifdef HAVE_KEYCHAIN
-#include <qt6keychain/keychain.h>
-#endif
+#include <utility>
 
 namespace AetherSDR {
 
@@ -36,6 +33,12 @@ SmartLinkClient::SmartLinkClient(QObject* parent)
     : QObject(parent)
 {
     m_nam.setTransferTimeout(kTransferTimeoutMs);
+    m_connectDeadline.setSingleShot(true);
+    m_connectDeadline.setInterval(30000);
+    connect(&m_connectDeadline, &QTimer::timeout, this, [this] {
+        failPendingConnection(tr("SmartLink connection request timed out."));
+    });
+    connect(this, &SmartLinkClient::authFailed, this, &SmartLinkClient::failPendingConnection);
     // Report credential-persistence availability up front so a build that
     // shipped without QtKeychain is diagnosable from the SmartLink support
     // log instead of failing silently (#3639). The disabled case is a
@@ -48,7 +51,7 @@ SmartLinkClient::SmartLinkClient(QObject* parent)
 #endif
 
     // SmartLink server TLS socket
-    connect(&m_socket, &QSslSocket::connected,    this, &SmartLinkClient::onSslConnected);
+    connect(&m_socket, &QSslSocket::encrypted,    this, &SmartLinkClient::onSslConnected);
     connect(&m_socket, &QSslSocket::disconnected, this, &SmartLinkClient::onSslDisconnected);
     connect(&m_socket, &QSslSocket::readyRead,    this, &SmartLinkClient::onReadyRead);
     connect(&m_socket, &QSslSocket::sslErrors,    this, &SmartLinkClient::onSslError);
@@ -264,23 +267,9 @@ void SmartLinkClient::resetAuthentication()
 
 void SmartLinkClient::saveCredentials()
 {
-    if (!m_refreshToken.isEmpty()) { m_sessionCredentials.insert(m_accountId, m_refreshToken); }
-#ifdef HAVE_KEYCHAIN
-    if (m_refreshToken.isEmpty()) return;
-
-    auto* job = new QKeychain::WritePasswordJob("AetherSDR");
-    job->setAutoDelete(true);
-    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(m_accountId));
-    job->setInsecureFallback(false);
-    job->setTextData(m_refreshToken);
-    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
-        if (j->error() != QKeychain::NoError)
-            qCWarning(lcSmartLink) << "SmartLinkClient: keychain save failed:" << j->errorString();
-        else
-            qCDebug(lcSmartLink) << "SmartLinkClient: refresh token saved to keychain";
-    });
-    job->start();
-#endif
+    if (m_refreshToken.isEmpty()) { return; }
+    m_sessionCredentials.insert(m_accountId, m_refreshToken);
+    m_credentials.write(m_accountId, m_refreshToken);
 }
 
 void SmartLinkClient::clearCredentials()
@@ -290,6 +279,8 @@ void SmartLinkClient::clearCredentials()
 
 void SmartLinkClient::forgetAccount(const QString& id)
 {
+    static const QRegularExpression valid(QStringLiteral("^(legacy|[a-f0-9]{64})$"));
+    if (!valid.match(id).hasMatch() || (id == m_accountId && m_accountLocked)) { return; }
     forgetRefreshToken(id);
     if (id == QLatin1String("legacy")) {
         AppSettings::instance().remove("SmartLinkEmail");
@@ -300,58 +291,108 @@ void SmartLinkClient::forgetAccount(const QString& id)
 void SmartLinkClient::forgetRefreshToken(const QString& id)
 {
     m_sessionCredentials.remove(id);
-#ifdef HAVE_KEYCHAIN
-    auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
-    job->setAutoDelete(true);
-    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(id));
-    job->setInsecureFallback(false);
-    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
-        if (j->error() != QKeychain::NoError && j->error() != QKeychain::EntryNotFound)
-            qCWarning(lcSmartLink) << "SmartLinkClient: keychain clear failed:" << j->errorString();
-        else
-            qCDebug(lcSmartLink) << "SmartLinkClient: refresh token cleared from keychain";
-    });
-    job->start();
-#endif
+    m_credentials.remove(id);
 }
 
 void SmartLinkClient::tryAutoLogin()
 {
-    if (m_authenticated) {
-        reconnect();
-        return;
-    }
+    if (m_authenticated) { reconnect(); return; }
     if (m_sessionCredentials.contains(m_accountId)) {
         loginWithRefreshToken(m_sessionCredentials.value(m_accountId));
         return;
     }
-#ifdef HAVE_KEYCHAIN
-    auto* job = new QKeychain::ReadPasswordJob("AetherSDR");
-    job->setAutoDelete(true);
-    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(m_accountId));
-    job->setInsecureFallback(false);
     const quint64 generation = m_authGeneration;
-    connect(job, &QKeychain::Job::finished, this, [this, generation](QKeychain::Job* j) {
+    m_credentials.read(m_accountId, [this, generation](bool ok, const QString& token) {
         if (generation != m_authGeneration) { return; }
-        auto* readJob = static_cast<QKeychain::ReadPasswordJob*>(j);
-        if (j->error() != QKeychain::NoError || readJob->textData().isEmpty()) {
+        if (!ok || token.isEmpty()) {
             qCDebug(lcSmartLink) << "SmartLinkClient: no stored credentials";
             return;
         }
         qCDebug(lcSmartLink) << "SmartLinkClient: found stored refresh token, attempting auto-login";
-        loginWithRefreshToken(readJob->textData());
+        loginWithRefreshToken(token);
     });
-    job->start();
-#endif
 }
 
 bool SmartLinkClient::persistentStoreAvailable()
 {
-#ifdef HAVE_KEYCHAIN
-    return true;
-#else
-    return false;
-#endif
+    return SmartLinkCredentials::available();
+}
+
+quint64 SmartLinkClient::beginConnection(const QString& serial, quint16 localPort,
+    const QList<quint32>& disconnectHandles, Ready ready, Failed failed)
+{
+    static const QRegularExpression token(QStringLiteral("^[A-Za-z0-9_.:-]{1,128}$"));
+    if (m_lease || !m_authenticated || !localPort || !token.match(serial).hasMatch()) { return 0; }
+    m_lease = ++m_nextLease;
+    m_accountLocked = true;
+    m_connectSerial = serial;
+    m_connectPort = localPort;
+    m_disconnectHandles = disconnectHandles;
+    m_connectSent = false;
+    m_ready = std::move(ready);
+    m_failed = std::move(failed);
+    m_connectDeadline.start();
+    const quint64 lease = m_lease;
+    QTimer::singleShot(0, this, [this, lease] {
+        if (m_lease != lease) { return; }
+        if (m_serverConnected) { sendPendingConnection(); }
+        else { reconnect(); }
+    });
+    return lease;
+}
+
+void SmartLinkClient::sendPendingConnection()
+{
+    if (!m_lease || m_connectSent || !m_serverConnected || !m_ready) { return; }
+    m_connectSent = true;
+    const quint64 lease = m_lease;
+    const auto send = [this, lease] {
+        if (m_lease == lease && m_ready && m_serverConnected) {
+            requestConnect(m_connectSerial, m_connectPort);
+        }
+    };
+    if (m_disconnectHandles.isEmpty()) { send(); }
+    else {
+        disconnectRadioClients(m_connectSerial, std::exchange(m_disconnectHandles, {}));
+        QTimer::singleShot(350, this, send);
+    }
+}
+
+void SmartLinkClient::retireBroker()
+{
+    // FlexLib 4.2.18 connect_ready carries only serial + handle. Retire the
+    // originating transport before another attempt; a local generation cannot
+    // identify an old server reply on the same broker connection.
+    m_pingTimer.stop();
+    const QSignalBlocker blocker(&m_socket);
+    m_socket.abort();
+    m_readBuffer.clear();
+    const bool connected = std::exchange(m_serverConnected, false);
+    if (connected) { emit serverDisconnected(); }
+}
+
+void SmartLinkClient::cancelConnection(quint64 lease)
+{
+    if (!lease || m_lease != lease) { return; }
+    m_lease = 0;
+    m_connectDeadline.stop();
+    m_ready = {};
+    m_failed = {};
+    m_connectSerial.clear();
+    m_disconnectHandles.clear();
+    m_accountLocked = false;
+    retireBroker();
+    // Signing in belongs to the account, not to the radio session.
+    QTimer::singleShot(0, this, [this] { if (m_authenticated && !m_lease) { reconnect(); } });
+}
+
+void SmartLinkClient::failPendingConnection(const QString& message)
+{
+    if (!m_lease || !m_ready) { return; }
+    m_ready = {};
+    m_connectDeadline.stop();
+    const Failed failed = std::exchange(m_failed, {});
+    if (failed) { failed(m_lease, message); }
 }
 
 // ── SmartLink Server Connection ──────────────────────────────────────────────
@@ -462,6 +503,7 @@ void SmartLinkClient::onSslConnected()
     qCDebug(lcSmartLink) << "SmartLinkClient: keepalive ping timer started (10s interval)";
 
     emit serverConnected();
+    sendPendingConnection();
 }
 
 void SmartLinkClient::onSslDisconnected()
@@ -470,6 +512,7 @@ void SmartLinkClient::onSslDisconnected()
     m_pingTimer.stop();
     m_serverConnected = false;
     emit serverDisconnected();
+    failPendingConnection(tr("SmartLink server disconnected during the connection request."));
 }
 
 void SmartLinkClient::onSslError(const QList<QSslError>& errors)
@@ -638,7 +681,15 @@ void SmartLinkClient::parseConnectReady(const QString& msg)
     QString serial = kv.value("serial");
 
     qCDebug(lcSmartLink) << "SmartLinkClient: connect ready, serial:" << serial;
-    emit connectReady(handle, serial);
+    if (!m_lease || !m_connectSent || serial != m_connectSerial || !m_ready) { return; }
+    static const QRegularExpression token(QStringLiteral("^[A-Za-z0-9_.:-]{1,512}$"));
+    if (!token.match(handle).hasMatch()) {
+        failPendingConnection(tr("SmartLink returned an invalid connection handle."));
+        return;
+    }
+    m_connectDeadline.stop();
+    const Ready ready = std::exchange(m_ready, {});
+    ready(m_lease, handle);
 }
 
 void SmartLinkClient::parseApplicationInfo(const QString& msg)

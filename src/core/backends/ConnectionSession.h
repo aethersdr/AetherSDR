@@ -14,6 +14,8 @@ struct ConnectionSession {
     QHostAddress remoteAddress;
     QHostAddress localAddress;
     quint16 localPort{0};
+    enum class Transport { Lan, Wan };
+    Transport transport{Transport::Lan};
 };
 
 struct RadioDisconnectRequest {
@@ -28,6 +30,8 @@ struct RadioDisconnectRequest {
 struct ReceiveTransportResult {
     bool ready{false};
     quint16 localPort{0};
+    enum class Transport { Lan, Wan };
+    Transport transport{Transport::Lan};
 };
 
 } // namespace AetherSDR

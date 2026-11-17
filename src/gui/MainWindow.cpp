@@ -838,64 +838,16 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
         return;
     }
 
-    if (!m_radioModel.prepareWanConnection()) {
-        const QString reason = tr("Disconnect the current radio before preparing SmartLink.");
-        // As the guard below: let the next reconnect tick try again rather
-        // than re-arm behind an attempt that never started.
-        setPanadapterConnectionAnimation(false);
-        m_wanReconnectAttemptInProgress = false;
-        if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(reason); }
-        else { m_connPanel->setStatusText(reason); }
-        return;
-    }
     m_userDisconnected = false;
-    m_radioModel.setKnownGuiClients(splitClientField(info.guiClientHandles),
-                                    splitClientField(info.guiClientPrograms),
-                                    splitClientField(info.guiClientStations),
-                                    splitClientField(info.guiClientIps),
-                                    splitClientField(info.guiClientHosts));
-    m_radioModel.setPendingClientDisconnects(disconnectHandles);
+    m_pendingWanRadio = info;
     m_connPanel->setStatusText("Requesting SmartLink connection…");
     setPanadapterConnectionAnimation(true, "Connecting to remote radio…");
-    // Store WAN radio info for when connect_ready arrives
-    m_pendingWanRadio = info;
-
-    // Pre-bind UDP socket for VITA-49 reception BEFORE requesting
-    // connection, so we can pass our port to the SmartLink server.
-    // The server tells the radio our public IP:port for UDP streaming.
-    if (!m_radioModel.panStream()) {
-        qWarning() << "MainWindow: WAN connect requested with no PanadapterStream"
-                   << "— Flex backend unavailable";
-        m_connPanel->setStatusText("SmartLink connection failed");
-        setPanadapterConnectionAnimation(false);
-        // From requestWanReconnect(), let the next tick try again rather than
-        // re-arm forever behind an attempt that never started.
+    if (!m_radioModel.connectViaSmartLink(info.serial, disconnectHandles)) {
         m_wanReconnectAttemptInProgress = false;
-        return;
-    }
-    m_smartLink.setAccountLocked(true);
-    quint16 udpPort = m_radioModel.panStream()->localPort();
-    if (udpPort == 0) {
-        // Not yet bound — start WAN early to get a port
-        const quint16 radioUdpPort = static_cast<quint16>(
-            info.publicUdpPort > 0 ? info.publicUdpPort : 4993);
-        auto* ps = m_radioModel.panStream();
-        QMetaObject::invokeMethod(ps, [ps, info, radioUdpPort]() {
-            ps->startWan(QHostAddress(info.publicIp), radioUdpPort);
-        }, Qt::BlockingQueuedConnection);
-        udpPort = ps->localPort();
-    }
-    qDebug() << "MainWindow: pre-bound UDP port" << udpPort << "for WAN hole punch";
-    auto requestSmartLinkConnect = [this, serial = info.serial, udpPort] {
-        if (serial != m_pendingWanRadio.serial)
-            return;
-        m_smartLink.requestConnect(serial, udpPort);
-    };
-    if (!disconnectHandles.isEmpty()) {
-        sendWanRadioClientDisconnects(info.serial, disconnectHandles);
-        QTimer::singleShot(350, this, requestSmartLinkConnect);
-    } else {
-        requestSmartLinkConnect();
+        const QString reason = tr("SmartLink is unavailable or another radio connection is still closing.");
+        if (!m_pendingRadioTarget.isEmpty()) { failRadioSwitch(reason); }
+        else { m_connPanel->setStatusText(reason); }
+        setPanadapterConnectionAnimation(false);
     }
 }
 
@@ -908,7 +860,7 @@ void MainWindow::requestWanReconnect()
         return;
     }
 
-    if (m_wanReconnectAttemptInProgress) {
+    if (m_wanReconnectAttemptInProgress || m_radioModel.isConnectAttemptInFlight()) {
         m_wanReconnectTimer.start();
         return;
     }
@@ -1050,7 +1002,6 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
             m_reconnectDlg = nullptr;
         // Dismissed without Reconnect: release the SmartLink account.
         if (m_userDisconnected && !m_radioModel.isConnected()) {
-            m_smartLink.setAccountLocked(false);
             m_pendingWanRadio = {};
         }
     });
@@ -7377,7 +7328,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 reconnectDialog->deleteLater();
             });
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
-                m_smartLink.setAccountLocked(false);
                 m_pendingWanRadio = {};
                 m_userDisconnected = true;
                 m_wanReconnectTimer.stop();
@@ -7412,7 +7362,7 @@ void MainWindow::onConnectionError(const QString& msg)
         setPanadapterConnectionAnimation(false);
 }
 
-void MainWindow::onWanCertFingerprintMismatch(const QString& host,
+void MainWindow::onWanCertFingerprintMismatch(quint64 attempt, const QString& host,
                                               const QString& expectedHex,
                                               const QString& presentedHex)
 {
@@ -7459,7 +7409,7 @@ void MainWindow::onWanCertFingerprintMismatch(const QString& host,
     if (box.clickedButton() == acceptBtn) {
         statusBar()->showMessage(
             tr("SmartLink certificate updated for %1").arg(host), 4000);
-        m_radioModel.acceptPresentedWanCert();
+        m_radioModel.acceptPresentedWanCert(attempt);
         // If the Radio Setup dialog is open with the SmartLink tab
         // showing, the just-updated pin needs to surface in the table
         // without requiring the operator to close+re-open the tab.
@@ -7468,7 +7418,7 @@ void MainWindow::onWanCertFingerprintMismatch(const QString& host,
     } else {
         statusBar()->showMessage(
             tr("SmartLink certificate rejected for %1").arg(host), 5000);
-        m_radioModel.rejectPresentedWanCert();
+        m_radioModel.rejectPresentedWanCert(attempt);
     }
 }
 

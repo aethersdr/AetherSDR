@@ -25,7 +25,7 @@ class FirmwareStager;
 
 class RadioConnection;
 class FlexLanSession;
-class WanConnection;
+class FlexWanSession;
 class PanadapterStream;
 class FlexReceiveData;
 
@@ -40,6 +40,7 @@ class FlexBackendTestAccess;
 
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
+    friend class FlexWanSessionTestAccess;
     friend class FlexReceiveDataTestAccess;
 
 public:
@@ -59,7 +60,6 @@ public:
     // queued hop on the owner's thread, fenced by route and epoch, in wire
     // order. It lives on this thread, not a worker's.
     FlexStatusIngress* statusIngress() { return &m_statusIngress; }
-    quint64 bindWanCommandSession(WanConnection* connection);
     FlexCommandSession& commandSession();
     void setCommandSessionForTest(FlexCommandSession* session) { initializeCommands(); m_commandsForTest = session; }
     void setRadioStateWriteHold(qint64 untilUtcMs) override { m_profileWriteHoldUtcMs = untilUtcMs; }
@@ -170,6 +170,8 @@ public:
     void disconnectRadio() override;
     void disconnectRadio(const RadioDisconnectRequest& request) override;
     std::optional<ConnectionSession> connectionSession() const override;
+    bool connectionClosing() const override;
+    void decideConnectionCertificate(quint64 attempt, bool accept) override;
     ReceiveTransportResult startReceiveTransport(bool rebind = false) override;
     bool isConnected() const override;
     ReceiveDispatch requestRadioNickname(const QString& nickname,
@@ -295,7 +297,7 @@ private:
                          RadioControlReply::Kind refusal = RadioControlReply::Kind::Failed);
     bool dispatchWire(const QString& command, CommandReply reply = {},
                       const FlexCommandSession::Options& options = {});
-    QPointer<WanConnection> m_commandWan;
+    bool m_wanMode{false};
     QPointer<FlexCommandSession> m_commandsForTest;
     qint64 m_profileWriteHoldUtcMs{0};
     SetupEntitySink m_setupEntitySink;
@@ -312,6 +314,7 @@ private:
     std::unique_ptr<FlexCwControls> m_cwControls;
     FlexStatusIngress m_statusIngress;
     std::unique_ptr<FlexLanSession> m_lanSession;
+    std::unique_ptr<FlexWanSession> m_wanSession;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread

@@ -1,7 +1,7 @@
 #include "core/LogManager.h"
 #include "FlexBackend.h"
 #include "FlexLanSession.h"
-#include "WanConnection.h"
+#include "FlexWanSession.h"
 #include "FlexProfileWritePolicy.h"
 #include "core/PerfTelemetry.h"
 
@@ -35,14 +35,7 @@ FlexCommandSession::Options guardedOptions(const RadioControlFence& current)
 FlexCommandSession& FlexBackend::commandSession()
 {
     if (m_commandsForTest) { return *m_commandsForTest; }
-    return m_commandWan ? m_commandWan->commands() : m_lanSession->commands();
-}
-
-quint64 FlexBackend::bindWanCommandSession(WanConnection* connection)
-{
-    m_commandWan = connection;
-    m_profileWriteHoldUtcMs = 0;
-    return m_statusIngress.bindLive(connection);
+    return m_wanMode ? m_wanSession->commands() : m_lanSession->commands();
 }
 
 bool FlexBackend::dispatchWire(const QString& command, CommandReply reply,
@@ -129,7 +122,7 @@ void FlexBackend::initializeCommands()
     };
     m_daxTxClientHandleProvider = [this] {
         const auto session = connectionSession();
-        return m_commandWan ? m_commandWan->clientHandle() : session ? session->clientHandle : 0;
+        return session ? session->clientHandle : 0;
     };
     m_sessionSink = [this](const QString& command, const SessionCommandGuard& guard,
                           const RadioControlCompletion& completion) {

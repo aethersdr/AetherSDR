@@ -1,5 +1,6 @@
 #include "WanConnection.h"
 #include <QPointer>
+#include <QSignalBlocker>
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include <QCryptographicHash>
@@ -135,7 +136,7 @@ WanConnection::WanConnection(QObject* parent)
         m_commands.writeFinished(write.epoch, write.sequence, result);
         return true;
     });
-    connect(&m_socket, &QSslSocket::connected,    this, &WanConnection::onTlsConnected);
+    connect(&m_socket, &QSslSocket::encrypted,    this, &WanConnection::onTlsConnected);
     connect(&m_socket, &QSslSocket::disconnected, this, &WanConnection::onTlsDisconnected);
     connect(&m_socket, &QSslSocket::readyRead,    this, &WanConnection::onReadyRead);
     connect(&m_socket, &QSslSocket::sslErrors,    this, &WanConnection::onSslErrors);
@@ -159,7 +160,7 @@ WanConnection::~WanConnection()
 void WanConnection::resetSessionState()
 {
     ++m_sessionGeneration;
-    // This object outlives every TLS session (a by-value MainWindow member), so
+    // This object outlives every TLS session (owned by FlexWanSession), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
     // live one. Mirrors RadioConnection::resetSessionState() and FlexLib's
@@ -220,6 +221,17 @@ void WanConnection::disconnectFromRadio()
     // A synchronous disconnected signal can retire this session and its
     // callback can start a replacement. Never reset that replacement here.
     if (alive && m_sessionGeneration == generation) { resetSessionState(); }
+}
+
+void WanConnection::abortConnection()
+{
+    const QSignalBlocker blocker(&m_socket);
+    m_heartbeat.stop();
+    m_socket.abort();
+    m_awaitingCertDecision = false;
+    m_presentedFingerprintHex.clear();
+    resetSessionState();
+    m_commands.retire(QStringLiteral("Connection closed."));
 }
 
 // ─── Command dispatch ────────────────────────────────────────────────────────

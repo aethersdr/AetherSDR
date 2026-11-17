@@ -1,3 +1,4 @@
+#include "FlexWanSessionTestSupport.h"
 // Production parsing, ingress dispatch and owner-thread lifecycle, with
 // in-memory lines. No socket is connected, bound or used as a fake radio.
 #include "FlexSliceStatusTestSupport.h"
@@ -290,9 +291,7 @@ private slots:
     void connectViaWanRoutesWanSliceReports()
     {
         Fixture f;
-        WanConnection first;
-        WanConnection next;
-        f.radio.connectViaWan(&first, QStringLiteral("192.0.2.1"), 4993);
+        WanConnection& first = FlexWanSessionTestAccess::connect(f.radio);
         emit first.lineReceived(CommandParser::parseLine(
             QStringLiteral("S1|slice 0 in_use=1 RF_frequency=14.2 mode=USB")), first.lineEpoch());
         QCoreApplication::sendPostedEvents();
@@ -302,9 +301,10 @@ private slots:
             QStringLiteral("S1|slice 0 RF_frequency=3.5")), first.lineEpoch());
         QCoreApplication::sendPostedEvents();
         QCOMPARE(f.radio.slice(0)->frequency(), 14.2);   // the idle LAN route is not this session's
-        f.radio.connectViaWan(&next, QStringLiteral("192.0.2.1"), 4993);
+        const quint64 retiredEpoch = first.lineEpoch();
+        WanConnection& next = FlexWanSessionTestAccess::connect(f.radio);
         emit first.lineReceived(CommandParser::parseLine(QStringLiteral("S1|slice 0 RF_frequency=1.8")),
-                                first.lineEpoch());
+                                retiredEpoch);
         emit next.lineReceived(CommandParser::parseLine(
             QStringLiteral("S1|slice 0 in_use=1 RF_frequency=7.244")), next.lineEpoch());
         QCoreApplication::sendPostedEvents();

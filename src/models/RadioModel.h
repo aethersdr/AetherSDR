@@ -25,7 +25,7 @@
 
 #include <QHostAddress>
 #include "core/backends/flex/RadioConnection.h"
-#include "core/backends/flex/WanConnection.h"
+#include "SmartLinkAccountModel.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
@@ -79,7 +79,6 @@
 
 namespace AetherSDR {
 class TxController;
-class WanConnection;
 class FlexStatusIngress;
 struct TxBandDelta;
 struct StreamStatusDelta;
@@ -118,6 +117,7 @@ struct TuneOutputControlState {
 // and exposes the radio's current state to the GUI via Qt properties/signals.
 class RadioModel : public QObject {
     Q_OBJECT
+    friend class FlexWanSessionTestAccess;
 
     Q_PROPERTY(QString name        READ name        NOTIFY infoChanged)
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
@@ -238,7 +238,7 @@ public:
     // Hl2Backend::connectRadio() parks the request in m_queuedConnect behind
     // the DSP open and re-drives it from finishDspSetup(), and nothing about
     // that queue reaches this model, so no signal fires for seconds.
-    bool isConnectAttemptInFlight() const { return m_connectAttemptActive; }
+    bool isConnectAttemptInFlight() const { return m_connectAttemptActive || (m_backend && m_backend->connectionClosing()); }
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
     bool transmitFrequencyCheck() const { return m_transmitFrequencyCheck; }
@@ -666,7 +666,7 @@ public:
 
     // Whether this session has a Flex transport. All controls still enter
     // through typed backend intents; this does not expose a wire writer.
-    bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
+    bool hasCommandPlane() const { return m_wanSession || m_connection != nullptr; }
     // The slice's tuning step, applied on the client when the radio has no
     // command plane to carry `slice set <n> step=`. Returns false, doing
     // nothing, when a command plane exists: the typed backend request sets it and
@@ -951,7 +951,8 @@ public:
     // An explicit radio choice supersedes the previous radio's armed
     // automatic reconnect; the next connect clears the intent again.
     void cancelAutomaticReconnect();
-    void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
+    bool connectViaSmartLink(const QString& serial, const QList<quint32>& disconnectHandles = {});
+    SmartLinkAccountModel& smartLinkAccounts() { return m_smartLinkAccounts; }
     // SmartLink only reaches Flex radios. A session that last ran another family
     // (IC-705, HL2) still holds that backend, which has no PanadapterStream for the
     // WAN hole punch, so swap to Flex before the connect is requested. Returns false
@@ -970,7 +971,7 @@ public:
     // the operator, then trigger forceDisconnect so the standard reconnect
     // timer brings the link back when the radio finishes booting.
     bool rebootRadio(std::optional<RadioControlSession> expectedSession = {});
-    bool isWan() const { return m_wanConn != nullptr; }
+    bool isWan() const { return m_wanSession; }
     // WAN, routed or a radio at a tailnet address (RFC #6271 D4): the
     // network thresholds, NTP, discovery release.
     bool isRemoteSession() const;
@@ -984,8 +985,8 @@ public:
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forward the user's
     // cert-mismatch decision down to the active WAN connection. No-op
     // if not connected via WAN or no decision is pending.
-    void acceptPresentedWanCert();
-    void rejectPresentedWanCert();
+    void acceptPresentedWanCert(quint64 attempt);
+    void rejectPresentedWanCert(quint64 attempt);
     void setTransmit(bool tx, TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
     // Snapshot for engine-owned deferred release. This is not a credential or
     // an invitation to borrow whichever operation happens to be current later.
@@ -1394,7 +1395,7 @@ signals:
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forwarded from
     // WanConnection. UI is expected to prompt the operator and call
     // accept/rejectPresentedWanCert() in response.
-    void certFingerprintMismatch(const QString& host,
+    void certFingerprintMismatch(quint64 attempt, const QString& host,
                                  const QString& expectedHex,
                                  const QString& presentedHex);
     // Emitted when another GUI client forces this client to disconnect.
@@ -1815,7 +1816,7 @@ private:
     // queued so far is refused (one strict fence for status and message lines).
     quint64 beginStatusSession();
     // Return the status ingress from a SmartLink session to the LAN connection.
-    void releaseWanStatus();
+    void connectToRadioRequest(const RadioInfo& info, const std::optional<RemoteRadioRequest>& remote);
     void wireStatusIngress(quint64 generation);
     void applyTxBandChanges(const TxBandDelta& delta);
     QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
@@ -1828,7 +1829,6 @@ private:
     quint64 m_observationEpoch{0};
     bool m_observationSessionOpen{true};
     quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for
-    quint64 m_wanRoute{0};               // fences queued SmartLink lifecycle per bind
     void handleMessageReceived(const ParsedMessage& msg);
     // Asks for the CW profile list once per session, whenever the backend's CW
     // capability is (or later becomes) engaged.
@@ -2912,9 +2912,8 @@ private:
     // empty-slice= unbind echo from re-triggering the nudge → #4009 storm.
     QSet<quint32> m_nudgedDaxStreams;
     quint64 m_radioObservationGeneration{0};
-    QPointer<WanConnection> m_wanConn;  // non-null when connected via SmartLink
-    QString  m_wanPublicIp;
-    quint16  m_wanUdpPort{4991};
+    SmartLinkAccountModel m_smartLinkAccounts;
+    bool m_wanSession{false};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
     QHash<int, quint32> m_foreignSliceOwners;  // slot id → owning client handle
     QHash<int, QString> m_reservedSlices;      // slot id → on-radio program (reserveSlice)
@@ -2971,6 +2970,9 @@ private:
     // by every way an attempt can end.
     bool      m_connectAttemptActive{false};
     quint64   m_connectionIntentRevision{0};
+    quint64 m_certificateDecisionId{0};
+    struct CertificateDecision { quint64 id; quint64 backend; quint64 attempt; quint64 intent; };
+    std::optional<CertificateDecision> m_certificateDecision;
     bool      m_forcedDisconnectInProgress{false};
     GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next

@@ -14,6 +14,8 @@
 #endif
 #include "core/discovery/DirectedDiscoveryAddress.h"
 #include "models/RadioSession.h"
+#include "models/ConnectionWorkspace.h"
+#include <QJsonDocument>
 
 #include <QCommandLineParser>
 #include <QElapsedTimer>
@@ -82,6 +84,16 @@ int main(int argc, char* argv[])
     const QCommandLineOption transmitOption(QStringLiteral("allow-local-tx"),
         QStringLiteral("Enable explicit credential-bound TX grants; never arms a client at startup."));
     parser.addOption(transmitOption);
+    const QCommandLineOption smartLinkAccountOption(QStringLiteral("smartlink-account"),
+        QStringLiteral("OS-vault SmartLink account ID for one explicit startup connection; requires --smartlink-radio and --allow-local-control."),
+        QStringLiteral("account-id"));
+    const QCommandLineOption smartLinkRadioOption(QStringLiteral("smartlink-radio"),
+        QStringLiteral("SmartLink radio serial for the explicit startup connection. No automatic reconnect or client eviction."),
+        QStringLiteral("serial"));
+    parser.addOptions({smartLinkAccountOption, smartLinkRadioOption});
+    const QCommandLineOption listSmartLinkOption(QStringLiteral("list-smartlink-accounts"),
+        QStringLiteral("List saved account IDs and labels, without reading credentials or connecting."));
+    parser.addOption(listSmartLinkOption);
     // Remote clients (docs/aetherd-remote-clients.md): receive-only, never TX.
     const QCommandLineOption remoteListenOption(QStringLiteral("remote-listen"),
         QStringLiteral("Serve remote clients over wss:// on this one address:port (no wildcard). "
@@ -99,6 +111,15 @@ int main(int argc, char* argv[])
     AetherSDR::aetherd::addCredentialOptions(parser);
     AetherSDR::aetherd::addGrantAdminOptions(parser);
     parser.process(app);
+    if (parser.isSet(listSmartLinkOption)) {
+        QJsonArray accounts;
+        for (const QJsonValue& value : AetherSDR::ConnectionWorkspace::load().value("accounts").toArray()) {
+            const QJsonObject account = value.toObject();
+            accounts.append(QJsonObject{{"id", account.value("id")}, {"name", account.value("name")}});
+        }
+        QTextStream(stdout) << QJsonDocument(accounts).toJson(QJsonDocument::Indented);
+        return 0;
+    }
     const QStringList hl2Addresses = parser.values(hl2AddressOption);
     for (const QString& text : hl2Addresses) {
         if (!AetherSDR::discovery::isDirectedDiscoveryAddress(QHostAddress(text))) {
@@ -123,6 +144,12 @@ int main(int argc, char* argv[])
         }
     }
 
+    const bool smartLink = parser.isSet(smartLinkAccountOption) || parser.isSet(smartLinkRadioOption);
+    if (smartLink && (!parser.isSet(smartLinkAccountOption) || !parser.isSet(smartLinkRadioOption)
+        || !parser.isSet(controlOption))) {
+        QTextStream(stderr) << "aetherd: SmartLink requires both account and radio selection and local control\n";
+        return 1;
+    }
     const auto credentialOptions = AetherSDR::aetherd::credentialOptions(parser);
     if (!credentialOptions.error.isEmpty()) {
         QTextStream(stderr) << "aetherd: " << credentialOptions.error << '\n';
@@ -336,6 +363,11 @@ int main(int argc, char* argv[])
         }
     }
 #endif
+    if (smartLink && (!connectionTarget || !connectionTarget->connectConfiguredRemote(
+            parser.value(smartLinkAccountOption), parser.value(smartLinkRadioOption)))) {
+        QTextStream(stderr) << "aetherd: invalid or unavailable SmartLink startup selection\n";
+        return 1;
+    }
     // A stop that arrived during startup could not quit a loop that was not
     // running yet; teardown below still releases whatever was set up.
     const int result = gracefulStop.takeStopBeforeLoop() ? 0 : app.exec();

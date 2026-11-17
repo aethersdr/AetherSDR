@@ -18,7 +18,6 @@ public:
     using Reply = std::function<void(int, const QString&)>;
     static FlexCommandSession& session(RadioModel& radio)
     {
-        if (radio.m_wanConn) { return radio.m_wanConn->commands(); }
         if (auto* backend = dynamic_cast<FlexBackend*>(radio.m_backend.get());
             backend && backend->connection() == radio.m_connection) {
             FlexCommandSession& commands = backend->commandSession();

@@ -43,8 +43,7 @@
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
 #endif
-#include "core/backends/flex/SmartLinkClient.h"
-#include "core/backends/flex/WanConnection.h"
+#include "models/SmartLinkAccountModel.h"
 #include "core/CwDecoder.h"
 #include "models/CwRxModel.h"
 #include "core/CwCallsignSpotter.h"
@@ -416,7 +415,7 @@ private slots:
     void onConnectionError(const QString& msg);
     // GHSA-wfx7-w6p8-4jr2 phase 2 (#2951): show mismatch modal and
     // forward the operator's decision back to the WanConnection.
-    void onWanCertFingerprintMismatch(const QString& host,
+    void onWanCertFingerprintMismatch(quint64 attempt, const QString& host,
                                       const QString& expectedHex,
                                       const QString& presentedHex);
     void onRadioMessage(const QString& text, MessageSeverity severity);
@@ -1431,8 +1430,7 @@ private:
     TciServer* tciServer() const { return m_session->tciServer(); }
     FreeDvReporterDialog*  m_freedvReporterDialog{nullptr};
 #endif
-    SmartLinkClient   m_smartLink;
-    WanConnection     m_wanConnection;
+    SmartLinkAccountModel& m_smartLink{m_radioModel.smartLinkAccounts()};
     AntennaGeniusModel m_antennaGenius;
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
@@ -1934,7 +1932,7 @@ private:
     QHash<QString, int> m_profileLoadPendingFftYpixels;
     QHash<QString, qint64> m_profileLoadPanDimensionsSettlingUntilMs;
 
-    // Pending WAN radio (between requestConnect and connectReady)
+    // Selected WAN radio retained for explicit UI reconnect policy.
     WanRadioInfo     m_pendingWanRadio;
     QTimer           m_wanReconnectTimer;
     bool             m_wanReconnectAttemptInProgress{false};

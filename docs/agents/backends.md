@@ -150,10 +150,43 @@ wait for actual cleanup completion, even after a deferred close was requested.
 
 RadioModel retains GUI registration, settings, presentation, and desktop retry
 policy. The daemon's connection target requires fresh intent after failure.
-SmartLink retains its existing transport owner; selecting another route retires
+SmartLink uses the backend-owned `FlexWanSession`; selecting another route retires
 the previous session. Demo uses the same lifecycle coordinator for its selected
 synthetic transport, while its native engine API remains socket-free. Neither
 worker topology nor TX authority changes.
+
+## SmartLink account and WAN ownership
+
+`RadioModel` owns `SmartLinkAccountModel`, which exposes account state, discovery
+snapshots and typed operator intents. Its implementation below the backend seam
+owns the Auth0/broker client; credentials and TLS sockets never reach the GUI.
+Credential operations are serialized per account, including queued forgets after
+outstanding writes. Account authentication survives an ordinary radio disconnect.
+
+A `RemoteRadioRequest` carries a shared account lease source and one selected
+radio snapshot into `FlexBackend`. `FlexWanSession` owns UDP preparation, the
+broker request, TLS validation, status routing, heartbeat and teardown. It binds
+status ingress before the handshake and publishes a `ConnectionSession` with
+trusted WAN transport identity. WAN cannot offer the independent LAN PTT-stop
+channel required for headless TX grants.
+
+FlexLib 4.2.18's `connect_ready` has a serial and handle but no request ID. The
+account service permits one connection lease and retires the originating broker
+transport before another request can reuse that serial. It does not relabel a
+late reply with a newly selected local generation. Explicit client eviction is
+consumed once; desktop retry creates an intent without eviction handles.
+
+Connect and close phases have deadlines. WAN close runs asynchronously on its
+owning event loop; `connectionClosing()` holds the reservation until completion.
+Certificate decisions are tied to the model intent, backend incarnation and WAN
+attempt. Headless callers reject an unresolved mismatch rather than replacing a
+pin. The desktop retains its existing prompt and TOFU policy.
+
+The daemon's `--smartlink-account` and `--smartlink-radio` options are local
+startup configuration. `RadioConnectionTarget::connectConfiguredRemote` reserves
+the same owner used by local connection control throughout authentication and
+teardown. The public catalogue identity, `radio.connect` request, credential
+schema and WAN TX eligibility remain unchanged.
 
 ## Flex command and reply ownership
 
@@ -161,8 +194,8 @@ worker topology nor TX authority changes.
 replies and expiry timer. `FlexBackend` installs its own typed-control routes;
 `RadioModel` supplies policy and receives results, without a raw command writer
 or reply map. The `ForTest` sink setters are encoding and transport injections
-only. LAN queues immutable writes to its existing worker. SmartLink retains its
-transport owner and uses the same ledger for controls and heartbeat sequencing.
+only. LAN queues immutable writes to its existing worker. The owned SmartLink
+transport uses the same ledger for controls and heartbeat sequencing.
 
 Register a pending reply before invoking the writer: Demo can answer immediately.
 LAN replies capture their original epoch on the producer and cross one queued
@@ -180,8 +213,7 @@ Sequence exhaustion refuses further admission until a new transport epoch.
 
 Profile-load timing, deferred pan intent, local memory storage, registration and
 administrative intent remain model policy. The backend enforces the profile
-write hold after encoding. Full SmartLink ownership, DSP relocation and process
-isolation remain separate work.
+write hold after encoding. DSP relocation and process isolation remain separate work.
 
 ## Display status observations
 

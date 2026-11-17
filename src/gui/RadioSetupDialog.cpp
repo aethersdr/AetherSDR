@@ -55,7 +55,7 @@
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
 #include "core/RfkitConnection.h"
-#include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
+#include "models/SmartLinkAccountModel.h"
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
 #include "core/UlanziDialMappings.h"
@@ -10016,7 +10016,7 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
         auto* item = table->item(row, 0);
         if (!item) return;
         const QString host = item->text();
-        WanCertCache::forgetPinnedCert(host);
+        SmartLinkAccountModel::forgetPinnedCertificate(host);
         refreshPinnedCertsTable();
     });
 
@@ -10032,7 +10032,7 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
         if (!self || !boxOwner || reply != QMessageBox::Yes) {
             return;
         }
-        WanCertCache::forgetAllPinnedCerts();
+        SmartLinkAccountModel::forgetAllPinnedCertificates();
         self->refreshPinnedCertsTable();
     });
 
@@ -10046,7 +10046,7 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
 void RadioSetupDialog::refreshPinnedCertsTable()
 {
     if (!m_pinnedCertsTable) return;
-    const QVector<PinnedCertInfo> pins = WanCertCache::listPinnedCerts();
+    const QVector<PinnedCertInfo> pins = SmartLinkAccountModel::pinnedCertificates();
     m_pinnedCertsTable->setRowCount(pins.size());
     for (int i = 0; i < pins.size(); ++i) {
         const PinnedCertInfo& pin = pins.at(i);
