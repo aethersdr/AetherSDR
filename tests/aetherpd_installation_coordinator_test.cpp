@@ -58,6 +58,17 @@ std::optional<AetherPDFirstPackage> firstPackage()
     AetherPDTest::PackageFixture fixture;
     return fixture.loadFirst();
 }
+AetherPDFirstRelease firstRelease(const AetherPDTest::PackageFixture& fixture)
+{
+    AetherPDFirstRelease release;
+    release.version = "0.1.0-test"; release.firmware = "4.3.16.42034"; release.profile = 1;
+    release.trust = fixture.firstTrust();
+    const auto names = AetherPDFirstPackage::fileNames();
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        release.urls[i] = QUrl(QStringLiteral("https://example.invalid/first/") + names[i]);
+    }
+    return release;
+}
 std::optional<Coordinator::Prepared> prepareFirst()
 {
     const auto package = firstPackage();
@@ -555,6 +566,91 @@ private slots:
             QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
         }
         QCOMPARE(loads, 0); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+    }
+    void firstDownloadNeedsExactPlanApprovalBeforeCredentialOrRadioEffects()
+    {
+        Fixture f; AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network downloads;
+        int loads = 0, writes = 0, creates = 0;
+        std::function<void(bool)> saved;
+        QByteArray savedHash;
+        AetherPDInstallationModel model(f.model, [&](const QString&, QObject*, auto) { ++loads; },
+            [&](RadioModel& radio) { ++creates; return std::make_unique<Coordinator>(radio, f.network, f.channel, f.archive, [&] { return f.clock; }); },
+            nullptr, [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
+            [&](const QString& serial, const QString& attempt, const QString& token, QObject*, auto done) {
+                ++writes; QCOMPARE(serial, QStringLiteral("fixture-8600")); QVERIFY(!attempt.isEmpty());
+                savedHash = QCryptographicHash::hash(token.toLatin1(), QCryptographicHash::Sha256); saved = std::move(done);
+            }, journalServices());
+        QVERIFY(model.prepareFirstRelease(firstRelease(fixture), "fixture-radio", f.model.controlSession()));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::Downloading);
+        QVERIFY(!model.approve(model.approvedPlan()));
+        for (const auto& file : fixture.firstFiles()) { downloads.last->complete(200, file); }
+        QTRY_COMPARE(model.state(), AetherPDInstallationModel::State::AwaitingApproval);
+        const auto preview = model.preview(); QVERIFY(preview); QVERIFY(preview->firstInstallation);
+        QVERIFY(preview->previousDigest.isEmpty()); QCOMPARE(preview->hostname, QStringLiteral("fixture-radio"));
+        QCOMPARE(model.downloadReceived(), model.downloadTotal()); QVERIFY(model.downloadTotal() > 0);
+        QCOMPARE(writes, 0); QCOMPARE(loads, 0); QCOMPARE(creates, 0);
+        QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty()); QCOMPARE(f.archive.nativeStarts, 0);
+        QVERIFY(!model.approve(preview->plan + 'x')); QCOMPARE(writes, 0);
+        QVERIFY(model.approve(preview->plan)); QCOMPARE(writes, 1); QCOMPARE(savedHash, preview->plan.mid(148, 32));
+        QCOMPARE(model.state(), AetherPDInstallationModel::State::SavingCredential);
+        QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty());
+        saved(false); QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::CredentialSaveFailed);
+        QCOMPARE(creates, 0); QCOMPARE(loads, 0); QCOMPARE(f.archive.nativeStarts, 0);
+    }
+    void firstDownloadRejectsChangedSessionCancelAndCorruptionWithoutEffects()
+    {
+        for (int mode = 0; mode < 5; ++mode) {
+            Fixture f; AetherPDTest::PackageFixture fixture;
+            AetherPDTest::Network downloads;
+            int writes = 0;
+            AetherPDInstallationModel model(f.model, {}, {}, nullptr,
+                [&] { return std::make_unique<AetherPDPackageDownload>(downloads); },
+                [&](const QString&, const QString&, const QString&, QObject*, auto) { ++writes; }, journalServices());
+            const auto selection = firstRelease(fixture);
+            QVERIFY(model.prepareFirstRelease(selection, "fixture-radio", f.model.controlSession()));
+            const QPointer<AetherPDTest::Reply> old = downloads.last;
+            const auto files = fixture.firstFiles();
+            if (mode == 0) {
+                model.cancel(); old->complete(200, files[0]);
+                QCOMPARE(model.state(), AetherPDInstallationModel::State::Finished); QVERIFY(old->aborted);
+            } else if (mode == 1) {
+                RadioSetupControlTestAccess::replaceConnectionGeneration(f.model);
+                old->complete(200, files[0]);
+                QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged);
+            } else if (mode == 2) {
+                old->complete(200, files[0] + 'x');
+                QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::DownloadFailed);
+            } else {
+                for (const auto& file : files) { downloads.last->complete(200, file); }
+                QCOMPARE(model.state(), AetherPDInstallationModel::State::Preparing);
+                if (mode == 3) { model.cancel(); }
+                else { RadioSetupControlTestAccess::replaceConnectionGeneration(f.model); model.reconcile(); }
+                QVERIFY(QThreadPool::globalInstance()->waitForDone(5000)); QCoreApplication::processEvents();
+                QVERIFY(model.state() != AetherPDInstallationModel::State::AwaitingApproval);
+                if (mode == 4) { QCOMPARE(model.failure(), AetherPDInstallationModel::Failure::SessionChanged); }
+            }
+            QCOMPARE(writes, 0); QVERIFY(f.network.sent.empty()); QVERIFY(f.transfers.isEmpty()); QCOMPARE(f.archive.nativeStarts, 0);
+        }
+    }
+    void firstDownloadInvalidTargetAndMissingIdentityServicesStartNothing()
+    {
+        Fixture f; AetherPDTest::PackageFixture fixture;
+        AetherPDTest::Network downloads;
+        const auto factory = [&] { return std::make_unique<AetherPDPackageDownload>(downloads); };
+        const AetherPDInstallationModel::TokenWriter writer = [](const QString&, const QString&, const QString&, QObject*, auto) {};
+        AetherPDInstallationModel missingWriter(f.model, {}, {}, nullptr, factory, {}, journalServices());
+        AetherPDInstallationModel missingJournal(f.model, {}, {}, nullptr, factory, writer);
+        const auto selection = firstRelease(fixture);
+        QVERIFY(!missingWriter.prepareFirstRelease(selection, "fixture-radio", f.model.controlSession()));
+        QVERIFY(!missingJournal.prepareFirstRelease(selection, "fixture-radio", f.model.controlSession()));
+        AetherPDInstallationModel model(f.model, {}, {}, nullptr, factory, writer, journalServices());
+        auto bad = selection; bad.firmware = "4.0.0.0";
+        QVERIFY(!model.prepareFirstRelease(bad, "fixture-radio", f.model.controlSession()));
+        bad = selection; bad.profile = 2;
+        QVERIFY(!model.prepareFirstRelease(bad, "fixture-radio", f.model.controlSession()));
+        QVERIFY(!model.prepareFirstRelease(selection, {}, f.model.controlSession()));
+        QVERIFY(downloads.sent.empty()); QVERIFY(f.transfers.isEmpty());
     }
     void downloadedPackagePreparesPreviewWithoutCredentialOrRadioEffects()
     {

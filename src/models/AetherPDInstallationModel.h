@@ -40,6 +40,7 @@ public:
     explicit AetherPDInstallationModel(RadioModel& radio, QObject* parent = nullptr);
     AetherPDInstallationModel(RadioModel& radio, TokenLoader loader, Factory factory, QObject* parent = nullptr, DownloadFactory downloader = {}, TokenWriter writer = {}, RecoveryServices recovery = {});
     bool prepareRelease(const AetherPDRelease& release, const RadioControlSession& session);
+    bool prepareFirstRelease(const AetherPDFirstRelease& release, const QString& hostname, const RadioControlSession& session);
     bool prepareFirstPackage(const AetherPDFirstPackage& package, const QString& hostname, const RadioControlSession& session);
     bool recoverFirstInstallation(const QByteArray& publisherKey, const RadioControlSession& session);
     bool recovering() const { return m_recovering; }
@@ -90,9 +91,11 @@ private:
     void unavailable(Failure reason);
     void retirePreparation();
     void downloaded(quint64 generation);
+    bool prepareDownload(const QString& firmware, const RadioControlSession& session, const QString& hostname = {});
     void preparePackage(std::function<std::optional<AetherPDPackage>()> load, quint64 generation);
     void prepareSnapshot(std::function<std::optional<Coordinator::Prepared>()> prepare, quint64 generation);
     bool prepareFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname, const RadioControlSession& session);
+    void prepareFirstSnapshot(std::function<std::optional<AetherPDFirstPackage>()> load, const QString& hostname, quint64 generation);
     bool prepareSavedFirst(std::function<std::optional<AetherPDFirstPackage>()> load, const QByteArray& publisherKey,
                            const RadioControlSession& session);
     void credential(const QString& token, quint64 generation);
@@ -117,6 +120,7 @@ private:
     Factory m_factory;
     DownloadFactory m_downloadFactory;
     std::unique_ptr<AetherPDPackageDownload> m_download;
+    QString m_downloadHostname;
     QPointer<QFutureWatcher<std::optional<Coordinator::Prepared>>> m_preparation;
     qint64 m_received{0}, m_total{0};
     QTimer m_timeout;

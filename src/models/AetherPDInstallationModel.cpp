@@ -83,8 +83,22 @@ bool AetherPDInstallationModel::current() const
 }
 bool AetherPDInstallationModel::prepareRelease(const AetherPDRelease& release, const RadioControlSession& session)
 {
+    if (!release.valid() || release.profile != 1 || !prepareDownload(release.firmware, session)) { return false; }
+    if (!m_download->start(release)) { unavailable(Failure::DownloadFailed); return false; }
+    return true;
+}
+bool AetherPDInstallationModel::prepareFirstRelease(const AetherPDFirstRelease& release, const QString& hostname,
+                                                  const RadioControlSession& session)
+{
+    if (!release.valid() || !m_write || !m_recovery.journal || hostname.isEmpty() || hostname.size() >= 64
+        || hostname != QString::fromLatin1(hostname.toLatin1()) || !prepareDownload(release.firmware, session, hostname)) { return false; }
+    if (!m_download->start(release)) { unavailable(Failure::DownloadFailed); return false; }
+    return true;
+}
+bool AetherPDInstallationModel::prepareDownload(const QString& firmware, const RadioControlSession& session, const QString& hostname)
+{
     if (QThread::currentThread() != thread() || !m_radio || m_radio->thread() != thread() || active() || !m_radio->controlSessionCurrent(session)
-        || !release.valid() || release.profile != 1 || release.firmware != m_radio->version() || m_radio->serial().isEmpty()) { return false; }
+        || firmware != m_radio->version() || m_radio->serial().isEmpty()) { return false; }
     retirePreparation();
     if (m_job) { disconnect(m_job.get(), nullptr, this, nullptr); }
     m_job.reset(); m_package.reset(); m_plan.clear(); m_carrier.clear(); m_archiveSha256.clear();
@@ -92,6 +106,7 @@ bool AetherPDInstallationModel::prepareRelease(const AetherPDRelease& release, c
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
     m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
     const quint64 generation = ++m_generation;
+    m_downloadHostname = hostname;
     m_download = m_downloadFactory();
     if (!m_download || m_download->thread() != thread()) { unavailable(Failure::DownloadFailed); return false; }
     m_download->setParent(this);
@@ -109,7 +124,6 @@ bool AetherPDInstallationModel::prepareRelease(const AetherPDRelease& release, c
     emit changed();
     if (!self || generation != m_generation || m_state != State::Downloading) { return false; }
     if (!current()) { unavailable(Failure::SessionChanged); return false; }
-    if (!m_download->start(release)) { unavailable(Failure::DownloadFailed); return false; }
     return true;
 }
 QString AetherPDInstallationModel::selectedDevelopmentVersion() const
@@ -173,6 +187,12 @@ bool AetherPDInstallationModel::prepareFirst(std::function<std::optional<AetherP
     m_publisherKey.clear(); m_nativeName.clear();
     m_outcome.reset(); m_cleanup = false; m_failure = Failure::None; m_received = 0; m_total = 0;
     m_session = session; m_serial = m_radio->serial(); m_firmware = m_radio->version(); m_address = m_radio->radioAddress();
+    prepareFirstSnapshot(std::move(load), hostname, ++m_generation);
+    return true;
+}
+void AetherPDInstallationModel::prepareFirstSnapshot(std::function<std::optional<AetherPDFirstPackage>()> load,
+                                                    const QString& hostname, quint64 generation)
+{
     QByteArray bytes(32, Qt::Uninitialized);
     for (char& byte : bytes) { byte = static_cast<char>(QRandomGenerator::system()->generate() & 255U); }
     m_firstToken = QString::fromLatin1(bytes.toHex());
@@ -181,8 +201,7 @@ bool AetherPDInstallationModel::prepareFirst(std::function<std::optional<AetherP
     prepareSnapshot([load = std::move(load), serial, tokenHash, hostname] {
         const auto package = load();
         return package ? Coordinator::prepareFirst(*package, serial, tokenHash, hostname) : std::nullopt;
-    }, ++m_generation);
-    return true;
+    }, generation);
 }
 bool AetherPDInstallationModel::savedFirstPreparationAvailable() const
 {
@@ -236,6 +255,7 @@ bool AetherPDInstallationModel::prepareSavedFirst(std::function<std::optional<Ae
 }
 void AetherPDInstallationModel::retirePreparation()
 {
+    m_downloadHostname.clear();
     m_recovering = false;
     m_recoveryCleanup = false;
     m_savedPreparation = false; m_savedPackageLoader = {};
@@ -256,7 +276,13 @@ void AetherPDInstallationModel::downloaded(quint64 generation)
     if (generation != m_generation || m_state != State::Downloading || !m_download) { return; }
     if (!current()) { unavailable(Failure::SessionChanged); return; }
     const auto package = m_download->package();
+    const auto firstPackage = m_download->firstPackage();
+    const QString hostname = m_downloadHostname;
     retirePreparation();
+    if (firstPackage) {
+        prepareFirstSnapshot([package = *firstPackage] { return std::optional<AetherPDFirstPackage>(package); }, hostname, generation);
+        return;
+    }
     if (!package) { unavailable(Failure::PackageRejected); return; }
     preparePackage([package = *package] { return std::optional<AetherPDPackage>(package); }, generation);
 }

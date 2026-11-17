@@ -18,6 +18,15 @@ resources were removed; the surviving shim had no capabilities. See
 [the first-install qualification](request/FIRST-INSTALL.md) for evidence and
 remaining production/FLEX-6000 gates.
 
+The desktop package downloader accepts independently pinned HTTPS selections
+for both upgrades and fresh installations. Fresh installation uses a separate
+publisher key and eight-file layout with no predecessor. Its model prepares a
+new identity and target plan only after package verification; exact-plan approval
+still precedes credential persistence and radio uploads. The download path is
+component-tested with injected HTTP and credential providers. Shipping catalogue
+entries, public package hosting and ordinary release selection remain incomplete;
+the existing local development selectors are not production distribution.
+
 Build from the repository root with Zig installed:
 
 ```sh

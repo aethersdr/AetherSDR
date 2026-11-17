@@ -1,0 +1,311 @@
+{
+  "created_utc": "2026-11-17T19:40:13.988979+00:00",
+  "status": "authenticated_first_install_HTTPS_download_and_exact_plan_preparation_component_qualified_not_shipping",
+  "source_base": "d760b2e59d5dfb9121330ccb850defd4616c2339",
+  "changed_source_sha256": {
+    "src/core/AetherPDPackageDownload.cpp": "2ec29ce1ed110ce9c26d291b3ef70c0537c224e9bdc3b6e65c8e8ff35f647910",
+    "src/core/AetherPDPackageDownload.h": "ad1645442de0146f45ad49d9f70c5d9ed2fca037487e852efa077f57e8468310",
+    "src/models/AetherPDInstallationModel.cpp": "e18e0af5603810b9dd5a7978c34df945f4d5f6b587ccf4eb05fbc5bc1b8cee83",
+    "src/models/AetherPDInstallationModel.h": "3b5b2a49ab084d315d6b030597043e885f8e099ecd42248285a7b401da29244c",
+    "tests/AetherPDPackageFixture.h": "4aaaaec26154c264c061061a4d0415f65da78f339aab2b748a580356c08b4b0e",
+    "tests/aetherpd_installation_coordinator_test.cpp": "809a317f8d6d2ad9cfd7d06c60e2ee08edbd9098244819cf7fb00893e2e1fc5a",
+    "tests/aetherpd_package_download_test.cpp": "34e4ac9f1f08ed5a7f2cf706ffd0170ac4a8642ea36cab0984c512f20a2b391e",
+    "tools/pd-waveform/README.md": "69bddf77362e3e3e8027d2c377b88803cfff5f90bc19fc3f35771a04bc324fdd"
+  },
+  "production_ready": false,
+  "implementation": [
+    "Separate first-install selection with independent eight-file pins and publisher key; no predecessor release or key.",
+    "Shared bounded RAM-only HTTPS downloader and cancellation, deadlines, request policy, per-file size/hash checks; separate result types cannot leak between download modes.",
+    "Signed candidate and first-worker verification plus exact firmware binding; unsupported first-install profiles refused before network. Existing first-package verifier supports only ARM64/profile1.",
+    "Radio-owned first-download preparation captures original control session and radio identity; only verified bytes proceed to fresh identity/target-plan generation on existing preparation executor.",
+    "Exact displayed-plan approval precedes any credential persistence; credential persistence still precedes radio upload. No RF, credentials or radio IO from downloader."
+  ],
+  "verification": {
+    "registered_CTest": [
+      "aetherpd_package_download_test",
+      "aetherpd_package_test",
+      "aetherpd_installation_coordinator_test"
+    ],
+    "CTest_passed": true,
+    "desktop_build_passed": true,
+    "built_desktop_sha256": "1254a015d37120b7ab7e82d2eb2a17d414856d21c8ab006bd4b74c14eba5d655",
+    "sanitizers": {
+      "address": true,
+      "undefined": true,
+      "leaks": true,
+      "download_test_passes": 32,
+      "installation_model_coordinator_test_passes": 40,
+      "scope": "Package/downloader/installation-model/coordinator and selected test translation units instrumented; other engine/dependencies uninstrumented."
+    },
+    "mutations": [
+      {
+        "name": "first-profile",
+        "source": "src/core/AetherPDPackageDownload.cpp",
+        "test": "invalidFirstSelectionRefusedBeforeNetwork",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "first-target",
+        "source": "src/core/AetherPDPackageDownload.cpp",
+        "test": "firstPackageSignatureAndTargetMustMatchIndependentSelection",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "stale-first-result",
+        "source": "src/core/AetherPDPackageDownload.cpp",
+        "test": "completeFirstReleaseHasNoPredecessorAndClearsOtherResult",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "original-session",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "firstDownloadRejectsChangedSessionCancelAndCorruptionWithoutEffects",
+        "exit": 1,
+        "detected": true
+      },
+      {
+        "name": "exact-plan-approval",
+        "source": "src/models/AetherPDInstallationModel.cpp",
+        "test": "firstDownloadNeedsExactPlanApprovalBeforeCredentialOrRadioEffects",
+        "exit": 1,
+        "detected": true
+      }
+    ],
+    "static_checks": [
+      {
+        "command": [
+          "python3",
+          "tools/check_test_registration.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_engine_boundary.py",
+          "--strict"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/check_qsettings.py"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "python3",
+          "tools/docs/gen_reference.py",
+          "--check"
+        ],
+        "exit": 0
+      },
+      {
+        "command": [
+          "node",
+          "tools/docs/test_log_rules.mjs"
+        ],
+        "exit": 0
+      }
+    ],
+    "npm_ci_and_docs_build_passed": true
+  },
+  "test_transport": "Injected QNetworkAccessManager replies and credential providers; no listening sockets, real certificate/redirect exchange, keychain or radio interaction.",
+  "radio_changes": [],
+  "reboot_commands": [],
+  "RF_commands": [],
+  "installed_candidate_unchanged": {
+    "release_blake2b_256": "c3d2522512f66f32025747661335e82eb8a3f572fe9888acf7af8380f9a43404",
+    "runtime_source": "aa5a33fc5de78ad5a9d6e5d48ba2e9c697e03bf0"
+  },
+  "limitations": [
+    "No authenticated shipping catalogue entries, public package hosting or ordinary release-selection UI wiring yet; local development selectors remain separate and must not ship.",
+    "No live HTTPS first installation or live installation/reboot result claimed by these component tests. Existing whole-radio reboot hang remains failed/unresolved; no unattended retry.",
+    "No ARMv7 first-install adapter or real FLEX6300/Linux2.6 qualification.",
+    "RF remains stopped pending operator steering on deferred SWR investigation; finite current-candidate pair does not establish repeatability.",
+    "All other P1-P10 alignment, cold-start, final-graph fault, storage/power-loss, credential/platform, sustained RF/stockAPD and independent release gates remain open."
+  ],
+  "evidence": [
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/build-sanitized.py.gz",
+      "bytes": 771,
+      "sha256": "d4bdb80e0d338855e033893a0d8c3e4776b58d21bb2f8ee39f2dd23228b7807a"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/sanitizer-build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/aetherpd_package_download_test-asan.log.gz",
+      "bytes": 627,
+      "sha256": "84d974ae6e6180a5334fd2799956e0b41d28c2f793049cfb72d619e4a7345cf5"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/aetherpd_installation_coordinator_test-asan.log.gz",
+      "bytes": 2152,
+      "sha256": "5f2819084ff2318384a9bd34d0df64b5e5246bedde643d59c5d918d5a8bda5f1"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/mutations.py.gz",
+      "bytes": 1420,
+      "sha256": "bc1f5263b012f02964e0994bc1ee4804984f376cf7b8020d53ed0651e1cdd4c5"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/mutations.json.gz",
+      "bytes": 370,
+      "sha256": "837003b15f59bf7c12dd45ca43ee1a82fcd92d0ad2a1462bf13508781244b533"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/mutations.log.gz",
+      "bytes": 352,
+      "sha256": "5a69847ad510eae1f71ca09aaf71a95fddffddaa9bc474346fbdf2cdcaf39547"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/desktop-build.log.gz",
+      "bytes": 517,
+      "sha256": "d6ce6858f46c82b00a42e9eacd3141b083dbe91cf3ab0596e7de2bba46c4e7c1"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/package-build.log.gz",
+      "bytes": 180,
+      "sha256": "54af80a202571ff984be6fa8f90ea36dc4a810bdfd289fabe73c5521aea3b4d2"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/ctest.log.gz",
+      "bytes": 265,
+      "sha256": "4a8ff56441860d1b8a3299bbed7711da32adf497020ac9eaabe2a18a58e70a5a"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/static-checks.json.gz",
+      "bytes": 185,
+      "sha256": "131f6b5b7028cd84638ede4497956b65057e1d360a24343542669b79e17abc9c"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/docs-ci.log.gz",
+      "bytes": 432,
+      "sha256": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/docs-build.log.gz",
+      "bytes": 502,
+      "sha256": "256d41db858e92b54864e2fca814d41060453fdad3b894ce69a8b70ceae4dad5"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/source.patch.gz",
+      "bytes": 7970,
+      "sha256": "dac0e3a7b083b68ac582d7a91bccbb8ea76b296c5b98f6d5d4304070aa952fd7"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/save.py.gz",
+      "bytes": 2724,
+      "sha256": "2f0468e87b3c8cd134b0665cd5de94a2acae502df808784c9165d38129be7d7a"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/static-0.log.gz",
+      "bytes": 84,
+      "sha256": "959aabfbd3d45f87cb2ec81df039d1fbcef4475b1bcb95d47c0062da2dbdaca0"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/static-1.log.gz",
+      "bytes": 1832,
+      "sha256": "ffaec11526cb3c5f1f9c7d47b399b5d7ff19f5f5185ee7b131eddc32cfe55570"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/static-2.log.gz",
+      "bytes": 61,
+      "sha256": "728dd27d76fe734e7d7a16cff56653c933c5ec7b012556d4be14ae8ebcef1097"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/static-3.log.gz",
+      "bytes": 65,
+      "sha256": "ef92287bd4b4371e61725f5f14d31857b596ee10d4c72b03f49375736759e4fb"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/static-4.log.gz",
+      "bytes": 404,
+      "sha256": "43f4c5c7fd6b846e8154366f1a038d47bf4af3b8a0763182f14aeb38d4dce887"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/first-profile/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/first-profile/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/first-profile/test.log.gz",
+      "bytes": 409,
+      "sha256": "a0f1d975613e80db8ff5007b7f5e6bbbe3fca9661f06c49728ecce46fb748370"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/first-target/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/first-target/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/first-target/test.log.gz",
+      "bytes": 447,
+      "sha256": "d812766694bb4af7d8c26844e2a7607a8d33537b32a33c7febcb74e7d6684d15"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/stale-first-result/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/stale-first-result/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/stale-first-result/test.log.gz",
+      "bytes": 415,
+      "sha256": "05f2feeed86b03f014eebc8410802462568a296833feeb4d2a8eb3dd3e3d0a67"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/original-session/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/original-session/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/original-session/test.log.gz",
+      "bytes": 594,
+      "sha256": "647481fc2f0a1ec936f8c9c21c83268a2df64113b0eb78fcca85c0e6ad6615ca"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/exact-plan-approval/build.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/exact-plan-approval/link.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "tools/pd-waveform/evidence/20261117-first-install-https/exact-plan-approval/test.log.gz",
+      "bytes": 544,
+      "sha256": "2fa51a4fbbddd5bac57d54904178a87b947b6cc3fb03169eff1a5bad81a96945"
+    }
+  ]
+}

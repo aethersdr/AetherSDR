@@ -6,6 +6,7 @@
 #include <QUrl>
 #include <memory>
 #include <optional>
+#include <variant>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -18,6 +19,16 @@ struct AetherPDRelease {
     quint32 profile{0};
     std::array<QUrl, 8> urls;
     AetherPDPackage::Trust trust;
+    bool valid() const;
+};
+// A fresh install has its own pins and publisher key, with no predecessor.
+// Only the implemented ARM64/profile-1 first-install protocol is selectable.
+struct AetherPDFirstRelease {
+    QString version;
+    QString firmware;
+    quint32 profile{0};
+    std::array<QUrl, 8> urls;
+    AetherPDFirstPackage::Trust trust;
     bool valid() const;
 };
 
@@ -33,14 +44,20 @@ public:
     enum class Failure { Network, Oversize, Integrity, Timeout };
     Q_ENUM(Failure)
     bool start(const AetherPDRelease& release);
+    bool start(const AetherPDFirstRelease& release);
     void cancel();
     bool active() const { return m_active; }
     std::optional<AetherPDPackage> package() const { return m_package; }
+    std::optional<AetherPDFirstPackage> firstPackage() const { return m_firstPackage; }
 signals:
     void progress(qint64 received, qint64 total);
     void ready();
     void failed(AetherSDR::AetherPDPackageDownload::Failure failure);
 private:
+    using Selection = std::variant<AetherPDRelease, AetherPDFirstRelease>;
+    bool begin(const Selection& release);
+    const std::array<QUrl, 8>& urls() const;
+    const std::array<AetherPDPackage::Pin, 8>& pins() const;
     void initialize();
     void next();
     bool consume();
@@ -51,9 +68,10 @@ private:
     QPointer<QNetworkAccessManager> m_network;
     QPointer<QNetworkReply> m_reply;
     QTimer m_deadline;
-    AetherPDRelease m_release;
+    Selection m_release;
     AetherPDPackage::Files m_files;
     std::optional<AetherPDPackage> m_package;
+    std::optional<AetherPDFirstPackage> m_firstPackage;
     std::size_t m_index{0};
     qint64 m_received{0}, m_total{0};
     bool m_active{false};
