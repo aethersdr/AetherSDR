@@ -4,7 +4,9 @@
     "url": "https://github.com/rtlsdrblog/rtl-sdr-blog/archive/aed0ea19f3a273370a13c9009b96313c75d54c7b.tar.gz",
     "sha256": "53d070b234507bd0eaa25ee2ec7b4e69d93a038ccf970c1390ad84162d3da5e1",
     "archive": "rtl-sdr-blog.tar.gz",
-    "directory": "rtl-sdr-blog-aed0ea19f3a273370a13c9009b96313c75d54c7b"
+    "directory": "rtl-sdr-blog-aed0ea19f3a273370a13c9009b96313c75d54c7b",
+    "patch": "rtl-async-cancellation.patch",
+    "patchSha256": "73ea98e8b56bad2c1afd640a842c44b9010d37a0f35748bd478b32b710b6a860"
   },
   "libusb": {
     "version": "1.0.30",

@@ -6909,6 +6909,18 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME rtl_package_closure_test
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_rtl_package.py)
+    # Actual pinned driver + injected libusb; no radio or socket. Release setup
+    # always runs this. Developer/system-library builds may lack its sources.
+    set(rtl_async_sanitizer)
+    if(NOT WIN32)
+        set(rtl_async_sanitizer --sanitize)
+    endif()
+    add_test(NAME rtl_async_cancellation_test
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup/test-rtl-async-cancellation.py
+                     ${rtl_async_sanitizer})
+    set_tests_properties(rtl_async_cancellation_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 30 LABELS "rtl;lifetime")
     add_test(NAME capability_record_parser
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)

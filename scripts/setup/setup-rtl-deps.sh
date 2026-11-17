@@ -22,10 +22,17 @@ fetch libusb
 fetch rtl
 USB="$WORK/$(field libusb directory)"
 RTL="$WORK/$(field rtl directory)"
+python3 "$SCRIPT_DIR/apply-rtl-patches.py" "$RTL"
+HARNESS="$SCRIPT_DIR/../../tests/rtl_async_cancellation_test.c"
+[ -f "$HARNESS" ] || HARNESS="$SCRIPT_DIR/rtl_async_cancellation_test.c"
+python3 "$SCRIPT_DIR/test-rtl-async-cancellation.py" --rtl-source "$RTL" --usb-source "$USB" \
+    --harness "$HARNESS"
 cmake_args=()
 if [ "$(uname -s)" = Darwin ]; then
     : "${MACOS_DEPLOYMENT_TARGET:?Set the deployment target explicitly}"
     export MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET"
+    # Libtool's sysctl probe can return no value in restricted build runners.
+    export lt_cv_sys_max_cmd_len=262144
     # New Apple SDKs can link pipe2 as a weak import even when the target
     # macOS lacks it. Autoconf's link-only probe then selects a null call.
     # libusb's pipe + fcntl fallback works across our supported macOS floor.
@@ -59,4 +66,6 @@ fi
 cp "$RTL/COPYING" "$SOURCES/RTL-SDR-COPYING"
 cp "$USB/COPYING" "$SOURCES/libusb-COPYING"
 cp "$SCRIPT_DIR/rtl-dependencies.json" "$SCRIPT_DIR/setup-rtl-deps.sh" "$SCRIPT_DIR/_verify_sha256.sh" "$SOURCES/"
+cp "$SCRIPT_DIR/apply-rtl-patches.py" "$SCRIPT_DIR/rtl-async-cancellation.patch" \
+    "$SCRIPT_DIR/test-rtl-async-cancellation.py" "$HARNESS" "$SOURCES/"
 echo "RTL dependency sources and recipes: $SOURCES"
