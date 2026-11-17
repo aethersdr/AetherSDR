@@ -186,6 +186,44 @@ void lifecycle()
     advancing.playbackStop(2);
     check(stops == 2, "unanswered old STOP cannot suppress STOP for a newer playback");
 }
+void partialServiceWrites()
+{
+    auto injectPartialWrite = [](Fixture& fixture) {
+        FlexCommandSession& session = FlexCommandTestAccess::session(fixture.radio);
+        session.setWriter([&session, &fixture](const FlexCommandSession::Write& write) {
+            const auto result = write.run([&] {
+                fixture.wire.append(write.command);
+                return FlexCommandSession::WriteResult::Unknown;
+            });
+            session.writeFinished(write.epoch, write.sequence, result);
+            return true;
+        });
+    };
+
+    {
+        Fixture f;
+        injectPartialWrite(f);
+        f.radio.dvkModel().playbackStart(1);
+        flush();
+        check(f.wire == QStringList{"dvk playback_start id=1"}
+                  && f.radio.dvkModel().pendingOperation() == VoiceKeyer::Playback
+                  && TxOperationIntegrationTestAccess::serviceHeld(f.radio),
+              "a partial DVK playback write keeps the original operation pending");
+    }
+    {
+        Fixture f;
+        applyNavtexStatus(f.radio.navtexModel(), "navtex", {{"status", "active"}});
+        injectPartialWrite(f);
+        f.radio.navtexModel().sendMessage('A', 'B', "test");
+        flush();
+        const auto& messages = f.radio.navtexModel().messages();
+        check(f.wire == QStringList{"navtex send tx_ident=A subject_indicator=B msg_text=\"test\""}
+                  && messages.size() == 1 && messages.first().status == NavtexMsgStatus::Unknown
+                  && TxOperationIntegrationTestAccess::serviceHeld(f.radio),
+              "a partial NAVTEX write records an unknown outcome and holds the original request");
+    }
+}
+
 void terminalFence()
 {
     {
@@ -394,6 +432,7 @@ int main(int argc, char** argv)
     encoding();
     lifecycle();
     terminalFence();
+    partialServiceWrites();
     lockoutRecovery();
     statusIngress();
     stopOrderingAndRadioState();
