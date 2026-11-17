@@ -581,6 +581,10 @@ ADC headroom or calibrated output power.
    may differ. The control requires radio-confirmed power and maximum-power
    readback and a fresh AetherPD service status. It locks while a source is
    armed, a transmission or measurement is active, or installation is pending.
+   After a normal desktop PTT release, power editing waits for queued transmit
+   work to finish and a fresh receive report. This does not release transmit
+   ownership for the analyzer: if an earlier desktop transmission still holds
+   that ownership, stop AetherPD and reconnect before preparing an analyzer run.
    The analyzer does not remember or restore this radio setting.
 2. Choose **Measured forward-power abort limit (W)**. This is a measured-power
    cutoff, not a command to change radio drive. The nominal radio power setting

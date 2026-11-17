@@ -1004,6 +1004,9 @@ public:
     bool independentTxReady() const;
     bool transmitRecovering() const { return m_txCoordinator.recovering(); }
     bool transmitOwnershipPending() const { return m_txCoordinator.hasOwnership(); }
+    // Non-keying desktop edits only; this does not release ownership or admit
+    // an independent transmitter after a locally completed over.
+    bool transmitConfigurationIdle() const;
     void emergencyTransmitStop();
     // Trusted composition only. A producer is a lifetime, not an actor grant.
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);

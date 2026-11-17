@@ -248,6 +248,13 @@ public:
     {
         radio.applyBackendTransmitDelta(delta);
     }
+    static void interlock(RadioModel& radio, const QString& state)
+    {
+        InterlockStatusDelta delta;
+        delta.state = state;
+        delta.txClientHandle = 7;
+        radio.applyInterlockStatus(delta);
+    }
     static bool cwxDrainArmed(const RadioModel& radio) { return radio.m_cwxDrainArmed; }
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
@@ -1688,6 +1695,83 @@ void localCompletionDoesNotAuthorizeHandoff()
     check(coordinator.finishLocalIntent(afterTeardown.operation)
               && coordinator.acknowledgeStopped(afterTeardown.operation),
           "test-only admission is retired without dispatching keying");
+}
+
+void aetherPDPowerAfterDesktopRelease()
+{
+    RadioConnection connection;
+    AetherPDTest::Network controlNetwork, measurementNetwork;
+    Fixture f;
+    TxOperationIntegrationTestAccess::preparePDLease(f.radio, connection, controlNetwork);
+    f.backend->caps.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
+        SliceFrequencyControl::Authority::Radio};
+    QFile fixture(QStringLiteral(AETHERPD_TESTDATA_DIR "/idle.json"));
+    check(fixture.open(QIODevice::ReadOnly), "power recovery has public status fixture");
+    QJsonObject source = QJsonDocument::fromJson(fixture.readAll()).object();
+    source["measurement_control"] = true;
+    source["source_purpose"] = "calibration";
+    controlNetwork.last->complete(200, QJsonDocument(source).toJson());
+    check(f.radio.aetherPDModel().status().has_value(), "power recovery status passed the production parser");
+    TransmitDelta power;
+    power.rfPower = 5;
+    power.maxPowerLevel = 10;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, power);
+    AetherPDMeasurementModel model(f.radio, measurementNetwork);
+    const RadioControlSession session = f.radio.controlSession();
+    const auto available = [&] { return model.powerControl(session).unavailableReason.isEmpty(); };
+    check(available(), "idle radio with confirmed power permits non-keying power configuration");
+
+    TxCoordinator& coordinator = TxOperationIntegrationTestAccess::coordinator(f.radio);
+    const TxCoordinator::Actor competitor = coordinator.registerActor({true, 0});
+    TxCoordinator::Completion release;
+    f.backend->keyingWriter = [&](bool on, const auto&, const auto& completion) {
+        if (!on) { release = completion; }
+    };
+    f.radio.setTransmit(true);
+    const TxCoordinator::Operation operation = f.radio.transmitOperation();
+    TxCoordinator::Dispatch entered = operation.beginDispatch(TxCoordinator::monotonicMs());
+    check(bool(entered) && !available(), "active desktop transmission blocks power configuration");
+    f.radio.setTransmit(false);
+    check(!available(), "local PTT release without fresh receive cannot enable power configuration");
+    TxOperationIntegrationTestAccess::interlock(f.radio, QStringLiteral("READY"));
+    check(!available(), "fresh receive cannot pass an outstanding terminal cleanup queue");
+    release.finish();
+    check(!available(), "completed cleanup cannot pass an entered terminal writer");
+    entered = {};
+    check(available() && f.radio.transmitOwnershipPending()
+            && !operation.hasConfirmedStop() && !operation.permitsDispatch(TxCoordinator::monotonicMs()),
+        "fresh receive and drained local work permit power edits while retaining unconfirmed TX ownership");
+    check(coordinator.acquire(competitor, TxCoordinator::monotonicMs()).refusal == TxCoordinator::Refusal::Busy
+            && !model.sourceArmReason(session, 1190).isEmpty(),
+        "non-keying power readiness grants neither independent handoff nor analyzer source preparation");
+
+    f.radio.setTransmit(true);
+    check(!available(), "reengagement retires the earlier receive observation");
+    f.radio.setTransmit(false);
+    release.finish();
+    check(!available(), "second local completion cannot reuse receive from the previous over");
+    for (const QString state : {QStringLiteral("PTT_REQUESTED"), QStringLiteral("UNKEY_REQUESTED")}) {
+        TxOperationIntegrationTestAccess::interlock(f.radio, state);
+        check(!available(), "transition status cannot enable post-release power configuration");
+    }
+    TxOperationIntegrationTestAccess::interlock(f.radio, QStringLiteral("READY"));
+    check(available() && f.commands == QStringList({"mox:on", "mox:off", "mox:on", "mox:off"})
+            && measurementNetwork.sent.empty(),
+        "new settled receive restores power configuration without RF, source or capture commands");
+    coordinator.emergencyStop();
+    check(!available(), "emergency recovery blocks non-keying power configuration");
+
+    GrantedFixture independent;
+    const TxGrantManager::Admission admission = independent.grants.acquire(
+        independent.a, independent.ga.grant, 1, TxCoordinator::Activity::Mox);
+    check(admission.accepted(), "independent power fixture acquires an injected bounded grant");
+    const TxController::Input input = TxController::fromGrantedPtt(
+        &independent.radio, admission.input, admission.operation);
+    check(input.start(), "independent power fixture enters the recording backend");
+    input.stop();
+    TxOperationIntegrationTestAccess::interlock(independent.radio, QStringLiteral("READY"));
+    check(independent.radio.transmitOwnershipPending() && !independent.radio.transmitConfigurationIdle(),
+        "an independent unconfirmed owner cannot use the desktop power-configuration exception");
 }
 
 void cwTuneMutualExclusion()
@@ -4277,6 +4361,7 @@ int main(int argc, char** argv)
     grantedModelBindingAndHandoff();
     aetherPDRunLeaseLifecycle();
     aetherPDMeasurementWorkflow();
+    aetherPDPowerAfterDesktopRelease();
     grantedModelWireStopIdentity();
     grantedModelPreflightAndCancellation();
     grantedModelSessionAndActivityBoundaries();

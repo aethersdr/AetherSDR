@@ -1,0 +1,131 @@
+{
+  "updated_utc": "2026-11-17T13:17:41.607244+00:00",
+  "status": "post_desktop_PTT_non_keying_power_readiness_component_qualified_live_pending",
+  "production_ready": false,
+  "source_base_commit": "ef05ff391fa66f7e6e14bf37af98d109b10667ea",
+  "root_cause": "AetherPD power configuration used pending TX ownership as a blanket busy condition. A normal legacy desktop PTT completion deliberately retains unconfirmed ownership, so the non-keying control stayed disabled even after receive resumed.",
+  "change": "Permit non-keying power configuration after current desktop local completion, fresh settled receive, zero pending deliveries and no entered writers. Retain ownership, key-on cancellation, independent handoff and source-arm barriers. No RF guard threshold changes.",
+  "component_tests": [
+    "tx_operation_integration_test",
+    "aetherpd_dialog_test"
+  ],
+  "restored_tests_passed": true,
+  "full_Linux_AetherSDR_build_passed": true,
+  "docs_npm_ci_and_build_passed": true,
+  "static_checks": [
+    {
+      "check": "boundary",
+      "exit_code": 0
+    },
+    {
+      "check": "command-plane",
+      "exit_code": 0
+    },
+    {
+      "check": "capability",
+      "exit_code": 0
+    },
+    {
+      "check": "touchpoint",
+      "exit_code": 0
+    },
+    {
+      "check": "CI-gate",
+      "exit_code": 0
+    },
+    {
+      "check": "reference",
+      "exit_code": 0
+    },
+    {
+      "check": "log-rules",
+      "exit_code": 0
+    }
+  ],
+  "mutations": [
+    {
+      "mutant": "blanket-ownership",
+      "build_exit": 0,
+      "ctest_exit": 8,
+      "behavior_failures": [
+        "[FAIL] fresh receive and drained local work permit power edits while retaining unconfirmed TX ownership",
+        "[FAIL] new settled receive restores power configuration without RF, source or capture commands"
+      ]
+    },
+    {
+      "mutant": "pending-cleanup",
+      "build_exit": 0,
+      "ctest_exit": 0,
+      "behavior_failures": []
+    },
+    {
+      "mutant": "entered-writer",
+      "build_exit": 0,
+      "ctest_exit": 8,
+      "behavior_failures": [
+        "[FAIL] completed cleanup cannot pass an entered terminal writer"
+      ]
+    }
+  ],
+  "mutation_limit": "Removing only the pending-delivery count passed: the tested normal completion cannot enter the unconfirmed slot until deliveries drain. This does not independently mutation-qualify the redundant count check. Removing the entered-writer check and restoring blanket ownership both fail the new behavioral regression.",
+  "intermediate_failures": [
+    "Initial build used the default unwritable ccache location; corrected to the workspace cache.",
+    "Initial new fixture omitted source_purpose while advertising measurement_control; production parser rejected it. Corrected fixture and asserted parser acceptance.",
+    "A sandboxed full test stalled in Qt PulseAudio enumeration inside the pre-existing voice-keyer fixture. Captured stack, terminated that exact test and passed with host audio-service access.",
+    "First mutation runner matched two pending-count occurrences and stopped before editing. Narrowed its target. A pending-count-only mutant survived due to the overlapping local-completion condition; retained that result."
+  ],
+  "last_live_state": {
+    "previous_desktop_PID": 3744797,
+    "AetherPD_service": "stopped confirmed through native HTTP200",
+    "radio": "connected, idle, FDX off",
+    "nominal_power_setting_W": 5,
+    "RF_commands_for_component_fix": 0
+  },
+  "limitations": [
+    "Not yet live-tested on the fixed desktop. Current installation and prior carrier evidence remain tied to their original source hashes.",
+    "Analyzer source preparation still requires no pending ownership; a completed legacy desktop PTT requires stop/reconnect before independent analyzer handoff. No generic idle-status acknowledgment introduced.",
+    "This is a non-keying control fix. Native SWR discrepancy, corrected RF endurance, natural alignment slip/cold bypass, final graph faults, stock APD comparison, actual6300 and release gates remain open.",
+    "No Windows/macOS or sanitizer run in this checkpoint."
+  ],
+  "evidence_sha256": {
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/CI-gate-final.log.gz": "68e6d770b509a5dbcf7f38dc3cad0fab1ee0c479b29f9839ab7c60b50b42b573",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/CI-gate.log.gz": "68e6d770b509a5dbcf7f38dc3cad0fab1ee0c479b29f9839ab7c60b50b42b573",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/analyze-carrier.py.gz": "44c5bcec6d97b733367e1855ca31e2014a14dbebcdabcc05219c63c9a96497d5",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/blanket-ownership-build.log.gz": "9500463c45474e07d30a0391f87940b3da9f382d6aa2b4b351b2530df078d146",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/blanket-ownership-ctest.log.gz": "4a4f6c507dacfce189ee64902d79583f43c71744992570e41f07ce0c04b28f6f",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/boundary-final.log.gz": "ffaec11526cb3c5f1f9c7d47b399b5d7ff19f5f5185ee7b131eddc32cfe55570",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/boundary.log.gz": "ffaec11526cb3c5f1f9c7d47b399b5d7ff19f5f5185ee7b131eddc32cfe55570",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/build-02.log.gz": "303f4fd5b5b99c613b8c4bc94e8de278046ecb4fd2cbccdaf60f445930927ad7",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/build-03.log.gz": "27abb99c4865ab1c100c3bf14e363b6b7ada3dc23ce0eef97c0d19d9e03c9268",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/build-04.log.gz": "27abb99c4865ab1c100c3bf14e363b6b7ada3dc23ce0eef97c0d19d9e03c9268",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/build.log.gz": "fca826d15b3262d201999439e257fbf86564841be4d01868c93a080cf07df5c9",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/capability-final.log.gz": "3dda96147739d2b9e41612b411aa76324f0fbba662fac6d3adc0c277b9bc9a8b",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/capability.log.gz": "3dda96147739d2b9e41612b411aa76324f0fbba662fac6d3adc0c277b9bc9a8b",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/command-plane-final.log.gz": "0bdc84dd79a68fc0cc7307fc4bdf40a0723476cc84495da44951b2711bfc555f",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/command-plane.log.gz": "0bdc84dd79a68fc0cc7307fc4bdf40a0723476cc84495da44951b2711bfc555f",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/ctest-03.log.gz": "eada3bc6745092a391a2854016340162b97c76acda7ff256973cd1a933a0e8dc",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/ctest-04.log.gz": "6d45e89f537a92245b15481f1b563370a51f4fd7aa0958393cf4d3c80da75121",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/ctest-host.log.gz": "3b6ff1760032544ae1ca84c123b68f4258c5a247ac1a5dd6b6de48118e16dbab",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/ctest.log.gz": "8ad5ac0584f45b6425120c3ceabed61e09c0781ca441b30f0459f2c8918f4479",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/docs-build.log.gz": "f6cb5162b4cebbd8f0a4e496b606c37e1cccc1755e852e9b96ed24c5d57aaf5b",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/docs-ci.log.gz": "35dfa0565f71eb70252706c81fc825dbe0888798f66c016888da77ef6cf21561",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/entered-writer-build.log.gz": "505db653a6c42b7d1ae7fbc5f54a91d50f61fc5626d668bce175c709d1bfb393",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/entered-writer-ctest.log.gz": "8dc919e9dac8b4fc5719b1cd73f38df90f4a73c2a3297d4afef8359c2b23ad35",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/initial.json.gz": "e0b953caddde0de84743cdd85c36f78ca3e18e1887cbd266725f5c9ca140011c",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/log-rules-final.log.gz": "43f4c5c7fd6b846e8154366f1a038d47bf4af3b8a0763182f14aeb38d4dce887",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/long-test-stack.log.gz": "7c10ceba427947b84163051fe0adab9afd3155d9a69c636ff8cbef5bc969f7a3",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/mutations.json.gz": "865850136107ab77f01d9e0ecea7d87ddf5a0179ebe5e89298f0a62043ef8a9c",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/mutations.py.gz": "906714400db9615691cc2e3593d497a18f770c5478f8a4b37b2cfe39c422f6af",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/pending-cleanup-build.log.gz": "505db653a6c42b7d1ae7fbc5f54a91d50f61fc5626d668bce175c709d1bfb393",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/pending-cleanup-ctest.log.gz": "66a0a00d19685df9029dc946cdb22413b08b6e0120e9542a7ae33265db54091e",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/reference-final.log.gz": "ef92287bd4b4371e61725f5f14d31857b596ee10d4c72b03f49375736759e4fb",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/restored-ctest.log.gz": "4f9dd2333cb60cf17de118f6f367c86db73c9386e5e84806d2063147d04b60c4",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/restored-full-build.log.gz": "6b032d171eb25feaec0619e305111773d2c5be96763b54f73a5955fae67bf8d9",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/save-component.py.gz": "e881ec83f4a893167903a723936e444073b7b284cd1c4c3bcdffa0784b21d74a",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/static-results.json.gz": "7f0fc4bfefad1de696b42c2f3acba4b92eb9c85b08e30960bc6e7aece78bd1e8",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/stop-predecessor-result.json.gz": "fbeb6d972c4b9530c946a2c6c78fb5f3717aca60e19007b71216b976a3ee3eff",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/stop-predecessor.py.gz": "224f3eeafa3648f29bb5d1ef44bc2360d7b34856ac0415a9b608561871eb42cf",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/touchpoint-final.log.gz": "8e748c45287f3f59b35b6fefc7f35ae7847c6dac3383f64b0c6af1b2c30e8448",
+    "tools/pd-waveform/evidence/20261117-post-PTT-power-control/touchpoint.log.gz": "2309040e8c77b41fc18e7f71ce179486cc49e92be4e1aca046872167a0899a00"
+  }
+}

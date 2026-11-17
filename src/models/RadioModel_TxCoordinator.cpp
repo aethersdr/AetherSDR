@@ -674,6 +674,18 @@ bool RadioModel::independentTxReady() const
         && !m_txCoordinator.recovering();
 }
 
+bool RadioModel::transmitConfigurationIdle() const
+{
+    if (QThread::currentThread() != thread() || m_txSessionClosing || !isConnected()) {
+        return false;
+    }
+    return !m_txCoordinator.hasOwnership()
+        || (m_txCoordinator.hasUnconfirmedLocalCompletion() && m_txOperation.permitsCleanup()
+            && !m_txOperation.independent() && m_daxTxSelectionRxObserved
+            && radioReceivingForTransmitDax() && m_pendingTxDeliveries == 0
+            && !m_txCoordinator.hasInFlightDispatches());
+}
+
 void RadioModel::requestIndependentTxStop(const TxCoordinator::Operation& operation)
 {
     if (!operation.independent() || !operation.permitsCleanup()

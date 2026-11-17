@@ -153,7 +153,7 @@ AetherPDMeasurementModel::PowerControl AetherPDMeasurementModel::powerControl(co
     } else if (state() != State::Idle || source->keyed || source->calibrationState == aetherpd::CalibrationState::Armed
         || source->calibrationState == aetherpd::CalibrationState::Running || tx.isTransmitting() || tx.isTuning()
         || tx.isMox() || m_radio->isRadioTransmitting() || !m_radio->txOwnedByUs()
-        || m_radio->transmitOwnershipPending() || m_radio->transmitRecovering()
+        || !m_radio->transmitConfigurationIdle() || m_radio->transmitRecovering()
         || m_radio->aetherPDInstallationModel().active()) {
         control.unavailableReason = tr("Cancel the source and finish transmission, measurement or installation before changing power.");
     }
