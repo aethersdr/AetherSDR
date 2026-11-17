@@ -70,6 +70,7 @@ public:
     void acknowledgeText(quint64 id);
     void sendText(quint64 id, const QString& message);
     qint64 sendBinary(quint64 id, const QByteArray& message);
+    qint64 sendStreamFrame(quint64 id, const QByteArray& message);
     void closeClient(quint64 id, QWebSocketProtocol::CloseCode code, const QString& reason);
     void configureClient(const TciStreamConfig& config);
     void configureLineOut(const TciLineOutConfig& config);
@@ -120,6 +121,8 @@ private:
         };
         std::deque<Text> texts;
         qsizetype textBytes{0};
+        quint64 droppedStreamFrames{0};
+        QElapsedTimer streamDropLog;
         int error{-1};
         QString errorText;
     };
@@ -177,6 +180,8 @@ private:
     std::function<qint64(quint64)> m_rxBacklog;
     std::function<void(quint64, QWebSocketProtocol::CloseCode, const QString&)> m_rxClose;
     static constexpr qint64 kMaxRxBacklogBytes = 256 * 1024;
+    static constexpr qint64 kMaxStreamBacklogBytes = kMaxRxBacklogBytes / 4;  // IQ's share of the backlog
+    static constexpr qint64 kStreamDropLogMs = 5000;   // at most one IQ-drop warning per interval
     float m_rxChannelGain[8]{1,1,1,1,1,1,1,1};
     qint64 m_rxAudioFramesSent{0};
     QMutex m_mailboxMutex;
